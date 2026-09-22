@@ -262,7 +262,7 @@ impl Session {
         // it into `external_transport` left it returning `None`, which took
         // the whole arm with it and made an external locate do nothing at all.
         if message.kind.is_transport() {
-            if let Some(gesture) = external_transport(message) {
+            for &gesture in external_transport(message) {
                 effects
                     .commands
                     .extend(self.apply_transport_control(gesture, playing));
@@ -549,21 +549,26 @@ impl Session {
     }
 }
 
-/// The transport gesture a system message asks for, if it is one.
+/// The transport gestures a system message asks for, in order.
 ///
 /// MIDI's Stop is a pause -- it holds position, and Continue resumes from
 /// where it stopped -- so it maps to [`TransportControl::Pause`] and not to
 /// [`TransportControl::Stop`], which returns to the start. Getting that
 /// backwards would make an external sequencer's stop button silently rewind
 /// the song.
-fn external_transport(message: &MidiMessage) -> Option<TransportControl> {
+///
+/// Start is the other half of the same distinction: it plays *from the
+/// beginning*, which is what separates it from Continue. Mapped to Play
+/// alone, an external sequencer's play-from-top resumed wherever mooloop had
+/// been paused, and the two machines ran bars apart.
+fn external_transport(message: &MidiMessage) -> &'static [TransportControl] {
     match message.kind {
-        MidiKind::Start => Some(TransportControl::Play),
-        MidiKind::Continue => Some(TransportControl::Play),
-        MidiKind::Stop => Some(TransportControl::Pause),
+        MidiKind::Start => &[TransportControl::ReturnToStart, TransportControl::Play],
+        MidiKind::Continue => &[TransportControl::Play],
+        MidiKind::Stop => &[TransportControl::Pause],
         // A song position is a seek, not a gesture; the caller adds it.
-        MidiKind::SongPosition { .. } => None,
-        _ => None,
+        MidiKind::SongPosition { .. } => &[],
+        _ => &[],
     }
 }
 
@@ -1035,12 +1040,18 @@ mod tests {
     /// A transport message from outside starts and pauses the transport with
     /// no binding at all, and MIDI's Stop is a *pause* -- it holds position.
     /// Mapping it to Stop would make an external sequencer's stop button
-    /// silently rewind the song.
+    /// silently rewind the song. Start plays from the top and Continue from
+    /// where it paused; this test used to pin both to a bare Play, which is
+    /// how Start came to resume instead of restarting.
     #[test]
     fn external_transport_messages_drive_the_transport() {
         let mut session = Session::default();
         let effects = session.apply_control_input(&system(MidiKind::Start), &ports(), false);
-        assert_eq!(effects.commands, vec![EngineCommand::Play]);
+        assert_eq!(
+            effects.commands,
+            vec![EngineCommand::Seek { tick: 0.0 }, EngineCommand::Play],
+            "Start plays from the beginning"
+        );
         assert!(!effects.edits, "starting playback is not an edit");
 
         let effects = session.apply_control_input(&system(MidiKind::Stop), &ports(), true);

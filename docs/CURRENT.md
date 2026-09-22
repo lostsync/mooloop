@@ -161,7 +161,9 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   device's default name is renamed after the new one. **A pattern's name
   survived save and reload only from 2026-09-13**; before that the session
   held it and the project format had nowhere to put it, so reopening a song
-  numbered every pattern again.
+  numbered every pattern again. Cloning a pattern gives the copy its name and
+  colour, and cloning or deleting one leaves every other pattern's name on
+  that pattern; until 2026-09-22 both shifted the names after it by one.
 - Pattern and Song transport modes are independent of the visible editor.
   The playlist is a lower-pane tab, supports layered tick-addressed pattern
   instances, and remains editable while either mode plays. Clip width follows
@@ -228,9 +230,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   role can already be assigned Meta outright.
 - Two lanes sit under the roll and toggle independently: a velocity lane
   drawn as stems with drag heads, and one variable automation lane. The
-  automation lane's picker lists the selected channel's generator and every
-  parameter of every effect on that channel and on every bus, grouped by
-  device, with already-open lanes marked and clear/remove actions. Points are drawn by clicking,
+  automation lane's picker lists the selected channel's generator, every
+  parameter of every effect on that channel, the channel's fader and pan
+  (as "Channel strip", after its chain), and every effect on every bus,
+  grouped by device, with already-open lanes marked and clear/remove
+  actions. Points are drawn by clicking,
   dragged to move, right-clicked to remove, and interpolate linearly. Lanes
   a clip is not currently showing are retained, not discarded.
 - Sixteenth-note rack cells summarize their four 64th-note substeps without
@@ -350,6 +354,9 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 - Every gain trim — device input/output, the rack-row volume knob, the source
   output trim — is the same dB knob class: −60 dB (−∞) to +12 dB from unity,
   double-click to 0 dB. Project files and the engine wire keep linear gain.
+  A new channel starts at 0 dB however it is made, and the strip's volume
+  descriptor defaults there too (`DEFAULT_CHANNEL_VOLUME`); one added from
+  the toolbar used to start at −1.9 dB.
 - The generator at the head of a chain is selectable, by clicking its header
   the way a device row is selected, and wears the same border. It is the one
   rack row a click could not name. What it does not do is take part in
@@ -375,7 +382,10 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   per visible entry, filtering to playable formats, an autoplay arm and a
   preview-gain trim feeding a dedicated engine preview voice -- a preview the
   command ring refuses says so in the status bar rather than being silence
-  with no explanation -- an info pane
+  with no explanation. The voice plays a file at its own sample rate,
+  band-limited like the sampler, so an audition is at the pitch the file
+  will have once loaded; one that is stopped or replaced fades over 2 ms
+  rather than cutting off -- an info pane
   with waveform, name, and format stats, and loading either into the selected
   channel or into a new one. The sampler face's prev/next-sample arrows step
   through **the folder the sample was browsed from**, which a save does not
@@ -431,12 +441,14 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   `<config>/mooloop/themes/<name>.toml`, one file per theme, and a malformed
   one is skipped with a message rather than stopping startup. All of it
   previews live and persists on Apply or OK. Shared audio controls, tooltips, and master
-  peak-meter ballistics. A fresh install requests a 256-frame buffer by
-  default (Preferences > Audio picks from 64/128/256/512/1024/2048) --
-  server-wide under JACK, the output device's own under Core Audio; a saved
-  config that already has a buffer size choice keeps it, and the engine
-  falls back to the driver's current buffer size with a printed warning if
-  the request is rejected. Sluggish input latency is a buffer-size symptom
+  peak-meter ballistics. A fresh install leaves the buffer size where the
+  driver has it, and Preferences > Audio shows that size; picking one
+  (64/128/256/512/1024/2048) requests it from then on -- server-wide under
+  JACK, the output device's own under Core Audio. A saved config that
+  already has a buffer size keeps it, which includes an older install's
+  256, written when that was the default. The engine falls back to the
+  driver's current buffer size with a printed warning if a request is
+  rejected. Sluggish input latency is a buffer-size symptom
   to check here before assuming a DSP bottleneck. The Shortcuts page lists
   every action in the registry (`ACTIONS.md`), grouped by category, each
   reassignable by clicking Record and pressing a key combination; rebinding
@@ -473,7 +485,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 - Offline export of exactly one selected-pattern pass in Pattern mode or one
   derived playlist pass in Song mode, followed by a configurable 0-30 second
   release tail. Outputs are 24-bit PCM WAV, 32-bit float WAV, or 192/256/320
-  kbps MP3.
+  kbps MP3. It renders in 512-frame blocks, a size live playback runs at,
+  rather than the graph's 8192-frame maximum, where one automated parameter
+  filled a device's event list and every later one on it was dropped from
+  the export. Parameter events that still find no room are counted, and an
+  export that lost any logs how many.
 - A shared widget library in `crates/mooloop-ui/ui`: knobs with value arcs and a
   bipolar mode (`controls.slint`), LED-segment metering with scales, latching
   clip indicators, gain-reduction and correlation meters (`meters.slint`), and a
@@ -534,7 +550,8 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   where no placement of that pattern is playing is heard but not recorded.
   The transport follows an external Start,
   Continue, Stop or Song Position without any mapping, because a device that
-  sends Start is asking for exactly one thing.
+  sends Start is asking for exactly one thing. Start plays from the
+  beginning, Continue from where it paused, and Stop pauses.
 
   **LEARN** beside the transport arms controller mapping: press any knob or
   fader and then move a control on the desk, and the two are bound. The button
@@ -720,8 +737,12 @@ sampler does (`docs/plans/audio-recording/`, steps 02-05, 2026-09-18):
   records, and -- a channel being a dumb slot -- its sampler can be swapped
   for another device. Either way the recording stays in `recordings/` and the
   status bar says which happened, rather than the take being written onto a
-  channel that cannot show or save it. A take whose file could not be written
-  is reported the same way and leaves no partial behind.
+  channel that cannot show or save it. A take is checkpointed every second,
+  so its file on disk is readable up to the last second even while it
+  records. A take whose file could not be finished -- a full disk, say -- is
+  reported the same way, and what it had checkpointed is kept and lands on
+  the channel; one that failed inside its first second leaves no partial
+  behind.
 - **REC refuses a source that is gone, and says which kind.** A channel or
   track that has since been deleted sends you back to the AUDIO row; no audio
   input device at all -- unplugged, changed, or a microphone permission macOS
@@ -880,8 +901,10 @@ land on its own when it starts to matter:
 - File > New Song (Ctrl+N) starts a fresh starter song, asking first when the
   current one has unsaved changes, as Open Song does. Every file and
   confirmation dialog is a separate program: `zenity` on Linux, and on macOS
-  the system's own panels through `osascript`. A dialog program that will not
-  start is logged, since to its caller it looks exactly like a cancel.
+  the system's own panels through `osascript`. The `.deb` and `.rpm` depend
+  on `zenity`; the AppImage cannot, so there it has to be installed. A dialog
+  program that will not start is logged, since to its caller it looks
+  exactly like a cancel.
 - Missing samples are recoverable by loading a replacement audio file, but
   there is no dedicated path-search/relink dialog, autosave, or crash recovery
   yet.
@@ -1039,8 +1062,9 @@ land on its own when it starts to matter:
   track's block, so everything after it -- the strip, the chain, both send
   taps and the fader -- sees the flipped signal.
 
-  Not yet: the strip's parameters are not automation or modulation
-  destinations, and there is no strip preset. `docs/plans/archive/console/00-status.md` says why
+  Not yet: the strip's own processing -- its drive, EQ and compressor -- is
+  not an automation or modulation destination (its fader and pan are), and
+  there is no strip preset. `docs/plans/archive/console/00-status.md` says why
   each is separable.
 - **Solo in place, per track.** A soloed track silences the *other* tracks,
   and the exceptions are what make it useful: anything that feeds a soloed
@@ -1156,7 +1180,9 @@ land on its own when it starts to matter:
   that is not there, leaving addresses on a generator that has no descriptor
   table yet untouched.
 - Thirteen effect kinds ship: a low-pass/high-pass filter, a drive/saturation
-  with four curves at 2x oversampling, a preamp carrying the channel strip's
+  with four curves at 2x oversampling whose Drive changes character rather
+  than level -- a signal at the -12 dBFS operating level keeps its peak at
+  any drive on any curve, and a hotter one is held down toward it -- a preamp carrying the channel strip's
   four voicings -- Moo, Grip, Punch and Iron, the last three measured from
   real units rather than picked -- over a Drive, Mix and Output in dB. `Moo`
   is the default and is bit-identical to no device at all, which makes the

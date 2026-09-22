@@ -12,6 +12,18 @@ pub const MAX_CHANNELS: usize = u8::MAX as usize + 1;
 /// `u8`, so 256 is the complete addressable bank rather than a UI limit.
 pub const MAX_PATTERNS: usize = u8::MAX as usize + 1;
 
+/// A new channel's volume, linear: unity.
+///
+/// Genuinely at unity, because the operating-level headroom comes from
+/// source calibration (`gain::REFERENCE_PEAK_DBFS`), not from a quiet default
+/// fader -- which is also what the channel volume knob's double-click and the
+/// mixer fader's reset land on. It is the one statement of the value: until
+/// 2026-09-22 core said 1.0 while the session's new channel, the engine's
+/// strip reset and the strip's volume descriptor all said 0.8, so a channel
+/// added from the toolbar started 1.9 dB under the level the gain contract
+/// is calibrated against, and a double-click on its knob made it louder.
+pub const DEFAULT_CHANNEL_VOLUME: f32 = 1.0;
+
 /// Complete addressable effect-chain bank. Chain slots cross the realtime
 /// bridge as `u8`; this is therefore a protocol boundary, not an eight-device
 /// product cap.
@@ -222,10 +234,7 @@ impl Channel {
             kind,
             muted: false,
             solo: false,
-            // Genuinely at unity: the operating-level headroom comes from
-            // source calibration (`gain::REFERENCE_PEAK_DBFS`), not from a
-            // quiet default fader.
-            volume: 1.0,
+            volume: DEFAULT_CHANNEL_VOLUME,
             pan: 0.0,
             bus: crate::MASTER_BUS,
             color: None,

@@ -9,6 +9,14 @@
 /// Gap below which `Smoothed::advance` snaps to the target instead of
 /// continuing to decay toward it. Far below any audible or musically
 /// meaningful parameter step, and far above `f32`'s subnormal range.
+///
+/// It only decides the end of the lag near zero. Everywhere else `f32` runs
+/// out of resolution first: once `gap * coeff` is under half a unit in the
+/// last place of the current value, the step rounds to nothing and the lag
+/// stalls short of its target for good. For a 10 ms lag landing on 0.7 that
+/// is about 1.4e-5 short; for the reverb's 120 ms predelay lag, which counts
+/// in samples, it is more than a whole sample. `advance` finishes those by
+/// creeping one unit in the last place per sample instead.
 const SNAP_EPSILON: f32 = 1.0e-9;
 
 /// A one-pole smoothed scalar. `set_target` is cheap enough to call every
@@ -58,9 +66,20 @@ impl Smoothed {
         // the snap it approximates.
         if delta.abs() < SNAP_EPSILON {
             self.current = self.target;
-        } else {
-            self.current += delta * self.coeff;
+            return self.current;
         }
+        let next = self.current + delta * self.coeff;
+        self.current = if next != self.current {
+            next
+        } else if delta > 0.0 {
+            // The step rounded to nothing: the lag has stalled (see
+            // `SNAP_EPSILON`). One unit in the last place is the smallest move
+            // there is, and the target is itself an `f32`, so this lands on
+            // it exactly without ever stepping by more than the lag would.
+            self.current.next_up()
+        } else {
+            self.current.next_down()
+        };
         self.current
     }
 
@@ -102,7 +121,10 @@ impl Smoothed {
     /// Whether the lag has reached its target and stopped moving.
     ///
     /// Exact rather than approximate: `advance` snaps once the remaining gap
-    /// is under `SNAP_EPSILON`, so a settled smoother really does hold still,
+    /// is under `SNAP_EPSILON` and creeps onto the target once `f32` can no
+    /// longer represent its step, and `advance_by`'s closed form rounds onto
+    /// the target once the gap is under half a unit in its last place, so a
+    /// settled smoother really does hold still,
     /// and a device can tell a host it has nothing left to do without the
     /// answer depending on how many samples it is asked about.
     pub fn is_settled(&self) -> bool {
@@ -157,6 +179,69 @@ mod tests {
         let mut smoothed = Smoothed::new(0.25, 0.005, 48_000);
         smoothed.set_target(1.0);
         assert_eq!(smoothed.advance_by(0), 0.25);
+    }
+
+    /// A lag that never arrives is never at rest, so a device reporting
+    /// `is_settled` to the idle-skip host would run forever. `f32` makes that
+    /// the default outcome: once `gap * coeff` is under half a unit in the
+    /// last place of the current value the step rounds to nothing, and for a
+    /// 10 ms lag landing on 0.7 that happens about 1.4e-5 short -- four orders
+    /// of magnitude above an absolute snap threshold. Covers slow lags, where
+    /// the stall is widest, and targets far from 1.0 in both directions.
+    #[test]
+    fn every_lag_reaches_its_target_and_stops() {
+        let sr = 48_000;
+        for (from, to, time_s) in [
+            (0.2_f32, 0.7_f32, 0.010_f32),
+            (0.7, 0.2, 0.010),
+            (0.0, 1.0, 0.005),
+            (1.0, 0.0, 0.005),
+            (0.0, 1.0, 1.0),
+            (-0.3, 0.9, 0.050),
+            (20_000.0, 440.0, 0.010),
+            (1.0e-4, 3.0e-4, 0.020),
+            // The reverb's predelay lag, which is counted in samples.
+            (0.0, 4_800.0, 0.120),
+        ] {
+            let mut smoothed = Smoothed::new(from, time_s, sr);
+            smoothed.set_target(to);
+            // Forty time constants is far past any audible movement.
+            let budget = (40.0 * time_s * sr as f32) as usize;
+            let mut previous = smoothed.value();
+            let mut largest_final_step = 0.0_f32;
+            for _ in 0..budget {
+                let value = smoothed.advance();
+                if smoothed.is_settled() {
+                    largest_final_step = (value - previous).abs();
+                    break;
+                }
+                previous = value;
+            }
+            assert!(
+                smoothed.is_settled(),
+                "{from} -> {to} over {time_s} s stalled at {} ({:e} short)",
+                smoothed.value(),
+                to - smoothed.value()
+            );
+            assert_eq!(smoothed.value(), to);
+            // Arriving must not be a step of its own: the last move is no
+            // larger than one unit in the last place of the target.
+            let ulp = to.abs().next_up() - to.abs();
+            assert!(
+                largest_final_step <= ulp.max(SNAP_EPSILON),
+                "{from} -> {to} over {time_s} s arrived with a step of {largest_final_step:e}"
+            );
+        }
+    }
+
+    #[test]
+    fn advancing_a_block_reaches_the_target_too() {
+        let mut smoothed = Smoothed::new(0.2, 0.010, 48_000);
+        smoothed.set_target(0.7);
+        for _ in 0..40 {
+            smoothed.advance_by(512);
+        }
+        assert!(smoothed.is_settled(), "stalled at {}", smoothed.value());
     }
 
     #[test]

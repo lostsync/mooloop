@@ -836,6 +836,20 @@ mooloop itself nor the pair that just failed. Preferring speakers over HDMI
 would be a guess about a machine the engine cannot see; being audible
 *somewhere* is the whole intent, and Preferences owns the real choice.
 
+This happens when the engine opens, and it works only because the engine
+opens *on the saved output*. Until 2026-09-22 it opened on the default, fell
+back from that, and applied the saved pair once the window was up -- which
+disconnected the working fallback before finding the saved pair missing, so
+unplugged headphones at launch meant total silence. Moving the output now
+connects the new pair before letting go of the old one, so choosing one in
+Preferences that will not connect leaves the current one playing.
+
+One part is still open: after a fallback, the fallback is what the engine
+remembers as its target, so auto-reconnect watches it rather than the saved
+pair, and plugging the headphones back in does not bring the output back to
+them. Keeping "wanted" and "connected" apart is P3's remainder in
+`reports/teams-2026-09-22.md`.
+
 To see the state directly: `pw-link -l | grep mooloop` lists the links, and no
 output at all means the outputs are connected to nothing.
 

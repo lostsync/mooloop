@@ -451,16 +451,29 @@ pub trait AudioNode {
     /// makes the default above implementable at all; the destinations, the
     /// timing, and the "safe default" behaviour are exactly as specified.
     /// See `docs/plans/automation-curves/00-status.md`.
-    fn apply_curves(&mut self, curves: &[ControlCurve<'_>], tick_frames: usize, fallback: &mut EventList) {
+    ///
+    /// Returns how many events `fallback` had no room for, so the engine can
+    /// count them in `RenderState::refused_events` the way it counts its own
+    /// pushes. An override that does not use `fallback` returns zero.
+    fn apply_curves(
+        &mut self,
+        curves: &[ControlCurve<'_>],
+        tick_frames: usize,
+        fallback: &mut EventList,
+    ) -> u64 {
+        let mut refused = 0;
         for curve in curves {
             for (tick, &value) in curve.values.iter().enumerate() {
                 let offset = (tick * tick_frames) as u32;
-                let _ = fallback.push_ordered(TimedEvent {
+                if !fallback.push_ordered(TimedEvent {
                     offset,
                     event: Event::ParamValue { id: curve.id, value },
-                });
+                }) {
+                    refused += 1;
+                }
             }
         }
+        refused
     }
 }
 
@@ -844,11 +857,12 @@ mod tests {
                 curves: &[ControlCurve<'_>],
                 _tick_frames: usize,
                 _fallback: &mut EventList,
-            ) {
+            ) -> u64 {
                 self.captured = curves
                     .iter()
                     .map(|c| (c.id, c.values.to_vec()))
                     .collect();
+                0
             }
         }
         let mut node = Records { captured: Vec::new() };

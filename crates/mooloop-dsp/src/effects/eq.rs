@@ -381,8 +381,9 @@ impl AudioNode for EqEffect {
         curves: &[ControlCurve<'_>],
         _tick_frames: usize,
         _fallback: &mut EventList,
-    ) {
+    ) -> u64 {
         self.curve_frame.capture(curves);
+        0
     }
 
     fn process(

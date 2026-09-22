@@ -1892,11 +1892,9 @@ fn queue_track_move(
     )
 }
 
-/// Duplicates pattern `index`'s length and every channel's notes for it,
-/// inserting the copy immediately after. Existing playlist placements (and
-/// `current_pattern`) keep pointing at the same pattern *content*, which
-/// means shifting any index greater than `index` up by one to follow the
-/// insertion; the new clone becomes the selected pattern, mirroring
+/// Duplicates pattern `index` immediately after itself -- see
+/// `Project::clone_pattern`, which moves every list parallel to the bank
+/// together. The new clone becomes the selected pattern, mirroring
 /// `queue_channel_insert` selecting the pasted/cloned channel.
 fn queue_pattern_clone(
     tx: &ProjectEditSender,
@@ -1911,27 +1909,13 @@ fn queue_pattern_clone(
     };
     let mut project = before.project.clone();
     let samples = before.samples.clone();
-    if project.pattern_lengths.len() >= MAX_PATTERNS || index >= project.pattern_lengths.len() {
+    if !project.clone_pattern(index) {
         return false;
     }
-    let length = project.pattern_lengths[index];
-    project.pattern_lengths.insert(index + 1, length);
-    for channel in &mut project.channels {
-        let notes = channel.notes[index].clone();
-        channel.notes.insert(index + 1, notes);
-        let automation = channel.automation[index].clone();
-        channel.automation.insert(index + 1, automation);
-    }
-    for placement in &mut project.playlist {
-        if placement.pattern as usize > index {
-            placement.pattern += 1;
-        }
-    }
-    project.current_pattern = (index + 1) as u16;
     queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
 }
 
-/// Removes pattern `index` and every channel's notes for it. Playlist
+/// Removes pattern `index` -- see `Project::remove_pattern`. Playlist
 /// placements on the removed pattern are dropped; placements on later
 /// patterns are reindexed down by one to keep pointing at the same
 /// content, mirroring the clone side of this pair.
@@ -1948,23 +1932,9 @@ fn queue_pattern_remove(
     };
     let mut project = before.project.clone();
     let samples = before.samples.clone();
-    if project.pattern_lengths.len() <= 1 || index >= project.pattern_lengths.len() {
+    if !project.remove_pattern(index) {
         return false;
     }
-    project.pattern_lengths.remove(index);
-    for channel in &mut project.channels {
-        channel.notes.remove(index);
-        channel.automation.remove(index);
-    }
-    project
-        .playlist
-        .retain(|placement| placement.pattern as usize != index);
-    for placement in &mut project.playlist {
-        if placement.pattern as usize > index {
-            placement.pattern -= 1;
-        }
-    }
-    project.current_pattern = index.min(project.pattern_lengths.len() - 1) as u16;
     queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
 }
 
@@ -2771,6 +2741,18 @@ fn descriptor_route_counts(
 /// and it happens before there is any UI to attach to.
 pub fn start_logging() {
     init_logging(UiSettings::load_or_default().general.log_to_file);
+}
+
+/// The audio configuration the user saved, for opening the engine on.
+///
+/// The engine has to *start* on it rather than be re-pointed once the window
+/// is up. Startup is where a saved output that has gone -- headphones
+/// unplugged, a device renamed -- falls back to one that works, and it can
+/// only do that for the output it was asked for: started on the default and
+/// re-targeted afterwards, the saved pair was tried last, failed, and took
+/// the working fallback down with it (P3 in `reports/teams-2026-09-22.md`).
+pub fn saved_audio_config() -> mooloop_engine::AudioConfig {
+    UiSettings::load_or_default().audio.engine_config()
 }
 
 /// Brings up diagnostic logging for the run and says what build is running.
@@ -8419,26 +8401,31 @@ impl AppUi {
             let history_state = state.clone();
             let commands = command_state.clone();
             let weak = window.as_weak();
+            // Inside the lane's press-to-release gesture, so a point created
+            // and then dragged is one entry named for the creation.
             window.on_automation_point_created(move |tick, value| {
                 let Some(window) = weak.upgrade() else {
                     return -1;
                 };
-                let before = project_snapshot(&st.borrow(), &window);
-                let mut st = st.borrow_mut();
-                let Some((id, command)) = st.session.create_automation_point(tick, value) else {
-                    return -1;
-                };
-                let _ = tx.send(command);
-                st.refresh_automation_points(&window);
-                drop(st);
-                record_project_history(
-                    &commands,
-                    before,
+                let mut created = -1;
+                with_gesture_history(
                     &history_state,
+                    &commands,
                     &window,
                     "Automation point added",
+                    || {
+                        let mut st = st.borrow_mut();
+                        let Some((id, command)) = st.session.create_automation_point(tick, value)
+                        else {
+                            return false;
+                        };
+                        let _ = tx.send(command);
+                        st.refresh_automation_points(&window);
+                        created = id as i32;
+                        true
+                    },
                 );
-                id as i32
+                created
             });
         }
         {
@@ -8447,25 +8434,29 @@ impl AppUi {
             let history_state = state.clone();
             let commands = command_state.clone();
             let weak = window.as_weak();
+            // Every pointer frame of a drag lands here. The lane opens a
+            // gesture on the press, so the whole drag is one undo entry
+            // rather than one per frame -- which also kept a single drag from
+            // spending most of a heavy song's history.
             window.on_automation_point_moved(move |id, tick, value| {
                 let Some(window) = weak.upgrade() else { return };
-                let before = project_snapshot(&st.borrow(), &window);
-                let mut st = st.borrow_mut();
-                let Some(command) = st
-                    .session
-                    .move_automation_point(id.max(0) as PointId, tick, value)
-                else {
-                    return;
-                };
-                let _ = tx.send(command);
-                st.refresh_automation_points(&window);
-                drop(st);
-                record_project_history(
-                    &commands,
-                    before,
+                with_gesture_history(
                     &history_state,
+                    &commands,
                     &window,
                     "Automation point moved",
+                    || {
+                        let mut st = st.borrow_mut();
+                        let Some(command) = st
+                            .session
+                            .move_automation_point(id.max(0) as PointId, tick, value)
+                        else {
+                            return false;
+                        };
+                        let _ = tx.send(command);
+                        st.refresh_automation_points(&window);
+                        true
+                    },
                 );
             });
         }
@@ -14783,22 +14774,14 @@ impl AppUi {
                             let Some(window) = weak.upgrade() else { return };
                             match action {
                                 AudioAction::ApplyPersisted(config) => {
-                                    if let Some(target) = config.output_target.clone() {
-                                        if let Err(error) = handle.set_output_target(Some(target)) {
-                                            log_warn!(
-                                                "audio",
-                                                "could not apply saved output target: {error}"
-                                            );
-                                        }
-                                    }
-                                    if let Some(frames) = config.buffer_size {
-                                        if let Err(error) = handle.set_buffer_size(frames) {
-                                            log_warn!(
-                                                "audio",
-                                                "could not apply saved buffer size: {error}"
-                                            );
-                                        }
-                                    }
+                                    // The output and the buffer size were
+                                    // applied when the engine opened, on the
+                                    // same saved config (`saved_audio_config`),
+                                    // which is the only point where a missing
+                                    // output can fall back to a working one.
+                                    // Re-applying them here tried the missing
+                                    // output again after the fallback had
+                                    // landed.
                                     handle.set_auto_reconnect(config.auto_reconnect);
                                     sync_audio_status(&handle, &window);
                                 }

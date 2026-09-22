@@ -37,6 +37,12 @@ code right now**. A gap large enough to need a plan belongs in `docs/plans/`;
 a wish belongs in `ENHANCEMENTS.md`; a described behaviour gap belongs in
 `CURRENT.md`. When an item is fixed, delete the row — do not annotate it.
 
+**This file takes no new rows as of 2026-09-22.** Linear is where work is
+tracked now (`AGENTS.md`, *Tracking work: Linear*): a new gap is an issue, in
+the `Loose ends` project unless a feature owns it. The rows below stay until
+they are fixed or filed, and filing one as an issue deletes its row here, in
+the same sitting, so that it is written down once.
+
 ---
 
 ## Wrong-looking UI over correct behaviour
@@ -311,15 +317,19 @@ blend stops nulling at mix 0 and
 `a_container_at_zero_mix_is_its_input_delayed_by_its_run` is what breaks.
 Found 2026-09-13.
 
-**The channel strip's parameters are not automation or modulation
+**The channel strip's processing parameters are not automation or modulation
 destinations.** Every one has a stable id (`mooloop_core::strip`) and the
-engine applies them by id, so the values are addressable; what is missing is
-that a lane's target is an `EffectTarget` plus a *slot* and a strip is not a
-slot. The ids start at 16 for this: `modulation::STRIP_PARAM_VOLUME` and
-`STRIP_PARAM_PAN` are 0 and 1 of what is conceptually the same strip
-(`ParamOwner::Strip`, already addressable by a route), so the two tables can
-become one without renumbering anything automation has persisted. Recorded
-2026-09-11 with step 03.
+engine applies them by id, so the values are addressable. The reason given
+here until 2026-09-22 -- that a lane's target is an `EffectTarget` plus a
+*slot*, and a strip is not a slot -- has gone: a lane's target is a
+`ParamAddr`, and `ParamOwner::Strip` is one. What is missing now is that the
+engine resolves only `STRIP_DESCRIPTORS` (the fader and pan,
+`resolve_strip_segments`), and the picker lists only those; the fader and pan
+became pickable on 2026-09-22. The processing ids start at 16 for this:
+`modulation::STRIP_PARAM_VOLUME` and `STRIP_PARAM_PAN` are 0 and 1 of what is
+conceptually the same strip, so the two tables can become one without
+renumbering anything automation has persisted. Recorded 2026-09-11 with
+step 03.
 
 **Buffer MIDI mapping has no UI.** `EngineHandle::set_buffer_midi_map`
 (`mooloop-engine/src/lib.rs:622`) is the only way to install one, and neither
@@ -340,11 +350,6 @@ learn gesture rides on `modulation-edit-started`, so its reach is exactly
 modulation's reach, and the inline fader rows have never carried that
 callback. Nothing is inconsistent between the two features; both simply stop
 at the same place.
-
-**Nothing in the MIDI control layer has been run against a device, as of
-2026-09-15.** Every layer has tests and the application compiles and draws its
-mapping page, and no keyboard has been plugged into it. `scripts/mooloop-mcp`
-and a controller are the check.
 
 ~~**The Core MIDI driver's port ids have never been compiled.**~~ **Closed
 2026-09-20**: `cargo check -p mooloop-engine --all-targets` on the Mac is
@@ -473,11 +478,6 @@ gesture that has already been replaced, which is a small change and was not
 worth making on a hazard nobody has hit. Found 2026-09-21, building
 `docs/plans/archive/gesture-undo/`.
 
-**Whether a solo click deserves its own undo step is a taste question.**
-`MixerBus::solo` is persisted (`core/src/mixer.rs:164`), so it is reverted
-by any undo either way; what is open is whether soloing should cost a
-Ctrl+Z of its own. It records one today. Found 2026-09-21.
-
 **Nothing checks that `apply_engine_message` still reads
 `EngineCommand::edits_document`.** The "not an edit" rule is one predicate now
 (`mooloop-core/src/bridge.rs`), and four tests in `edits_document_tests` pin
@@ -535,30 +535,6 @@ caller and nothing rolls them back. Cheapest honest fix: clear the latch when
 the queue drains, or per document in `replace_project`. Found 2026-09-21,
 `reports/fable-2026-09-21.md` finding 8.
 
-**The channel and device clipboards outlive the song, carrying ids that named
-channels in the old one.** `CommandState::channel_clipboard`
-(`mooloop-session/src/command.rs:17`) is written at `lib.rs:8396` and `:8412`,
-read at `:1112` and `:8417`, and never set to `None`; the device clipboard is
-the same (`:15489`, read `:6392` and `:15511`). Three fields up in the same
-`CommandState`, `history` **is** cleared at both document boundaries
-(`lib.rs:13088` New Song, `:13464` Open Song) under a comment explaining why a
-snapshot must not cross a document. The clipboard was left out of that.
-
-Only `audio_input` carries a project id -- `ChannelMidiInput`
-(`core/src/midi.rs:382`) names a MIDI *port*, not a channel, so the report's
-"`audio_input` and `midi_input` ids" is half right. And the reason the paste
-is wrong is not that the id resolves to nothing: `assign_channel_ids`
-(`core/src/project.rs:1040`) gives an identity-less song `ChannelId(index)`
-and `next_channel_id` counts per document, so **low ids collide between
-songs** and a pasted `Channel(ChannelId(0))` names the new song's first
-channel -- inaudible, plausible, and wrong. `AudioInputSource::resolve` has no
-"departed" marker to fall back on, unlike Aux In's reseat
-(`aux_in.rs:219-227`, `DEPARTED_SOURCE`), so it reads as Off when it misses
-and as somebody else's channel when it hits. The same-song half is recorded
-below (`rescope_after`, `core/src/project.rs:1545`, does not touch the field).
-Whether a clipboard should survive a song is Adam's call; the ids inside it
-should not. Found 2026-09-21, `reports/fable-2026-09-21.md` finding 7; MOO-60.
-
 **Add Channel frees one allocation on the audio thread.** Not the automation
 lanes any more (`reports/fable-2026-09-21.md`, finding 1, fixed): what is
 left is the seat's `ModRack`, replaced by `set_channel_modulation(channel,
@@ -607,9 +583,19 @@ at a 512-frame block:
   it O(destinations).
 - `EventList::push_ordered` (`dsp/src/event.rs:122`) is an insertion sort
   into `MAX_EVENTS = 256`, and the control pass emits one event per control
-  tick per driven destination into a `let _` (`render.rs:5934`). **The
-  8192-frame block this used to be written against is the far end of it, and
-  the near end is 512 frames** -- the same loop serves modulation as well as
+  tick per driven destination. **The 8192-frame block this used to be written
+  against is the far end of it, and the near end is 512 frames.** Export ran
+  at the far end every time until 2026-09-22 and now renders in 512-frame
+  blocks (`offline.rs`, `OFFLINE_BLOCK_FRAMES`), and the control pass's
+  refusals -- source and effect parameters, route amounts, auditions -- are
+  counted in `RenderState::refused_events`, which an export returns and
+  logs. Plan D (`docs/plans/automation-curves/`) then moved a driven
+  parameter out of the list into a per-destination curve row, which takes a
+  device with a native curve path off the cap -- only the EQ so far. Every
+  other device still gets its curves back as events through
+  `AudioNode::apply_curves`'s default fallback, whose refusals are counted in
+  the same total, and route amounts are still one event per tick. So for
+  those, the near end is still open: the same loop serves modulation as well as
   automation, so a channel has up to `MAX_MOD_ROUTES_PER_CHANNEL = 16` plus
   `MAX_AUTOMATION_LANES_PER_CHANNEL = 8` driven destinations, and
   24 x 512/`CONTROL_RATE_FRAMES` = 384 is already past 256. Sixteen of those
@@ -620,7 +606,9 @@ at a 512-frame block:
   value everywhere but one destination freezing mid-block and every later one
   in descriptor order getting nothing. No allocation and no noise either way.
   MOO-73, which also names three more sites that drop a `push_ordered`
-  refusal, two of them without even a `let _`.
+  refusal, two of them without even a `let _`. The note and choke pushes --
+  the sequencer's note scheduling, choke injection and `release_all_voices`
+  -- are still uncounted.
 - `Sequencer::set_playlist_placement` did `push` then `sort_unstable` on the
   callback per placement toggle. **Closed 2026-09-22**: it inserts at
   `partition_point`, which answers the duplicate check in the same binary
@@ -1159,37 +1147,6 @@ routes whose device is gone (`modulation.rs:1875`) while keeping *illegal*
 routes inert (`modulation.rs:1932`). Both behaviours were chosen on purpose in
 their own passes; nobody has decided whether they should match.
 
-**A pasted channel keeps the original's audio input, so a copy of a channel
-that resamples itself resamples the original.** `channel_clipboard`
-(`session/session.rs:1736`) clones the whole `ProjectChannel`, `audio_input`
-included (`core/src/channel.rs:158`), and nothing on the way back in touches
-it: `queue_channel_insert` (`mooloop-ui/src/lib.rs:1495`) renames the copy
-and resizes its lanes, and `rescope_after` (`core/src/project.rs:1545`) walks
-subscriptions, modulation and lanes and not this field. A paste of a channel
-whose input is `Channel(n)` therefore points at channel *n* — the original —
-rather than at itself, which is the reading a duplicated feedback path would
-want and not the reading a duplicated resampler would.
-
-Both are defensible and the field is one line either way, so this is a
-question rather than a defect: **Adam's call.** Neither answer needs the
-rescope walk; the copy's own id is minted by `insert_channel` and is
-available at the same point the name is made unique. Found 2026-09-20,
-`reports/fable-2026-09-20.md` finding 4.
-
-**Answered 2026-09-21, in the direction that cannot be wrong silently.**
-`queue_channel_insert` clears `audio_input` and `midi_input` on every paste
-and says so in the status message. The forcing case was the *other*
-document: the clipboard outlives New Song and Open Song
-(`CommandState::channel_clipboard` is written in two places and cleared
-nowhere), so a channel copied in one song pasted into the next carried ids
-that named whatever that song happened to have at those numbers
-(`reports/fable-2026-09-21.md`, finding 7). Adam's call stands for the
-same-song reading: if a duplicate should keep its input pick, the place to
-do it is here, with the copy's own id, and only when the clipboard and the
-document agree -- which needs a document identity the clipboard does not
-carry yet. Whether a clipboard should survive a song at all is the same
-question one level up, and is still open.
-
 ---
 
 ## One name, two policies
@@ -1500,27 +1457,6 @@ Moving tempo and swing onto `Session` is the one worth doing before any view
 rewrite. Pane layout and appearance preferences are read from the window too,
 which is fine: that is view state. The full list is in
 `docs/plans/egui-view-layer/00-status.md`.
-
-
-**Two EQ listening passes are owed, and the plan they belonged to has
-closed.** `eq-v2/` archived on 2026-09-15 when Adam declined step 04, so these
-are now owed against shipped code rather than against a pending decision, and
-they are recorded here so the archiving does not bury them. Neither is a
-defect; both are a change nobody has yet confirmed by ear.
-
-- **Step 03, the shelf slope.** Measured rather than guessed, so the listen is
-  narrow: at the Q both shelves rest at (0.707) the change peaks at **0.45 dB**
-  an octave from the corner, it pivots about the corner rather than moving the
-  shelf, and it is gone three octaves out. What actually changed is the Q knob,
-  which did nothing at all before -- **up to 1.9 dB at Q 0.15**. So the patches
-  affected are the ones where somebody tried to use that knob and gave up. Listen
-  to shelves with a Q away from 0.707, an octave either side of the corner.
-  `archive/eq-v2/00-status.md` has the table. See the shelf-Q entry above for
-  why the top 46% of that knob still does nothing.
-- **Step 02, the response plot.** Changed nothing audible and changed what the
-  picture *claims*: the curve is the bank's own coefficients evaluated rather
-  than a shape drawn to resemble them, and the pass filters appear in it at
-  last. That wants a look with a patch moving under it, not a listen.
 
 **`mooloop-ui` had never been linted, and two things had ridden in on that.**
 Fixed 2026-09-07, recorded because the *shape* of it will recur: `cargo

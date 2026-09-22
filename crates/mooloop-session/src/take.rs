@@ -37,6 +37,14 @@ const RING_SECONDS: usize = 10;
 /// How often an idle drain looks at the ring again.
 const DRAIN_POLL: Duration = Duration::from_millis(5);
 
+/// Seconds of audio between checkpoints. hound's `flush` rewrites the header
+/// for everything written so far, so a take is a readable WAV up to its last
+/// checkpoint whatever happens next: the process dies, a write fails, or the
+/// machine loses power once the OS has written the page out. Without it only
+/// `finalize` patched the header, and a take that never reached `finalize`
+/// said zero frames and could not be opened at all.
+const CHECKPOINT_SECONDS: u64 = 1;
+
 /// How long [`TakeRecorder::finish_all`] waits for one drain to notice its
 /// take ended and write what is left.
 ///
@@ -74,6 +82,10 @@ impl FinishedTake {
 enum Drained {
     /// A file with at least one frame in it.
     Written { frames: u64 },
+    /// The drain failed after at least one checkpoint. The file is a readable
+    /// take of `frames` -- everything up to that checkpoint -- so it is kept
+    /// and lands like a finished one, and `error` says what was lost.
+    Partial { frames: u64, error: String },
     /// Nothing was recorded -- cancelled while waiting for its bar -- so the
     /// file was removed rather than left as an empty WAV.
     Empty,
@@ -232,9 +244,9 @@ impl TakeRecorder {
     /// [`Self::collect`] is the pump's version and skips a drain that has not
     /// finished, which is right when it will be asked again in sixteen
     /// milliseconds and wrong when this is the last time anything will ask:
-    /// `hound` patches the frame count into the WAV header in `finalize`, at
-    /// the end of the drain, so a take whose drain never runs out leaves a
-    /// file that says it holds zero frames.
+    /// only `finalize`, at the end of the drain, patches the whole take into
+    /// the WAV header, so a take whose drain never runs out leaves a file
+    /// that stops at its last checkpoint.
     ///
     /// Each drain is given [`FINISH_DEADLINE`] so a stuck one cannot hang
     /// quit; one that overruns has its partial file removed and is reported.
@@ -261,9 +273,11 @@ impl TakeRecorder {
                 classify(take, &mut finished, &mut failures);
             } else {
                 // **A timed-out wait removes the partial file** (open question 9,
-                // answered 2026-09-21). Its header was never patched, so what is on
-                // disk is a WAV nothing can read; leaving it would put a file
-                // in `recordings/` that looks like a take and is not one.
+                // answered 2026-09-21). When that was decided its header had
+                // never been patched, so what was on disk was a WAV nothing
+                // could read. Since checkpoints (`CHECKPOINT_SECONDS`) it reads
+                // up to its last one, so the reason has gone and the decision
+                // stands until it is revisited.
                 let removed = std::fs::remove_file(&take.path).is_ok();
                 failures.push(format!(
                     "{} did not finish writing within {} seconds{}",
@@ -318,6 +332,16 @@ fn classify(mut take: Running, finished: &mut Vec<FinishedTake>, failures: &mut 
             dropped: take.status.dropped(),
             start_tick: take.status.start_tick(),
         }),
+        Some(Drained::Partial { frames, error }) => {
+            finished.push(FinishedTake {
+                channel: take.channel,
+                path: take.path,
+                frames,
+                dropped: take.status.dropped(),
+                start_tick: take.status.start_tick(),
+            });
+            failures.push(error);
+        }
         Some(Drained::Failed(error)) => failures.push(error),
         Some(Drained::Empty) | None => {}
     }
@@ -539,14 +563,37 @@ impl TakeView {
     }
 }
 
-/// A drain that could not finish: remove the partial file and say so.
+/// A drain that could not finish. The one place a failure is worded, so
+/// every call site agrees.
 ///
-/// Its header still says zero frames, because only `finalize` patches that,
-/// so what is left on disk is a WAV nothing can read. Leaving it there means
-/// the recordings folder accumulates unreadable files that only step 06's
-/// sweeper would ever remove -- and it would list them as ordinary unused
-/// takes. The one place a failure is worded, so both call sites agree.
-fn failed(path: &Path, doing: &str, error: impl std::fmt::Display) -> Drained {
+/// With a checkpoint behind it the file is a readable take up to that point
+/// (see [`CHECKPOINT_SECONDS`]), so it is kept: a performance cut short by a
+/// full disk is still the performance. With none, its header still says zero
+/// frames and what is left on disk is a WAV nothing can read, so it is
+/// removed -- left there, the recordings folder would accumulate unreadable
+/// files that only step 06's sweeper would ever remove, listed as ordinary
+/// unused takes.
+///
+/// The writer is gone by the time this runs. Its `Drop` tries to patch the
+/// header once more, and on a full disk that fails at the seek that has to
+/// flush the buffer first, so the header stays at the last checkpoint.
+fn failed(
+    path: &Path,
+    doing: &str,
+    error: impl std::fmt::Display,
+    checkpointed: u64,
+    sample_rate: u32,
+) -> Drained {
+    if checkpointed > 0 {
+        let seconds = checkpointed as f64 / f64::from(sample_rate.max(1));
+        return Drained::Partial {
+            frames: checkpointed,
+            error: format!(
+                "{doing} {}: {error}; the first {seconds:.1} s of the take were kept",
+                path.display()
+            ),
+        };
+    }
     let note = match std::fs::remove_file(path) {
         Ok(()) => "; the partial recording was removed",
         Err(_) => "",
@@ -566,7 +613,10 @@ fn drain<W: Write + Seek>(
     peaks: &Mutex<Vec<[f32; 2]>>,
     path: &Path,
 ) -> Drained {
+    let sample_rate = writer.spec().sample_rate;
+    let checkpoint_every = u64::from(sample_rate).max(1) * CHECKPOINT_SECONDS;
     let mut written = 0u64;
+    let mut checkpointed = 0u64;
     let mut bucket = [0.0f32; 2];
     let mut in_bucket = 0usize;
     loop {
@@ -581,10 +631,10 @@ fn drain<W: Write + Seek>(
                     .write_sample(frame[0])
                     .and_then(|()| writer.write_sample(frame[1]))
                 {
-                    // A failed take owns its file. Nothing else will ever
-                    // name it -- the session hands back a `Failed` and
-                    // forgets the path -- so leaving it behind fills
-                    // `recordings/` with fragments a user has no way to tell
+                    // A failed take owns its file: `failed` keeps it as a
+                    // `Partial` take when a checkpoint made it readable, and
+                    // removes it otherwise. A fragment nothing names would
+                    // fill `recordings/` with files a user has no way to tell
                     // from a take that worked
                     // (`reports/fable-2026-09-21.md`, finding 3).
                     //
@@ -593,7 +643,17 @@ fn drain<W: Write + Seek>(
                     // bytes. `chunk` is abandoned unread on purpose: the take
                     // is already lost and the ring dies with the producer.
                     drop(writer);
-                    return failed(path, "writing", error);
+                    return failed(path, "writing", error, checkpointed, sample_rate);
+                }
+                written += 1;
+                // Counted in frames rather than per chunk, so a checkpoint is
+                // a second of audio however the ring happened to hand it over.
+                if written - checkpointed >= checkpoint_every {
+                    if let Err(error) = writer.flush() {
+                        drop(writer);
+                        return failed(path, "writing", error, checkpointed, sample_rate);
+                    }
+                    checkpointed = written;
                 }
                 bucket[0] = bucket[0].max(frame[0].abs());
                 bucket[1] = bucket[1].max(frame[1].abs());
@@ -607,7 +667,6 @@ fn drain<W: Write + Seek>(
                 }
             }
             chunk.commit_all();
-            written += available as u64;
             continue;
         }
         let told_everything = status.phase() == TakePhase::Ended && written >= status.frames();
@@ -623,9 +682,9 @@ fn drain<W: Write + Seek>(
     }
     // `finalize` consumes the writer, so the handle is already closed here.
     if let Err(error) = writer.finalize() {
-        // Same rule as the write above: a header that was never finished is
-        // not a playable file, and nothing else is going to clean it up.
-        return failed(path, "finishing", error);
+        // Same rule as the write above: what the last checkpoint covered is
+        // kept, and a header that was never written at all is removed.
+        return failed(path, "finishing", error, checkpointed, sample_rate);
     }
     if written == 0 {
         let _ = std::fs::remove_file(path);
@@ -723,20 +782,31 @@ mod tests {
     /// A `Write + Seek` sink that fails on demand, so the drain's failure
     /// handling can be reached without a full disk.
     struct FailingSink {
-        inner: std::io::Cursor<Vec<u8>>,
+        /// Shared, so a test can read what reached the "disk" after the
+        /// writer that owned the sink is gone.
+        inner: std::rc::Rc<std::cell::RefCell<std::io::Cursor<Vec<u8>>>>,
         when: FailWhen,
         allowance: usize,
     }
 
     impl FailingSink {
         fn new(when: FailWhen) -> Self {
+            // Enough for the header and a few frames, so the failure lands
+            // mid-take rather than before anything is written.
+            Self::with_allowance(when, 128)
+        }
+
+        fn with_allowance(when: FailWhen, allowance: usize) -> Self {
             Self {
-                inner: std::io::Cursor::new(Vec::new()),
+                inner: Default::default(),
                 when,
-                // Enough for the header and a few frames, so the failure
-                // lands mid-take rather than before anything is written.
-                allowance: 128,
+                allowance,
             }
+        }
+
+        /// Everything written so far, as a file would hold it.
+        fn contents(&self) -> std::rc::Rc<std::cell::RefCell<std::io::Cursor<Vec<u8>>>> {
+            self.inner.clone()
         }
     }
 
@@ -748,13 +818,13 @@ mod tests {
                 }
                 let n = buf.len().min(self.allowance);
                 self.allowance -= n;
-                return self.inner.write(&buf[..n]);
+                return self.inner.borrow_mut().write(&buf[..n]);
             }
-            self.inner.write(buf)
+            self.inner.borrow_mut().write(buf)
         }
 
         fn flush(&mut self) -> std::io::Result<()> {
-            self.inner.flush()
+            self.inner.borrow_mut().flush()
         }
     }
 
@@ -763,7 +833,7 @@ mod tests {
             if self.when == FailWhen::Finalizing {
                 return Err(std::io::Error::other("the disk went away"));
             }
-            self.inner.seek(pos)
+            self.inner.borrow_mut().seek(pos)
         }
     }
 
@@ -859,9 +929,11 @@ mod tests {
         drop(take);
     }
 
-    /// When a drain fails there is no way to write the header, so what is on
-    /// disk is a WAV nothing can read. Both routes out -- a write that fails
-    /// partway, and a `finalize` that cannot patch the header -- remove it.
+    /// When a drain fails before its first checkpoint there is no way to write
+    /// the header, so what is on disk is a WAV nothing can read. Both routes
+    /// out -- a write that fails partway, and a `finalize` that cannot patch
+    /// the header -- remove it. Two hundred frames is far short of a second,
+    /// so neither case here reaches a checkpoint.
     ///
     /// Shaped against the unfixed tree, where only `Drained::Empty` removed
     /// anything: both cases left one unreadable file in the folder and said
@@ -907,6 +979,113 @@ mod tests {
                 "{when:?} left its partial file behind"
             );
         }
+    }
+
+    /// A take still recording is a readable file on disk, up to its last
+    /// checkpoint -- which is what survives the process dying, since nothing
+    /// after that runs `finalize`.
+    ///
+    /// Shaped against the unfixed tree, where only `finalize` patched the
+    /// header: the live file said zero frames and hound refused it or read it
+    /// as empty, for the whole length of the take.
+    #[test]
+    fn a_take_in_progress_is_readable_up_to_its_last_checkpoint() {
+        const RATE: u32 = 1_000;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("live.wav");
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: RATE,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let writer = hound::WavWriter::create(&path, spec).unwrap();
+        let (mut producer, consumer) = rtrb::RingBuffer::new(4_096);
+        let frames = ramp(2_500);
+        for frame in &frames {
+            producer.push(*frame).unwrap();
+        }
+        let status = Arc::new(TakeStatus::new());
+        let peaks = Arc::new(Mutex::new(Vec::new()));
+        let handle = {
+            let (status, peaks, path) = (status.clone(), peaks.clone(), path.clone());
+            std::thread::spawn(move || drain(consumer, &status, writer, &peaks, &path))
+        };
+
+        // Two checkpoints' worth has gone by and the take is still live.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let readable = loop {
+            let frames_on_disk = hound::WavReader::open(&path)
+                .map(|reader| reader.duration())
+                .unwrap_or(0);
+            if frames_on_disk >= 2_000 || Instant::now() >= deadline {
+                break frames_on_disk;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(readable, 2_000, "the live file is not readable to its last checkpoint");
+        let mut reader = hound::WavReader::open(&path).unwrap();
+        let samples: Vec<f32> = reader.samples::<f32>().map(Result::unwrap).collect();
+        let flat: Vec<f32> = frames[..2_000].iter().flat_map(|frame| *frame).collect();
+        assert_eq!(samples, flat);
+
+        status.end();
+        drop(producer);
+        let outcome = handle.join().unwrap();
+        assert!(
+            matches!(outcome, Drained::Written { frames: 2_500 }),
+            "{outcome:?}"
+        );
+        assert_eq!(hound::WavReader::open(&path).unwrap().duration(), 2_500);
+    }
+
+    /// A write that fails after a checkpoint keeps the take: what the header
+    /// covers is a performance, and a full disk is no reason to throw it away.
+    /// It is handed back as `Partial`, so it lands on the channel *and* the
+    /// failure is reported.
+    ///
+    /// Shaped against the unfixed tree, where every failure removed the file.
+    #[test]
+    fn a_drain_that_fails_after_a_checkpoint_keeps_the_take() {
+        const RATE: u32 = 1_000;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("partial.wav");
+        std::fs::write(&path, b"a partial recording").unwrap();
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: RATE,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        // Room for the header and about a second and a half of frames, so
+        // the failure lands after the first checkpoint and before the second.
+        let sink = FailingSink::with_allowance(FailWhen::Writing, 256 + 1_500 * 8);
+        let disk = sink.contents();
+        let writer = hound::WavWriter::new(sink, spec).unwrap();
+        let (mut producer, consumer) = rtrb::RingBuffer::new(4_096);
+        let frames = ramp(3_000);
+        for frame in &frames {
+            producer.push(*frame).unwrap();
+        }
+        drop(producer);
+        let status = TakeStatus::new();
+        status.end();
+        let peaks = Mutex::new(Vec::new());
+
+        let outcome = drain(consumer, &status, writer, &peaks, &path);
+
+        let Drained::Partial { frames: kept, error } = outcome else {
+            panic!("a failure after a checkpoint should keep the take, got {outcome:?}");
+        };
+        assert_eq!(kept, 1_000);
+        assert!(error.contains("were kept"), "the message does not say so: {error}");
+        assert!(path.exists(), "the kept take was removed");
+        let bytes = disk.borrow().get_ref().clone();
+        let mut reader = hound::WavReader::new(std::io::Cursor::new(bytes)).unwrap();
+        assert_eq!(reader.duration(), 1_000, "the header is not at the checkpoint");
+        let samples: Vec<f32> = reader.samples::<f32>().map(Result::unwrap).collect();
+        let flat: Vec<f32> = frames[..1_000].iter().flat_map(|frame| *frame).collect();
+        assert_eq!(samples, flat);
     }
 
     /// A take lands only on a channel that still exists **and** still holds a

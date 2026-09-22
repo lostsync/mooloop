@@ -20,6 +20,8 @@
 
 use mooloop_core::DriveCurve;
 
+use crate::shaper::DRIVE_REFERENCE_LINEAR;
+
 /// A topology-preserving state-variable low-pass filter (Chamberlin/Zavalishin
 /// form). Unlike a biquad it stays well behaved while cutoff moves every
 /// sample, which is what envelope-modulated synth filters need.
@@ -307,11 +309,6 @@ impl AllPass {
         output
     }
 }
-
-/// Signal level (linear) the drive compensation anchors to: the operating
-/// level, `10^(REFERENCE_PEAK_DBFS/20)`. Written as a literal because this
-/// runs per sample.
-const DRIVE_REFERENCE_LINEAR: f32 = 0.251;
 
 /// Compensated soft saturation shared by the sampler, drum synth, both
 /// synths, and the filter effect: pre-gain into `tanh`, normalized by the

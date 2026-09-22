@@ -16,6 +16,7 @@ use mooloop_core::{
     default_buses, log_warn, sanitize_bank, would_create_cycle, DEFAULT_STEPS,
     MAX_BUSES, MAX_CHANNELS, MAX_PLAYLIST_PLACEMENTS,
     drop_lanes_for_device, strip_descriptor, AutomationLane, BusSetup, Channel, ChannelId,
+    STRIP_DESCRIPTORS,
     ChannelSetup, DeviceId,
     AuxInParams, AuxInState, ChannelSource, DeviceKind, DrumSynthParams, DrumSynthState, Ds01Params, Ds01State,
     EffectParams, EffectSlotState, EffectTarget, MlM1Params, MlM1State, MlP8Params, MlP8State,
@@ -707,8 +708,9 @@ impl Session {
     }
 
     /// Every destination the selected clip can address: the channel's own
-    /// effect chain plus every bus's, because a clip's automation is allowed
-    /// to reach the buses its channel feeds into.
+    /// effect chain and its strip's fader and pan, plus every bus's chain,
+    /// because a clip's automation is allowed to reach the buses its channel
+    /// feeds into.
     ///
     /// The generator is included, and listed first -- it is the top of the
     /// signal path and what most channels have instead of an effect chain.
@@ -745,6 +747,19 @@ impl Session {
                         descriptor,
                     ));
                 }
+            }
+            // The strip's fader and pan, after the chain because that is
+            // where they sit in the signal path. The engine has resolved
+            // strip lanes all along (`resolve_strip_segments`); only these
+            // rows were missing, so a song could carry a fader lane -- one
+            // written by hand, or by a later version -- that played and could
+            // not be seen.
+            for descriptor in STRIP_DESCRIPTORS.iter() {
+                rows.push((
+                    ParamAddr::strip(channel, descriptor.id),
+                    "Channel strip".to_string(),
+                    descriptor,
+                ));
             }
         }
         for (index, bus) in self.buses.iter().enumerate() {
@@ -827,7 +842,8 @@ impl Session {
                 let slot = mooloop_core::device_slot(effects, device)?;
                 effects[slot].kind().descriptor(target.param)
             }
-            ParamOwner::Modulator { .. } | ParamOwner::Strip => None,
+            ParamOwner::Strip => strip_descriptor(target.param),
+            ParamOwner::Modulator { .. } => None,
         }
     }
 

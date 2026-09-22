@@ -1,10 +1,12 @@
 # Fix the edit loop — plan status
 
 **Steps 01 and 02 landed 2026-09-04. Step 03 is closed unstarted, on a
-measurement. Step 04 waits on one number that only a future session can
-produce.** Written 2026-09-03, out of a session that went looking for whether
-to replace Slint with egui and found the toolkit was the wrong question to be
-asking first.
+measurement. Step 04's number arrived the same day -- 10% blocked, under its
+own bar -- and it now waits on Adam's decision** (Linear MOO-146, in project
+[Edit loop](https://linear.app/mooloop/project/edit-loop-f3661f76ed2c); the
+dev-build listening test step 02 left open is MOO-168). Written 2026-09-03,
+out of a session that went looking for whether to replace Slint with egui and
+found the toolkit was the wrong question to be asking first.
 
 What changed: `scripts/antibox` picks incremental compilation for dev builds
 and sccache for release builds instead of always sccache (64% off a workspace

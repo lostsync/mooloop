@@ -22,7 +22,10 @@ mooloop-ui = { workspace = true }
 
 # Packaged by .github/workflows/release.yml via `cargo deb`. Shared-library
 # dependencies (JACK, GL, X11/Wayland, fontconfig, ...) are auto-detected
-# with $auto rather than hand-listed.
+# with $auto rather than hand-listed. zenity is not a library, so nothing
+# detects it: every file dialog and confirmation shells out to it
+# (`mooloop-session/src/dialogs.rs`), and without it Open, Save and Export
+# have no way to ask for a path. It is named here and in the rpm's requires.
 [package.metadata.deb]
 maintainer = "adam <lostsync@gmail.com>"
 copyright = "2026, adam"
@@ -34,7 +37,7 @@ small synthesis engines, and talks directly to JACK or PipeWire's JACK \
 compatibility layer."""
 section = "sound"
 priority = "optional"
-depends = "$auto"
+depends = "$auto, zenity"
 assets = [
     ["target/release/mooloop", "usr/bin/", "755"],
     ["../../packaging/mooloop.desktop", "usr/share/applications/", "644"],
@@ -48,3 +51,8 @@ assets = [
     { source = "../../packaging/mooloop.desktop", dest = "/usr/share/applications/mooloop.desktop", mode = "644" },
     { source = "../../packaging/mooloop.png", dest = "/usr/share/icons/hicolor/256x256/apps/mooloop.png", mode = "644" },
 ]
+
+# Shared libraries are found by generate-rpm's automatic requires; zenity is
+# not one (see the deb metadata above).
+[package.metadata.generate-rpm.requires]
+zenity = "*"

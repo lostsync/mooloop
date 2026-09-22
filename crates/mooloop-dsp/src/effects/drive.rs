@@ -14,7 +14,9 @@ use crate::bus::StereoBus;
 use crate::event::EventList;
 use crate::filter::OnePoleLp;
 use crate::node::{AudioNode, ProcessContext};
-use crate::shaper::{drive_compensation, shape, Oversampler2x, OVERSAMPLER_LATENCY_FRAMES};
+use crate::shaper::{
+    reference_drive_compensation, shape, Oversampler2x, OVERSAMPLER_LATENCY_FRAMES,
+};
 use crate::smooth::Smoothed;
 use super::{process_param_split, RangeProcessor};
 
@@ -107,7 +109,7 @@ impl RangeProcessor for DriveEffect {
             let tone = self.tone.advance();
             let mix = self.mix.advance();
             let output = self.output.advance();
-            let compensation = drive_compensation(curve, drive);
+            let compensation = reference_drive_compensation(curve, drive);
             let (dry_l, dry_r) = (bus.l[i], bus.r[i]);
 
             let wet_l = self.left.process(dry_l, |x| shape(curve, x * drive)) * compensation;
@@ -343,11 +345,18 @@ mod tests {
             },
         }));
         effect.process(&context(frames), &mut bus, &events, None);
-        let before = rms(&bus.l[frames / 4..frames / 2]);
-        let after = rms(&bus.l[3 * frames / 4..frames]);
+        // Measured as character rather than level, because the compensation
+        // holds the level: a hard-clipped sine squares off, so its RMS climbs
+        // from peak/sqrt(2) toward its peak.
+        let squareness = |samples: &[f32]| {
+            let peak = samples.iter().fold(0.0f32, |a, s| a.max(s.abs()));
+            rms(samples) / peak
+        };
+        let before = squareness(&bus.l[frames / 4..frames / 2]);
+        let after = squareness(&bus.l[3 * frames / 4..frames]);
         assert!(
-            after > before * 2.0,
-            "drive rise had no effect: {before} then {after}"
+            before < 0.75 && after > 0.9,
+            "drive rise had no effect: rms/peak {before} then {after}"
         );
     }
 
@@ -375,6 +384,44 @@ mod tests {
                     bus.l[i].is_finite() && bus.l[i].abs() < 8.0,
                     "{curve:?} produced {} at {i}",
                     bus.l[i]
+                );
+            }
+        }
+    }
+
+    /// The gain-structure contract (`docs/GAIN_STRUCTURE.md`): at the
+    /// operating level, raising drive changes character, not level. Signals
+    /// arrive near `REFERENCE_PEAK_DBFS`, so that is where the compensation
+    /// has to hold the peak -- anchored at full scale instead, the default
+    /// drive of 2 was +5.6 dB of plain volume on a Soft curve and drive 8
+    /// nearly +12 dB, so the knob was mostly a volume knob.
+    #[test]
+    fn drive_holds_a_reference_level_peak_on_every_curve() {
+        let reference = 10.0_f32.powf(mooloop_core::gain::REFERENCE_PEAK_DBFS / 20.0);
+        let frames = 9_600;
+        for curve in [
+            DriveCurve::Soft,
+            DriveCurve::Hard,
+            DriveCurve::Fold,
+            DriveCurve::Tape,
+        ] {
+            for drive in [1.0_f32, 2.0, 4.0, 8.0, 32.0, 64.0] {
+                let mut bus = sine_bus(frames, 220.0, reference);
+                let mut effect = DriveEffect::new(
+                    DriveParams {
+                        drive,
+                        curve,
+                        ..DriveParams::default()
+                    },
+                    48_000,
+                );
+                effect.process(&context(frames), &mut bus, &EventList::empty(), None);
+                let settled = &bus.l[frames / 2..];
+                let peak = settled.iter().fold(0.0f32, |a, s| a.max(s.abs()));
+                let change_db = 20.0 * (peak / reference).log10();
+                assert!(
+                    change_db.abs() <= 1.0,
+                    "{curve:?} at drive {drive} moved a reference-level peak by {change_db:+.2} dB"
                 );
             }
         }

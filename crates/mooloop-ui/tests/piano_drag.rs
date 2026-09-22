@@ -504,3 +504,86 @@ fn two_drags_are_two_gestures() {
 
     assert_eq!(*begins.borrow(), 2);
 }
+
+/// Dragging an automation point is one undo entry, however many pointer
+/// frames it takes -- and a press on empty lane that creates the point and
+/// then drags it is that same one entry.
+///
+/// Before this bracket every frame of the drag recorded its own
+/// whole-project history entry, so one sweep could spend most of a heavy
+/// song's history (C3 in `reports/teams-2026-09-22.md`). Undo can only see a
+/// drag as one edit if the lane says where it begins and ends, which is
+/// `Gesture.begin()` and `Gesture.end()` -- `gesture_bracket.rs`'s lesson
+/// for the shared controls, arriving at the one drag surface that is not
+/// one of them. A test that called the Rust handlers directly could not see
+/// the bracket was missing.
+///
+/// The lane is found by pressing down a column until it answers rather than
+/// by a measured constant: its position depends on which lanes are open,
+/// and `common::piano_grid`'s constants were measured with them all shut.
+#[test]
+fn an_automation_point_drag_is_one_gesture() {
+    #[derive(Default)]
+    struct Log {
+        begins: usize,
+        ends: usize,
+        created: usize,
+        moved_ids: Vec<i32>,
+    }
+    const CREATED_ID: i32 = 42;
+
+    let ui = harness(Vec::new());
+    ui.set_automation_lane_visible(true);
+    ui.set_automation_lane_name("Filter 1 · Cutoff".into());
+    // No existing point anywhere, so every press on the lane creates one.
+    ui.on_automation_point_hit_test(|_, _, _| -1);
+    let log = Rc::new(RefCell::new(Log::default()));
+    {
+        let log = log.clone();
+        ui.global::<mooloop_ui::Gesture>()
+            .on_begin(move || log.borrow_mut().begins += 1);
+    }
+    {
+        let log = log.clone();
+        ui.global::<mooloop_ui::Gesture>()
+            .on_end(move || log.borrow_mut().ends += 1);
+    }
+    {
+        let log = log.clone();
+        ui.on_automation_point_created(move |_, _| {
+            log.borrow_mut().created += 1;
+            CREATED_ID
+        });
+    }
+    {
+        let log = log.clone();
+        ui.on_automation_point_moved(move |id, _, _| log.borrow_mut().moved_ids.push(id));
+    }
+
+    let x = tick_x(8 * TICKS_PER_STEP);
+    let lane_top = (GRID_TOP_Y as i32..760)
+        .step_by(2)
+        .map(|y| y as f32)
+        .find(|&y| {
+            click(ui.window(), (x, y), false);
+            log.borrow().created > 0
+        })
+        .expect("no press anywhere below the grid reached the automation lane");
+    *log.borrow_mut() = Log::default();
+
+    let y = lane_top + 20.0;
+    drag(ui.window(), (x, y), (x + 3.0 * STEP_WIDTH, y - 12.0));
+
+    let log = log.borrow();
+    assert_eq!(log.created, 1, "the press did not create a point");
+    assert!(
+        log.moved_ids.len() >= 2 && log.moved_ids.iter().all(|id| *id == CREATED_ID),
+        "the drag did not move the point it created: {:?}",
+        log.moved_ids
+    );
+    assert_eq!(
+        (log.begins, log.ends),
+        (1, 1),
+        "a create-and-drag must be exactly one gesture, however many frames it took"
+    );
+}

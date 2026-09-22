@@ -143,7 +143,10 @@ pub use generator::{
     SYNTH_PARAM_POLYPHONY, SYNTH_PARAM_RELEASE, SYNTH_PARAM_SPREAD, SYNTH_PARAM_SUSTAIN,
     synth_osc_param,
 };
-pub use channel::{Channel, DeviceKind, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_PATTERNS};
+pub use channel::{
+    Channel, DeviceKind, DEFAULT_CHANNEL_VOLUME, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
+    MAX_PATTERNS,
+};
 pub use color::ProjectColor;
 pub use gain::{
     db_to_linear, db_to_linear_unfloored, format_db, linear_to_db, linear_to_db_unfloored,

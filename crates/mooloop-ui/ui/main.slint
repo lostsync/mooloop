@@ -6067,6 +6067,7 @@ export component MainWindow inherits Window {
                                             // update and the drag collapses.
                                             automation-touch := TouchArea {
                                                 property <int> grabbed-id: -1;
+                                                property <bool> gesture-open: false;
                                                 enabled: root.automation-lane-name != "";
                                                 mouse-cursor: root.automation-point-hit-test(
                                                         parent.snap(self.mouse-x, true),
@@ -6086,6 +6087,15 @@ export component MainWindow inherits Window {
                                                                 root.automation-point-removed(hit);
                                                             }
                                                         } else if (e.button == PointerEventButton.left) {
+                                                            // One press, one undo entry: the
+                                                            // point it creates and every move
+                                                            // of the drag that follows land as
+                                                            // a single edit, the way a knob's
+                                                            // drag does. Opened before the
+                                                            // create so a click-and-drag on
+                                                            // empty lane is one entry too.
+                                                            Gesture.begin();
+                                                            self.gesture-open = true;
                                                             self.grabbed-id = hit >= 0
                                                                 ? hit
                                                                 : root.automation-point-created(tick, value);
@@ -6096,8 +6106,16 @@ export component MainWindow inherits Window {
                                                             self.grabbed-id,
                                                             parent.snap(self.mouse-x, e.modifiers.shift),
                                                             parent.y-value(self.mouse-y));
-                                                    } else if (e.kind == PointerEventKind.up) {
+                                                    } else if (e.kind == PointerEventKind.up
+                                                            || e.kind == PointerEventKind.cancel) {
                                                         self.grabbed-id = -1;
+                                                        // Only the button that opened it
+                                                        // closes it: a right-click's release
+                                                        // has nothing open.
+                                                        if (self.gesture-open) {
+                                                            self.gesture-open = false;
+                                                            Gesture.end();
+                                                        }
                                                     }
                                                 }
                                                 changed has-hover => {
