@@ -91,6 +91,14 @@ impl Smoothed {
         self.current
     }
 
+    /// The value `advance`/`advance_by` is moving toward. Beside `value()`,
+    /// for a caller that wants both ends of the ramp without advancing it --
+    /// `is_settled` already reads the same comparison internally, this is
+    /// the same information as a value a caller outside this module can use.
+    pub fn target(&self) -> f32 {
+        self.target
+    }
+
     /// Whether the lag has reached its target and stopped moving.
     ///
     /// Exact rather than approximate: `advance` snaps once the remaining gap

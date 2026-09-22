@@ -56,6 +56,32 @@ fn loaded_project(count: usize) -> Project {
     project
 }
 
+/// [`loaded_project`], with the filter actually engaged.
+///
+/// `MlP8Params::default`'s cutoff is `1.0` -- wide open, unresonant, nothing
+/// routed to it -- which is `Prepared::filter_open`'s bypass condition, so
+/// `loaded_project`'s baseline never enters `Voice::shape`'s filter half at
+/// all. This is the before/after figure for `reports/fable-2026-09-22.md`
+/// finding 2, Plan B: a closed, resonant filter is what pays for
+/// `SvfCoeffs::for_cutoff` (the `tan()`) every sample, and what
+/// `Voice::cached_hz_from_knob` (step 4's hoist) takes `hz_from_normalized`'s
+/// `powf` out of.
+fn filtered_project(count: usize) -> Project {
+    let mut project = Project::default();
+    project.channels.clear();
+    let params = MlP8Params {
+        filter_cutoff: 0.3,
+        filter_resonance: 0.4,
+        ..MlP8Params::default()
+    };
+    for index in 0..count {
+        let mut channel = ProjectChannel::mlp8_with_params(index, 1, params);
+        channel.notes[0].push(NoteEvent::new(index as u32 + 1, 0, 96, 48 + index as u8, 100));
+        project.channels.push(channel);
+    }
+    project
+}
+
 /// `count` sampler channels, each holding a *full* pattern: one note every
 /// sixty-fourth across the whole `MAX_PATTERN_STEPS` capacity, 1,024 notes
 /// per channel, built with `NoteEvent::new` in a loop the way a note-dense
@@ -423,6 +449,12 @@ fn playing_effect_cost() {
         EffectKind::Reverb,
         EffectKind::Plate,
         EffectKind::Drive,
+        // A closed, resonant `FilterEffect` on a static cutoff: one range
+        // covers the whole block (no `ParamValue` events), so this is
+        // squarely the case `reports/fable-2026-09-22.md` finding 2, Plan B
+        // targets -- `SvfCoeffs` computed twice a range and lerped, instead
+        // of `tan()` and a divide every sample.
+        EffectKind::Filter,
     ] {
         let mut project = loaded_project(channels);
         for channel in &mut project.channels {
@@ -433,6 +465,34 @@ fn playing_effect_cost() {
             "  {:<12}  {nanos:>9}  {:>10}",
             format!("{kind:?}"),
             nanos as i128 - bare as i128
+        );
+    }
+}
+
+/// The voice filter's own cost, as opposed to the `FilterEffect`
+/// `playing_effect_cost` measures.
+///
+/// [`loaded_project`]'s default patch has the filter wide open
+/// (`filter_cutoff: 1.0`), which is `Prepared::filter_open`'s bypass
+/// condition, so that baseline never runs `Voice::shape`'s filter half at
+/// all -- a closed, resonant patch is the one that does. Companion to
+/// [`playing_effect_cost`] for `reports/fable-2026-09-22.md` finding 2,
+/// Plan B step 4 (`Voice::cached_hz_from_knob`, the sampler's
+/// `Sampler::filter_base_hz`, and the equivalent hoists in `monosynth.rs`,
+/// `polysynth.rs` and `mlm1.rs`).
+#[test]
+#[ignore = "measures wall time; run deliberately in release"]
+fn filter_engaged_cost() {
+    let channels = 8;
+    println!();
+    println!("  {channels} ML-P8 channels holding a note, filter closed and resonant");
+    println!("  frames   open ns/block   closed ns/block   over open");
+    for frames in [64usize, 128, 256, 512] {
+        let open = per_block_nanos(&loaded_project(channels), frames, 400);
+        let closed = per_block_nanos(&filtered_project(channels), frames, 400);
+        println!(
+            "  {frames:>6}  {open:>13}  {closed:>15}  {:>10}",
+            closed as i128 - open as i128
         );
     }
 }

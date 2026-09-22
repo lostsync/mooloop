@@ -419,7 +419,10 @@ impl PolySynth {
 
         // Signal-scaling parameters lag their targets; everything else is
         // cheap enough to read straight from the block's parameters.
-        for voice in voices.iter_mut() {
+        let frames = end.saturating_sub(start);
+        let mut cutoff = [0.0_f32; MAX_POLY_VOICES as usize];
+        let mut base_hz = [0.0_f32; MAX_POLY_VOICES as usize];
+        for (voice_index, voice) in voices.iter_mut().enumerate() {
             for (smoothed, osc) in voice.osc_level.iter_mut().zip(params.osc.iter()) {
                 smoothed.set_target(osc.level.clamp(0.0, 1.0));
             }
@@ -427,6 +430,13 @@ impl PolySynth {
                 .cutoff
                 .set_target(params.filter_cutoff.clamp(0.0, 1.0));
             voice.drive.set_target(params.drive.clamp(0.0, 1.0));
+            // `hz_from_normalized`'s `powf` depends only on the smoothed
+            // knob position, which has settled to a constant for most of a
+            // note's life; resolve it once per voice per range instead of
+            // every sample per voice. `advance_by` leaves `voice.cutoff`
+            // exactly where `frames` calls to `advance()` would have.
+            cutoff[voice_index] = voice.cutoff.advance_by(frames);
+            base_hz[voice_index] = hz_from_normalized(cutoff[voice_index], max_hz);
         }
 
         for i in start..end {
@@ -469,18 +479,16 @@ impl PolySynth {
                         );
                 }
 
-                let cutoff = voice.cutoff.advance();
                 let drive = voice.drive.advance();
-                let filtered = if cutoff >= 0.999
+                let filtered = if cutoff[voice_index] >= 0.999
                     && env_amount.abs() <= f32::EPSILON
                     && resonance <= f32::EPSILON
                     && to_filter == 0.0
                 {
                     mix
                 } else {
-                    let base_hz = hz_from_normalized(cutoff, max_hz);
                     let octaves = voice.env.level() * env_amount * 6.0 + lfo_value * to_filter;
-                    let cutoff_hz = (base_hz * octaves.exp2()).clamp(20.0, max_hz);
+                    let cutoff_hz = (base_hz[voice_index] * octaves.exp2()).clamp(20.0, max_hz);
                     voice
                         .filter
                         .next_sample_lp_hp(mix, cutoff_hz, resonance, sr)
