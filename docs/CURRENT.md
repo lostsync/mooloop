@@ -880,8 +880,10 @@ land on its own when it starts to matter:
 - File > New Song (Ctrl+N) starts a fresh starter song, asking first when the
   current one has unsaved changes, as Open Song does. Every file and
   confirmation dialog is a separate program: `zenity` on Linux, and on macOS
-  the system's own panels through `osascript`. A dialog program that will not
-  start is logged, since to its caller it looks exactly like a cancel.
+  the system's own panels through `osascript`. The `.deb` and `.rpm` depend
+  on `zenity`; the AppImage cannot, so there it has to be installed. A dialog
+  program that will not start is logged, since to its caller it looks
+  exactly like a cancel.
 - Missing samples are recoverable by loading a replacement audio file, but
   there is no dedicated path-search/relink dialog, autosave, or crash recovery
   yet.
