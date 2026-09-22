@@ -106,4 +106,4 @@ grep -n "<the test's name>" /tmp/run.log
 - The `LOOSE_ENDS.md` row deleted if the item is gone, **rewritten if the fix
   was broader or narrower than the fault**.
 - `CURRENT.md` updated if any of this changed what the application does.
-- `CONTRIBUTORS.md` bumped.
+- `CONTRIBUTORS.md` signed if your model+harness pair is not in it yet.

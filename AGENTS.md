@@ -32,10 +32,10 @@ Before every task, run `git status --short --branch`.
   worktree.
 - Commit small, buildable changes. Do not use `--no-verify`, rewrite shared
   history, or commit generated output, `target/`, or secrets.
-- Before every commit, update your model+harness row in `CONTRIBUTORS.md`.
-  It is a roster and it is a table: bump `Last seen` and `Sessions`, and leave
-  `Known for` alone unless it has stopped being true. Detail belongs in the
-  commit message, or in `docs/JOURNAL.md` if it is a narrative worth keeping.
+- Sign in once in `CONTRIBUTORS.md`: if your model+harness pair has no row,
+  add one; if it already has one, leave it alone. There is nothing to bump
+  per commit. Detail belongs in the commit message, or in `docs/JOURNAL.md`
+  if it is a narrative worth keeping.
 - Finish with a clean worktree, proportional verification, and a fast-forward
   merge to `main`. Do not merge, force-push, reset, or delete a worktree with
   uncommitted or unmerged work without Adam's explicit confirmation.
