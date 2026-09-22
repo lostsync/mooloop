@@ -17377,6 +17377,52 @@ mod preset_browser_tests {
 mod tests {
     use mooloop_session::browser::is_playable_sample;
 
+    /// **The published row says what the chain says**, for every kind.
+    ///
+    /// Written because its absence was measured rather than suspected:
+    /// publishing `is_container: false` unconditionally passed the whole
+    /// `mooloop-ui` suite. That mutation turns off the enclosure, makes a
+    /// container's wet/dry knob live -- the "convincing but inert control"
+    /// the rack's own rule forbids -- disables unwrap, makes `+` insert
+    /// beside the box instead of into it, and draws no container face at
+    /// all. The entire container interface, silently gone, with every test
+    /// green.
+    ///
+    /// The gap is older than the flag: `slot.kind == 13` was exactly as
+    /// unwatched, and nothing has ever checked that the rack draws a
+    /// container as one. This closes the half a unit test can reach -- the
+    /// value crossing the boundary -- and it is the half a later edit to the
+    /// publisher would break. Whether the *markup* honours it is a rendered
+    /// question and is `containers/09`'s to answer, where the drawing
+    /// changes anyway.
+    #[test]
+    fn a_published_row_reports_containment_for_every_kind() {
+        use mooloop_core::{EffectKind, EffectSlotState};
+
+        for kind in EffectKind::ALL {
+            let slot = EffectSlotState::of_kind(kind);
+            let row = super::effect_slot_row(
+                &slot,
+                &[],
+                None,
+                super::RackPlacement {
+                    depth: 0,
+                    closing: Vec::new(),
+                    selected: false,
+                    wrap_enabled: true,
+                },
+                48_000,
+            );
+            assert_eq!(
+                row.is_container,
+                kind.is_container(),
+                "the row published for {} disagrees with the chain about \
+                 whether it holds a run",
+                kind.label()
+            );
+        }
+    }
+
     /// The subscription plan states an answer for the slot past the end of
     /// the chain, which is the one a removal vacates.
     ///
