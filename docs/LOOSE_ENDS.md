@@ -607,9 +607,13 @@ at a 512-frame block:
   it O(destinations).
 - `EventList::push_ordered` (`dsp/src/event.rs:122`) is an insertion sort
   into `MAX_EVENTS = 256`, and the control pass emits one event per control
-  tick per driven destination into a `let _` (`render.rs:5934`). **The
-  8192-frame block this used to be written against is the far end of it, and
-  the near end is 512 frames** -- the same loop serves modulation as well as
+  tick per driven destination. **The 8192-frame block this used to be written
+  against is the far end of it, and the near end is 512 frames.** Export ran
+  at the far end every time until 2026-09-22 and now renders in 512-frame
+  blocks (`offline.rs`, `OFFLINE_BLOCK_FRAMES`), and the control pass's
+  refusals -- source and effect parameters, route amounts, auditions -- are
+  counted in `RenderState::refused_events`, which an export returns and
+  logs. The near end is still open: the same loop serves modulation as well as
   automation, so a channel has up to `MAX_MOD_ROUTES_PER_CHANNEL = 16` plus
   `MAX_AUTOMATION_LANES_PER_CHANNEL = 8` driven destinations, and
   24 x 512/`CONTROL_RATE_FRAMES` = 384 is already past 256. Sixteen of those
@@ -620,7 +624,9 @@ at a 512-frame block:
   value everywhere but one destination freezing mid-block and every later one
   in descriptor order getting nothing. No allocation and no noise either way.
   MOO-73, which also names three more sites that drop a `push_ordered`
-  refusal, two of them without even a `let _`.
+  refusal, two of them without even a `let _`. The note and choke pushes --
+  the sequencer's note scheduling, choke injection and `release_all_voices`
+  -- are still uncounted.
 - `Sequencer::set_playlist_placement` did `push` then `sort_unstable` on the
   callback per placement toggle. **Closed 2026-09-22**: it inserts at
   `partition_point`, which answers the duplicate check in the same binary

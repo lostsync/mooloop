@@ -476,7 +476,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 - Offline export of exactly one selected-pattern pass in Pattern mode or one
   derived playlist pass in Song mode, followed by a configurable 0-30 second
   release tail. Outputs are 24-bit PCM WAV, 32-bit float WAV, or 192/256/320
-  kbps MP3.
+  kbps MP3. It renders in 512-frame blocks, a size live playback runs at,
+  rather than the graph's 8192-frame maximum, where one automated parameter
+  filled a device's event list and every later one on it was dropped from
+  the export. Parameter events that still find no room are counted, and an
+  export that lost any logs how many.
 - A shared widget library in `crates/mooloop-ui/ui`: knobs with value arcs and a
   bipolar mode (`controls.slint`), LED-segment metering with scales, latching
   clip indicators, gain-reduction and correlation meters (`meters.slint`), and a

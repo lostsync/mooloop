@@ -843,10 +843,15 @@ impl PendingEffectParams {
         }
     }
 
-    fn copy_to(&self, destination: &mut EventList) {
+    /// Returns how many of the queued events `destination` had no room for.
+    fn copy_to(&self, destination: &mut EventList) -> u64 {
+        let mut refused = 0;
         for event in self.events.iter().flatten() {
-            let _ = destination.push_ordered(*event);
+            if !destination.push_ordered(*event) {
+                refused += 1;
+            }
         }
+        refused
     }
 }
 
@@ -964,6 +969,9 @@ struct EffectChain {
     /// Reused while each sequential slot processes. See
     /// `PendingEffectParams` for why this is not stored per slot.
     event_scratch: EventList,
+    /// Parameter events `event_scratch` had no room for, since this chain was
+    /// built. See [`RenderState::refused_events`].
+    refused_events: u64,
     /// Per-slot dry-path delay matching the installed node's reported
     /// latency, so the wet/dry blend never mixes time-misaligned signals.
     /// Allocated off the realtime thread, next to the node it belongs to.
@@ -1031,6 +1039,7 @@ impl EffectChain {
             bound: 0,
             slots: std::array::from_fn(|_| None),
             event_scratch: EventList::empty(),
+            refused_events: 0,
             dry_align: std::array::from_fn(|_| None),
             analyzers: std::array::from_fn(|_| None),
             dry: StereoBus::with_capacity(MAX_BLOCK_SIZE),
@@ -1383,13 +1392,15 @@ impl EffectChain {
                 };
                 let value = descriptor
                     .from_normalized((base_normalized + offset_normalized).clamp(0.0, 1.0));
-                let _ = self.event_scratch.push_ordered(TimedEvent {
+                if !self.event_scratch.push_ordered(TimedEvent {
                     offset,
                     event: Event::ParamValue {
                         id: descriptor.id,
                         value,
                     },
-                });
+                }) {
+                    self.refused_events += 1;
+                }
             }
         }
     }
@@ -1816,7 +1827,7 @@ impl EffectChain {
                 }
                 self.event_scratch.clear();
                 if let Some(state) = self.slots[slot].as_mut() {
-                    state.events.copy_to(&mut self.event_scratch);
+                    self.refused_events += state.events.copy_to(&mut self.event_scratch);
                 }
                 self.control_events_for_slot(slot, scope, modulation, automation);
                 // Read the slot's host controls before the node borrow: they
@@ -3140,6 +3151,9 @@ pub(crate) struct RenderState {
     /// compared were not simply the same render twice: a skip mechanism that
     /// never fires would pass every one of them.
     slept_strip_blocks: u64,
+    /// Events the per-channel lists had no room for, since this state was
+    /// built. See [`Self::refused_events`].
+    refused_events: u64,
     /// Where each track's channel strip runs in its block.
     ///
     /// Initialized from `mooloop_core::mixer::STRIP_PIN`, which is the one
@@ -3248,6 +3262,7 @@ impl RenderState {
             strip_pin: STRIP_PIN,
             skip_idle: true,
             slept_strip_blocks: 0,
+            refused_events: 0,
             sequencer: Sequencer::new(1, 1, DEFAULT_STEPS as usize, mooloop_core::Ppq::DEFAULT),
             strips,
             audio_slots: slots_for_growth,
@@ -5690,10 +5705,12 @@ impl RenderState {
                 continue;
             };
             if let Some(events) = self.events.get_mut(audition.channel as usize) {
-                let _ = events.push_ordered(TimedEvent {
+                if !events.push_ordered(TimedEvent {
                     offset: audition.offset.min(last_frame),
                     event: audition.event,
-                });
+                }) {
+                    self.refused_events += 1;
+                }
             }
         }
     }
@@ -6056,13 +6073,15 @@ impl RenderState {
                         };
                         let value = descriptor
                             .from_normalized((base_normalized + offset_normalized).clamp(0.0, 1.0));
-                        let _ = self.events[index].push_ordered(TimedEvent {
+                        if !self.events[index].push_ordered(TimedEvent {
                             offset: (tick * CONTROL_RATE_FRAMES) as u32,
                             event: Event::ParamValue {
                                 id: descriptor.id,
                                 value,
                             },
-                        });
+                        }) {
+                            self.refused_events += 1;
+                        }
                     }
                 }
 
@@ -6107,13 +6126,15 @@ impl RenderState {
                             let amount = descriptor.from_normalized(
                                 (base_normalized + offset_normalized).clamp(0.0, 1.0),
                             );
-                            let _ = self.events[index].push_ordered(TimedEvent {
+                            if !self.events[index].push_ordered(TimedEvent {
                                 offset: (tick * CONTROL_RATE_FRAMES) as u32,
                                 event: Event::SourceRouteAmount {
                                     route: route.id,
                                     amount,
                                 },
-                            });
+                            }) {
+                                self.refused_events += 1;
+                            }
                         }
                     }
                 }
@@ -6572,6 +6593,21 @@ impl RenderState {
     #[cfg(test)]
     pub fn slept_strip_blocks(&self) -> u64 {
         self.slept_strip_blocks
+    }
+
+    /// Events refused for want of room since this state was built: an
+    /// `EventList` holds `MAX_EVENTS`, and a block that resolves more
+    /// automation or modulation ticks than that for one device loses the
+    /// rest -- the second parameter, typically, since the first filled the
+    /// list. Zero is the only right answer; a non-zero count means what was
+    /// heard is not what the project says.
+    pub fn refused_events(&self) -> u64 {
+        let chains = self
+            .strips
+            .iter()
+            .map(|strip| strip.effects.refused_events)
+            .chain(self.buses.iter().map(|bus| bus.effects.refused_events));
+        self.refused_events + chains.sum::<u64>()
     }
 
     pub fn play(&mut self) {
@@ -12729,8 +12765,9 @@ mod footprint {
         // buffers: what a chain needs at once is one copy per box it is
         // currently in, not one per box it holds, so ten sibling containers
         // share what four nested ones would need. A chain with no container
-        // pays only the pointer.
-        assert_eq!(size_of::<EffectChain>(), 20_552);
+        // pays only the pointer. Eight more is the count of events its lists
+        // had no room for, which is what lets an export say it lost some.
+        assert_eq!(size_of::<EffectChain>(), 20_560);
         // A strip holds one node of every generator kind, so a new device is
         // paid for on every live channel whether or not anything uses it.
         // The ML-P8 is 5,776 bytes of it. Its eight voices are the bulk -- a
@@ -12884,7 +12921,11 @@ mod footprint {
         // the strip so that an install carrying the strip carries the take.
         // The ring and the status it points to are allocated only while a
         // take is armed.
-        assert_eq!(size_of::<ChannelStrip>(), 42_376);
+        //
+        // `teams-2026-09-22` C4 added 8, in the strip's `EffectChain`: the
+        // count of events its lists refused, so an export can say it lost
+        // some rather than quietly dropping a parameter.
+        assert_eq!(size_of::<ChannelStrip>(), 42_384);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -12909,9 +12950,9 @@ mod footprint {
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        // The sampler's retired-sample ring is 152 of this, and a take's
-        // pointer the latest 8.
-        assert_eq!(per_live, 60_816);
+        // The sampler's retired-sample ring is 152 of this, a take's pointer
+        // 8, and the effect chain's refused-event count the latest 8.
+        assert_eq!(per_live, 60_824);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
