@@ -376,6 +376,13 @@ Do not run Cargo commands concurrently. Read
 snapshots, or the live application; it contains this machine's memory limits
 and rendering procedures.
 
+**In a Claude Code web container the limits are different again** -- 15 GB and
+no swap at all, where an overshoot is an OOM kill rather than a slowdown, so
+the repository's `jobs = 3` does not survive a `--workspace` run. A
+`SessionStart` hook installs the build dependencies and drops the job count to
+one; the ladder below still applies, but "iterate on the laptop, verify on the
+box" does not. See "Claude Code on the web" in `docs/OPERATIONS.md`.
+
 ### The verification ladder
 
 Sixty-one percent of Adam's working time goes on `cargo`, and almost all of it

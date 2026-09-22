@@ -137,6 +137,104 @@ compiles about 412,000 lines of which 96% are generated. Nothing here can be
 tuned below that; `docs/plans/egui-view-layer/00-status.md` measures what the
 figures look like without it.
 
+## Claude Code on the web
+
+A web session runs in a fresh Ubuntu container: a bare image with a Rust
+toolchain and nothing else. None of the audio, graphics or font development
+headers are present, and neither is `mold`, which `.cargo/config.toml` pins as
+this target's linker -- so nothing builds at all until they are installed.
+
+`.claude/hooks/session-start.sh` installs them, registered as a `SessionStart`
+hook in `.claude/settings.json`. It runs synchronously, because the first
+thing a session does is usually a Cargo command and an async install loses
+that race; the container image is cached afterwards, so the cost is paid once.
+It also sets `core.hooksPath`, which `AGENTS.md` requires once per clone and a
+new container is a new clone every time.
+
+Its package list is a copy of the one `.github/workflows/ci.yml` installs, plus
+`mold`. **CI is the reference; the hook is the copy.** A build that fails there
+for a missing header needs both edited.
+
+### The container's limits are not the laptop's
+
+| | Laptop | Web container |
+| --- | --- | --- |
+| RAM | 16 GB | 15 GB |
+| Swap | 8 GB zram | **none** |
+| Cores | 8 threads | 4 |
+| Disk | the machine's | a finite session allowance |
+| `scripts/cargo-capped` | bounds the run | no systemd; runs uncapped |
+
+The missing swap is the whole difference. On the laptop an overshoot goes to
+zram and the run gets slow; here it is an OOM kill, and the kill lands on
+whichever process the kernel picks, which can be the session itself.
+
+So the hook writes `CARGO_BUILD_JOBS=1` into the session environment, which
+overrides `.cargo/config.toml`. Measured in this container on 2026-09-19, both
+runs at one job and both green:
+
+| Run | Peak RSS, one rustc | Wall | CPU |
+| --- | --- | --- | --- |
+| `cargo check -p mooloop-ui`, cold | 5.8 GB | 9m54s | 99% |
+| `cargo test -p mooloop-ui --no-run`, cold | **8.5 GB** | 33m42s | 98% |
+
+Two of that second figure is 17 GB on a 15 GB machine, which is why `jobs = 3`
+-- chosen for a laptop with 8 GB of zram behind it -- cannot survive a
+`--workspace` run here. The 98-99% CPU says the rest: the expensive unit is one
+rustc on the module `slint_build` expands `ui/main.slint` into, and no job
+count subdivides one process.
+
+How many of those units a command has is what decides whether overriding the
+default is safe:
+
+| Command | Big rustc units | Safe at |
+| --- | --- | --- |
+| `cargo check -p mooloop-ui` | 1 (nothing else depends on it) | any job count |
+| `cargo test`/`build -p mooloop-ui` | 7, one per test binary | one job |
+| anything not touching `mooloop-ui` | 0 | any job count |
+
+**So pass `-j 4` explicitly for crates other than `mooloop-ui`**, where the
+peak is nowhere near the limit and four cores are otherwise idle, and leave
+the default alone for the rest:
+
+```sh
+cargo test -p mooloop-dsp -j 4    # 666 tests, 25s including the cold dep build
+cargo test -p mooloop-ui          # leave this one at the default
+```
+
+Do not raise the default to speed up a slow workspace run. The workspace run is
+the command that gets killed. The cost of `jobs = 1` is real -- it serialises
+the dependency compilation that would happily run four-wide, and that is most
+of the 33 minutes above -- and it is the price of a session that survives.
+
+`CARGO_INCREMENTAL` is left on for the reason given under "Cargo limits":
+turning it off trades disk for memory, and memory is the scarcer resource here.
+
+### When the disk fills
+
+A debug `target/` for this workspace is a large fraction of the session's
+allowance, and `df` is misleading when it runs out -- "Avail" reads 0 against a
+low "Used", because the allowance is spent rather than the disk full. Deletes
+still succeed while writes fail.
+
+One `cargo test -p mooloop-ui --no-run` leaves 22 GB behind: 13 GB in `deps/`
+(seven test binaries at about 363 MB each, plus a 679 MB `libmooloop_ui`
+rlib) and 8.4 GB of incremental state.
+
+```sh
+rm -rf target/debug/incremental   # ~9 GB back, and a rebuild regenerates it
+cargo clean -p mooloop-ui         # expensive; those seven binaries are the rest
+```
+
+**The first does not invalidate anything already built** -- verified here, a
+`cargo test -p mooloop-ui --test fader_taper` straight afterwards reached
+"Finished" in 0.56s and ran. It costs the next *changed* rebuild its
+incremental cache, nothing more.
+
+The hook does that reclaim itself when it fires with under 8 GB free, which is
+what a `resume` or `compact` firing is good for -- by then a build has happened.
+`MOOLOOP_WEB_RECLAIM_BELOW_GB` moves the threshold.
+
 ## Remote builds and tests
 
 The laptop's Cargo limits exist because of its memory. `scripts/antibox` sends
