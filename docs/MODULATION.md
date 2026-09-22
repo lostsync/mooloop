@@ -242,7 +242,19 @@ Devices receive only `resolved`; the engine owns base and the route sum.
 
 **Write precedence.** Three writers reach an effect parameter, and which one
 the device hears is a stated rule, not an order of calls. The same table sits
-on `control_events_for_slot` in `crates/mooloop-engine/src/render.rs`:
+on `control_events_for_slot` in `crates/mooloop-engine/src/render.rs`. The
+base-plus-offset rule below is unchanged by `docs/plans/automation-curves/`;
+what changed is the wire: rows one and two used to leave the engine as a
+`ParamValue` event pushed at every control tick, and now leave as one curve —
+a per-destination `[f32; ticks]`, handed to the node once a block through
+`AudioNode::apply_curves` — with the same resolved value at the same tick.
+**The carrier is now a curve, not a step of events.** A node without a native
+curve path still receives the identical step of `ParamValue` events it always
+did, converted from the curve by that trait method's default implementation,
+so nothing downstream of a device's `process` had to change for this. Only
+row three — the knob's own value, with no lane and no route — is still an
+event on the wire, because it is not a curve: it fires once, at one offset,
+not once a tick.
 
 | Lane | Route | Base | Offset | Who writes the device |
 | --- | --- | --- | --- | --- |
@@ -323,15 +335,23 @@ hard-coded slot number. Source metadata declares its label, signal shape
 metadata declares that the parameter is legal to modulate.
 
 The engine evaluates sources before their destinations at the declared control
-rate, resolves the routes, and emits `Event::ParamValue` into the
-destination's existing event path. The conceptual path is:
+rate, resolves the routes, and hands the destination a curve -- one resolved
+value per control tick, through `AudioNode::apply_curves` -- rather than
+pushing an event per tick onto the destination's list. The conceptual path is:
 
 ```text
 source -> normalized control signal -> route transform -> ParamAddr
 ```
 
-**No effect changes to support modulation. Ever.** Effects already split their
-block at `ParamValue` offsets. That contract is the whole design; keep it.
+**No effect changes to support modulation. Ever.** That is still the whole
+design, and it still holds under the curve path: `apply_curves`'s default
+implementation turns the curve back into the exact `Event::ParamValue` step
+an effect's ordinary block-splitting already knows how to consume, so a
+device that has not opted into a native curve path never has to. Events with
+sample offsets stay for what they are for -- notes, and the boundary a
+future hosted plugin's parameter queue is built from -- and a curve becomes
+events only there, or for a device that has not opted in.
+`docs/plans/automation-curves/00-status.md`.
 
 ### Base value plus offset
 

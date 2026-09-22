@@ -28,13 +28,14 @@
 //! here for a fortnight, so a fix to the shared RBJ primitive could silently
 //! miss the only EQ that needed it.
 
-use mooloop_core::{eq_plot_frequency, EqBand, EqParams, EQ_MAX_BANDS};
+use mooloop_core::{eq_band_of, eq_pass_of, eq_plot_frequency, EqBand, EqParams, EQ_MAX_BANDS};
 
 use crate::biquad::Biquad;
 use crate::bus::StereoBus;
 use crate::event::EventList;
-use crate::node::{AudioNode, ProcessContext};
-use super::{process_param_split, RangeProcessor};
+use crate::modulator::CONTROL_RATE_FRAMES;
+use crate::node::{AudioNode, ControlCurve, ProcessContext};
+use super::{process_curve_split, process_param_split, CurveFrame, RangeProcessor};
 
 const PASS_STAGES: usize = 6;
 
@@ -47,8 +48,9 @@ pub struct EqEffect {
     sample_rate: u32,
     left: [Biquad; STAGES],
     right: [Biquad; STAGES],
-    /// Which stages are doing something, rebuilt whenever the coefficients
-    /// are.
+    /// Which stages are doing something. Kept rather than re-scanned from
+    /// `params` on every rebuild, because [`Self::resolve_dirty`] updates it
+    /// incrementally alongside whichever stages it redesigns.
     ///
     /// A stage that is switched off is set to [`Biquad::identity`], which is
     /// `out = input` with no state to evolve -- so running it is arithmetic
@@ -60,6 +62,31 @@ pub struct EqEffect {
     /// holds the exactness the skip rests on.
     active: [u8; STAGES],
     active_len: usize,
+    /// One stage's own liveness, tracked alongside `active` so a partial
+    /// rebuild can fold a changed stage into the compact `active` list
+    /// without re-scanning every field of `params`.
+    live: [bool; STAGES],
+    /// Which stages have a parameter change waiting to be designed in.
+    /// Marked by `apply_param`, resolved lazily by [`Self::resolve_dirty`] --
+    /// see that function's doc comment for why the rebuild happens there and
+    /// not eagerly inside `apply_param`.
+    ///
+    /// Starts entirely `true` so `new`'s own call to `resolve_dirty` builds
+    /// the whole bank the same way any later edit's does -- one rebuild
+    /// path, not a separate one-off build in the constructor plus an
+    /// incremental one afterwards.
+    dirty: [bool; STAGES],
+    /// This block's curves, captured by `apply_curves` and consumed by
+    /// `process`. Empty on a block with nothing modulated or automated, in
+    /// which case `process` falls back to the ordinary event-timed split.
+    curve_frame: CurveFrame,
+    /// Test-only instrumentation: how many times each stage has actually
+    /// been redesigned. A behavioural test cannot otherwise tell a
+    /// dirty-flag skip apart from a redundant rebuild that happens to land
+    /// on the same coefficients -- both produce identical output by
+    /// definition -- so this counts the thing the mechanism claims to save.
+    #[cfg(test)]
+    rebuilds: [u32; STAGES],
 }
 
 impl EqEffect {
@@ -71,19 +98,109 @@ impl EqEffect {
             right: [Biquad::identity(); STAGES],
             active: [0; STAGES],
             active_len: 0,
+            live: [false; STAGES],
+            // Every stage starts dirty, so the resolve below builds the
+            // whole bank exactly as the old unconditional
+            // `update_coefficients` did. Built here, eagerly, rather than
+            // left for the first `process_range` -- `is_at_rest` reads
+            // `active`/`left`/`right` through `&self` and cannot resolve a
+            // dirty flag itself, so a node that had never rendered would
+            // otherwise answer "at rest" about a bank it had not designed
+            // yet.
+            dirty: [true; STAGES],
+            curve_frame: CurveFrame::empty(),
+            #[cfg(test)]
+            rebuilds: [0; STAGES],
         };
-        effect.update_coefficients();
+        effect.resolve_dirty();
         effect
     }
 
-    fn update_coefficients(&mut self) {
-        let live = design_eq_bank(&self.params, self.sample_rate, &mut self.left);
-        design_eq_bank(&self.params, self.sample_rate, &mut self.right);
-        self.active_len = 0;
-        for (index, live) in live.iter().enumerate() {
-            if *live {
-                self.active[self.active_len] = index as u8;
-                self.active_len += 1;
+    /// Redesign whichever stages `apply_param` marked since the last call,
+    /// and refold the compact `active` list if any of them changed liveness.
+    ///
+    /// Called from [`RangeProcessor::process_range`] rather than from
+    /// `apply_param` itself, which is what makes this a *coalescing* rebuild
+    /// rather than merely a targeted one: `process_curve_split` and
+    /// `process_param_split` both call every tick's `apply_param`s before
+    /// the `process_range` that renders that tick, so several parameters
+    /// changing at the same control tick mark their stages dirty and are
+    /// resolved together, once, immediately before the audio that needs
+    /// them -- rather than once per `apply_param` call, which is what let a
+    /// size-like knob and a fast automation lane on the same stage pay for
+    /// the same trig twice in one tick under the old eager scheme.
+    fn resolve_dirty(&mut self) {
+        let mut refolded = false;
+        for band in 0..EQ_MAX_BANDS {
+            if !self.dirty[band] {
+                continue;
+            }
+            let value = self.params.bands[band];
+            design_band(&mut self.left[band], value, self.sample_rate);
+            design_band(&mut self.right[band], value, self.sample_rate);
+            self.live[band] = value.enabled;
+            self.dirty[band] = false;
+            refolded = true;
+            #[cfg(test)]
+            {
+                self.rebuilds[band] += 1;
+            }
+        }
+        for (pass_index, high) in [(0usize, true), (1usize, false)] {
+            let filter = if high {
+                self.params.high_pass
+            } else {
+                self.params.low_pass
+            };
+            for stage in 0..PASS_STAGES {
+                let index = EQ_MAX_BANDS + pass_index * PASS_STAGES + stage;
+                if !self.dirty[index] {
+                    continue;
+                }
+                let enabled = filter.enabled && stage < filter.slope.stages();
+                if enabled {
+                    self.left[index].pass(filter.frequency_hz, filter.q, high, self.sample_rate);
+                    self.right[index].pass(filter.frequency_hz, filter.q, high, self.sample_rate);
+                } else {
+                    self.left[index] = Biquad::identity();
+                    self.right[index] = Biquad::identity();
+                }
+                self.live[index] = enabled;
+                self.dirty[index] = false;
+                refolded = true;
+                #[cfg(test)]
+                {
+                    self.rebuilds[index] += 1;
+                }
+            }
+        }
+        if refolded {
+            self.active_len = 0;
+            for (index, live) in self.live.iter().enumerate() {
+                if *live {
+                    self.active[self.active_len] = index as u8;
+                    self.active_len += 1;
+                }
+            }
+        }
+    }
+
+    /// Mark every stage `id` affects dirty, without redesigning anything --
+    /// [`Self::resolve_dirty`] does that, lazily, coalescing however many
+    /// parameters changed at this control tick into one pass.
+    fn mark_dirty(&mut self, id: u32) {
+        if let Some((band, _field)) = eq_band_of(id) {
+            if band < EQ_MAX_BANDS {
+                self.dirty[band] = true;
+            }
+            return;
+        }
+        if let Some((pass, _field)) = eq_pass_of(id) {
+            for stage in 0..PASS_STAGES {
+                let index = EQ_MAX_BANDS + pass * PASS_STAGES + stage;
+                if index < STAGES {
+                    self.dirty[index] = true;
+                }
             }
         }
     }
@@ -206,6 +323,11 @@ pub fn eq_response_db(params: &EqParams, sample_rate: u32, samples: usize) -> Ve
 
 impl RangeProcessor for EqEffect {
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
+        // Lazily resolves whatever `apply_param` marked dirty since the last
+        // call -- see `resolve_dirty`'s own doc comment for why the rebuild
+        // lives here rather than in `apply_param`. Cheap when nothing is
+        // dirty: nineteen bool reads, not nineteen redesigns.
+        self.resolve_dirty();
         // Nothing switched on is not "an EQ that happens to be flat": it is
         // no filter at all, and the samples should not be touched.
         if self.active_len == 0 {
@@ -230,7 +352,7 @@ impl RangeProcessor for EqEffect {
         if state.set(id, value).is_some() {
             if let mooloop_core::EffectParams::Eq(params) = state {
                 self.params = params;
-                self.update_coefficients();
+                self.mark_dirty(id);
             }
         }
     }
@@ -248,9 +370,50 @@ impl AudioNode for EqEffect {
         })
     }
 
-    fn process(&mut self, ctx: &ProcessContext, bus: &mut StereoBus, events_in: &EventList, _events_out: Option<&mut EventList>) {
+    /// The EQ's native curve path: every modulated or automated band/pass
+    /// field this block resolved to, copied into `curve_frame` for `process`
+    /// to consume. This is what removes the EQ from the shared, 256-slot
+    /// `EventList`'s capacity -- the device finding 3 names as the worst
+    /// offender, at up to fifty destinations (`EQ_DESCRIPTOR_COUNT`) that
+    /// used to compete for the same list every other driven device did too.
+    fn apply_curves(
+        &mut self,
+        curves: &[ControlCurve<'_>],
+        _tick_frames: usize,
+        _fallback: &mut EventList,
+    ) {
+        self.curve_frame.capture(curves);
+    }
+
+    fn process(
+        &mut self,
+        ctx: &ProcessContext,
+        bus: &mut StereoBus,
+        events_in: &EventList,
+        _events_out: Option<&mut EventList>,
+    ) {
         let frames = ctx.frames.min(bus.capacity());
-        process_param_split(self, bus, events_in, frames);
+        if self.curve_frame.is_empty() {
+            process_param_split(self, bus, events_in, frames);
+        } else {
+            // Taken rather than borrowed: `process_curve_split` needs `self`
+            // by `&mut` for `apply_param`/`process_range` at the same time
+            // it reads the curves, and those curves live in a field of
+            // `self` -- the borrow checker cannot see that the two uses
+            // don't alias, so the frame has to move out first. `take`
+            // leaves `self.curve_frame` at `CurveFrame::default()`, which is
+            // empty, so this also does the clearing the old code did
+            // separately.
+            let curve_frame = std::mem::take(&mut self.curve_frame);
+            process_curve_split(
+                self,
+                bus,
+                events_in,
+                &curve_frame,
+                CONTROL_RATE_FRAMES,
+                frames,
+            );
+        }
     }
 }
 
@@ -303,6 +466,122 @@ mod tests {
         let mut bus = signal(frames);
         effect.process(&ctx_for(sr, frames), &mut bus, &EventList::empty(), None);
         (bus.l[..frames].to_vec(), bus.r[..frames].to_vec())
+    }
+
+    /// Every stage is dirty right after construction -- `new`'s own call to
+    /// `resolve_dirty` is what builds the bank -- so every one of the
+    /// nineteen stages should have been designed exactly once.
+    #[test]
+    fn construction_designs_every_stage_exactly_once() {
+        let effect = EqEffect::new(EqParams::default(), 48_000);
+        assert_eq!(effect.rebuilds, [1u32; STAGES]);
+    }
+
+    /// The dirty-flag mechanism's whole claim: changing one band's parameter
+    /// redesigns that band and *only* that band. A behavioural comparison of
+    /// the output cannot tell a skip apart from a redundant rebuild landing
+    /// on the same coefficients -- both are correct and both look identical
+    /// from outside -- so this reads the per-stage rebuild counter the
+    /// mechanism keeps for exactly this reason.
+    #[test]
+    fn changing_one_band_only_redesigns_that_band() {
+        let mut effect = EqEffect::new(EqParams::default(), 48_000);
+        effect.apply_param(mooloop_core::eq_band_param(2, mooloop_core::EQ_BAND_GAIN), 6.0);
+        // `apply_param` only marks the flag; `resolve_dirty` is what a real
+        // block calls (from `process_range`) to fold it in.
+        assert_eq!(
+            effect.rebuilds, [1u32; STAGES],
+            "apply_param alone must not have redesigned anything yet"
+        );
+        effect.resolve_dirty();
+        for (index, count) in effect.rebuilds.iter().enumerate() {
+            if index == 2 {
+                assert_eq!(*count, 2, "band 2 should have been redesigned once more");
+            } else {
+                assert_eq!(
+                    *count, 1,
+                    "stage {index} was redesigned though only band 2's own \
+                     parameter changed"
+                );
+            }
+        }
+    }
+
+    /// A high-pass field change redesigns every one of that pass filter's
+    /// own stages (they share `frequency_hz`/`q`, so all of them genuinely
+    /// depend on it) and touches nothing else -- not the low-pass, which
+    /// shares no state with the high-pass, and not any band.
+    #[test]
+    fn changing_the_high_pass_does_not_redesign_the_low_pass_or_any_band() {
+        let mut effect = EqEffect::new(EqParams::default(), 48_000);
+        effect.apply_param(
+            mooloop_core::eq_pass_param(mooloop_core::EQ_HIGH_PASS, mooloop_core::EQ_PASS_FREQ),
+            120.0,
+        );
+        effect.resolve_dirty();
+        let high_pass_start = EQ_MAX_BANDS;
+        let low_pass_start = EQ_MAX_BANDS + PASS_STAGES;
+        for (index, count) in effect.rebuilds.iter().enumerate() {
+            if (high_pass_start..low_pass_start).contains(&index) {
+                assert_eq!(*count, 2, "high-pass stage {index} should have been redesigned");
+            } else {
+                assert_eq!(
+                    *count, 1,
+                    "stage {index} was redesigned though only the high-pass changed"
+                );
+            }
+        }
+    }
+
+    /// Two parameters changing at the same control tick -- exactly what
+    /// `process_curve_split` and `process_param_split` both do before
+    /// calling `process_range` once -- resolve in one pass: each touched
+    /// stage is redesigned once, not once per `apply_param` call that
+    /// touched it.
+    #[test]
+    fn two_params_changing_at_one_tick_coalesce_into_one_resolve() {
+        let mut effect = EqEffect::new(EqParams::default(), 48_000);
+        effect.apply_param(mooloop_core::eq_band_param(0, mooloop_core::EQ_BAND_GAIN), 3.0);
+        effect.apply_param(mooloop_core::eq_band_param(0, mooloop_core::EQ_BAND_Q), 2.0);
+        effect.resolve_dirty();
+        assert_eq!(
+            effect.rebuilds[0], 2,
+            "band 0 should have been redesigned once for the tick, not once \
+             per parameter that changed on it"
+        );
+    }
+
+    /// The curve path is a genuine addition, not a different device: driven
+    /// through `apply_curves` + `process`, the EQ reaches the same output as
+    /// the ordinary event path given the same per-tick values.
+    #[test]
+    fn the_curve_path_and_the_event_path_agree() {
+        let sr = 48_000;
+        let frames = 128usize;
+        let gain_id = mooloop_core::eq_band_param(0, mooloop_core::EQ_BAND_GAIN);
+
+        let mut via_events = EqEffect::new(EqParams::default(), sr);
+        let mut events = EventList::empty();
+        events.push_ordered(crate::event::TimedEvent {
+            offset: 0,
+            event: Event::ParamValue { id: gain_id, value: 6.0 },
+        });
+        events.push_ordered(crate::event::TimedEvent {
+            offset: 32,
+            event: Event::ParamValue { id: gain_id, value: 9.0 },
+        });
+        let mut bus_events = signal(frames);
+        via_events.process(&ctx_for(sr, frames), &mut bus_events, &events, None);
+
+        let mut via_curves = EqEffect::new(EqParams::default(), sr);
+        let values = [6.0f32, 9.0, 9.0, 9.0];
+        let curves = [ControlCurve { id: gain_id, values: &values }];
+        via_curves.apply_curves(&curves, CONTROL_RATE_FRAMES, &mut EventList::empty());
+        let mut bus_curves = signal(frames);
+        via_curves.process(&ctx_for(sr, frames), &mut bus_curves, &EventList::empty(), None);
+
+        assert_eq!(bus_events.l[..frames], bus_curves.l[..frames]);
+        assert_eq!(bus_events.r[..frames], bus_curves.r[..frames]);
     }
 
     /// The property the stage skip rests on, and the reason it is a
