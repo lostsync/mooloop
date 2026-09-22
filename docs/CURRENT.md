@@ -375,7 +375,10 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   per visible entry, filtering to playable formats, an autoplay arm and a
   preview-gain trim feeding a dedicated engine preview voice -- a preview the
   command ring refuses says so in the status bar rather than being silence
-  with no explanation -- an info pane
+  with no explanation. The voice plays a file at its own sample rate,
+  band-limited like the sampler, so an audition is at the pitch the file
+  will have once loaded; one that is stopped or replaced fades over 2 ms
+  rather than cutting off -- an info pane
   with waveform, name, and format stats, and loading either into the selected
   channel or into a new one. The sampler face's prev/next-sample arrows step
   through **the folder the sample was browsed from**, which a save does not

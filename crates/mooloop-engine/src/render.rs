@@ -33,6 +33,7 @@ use mooloop_dsp::{
     TimedEvent,
     CONTROL_RATE_FRAMES, MAX_BLOCK_SIZE, SILENCE_PEAK,
 };
+use mooloop_dsp::interpolate::{Region, SincTable};
 use mooloop_dsp::smooth::Smoothed;
 use mooloop_dsp::strip::Strip;
 
@@ -3092,6 +3093,10 @@ pub(crate) struct RenderState {
     /// a time: a new preview replaces the old, and the retired sample's
     /// ownership returns to the UI thread through the reclaim ring.
     preview: Option<PreviewVoice>,
+    /// The voice a new preview or a Stop displaced, fading out over
+    /// [`PREVIEW_FADE_S`] rather than cut mid-waveform. It retires through the
+    /// same ring as a preview that played to its end.
+    preview_fading: Option<PreviewVoice>,
     preview_retired: RetiredPreviews,
     /// Linear preview gain, shared with the GUI so the knob is heard live.
     /// It starts at the operating level rather than unity: an audition is
@@ -3153,11 +3158,82 @@ pub(crate) struct RenderState {
     skip_idle: bool,
 }
 
+/// How long a preview that is stopped or replaced takes to fade out. Long
+/// enough that the cut is not a click, short enough that auditioning down a
+/// list of files still feels immediate.
+const PREVIEW_FADE_S: f64 = 0.002;
+
 /// One-shot straight to the master output: no envelope, no channel strip.
 /// A browser preview should sound like the file, not like the project.
+///
+/// "Like the file" includes its sample rate. The read position counts the
+/// file's own frames and advances by `file rate / engine rate` per output
+/// frame, through the sampler's band-limited [`SincTable`] -- read at the
+/// engine rate instead, a 44.1 kHz file auditioned 1.5 semitones sharp on a
+/// 48 kHz engine and a 96 kHz file an octave low, while the same file
+/// loaded into a sampler played at its true pitch.
 struct PreviewVoice {
     sample: Arc<SampleData>,
-    position: usize,
+    /// Position in the file's frames. Whole-numbered while the file's rate
+    /// matches the engine's, which reads each frame untouched.
+    position: f64,
+    /// Output frames left in a fade-out, and its length; `None` while the
+    /// voice is playing normally.
+    fade: Option<(u32, u32)>,
+}
+
+impl PreviewVoice {
+    fn new(sample: Arc<SampleData>) -> Self {
+        Self {
+            sample,
+            position: 0.0,
+            fade: None,
+        }
+    }
+
+    fn finished(&self) -> bool {
+        self.position >= self.sample.frames.len() as f64 || matches!(self.fade, Some((0, _)))
+    }
+
+    /// Sum up to `frames` output frames into `bus`. Returns whether the voice
+    /// has nothing left to play.
+    fn render(&mut self, bus: &mut StereoBus, frames: usize, gain: f32, engine_rate: u32) -> bool {
+        let samples = &self.sample.frames;
+        let len = samples.len();
+        // A file with no rate recorded plays at the engine's rather than not
+        // at all.
+        let file_rate = if self.sample.sample_rate == 0 {
+            engine_rate
+        } else {
+            self.sample.sample_rate
+        };
+        let rate = f64::from(file_rate) / f64::from(engine_rate.max(1));
+        let table = SincTable::shared();
+        let region = Region::whole(len);
+        for index in 0..frames {
+            if self.position >= len as f64 {
+                return true;
+            }
+            let fade_gain = match &mut self.fade {
+                None => 1.0,
+                Some((0, _)) => return true,
+                Some((left, length)) => {
+                    let level = *left as f32 / *length as f32;
+                    *left -= 1;
+                    level
+                }
+            };
+            let frame = if rate == 1.0 {
+                samples[self.position as usize]
+            } else {
+                table.read(samples, self.position, rate, region)
+            };
+            bus.l[index] += frame[0] * gain * fade_gain;
+            bus.r[index] += frame[1] * gain * fade_gain;
+            self.position += rate;
+        }
+        self.finished()
+    }
 }
 
 impl RenderState {
@@ -3225,6 +3301,7 @@ impl RenderState {
             seeked: false,
             deferred: [None; MAX_DEFERRED],
             preview: None,
+            preview_fading: None,
             preview_retired: RetiredPreviews::new(),
             preview_gain: Arc::new(AtomicU32::new(mooloop_core::gain::db_to_linear(mooloop_core::gain::REFERENCE_PEAK_DBFS).to_bits())),
         };
@@ -3233,6 +3310,9 @@ impl RenderState {
         // they should not disagree at rest.
         let initial = state.sequencer.active_channels();
         state.grow_channels(initial);
+        // The preview reads through the shared sinc table; build it here, on
+        // the control thread, so no audition is the first to touch it.
+        SincTable::shared();
         state
     }
 
@@ -3252,20 +3332,25 @@ impl RenderState {
         self.preview_gain = gain;
     }
 
-    /// Starts, restarts, or stops the preview voice. Returns the replaced
-    /// sample, if there was one, for off-thread disposal.
+    /// Starts, restarts, or stops the preview voice. The voice it displaces
+    /// fades out rather than stopping dead, and retires through the ring when
+    /// the fade ends. Returns the sample of a voice that was *already* fading
+    /// -- a third audition inside two milliseconds cuts it the rest of the
+    /// way -- for off-thread disposal.
     pub(crate) fn apply_preview(&mut self, command: PreviewCommand) -> Option<Arc<SampleData>> {
-        let replaced = self.preview.take().map(|voice| voice.sample);
+        let cut = self.preview_fading.take().map(|voice| voice.sample);
+        if let Some(mut voice) = self.preview.take() {
+            let length = (PREVIEW_FADE_S * f64::from(self.sample_rate)).round().max(1.0) as u32;
+            voice.fade = Some((length, length));
+            self.preview_fading = Some(voice);
+        }
         match command {
             PreviewCommand::Play { sample } => {
-                self.preview = Some(PreviewVoice {
-                    sample,
-                    position: 0,
-                });
+                self.preview = Some(PreviewVoice::new(sample));
             }
             PreviewCommand::Stop => {}
         }
-        replaced
+        cut
     }
 
     /// Hands back a sample whose preview finished, for disposal off the
@@ -3289,41 +3374,35 @@ impl RenderState {
     /// bus walk: the preview bypasses the project's chains, balance, and
     /// mute so the file is heard as the file.
     fn render_preview(&mut self, frames: usize) {
-        let Some(voice) = self.preview.as_mut() else {
+        if self.preview.is_none() && self.preview_fading.is_none() {
             return;
-        };
+        }
         let gain = f32::from_bits(self.preview_gain.load(Ordering::Relaxed));
-        let samples = &voice.sample.frames;
-        let start = voice.position.min(samples.len());
-        let count = (start + frames).min(samples.len()) - start;
         let master = &mut self.buses[MASTER_BUS as usize];
         // The preview writes into the master after the bus walk has already
         // decided whether to empty it, so it has to say that it did: a master
         // left holding the last frames of a retired preview would keep
         // playing them for as long as nothing else routed to it.
         master.dirty = true;
-        let bus = &mut master.bus;
-        for index in 0..count {
-            let frame = samples[start + index];
-            bus.l[index] += frame[0] * gain;
-            bus.r[index] += frame[1] * gain;
-        }
-        let played = start + count;
-        if played < samples.len() {
-            self.preview.as_mut().expect("preview checked above").position = played;
-            return;
-        }
-        // Finished. Retire it if there is room, and otherwise leave the voice
-        // where it is and try again next block: `start` will equal the
-        // buffer's length, so `count` is zero and nothing further is summed.
-        // Holding costs a comparison; the alternatives are a `Vec` growing
-        // here or an `Arc` freed here, and this is the realtime callback.
-        let voice = self.preview.take().expect("preview checked above");
-        if let Some(returned) = self.preview_retired.push(voice.sample) {
-            self.preview = Some(PreviewVoice {
-                sample: returned,
-                position: played,
-            });
+        for slot in [&mut self.preview, &mut self.preview_fading] {
+            let Some(voice) = slot.as_mut() else {
+                continue;
+            };
+            if !voice.render(&mut master.bus, frames, gain, self.sample_rate) {
+                continue;
+            }
+            // Finished. Retire it if there is room, and otherwise leave the
+            // voice where it is and try again next block: it is past its end,
+            // so it sums nothing further. Holding costs a comparison; the
+            // alternatives are a `Vec` growing here or an `Arc` freed here,
+            // and this is the realtime callback.
+            let voice = slot.take().expect("voice checked above");
+            if let Some(returned) = self.preview_retired.push(voice.sample) {
+                *slot = Some(PreviewVoice {
+                    sample: returned,
+                    ..voice
+                });
+            }
         }
     }
 
@@ -7821,20 +7900,27 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             "the preview must reach the master bus while the transport is stopped"
         );
 
-        // Replacing a playing preview hands the old sample back for UI-side
-        // disposal before it can ever be dropped on the realtime thread.
+        // Replacing a playing preview fades the old one out rather than
+        // handing it straight back: it is still sounding. Nothing is returned
+        // for disposal, because nothing has finished yet.
         let second = Arc::new(SampleData {
             frames: vec![[1.0, 1.0]; 10],
             sample_rate: 48_000,
             root_note: 60,
         });
         let replaced = render.apply_preview(PreviewCommand::Play { sample: second.clone() });
-        assert!(Arc::ptr_eq(&replaced.expect("a preview was playing"), &first));
+        assert!(replaced.is_none(), "the displaced voice is fading, not finished");
 
-        // Ten frames are gone after one block; retirement follows.
+        // Ten frames and a two-millisecond fade are both over after one
+        // block, and both samples retire through the ring -- never dropped on
+        // the realtime thread.
         render.process_block(512);
-        let retired = render.pop_retired_preview().expect("voice finished");
-        assert!(Arc::ptr_eq(&retired, &second));
+        let retired = [
+            render.pop_retired_preview().expect("a voice finished"),
+            render.pop_retired_preview().expect("both voices finished"),
+        ];
+        assert!(retired.iter().any(|sample| Arc::ptr_eq(sample, &first)));
+        assert!(retired.iter().any(|sample| Arc::ptr_eq(sample, &second)));
         assert!(render.pop_retired_preview().is_none());
 
         // And the preview is silent again.
@@ -7846,6 +7932,74 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 .iter()
                 .any(|sample| *sample != 0.0)
         );
+    }
+
+    /// A preview plays a file at the file's own rate, as the sampler does
+    /// once the same file is loaded into it. Measured as duration: a tenth of
+    /// a second of audio lasts a tenth of a second whatever rate it was
+    /// written at.
+    ///
+    /// Shaped against the unfixed tree, which copied one file frame per
+    /// output frame: the 44.1 kHz file ran 4,410 frames (1.5 semitones sharp)
+    /// and the 96 kHz one 9,600 (an octave low).
+    #[test]
+    fn preview_plays_a_file_at_its_own_rate() {
+        for file_rate in [44_100u32, 48_000, 96_000] {
+            let mut render = RenderState::new(48_000, empty_channel_audio_bank());
+            render.attach_preview_gain(Arc::new(AtomicU32::new(1.0f32.to_bits())));
+            let tenth = file_rate as usize / 10;
+            render.apply_preview(PreviewCommand::Play {
+                sample: Arc::new(SampleData {
+                    frames: vec![[0.5, 0.5]; tenth],
+                    sample_rate: file_rate,
+                    root_note: 60,
+                }),
+            });
+            let mut sounding = 0usize;
+            for _ in 0..24 {
+                render.process_block(512);
+                sounding += render.master().l[..512]
+                    .iter()
+                    .filter(|sample| **sample > 0.25)
+                    .count();
+            }
+            assert!(
+                sounding.abs_diff(4_800) <= 2,
+                "a tenth of a second at {file_rate} Hz lasted {sounding} frames at 48 kHz"
+            );
+        }
+    }
+
+    /// Stopping a preview fades it rather than cutting it mid-waveform,
+    /// which is a click on every audition that is interrupted -- and
+    /// auditioning down a list interrupts every one of them.
+    #[test]
+    fn stopping_a_preview_fades_instead_of_cutting() {
+        let mut render = RenderState::new(48_000, empty_channel_audio_bank());
+        render.attach_preview_gain(Arc::new(AtomicU32::new(1.0f32.to_bits())));
+        let sample = Arc::new(SampleData {
+            frames: vec![[0.5, 0.5]; 48_000],
+            sample_rate: 48_000,
+            root_note: 60,
+        });
+        render.apply_preview(PreviewCommand::Play { sample: sample.clone() });
+        render.process_block(512);
+        assert!(render.apply_preview(PreviewCommand::Stop).is_none());
+        render.process_block(512);
+        let out = &render.master().l[..512];
+        let fade = (PREVIEW_FADE_S * 48_000.0).round() as usize;
+        assert!((out[0] - 0.5).abs() < 1.0e-6, "the fade starts from where it was");
+        let largest_step = out[..=fade]
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            largest_step <= 0.5 / fade as f32 + 1.0e-6,
+            "the stop stepped by {largest_step}"
+        );
+        assert!(out[fade..].iter().all(|sample| *sample == 0.0), "and then it is silent");
+        let retired = render.pop_retired_preview().expect("the faded voice retires");
+        assert!(Arc::ptr_eq(&retired, &sample));
     }
 
     #[test]
