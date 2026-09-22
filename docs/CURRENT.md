@@ -1158,7 +1158,9 @@ land on its own when it starts to matter:
   that is not there, leaving addresses on a generator that has no descriptor
   table yet untouched.
 - Thirteen effect kinds ship: a low-pass/high-pass filter, a drive/saturation
-  with four curves at 2x oversampling, a preamp carrying the channel strip's
+  with four curves at 2x oversampling whose Drive changes character rather
+  than level -- a signal at the -12 dBFS operating level keeps its peak at
+  any drive on any curve, and a hotter one is held down toward it -- a preamp carrying the channel strip's
   four voicings -- Moo, Grip, Punch and Iron, the last three measured from
   real units rather than picked -- over a Drive, Mix and Output in dB. `Moo`
   is the default and is bit-identical to no device at all, which makes the
