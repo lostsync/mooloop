@@ -617,20 +617,41 @@ before that writer exists, not after.
 
 **Three callback costs that grow with the song rather than the block**, from
 `reports/fable-2026-09-21.md` finding 5, none of them a hazard and none of
-them measured:
+them measured. The third is closed; the first two are open as MOO-73, and the
+second is not really a cost at all -- it is a silent wrong answer, reachable
+at a 512-frame block:
 
 - Song-mode automation lookup is playlist by channels by destinations per
   block once any lane exists under the playhead (`automation_lane_at`,
   `sequencer.rs:526`). A per-block cache of covering placements would make
   it O(destinations).
 - `EventList::push_ordered` (`dsp/src/event.rs:122`) is an insertion sort
-  into `MAX_EVENTS = 256`, and automation emits one event per control tick
-  per destination -- at an 8192-frame block one automated destination fills
-  the list alone and every later push returns `false` into a `let _`. No
-  allocation, no noise, wrong values.
-- `Sequencer::set_playlist_placement` does `push` then `sort_unstable` on
-  the callback per placement toggle; an insert at `partition_point` is the
-  same number of lines.
+  into `MAX_EVENTS = 256`, and the control pass emits one event per control
+  tick per driven destination into a `let _` (`render.rs:5934`). **The
+  8192-frame block this used to be written against is the far end of it, and
+  the near end is 512 frames** -- the same loop serves modulation as well as
+  automation, so a channel has up to `MAX_MOD_ROUTES_PER_CHANNEL = 16` plus
+  `MAX_AUTOMATION_LANES_PER_CHANNEL = 8` driven destinations, and
+  24 x 512/`CONTROL_RATE_FRAMES` = 384 is already past 256. Sixteen of those
+  twenty-four need no lane drawn at all, so a modulation rack alone reaches
+  it at an ordinary buffer size. Notes are scheduled before the control pass,
+  so what is lost is automation and modulation rather than notes, and because
+  the refusal is on capacity rather than on order the failure is not a wrong
+  value everywhere but one destination freezing mid-block and every later one
+  in descriptor order getting nothing. No allocation and no noise either way.
+  MOO-73, which also names three more sites that drop a `push_ordered`
+  refusal, two of them without even a `let _`.
+- `Sequencer::set_playlist_placement` did `push` then `sort_unstable` on the
+  callback per placement toggle. **Closed 2026-09-22**: it inserts at
+  `partition_point`, which answers the duplicate check in the same binary
+  search, so painting a range costs one search and one memmove per cell
+  rather than a sort of up to 512 placements. What that changed beyond the
+  cost is that the playlist's sortedness used to be a *consequence* of the
+  function and is now something it *depends* on -- `load_project` is the
+  other place that establishes it -- so the invariant is named in the doc
+  comment and guarded by
+  `playlist_stays_sorted_and_deduplicated_however_it_is_painted`, which was
+  validated by moving the insert index and watching it fail.
 
 Also on the thread: `defer_command`'s `debug_assert!(false, "... {command:?}")`
 (`render.rs:4591`) formats an `EngineCommand` and panics from the callback in
