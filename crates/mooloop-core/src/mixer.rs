@@ -880,11 +880,69 @@ pub fn clamp_bus(bus: u8) -> u8 {
 /// would move the channel in time relative to every other one, so A/B-ing an
 /// effect would also A/B the timing and neither answer would be about the
 /// effect. Removing the device is what gives the latency back.
+///
+/// **This walks the container tree rather than summing the flat list**, and
+/// today the two agree on every chain that exists. `containers/02` recorded,
+/// correctly at the time, that containers needed no change here: a
+/// container's children are rows of the same chain, its own declared latency
+/// is zero, and so a flat sum already counted them exactly once.
+///
+/// That holds precisely as long as every row is in **series**. A layer
+/// (`docs/plans/containers/07-a-branch-is-a-run.md`) splits its input across
+/// its direct children and sums what comes back, so the frames a signal
+/// spends inside one is its *longest* branch, not the total of all of them --
+/// and a flat sum would over-declare by the difference. Over-declaring is not
+/// a quiet error: the mixer compensates every other channel against this
+/// number, so the channel holding the layer would sit late against the whole
+/// song while sounding perfectly correct on its own.
+///
+/// The walk is here before the kind that needs it, so that the commit adding
+/// `Layer` changes one arm rather than the compensation model. On a serial
+/// tree it is a restructure and
+/// `the_latency_walk_agrees_with_the_flat_sum_on_every_serial_arrangement`
+/// is what says so.
 pub fn chain_latency(effects: &[EffectSlotState]) -> u32 {
-    effects
-        .iter()
-        .map(|effect| effect.kind().latency_frames())
-        .sum()
+    latency_of_runs(effects, 0..effects.len())
+}
+
+/// Declared latency of `range`, which must be a whole number of complete runs
+/// sitting at one depth -- a chain, or everything inside one container.
+///
+/// Sibling runs are in series with each other, so they add. What a *container*
+/// does with the runs inside it is the question that is about to have two
+/// answers, and it is asked one level down in [`latency_of_run`].
+fn latency_of_runs(effects: &[EffectSlotState], range: std::ops::Range<usize>) -> u32 {
+    let mut total: u32 = 0;
+    let mut slot = range.start;
+    while slot < range.end {
+        total = total.saturating_add(latency_of_run(effects, slot));
+        // `run_of` already guarantees an end past `slot`; the `max` is here
+        // because this is a loop over data that arrives from a file, and
+        // `integrity.rs` has no depth or span check that would catch a run
+        // claiming to end where it starts (`MAX_CONTAINER_DEPTH`'s own note).
+        // A hang on the control thread is a worse way to find that out.
+        slot = crate::run_of(effects, slot).end.max(slot + 1);
+    }
+    total
+}
+
+/// Declared latency of the run headed by `slot`: the device itself, plus
+/// whatever it holds.
+///
+/// A container's own declared latency is zero and stays zero -- it has no
+/// signal path of its own. What it contributes is its contents, and **the
+/// rule for combining them is the one thing a second container kind
+/// changes**: a chain's rows are in series and add, where a layer's branches
+/// are in parallel and the longest one wins.
+fn latency_of_run(effects: &[EffectSlotState], slot: usize) -> u32 {
+    let Some(head) = effects.get(slot) else {
+        return 0;
+    };
+    let own = head.kind().latency_frames();
+    if !head.params.is_container() {
+        return own;
+    }
+    own.saturating_add(latency_of_runs(effects, crate::span_of(effects, slot)))
 }
 
 /// Declared latency of the run the container in `slot` encloses.
@@ -899,9 +957,12 @@ pub fn chain_latency(effects: &[EffectSlotState]) -> u32 {
 /// the whole chain and already counts these rows, so declaring the run here
 /// too would compensate the channel twice. See question 4 in
 /// `docs/plans/containers/README.md`.
+///
+/// It walks the tree for the same reason `chain_latency` does, and it is the
+/// number `containers/08` will read per branch to size the alignment delays:
+/// a branch's latency is its run's, and the layer waits for the longest.
 pub fn run_latency(effects: &[EffectSlotState], slot: usize) -> u32 {
-    let run = crate::span_of(effects, slot);
-    effects[run].iter().map(|e| e.kind().latency_frames()).sum()
+    latency_of_runs(effects, crate::span_of(effects, slot))
 }
 
 /// What each producer must be delayed by so that everything summing at a
@@ -2600,5 +2661,142 @@ mod tests {
             assert!(!seen[bus as usize], "bus {bus} appears twice");
             seen[bus as usize] = true;
         }
+    }
+
+    // --- Chain latency -----------------------------------------------------
+
+    use crate::effect::{EffectKind, EffectSlotState};
+    use crate::structure::{insert_effect, wrap_in_container};
+
+    /// The flat sum the tree walk replaced.
+    ///
+    /// Kept as the oracle rather than deleted, because "the walk agrees with
+    /// the sum" is the whole claim of the commit that introduced the walk,
+    /// and a claim needs both sides to be checkable. It stops being the
+    /// oracle for *layers* the moment one exists -- and that is the point:
+    /// the arrangements below are all serial, so this stays correct for
+    /// them forever.
+    fn flat_sum(effects: &[EffectSlotState]) -> u32 {
+        effects
+            .iter()
+            .map(|effect| effect.kind().latency_frames())
+            .sum()
+    }
+
+    /// A chain of leaves, in order.
+    fn leaves(kinds: &[EffectKind]) -> Vec<EffectSlotState> {
+        let mut effects = Vec::new();
+        let mut next = 0;
+        for kind in kinds {
+            let at = effects.len();
+            insert_effect(&mut effects, &mut next, at, EffectSlotState::of_kind(*kind));
+        }
+        effects
+    }
+
+    fn wrap(effects: &mut Vec<EffectSlotState>, run: std::ops::Range<usize>) {
+        let mut next = u32::from(u16::MAX);
+        let container = EffectSlotState::of_kind(EffectKind::Chain);
+        wrap_in_container(effects, &mut next, run, container).expect("a wrappable run");
+    }
+
+    /// **Drive is the only kind that declares a latency** (the oversampler's
+    /// fifteen frames), so an arrangement without one cannot tell a right
+    /// answer from zero. Every case below has at least two.
+    fn drives_and_filters() -> Vec<EffectSlotState> {
+        leaves(&[
+            EffectKind::Filter,
+            EffectKind::Drive,
+            EffectKind::Delay,
+            EffectKind::Drive,
+            EffectKind::Reverb,
+        ])
+    }
+
+    /// The guard on the walk, and it is written to pass on the tree as it is:
+    /// with every row in series a tree walk and a flat sum are the same
+    /// number, so this commit changes no behaviour and this test is what
+    /// says so.
+    ///
+    /// It keeps its value afterwards rather than becoming a tautology. When
+    /// `EffectKind::Layer` lands, these arrangements are still serial and
+    /// still have to agree -- so a `max` written into the wrong arm, or a
+    /// chain accidentally combining its rows in parallel, fails here.
+    #[test]
+    fn the_latency_walk_agrees_with_the_flat_sum_on_every_serial_arrangement() {
+        let two_drives = 2 * EffectKind::Drive.latency_frames();
+
+        let flat = drives_and_filters();
+        assert_eq!(chain_latency(&flat), two_drives, "a flat chain");
+
+        // One box around the middle, one around the head, one around
+        // everything, and two nested -- which is every shape the gestures can
+        // make that differs in how the walk has to recurse. Each case is the
+        // wraps to apply, innermost last, because `wrap_in_container` takes
+        // indices into the chain as it stands.
+        let arrangements: [(&str, &[(usize, usize)]); 5] = [
+            ("a box around the middle", &[(1, 3)]),
+            ("a box around the head", &[(0, 2)]),
+            ("a box around everything", &[(0, 5)]),
+            ("two sibling boxes", &[(3, 5), (0, 2)]),
+            ("a box inside a box", &[(1, 3), (0, 4)]),
+        ];
+
+        for (what, wraps) in arrangements {
+            let mut effects = drives_and_filters();
+            for (start, end) in wraps {
+                wrap(&mut effects, *start..*end);
+            }
+            assert!(
+                crate::span_problem(&effects).is_none(),
+                "{what} built a malformed chain: {:?}",
+                crate::span_problem(&effects)
+            );
+            assert_eq!(
+                chain_latency(&effects),
+                flat_sum(&effects),
+                "the walk and the sum disagree about {what}"
+            );
+            assert_eq!(
+                chain_latency(&effects),
+                two_drives,
+                "{what} moved the chain's latency, and wrapping a run must not"
+            );
+        }
+    }
+
+    /// A container declares nothing of its own, so putting one around a run
+    /// cannot change what the channel is compensated by. Stated separately
+    /// from the agreement above because it is the property a musician would
+    /// notice: wrapping two devices in a box must not shift the channel in
+    /// time against the rest of the song.
+    #[test]
+    fn wrapping_a_run_does_not_move_the_channel_in_time() {
+        let bare = drives_and_filters();
+        let mut boxed = drives_and_filters();
+        wrap(&mut boxed, 1..3);
+        assert_eq!(chain_latency(&bare), chain_latency(&boxed));
+        assert_eq!(boxed.len(), bare.len() + 1, "the box took a row");
+    }
+
+    /// What a container's dry copy waits for: its contents, not itself and
+    /// not the rest of the chain.
+    #[test]
+    fn a_runs_latency_is_what_the_box_holds() {
+        let mut effects = drives_and_filters();
+        // Filter | [Drive Delay] | Drive Reverb -- one Drive inside, one out.
+        wrap(&mut effects, 1..3);
+        let container = 1;
+        assert!(effects[container].params.is_container());
+        assert_eq!(
+            run_latency(&effects, container),
+            EffectKind::Drive.latency_frames(),
+            "the run holds exactly one Drive"
+        );
+        assert_eq!(
+            run_latency(&effects, 0),
+            0,
+            "a leaf encloses nothing, whatever its own latency"
+        );
     }
 }
