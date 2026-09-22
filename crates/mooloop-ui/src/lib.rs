@@ -2706,6 +2706,12 @@ fn effect_slot_row(
         detector_db: METER_FLOOR_DB,
         gain_reduction_db: 0.0,
         children: slot.params.container_children().unwrap_or(0) as i32,
+        // The markup asked `kind == 13` in seven places, which is the Rust
+        // predicate re-derived from a number the comment above `kind` calls a
+        // *runtime* binding that may be renumbered. Carried on the row like
+        // `children` and `closing`, so the markup asks what a row is rather
+        // than what index it happens to have published this frame.
+        is_container: slot.params.is_container(),
         depth,
         closing: ModelRc::from(Rc::new(VecModel::from(closing))),
         selected,

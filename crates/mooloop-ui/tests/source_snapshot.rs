@@ -664,6 +664,7 @@ fn effect_slot(kind: EffectKind) -> EffectSlotRow {
         detector_db: -60.0,
         gain_reduction_db: 0.0,
         children: 0,
+        is_container: kind.is_container(),
         depth: 0,
         // A fixture row: these tests are about what the rack draws, not
         // about the depth cap, so wrapping is offered.

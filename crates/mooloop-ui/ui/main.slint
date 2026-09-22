@@ -342,6 +342,15 @@ struct EffectSlotRow {
     // once rather than twice.
     children: int,
     depth: int,
+    // Whether this row holds a run of the rows after it.
+    //
+    // The markup used to ask `kind == 13`, seven times. That is the Rust
+    // predicate `EffectParams::is_container` re-derived from a number which
+    // the comment above `kind` describes as a runtime binding that may be
+    // renumbered -- so the renumbering it invites would have had to find all
+    // seven, and a second container kind would have had to be added to all
+    // seven as `|| kind == 14`. Carried here for the same reason `closing` is.
+    is-container: bool,
     // Whether wrapping this row would leave every container inside
     // `MAX_CONTAINER_DEPTH`. A bool and not a comparison against `depth`,
     // because the cap is an engine number and spelling it here would be a
@@ -4632,7 +4641,7 @@ export component MainWindow inherits Window {
                                             // A container draws no output rail against its
                                             // own face -- it draws one past the last device
                                             // it holds -- so its frame is a rail narrower.
-                                            property <bool> is-container: slot.kind == 13;
+                                            property <bool> is-container: slot.is-container;
                                             property <length> frame-width: self.face-width
                                                 + DeviceRackMetrics.rail-width
                                                     * (self.is-container ? 1 : 2);
@@ -4710,7 +4719,7 @@ export component MainWindow inherits Window {
                                             // half of the same protection.
                                             for level in [1, 2, 3, 4] : ContainerEnclosure {
                                                 property <bool> inside: slot.depth >= level;
-                                                property <bool> is-head: slot.kind == 13 && slot.depth == level - 1;
+                                                property <bool> is-head: slot.is-container && slot.depth == level - 1;
                                                 visible: self.inside || self.is-head;
                                                 level: level;
                                                 head: self.is-head;
@@ -4785,12 +4794,12 @@ export component MainWindow inherits Window {
                                                 // it is the "convincing but
                                                 // inert control" the rack's own
                                                 // rule names.
-                                                wet-dry-enabled: slot.kind != 13;
+                                                wet-dry-enabled: !slot.is-container;
                                                 wet-dry: slot.wet-dry;
                                                 wet-dry-text: round(slot.wet-dry * 100) + "% wet";
                                                 wet-dry-changed(v) => { root.effect-wet-dry-changed(index, v); }
                                                 removal-enabled: true;
-                                                is-container: slot.kind == 13;
+                                                is-container: slot.is-container;
                                                 container-children: slot.children;
                                                 // Wrapping a container in
                                                 // another is legal, so this
@@ -4799,7 +4808,7 @@ export component MainWindow inherits Window {
                                                 // one the engine will not
                                                 // blend.
                                                 wrap-enabled: slot.wrap-enabled;
-                                                unwrap-enabled: slot.kind == 13;
+                                                unwrap-enabled: slot.is-container;
                                                 wrap-requested => { root.wrap-effect-clicked(index); }
                                                 unwrap-requested => { root.unwrap-effect-clicked(index); }
                                                 selected: slot.selected;
@@ -4814,7 +4823,7 @@ export component MainWindow inherits Window {
                                                 // for an empty box those are the same
                                                 // number, and no index can mean both.
                                                 effect-kind-selected(kind) => {
-                                                    if (slot.kind == 13) {
+                                                    if (slot.is-container) {
                                                         root.add-effect-into-container(kind, index);
                                                     } else {
                                                         root.add-effect-clicked(kind, index);
@@ -5297,7 +5306,7 @@ export component MainWindow inherits Window {
                                                     reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     select-requested => { root.device-selected(index); }
                                                 }
-                                                if slot.kind == 13 : ContainerDeviceFace {
+                                                if slot.is-container : ContainerDeviceFace {
                                                     x: DeviceRackMetrics.rail-width;
                                                     y: 0px;
                                                     width: parent.content-width;

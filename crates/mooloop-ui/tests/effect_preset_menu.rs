@@ -225,6 +225,7 @@ fn the_insert_menu_offers_every_kind() {
 fn the_menu_and_the_faces_cover_every_kind() {
     let menu = menu_indices();
     let faces = face_branches();
+    let predicate_faces = predicate_face_branches();
     let known = every_kind_index();
 
     for index in &menu {
@@ -252,12 +253,29 @@ fn the_menu_and_the_faces_cover_every_kind() {
             kind.label()
         );
 
-        let expected_face = match kind {
-            // The one face not named after its kind: the kind is `Chain`
-            // because a chain is what it holds.
-            EffectKind::Chain => "ContainerDeviceFace".to_string(),
-            other => format!("{other:?}DeviceFace"),
-        };
+        // A container is drawn by the predicate arm, because every container
+        // kind shares one face until `containers/09` gives a layer its own.
+        // The question is unchanged -- exactly one arm draws this kind -- but
+        // it is asked of `is-container` rather than of the index.
+        if kind.is_container() {
+            assert_eq!(
+                predicate_faces,
+                vec!["ContainerDeviceFace".to_string()],
+                "{} is a container, so it is drawn by the single \
+                 `if slot.is-container : ContainerDeviceFace` arm in \
+                 main.slint, and that arm has to exist exactly once",
+                kind.label()
+            );
+            assert!(
+                !faces.iter().any(|(at, _)| *at == index),
+                "{} (kind {index}) has an indexed face arm as well as the \
+                 predicate one, so it would draw two faces",
+                kind.label()
+            );
+            continue;
+        }
+
+        let expected_face = format!("{kind:?}DeviceFace");
         let drawn: Vec<&str> = faces
             .iter()
             .filter(|(at, _)| *at == index)
@@ -302,6 +320,28 @@ fn face_branches() -> Vec<(i32, String)> {
                 return None;
             }
             Some((index.trim().parse().ok()?, face.to_string()))
+        })
+        .collect()
+}
+
+/// The faces drawn by a predicate rather than by an index.
+///
+/// One arm, `if slot.is-container : ContainerDeviceFace`. It is keyed that
+/// way because containment is a property of the row and not of its number:
+/// the markup asked `slot.kind == 13` in seven places until 2026-09-21, and
+/// a second container kind would have had to be added to all seven as
+/// `|| kind == 14`.
+///
+/// It means face dispatch is no longer one arm per kind, so the cover test
+/// below asks a container kind a different question -- but the same one
+/// underneath: **is there exactly one arm that draws it.**
+fn predicate_face_branches() -> Vec<String> {
+    MAIN_SLINT
+        .lines()
+        .filter_map(|line| line.split_once("if slot.is-container : "))
+        .filter_map(|(_, face)| {
+            let face = face.trim().trim_end_matches('{').trim();
+            face.ends_with("DeviceFace").then(|| face.to_string())
         })
         .collect()
 }
