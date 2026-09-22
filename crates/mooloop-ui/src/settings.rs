@@ -343,7 +343,12 @@ impl Default for DriverSettings {
         Self {
             output_port_l: None,
             output_port_r: None,
-            buffer_size: Some(256),
+            // The server's, until somebody picks one. Under JACK the buffer
+            // is server-wide, so a default of 256 re-sized it for every
+            // client on the machine each time mooloop started, whatever the
+            // user had set the server to (P8 in
+            // `reports/teams-2026-09-22.md`).
+            buffer_size: None,
             auto_reconnect: true,
         }
     }
@@ -1865,7 +1870,16 @@ mod tests {
         let (unused, other) = ("core-audio", &mut audio.core_audio);
         assert!(!written.contains(unused), "{written}");
         other.buffer_size = Some(2048);
-        assert_eq!(audio.engine_config().buffer_size, Some(256));
+        assert_eq!(audio.engine_config().buffer_size, None);
+    }
+
+    /// A fresh install asks the driver for nothing: under JACK the buffer is
+    /// the whole server's, and a default request re-sized it for every
+    /// client on the machine on every launch.
+    #[test]
+    fn a_fresh_install_leaves_the_buffer_size_alone() {
+        assert_eq!(DriverSettings::default().buffer_size, None);
+        assert_eq!(AudioSettings::default().engine_config().buffer_size, None);
     }
 
     #[test]

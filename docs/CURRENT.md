@@ -441,12 +441,14 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   `<config>/mooloop/themes/<name>.toml`, one file per theme, and a malformed
   one is skipped with a message rather than stopping startup. All of it
   previews live and persists on Apply or OK. Shared audio controls, tooltips, and master
-  peak-meter ballistics. A fresh install requests a 256-frame buffer by
-  default (Preferences > Audio picks from 64/128/256/512/1024/2048) --
-  server-wide under JACK, the output device's own under Core Audio; a saved
-  config that already has a buffer size choice keeps it, and the engine
-  falls back to the driver's current buffer size with a printed warning if
-  the request is rejected. Sluggish input latency is a buffer-size symptom
+  peak-meter ballistics. A fresh install leaves the buffer size where the
+  driver has it, and Preferences > Audio shows that size; picking one
+  (64/128/256/512/1024/2048) requests it from then on -- server-wide under
+  JACK, the output device's own under Core Audio. A saved config that
+  already has a buffer size keeps it, which includes an older install's
+  256, written when that was the default. The engine falls back to the
+  driver's current buffer size with a printed warning if a request is
+  rejected. Sluggish input latency is a buffer-size symptom
   to check here before assuming a DSP bottleneck. The Shortcuts page lists
   every action in the registry (`ACTIONS.md`), grouped by category, each
   reassignable by clicking Record and pressing a key combination; rebinding
