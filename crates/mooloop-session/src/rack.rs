@@ -1,4 +1,4 @@
-//! Channel-rack edits: selection, mute, level, pan, bus, and source.
+//! Channel-rack edits: selection, mute, solo, level, pan, bus, and source.
 
 use crate::channel::ChannelState;
 use crate::session::Session;
@@ -80,6 +80,45 @@ impl Session {
             channel: channel as u8,
             muted: state.muted,
         })
+    }
+
+    /// Flips a channel's solo.
+    ///
+    /// **Solo in place**, the same ruling a track's follows: what it silences
+    /// is derived by the pump's `sync_channel_solo`, not here, because it is
+    /// a property of the whole bank rather than of this channel. This only
+    /// says which button is lit, which is why it hands back no command.
+    ///
+    /// Nothing is refused. A track's solo is refused on the master, which
+    /// every track reaches and soloing would silence nothing; no channel has
+    /// that standing, so soloing the only channel in a song is simply a solo
+    /// that silences nothing, and dropping it changes nothing back.
+    pub fn toggle_channel_solo(&mut self, channel: i32) -> bool {
+        let Ok(channel) = usize::try_from(channel) else {
+            return false;
+        };
+        let Some(state) = self.channels.get_mut(channel) else {
+            return false;
+        };
+        state.solo = !state.solo;
+        // Routing-shaped state does not travel as a command, so the edit is
+        // marked here rather than falling out of one -- the same reason
+        // `toggle_track_solo` marks its own, and the reason a plain
+        // `dirty = true` at the call site would be wrong: `mark_dirty` also
+        // bumps the revision everything else reads.
+        self.mark_dirty();
+        true
+    }
+
+    /// Which channels a solo is silencing, for the pump to send and for the
+    /// rack rows to dim. Derived from the bank on each ask, for the reason
+    /// [`Self::toggle_channel_solo`] hands back no command.
+    ///
+    /// The whole plan rather than one channel's answer, because both callers
+    /// want every row: the plan is what `sync_channel_solo` diffs, and asking
+    /// per row would re-derive the bank once per row.
+    pub fn channel_solo_silenced(&self) -> [bool; MAX_CHANNELS] {
+        mooloop_core::channel::solo_silenced(self.channels.iter().map(|state| state.solo))
     }
 
     /// Sets a channel's output level, clamped to the container's headroom.

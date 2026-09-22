@@ -879,6 +879,13 @@ fn same_strip(held: &mooloop_core::ChannelSetup, incoming: &mooloop_core::Channe
         // Where the channel records audio from is routing, held in the
         // engine's own audio input cell, not strip content.
         audio_input: _,
+        // Nor is the solo: what the strip carries is the *verdict*
+        // (`ChannelStrip::solo_silenced`), which is derived from the whole
+        // bank and re-read from the incoming project by
+        // `RenderState::carry_strips_from` exactly as the destination above
+        // is. A channel whose only change is its own solo button is still
+        // the same strip, and carrying it is what keeps its voices sounding.
+        solo: _,
     } = channel;
     let other = &incoming.channel;
     *name == other.name

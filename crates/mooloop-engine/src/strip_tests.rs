@@ -267,6 +267,89 @@ fn a_solo_silences_the_siblings_and_keeps_the_path() {
     );
 }
 
+/// **Solo in place one level down**: soloing a *channel* silences the other
+/// channels, and is exactly those channels muted by hand.
+///
+/// The same claim `a_solo_silences_the_siblings_and_keeps_the_path` makes for
+/// tracks, and made against `load_project` for the same reason -- that is the
+/// path an offline bounce takes, so a render of a soloed song matches what
+/// was heard.
+///
+/// A channel's version has no "keeps the path" half, and that is the
+/// difference between the two derivations rather than a gap in the test:
+/// channels do not feed each other, so there is no ancestor to keep up.
+#[test]
+fn soloing_a_channel_is_the_other_channels_muted() {
+    let mut quiet = one_note_channel(45);
+    let mut soloed = one_note_channel(52);
+    quiet.setup.channel.bus = 1;
+    soloed.setup.channel.bus = 1;
+    let mut project = Project {
+        channels: vec![quiet, soloed],
+        ..Project::default()
+    };
+    project.ensure_tracks(2);
+
+    let (both, _) = render_master(&project, 0.5);
+    assert!(peak_of(&both) > 0.01, "the comparison ran on silence");
+
+    project.channels[1].setup.channel.solo = true;
+    let (alone, _) = render_master(&project, 0.5);
+    assert!(
+        peak_of(&alone) > 0.01,
+        "a soloed channel has to still be heard"
+    );
+    assert!(
+        worst_difference(&both, &alone) > 1e-3,
+        "soloing one of two channels has to change the mix"
+    );
+
+    // The same render with the silenced channel muted by hand instead.
+    project.channels[1].setup.channel.solo = false;
+    project.channels[0].setup.channel.muted = true;
+    let (muted, _) = render_master(&project, 0.5);
+    project.channels[0].setup.channel.muted = false;
+    project.channels[1].setup.channel.solo = true;
+    let (soloed_again, _) = render_master(&project, 0.5);
+    assert_eq!(
+        muted, soloed_again,
+        "solo in place should be exactly the other channels muted"
+    );
+}
+
+/// A solo does not eat a mute, which is why the verdict is a second field on
+/// the strip rather than a write to `output.muted`: a channel muted by hand
+/// and then silenced by somebody else's solo is still muted when that solo
+/// is dropped.
+#[test]
+fn dropping_a_solo_gives_a_channel_back_its_own_mute() {
+    let mut project = Project {
+        channels: vec![one_note_channel(45), one_note_channel(52)],
+        ..Project::default()
+    };
+    project.ensure_tracks(1);
+    project.channels[0].setup.channel.muted = true;
+
+    let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+    assert!(!render.channel_solo_silenced(0), "nothing is soloed yet");
+
+    render.apply_command(EngineCommand::SetChannelSoloSilenced {
+        channel: 0,
+        silenced: true,
+    });
+    assert!(render.channel_solo_silenced(0));
+
+    render.apply_command(EngineCommand::SetChannelSoloSilenced {
+        channel: 0,
+        silenced: false,
+    });
+    assert!(!render.channel_solo_silenced(0), "the verdict did not lift");
+    assert!(
+        render.channel_muted(0),
+        "the solo ate the channel's own mute on the way past"
+    );
+}
+
 /// A soloed *group* keeps the tracks that feed it: their audio is what the
 /// group is made of, so silencing them would make the solo silent.
 #[test]

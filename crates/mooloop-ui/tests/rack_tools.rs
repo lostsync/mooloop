@@ -59,6 +59,8 @@ fn harness() -> MainWindow {
         track_color: Default::default(),
         has_track_color: false,
         muted: false,
+        solo: false,
+        solo_silenced: false,
         volume_db: 20.0f32.mul_add(0.8f32.log10(), 0.0), // -1.94 dB, linear 0.8
         pan: 0.0,
         selected: true,
@@ -90,6 +92,78 @@ fn drag(window: &slint::Window, from: f32, to: f32, button: PointerEventButton) 
 
 fn click(window: &slint::Window, x: f32, button: PointerEventButton) {
     drag(window, x, x, button);
+}
+
+/// The solo/mute chip's geometry in the first rack row.
+///
+/// Derived from the same prefix `GRID_ORIGIN_X` is measured against rather
+/// than measured separately: the row is a `HorizontalBox` with 2px of padding
+/// and 6px of spacing, holding an 88px name plate, this 18px chip, two 22px
+/// knobs and a 30px bus picker before the grid. That is
+/// `2 + 88 + 6 + 18 + 6 + 22 + 6 + 22 + 6 + 30 + 6 = 212` to the grid, so the
+/// row's own origin is `GRID_ORIGIN_X - 212` and the chip starts 96px into it.
+const CHIP_X: f32 = GRID_ORIGIN_X - 212.0 + 96.0 + 9.0;
+
+/// The chip is 18px tall and centred on the row: 8px of solo, a 1px rule,
+/// then 9px of mute. These are the middles of the two halves, and a test that
+/// clicked between them would be testing nothing -- which is what the
+/// cross-assertions in `the_rack_rows_chip_is_two_buttons` are for.
+const SOLO_Y: f32 = ROW_CENTRE_Y - 9.0 + 4.0;
+const MUTE_Y: f32 = ROW_CENTRE_Y - 9.0 + 13.5;
+
+/// Click one of the chip's halves.
+fn click_at(window: &slint::Window, x: f32, y: f32) {
+    let at = LogicalPosition::new(x, y);
+    window.dispatch_event(WindowEvent::PointerMoved { position: at });
+    window.dispatch_event(WindowEvent::PointerPressed {
+        position: at,
+        button: PointerEventButton::Left,
+    });
+    window.dispatch_event(WindowEvent::PointerReleased {
+        position: at,
+        button: PointerEventButton::Left,
+    });
+}
+
+/// **The chip is two buttons, and a press has to reach the right one.**
+///
+/// `ChannelMuteSolo` replaced a single `MuteButton` in the rack row, in the
+/// same 18x18 footprint: solo above the rule, mute below it. Nothing else in
+/// this interface splits one chip's height between two callbacks, so nothing
+/// else would notice the two halves collapsing into one -- a model test would
+/// report both flags correct while every solo press muted the channel.
+///
+/// Dispatched as real pointer events for the reason at the top of this file,
+/// and each assertion says what the *other* callback did: a chip whose halves
+/// swapped, or whose top half stopped being hit at all, passes any test that
+/// only checks that solo fired.
+#[test]
+fn the_rack_rows_chip_is_two_buttons() {
+    let ui = harness();
+    let pressed = Rc::new(RefCell::new(Vec::new()));
+    ui.on_channel_soloed({
+        let pressed = pressed.clone();
+        move |channel| pressed.borrow_mut().push(("solo", channel))
+    });
+    ui.on_channel_muted({
+        let pressed = pressed.clone();
+        move |channel| pressed.borrow_mut().push(("mute", channel))
+    });
+
+    click_at(ui.window(), CHIP_X, SOLO_Y);
+    assert_eq!(
+        pressed.borrow().as_slice(),
+        [("solo", 0)],
+        "the top half of the chip did not solo channel 0"
+    );
+
+    pressed.borrow_mut().clear();
+    click_at(ui.window(), CHIP_X, MUTE_Y);
+    assert_eq!(
+        pressed.borrow().as_slice(),
+        [("mute", 0)],
+        "the bottom half of the chip did not mute channel 0"
+    );
 }
 
 #[test]

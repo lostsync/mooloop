@@ -125,11 +125,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   creating another new song generates a new variation. Channels can use any of
   eight sources — the sampler, the v1 drum synth, the DS-01, the v1 mono
   synth, the ML-M1, the v1 poly synth, the ML-P8, or Aux In, which plays
-  another channel's published audio outlet — and every rack row exposes mute,
-  output volume, and constant-power stereo pan. The rack's `+` offers all
-  eight when adding a channel, which is the same list the source picker offers
-  when changing one; its rows are ordinary menu rows, reading down a left
-  edge like the rest of the interface's menus.
+  another channel's published audio outlet — and every rack row exposes solo
+  and mute, output volume, and constant-power stereo pan. The rack's `+`
+  offers all eight when adding a channel, which is the same list the source
+  picker offers when changing one; its rows are ordinary menu rows, reading
+  down a left edge like the rest of the interface's menus.
 - Channels can be reordered by dragging a rack row's name plate. The rows
   between the grab and the landing slide aside, and the gap that opens is the
   drop indicator. Every address in the song that named a channel follows it —
@@ -899,8 +899,29 @@ land on its own when it starts to matter:
 
 ### Mixing, Routing, And Effects
 
-- Channel mute, volume, and pan are exposed, as compact knobs in the rack row,
-  alongside the mixer track the channel feeds.
+- Channel solo, mute, volume, and pan are exposed in the rack row, alongside
+  the mixer track the channel feeds: volume and pan as compact knobs, solo and
+  mute as one 18px chip split across its middle — yellow above, red below.
+  Neither half wears a letter; the colour of the lit half is what says which
+  is on.
+- **Solo in place, per channel**, since 2026-09-22. A soloed channel silences
+  the *other* channels and is heard through its own volume, pan, mute and
+  track, exactly as a soloed track is. It is the same ruling one level down
+  and a simpler derivation: channels do not feed each other, so there are no
+  ancestors to keep audible the way a soloed track's feeders are kept. An Aux
+  In reading a silenced channel's outlet still hears it, because a producer
+  publishes whether or not it is heard.
+
+  A channel's `solo` is what is stored; what it silences is derived from the
+  whole bank every pump tick and never written down. A solo does not touch
+  the soloed channel's own mute, and dropping a solo gives every channel back
+  whatever its mute said. The name of a channel a solo is silencing dims, the
+  way a silenced mixer strip's name does.
+
+  A channel's solo and a track's are separate controls over separate banks:
+  soloing a channel says nothing about tracks, and soloing the track a channel
+  feeds says nothing about its siblings on that track. `channel.solo` is in
+  the shortcut registry with no default chord (`docs/ACTIONS.md`).
 - **The mixer is a list of tracks, and a track is made because somebody made
   it.** A new song opens with the master; the starter kit adds `Drums` and
   `Bass`, with its four drum channels grouped onto the first. `+` in the mixer

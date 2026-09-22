@@ -627,6 +627,42 @@ impl Session {
         }
     }
 
+    /// Reconcile which channels the engine is silencing for a solo.
+    ///
+    /// The channel half of [`Self::sync_solo`], beside it and for the same
+    /// reasons: derived and diffed once a tick, all false while nothing is
+    /// soloed, and deliberately not marking the document dirty -- what a solo
+    /// silences is derived state, and `Channel::solo` is the thing the user
+    /// did.
+    ///
+    /// Held apart from the track pass rather than folded into it because the
+    /// two are different address spaces: a `bus` and a `channel` are both
+    /// `u8` and mean different seats, which is the confusion `AGENTS.md`'s
+    /// parameter-identity section is written about.
+    pub fn sync_channel_solo(&mut self, handle: &mut impl CommandSink) {
+        let plan = self.channel_solo_silenced();
+        if plan == self.channel_solo_silenced_sent {
+            return;
+        }
+        let mut refused = false;
+        for (channel, &silenced) in plan.iter().enumerate() {
+            if silenced == self.channel_solo_silenced_sent[channel] {
+                continue;
+            }
+            if handle.send(EngineCommand::SetChannelSoloSilenced {
+                channel: channel as u8,
+                silenced,
+            }) {
+                self.channel_solo_silenced_sent[channel] = silenced;
+            } else {
+                refused = true;
+            }
+        }
+        if refused {
+            self.report_refused_command("channel solo silencing");
+        }
+    }
+
     /// The audio edges this project's channels compile to, from the model as
     /// it stands.
     ///

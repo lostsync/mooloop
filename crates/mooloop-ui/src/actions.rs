@@ -318,10 +318,17 @@ pub(crate) static ACTIONS: &[ActionSpec] = &[
     ),
     action!("channel.clone", "Clone Channel", "Channel", ctrl + "d"),
     action!("channel.mute", "Mute Channel", "Channel", ctrl + "m"),
-    // Solo landed on a *track* on 2026-09-11 -- `BusSetup::solo`, in place
-    // rather than the monitor tap `archive/MIXER_PLAN.md` had specified -- so these
-    // bind the track's. A channel still has no solo of its own, and an
-    // action named for one would be an action bound to nothing.
+    // Unbound by default, like `pattern.clear` and for the same reason: the
+    // three chords a solo would reach for are taken -- Ctrl+M is the mute
+    // beside it, Ctrl+Shift+M is the track's solo and Ctrl+Alt+M the track's
+    // mute -- and a channel solo is one click away on every rack row. It is
+    // registered so that it appears on the Shortcuts page and can be bound,
+    // which is what `transport.record-arm-toggle` is registered for.
+    action!("channel.solo", "Solo Channel", "Channel"),
+    // The track's pair, which are a different scope and a different solo:
+    // `BusSetup::solo` silences the other *tracks*, following the routing
+    // graph, where `channel.solo` above silences the other channels. Both
+    // are solo in place, since 2026-09-11.
     scoped_action!(
         "track.solo",
         "Solo Track",

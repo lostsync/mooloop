@@ -1,9 +1,9 @@
 import { Theme } from "theme.slint";
 import {
-    AudioOrientation, DraggablePoint, IconButton, InstrumentModule, KnobField, LedIndicator,
-    MiniKnob, MixerFader, MuteButton, ParameterFader, ParameterKnob, PeakMeter, SectionLabel,
-    SegmentedControl, SelectorBank, SoloButton, StereoPeakMeter, TimeDivisionKnob, ToggleButton,
-    ToolButton, TransportButton, TrimKnob, ValueReadout, ZoomScrollBar
+    AudioOrientation, ChannelMuteSolo, DraggablePoint, IconButton, InstrumentModule, KnobField,
+    LedIndicator, MiniKnob, MixerFader, MuteButton, ParameterFader, ParameterKnob, PeakMeter,
+    SectionLabel, SegmentedControl, SelectorBank, SoloButton, StereoPeakMeter, TimeDivisionKnob,
+    ToggleButton, ToolButton, TransportButton, TrimKnob, ValueReadout, ZoomScrollBar
 } from "controls.slint";
 import { EnvelopeEditor } from "envelope.slint";
 import {
@@ -310,6 +310,13 @@ export global MockupCatalog {
             component: "OscillatorDeviceStrip", name: "Oscillator strip",
             module: "device-oscillator.slint", groups: ["Device rack", "Mixer"],
             default-width: 190px, default-height: 190px, behavior: 1,
+        },
+        // Appended rather than filed beside the mute and solo buttons it
+        // replaces in a rack row: `kind` is a row's *position* in this list,
+        // so an insert renumbers every specimen after it.
+        {
+            component: "ChannelMuteSolo", name: "Channel mute/solo", module: "controls.slint",
+            groups: ["Buttons", "Mixer"], default-width: 18px, default-height: 18px, behavior: 2,
         },
     ];
 
@@ -739,5 +746,12 @@ export component MockupSpecimen inherits Rectangle {
         cents: 0;
         level: 0.8;
         pulse-width: 0.5;
+    }
+    // One knob drives both halves, which is what a specimen can do and a rack
+    // row cannot: past halfway the chip is both soloed and muted, which is
+    // the state worth being able to look at.
+    if root.kind == 63: ChannelMuteSolo {
+        muted: root.value > 0.5;
+        soloed: root.value > 0.5;
     }
 }

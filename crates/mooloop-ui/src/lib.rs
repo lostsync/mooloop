@@ -1640,6 +1640,8 @@ fn add_channel_with_history(
             track_color: channel_colors::to_slint(feeding_track_color(&st.session.buses, ch.bus)),
             has_track_color: feeding_track_color(&st.session.buses, ch.bus).is_some(),
             muted: false,
+            solo: false,
+            solo_silenced: false,
             volume_db: linear_to_db(ch.volume),
             pan: ch.pan,
             selected: true,
@@ -3620,6 +3622,11 @@ impl UiState {
             track_color: Default::default(),
             has_track_color: false,
             muted: false,
+            solo: false,
+            // A new song has one channel and nothing soloed, so nothing is
+            // silenced; the first refresh derives it from the bank if that
+            // changes.
+            solo_silenced: false,
             volume_db: linear_to_db(first.volume),
             pan: first.pan,
             selected: true,
@@ -3715,6 +3722,7 @@ impl UiState {
                 ))
             })
             .collect();
+        let solo_silenced = self.session.channel_solo_silenced();
         let rows: Vec<ChannelRow> = self
             .session.channels
             .iter()
@@ -3729,6 +3737,8 @@ impl UiState {
                 )),
                 has_track_color: feeding_track_color(&self.session.buses, channel.bus).is_some(),
                 muted: channel.muted,
+                solo: channel.solo,
+                solo_silenced: solo_silenced[index],
                 volume_db: linear_to_db(channel.volume),
                 pan: channel.pan,
                 selected: index == self.session.selected,
@@ -3776,10 +3786,16 @@ impl UiState {
     }
     /// Push the selected/muted flags of every row to the rack model.
     fn sync_row_flags(&self) {
+        // Derived once for the bank rather than per row: what a solo silences
+        // is a property of every channel at once, so asking per row would
+        // re-derive the whole plan once per row.
+        let solo_silenced = self.session.channel_solo_silenced();
         for (i, ch) in self.session.channels.iter().enumerate() {
             if let Some(mut row) = self.rows.row_data(i) {
                 row.selected = i == self.session.selected;
                 row.muted = ch.muted;
+                row.solo = ch.solo;
+                row.solo_silenced = solo_silenced[i];
                 row.volume_db = linear_to_db(ch.volume);
                 row.pan = ch.pan;
                 row.bus = ch.bus as i32;
@@ -6787,11 +6803,12 @@ impl AppUi {
                     "channel.remove" => window.invoke_edit_command_requested(6, channel),
                     "channel.add" => window.invoke_add_channel_clicked(0),
                     "channel.mute" => window.invoke_channel_muted(channel),
-                    // Solo is a *track's*, in place, since 2026-09-11; a
-                    // channel has none to bind. The track is the one the
-                    // rack is editing, which is the one a mixer click put
-                    // there -- so with a channel open these do nothing and
-                    // say so by falling through.
+                    "channel.solo" => window.invoke_channel_soloed(channel),
+                    // The *track's* pair, which is a different seat and a
+                    // different solo from the channel's above. The track is
+                    // the one the rack is editing, which is the one a mixer
+                    // click put there -- so with a channel open these do
+                    // nothing and say so by falling through.
                     "track.solo" | "track.mute" => {
                         if !window.get_editing_bus() {
                             return false;
@@ -8597,6 +8614,29 @@ impl AppUi {
                     };
                     st.sync_row_flags();
                     let _ = tx.send(command);
+                    true
+                });
+            });
+        }
+
+        // Solo, in place. The button says which channel is soloed; what that
+        // silences is derived by the pump's `sync_channel_solo`, because it
+        // is a property of the whole bank -- so this sends no command, and
+        // every *other* row's name dims or undims, which is why the flags for
+        // all of them are pushed rather than one row's.
+        {
+            let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_channel_soloed(move |ch| {
+                let Some(window) = weak.upgrade() else { return };
+                with_project_history(&st, &commands, &window, "Solo Channel", || {
+                    let mut st = st.borrow_mut();
+                    if !st.session.toggle_channel_solo(ch) {
+                        return false;
+                    }
+                    st.sync_row_flags();
+                    st.update_document_title(&window);
                     true
                 });
             });
@@ -14842,6 +14882,10 @@ impl AppUi {
                 // feeders and its destination stay up -- so it is derived
                 // here rather than worked out at the button.
                 st.borrow_mut().session.sync_solo(&mut handle);
+                // And the channel half of it, which is the same derivation
+                // over the other address space: a bank with nothing soloed
+                // derives all false and sends nothing.
+                st.borrow_mut().session.sync_channel_solo(&mut handle);
                 // And the track graph, which is the fourth of these and the
                 // one that used to be sent from the edit that caused it.
                 // Routing stopped being one `u8` per track when a send became

@@ -52,6 +52,8 @@ fn render_playlist_snapshot() {
         track_color: Default::default(),
         has_track_color: false,
         muted: false,
+        solo: false,
+        solo_silenced: false,
         volume_db: -1.9382, // linear 0.8 in dB
         pan: 0.0,
         selected: true,

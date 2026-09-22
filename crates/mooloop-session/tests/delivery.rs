@@ -159,6 +159,63 @@ fn a_refused_solo_is_sent_again_on_the_next_tick() {
     );
 }
 
+/// The channel half of the same reconciler, and the same claim: a refused
+/// command must leave the mirror where it was.
+///
+/// Written out rather than folded into the test above, because the two are
+/// different address spaces reconciled against different mirrors -- a `bus`
+/// and a `channel` are both `u8` and name different seats, which is the
+/// confusion `AGENTS.md` names -- so a session that reconciled tracks
+/// correctly and channels not at all would pass that test alone.
+#[test]
+fn a_refused_channel_solo_is_sent_again_on_the_next_tick() {
+    // Two channels, one soloed: a solo silences what it beats, so a bank
+    // with nothing to beat derives all-false and this would test nothing.
+    let mut session = Session::default();
+    session.add_channel(DeviceKind::Sampler);
+    session.channels[1].solo = true;
+    let wanted = session.channel_solo_silenced();
+    assert_ne!(
+        wanted, session.channel_solo_silenced_sent,
+        "the fixture has to want a send, or this test passes for the wrong reason"
+    );
+
+    let mut ring = Ring::full();
+    session.sync_channel_solo(&mut ring);
+    assert_eq!(ring.sent(), 0, "a full ring accepted a command");
+    assert_ne!(
+        session.channel_solo_silenced_sent, wanted,
+        "the mirror advanced past a command that was never delivered, so no \
+         later diff can find it"
+    );
+
+    ring.drain(64);
+    session.sync_channel_solo(&mut ring);
+    assert!(
+        ring.engine.iter().any(|command| matches!(
+            command,
+            EngineCommand::SetChannelSoloSilenced { .. }
+        )),
+        "the retry did not resend what the refusal dropped"
+    );
+    assert_eq!(
+        session.channel_solo_silenced_sent, wanted,
+        "a delivered command did not advance the mirror"
+    );
+}
+
+/// A bank with nothing soloed costs nothing: the derivation is all-false,
+/// which is what the mirror already holds, so no command is built at all.
+/// This is what entitles the pump to run it every tick.
+#[test]
+fn a_bank_with_no_channel_soloed_sends_nothing() {
+    let mut session = Session::default();
+    session.add_channel(DeviceKind::Sampler);
+    let mut ring = Ring::with_room(usize::MAX);
+    session.sync_channel_solo(&mut ring);
+    assert_eq!(ring.sent(), 0, "an unsoloed bank sent a command");
+}
+
 /// `sync_compensation` sends one command per target inside a loop, so its
 /// mirror cannot be one flag at the bottom: a ring with room for one of two
 /// must leave the other outstanding, and must not resend the one that landed.

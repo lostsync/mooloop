@@ -14,7 +14,7 @@ use crate::project::ProjectSnapshot;
 use crate::values::descriptor_slots;
 use mooloop_core::{
     default_buses, log_warn, sanitize_bank, would_create_cycle, DEFAULT_STEPS,
-    MAX_BUSES, MAX_PLAYLIST_PLACEMENTS,
+    MAX_BUSES, MAX_CHANNELS, MAX_PLAYLIST_PLACEMENTS,
     drop_lanes_for_device, strip_descriptor, AutomationLane, BusSetup, Channel, ChannelId,
     ChannelSetup, DeviceId,
     AuxInParams, AuxInState, ChannelSource, DeviceKind, DrumSynthParams, DrumSynthState, Ds01Params, Ds01State,
@@ -151,6 +151,11 @@ pub struct Session {
     /// property of the whole graph, so the pump re-derives and diffs rather
     /// than the session tracking it per edit.
     pub solo_silenced_sent: [bool; MAX_BUSES],
+    /// Which channels the engine has been told a solo silences. The channel
+    /// half of [`Self::solo_silenced_sent`], kept apart because the two are
+    /// different address spaces and different derivations -- a track's walks
+    /// the routing graph, a channel's does not.
+    pub channel_solo_silenced_sent: [bool; MAX_CHANNELS],
     /// The track graph and the send routing the engine has been told about.
     ///
     /// The key deliberately holds only what is *structural* about a send --
@@ -324,6 +329,7 @@ impl Default for Session {
             compensation_sent: crate::engine::CompensationSent::default(),
             console_sums_sent: [false; MAX_BUSES],
             solo_silenced_sent: [false; MAX_BUSES],
+            channel_solo_silenced_sent: [false; MAX_CHANNELS],
             track_graph_sent: (mooloop_core::CompiledBusGraph::default(), Vec::new()),
             audio_graph_sent: mooloop_core::CompiledAudioGraph::default(),
             sample_request: HashMap::new(),
@@ -563,6 +569,7 @@ impl Session {
                             color: channel.color,
                             kind: channel.kind,
                             muted: channel.muted,
+                            solo: channel.solo,
                             volume: channel.volume,
                             pan: channel.pan,
                             bus: channel.bus,
@@ -1446,6 +1453,7 @@ impl Session {
                     color: setup.channel.color,
                     kind: setup.channel.kind,
                     muted: setup.channel.muted,
+                    solo: setup.channel.solo,
                     volume: setup.channel.volume,
                     pan: setup.channel.pan,
                     params: sampler.map(|state| state.params).unwrap_or_default(),
@@ -1566,6 +1574,7 @@ impl Session {
         // document, so a plan derived against the old one must not be
         // trusted to say what the engine already knows.
         self.solo_silenced_sent = [false; MAX_BUSES];
+        self.channel_solo_silenced_sent = [false; MAX_CHANNELS];
         // Same for the audio edges: `RenderState::load_project` compiles and
         // allocates its own, so this side must re-derive rather than trust a
         // plan for the document that just left.

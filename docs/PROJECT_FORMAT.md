@@ -436,6 +436,12 @@ before any of them existed still loads:
   pinned position is a policy the application states once, and a per-track
   copy of it would be a thing to keep in step for a feature nobody has asked
   for. See `docs/plans/archive/console/03-the-channel-strip-device.md`.
+- **A channel's solo is stored the same way, and omitted when it is off.**
+  `channels[].setup.channel.solo` is a defaulted bool that is skipped when
+  false, so a song written before channel solo existed loads with none and
+  saves byte-identically; only a song with something soloed grows the field.
+  What it silences is derived from the whole bank every pump tick and never
+  written, for the reason the track's below is not.
 - **A track's solo is stored, and what solo *does* is not.** `buses[].bus.solo`
   is a defaulted bool, so a project reopens with the same tracks soloed. What
   it silences is derived every pump tick from the whole bank -- a soloed

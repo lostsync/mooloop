@@ -122,6 +122,18 @@ pub struct Channel {
     pub name: String,
     pub kind: DeviceKind,
     pub muted: bool,
+    /// Whether this channel is soloed.
+    ///
+    /// **Solo in place**, the same ruling a track's solo follows: soloing
+    /// silences the *other* channels rather than opening a monitor path, so
+    /// a soloed channel is still heard through its own volume, its pan and
+    /// the track it feeds. What it silences is [`solo_silenced`], and that is
+    /// derived rather than stored, for the reason a track's is.
+    ///
+    /// Defaulted and omitted when false, so a song written before channel
+    /// solo existed loads and saves byte-identically.
+    #[serde(default, skip_serializing_if = "is_unsoloed")]
+    pub solo: bool,
     /// Linear output volume in [0, `MAX_LINEAR_GAIN`] (+12 dB).
     pub volume: f32,
     /// Stereo pan in [-1, 1].
@@ -162,12 +174,54 @@ fn is_default_midi_input(input: &crate::midi::ChannelMidiInput) -> bool {
     input == &crate::midi::ChannelMidiInput::default()
 }
 
+/// `skip_serializing_if` for [`Channel::solo`]. Named rather than spelled as
+/// a negation at the field, because the field's absence has to keep meaning
+/// "not soloed" in every direction it is read.
+fn is_unsoloed(solo: &bool) -> bool {
+    !*solo
+}
+
+/// Which channels a solo silences, indexed by channel.
+///
+/// All false while nothing is soloed, which is the case that has to cost
+/// nothing: a bank with no solo anywhere derives all false, matches what was
+/// last sent, and never reaches the engine.
+///
+/// **Flat, where a track's is a graph walk.** [`crate::mixer::solo_silenced`]
+/// keeps a soloed track's feeders and its destination audible, because a
+/// track's audio *is* made of what feeds it. Channels do not feed each other:
+/// a channel is a source, so the only honest reading is that soloing one
+/// silences the rest. The one edge that looks like a counter-example is an
+/// Aux In reading another channel's published outlet, and it is not one -- a
+/// producer publishes whether or not it is heard (`docs/CURRENT.md`, "A muted
+/// producer publishes too"), so silencing a source does not take its outlet
+/// away from whoever is reading it.
+///
+/// Answers only for the `count` channels the caller has; a seat past the end
+/// of the bank is not soloed and is not silenced either.
+pub fn solo_silenced(soloed: impl IntoIterator<Item = bool>) -> [bool; MAX_CHANNELS] {
+    let mut flags = [false; MAX_CHANNELS];
+    let mut count = 0;
+    for (slot, solo) in flags.iter_mut().zip(soloed) {
+        *slot = solo;
+        count += 1;
+    }
+    if !flags[..count].iter().any(|&solo| solo) {
+        return flags;
+    }
+    for slot in flags[..count].iter_mut() {
+        *slot = !*slot;
+    }
+    flags
+}
+
 impl Channel {
     pub fn new(name: impl Into<String>, kind: DeviceKind) -> Self {
         Self {
             name: name.into(),
             kind,
             muted: false,
+            solo: false,
             // Genuinely at unity: the operating-level headroom comes from
             // source calibration (`gain::REFERENCE_PEAK_DBFS`), not from a
             // quiet default fader.
@@ -210,5 +264,62 @@ mod tests {
     fn a_default_channel_name_is_its_label_and_its_slot() {
         assert_eq!(DeviceKind::DrumSynth.default_channel_name(0), "Drum Synth 1");
         assert_eq!(DeviceKind::MlP8.default_channel_name(7), "ML-P8 8");
+    }
+
+    /// Nothing soloed silences nothing, which is the case that has to cost
+    /// nothing -- it is derived every pump tick.
+    #[test]
+    fn a_bank_with_no_channel_soloed_silences_nothing() {
+        assert_eq!(solo_silenced([false, false, false]), [false; MAX_CHANNELS]);
+    }
+
+    /// A solo silences the other channels and not itself, and two solos add
+    /// rather than fight.
+    #[test]
+    fn soloing_channels_silences_the_ones_left_out() {
+        let silenced = solo_silenced([false, true, false, true]);
+        assert!(silenced[0], "not soloed, so silenced");
+        assert!(!silenced[1], "the soloed channel");
+        assert!(silenced[2], "not soloed, so silenced");
+        assert!(!silenced[3], "the other soloed channel");
+    }
+
+    /// A seat past the end of the bank is not a channel, so it is neither
+    /// soloed nor silenced. Read the other way round this is what keeps a
+    /// solo from silencing channels that do not exist, which is how a bank
+    /// that grew would have arrived already quiet.
+    #[test]
+    fn a_solo_says_nothing_about_seats_the_bank_does_not_have() {
+        let silenced = solo_silenced([true, false]);
+        assert!(!silenced[0]);
+        assert!(silenced[1]);
+        assert!(
+            silenced[2..].iter().all(|&silenced| !silenced),
+            "seats past the bank were silenced"
+        );
+    }
+
+    /// A channel's own solo is what is stored; what it silences is not. A
+    /// song written before channel solo existed loads with none, and one
+    /// with nothing soloed saves without the field.
+    #[test]
+    fn an_unsoloed_channel_is_absent_from_the_manifest() {
+        let mut channel = Channel::new("Kick", DeviceKind::Sampler);
+        let text = toml::to_string(&channel).expect("a channel serializes");
+        assert!(
+            !text.contains("solo"),
+            "an unsoloed channel wrote a field: {text}"
+        );
+        let back: Channel = toml::from_str(&text).expect("and reads back");
+        assert!(!back.solo);
+
+        channel.solo = true;
+        let text = toml::to_string(&channel).expect("a soloed channel serializes");
+        assert!(
+            text.contains("solo = true"),
+            "a soloed channel wrote nothing: {text}"
+        );
+        let back: Channel = toml::from_str(&text).expect("and reads back");
+        assert!(back.solo);
     }
 }

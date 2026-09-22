@@ -11,8 +11,8 @@ block at the bottom.
 
 Anything that can be muted should also be able to be soloed.
   DONE 2026-09-11 for tracks, as solo in place: the others go quiet, and a
-  soloed track's feeders and destinations stay audible. A channel still has
-  no solo of its own, and neither does a device.
+  soloed track's feeders and destinations stay audible. DONE 2026-09-22 for
+  channels, on the rack row's mute chip. A device still has no solo.
 
 
 Piano roll:
