@@ -24,7 +24,7 @@ table of which document to read for which task. Start there, not here.
 | [ACTIONS.md](ACTIONS.md) | The action registry: how a shortcut, menu row, or future console command is added. |
 | [WIDGET_INVENTORY.md](WIDGET_INVENTORY.md) | UI patterns duplicated in `.slint` with no component behind them. Read before writing a new widget. |
 | [JOURNAL.md](JOURNAL.md) | The narrative: what was built, what broke, and what it taught. |
-| [LOOSE_ENDS.md](LOOSE_ENDS.md) | Small verified gaps that were deliberate stopping points. Delete a row when it is fixed. |
+| [LOOSE_ENDS.md](LOOSE_ENDS.md) | Small verified gaps recorded before Linear took over tracking. Takes no new rows; delete a row when it is fixed or moves to an issue. |
 
 ## What it is for
 
@@ -53,10 +53,12 @@ table of which document to read for which task. Start there, not here.
 
 ## Directories
 
-- [plans/](plans/) — numbered work orders. `00-status.md` in each says what has
-  landed; work the files in order. Completed directories move to
-  [plans/archive/](plans/archive/). [plans/README.md](plans/README.md) is the
-  one place that says which state every plan is in.
+- [plans/](plans/) — numbered work orders, each with a Linear project and one
+  issue per step. Linear says which state every plan and step is in;
+  `00-status.md` in each records what the doing found. Work the files in
+  order. Completed directories move to [plans/archive/](plans/archive/).
+  [plans/README.md](plans/README.md) is the narrative of how each plan got
+  where it is.
 - [workflows/](workflows/) — procedures that are run *again*, where a plan is
   work that lands once. Each carries a record of what its runs found, because a
   workflow's failure mode is looking for something that has stopped being the

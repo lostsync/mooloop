@@ -6,8 +6,12 @@ are the steps, worked in order. **When every step is done, the whole directory
 moves to `archive/`** — that move is what marks a plan finished, so an active
 directory should always contain live work.
 
-`docs/FOCUS.md` decides which of these is next. This file only says what state
-each one is in.
+`docs/FOCUS.md` decides which of these is next. **Linear holds the state**:
+every plan here has a project there, and every step an issue, and those are
+the copy to trust and to update (`AGENTS.md`, *Tracking work: Linear*). This
+file is the narrative -- how each plan got where it is and what it is worth
+reading before reopening -- and where it states a plan's state, it is a
+summary as of its date.
 
 `incremental-structure/` **finished 2026-09-18 and is in `archive/`**, the
 same day `buffer-implementation/` was closed and archived. It was the

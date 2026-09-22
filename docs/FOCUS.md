@@ -17,7 +17,7 @@ accumulate the archaeology of closed steps** — that is what
 why the version before last reached twenty-four kilobytes.
 
 Read `PRODUCT.md` for the product argument, `CURRENT.md` for the implemented
-surface, and `docs/plans/README.md` for what state each plan is in. Source and
+surface, and the projects in Linear for what state each plan is in. Source and
 tests settle any disagreement with any of them.
 
 ## The rule

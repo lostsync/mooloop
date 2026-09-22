@@ -37,6 +37,12 @@ code right now**. A gap large enough to need a plan belongs in `docs/plans/`;
 a wish belongs in `ENHANCEMENTS.md`; a described behaviour gap belongs in
 `CURRENT.md`. When an item is fixed, delete the row — do not annotate it.
 
+**This file takes no new rows as of 2026-09-22.** Linear is where work is
+tracked now (`AGENTS.md`, *Tracking work: Linear*): a new gap is an issue, in
+the `Loose ends` project unless a feature owns it. The rows below stay until
+they are fixed or filed, and filing one as an issue deletes its row here, in
+the same sitting, so that it is written down once.
+
 ---
 
 ## Wrong-looking UI over correct behaviour

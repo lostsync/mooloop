@@ -272,3 +272,6 @@ Instead, a workspace label group, **`Team`**, holds one label per team, named
 exactly as in [the ten](#the-ten). It is single-select. A board per team is an
 issue view filtered or grouped by `Team`. Each label's description is a few
 words and a pointer back here; this file is the definition.
+
+The rest of how Linear is used -- projects, statuses, the type labels, and the
+`Question` and `Triage` labels -- is in `AGENTS.md`, *Tracking work: Linear*.
