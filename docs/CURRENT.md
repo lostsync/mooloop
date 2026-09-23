@@ -536,9 +536,13 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   through `midir`, and a keyboard plugged in later is picked up within a
   second. JACK notes keep their frame offsets; Core MIDI notes act at the top
   of the next block. A key comes up on every channel it went down on, so
-  moving the selection while holding one does not strand a note. Only note-on
-  and note-off play: velocity is passed through, and CC, pitch bend, sustain,
-  and program change do nothing on a channel. A `BufferMidiMap` — note and CC
+  moving the selection while holding one does not strand a note. Note-on and
+  note-off play, with velocity passed through. **The sustain pedal (CC 64)
+  holds released keys** on every source, since it defers the release
+  rather than asking the device (MOO-128). One pedal serves every input, and
+  lifting it releases each held note on the channels that played it. A
+  recorded note still ends when its key comes up. Pitch bend, the mod wheel,
+  aftertouch and program change do nothing on a channel yet. A `BufferMidiMap` — note and CC
   mappings onto one Buffer insert's gestures — takes the notes it maps ahead
   of the keyboard, but nothing installs one:
   `EngineHandle::set_buffer_midi_map` has no caller outside its own tests.

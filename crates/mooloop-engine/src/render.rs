@@ -3150,6 +3150,9 @@ const MAX_AUDITIONS_PER_BLOCK: usize = 64;
 /// sound on the audio thread and their release does not depend on it.
 const MAX_OUTGOING_EVENTS_PER_BLOCK: usize = 128;
 
+/// The sustain pedal's controller number (MOO-128).
+const SUSTAIN_PEDAL_CC: u8 = 64;
+
 /// Words of the held-key bitset: one bit per channel, so a note held on
 /// several listening channels releases on all of them.
 const HELD_KEY_WORDS: usize = MAX_CHANNELS / 64;
@@ -3161,16 +3164,88 @@ const HELD_KEY_WORDS: usize = MAX_CHANNELS / 64;
 /// multitimbral setup *is*. The release still goes exactly where the press
 /// went, which is what the single byte was protecting, and now protects it for
 /// every channel that took the note rather than for the last one to.
+///
+/// **The sustain pedal lives here too** (MOO-128), because a sustained note is
+/// a held note whose key has come up: the one place that knows where a
+/// release has to go is the one place that can defer it. While the pedal is
+/// down, a released key moves from `channels` to `sustained` instead of
+/// sounding its note-off, and lifting the pedal releases everything
+/// `sustained` holds. No source has to know the pedal exists, which is why
+/// all eight respond to it at once.
 #[derive(Clone, Copy)]
 struct HeldKeys {
     channels: [[u64; HELD_KEY_WORDS]; 128],
+    /// Notes whose key is up but whose release the pedal is holding back,
+    /// on the channels that played them.
+    sustained: [[u64; HELD_KEY_WORDS]; 128],
+    /// CC 64 at or above 64, from any input. One pedal, like one keyboard:
+    /// a second controller's pedal is the same pedal.
+    pedal: bool,
 }
 
 impl HeldKeys {
     const fn new() -> Self {
         Self {
             channels: [[0; HELD_KEY_WORDS]; 128],
+            sustained: [[0; HELD_KEY_WORDS]; 128],
+            pedal: false,
         }
+    }
+
+    /// A key came up. With the pedal down its channels are sustained and
+    /// nothing is released; otherwise they are released now.
+    fn key_up(&mut self, note: u8) -> HeldChannels {
+        let released = self.release(note);
+        if !self.pedal {
+            return released;
+        }
+        let sustained = &mut self.sustained[usize::from(note & 0x7f)];
+        for (word, held) in sustained.iter_mut().zip(released.words) {
+            *word |= held;
+        }
+        HeldChannels {
+            words: [0; HELD_KEY_WORDS],
+            word: 0,
+        }
+    }
+
+    /// The channels the pedal is holding `note` on, without clearing them:
+    /// a release that finds no room this block has to be tried again next
+    /// block, or the note would sound forever. [`Self::unsustain`] clears
+    /// each one as its note-off is queued.
+    fn sustained_on(&self, note: u8) -> HeldChannels {
+        HeldChannels {
+            words: self.sustained[usize::from(note & 0x7f)],
+            word: 0,
+        }
+    }
+
+    fn unsustain(&mut self, note: u8, channel: u8) {
+        let channel = usize::from(channel);
+        self.sustained[usize::from(note & 0x7f)][channel / 64] &= !(1 << (channel % 64));
+    }
+
+    /// Whether a lifted pedal left releases still to send.
+    fn owes_releases(&self) -> bool {
+        !self.pedal
+            && self
+                .sustained
+                .iter()
+                .any(|note| note.iter().any(|word| *word != 0))
+    }
+
+    /// Set the pedal. Returns whether it just came up, when the caller has to
+    /// release every sustained note.
+    fn set_pedal(&mut self, down: bool) -> bool {
+        let lifted = self.pedal && !down;
+        self.pedal = down;
+        lifted
+    }
+
+    #[cfg(test)]
+    fn is_sustained(&self, note: u8, channel: u8) -> bool {
+        let channel = usize::from(channel);
+        self.sustained[usize::from(note & 0x7f)][channel / 64] & (1 << (channel % 64)) != 0
     }
 
     fn hold(&mut self, note: u8, channel: u8) {
@@ -6008,6 +6083,9 @@ impl RenderState {
                     // it: the control layer needs to see every control that
                     // moves, both to map it and to learn it.
                     self.emit(mooloop_core::EngineEvent::ControlInput(*message));
+                    if controller == SUSTAIN_PEDAL_CC {
+                        self.set_sustain_pedal(message.offset, value >= 64);
+                    }
                     let Some(map) = map.filter(|map| map.accepts(message)) else {
                         continue;
                     };
@@ -6076,7 +6154,9 @@ impl RenderState {
         // A key pressed again before its release arrived -- a dropped
         // note-off, or two controllers on one pitch -- lets the first go
         // rather than stranding it under an id the second is about to reuse.
+        // So does one the pedal is still holding: the id is the key's.
         self.stop_note(offset, note);
+        self.stop_sustained_note(offset, note);
         let id = keyboard_note_id(note);
         let mut claimed = false;
         for channel in 0..self.channel_count() {
@@ -6102,13 +6182,49 @@ impl RenderState {
         self.capture_note_on(message, note, velocity);
     }
 
-    /// A key came up: release it on every channel it went down on.
+    /// A key came up: release it on every channel it went down on -- or,
+    /// with the sustain pedal down, leave it sounding until the pedal lifts.
+    ///
+    /// A recorded note still ends here, with its key: the pedal is a
+    /// performance gesture over the notes, not part of their length.
     fn stop_note(&mut self, offset: u32, note: u8) {
         let id = keyboard_note_id(note);
-        for channel in self.held_keys.release(note) {
+        for channel in self.held_keys.key_up(note) {
             self.queue_audition(channel, offset, Event::NoteOff { id, note });
         }
         self.capture_note_off(offset, note);
+    }
+
+    /// End a note the pedal is holding: its key went down again, or the
+    /// pedal lifted. A channel whose note-off finds the block's auditions
+    /// full stays sustained, and [`Self::release_lifted_sustain`] sends it
+    /// next block -- a pedal lifted over a long glissando can owe more
+    /// releases than one block carries.
+    fn stop_sustained_note(&mut self, offset: u32, note: u8) {
+        let id = keyboard_note_id(note);
+        for channel in self.held_keys.sustained_on(note) {
+            if self.queue_audition(channel, offset, Event::NoteOff { id, note }) {
+                self.held_keys.unsustain(note, channel);
+            }
+        }
+    }
+
+    /// CC 64. Lifting the pedal releases every note it was holding, on the
+    /// channels that played it, at the pedal's own frame (MOO-128).
+    fn set_sustain_pedal(&mut self, offset: u32, down: bool) {
+        if self.held_keys.set_pedal(down) {
+            self.release_lifted_sustain(offset);
+        }
+    }
+
+    /// Send what a lifted pedal still owes, as far as this block has room.
+    fn release_lifted_sustain(&mut self, offset: u32) {
+        if !self.held_keys.owes_releases() {
+            return;
+        }
+        for note in 0..128u8 {
+            self.stop_sustained_note(offset, note);
+        }
     }
 
     /// How many channels the renderer currently has. A route past the end
@@ -6224,6 +6340,8 @@ impl RenderState {
     /// -- auditioning a slice or playing a keyboard must not require pressing
     /// play.
     fn dispatch_auditions(&mut self, frames: usize) {
+        // Releases a lifted pedal could not fit into an earlier block.
+        self.release_lifted_sustain(0);
         let last_frame = frames.saturating_sub(1) as u32;
         for slot in self.auditions.iter_mut() {
             let Some(audition) = slot.take() else {
@@ -7366,6 +7484,84 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 Event::NoteOn { .. }
             ));
         }
+    }
+
+    /// The sustain pedal, through `apply_midi` (MOO-128): with CC 64 down a
+    /// released key queues no note-off and stays sustained on the channel
+    /// that played it; lifting the pedal releases it there. A key pressed
+    /// again under the pedal ends its sustained note before restarting, and
+    /// a key released after the pedal is already up releases at once.
+    #[test]
+    fn the_sustain_pedal_holds_a_released_key_until_it_lifts() {
+        use mooloop_core::{MidiKind, MidiMessage};
+
+        let mut render = RenderState::new(48_000, empty_channel_audio_bank());
+        render.load_project(&Project::default());
+        let keyboard = Arc::new(AtomicU8::new(0));
+        render.attach_keyboard_channel(keyboard);
+        let message = |kind| MidiMessage {
+            offset: 0,
+            port: mooloop_core::MidiPortId::FIRST,
+            channel: 0,
+            kind,
+        };
+        let pedal = |value| message(MidiKind::ControlChange { controller: 64, value });
+        let releases = |render: &mut RenderState| -> Vec<(u8, u8)> {
+            let found = render
+                .auditions
+                .iter()
+                .flatten()
+                .filter_map(|audition| match audition.event {
+                    Event::NoteOff { note, .. } => Some((audition.channel, note)),
+                    _ => None,
+                })
+                .collect();
+            render.auditions = [None; MAX_AUDITIONS_PER_BLOCK];
+            found
+        };
+
+        render.apply_midi(&[message(MidiKind::NoteOn { note: 60, velocity: 100 })]);
+        render.apply_midi(&[pedal(127)]);
+        releases(&mut render);
+
+        // Down edge: the key comes up and nothing is released.
+        render.apply_midi(&[message(MidiKind::NoteOff { note: 60 })]);
+        assert!(releases(&mut render).is_empty(), "the pedal let the note go");
+        assert!(render.held_keys.is_sustained(60, 0));
+        assert!(!render.held_keys.any_held(), "the key itself is up");
+
+        // Pressed again under the pedal: the sustained note ends first.
+        render.apply_midi(&[message(MidiKind::NoteOn { note: 60, velocity: 90 })]);
+        assert_eq!(releases(&mut render), [(0, 60)]);
+        assert!(!render.held_keys.is_sustained(60, 0));
+        render.apply_midi(&[message(MidiKind::NoteOff { note: 60 })]);
+        assert!(releases(&mut render).is_empty());
+
+        // Up edge: everything the pedal held goes, on its own channel.
+        render.apply_midi(&[pedal(0)]);
+        assert_eq!(releases(&mut render), [(0, 60)]);
+        assert!(!render.held_keys.is_sustained(60, 0));
+
+        // With the pedal up a key releases at once again.
+        render.apply_midi(&[message(MidiKind::NoteOn { note: 64, velocity: 100 })]);
+        releases(&mut render);
+        render.apply_midi(&[message(MidiKind::NoteOff { note: 64 })]);
+        assert_eq!(releases(&mut render), [(0, 64)]);
+
+        // A glissando under the pedal owes more releases than one block's
+        // auditions hold. What does not fit is sent next block, not lost.
+        render.apply_midi(&[pedal(127)]);
+        for note in 0..100u8 {
+            render.apply_midi(&[message(MidiKind::NoteOn { note, velocity: 100 })]);
+            render.apply_midi(&[message(MidiKind::NoteOff { note })]);
+            releases(&mut render);
+        }
+        render.apply_midi(&[pedal(0)]);
+        let first = releases(&mut render).len();
+        assert_eq!(first, MAX_AUDITIONS_PER_BLOCK);
+        render.release_lifted_sustain(0);
+        assert_eq!(first + releases(&mut render).len(), 100);
+        assert!((0..100).all(|note| !render.held_keys.is_sustained(note, 0)));
     }
 
     /// A MIDI keyboard plays the selected channel with the transport stopped,
