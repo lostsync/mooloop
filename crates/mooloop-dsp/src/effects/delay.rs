@@ -152,6 +152,26 @@ fn tone_coeff(tone: f32, sample_rate: u32) -> f32 {
     (1.0 - (-core::f32::consts::TAU * hz / sr).exp()).clamp(0.0, 1.0)
 }
 
+/// Where the feedback path's saturation starts to bend: well above a repeat
+/// of anything at the operating level, so ordinary repeats are exact.
+const FEEDBACK_KNEE: f32 = 0.5;
+
+/// What a repeat can never exceed on its way back into the line.
+const FEEDBACK_CEILING: f32 = 1.0;
+
+/// A `tanh` knee for the feedback path: the identity up to
+/// [`FEEDBACK_KNEE`], then bending to [`FEEDBACK_CEILING`]. The line then
+/// never holds more than the input plus one, whatever the feedback, the
+/// cross-feed or the input level (MOO-124).
+fn feedback_saturate(x: f32) -> f32 {
+    let magnitude = x.abs();
+    if magnitude <= FEEDBACK_KNEE {
+        return x;
+    }
+    let headroom = FEEDBACK_CEILING - FEEDBACK_KNEE;
+    x.signum() * (FEEDBACK_KNEE + headroom * ((magnitude - FEEDBACK_KNEE) / headroom).tanh())
+}
+
 impl RangeProcessor for DelayEffect {
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         let cross = self.params.cross;
@@ -175,8 +195,14 @@ impl RangeProcessor for DelayEffect {
             let fed_l = damped_l * (1.0 - cross) + damped_r * cross;
             let fed_r = damped_r * (1.0 - cross) + damped_l * cross;
 
-            self.line
-                .write(dry_l + fed_l * feedback, dry_r + fed_r * feedback);
+            // Saturated in the loop (MOO-124): transparent at any level a
+            // repeat normally has, and bounded however long a loud input
+            // keeps feeding a 0.98 loop, which otherwise settles at fifty
+            // times the input.
+            self.line.write(
+                dry_l + feedback_saturate(fed_l * feedback),
+                dry_r + feedback_saturate(fed_r * feedback),
+            );
             self.head.advance(drift);
 
             bus.l[i] = dry_l + (wet_l - dry_l) * mix;
@@ -681,6 +707,59 @@ mod tests {
                 late < early,
                 "{mode:?} did not decay: started {early}, ended {late}"
             );
+        }
+    }
+
+    /// **The gain bound (MOO-124).** A full-scale sine held into every mode
+    /// at maximum feedback and full cross-feed leaves the delay at no more
+    /// than twice full scale: the input plus one saturated repeat. Without
+    /// the saturation the loop settles around fifty times its input.
+    #[test]
+    fn maximum_feedback_on_a_loud_input_stays_bounded() {
+        for mode in [DelayMode::Digital, DelayMode::Tape, DelayMode::Reverse] {
+            let frames = 8_192;
+            let mut effect = DelayEffect::new(
+                DelayParams {
+                    time_ms: 120.0,
+                    tempo_sync: false,
+                    time_division: ModTimeDivision::default(),
+                    feedback: 0.98,
+                    mode,
+                    cross: 0.5,
+                    tone: 1.0,
+                    mix: 1.0,
+                },
+                SR,
+            );
+            let mut loudest = 0.0_f32;
+            let mut phase = 0usize;
+            for _ in 0..40 {
+                let mut bus = StereoBus::with_capacity(frames);
+                for i in 0..frames {
+                    let s = (phase as f32 * 220.0 / SR as f32 * core::f32::consts::TAU).sin();
+                    bus.l[i] = s;
+                    bus.r[i] = s;
+                    phase += 1;
+                }
+                effect.process(&context(frames), &mut bus, &EventList::empty(), None);
+                loudest = loudest
+                    .max(crate::testkit::peak(&bus.l[..frames]))
+                    .max(crate::testkit::peak(&bus.r[..frames]));
+            }
+            // Two, plus a little for the read head's interpolation overshoot.
+            assert!(loudest <= 2.1, "{mode:?} reached {loudest} on a full-scale input");
+        }
+    }
+
+    #[test]
+    fn feedback_saturation_is_exact_below_its_knee_and_bounded_above() {
+        for x in [0.0_f32, 0.1, -0.3, 0.5, -0.5] {
+            assert_eq!(feedback_saturate(x), x);
+        }
+        for x in [0.6_f32, 2.0, 100.0, f32::MAX] {
+            let y = feedback_saturate(x);
+            assert!(y > FEEDBACK_KNEE && y <= FEEDBACK_CEILING, "{x} -> {y}");
+            assert_eq!(feedback_saturate(-x), -y);
         }
     }
 

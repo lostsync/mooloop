@@ -777,6 +777,26 @@ boundary.
   and an octave down are mirror images, and a 100 ms glide is on the new note
   after 100 ms (MOO-145). It was a one-pole in Hz, lopsided in pitch and about
   4.6 times slower than its label.
+- Resonance tapers exponentially on every SVF-based filter (the v1 synths,
+  the sampler, ML-P8, the Filter effect, ML-M1's clean model): the peak grows
+  by about 2.6 dB for each tenth of the knob up to +20 dB, where it used to
+  sit flat for most of the knob and put 9 dB in its last tenth (MOO-123). A
+  24 dB slope is one shared compensated cascade (`filter::SvfCascade`, which
+  was ML-P8's LP24): its corner lands where the 12 dB one's does and it peaks
+  about as hard, so the Filter effect's 24 dB mode no longer reaches +40 dB,
+  and that effect bends its output under the voice ceiling (MOO-124). Delay
+  feedback saturates in the loop above half scale, so a loud input into 0.98
+  feedback settles at twice full scale at most rather than fifty times.
+- **A song saved before 2026-09-23 sounds slightly different** after these
+  changes, with every stored value unchanged (they are normalized, and the
+  curves under them moved): a Cutoff knob at 0.75 is 3.56 kHz where it was
+  3.77 kHz at 48 kHz (about a semitone down; more at 96 and 192 kHz, where
+  it was far brighter); mid-knob Resonance is less peaky (at 0.5 the SVF's
+  damping is 0.45 where it was 1.05) with the same top; a glide arrives in
+  its Glide time, about 4.6 times sooner than before; ML-P8's LP24 and the
+  Filter effect's 24 dB mode peak harder or softer to match their 12 dB
+  modes; and delay repeats above half scale saturate. There is no migration:
+  the old curves are what MOO-116, 119, 123, 124 and 145 fixed.
 - The v1 mono synth's LFO is one shape (sine, triangle, saw, square, or sample and
   hold) with a depth per destination: pitch, filter cutoff, pulse width, and
   tremolo. It free-runs across notes and silence unless set to retrigger.

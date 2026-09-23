@@ -7,8 +7,8 @@ use mooloop_core::{
 
 use crate::bus::StereoBus;
 use crate::event::EventList;
-use crate::filter::{Svf, SvfCoeffs};
-use crate::shaper::apply_drive;
+use crate::filter::{SvfCascade, SvfCoeffs, SvfOutput, SvfSlope};
+use crate::shaper::{apply_drive, soft_ceiling};
 use crate::modulator::CONTROL_RATE_FRAMES;
 use crate::node::{AudioNode, ProcessContext};
 use crate::smooth::Smoothed;
@@ -27,8 +27,8 @@ const DRIVE_SMOOTH_S: f32 = 0.005;
 /// A stereo state-variable filter. Each channel keeps a two-stage SVF cascade:
 /// 12 dB/oct uses the first stage and 24 dB/oct uses both.
 pub struct FilterEffect {
-    left: [Svf; 2],
-    right: [Svf; 2],
+    left: SvfCascade,
+    right: SvfCascade,
     params: FilterParams,
     sample_rate: u32,
     cutoff: Smoothed,
@@ -39,8 +39,8 @@ pub struct FilterEffect {
 impl FilterEffect {
     pub fn new(params: FilterParams, sample_rate: u32) -> Self {
         Self {
-            left: [Svf::new(), Svf::new()],
-            right: [Svf::new(), Svf::new()],
+            left: SvfCascade::new(),
+            right: SvfCascade::new(),
             params,
             sample_rate,
             cutoff: Smoothed::new(params.cutoff_hz.max(0.0), CUTOFF_SMOOTH_S, sample_rate),
@@ -67,30 +67,33 @@ impl FilterEffect {
         self.drive.reset_to(params.drive.clamp(0.0, 1.0));
     }
 
-    fn select_output(mode: FilterMode, output: (f32, f32, f32)) -> f32 {
-        match mode {
-            FilterMode::LowPass => output.0,
-            FilterMode::BandPass => output.1,
-            FilterMode::HighPass => output.2,
-        }
+    fn shape(mode: FilterMode, slope: FilterSlope) -> (SvfOutput, SvfSlope) {
+        let output = match mode {
+            FilterMode::LowPass => SvfOutput::Low,
+            FilterMode::BandPass => SvfOutput::Band,
+            FilterMode::HighPass => SvfOutput::High,
+        };
+        let slope = match slope {
+            FilterSlope::Db12 => SvfSlope::Db12,
+            FilterSlope::Db24 => SvfSlope::Db24,
+        };
+        (output, slope)
     }
 
+    /// One channel: drive, the shared compensated cascade (MOO-124: the 24 dB
+    /// mode used to run two stages at the full resonance with no
+    /// compensation, +40 dB at the cutoff), and the voice ceiling on the way
+    /// out, so a resonant peak on a hot input bends instead of leaving the
+    /// effect at any level at all.
     fn process_channel(
-        stages: &mut [Svf; 2],
+        cascade: &mut SvfCascade,
         input: f32,
         coeffs: &SvfCoeffs,
-        mode: FilterMode,
-        slope: FilterSlope,
+        output: SvfOutput,
+        slope: SvfSlope,
     ) -> f32 {
-        let first = Self::select_output(mode, stages[0].tick_with(input, coeffs));
-        let second = Self::select_output(mode, stages[1].tick_with(first, coeffs));
-        if slope == FilterSlope::Db24 {
-            second
-        } else {
-            first
-        }
+        soft_ceiling(cascade.tick_with(input, coeffs, output, slope))
     }
-
 }
 
 impl RangeProcessor for FilterEffect {
@@ -112,19 +115,23 @@ impl RangeProcessor for FilterEffect {
     /// See `reports/fable-2026-09-22.md` finding 2, Plan B.
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         let sr = self.sample_rate;
-        let mode = self.params.mode;
-        let slope = self.params.slope;
+        let (output, slope) = Self::shape(self.params.mode, self.params.slope);
 
         let mut pos = start;
         while pos < end {
             let chunk_end = (pos + CONTROL_RATE_FRAMES).min(end);
             let chunk_frames = chunk_end - pos;
 
-            let start_coeffs =
-                SvfCoeffs::for_cutoff(self.cutoff.value(), self.resonance.value(), sr);
+            let start_coeffs = SvfCascade::coeffs(
+                output,
+                slope,
+                self.cutoff.value(),
+                self.resonance.value(),
+                sr,
+            );
             let cutoff_end = self.cutoff.advance_by(chunk_frames);
             let resonance_end = self.resonance.advance_by(chunk_frames);
-            let end_coeffs = SvfCoeffs::for_cutoff(cutoff_end, resonance_end, sr);
+            let end_coeffs = SvfCascade::coeffs(output, slope, cutoff_end, resonance_end, sr);
 
             for (n, i) in (pos..chunk_end).enumerate() {
                 let t = if chunk_frames > 1 {
@@ -138,14 +145,14 @@ impl RangeProcessor for FilterEffect {
                     &mut self.left,
                     apply_drive(bus.l[i], drive),
                     &coeffs,
-                    mode,
+                    output,
                     slope,
                 );
                 bus.r[i] = Self::process_channel(
                     &mut self.right,
                     apply_drive(bus.r[i], drive),
                     &coeffs,
-                    mode,
+                    output,
                     slope,
                 );
             }
@@ -187,8 +194,8 @@ impl AudioNode for FilterEffect {
         self.cutoff.is_settled()
             && self.resonance.is_settled()
             && self.drive.is_settled()
-            && self.left.iter().all(Svf::is_at_rest)
-            && self.right.iter().all(Svf::is_at_rest)
+            && self.left.is_at_rest()
+            && self.right.is_at_rest()
     }
 
     fn process(
@@ -382,42 +389,76 @@ mod tests {
         );
     }
 
-    /// The old per-sample path: derive `Svf`'s coefficients fresh every
-    /// sample from a held-constant cutoff/resonance, exactly what
+    /// The per-sample path: the cascade deriving its coefficients fresh every
+    /// sample from a held-constant cutoff/resonance, which is what
     /// `process_channel` did before it took a precomputed `SvfCoeffs`. A
     /// static cutoff is the case where the coefficient-lerp path's two
-    /// endpoints are identical, so this is the tightest before/after
-    /// comparison available without the old code still in the tree.
+    /// endpoints are identical, so this is the tightest comparison available.
     fn old_path_static_cutoff(input: &[f32], params: FilterParams, sample_rate: u32) -> Vec<f32> {
-        let mut stages = [Svf::new(), Svf::new()];
+        let (output, slope) = FilterEffect::shape(params.mode, params.slope);
+        let mut cascade = SvfCascade::new();
         input
             .iter()
             .map(|&x| {
-                let first = FilterEffect::select_output(
-                    params.mode,
-                    stages[0].next_sample_lp_bp_hp(
-                        x,
-                        params.cutoff_hz,
-                        params.resonance,
-                        sample_rate,
-                    ),
-                );
-                let second = FilterEffect::select_output(
-                    params.mode,
-                    stages[1].next_sample_lp_bp_hp(
-                        first,
-                        params.cutoff_hz,
-                        params.resonance,
-                        sample_rate,
-                    ),
-                );
-                if params.slope == FilterSlope::Db24 {
-                    second
-                } else {
-                    first
-                }
+                soft_ceiling(cascade.next_sample(
+                    x,
+                    output,
+                    slope,
+                    params.cutoff_hz,
+                    params.resonance,
+                    sample_rate,
+                ))
             })
             .collect()
+    }
+
+    /// **The gain bound (MOO-124).** At every mode, slope and resonance, a
+    /// reference-level sine anywhere around the cutoff leaves the Filter
+    /// effect no more than 21 dB louder, and nothing -- a full-scale sine
+    /// straight into the peak -- leaves it above the voice ceiling. Until
+    /// MOO-124 the 24 dB mode peaked at +40 dB with nothing after it.
+    #[test]
+    fn no_mode_slope_or_resonance_peaks_past_its_bound() {
+        let sr = 48_000u32;
+        let frames = sr as usize / 2;
+        let peak_through = |params: FilterParams, freq: f32, level: f32| -> f32 {
+            let mut bus = StereoBus::with_capacity(frames);
+            for i in 0..frames {
+                let s = (i as f32 / sr as f32 * freq * core::f32::consts::TAU).sin() * level;
+                bus.l[i] = s;
+                bus.r[i] = s;
+            }
+            let mut effect = FilterEffect::new(params, sr);
+            effect.process(&context(frames), &mut bus, &EventList::empty(), None);
+            crate::testkit::peak(&bus.l[frames / 2..frames])
+        };
+        const REFERENCE: f32 = 0.25;
+        for mode in [FilterMode::LowPass, FilterMode::BandPass, FilterMode::HighPass] {
+            for slope in [FilterSlope::Db12, FilterSlope::Db24] {
+                for resonance in [0.0_f32, 0.7, 1.0] {
+                    let params = FilterParams {
+                        cutoff_hz: 1_000.0,
+                        resonance,
+                        mode,
+                        slope,
+                        drive: 0.0,
+                    };
+                    for step in -6..=6 {
+                        let freq = 1_000.0 * 2.0_f32.powf(step as f32 / 12.0);
+                        let gain = crate::testkit::db(peak_through(params, freq, REFERENCE) / REFERENCE);
+                        assert!(
+                            gain <= 21.0,
+                            "{mode:?} {slope:?} resonance {resonance} at {freq:.0} Hz: +{gain:.1} dB"
+                        );
+                    }
+                    let hot = peak_through(params, 1_000.0, 1.0);
+                    assert!(
+                        hot <= crate::shaper::VOICE_CEILING,
+                        "{mode:?} {slope:?} resonance {resonance}: a full-scale sine left at {hot}"
+                    );
+                }
+            }
+        }
     }
 
     /// Plan B step 2's bit-compare: at an unchanging cutoff (drive off, so
