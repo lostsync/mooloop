@@ -516,3 +516,18 @@ test result: ok. 700 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out
    Doc-tests mooloop_dsp
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
+
+## After the plan: the fallback thins (MOO-73, 2026-09-23)
+
+Every device but the EQ still takes its curves through `apply_curves`'s
+default fallback, into a 256-event list it shares with the channel's notes.
+Sixteen routes and eight lanes at 512 frames therefore still overflowed it,
+freezing one destination mid-block and starving the rest. The default now
+thins every curve evenly when they would not fit (`fallback_stride`,
+`node.rs`), counted back from each curve's last tick so a block still ends
+on the resolved value. The ML-P8's internal route amounts, still one event
+per tick as recorded above, are thinned the same way against half of the
+list's room (`control_tick_stride`, `render.rs`). Every `EventList` counts
+its own refusals now, which puts the sequencer's note and choke pushes into
+`RenderState::refused_events`. A native curve path per device is still the
+structural answer. Thinning only keeps the others correct in the meantime.

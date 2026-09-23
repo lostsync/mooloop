@@ -3331,6 +3331,18 @@ fn inject_choke_events(choke_groups: &[u8], events: &mut [Box<EventList>]) {
     }
 }
 
+/// Every how many control ticks `rows` destinations of `ticks` ticks each
+/// can emit an event and still fit in `room`: one when they all fit, and at
+/// most `ticks`, which is one event per destination per block. The internal
+/// routes' twin of `mooloop_dsp::node`'s `fallback_stride` (MOO-73).
+fn control_tick_stride(ticks: usize, rows: usize, room: usize) -> usize {
+    let mut stride = 1;
+    while stride < ticks && rows * ticks.div_ceil(stride) > room {
+        stride += 1;
+    }
+    stride
+}
+
 /// Release every voice on every live channel at `offset`.
 ///
 /// Sorted ahead of any note-on at the same offset by `push_ordered`, so the
@@ -6656,6 +6668,18 @@ impl RenderState {
                 // not done rather than silently unaddressed.
                 let internal: Option<mooloop_core::MlP8Routes> =
                     base.internal_routes().copied();
+                // Thinned the way `apply_curves`'s default fallback thins
+                // (MOO-73), against half of what the channel's list has left:
+                // the other half is for the source parameters' fallback,
+                // which runs after this. Sixteen routes at 1024 frames would
+                // otherwise fill the list alone.
+                let route_rows = internal.iter().flat_map(|routes| routes.iter()).count()
+                    * base.kind().route_descriptors().len();
+                let route_stride = control_tick_stride(
+                    resolved_ticks,
+                    route_rows,
+                    self.events[index].remaining() / 2,
+                );
                 for route in internal.iter().flat_map(|routes| routes.iter()) {
                     for descriptor in base.kind().route_descriptors() {
                         let destination = ParamAddr {
@@ -6673,6 +6697,11 @@ impl RenderState {
                         }
                         let knob_normalized = descriptor.to_normalized(route.amount);
                         for tick in 0..resolved_ticks {
+                            // Counted back from the last tick, so the block
+                            // still ends on the resolved value.
+                            if (resolved_ticks - 1 - tick) % route_stride != 0 {
+                                continue;
+                            }
                             let base_normalized = curve
                                 .as_ref()
                                 .zip(automation.as_ref())
@@ -9528,6 +9557,18 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         // fallback into the channel's 256-event list: 2 x 256 ticks, which
         // refused the whole second destination until MOO-73 thinned it.
         assert_eq!(render.refused_events(), 0);
+    }
+
+    /// The internal routes' stride: every tick while they fit, coarser only
+    /// when sixteen routes would fill the list alone, never coarser than
+    /// one event per route per block.
+    #[test]
+    fn internal_route_amounts_thin_only_when_they_would_not_fit() {
+        assert_eq!(control_tick_stride(16, 16, 128), 2);
+        assert_eq!(control_tick_stride(16, 4, 128), 1);
+        assert_eq!(control_tick_stride(32, 16, 128), 4);
+        assert_eq!(control_tick_stride(256, 16, 8), 256);
+        assert_eq!(control_tick_stride(0, 16, 0), 1);
     }
 
     /// MOO-73, the threshold the issue was filed on: sixteen routes, a full
