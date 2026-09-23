@@ -342,14 +342,23 @@ fn filter_point_drag_and_wheel_update_only_the_bound_parameters() {
     ui.set_cutoff(cutoff);
     ui.set_resonance(resonance);
     let cutoff_updates = cutoffs.borrow().len();
-    // Hover the handle's post-drag position: centered on the cutoff's x;
-    // the curve crosses its own cutoff at magnitude 1/sqrt(1 + damping^2)
-    // (damping now 2 - resonance * 1.9), so plot-y is just under 0.6.
-    let damping = 2.0 - resonance * 1.9;
-    let magnitude = 1.0 / (1.0 + damping * damping).sqrt();
+    // Hover the handle's post-drag position: centered on the cutoff's x, and
+    // at `plot-y-at(cutoff, cutoff)` in device-displays.slint. At its own
+    // cutoff the low-pass has ratio 1, so the display's response is exactly
+    // 1/damping, with damping from the engine's taper (`svf_damping`, which
+    // `cutoff_law_agreement.rs` holds the display to; MOO-123, MOO-178). The
+    // old `1/sqrt(1 + damping^2)` was never the display's formula; under the
+    // linear taper it happened to land inside the 14px handle, and under the
+    // exponential one it misses by ~17px.
+    let magnitude = 1.0 / mooloop_dsp::filter::svf_damping(resonance);
+    let plot_y = if magnitude >= 1.0 {
+        (0.25 - 0.2 * (1.0 - 1.0 / magnitude)).clamp(0.04, 0.25)
+    } else {
+        (0.25 + 0.7 * (1.0 - magnitude)).clamp(0.25, 0.95)
+    };
     let hover = LogicalPosition::new(
         10.0 + cutoff * 208.0,
-        HEADER_HEIGHT + 40.0 + (0.25 + 0.7 * (1.0 - magnitude)) * 96.0,
+        HEADER_HEIGHT + 40.0 + plot_y * 96.0,
     );
     ui.window()
         .dispatch_event(WindowEvent::PointerMoved { position: hover });
