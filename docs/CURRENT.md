@@ -2025,9 +2025,13 @@ land on its own when it starts to matter:
   15 frames of its complete 2x interpolate/decimate path, and it also delays
   its internal dry path by the same amount so its own wet/dry control cannot
   mix time-misaligned signals. Channels with unequal effect latency no longer
-  comb-filter when they meet at a bus -- see the mixer entry above. There is
-  no plugin hosting, so there is nothing else whose latency would have to be
-  discovered at runtime rather than declared.
+  comb-filter when they meet at a bus -- see the mixer entry above. Nothing
+  hosts a plugin yet. A song can already name one: a `plugin` effect device
+  whose slot is in the song's `plugins` table (`PROJECT_FORMAT.md`, "Hosted
+  plugins"). Such a song loads, plays that device as a pass-through, and saves
+  it back unchanged, lanes and routes on its parameters included. The session
+  reads a hosted plugin's latency at runtime rather than from its kind, but
+  nothing inserts one until step 06 of `docs/plans/plugin-hosting/`.
 
 ### Buffers And Rendering
 

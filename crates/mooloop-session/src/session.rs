@@ -254,6 +254,10 @@ pub struct Session {
     /// (`docs/plans/plugin-hosting/`, steps 04 and 06).
     pub plugins: mooloop_core::PluginSlots,
     pub next_plugin_slot: u32,
+    /// The hosted plugins' control-thread halves, by slot. **Not** document
+    /// state: an instance is a running plugin, rebuilt from `plugins` when a
+    /// song opens. See `crate::plugin_rack`.
+    pub plugin_rack: crate::plugin_rack::PluginRack,
     /// The bindings' resolved ports and pickup state. **Not** document state:
     /// where a knob was last seen is the state of one performance, and a
     /// project reopened is a performance that has not started.
@@ -369,6 +373,7 @@ impl Default for Session {
             control_map: mooloop_core::ControlMap::default(),
             plugins: mooloop_core::PluginSlots::new(),
             next_plugin_slot: 0,
+            plugin_rack: crate::plugin_rack::PluginRack::new(),
             control_state: mooloop_core::ControlMapState::default(),
             control_learn: None,
             record_armed: false,
@@ -1563,6 +1568,12 @@ impl Session {
         self.control_map = project.control_map.clone();
         self.plugins = project.plugins.clone();
         self.next_plugin_slot = project.next_plugin_slot;
+        // An install rebuilds every chain from the document, so no hosted
+        // processor survives it: the retired project carries them back to
+        // `EngineHandle::poll`, and the instances go once they have
+        // (`PluginRack::collect`). Re-hosting a song's plugins on install is
+        // step 06 of `docs/plans/plugin-hosting/`.
+        self.plugin_rack.close();
         // A load may have moved every bound parameter, so every control has
         // to catch its value again rather than snapping it back to wherever
         // the knob was left. The caller re-resolves the ports, which it can

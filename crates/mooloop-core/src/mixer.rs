@@ -902,7 +902,26 @@ pub fn clamp_bus(bus: u8) -> u8 {
 /// `the_latency_walk_agrees_with_the_flat_sum_on_every_serial_arrangement` is
 /// what says so.
 pub fn chain_latency(effects: &[EffectSlotState]) -> u32 {
-    latency_of_runs(effects, 0..effects.len(), crate::ContainerFlow::Series)
+    chain_latency_with(effects, &declared_latency)
+}
+
+/// [`chain_latency`], with each device's own latency asked of `own` rather
+/// than of its kind.
+///
+/// For a hosted plugin, whose latency is known only once its instance is
+/// active and can change while it runs
+/// (`docs/plans/plugin-hosting/04-the-plugin-rack.md`): the session passes a
+/// lookup that asks the plugin rack for a plugin device and the kind for
+/// everything else. **Not a second compensation path** -- the same walk, the
+/// same containers and branches, with one number supplied from elsewhere.
+pub fn chain_latency_with(effects: &[EffectSlotState], own: &dyn Fn(&EffectSlotState) -> u32) -> u32 {
+    latency_of_runs(effects, 0..effects.len(), crate::ContainerFlow::Series, own)
+}
+
+/// A device's own declared latency: its kind's, which for a plugin is the
+/// pass-through's zero.
+fn declared_latency(slot: &EffectSlotState) -> u32 {
+    slot.kind().latency_frames()
 }
 
 /// Declared latency of `range`, which must be a whole number of complete runs
@@ -917,11 +936,12 @@ fn latency_of_runs(
     effects: &[EffectSlotState],
     range: std::ops::Range<usize>,
     flow: crate::ContainerFlow,
+    own: &dyn Fn(&EffectSlotState) -> u32,
 ) -> u32 {
     let mut total: u32 = 0;
     let mut slot = range.start;
     while slot < range.end {
-        let run = latency_of_run(effects, slot);
+        let run = latency_of_run(effects, slot, own);
         total = match flow {
             crate::ContainerFlow::Series => total.saturating_add(run),
             crate::ContainerFlow::Parallel => total.max(run),
@@ -942,13 +962,15 @@ fn latency_of_runs(
 /// A container's own declared latency is zero and stays zero -- it has no
 /// signal path of its own. What it contributes is its contents, combined the
 /// way its kind says ([`run_latency`]).
-fn latency_of_run(effects: &[EffectSlotState], slot: usize) -> u32 {
+fn latency_of_run(
+    effects: &[EffectSlotState],
+    slot: usize,
+    own: &dyn Fn(&EffectSlotState) -> u32,
+) -> u32 {
     let Some(head) = effects.get(slot) else {
         return 0;
     };
-    head.kind()
-        .latency_frames()
-        .saturating_add(run_latency(effects, slot))
+    own(head).saturating_add(run_latency_with(effects, slot, own))
 }
 
 /// Declared latency of the run the container in `slot` encloses.
@@ -967,11 +989,19 @@ fn latency_of_run(effects: &[EffectSlotState], slot: usize) -> u32 {
 /// For a layer it is the **longest branch**, which is both what its dry copy
 /// waits for and what every shorter branch is delayed up to.
 pub fn run_latency(effects: &[EffectSlotState], slot: usize) -> u32 {
+    run_latency_with(effects, slot, &declared_latency)
+}
+
+fn run_latency_with(
+    effects: &[EffectSlotState],
+    slot: usize,
+    own: &dyn Fn(&EffectSlotState) -> u32,
+) -> u32 {
     let flow = effects
         .get(slot)
         .and_then(|head| head.params.container_flow())
         .unwrap_or(crate::ContainerFlow::Series);
-    latency_of_runs(effects, crate::span_of(effects, slot), flow)
+    latency_of_runs(effects, crate::span_of(effects, slot), flow, own)
 }
 
 /// How long the branch headed by `branch` has to wait for the longest branch
@@ -993,7 +1023,7 @@ pub fn branch_alignment(effects: &[EffectSlotState], layer: usize, branch: usize
     if !is_layer || !layer_branches(effects, layer).any(|head| head == branch) {
         return 0;
     }
-    run_latency(effects, layer).saturating_sub(latency_of_run(effects, branch))
+    run_latency(effects, layer).saturating_sub(latency_of_run(effects, branch, &declared_latency))
 }
 
 /// The rows that head the direct children of the container in `slot`, in
@@ -2898,5 +2928,42 @@ mod tests {
             0,
             "a chain's rows are not branches"
         );
+    }
+
+    /// `chain_latency_with` walks exactly as `chain_latency` does, with one
+    /// number supplied from elsewhere: a layer is still its longest branch,
+    /// not the sum, when a branch's latency is only known at runtime -- a
+    /// hosted plugin's, which the session asks the plugin rack for
+    /// (`docs/plans/plugin-hosting/04-the-plugin-rack.md`).
+    #[test]
+    fn a_runtime_latency_in_a_layer_branch_is_still_the_longest_branch() {
+        let drive = EffectKind::Drive.latency_frames();
+        // Layer | Plugin | Drive: two one-device branches.
+        let mut effects = leaves(&[EffectKind::Plugin, EffectKind::Drive]);
+        let mut next = u32::from(u16::MAX);
+        wrap_in_container(
+            &mut effects,
+            &mut next,
+            0..2,
+            EffectSlotState::of_kind(EffectKind::Layer),
+        )
+        .expect("a wrappable run");
+        let reporting = |latency: u32| {
+            move |slot: &EffectSlotState| match slot.kind() {
+                EffectKind::Plugin => latency,
+                kind => kind.latency_frames(),
+            }
+        };
+        assert_eq!(chain_latency(&effects), drive, "by kind, the plugin adds nothing");
+        assert_eq!(chain_latency_with(&effects, &reporting(0)), drive);
+        assert_eq!(
+            chain_latency_with(&effects, &reporting(512)),
+            512,
+            "the plugin's branch is now the longest, and the branches are not summed"
+        );
+        assert_eq!(chain_latency_with(&effects, &reporting(7)), drive, "the Drive's is");
+        // In series the same lookup adds, as a chain's rows do.
+        let series = leaves(&[EffectKind::Plugin, EffectKind::Drive]);
+        assert_eq!(chain_latency_with(&series, &reporting(512)), 512 + drive);
     }
 }

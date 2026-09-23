@@ -10,6 +10,7 @@ authors.workspace = true
 # depend on this crate (`docs/plans/plugin-hosting/04-the-plugin-rack.md`),
 # not the other way round.
 [dependencies]
+mooloop-core = { workspace = true }
 mooloop-dsp = { workspace = true }
 clack-host = "0.2"
 clack-extensions = { version = "0.2", features = [

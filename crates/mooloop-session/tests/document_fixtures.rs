@@ -228,6 +228,47 @@ fn maximal_project() -> Project {
         .expect("the starter kit sends to its reverb");
     send.level = 0.4;
     send.enabled = false;
+    // A hosted plugin nobody here has installed: its slot, a sparse
+    // parameter list, a state, the device that names it, and a lane on one
+    // of its parameters (`docs/plans/plugin-hosting/`, steps 02 and 03).
+    let mut slot = mooloop_core::PluginSlotState::new(mooloop_core::PluginRef {
+        format: mooloop_core::PluginFormat::Clap,
+        id: "com.example.fixture".to_owned(),
+        name: "Fixture".to_owned(),
+        vendor: "Example".to_owned(),
+        version: "2.0".to_owned(),
+    });
+    slot.params = vec![mooloop_core::PluginParamInfo {
+        id: 4_000_000_000,
+        name: "Drive".to_owned(),
+        module: "Main".to_owned(),
+        min: 0.0,
+        max: 10.0,
+        default: 1.0,
+        stepped: Some(11),
+        automatable: true,
+        modulatable: false,
+        hidden: false,
+    }];
+    slot.state = mooloop_core::PluginStateText(mooloop_core::PluginState {
+        chunks: vec![mooloop_core::PluginStateChunk {
+            tag: "clap".to_owned(),
+            data: (0..=255u8).collect(),
+        }],
+    });
+    let plugin_slot = project.add_plugin_slot(slot);
+    let mut device = EffectSlotState::of_kind(EffectKind::Plugin);
+    device.params = mooloop_core::EffectParams::Plugin(plugin_slot);
+    project.channels[first].setup.push_effect(device);
+    let plugin_device = project.channels[first].setup.effects.last().unwrap().id;
+    let mut plugin_lane = AutomationLane::new(ParamAddr::plugin_param(
+        EffectTarget::Channel(first as u8),
+        plugin_device,
+        4_000_000_000,
+    ));
+    let point = plugin_lane.allocate_id();
+    let _ = plugin_lane.upsert(AutomationPoint::new(point, 0, 0.25));
+    project.channels[first].automation[1].push(plugin_lane);
     project.selected_channel = project.channels[first].id;
     // What the app does to every document it holds: references that name a
     // channel by seat take that channel's identity. Without it the save does

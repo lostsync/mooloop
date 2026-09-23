@@ -3306,6 +3306,7 @@ version = "0.1.4"
 dependencies = [
  "clack-extensions",
  "clack-host",
+ "mooloop-core",
  "mooloop-dsp",
  "mooloop-test-plugin",
 ]
@@ -3329,6 +3330,7 @@ dependencies = [
  "mooloop-core",
  "mooloop-dsp",
  "mooloop-engine",
+ "mooloop-plugin-host",
  "mooloop-project",
  "rtrb",
  "rustix 1.1.4",

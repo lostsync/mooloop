@@ -13,6 +13,9 @@ mooloop-core = { workspace = true }
 mooloop-dsp = { workspace = true }
 mooloop-engine = { workspace = true }
 mooloop-project = { workspace = true }
+# The host's neutral side only (`HostedInstance`, `Lifeline`): no plugin
+# format's types leave that crate, which `plugin_formats_stay_out` holds.
+mooloop-plugin-host = { workspace = true }
 hound = "3"
 rtrb = { workspace = true }
 symphonia = {

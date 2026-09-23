@@ -41,6 +41,28 @@ activate the instance on the control thread, put it in the rack, and send
 `InstallEffect` with the real processor. If the plugin can't be found, the
 session installs step 02's placeholder and records why.
 
+**Carried from step 04 (`00-status.md`, "Step 04, recorded").** This is the
+step where a real processor first reaches a chain, so these land here:
+
+- **A structural install must not rebuild a hosted plugin as a placeholder.**
+  Every channel paste, delete or move reinstalls the project from the
+  document (blocker 7), and `build_effect` turns each plugin device back into
+  a pass-through. `replace_project` closes the rack, so the instance goes
+  once the old processor comes back. The install has to take the rack's
+  processors instead: build new ones from the live instances
+  (`HostedInstance::build_processor`), not from `build_effect`.
+- **The engine's own latency reads.** The engine's install-time
+  `chain_latency` and a container's `run_latency` read the kind, which is 0
+  for a plugin. A plugin *inside a container* gets its dry-path delay sized
+  wrong until they ask the same lookup the session does (`chain_latency_with`).
+- **Closing and quitting wait for the rack.** Remove everything, wait for
+  `PluginRack::dying()` to reach zero with a bounded timeout, and after the
+  timeout stop the audio driver before dropping the instances.
+- **Step 04's "done when"**: no external object is created, destroyed,
+  rescanned or serialized on the audio thread, checked with the counting
+  `GlobalAlloc` (`soak_tests.rs`) around a render with a real
+  `ClapProcessor` in the chain.
+
 ## Tests
 
 - The test plugin in a channel, rendered **offline and in realtime** from

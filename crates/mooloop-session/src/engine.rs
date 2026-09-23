@@ -9,7 +9,7 @@ use crate::channel::ChannelState;
 use crate::history::Entry as HistoryEntry;
 use crate::project::{HistoryMove, ProjectEdit, ProjectSnapshot};
 use mooloop_core::{
-    chain_latency, compensable_send_edges, compile_audio_graph, compile_bus_graph,
+    chain_latency_with, compensable_send_edges, compile_audio_graph, compile_bus_graph,
     compile_latency, log_error, sends_are_compensable,
     CompiledAudioGraph,
     BbtPosition, CompiledLatency, DeviceKind, EffectTarget, EngineCommand, OutletDescriptor,
@@ -563,13 +563,16 @@ impl Session {
         let graph = compile_bus_graph(&self.buses).unwrap_or_default();
         let mut channel_latency = [0u32; MAX_CHANNELS];
         let mut channel_bus = [MASTER_BUS; MAX_CHANNELS];
+        // A hosted plugin's latency is its instance's, known only once it is
+        // active (`Self::device_latency`); every other device's is its kind's.
+        let own = |slot: &mooloop_core::EffectSlotState| self.device_latency(slot);
         for (index, channel) in self.channels.iter().take(MAX_CHANNELS).enumerate() {
-            channel_latency[index] = chain_latency(&channel.effects);
+            channel_latency[index] = chain_latency_with(&channel.effects, &own);
             channel_bus[index] = channel.bus;
         }
         let mut bus_latency = [0u32; MAX_BUSES];
         for (index, bus) in self.buses.iter().take(MAX_BUSES).enumerate() {
-            bus_latency[index] = chain_latency(&bus.effects);
+            bus_latency[index] = chain_latency_with(&bus.effects, &own);
         }
         compile_latency(
             &graph,

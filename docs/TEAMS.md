@@ -140,6 +140,9 @@ Files marked *shared* are split in the table above.
   review, as any saved field is), `core/tests/plugin_formats_stay_out.rs`,
   and `dsp/src/effects/plugin_placeholder.rs` (a plugin device with no
   plugin running in it)
+- `session/src/plugin_rack.rs`: the control thread's hosted plugins
+  (`PluginRack`, `Session::service_plugins`, `Session::device_latency`),
+  in a Document-owned directory by agreement with Document & Session
 - `dsp/src/`: `node.rs` (*shared*), `event.rs`, `bus.rs` (*shared*), `taps.rs`
   — the `AudioNode` contract and what flows through it
 - `core/src/bridge.rs`

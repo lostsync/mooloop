@@ -934,7 +934,15 @@ type GateTable = [[NoteGateEvents; MAX_CHANNELS]; MAX_CONTROL_TICKS_PER_BLOCK];
 /// `SetEffectParam` commands. The mechanism stays for the retained-audio
 /// buffer, whose ring size genuinely cannot change on the audio thread.
 fn effect_resource_key(params: mooloop_core::EffectParams) -> Option<u64> {
-    params.buffer().copied().map(buffer_allocation_key)
+    match params {
+        // A hosted plugin's processor is swapped by `ReplaceEffect` when the
+        // plugin restarts, keyed by its song slot: a replacement that
+        // arrives after the device was removed, or for a different plugin,
+        // finds a different key and does nothing
+        // (`docs/plans/plugin-hosting/04-the-plugin-rack.md`).
+        mooloop_core::EffectParams::Plugin(slot) => Some(u64::from(slot.0)),
+        _ => params.buffer().copied().map(buffer_allocation_key),
+    }
 }
 
 #[derive(Clone, Copy)]

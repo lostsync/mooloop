@@ -17,6 +17,10 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+pub mod instance;
+
+pub use instance::{HostError, HostedInstance, Lifeline, RequestFlags, Requests};
+
 use std::ffi::CStr;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};

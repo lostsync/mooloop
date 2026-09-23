@@ -16104,6 +16104,12 @@ impl AppUi {
                 // the plan actually moved, which is every tick but the few
                 // after a structural edit
                 // (`docs/plans/latency-compensation/04-preallocated-delays.md`).
+                // Hosted plugins first: drop the instances whose processors
+                // came back through `poll`, and act on what the plugins asked
+                // for (`docs/plans/plugin-hosting/04`). Before the
+                // compensation sync, so a latency change is in this tick's
+                // plan.
+                st.borrow_mut().session.service_plugins(&mut handle);
                 st.borrow_mut().session.sync_compensation(&mut handle);
                 // Beside it and for the same reasons: an edge's fate is a
                 // property of every channel at once, so deriving and diffing

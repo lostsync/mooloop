@@ -6,7 +6,7 @@ mirror this file step-for-step the way MOO-5/16/30 do. The GitHub issue
 numbers below (`#10`, `#26`-`#30`) predate Adam's move away from GitHub
 issues; MOO-11 is the live tracking issue.
 
-**Written 2026-09-16.** Steps 01 (the spike), 02 (the neutral contract) and 03 (parameters belong to an instance) landed on 2026-09-23, and so did MOO-56's one boxed source slot, which closes blocker 4 below. Adam asked for it directly:
+**Written 2026-09-16.** Steps 01 (the spike), 02 (the neutral contract), 03 (parameters belong to an instance) and 04 (the plugin rack) landed on 2026-09-23, and so did MOO-56's one boxed source slot, which closes blocker 4 below. Adam asked for it directly:
 *"let's go ahead and plan out how we'll add CLAP support. Later we'll add
 VST/3 and AU. instrument support as well."* `SCOPE.md` already put CLAP in
 for 0.2.0 (item 9). This plan is outside the `FOCUS.md` sequence for the same
@@ -525,7 +525,7 @@ words. **Do not reopen this as a version-bump question.**
 | 01 | Spike: `clack-host` loads and runs a CLAP; an in-repo test plugin | — (MOO-76) | new crate only | **done 2026-09-23** |
 | 02 | The neutral contract: types, `Project.plugins`, TOML state, a fake plugin end to end | #26 | core, project | **done 2026-09-23** (MOO-77) |
 | 03 | Parameters belong to an instance | #26 | core, session | **done 2026-09-23** (MOO-78) |
-| 04 | `PluginRack`, main-thread requests, latency known at runtime | #26 | engine, session | not started |
+| 04 | `PluginRack`, main-thread requests, latency known at runtime | #26 | engine, session | **done 2026-09-23** (MOO-79) |
 | 05 | The scanner, out of process, with its cache | #27 | plugin-host, app, settings | not started |
 | 06 | A headless CLAP effect in a chain | #27 | plugin-host, session | not started |
 | 07 | Parameters, automation, modulation and state round-trip | #28 | session, project | not started |
@@ -717,6 +717,61 @@ built against the real callers rather than guessed at now. Step 03's
 four-billion-id test is here in the form that applies today: the address, the
 save and the integrity pass all carry `4_000_000_000` and nothing is sized by
 it.
+
+## Step 04, recorded 2026-09-23 (MOO-79)
+
+**What landed.** `mooloop_plugin_host::instance`: the `HostedInstance`
+trait (the control-thread half, with no format's types in it), `Requests`
+and `RequestFlags` (one atomic word, raised from any thread and drained once
+a tick), `HostError` and `Lifeline`. `mooloop_session::plugin_rack`:
+`PluginRack`, keyed by `PluginSlotId`, plus `Session::service_plugins`, which
+the pump calls once a tick before `sync_compensation`, and
+`Session::device_latency`. `Session.plugin_rack` holds it. The session now
+depends on `mooloop-plugin-host`, and `plugin_formats_stay_out` still holds:
+the session names the host crate, never `clack`.
+
+**How it differs from `04-the-plugin-rack.md`.**
+
+- **Teardown uses a lifeline, not a slot id on the reclaim message.** Every
+  processor an instance builds holds a clone of the entry's `Lifeline`. A
+  removed entry is marked dying and dropped by `PluginRack::collect` once
+  it's the last holder. Processors are only dropped on the control thread,
+  in `EngineHandle::poll` or with a retired project. So the instance goes
+  strictly after its processor, and the engine's reclaim path needed no
+  change. That covers a whole-project install too, which the step file
+  didn't mention: `replace_project` closes the rack.
+- **A restart is swapped in by slot.** `effect_resource_key` gives a plugin
+  device its slot id as the resource key, so `ReplaceEffect` from a
+  restart that arrives after the device was removed finds a different key
+  and does nothing. That is the step's own suggestion, and
+  `a_restart_requested_after_removal_does_nothing` holds the rack's half.
+- **Latency is one lookup, not a second path.** `mooloop_core::chain_latency_with`
+  is `chain_latency` with each device's own latency supplied by the caller.
+  `Session::latency_plan` passes `device_latency`, which asks the rack for
+  a hosted plugin (0 when it's missing) and the kind for everything else.
+  `sync_compensation` already derives and diffs the plan every tick, so a
+  latency change needs no event handling at all.
+  `compensation_follows_a_plugins_reported_latency` pins it.
+- **Not here: the engine's own latency reads.** The engine's install path
+  (`chain_latency` in `render.rs`) and a container's run latency still read
+  the kind, so they see 0 for a plugin. On install the engine compensates
+  as if every plugin were the placeholder, and the session's next
+  `sync_compensation` corrects it per target. A plugin *inside a container*
+  is not corrected, because the dry-path delay a container holds is sized at
+  install. That is step 06's, where a real processor first reaches a chain.
+- **Not here: waiting on close and exit.** The rack can say how many
+  entries are dying (`PluginRack::dying`), but nothing waits on it with a
+  timeout yet, and no driver is stopped first. Nothing hosts a plugin until
+  step 06, which inserts the first instance and owns that wait.
+- **Blocker 7 still stands.** Every structural edit reinstalls the project
+  from the document, which rebuilds each plugin device as a placeholder and
+  retires the hosted processor. Step 06 has to hand the rack's processors to
+  the install rather than letting `build_effect` rebuild them.
+- **The counting-`GlobalAlloc` check.** `soak_tests.rs` still passes, but
+  nothing in this step creates, destroys, rescans or serializes a plugin on
+  the audio thread, because nothing reaches the audio thread except a
+  processor. Step 06's real processor is where that check has something to
+  catch.
 
 ## The test plugins
 
