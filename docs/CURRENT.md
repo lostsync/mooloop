@@ -349,7 +349,19 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   mix parameter. The dry path is delayed by the device's declared dry-path
   alignment latency before the blend, so latency-introducing effects do not
   comb-filter their own dry copy; wet-only returns may retain their own
-  intentional pre-delay. Buses meter their effect slots the same way channels do: the
+  intentional pre-delay. **Every host move ramps** (MOO-108, 2026-09-23):
+  wet/dry, both trims and a container's Mix follow their controls through
+  the mixer's 5 ms one-pole per sample, and bypass is a crossfade between
+  the device's output and the bypassed path while the device keeps running,
+  taken out of the path once the fade is 60 dB down (about 35 ms). A
+  bypassed container fades its Mix to dry the same way before its run stops
+  being called. A device coming back from bypass is told its held audio is
+  stale (`Discontinuity::Seek`), so an un-bypassed delay starts empty rather
+  than playing the repeats it held when it went out. Removing a device fades
+  it out of the path first: the executor holds the removal, and the edits
+  queued behind it, until the fade has run, or 100 ms at most for a chain
+  that is not being processed. `continuity_tests.rs` holds each of these to
+  the family's step bound. Buses meter their effect slots the same way channels do: the
   rack polls whichever chain it shows, and a bus's head face reads its summed
   input and post-chain peak. Sources have a blank input meter because they generate rather
   than receive audio.

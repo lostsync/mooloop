@@ -22,13 +22,15 @@
 use std::sync::Arc;
 
 use mooloop_core::{
-    EngineCommand, MonoSynthParams, NoteEvent, OscParams, OscWave, Project, ProjectChannel,
-    DEFAULT_STEPS,
+    DelayParams, EffectKind, EffectParams, EffectSlotState, EffectTarget, EngineCommand,
+    FilterMode, FilterParams, MonoSynthParams, NoteEvent, OscParams, OscWave, Project,
+    ProjectChannel, DEFAULT_STEPS,
 };
 use mooloop_dsp::SampleData;
 
 use crate::render::RenderState;
-use crate::render_test_support::{step_across, Transition, SAMPLE_RATE};
+use crate::render_test_support::{render_frames, step_across, Transition, SAMPLE_RATE};
+use crate::StructuralCommand;
 
 /// Frames rendered before each change: long enough for the note's attack to
 /// be over, and deliberately not a multiple of the block size, so the change
@@ -414,5 +416,263 @@ fn a_sample_ending_mid_waveform_is_continuous() {
     assert_continuous(
         "a sample running out on a crest",
         step_across(&mut render, 11_000, |_| {}, 3_000),
+    );
+}
+
+// --- Effects: MOO-108 --------------------------------------------------------
+
+/// The sine through a low-pass at 150 Hz, which both attenuates and delays
+/// a 220 Hz tone: the device's output and the dry path differ everywhere,
+/// so switching between them steps wherever the switch lands.
+fn filtered_sine(configure: impl FnOnce(&mut EffectSlotState)) -> RenderState {
+    let mut channel = sine_channel();
+    let mut effect = EffectSlotState::new(EffectParams::Filter(FilterParams {
+        cutoff_hz: 150.0,
+        resonance: 0.0,
+        mode: FilterMode::LowPass,
+        ..FilterParams::default()
+    }));
+    configure(&mut effect);
+    channel.setup.push_effect(effect).expect("room");
+    render_of(vec![channel])
+}
+
+/// The sine's channel, with `effects` built on it, playing.
+fn render_of(channels: Vec<ProjectChannel>) -> RenderState {
+    playing(&Project {
+        channels,
+        pattern_lengths: vec![DEFAULT_STEPS],
+        ..Project::default()
+    })
+}
+
+const FX: EffectTarget = EffectTarget::Channel(0);
+
+#[test]
+fn bypassing_an_effect_is_continuous() {
+    let mut render = filtered_sine(|_| {});
+    assert_continuous(
+        "bypassing an effect",
+        step_across(
+            &mut render,
+            LEAD,
+            |render| {
+                render.apply_command(
+                    EngineCommand::SetEffectBypassed {
+                        target: FX,
+                        slot: 0,
+                        bypassed: true,
+                    },
+                )
+            },
+            TAIL,
+        ),
+    );
+}
+
+#[test]
+fn un_bypassing_an_effect_is_continuous() {
+    let mut render = filtered_sine(|effect| effect.bypassed = true);
+    assert_continuous(
+        "un-bypassing an effect",
+        step_across(
+            &mut render,
+            LEAD,
+            |render| {
+                render.apply_command(
+                    EngineCommand::SetEffectBypassed {
+                        target: FX,
+                        slot: 0,
+                        bypassed: false,
+                    },
+                )
+            },
+            TAIL,
+        ),
+    );
+}
+
+#[test]
+fn moving_wet_dry_is_continuous() {
+    let mut render = filtered_sine(|_| {});
+    assert_continuous(
+        "wet/dry from wet to dry",
+        step_across(
+            &mut render,
+            LEAD,
+            |render| {
+                render.apply_command(
+                    EngineCommand::SetEffectWetDry {
+                        target: FX,
+                        slot: 0,
+                        wet_dry: 0.0,
+                    },
+                )
+            },
+            TAIL,
+        ),
+    );
+}
+
+#[test]
+fn moving_the_effect_trims_is_continuous() {
+    let mut render = filtered_sine(|effect| effect.wet_dry = 0.5);
+    assert_continuous(
+        "the input trim from unity to a quarter",
+        step_across(
+            &mut render,
+            LEAD,
+            |render| {
+                render.apply_command(
+                    EngineCommand::SetEffectInputTrim {
+                        target: FX,
+                        slot: 0,
+                        input_trim: 0.25,
+                    },
+                )
+            },
+            TAIL,
+        ),
+    );
+    let mut render = filtered_sine(|_| {});
+    assert_continuous(
+        "the output trim from unity to a quarter",
+        step_across(
+            &mut render,
+            LEAD,
+            |render| {
+                render.apply_command(
+                    EngineCommand::SetEffectOutputTrim {
+                        target: FX,
+                        slot: 0,
+                        output_trim: 0.25,
+                    },
+                )
+            },
+            TAIL,
+        ),
+    );
+}
+
+#[test]
+fn moving_a_containers_mix_is_continuous() {
+    let mut channel = sine_channel();
+    channel
+        .setup
+        .push_effect(EffectSlotState::new(EffectParams::Filter(FilterParams {
+            cutoff_hz: 150.0,
+            resonance: 0.0,
+            mode: FilterMode::LowPass,
+            ..FilterParams::default()
+        })))
+        .expect("room");
+    let setup = &mut channel.setup;
+    mooloop_core::wrap_in_container(
+        &mut setup.effects,
+        &mut setup.next_device_id,
+        0..1,
+        EffectSlotState::of_kind(EffectKind::Chain),
+    )
+    .expect("wrapped");
+    let mut render = render_of(vec![channel]);
+    assert_continuous(
+        "a container's Mix from wet to dry",
+        step_across(
+            &mut render,
+            LEAD,
+            |render| {
+                render.apply_command(
+                    EngineCommand::SetEffectParam {
+                        target: FX,
+                        slot: 0,
+                        id: mooloop_core::CONTAINER_PARAM_MIX,
+                        value: 0.0,
+                    },
+                )
+            },
+            TAIL,
+        ),
+    );
+}
+
+/// Removal is two moments: the executor asking, which starts the fade, and
+/// the removal itself once the fade has run. Both are held to the bound.
+#[test]
+fn removing_an_effect_is_continuous() {
+    let mut render = filtered_sine(|_| {});
+    assert_continuous(
+        "the fade a removal starts",
+        step_across(
+            &mut render,
+            LEAD,
+            |render| assert!(!render.effect_removal_ready(FX, 0, 0)),
+            TAIL,
+        ),
+    );
+    assert!(
+        render.effect_removal_ready(FX, 0, TAIL),
+        "the fade should have run within {TAIL} frames"
+    );
+    assert_continuous(
+        "the removal itself",
+        step_across(
+            &mut render,
+            1_000,
+            |render| {
+                let displaced =
+                    render.apply_structural(StructuralCommand::RemoveEffect { target: FX, slot: 0 });
+                assert!(displaced.is_some(), "the removal should have displaced the filter");
+                // Dropped here, in a test; the executor sends it back.
+                drop(displaced);
+            },
+            1_000,
+        ),
+    );
+}
+
+/// A delay taken out of the path and brought back plays none of the repeats
+/// it was holding when it went (MOO-108).
+#[test]
+fn un_bypassing_a_delay_plays_no_repeats_from_before() {
+    let mut channel = sine_channel();
+    // A short note, so the input is silent long before the delay returns.
+    channel.notes[0].clear();
+    channel.notes[0].push(NoteEvent::new(1, 0, 24, 57, 127));
+    channel
+        .setup
+        .push_effect(EffectSlotState::new(EffectParams::Delay(DelayParams {
+            time_ms: 250.0,
+            tempo_sync: false,
+            feedback: 0.8,
+            mix: 1.0,
+            ..DelayParams::default()
+        })))
+        .expect("room");
+    let mut render = render_of(vec![channel]);
+    // The delay is all wet, so the first thing out of it is the first
+    // repeat, a quarter of a second in; by 18 000 frames the note and its
+    // release are over and the repeats are ringing.
+    let (ringing, _) = render_frames(&mut render, 18_000);
+    assert!(
+        ringing[12_000..].iter().any(|sample| sample.abs() > 0.01),
+        "the delay has to be ringing when it is bypassed"
+    );
+    render.apply_command(EngineCommand::SetEffectBypassed {
+        target: FX,
+        slot: 0,
+        bypassed: true,
+    });
+    // Half a second out of the path: the fade runs, then the device stops.
+    render_frames(&mut render, 24_000);
+    render.apply_command(EngineCommand::SetEffectBypassed {
+        target: FX,
+        slot: 0,
+        bypassed: false,
+    });
+    let (after, _) = render_frames(&mut render, 48_000);
+    let loudest = after.iter().fold(0.0f32, |peak, sample| peak.max(sample.abs()));
+    assert!(
+        loudest < 1.0e-4,
+        "the delay came back playing repeats from before its bypass, peak {loudest}"
     );
 }

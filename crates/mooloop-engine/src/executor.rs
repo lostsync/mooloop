@@ -18,7 +18,7 @@ use rtrb::Consumer;
 
 use crate::load::LoadMeters;
 use crate::render::{RenderState, RetiredPreviews};
-use crate::{PreparedProject, RealtimeCommand, StructuralReclaim};
+use crate::{PreparedProject, RealtimeCommand, StructuralCommand, StructuralReclaim};
 
 /// Per-block MIDI input ceiling. Bounded so the callback never allocates.
 const MAX_MIDI_PER_BLOCK: usize = 256;
@@ -209,6 +209,14 @@ impl Executor {
                     if self.reclaim_tx.slots() == 0 || self.render.has_displaced_effects() {
                         self.pending_command = Some(RealtimeCommand::Structural(command));
                         break;
+                    }
+                    // A removal waits for its device to fade out of the path
+                    // (MOO-108), and holds what is behind it in order.
+                    if let StructuralCommand::RemoveEffect { target, slot } = &command {
+                        if !self.render.effect_removal_ready(*target, *slot, frames) {
+                            self.pending_command = Some(RealtimeCommand::Structural(command));
+                            break;
+                        }
                     }
                     if let Some(displaced) = self.render.apply_structural(command) {
                         match self.reclaim_tx.push(displaced) {
