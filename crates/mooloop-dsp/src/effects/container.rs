@@ -15,7 +15,7 @@
 //! That is what let the container land silent and the mix arrive afterwards
 //! as a change to the host alone.
 
-use mooloop_core::ChainParams;
+use mooloop_core::ContainerParams;
 
 use crate::bus::StereoBus;
 use crate::event::EventList;
@@ -23,19 +23,19 @@ use crate::node::{AudioNode, ProcessContext};
 
 /// A container's slot occupant: transparent, stateless, and always at rest.
 pub struct ContainerEffect {
-    params: ChainParams,
+    params: ContainerParams,
 }
 
 impl ContainerEffect {
-    pub fn new(params: ChainParams) -> Self {
+    pub fn new(params: ContainerParams) -> Self {
         Self { params }
     }
 
-    pub fn set_params(&mut self, params: ChainParams) {
+    pub fn set_params(&mut self, params: ContainerParams) {
         self.params = params;
     }
 
-    pub fn params(&self) -> ChainParams {
+    pub fn params(&self) -> ContainerParams {
         self.params
     }
 }
@@ -94,7 +94,7 @@ mod tests {
     #[test]
     fn a_container_is_transparent_at_every_mix() {
         for mix in [0.0, 0.25, 0.5, 1.0] {
-            let mut node = ContainerEffect::new(ChainParams { children: 2, mix });
+            let mut node = ContainerEffect::new(ContainerParams { children: 2, mix });
             let mut bus = StereoBus::with_capacity(64);
             for frame in 0..64 {
                 bus.l[frame] = frame as f32 / 64.0;

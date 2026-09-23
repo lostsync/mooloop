@@ -772,7 +772,7 @@ impl Session {
         // than which one it is.
         let device = effect.id;
         // Nor may it take this row's *span*. `children` is structure -- the
-        // reason `CHAIN_PARAM_MIX` deliberately has no id for it is that a
+        // reason `CONTAINER_PARAM_MIX` deliberately has no id for it is that a
         // curve drawn on it would rewrite the shape of the chain -- and a
         // whole-struct assignment carried it in from the file. Nothing else
         // caught it: the doctor checks descriptor values and `children` is
@@ -1498,7 +1498,7 @@ mod tests {
     /// because a run's end boundary is outside it -- the same rule
     /// `insert_effect` follows for the rack's own `+`.
     /// A preset carries what a device *sounds like*, never the shape of the
-    /// chain around it. `children` is structure -- `CHAIN_PARAM_MIX` has no
+    /// chain around it. `children` is structure -- `CONTAINER_PARAM_MIX` has no
     /// id for it precisely so a curve cannot rewrite the chain -- and the
     /// whole-struct assignment in `load_effect_preset` carried it in from
     /// the file. Nothing downstream caught it: the doctor checks descriptor
@@ -1517,7 +1517,7 @@ mod tests {
 
         // A hand-written bundle claiming a span far past the end of the rack.
         let mut preset = session.channels[0].effects[0];
-        preset.params = EffectParams::Chain(mooloop_core::ChainParams {
+        preset.params = EffectParams::Chain(mooloop_core::ContainerParams {
             children: 200,
             mix: 0.25,
         });
@@ -1622,7 +1622,7 @@ mod tests {
         );
         assert_eq!(
             session.channels[0].effects[1].params,
-            EffectParams::Chain(mooloop_core::ChainParams {
+            EffectParams::Chain(mooloop_core::ContainerParams {
                 children: 1,
                 ..Default::default()
             }),
@@ -1668,7 +1668,7 @@ mod tests {
         // A headless run -- a child with no box in front of it -- must not be
         // able to straddle its way into a well-formed chain.
         let mut headless = run.clone();
-        headless.effects[0].params = EffectParams::Chain(mooloop_core::ChainParams {
+        headless.effects[0].params = EffectParams::Chain(mooloop_core::ContainerParams {
             children: 4,
             ..Default::default()
         });

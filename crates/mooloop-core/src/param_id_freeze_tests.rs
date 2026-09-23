@@ -234,6 +234,12 @@ const FROZEN: &[(Owner, &[(u32, &str)])] = &[
     (Effect(EffectKind::Chain), &[
         (0, "Mix"),
     ]),
+    // The same single id, because a layer holds `ContainerParams` too and the
+    // two kinds share one descriptor table. Ids are scoped by kind, so id 0
+    // meaning Mix here and Mix there is one fact written once, not twice.
+    (Effect(EffectKind::Layer), &[
+        (0, "Mix"),
+    ]),
     (Device(DeviceKind::Sampler), &[
         (0, "Start"),
         (1, "End"),

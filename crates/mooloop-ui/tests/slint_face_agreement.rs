@@ -949,19 +949,30 @@ fn every_effect_face_knob_agrees_with_its_table() {
 /// reads, so a control that refuses modulation has no index to be found by.
 /// There is one: the container's Mix, which cannot be a modulation destination
 /// because resolving a route onto it would mean rewriting the shape of the chain
-/// from the audio thread (`effect.rs`, above `CHAIN_PARAM_MIX`).
+/// from the audio thread (`effect.rs`, above `CONTAINER_PARAM_MIX`).
 ///
-/// A list of one is worth having rather than a note, because `EffectKind::ALL`
-/// is fourteen and the automatic pass covers thirteen. Leaving the fourteenth to
-/// a sentence is how the effect faces came to be uncovered while the generators
-/// were checked.
-const UNROUTED_KNOBS: [(&str, &str, EffectKind, &str, u32); 1] = [(
-    "container-device.slint",
-    CONTAINER_SLINT,
-    EffectKind::Chain,
-    "mix",
-    mooloop_core::CHAIN_PARAM_MIX,
-)];
+/// A list is worth having rather than a note, because `EffectKind::ALL` is
+/// fifteen and the automatic pass covers thirteen. Leaving the other two to a
+/// sentence is how the effect faces came to be uncovered while the generators
+/// were checked. Both container kinds are named, although they share one face
+/// and one table today, so that `containers/09` giving the layer its own face
+/// has a row here to move rather than an absence to notice.
+const UNROUTED_KNOBS: [(&str, &str, EffectKind, &str, u32); 2] = [
+    (
+        "container-device.slint",
+        CONTAINER_SLINT,
+        EffectKind::Chain,
+        "mix",
+        mooloop_core::CONTAINER_PARAM_MIX,
+    ),
+    (
+        "container-device.slint",
+        CONTAINER_SLINT,
+        EffectKind::Layer,
+        "mix",
+        mooloop_core::CONTAINER_PARAM_MIX,
+    ),
+];
 
 #[test]
 fn every_unrouted_face_knob_agrees_with_its_table() {
@@ -1097,7 +1108,7 @@ fn the_aux_in_face_reads_and_writes_level_by_id() {
 /// face's own markup can name, because the control is a selector, a switch, a
 /// slider, a knob whose `value` is an expression, or a knob that refuses
 /// modulation. Each is the descriptor id the property displays.
-const UNKNOBBED_BINDINGS: [(EffectKind, &str, u32); 12] = [
+const UNKNOBBED_BINDINGS: [(EffectKind, &str, u32); 13] = [
     (EffectKind::Filter, "mode", mooloop_core::FILTER_PARAM_MODE),
     (EffectKind::Filter, "slope", mooloop_core::FILTER_PARAM_SLOPE),
     (EffectKind::Drive, "curve", mooloop_core::DRIVE_PARAM_CURVE),
@@ -1109,7 +1120,8 @@ const UNKNOBBED_BINDINGS: [(EffectKind, &str, u32); 12] = [
     (EffectKind::Modulation, "mode", mooloop_core::MODULATION_PARAM_MODE),
     (EffectKind::Modulation, "rate", mooloop_core::MODULATION_PARAM_RATE_HZ),
     (EffectKind::Buffer, "quantize", mooloop_core::BUFFER_PARAM_QUANTIZE),
-    (EffectKind::Chain, "mix", mooloop_core::CHAIN_PARAM_MIX),
+    (EffectKind::Chain, "mix", mooloop_core::CONTAINER_PARAM_MIX),
+    (EffectKind::Layer, "mix", mooloop_core::CONTAINER_PARAM_MIX),
 ];
 
 /// The face properties fed from the row's reserved fields: a tempo-sync flag
@@ -1177,7 +1189,8 @@ fn row_field_binding(line: &str) -> Option<(String, usize)> {
 /// incident, and for the same reason: only the write side was tested.
 ///
 /// Each `if slot.kind == N : XDeviceFace` element in `main.slint` is read for
-/// its `prop: slot.pK` bindings. `prop` is resolved to an id through the
+/// its `prop: slot.pK` bindings, and so is the one `if slot.is-container :`
+/// element, once for each container kind it draws. `prop` is resolved to an id through the
 /// face's own knob for it -- the modulation index that knob reads, which
 /// `every_effect_face_knob_agrees_with_its_table` already holds to the table
 /// -- or through `UNKNOBBED_BINDINGS` where the face has no such knob. The
@@ -1192,8 +1205,14 @@ fn every_face_reads_its_parameters_by_id() {
         .max()
         .expect("effect kinds describe parameters") as usize;
 
-    let mut failures = Vec::new();
-    let mut checked = 0usize;
+    // Every face arm, with the kind it draws. An indexed arm draws the one
+    // kind its number belongs to. The predicate arm draws every container
+    // kind, which share one face until `containers/09` -- and it has to be
+    // read here too: when the container's arm moved from `slot.kind == 13`
+    // to `slot.is-container` on 2026-09-21, this test quietly stopped seeing
+    // it, and the Mix binding was checked by nothing while the tripwire
+    // below, at 60 of 66, went on passing.
+    let mut arms: Vec<(&str, EffectKind, &str)> = Vec::new();
     for (line, body) in blocks_after(MAIN_SLINT, "if slot.kind == ") {
         let header = MAIN_SLINT.lines().nth(line - 1).expect("header line");
         let Some((number, face)) = header
@@ -1209,6 +1228,29 @@ fn every_face_reads_its_parameters_by_id() {
             .into_iter()
             .find(|kind| mooloop_ui::effect_kind_index(*kind) == number)
             .unwrap_or_else(|| panic!("main.slint:{line}: no effect kind is numbered {number}"));
+        arms.push((face, kind, body));
+    }
+    let mut predicate_arms = 0usize;
+    for (line, body) in blocks_after(MAIN_SLINT, "if slot.is-container : ") {
+        let header = MAIN_SLINT.lines().nth(line - 1).expect("header line");
+        let Some(face) = header.trim().strip_prefix("if slot.is-container : ") else {
+            continue;
+        };
+        let face = face.trim().trim_end_matches('{').trim();
+        predicate_arms += 1;
+        for kind in EffectKind::ALL.into_iter().filter(|kind| kind.is_container()) {
+            arms.push((face, kind, body));
+        }
+    }
+    assert_eq!(
+        predicate_arms, 1,
+        "main.slint draws containers through exactly one `if slot.is-container` \
+         arm, and this test has to be reading it"
+    );
+
+    let mut failures = Vec::new();
+    let mut checked = 0usize;
+    for (face, kind, body) in arms {
         if kind == EffectKind::Eq {
             continue;
         }

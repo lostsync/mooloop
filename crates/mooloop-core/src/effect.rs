@@ -34,6 +34,35 @@ pub enum EffectKind {
     /// A container: a device that holds an ordered run of the devices after
     /// it. See `docs/plans/containers/02-the-container-is-a-device.md`.
     Chain,
+    /// A container whose direct children are **parallel branches**, summed.
+    ///
+    /// The fifteenth kind and the second that is not an effect. A branch is a
+    /// direct child's *run*: a leaf child is a one-device branch, and a
+    /// `Chain` child is a branch holding as many devices as it likes, which
+    /// is how Drive → Delay becomes one branch with no new syntax.
+    ///
+    /// **It runs in series until `containers/08`**, which is what makes that
+    /// step's "a layer of one branch is bit-identical to a chain" a claim
+    /// about something. A project written now opens the same after it.
+    /// See `docs/plans/containers/07-a-branch-is-a-run.md`.
+    Layer,
+}
+
+/// How a container runs the rows it holds. See [`EffectKind::container_flow`].
+///
+/// Both kinds hold the same thing -- `ContainerParams`, a child count and a
+/// mix -- and store it the same way. What differs is what the renderer does
+/// with the span, and what the latency walk and the rack's drawing say about
+/// it, which are the three readers `docs/plans/containers/07` names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ContainerFlow {
+    /// Each row into the next, in rack order: a `Chain`. The rows' latencies
+    /// add.
+    Series,
+    /// The input split across the **direct children**, each child's run a
+    /// branch, and the branches summed: a `Layer`. The longest branch is the
+    /// latency, and the others are delayed to meet it.
+    Parallel,
 }
 
 /// Base-rate frames of latency the 2x oversampler's interpolate/process/
@@ -81,7 +110,8 @@ impl EffectKind {
             // of the same chain, so `chain_latency` already counts them; a
             // sum here would count them twice. See question 4 in
             // `docs/plans/containers/README.md`.
-            | Self::Chain => 0,
+            | Self::Chain
+            | Self::Layer => 0,
         }
     }
 
@@ -90,17 +120,39 @@ impl EffectKind {
     /// **The one place a kind is asked whether it is a container.** It was
     /// spelled `== EffectKind::Chain` at each of its call sites, which is the
     /// same shape as the params-level test below and drifts for the same
-    /// reason: a second container kind is arriving
+    /// reason: a second container kind was arriving
     /// (`docs/plans/containers/07-a-branch-is-a-run.md`) and every site that
-    /// names `Chain` by hand is a site that will keep meaning "a serial
+    /// named `Chain` by hand was a site that would keep meaning "a serial
     /// container" when it meant "a container".
+    ///
+    /// Read off [`Self::container_flow`] rather than matched a second time,
+    /// so "is a container" and "how does it run" cannot disagree about which
+    /// kinds are containers: there is one match, and this is its `is_some`.
     ///
     /// `EffectParams::is_container` is this question asked of a value rather
     /// than of a kind, and `container_predicates_agree_about_every_kind`
     /// holds the two together.
     pub fn is_container(self) -> bool {
+        self.container_flow().is_some()
+    }
+
+    /// How a container runs the rows it holds, or `None` for a device that
+    /// holds nothing.
+    ///
+    /// The one question two container kinds answer differently, and so the
+    /// one place the words `Chain` and `Layer` are told apart. Everything
+    /// about *where* a container's rows are -- its span, its depth, whether
+    /// an index falls inside it -- is the same for both and is asked of
+    /// [`EffectParams::container_children`] instead; nothing in
+    /// `structure.rs` reads this.
+    ///
+    /// Introduced with `Layer` rather than before it, deliberately: with one
+    /// container kind in the tree, `Option<ContainerFlow>` would have had one
+    /// variant and been `is_container()` spelled a second way.
+    pub fn container_flow(self) -> Option<ContainerFlow> {
         match self {
-            Self::Chain => true,
+            Self::Chain => Some(ContainerFlow::Series),
+            Self::Layer => Some(ContainerFlow::Parallel),
             Self::Eq
             | Self::Modulation
             | Self::Filter
@@ -113,12 +165,12 @@ impl EffectKind {
             | Self::Gate
             | Self::Compressor
             | Self::Limiter
-            | Self::Buffer => false,
+            | Self::Buffer => None,
         }
     }
 
     /// Every kind, in the order the UI offers them when adding an effect.
-    pub const ALL: [EffectKind; 14] = [
+    pub const ALL: [EffectKind; 15] = [
         EffectKind::Eq,
         EffectKind::Modulation,
         EffectKind::Filter,
@@ -133,6 +185,7 @@ impl EffectKind {
         EffectKind::Limiter,
         EffectKind::Buffer,
         EffectKind::Chain,
+        EffectKind::Layer,
     ];
 
     /// Display name for device headers and the add-effect picker.
@@ -152,6 +205,7 @@ impl EffectKind {
             Self::Limiter => "Limiter",
             Self::Buffer => "Buffer",
             Self::Chain => "Chain",
+            Self::Layer => "Layer",
         }
     }
 
@@ -172,7 +226,7 @@ impl EffectKind {
             Self::Compressor => &COMPRESSOR_DESCRIPTORS,
             Self::Limiter => &LIMITER_DESCRIPTORS,
             Self::Buffer => &BUFFER_DESCRIPTORS,
-            Self::Chain => &CHAIN_DESCRIPTORS,
+            Self::Chain | Self::Layer => &CONTAINER_DESCRIPTORS,
         }
     }
 
@@ -197,7 +251,8 @@ impl EffectKind {
             Self::Compressor => EffectParams::Compressor(CompressorParams::default()),
             Self::Limiter => EffectParams::Limiter(LimiterParams::default()),
             Self::Buffer => EffectParams::Buffer(BufferParams::default()),
-            Self::Chain => EffectParams::Chain(ChainParams::default()),
+            Self::Chain => EffectParams::Chain(ContainerParams::default()),
+            Self::Layer => EffectParams::Layer(ContainerParams::default()),
         }
     }
 }
@@ -2840,7 +2895,20 @@ static BUFFER_DESCRIPTORS: [ParamDescriptor; 11] = [
 /// and `the_slint_division_table_matches_mod_time_division` now guards it.
 pub const MOD_TIME_DIVISION_TOP: f32 = crate::ModTimeDivision::ALL.len() as f32 - 1.0;
 
-/// A container's own state.
+/// A container's own state, whichever kind of container it is.
+///
+/// **One struct for both `Chain` and `Layer`**, and it was called
+/// `ChainParams` until 2026-09-21. The two kinds differ in what they *do*
+/// with the rows they hold -- a chain runs them in order, a layer splits
+/// across them and sums -- and not at all in what they store: a child count
+/// and a mix, meaning the same two things. Naming it after one of its two
+/// users is how a second copy gets written the day the other one needs a
+/// field, so it is named after what it is.
+///
+/// The Rust name is not on the wire. `EffectParams` is a tagged enum with the
+/// payload in `state`, so a chain is `{"type":"chain","state":{...}}` and a
+/// layer is `{"type":"layer","state":{...}}`; the struct's identifier appears
+/// in neither, and the rename cost no compatibility.
 ///
 /// **A container does not hold its children.** `children` says how many of the
 /// rows *after* this one are inside it, and those rows live in the same
@@ -2855,7 +2923,7 @@ pub const MOD_TIME_DIVISION_TOP: f32 = crate::ModTimeDivision::ALL.len() as f32 
 /// `docs/plans/containers/02-the-container-is-a-device.md` states the two
 /// invariants the representation has to hold.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ChainParams {
+pub struct ContainerParams {
     /// How many of the rows following this one are inside it.
     #[serde(default)]
     pub children: u8,
@@ -2863,15 +2931,15 @@ pub struct ChainParams {
     /// `EffectChain::close_run`. The dry copy is taken as the box opens and
     /// delayed by the run's declared latency, so the blend is against what
     /// went in rather than against what went in `run_latency` frames ago.
-    #[serde(default = "default_chain_mix")]
+    #[serde(default = "default_container_mix")]
     pub mix: f32,
 }
 
-fn default_chain_mix() -> f32 {
+fn default_container_mix() -> f32 {
     1.0
 }
 
-impl Default for ChainParams {
+impl Default for ContainerParams {
     fn default() -> Self {
         Self {
             children: 0,
@@ -2900,15 +2968,15 @@ pub struct EffectRun {
     pub effects: Vec<EffectSlotState>,
 }
 
-/// `Event::ParamValue` ids for [`ChainParams`].
+/// `Event::ParamValue` ids for [`ContainerParams`].
 ///
 /// `children` is deliberately absent, for the same reason `BufferParams.bars`
 /// is: it is structure rather than a control. A curve drawn on it would
 /// rewrite the shape of the chain from the audio thread.
-pub const CHAIN_PARAM_MIX: u32 = 0;
+pub const CONTAINER_PARAM_MIX: u32 = 0;
 
-static CHAIN_DESCRIPTORS: [ParamDescriptor; 1] = [ParamDescriptor {
-    id: CHAIN_PARAM_MIX,
+static CONTAINER_DESCRIPTORS: [ParamDescriptor; 1] = [ParamDescriptor {
+    id: CONTAINER_PARAM_MIX,
     name: "Mix",
     unit: "",
     min: 0.0,
@@ -2947,7 +3015,8 @@ pub enum EffectParams {
     Compressor(CompressorParams),
     Limiter(LimiterParams),
     Buffer(BufferParams),
-    Chain(ChainParams),
+    Chain(ContainerParams),
+    Layer(ContainerParams),
 }
 
 impl EffectParams {
@@ -2967,6 +3036,7 @@ impl EffectParams {
             Self::Limiter(_) => EffectKind::Limiter,
             Self::Buffer(_) => EffectKind::Buffer,
             Self::Chain(_) => EffectKind::Chain,
+            Self::Layer(_) => EffectKind::Layer,
         }
     }
 
@@ -2990,7 +3060,7 @@ impl EffectParams {
     /// places that render and draw, and it does not belong here.
     pub fn container_children(&self) -> Option<u8> {
         match self {
-            Self::Chain(chain) => Some(chain.children),
+            Self::Chain(container) | Self::Layer(container) => Some(container.children),
             _ => None,
         }
     }
@@ -2998,6 +3068,12 @@ impl EffectParams {
     /// Whether this device holds a run of the rows after it.
     pub fn is_container(&self) -> bool {
         self.container_children().is_some()
+    }
+
+    /// How this device runs the rows it holds, or `None` for a device that
+    /// holds nothing. [`EffectKind::container_flow`], asked of a value.
+    pub fn container_flow(&self) -> Option<ContainerFlow> {
+        self.kind().container_flow()
     }
 
     /// Set how many of the rows after this one are inside it.
@@ -3009,8 +3085,8 @@ impl EffectParams {
     /// saturates, and a wrap refuses outright rather than truncating a run it
     /// cannot describe.
     pub fn set_container_children(&mut self, children: u8) {
-        if let Self::Chain(chain) = self {
-            chain.children = children;
+        if let Self::Chain(container) | Self::Layer(container) = self {
+            container.children = children;
         }
     }
 
@@ -3247,8 +3323,8 @@ impl EffectParams {
                 BUFFER_PARAM_QUANT_START => Some(p.quant_start),
                 _ => None,
             },
-            Self::Chain(p) => match id {
-                CHAIN_PARAM_MIX => Some(p.mix),
+            Self::Chain(p) | Self::Layer(p) => match id {
+                CONTAINER_PARAM_MIX => Some(p.mix),
                 _ => None,
             },
         }
@@ -3390,8 +3466,8 @@ impl EffectParams {
                 BUFFER_PARAM_QUANT_START => p.quant_start = value,
                 _ => return None,
             },
-            Self::Chain(p) => match id {
-                CHAIN_PARAM_MIX => p.mix = value,
+            Self::Chain(p) | Self::Layer(p) => match id {
+                CONTAINER_PARAM_MIX => p.mix = value,
                 _ => return None,
             },
         }
@@ -3687,7 +3763,63 @@ mod tests {
                 params.container_children().is_some(),
                 "{kind:?} is a container that cannot count its rows"
             );
+            assert_eq!(
+                params.is_container(),
+                params.container_flow().is_some(),
+                "{kind:?} is a container that cannot say how it runs its rows"
+            );
         }
+    }
+
+    /// **The two container kinds differ in one answer, and it is this one.**
+    ///
+    /// Stated per kind rather than swept, because the sweep above can only
+    /// say that every container has *a* flow. A layer that answered `Series`
+    /// would pass it, run its branches one into the next, and still be called
+    /// a layer -- which is exactly how `containers/07` lands it on purpose,
+    /// and exactly what must stop being true in `containers/08`.
+    #[test]
+    fn a_chain_runs_in_series_and_a_layer_in_parallel() {
+        assert_eq!(EffectKind::Chain.container_flow(), Some(ContainerFlow::Series));
+        assert_eq!(EffectKind::Layer.container_flow(), Some(ContainerFlow::Parallel));
+        let parallel: Vec<EffectKind> = EffectKind::ALL
+            .into_iter()
+            .filter(|kind| kind.container_flow() == Some(ContainerFlow::Parallel))
+            .collect();
+        assert_eq!(parallel, [EffectKind::Layer], "only a layer splits its input");
+    }
+
+    /// A layer is a new `type` tag and nothing else: a file naming it decodes
+    /// with the container defaults, and a chain written before `Layer`
+    /// existed decodes exactly as it did. `PROJECT_FORMAT.md`'s additive rule
+    /// at the one place a new params variant could break it.
+    #[test]
+    fn a_layer_is_a_new_tag_on_the_same_state() {
+        let layer: EffectParams =
+            toml::from_str("type = \"layer\"\n[state]\n").expect("an empty layer state decodes");
+        assert_eq!(layer, EffectParams::Layer(ContainerParams::default()));
+
+        let dialled = EffectParams::Layer(ContainerParams {
+            children: 2,
+            mix: 0.25,
+        });
+        let written = toml::to_string(&dialled).expect("a layer encodes");
+        assert!(
+            written.contains("type = \"layer\""),
+            "a layer is written under its own tag, got {written:?}"
+        );
+        assert_eq!(toml::from_str::<EffectParams>(&written).expect("and reads back"), dialled);
+
+        let chain: EffectParams =
+            toml::from_str("type = \"chain\"\n[state]\nchildren = 2\nmix = 0.25\n")
+                .expect("a chain still decodes");
+        assert_eq!(
+            chain,
+            EffectParams::Chain(ContainerParams {
+                children: 2,
+                mix: 0.25
+            })
+        );
     }
 
     /// Each of the seven call sites this setter replaced was an `if let`

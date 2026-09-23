@@ -146,6 +146,15 @@ a paragraph because `06` said "which is `compile_latency` (`mixer.rs`) applied
 inside a chain", and it is not: `compile_latency` compiles a tree of strips,
 and there is no strip here to compile.
 
+> **Two corrections from landing the third commit, 2026-09-22** (the whole
+> account is in `00-status.md`). There is no `LayerParams`: `ChainParams`
+> became `ContainerParams` and both kinds hold it, because two structs with
+> the same two fields meaning the same things is a rule written twice. And
+> the latency walk's `max` arm does **not** arrive with `Layer`: while a
+> layer runs in series, a walk that took its longest branch would declare
+> less latency than the renderer takes, so it lands in 08 with the render
+> that makes it true.
+
 ## What this step builds
 
 1. **The predicate sweep**, above. One commit, no behaviour change, the

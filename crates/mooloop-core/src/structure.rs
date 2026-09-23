@@ -1649,6 +1649,70 @@ mod tests {
         assert!(span_problem(&effects).is_some_and(|problem| problem.contains("overlap")));
     }
 
+    /// **A layer is a container to every span primitive, word for word.**
+    ///
+    /// `containers/07` rests on the claim that none of the span primitives
+    /// learns the word `Layer`: they read `container_children`, and a layer
+    /// answers it exactly as a chain does. So the same malformed chains are
+    /// reported in the same sentence whichever kind heads them, and the same
+    /// move carries the same run to the same place. Swept over every
+    /// container kind rather than naming two, so a third arrives covered.
+    #[test]
+    fn every_container_kind_is_reported_and_moved_the_same_way() {
+        let containers: Vec<EffectKind> = EffectKind::ALL
+            .into_iter()
+            .filter(|kind| kind.is_container())
+            .collect();
+        assert!(containers.len() >= 2, "a chain and a layer, at least");
+
+        // One sentence per malformation, per kind. Collected rather than
+        // compared pairwise so a failure prints every kind's answer.
+        let report = |kind: EffectKind| {
+            let mut too_long = chain(&[kind, EffectKind::Filter]);
+            too_long[0].params.set_container_children(9);
+
+            let mut overlapping = chain(&[kind, kind, EffectKind::Filter, EffectKind::Drive]);
+            overlapping[0].params.set_container_children(2);
+            overlapping[1].params.set_container_children(2);
+
+            (span_problem(&too_long), span_problem(&overlapping))
+        };
+        let reports: Vec<_> = containers.iter().map(|kind| report(*kind)).collect();
+        assert!(reports[0].0.is_some() && reports[0].1.is_some(), "{reports:?}");
+        assert!(
+            reports.iter().all(|each| *each == reports[0]),
+            "a malformed span reads differently depending on which kind of \
+             container heads it: {reports:?}"
+        );
+
+        // The move from `moving_a_container_carries_its_run_and_reparents_it`,
+        // with each kind as the box.
+        for kind in containers {
+            let mut effects = chain(&[
+                EffectKind::Filter,
+                EffectKind::Drive,
+                EffectKind::Delay,
+                EffectKind::Gate,
+            ]);
+            let mut next = effects.len() as u32;
+            wrap_in_container(&mut effects, &mut next, 0..2, EffectSlotState::of_kind(kind))
+                .expect("box");
+            assert!(move_effect(&mut effects, 0, 1));
+            assert_eq!(
+                shape(&effects),
+                [
+                    (0, EffectKind::Delay),
+                    (0, kind),
+                    (1, EffectKind::Filter),
+                    (1, EffectKind::Drive),
+                    (0, EffectKind::Gate),
+                ],
+                "a {kind:?} did not take its contents to its new home"
+            );
+            assert_eq!(span_problem(&effects), None);
+        }
+    }
+
     #[test]
     fn channel_indices_close_up_after_a_deletion_and_open_after_an_insert() {
         let removed = ChannelEdit::Removed(1);

@@ -262,7 +262,7 @@ pub fn build_effect_at_tempo(
         // Transparent, and deliberately so: a container's mix belongs to the
         // host beside the per-slot dry path, not to a node. See
         // `container.rs`.
-        EffectParams::Chain(p) => Box::new(ContainerEffect::new(p)),
+        EffectParams::Chain(p) | EffectParams::Layer(p) => Box::new(ContainerEffect::new(p)),
     }
 }
 

@@ -12,8 +12,10 @@ import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 // The mix knob is the control; the diagram is a readout of it. The sum node
 // rides between the two lanes at the blend position, so the picture answers
 // "how much of this is the run?" before the percentage is read.
+//
+// It draws both container kinds until `containers/09` gives a layer its own
+// drawing, so its title is the row's `label` rather than a word written here.
 export component ContainerDeviceFace inherits EffectDeviceShell {
-    name: "Chain";
     kind: "FX / 1U";
     // Normalized 0..1, and already the natural range: a mix is a ratio.
     in-out property <float> mix;

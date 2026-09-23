@@ -58,7 +58,7 @@ pub fn patches(kind: EffectKind) -> Vec<EffectFactoryPatch> {
         // A container has one control and it is a mix. There is no patch of
         // it to ship, and a bank of one-knob presets would be noise in the
         // menu rather than a demonstration of range.
-        EffectKind::Chain => Vec::new(),
+        EffectKind::Chain | EffectKind::Layer => Vec::new(),
     }
 }
 
@@ -756,7 +756,7 @@ mod tests {
     /// presets would be noise rather than a demonstration of range. Named
     /// here rather than skipped silently, because "this kind has no bank" is
     /// a claim about the kind and not a gap in the content.
-    const NO_BANK: [EffectKind; 1] = [EffectKind::Chain];
+    const NO_BANK: [EffectKind; 2] = [EffectKind::Chain, EffectKind::Layer];
 
     #[test]
     fn every_kind_has_a_bank_of_its_own_kind() {

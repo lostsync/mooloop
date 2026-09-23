@@ -2384,6 +2384,7 @@ pub fn effect_kind_index(kind: EffectKind) -> i32 {
         EffectKind::Buffer => 11,
         EffectKind::Preamp => 12,
         EffectKind::Chain => 13,
+        EffectKind::Layer => 14,
     }
 }
 
@@ -2411,8 +2412,10 @@ pub fn effect_kind_units(kind: EffectKind) -> i32 {
         EffectKind::Modulation => 2,
         EffectKind::Eq => 2,
         // One unit: a name, a mix, and a collapse. The devices it holds are
-        // rows of their own and carry their own width.
-        EffectKind::Chain => 1,
+        // rows of their own and carry their own width. A layer is the same
+        // head -- what differs is how its branches are drawn, which is
+        // `containers/09` and may yet want more height rather than more width.
+        EffectKind::Chain | EffectKind::Layer => 1,
     }
 }
 
@@ -2712,6 +2715,8 @@ fn effect_slot_row(
         // `children` and `closing`, so the markup asks what a row is rather
         // than what index it happens to have published this frame.
         is_container: slot.params.is_container(),
+        // The kind's own name, for the one face that draws two kinds.
+        label: kind.label().into(),
         depth,
         closing: ModelRc::from(Rc::new(VecModel::from(closing))),
         selected,
@@ -17420,6 +17425,9 @@ mod tests {
                  whether it holds a run",
                 kind.label()
             );
+            // The container face titles itself from this, so a layer that
+            // published "Chain" would be drawn as one.
+            assert_eq!(row.label.as_str(), kind.label());
         }
     }
 

@@ -156,7 +156,7 @@ pub use gain::{
 };
 pub use effect::{
     BitcrushParams, BitcrushStyle, BufferParams, CompressorParams, DelayMode, DelayParams,
-    ChainParams, ChannelId, DeviceId, TrackId, track_id_is_unassigned, DriveCurve, DriveParams, EffectKind, EffectParams,
+    ContainerFlow, ContainerParams, ChannelId, DeviceId, TrackId, track_id_is_unassigned, DriveCurve, DriveParams, EffectKind, EffectParams,
     EffectRun, EffectSlotState, eq_effective_q, EqBand,
     EqBandKind, EqParams, EqPassFilter, EqQProfile, EqSlope, FilterMode, FilterParams, FilterSlope,
     GateParams, LimiterParams, ModulationMode, ModulationParams, ParamCurve, ParamDescriptor,
@@ -167,7 +167,7 @@ pub use effect::{
     BUFFER_PARAM_QUANTIZE, BUFFER_PARAM_QUANT_START, BUFFER_PARAM_JUMP_BACK,
     BUFFER_PARAM_REVERSE, BUFFER_PARAM_STUTTER, BUFFER_PARAM_STUTTER_LENGTH,
     BUFFER_PARAM_POSITION_SPAN, BUFFER_SPAN_FULL, BUFFER_PARAM_RATE,
-    CHAIN_PARAM_MIX,  MOD_TIME_DIVISION_TOP,
+    CONTAINER_PARAM_MIX,  MOD_TIME_DIVISION_TOP,
     COMP_PARAM_ATTACK_MS, COMP_PARAM_KNEE_DB, COMP_PARAM_MAKEUP_DB, COMP_PARAM_RATIO,
     COMP_PARAM_RELEASE_MS, COMP_PARAM_THRESHOLD_DB, DELAY_MAX_TIME_MS, DELAY_PARAM_CROSS,
     DELAY_PARAM_FEEDBACK, DELAY_PARAM_MIX, DELAY_PARAM_MODE, DELAY_PARAM_TIME_MS, DELAY_PARAM_TONE,

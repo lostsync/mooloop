@@ -275,6 +275,7 @@ fn render_mixer_pane_with_a_bus_chain() {
             gain_reduction_db: 0.0,
             children: 0,
             is_container: false,
+            label: EffectKind::Compressor.label().into(),
             depth: 0,
             // A fixture row: these tests are about what the rack draws, not
             // about the depth cap, so wrapping is offered.
@@ -342,6 +343,7 @@ fn render_mixer_pane_with_a_bus_chain() {
             gain_reduction_db: -6.0,
             children: 0,
             is_container: false,
+            label: EffectKind::Limiter.label().into(),
             depth: 0,
             // A fixture row: these tests are about what the rack draws, not
             // about the depth cap, so wrapping is offered.

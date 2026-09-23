@@ -14,7 +14,7 @@ use crate::meters::DeviceMeters;
 use crate::render::RenderState;
 use crate::render_test_support::{render_blocks, SAMPLE_RATE};
 use mooloop_core::{
-    ChainParams, EffectKind, EffectParams, EffectSlotState, NoteEvent, Project, ProjectChannel,
+    ContainerParams, EffectKind, EffectParams, EffectSlotState, NoteEvent, Project, ProjectChannel,
 };
 
 /// One drum channel hitting on the downbeat, through Filter, Drive and Delay.
@@ -42,11 +42,17 @@ fn three_device_chain() -> Project {
 
 /// Wrap `run` of channel 0's chain in a container at `mix`.
 fn wrap(project: &mut Project, run: std::ops::Range<usize>, mix: f32) {
+    wrap_as(project, EffectKind::Chain, run, mix);
+}
+
+/// Wrap `run` of channel 0's chain in a container of `kind` at `mix`.
+fn wrap_as(project: &mut Project, kind: EffectKind, run: std::ops::Range<usize>, mix: f32) {
     let setup = &mut project.channels[0].setup;
-    let mut container = EffectSlotState::of_kind(EffectKind::Chain);
-    if let EffectParams::Chain(chain) = &mut container.params {
-        chain.mix = mix;
-    }
+    let mut container = EffectSlotState::of_kind(kind);
+    container
+        .params
+        .set(mooloop_core::CONTAINER_PARAM_MIX, mix)
+        .expect("a container has a mix");
     mooloop_core::wrap_in_container(&mut setup.effects, &mut setup.next_device_id, run, container)
         .expect("wrapped");
 }
@@ -170,6 +176,87 @@ fn a_container_round_trips_through_the_document() {
         "the nesting did not survive the round trip"
     );
     assert_eq!(mooloop_core::span_problem(&reloaded.channels[0].setup.effects), None);
+    assert_eq!(render_blocks(&reloaded, 0.5, 128), before);
+}
+
+/// **`containers/07`'s acceptance case.** A layer lands running its rows in
+/// series, exactly as a chain does, so it has to *be* a chain: the same run,
+/// wrapped in a `Layer` and in a `Chain` at the same mix, renders sample for
+/// sample the same at three block sizes.
+///
+/// Drive is in the run for the reason step 02 gives -- it is the only kind
+/// that declares a latency, so a layer that sized its dry path differently
+/// would comb at the partial mix rather than pass. That is also why the mix
+/// is not only 1.0: at full wet the dry path is never heard.
+///
+/// This is the thing `containers/08`'s "a layer of one branch is a chain" is
+/// identical *to*. When 08 teaches the engine to split, a layer of three
+/// leaves stops being serial and this case gives way to that one.
+#[test]
+fn a_layer_running_in_series_is_a_chain() {
+    let bare = three_device_chain();
+    for mix in [1.0, 0.6] {
+        let mut chain = bare.clone();
+        wrap_as(&mut chain, EffectKind::Chain, 0..3, mix);
+        let mut layer = bare.clone();
+        wrap_as(&mut layer, EffectKind::Layer, 0..3, mix);
+        for block in [64, 128, 512] {
+            let reference = render_blocks(&chain, 0.5, block);
+            assert!(
+                reference.iter().any(|s| s.abs() > 1.0e-4),
+                "the reference render was silent, so this proves nothing"
+            );
+            assert_eq!(
+                render_blocks(&layer, 0.5, block),
+                reference,
+                "a layer at mix {mix} was not its chain at block {block}"
+            );
+        }
+    }
+}
+
+/// A layer survives a save and a reload as a layer, inside a chain, with its
+/// run intact -- `layer` is a new `type` tag and the document has to carry it
+/// both ways -- and the project still renders the same.
+#[test]
+fn a_layer_round_trips_through_the_document() {
+    let temp = tempfile::tempdir().expect("a temp dir");
+    let path = temp.path().join("layered.mooloop");
+
+    let mut layered = three_device_chain();
+    wrap_as(&mut layered, EffectKind::Layer, 1..3, 0.4);
+    wrap_as(&mut layered, EffectKind::Chain, 0..4, 0.8);
+    let before = render_blocks(&layered, 0.5, 128);
+
+    mooloop_project::save_song(&path, &layered, mooloop_project::AssetMode::Referenced)
+        .expect("the song saves");
+    let mooloop_project::LoadedDocument::Song(reloaded) =
+        mooloop_project::load_bundle(&path).expect("it reopens").document
+    else {
+        panic!("a song came back as something else");
+    };
+
+    let effects = &reloaded.channels[0].setup.effects;
+    let shape: Vec<(usize, EffectKind)> = (0..effects.len())
+        .map(|slot| (mooloop_core::depth_at(effects, slot), effects[slot].kind()))
+        .collect();
+    assert_eq!(
+        shape,
+        [
+            (0, EffectKind::Chain),
+            (1, EffectKind::Filter),
+            (1, EffectKind::Layer),
+            (2, EffectKind::Drive),
+            (2, EffectKind::Delay),
+        ],
+        "the layer did not survive the round trip as a layer"
+    );
+    assert_eq!(
+        effects[2].params,
+        layered.channels[0].setup.effects[2].params,
+        "the layer's mix and span came back different"
+    );
+    assert_eq!(mooloop_core::span_problem(effects), None);
     assert_eq!(render_blocks(&reloaded, 0.5, 128), before);
 }
 
@@ -307,7 +394,7 @@ fn a_nested_container_blends_what_the_inner_one_produced() {
 fn a_container_decodes_from_a_manifest_that_names_neither_field() {
     let params: EffectParams =
         toml::from_str("type = \"chain\"\n[state]\n").expect("an empty state decodes");
-    assert_eq!(params, EffectParams::Chain(ChainParams::default()));
+    assert_eq!(params, EffectParams::Chain(ContainerParams::default()));
     assert_eq!(params.kind(), EffectKind::Chain);
 }
 

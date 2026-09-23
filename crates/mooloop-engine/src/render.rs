@@ -2189,7 +2189,7 @@ impl EffectChain {
         let mix = self
             .slot(run.slot)
             .and_then(|state| state.base_params)
-            .and_then(|params| params.get(mooloop_core::CHAIN_PARAM_MIX))
+            .and_then(|params| params.get(mooloop_core::CONTAINER_PARAM_MIX))
             .unwrap_or(1.0)
             .clamp(0.0, 1.0);
         // Two disjoint fields at once: the ring lives on the container's slot
@@ -12155,7 +12155,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                     // Follow is deliberately transparent until an atomic
                     // buffer event arrives.
                 }
-                mooloop_core::EffectKind::Chain => {
+                mooloop_core::EffectKind::Chain | mooloop_core::EffectKind::Layer => {
                     // A container is transparent by construction and stays
                     // that way: its mix belongs to the chain host, not to the
                     // node in the slot. `docs/plans/containers/03` gives the
@@ -12171,15 +12171,17 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                     build_effect(params, 48_000),
                 ));
             });
-            // Two kinds are transparent on purpose, for two different
+            // Two shapes are transparent on purpose, for two different
             // reasons: Follow passes audio through until an atomic buffer
-            // event arrives, and a container has no signal path of its own.
-            // Equal-power leaks a cos(pi/2) ~ 6e-8 of the aligned dry
-            // alongside either, which is inaudible but not bit-exact.
-            if matches!(
-                kind,
-                mooloop_core::EffectKind::Buffer | mooloop_core::EffectKind::Chain
-            ) {
+            // event arrives, and a container of either kind has no signal
+            // path of its own. Equal-power leaks a cos(pi/2) ~ 6e-8 of the
+            // aligned dry alongside either, inaudible but not bit-exact.
+            //
+            // A *layer* is transparent here for a second reason as well,
+            // and only until `containers/08`: with one row and nothing to
+            // sum against, a branch is its input. This arm does not have to
+            // move when the split lands -- an empty layer stays its input.
+            if kind == mooloop_core::EffectKind::Buffer || kind.is_container() {
                 assert!(
                     (wet - dry).abs() < dry * 1.0e-5,
                     "{} must be transparent: dry {dry}, wet {wet}",

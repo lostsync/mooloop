@@ -218,14 +218,15 @@ struct BrowserRow {
 struct EffectSlotRow {
     // Matches EffectKind: 0=Filter, 1=Drive, 2=Bitcrush, 3=Delay,
     // 4=Gate, 5=Compressor, 6=Limiter, 7=EQ, 8=Reverb, 9=Mod,
-    // 10=Plate, 11=Buffer, 12=Preamp, 13=Chain.
+    // 10=Plate, 11=Buffer, 12=Preamp, 13=Chain, 14=Layer.
     //
     // This numbering is `effect_kind_index` in `lib.rs` and it is a *runtime*
     // binding: a project persists the `EffectKind` by name, and the index is
     // recomputed on every publish. So it can be renumbered -- but every arm
     // below, and every `kind-selected` in the insert menu, has to move with
-    // it, and `the_insert_menu_offers_every_kind` requires the menu's last
-    // row to carry the highest index. Chain keeps it, being last on purpose.
+    // it, and `the_insert_menu_offers_every_kind` clicks every row of that
+    // menu and requires every kind's number back exactly once. A container
+    // is drawn by `is-container`, not by its number.
     kind: int,
     // Rack units this device's face occupies. Devices with more working
     // controls get more width rather than compressing their controls.
@@ -351,6 +352,11 @@ struct EffectSlotRow {
     // seven, and a second container kind would have had to be added to all
     // seven as `|| kind == 14`. Carried here for the same reason `closing` is.
     is-container: bool,
+    // The kind's display name, `EffectKind::label`. Read by the container
+    // face, which draws both container kinds and would otherwise title a
+    // layer "Chain" -- or have to tell the two apart by `kind`'s number,
+    // which is the comparison `is-container` exists to retire.
+    label: string,
     // Whether wrapping this row would leave every container inside
     // `MAX_CONTAINER_DEPTH`. A bool and not a comparison against `depth`,
     // because the cap is an engine number and spelling it here would be a
@@ -5311,6 +5317,7 @@ export component MainWindow inherits Window {
                                                     y: 0px;
                                                     width: parent.content-width;
                                                     height: parent.height;
+                                                    name: slot.label;
                                                     slot-index: index;
                                                     slot-count: root.effect-slots.length;
                                                     bypassed: slot.bypassed;

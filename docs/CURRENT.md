@@ -1399,6 +1399,14 @@ land on its own when it starts to matter:
   on. The modulation driving a run does not travel with it, because a route's
   source lives in the channel's rack rather than in the container; see
   `docs/plans/containers/00-status.md`.
+- A second container kind, **Layer**, sits under Chain in the insert menu and
+  saves and reloads as its own kind. It holds a run, nests, wraps, bypasses
+  and mixes exactly as a chain does -- and **it runs what it holds in
+  series, exactly as a chain does**, until `containers/08` teaches the engine
+  to split its input across its devices and sum them. The rack draws it as a
+  chain's box with "Layer" on its face until `containers/09`. The wrap button
+  always makes a Chain, and a layer's preset carries only its own mix, not
+  what it holds (`containers/10`).
 - `ParamAddr` addresses parameters owned by a source, a rack device, a
   modulator slot, or the strip, within its channel-or-bus scope. A rack device
   is named by a durable `DeviceId` minted when it is inserted, so reordering,

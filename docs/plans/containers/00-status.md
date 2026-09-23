@@ -8,7 +8,7 @@ Linear: project [Containers and the layer device](https://linear.app/mooloop/pro
 
 | Step | What | Issue | State |
 | --- | --- | --- | --- |
-| [07](07-a-branch-is-a-run.md) | One container predicate, latency as a tree, `EffectKind::Layer` landing silent | [MOO-69](https://linear.app/mooloop/issue/MOO-69) | **two of three commits landed 2026-09-21** — see below |
+| [07](07-a-branch-is-a-run.md) | One container predicate, latency as a tree, `EffectKind::Layer` landing silent | [MOO-69](https://linear.app/mooloop/issue/MOO-69) | **landed 2026-09-22** — see below |
 | [08](08-the-chain-splits-and-sums.md) | Branch buffers, alignment, the sum — the engine | [MOO-70](https://linear.app/mooloop/issue/MOO-70) | not started |
 | [09](09-the-rack-draws-branches.md) | The drawing. **Blocked on a mock-up from Adam**, deliberately | [MOO-71](https://linear.app/mooloop/issue/MOO-71) | not started |
 | [10](10-the-gestures-and-the-preset.md) | Wrap-as-layer, add/remove a branch, a preset with branches | [MOO-72](https://linear.app/mooloop/issue/MOO-72) | not started |
@@ -21,10 +21,13 @@ does change, and 02 recorded the opposite in good faith, is that
 **`chain_latency` stops being a sum** — the time a signal spends inside a
 layer is its longest branch, not the total of all of them.
 
-## Step 07, as far as it has gone
+## Step 07 — a branch is a run, and a layer is a device
 
-Two of its three commits are on `main`, both behaviour-neutral and both
-verified by mutation rather than by being green.
+Landed in three commits, the first two on 2026-09-21 and the third on
+2026-09-22. All three are behaviour-neutral for every project that existed
+before them, and the third is the one a musician can see: a **Layer** row at
+the bottom of the insert menu, which runs what it holds **in series**,
+exactly as a Chain does, until step 08.
 
 - **`96848cb` — one container predicate.** `EffectKind::is_container`,
   `EffectParams::{is_container, container_children, set_container_children}`,
@@ -43,17 +46,95 @@ verified by mutation rather than by being green.
   `the_latency_walk_agrees_with_the_flat_sum_on_every_serial_arrangement`
   pins over five shapes. Changing the sibling combine to `max` fails it at
   15 against 30.
+- **The third commit — `EffectKind::Layer`.** The fifteenth kind, with the
+  persistence, the insert-menu row, the kind index and preset slug, and a
+  face. The rack's two local commits from 2026-09-21 (`is-container` on the
+  row instead of `kind == 13` seven times, and the test that the published
+  row says so) went with it.
 
-**What is left of 07 is the third commit**: `EffectKind::Layer`,
-`LayerParams`, `ContainerFlow` with both its variants, persistence and
-integrity repair — and the layer running **in series**, so that 08's "one
-branch is bit-identical to a chain" has something to be identical to.
+### What the third commit found
 
-Two things the doing has already corrected in the step file. `container_flow`
-has **three** readers, not two — the latency walk is one — and it is
-deliberately not introduced until `Layer` exists, because a one-variant
-`Option<ContainerFlow>` is `is_container()` written a second way, which is
-what `96848cb` spent itself removing.
+- **There is no `LayerParams`.** The work order asked for one with "the same
+  two fields `ChainParams` has, for the same two reasons". Two structs with
+  the same fields meaning the same things is the fault this codebase keeps
+  finding, so `ChainParams` became **`ContainerParams`** and both kinds hold
+  it. The Rust name is not on the wire -- `EffectParams` is tagged, so a
+  chain is `type = "chain"` and a layer `type = "layer"` around the same
+  `state` -- and the rename cost no compatibility. `CHAIN_PARAM_MIX` became
+  `CONTAINER_PARAM_MIX` for the same reason, and a layer's frozen id table
+  is the chain's (`param_id_freeze_tests.rs`).
+- **`ContainerFlow` is where `is_container` comes from now.**
+  `EffectKind::container_flow` is the one match that tells `Chain` from
+  `Layer` (`Series`, `Parallel`), and `is_container` is its `is_some()`. So
+  the reason the predicate commit refused a one-variant enum is answered the
+  other way round: the enum is not a second spelling of the predicate, the
+  predicate is a reading of the enum. `a_chain_runs_in_series_and_a_layer_in_parallel`
+  pins which kind answers which.
+- **The latency walk does not read it yet, and that is a correction to this
+  file.** 07 said the latency arm would change with `Layer`. It cannot while
+  a layer runs in series: the walk's number sizes both the channel's
+  compensation and the layer's own dry-path ring, and a layer holding two
+  Drives that declared 15 frames while the renderer took 30 would comb at any
+  partial mix and sit the channel 15 frames late. The `max` arm lands in 08,
+  with the render that makes it true. A latency change is still never
+  bundled with a *new kind*, which was the bisection argument; it is bundled
+  with the behaviour it describes.
+- **The container face said "Chain" whatever it was drawing.** Its title
+  was a literal in `container-device.slint`, so a layer would have been
+  titled a chain. `EffectSlotRow` gained `label` -- `EffectKind::label`,
+  published beside `is-container` -- and the face reads it. Telling the two
+  apart by `kind == 14` in the markup would have been the comparison the
+  `is-container` commit had just retired.
+- **The `is-container` commit had quietly taken a guard off.**
+  `every_face_reads_its_parameters_by_id` found face arms by searching
+  `main.slint` for `if slot.kind == `, and the container's arm stopped
+  matching the moment it became `if slot.is-container :`. Its Mix binding
+  was then checked by nothing, and the test's tripwire (at least 60 of the
+  66 bindings) went on passing at 65. It reads the predicate arm now, once
+  per container kind, and asserts there is exactly one.
+- **Both container kinds are the same to every span primitive, word for
+  word.** `every_container_kind_is_reported_and_moved_the_same_way` sweeps
+  the container kinds through `span_problem`'s two malformations and a move
+  of a boxed run, and requires identical answers.
+
+### What it cost
+
+Measured on the tree either side of the commit, as `CAPACITY_POLICY.md`
+asks of anything that adds to a stored type: **nothing moved.**
+
+| Type | Before | After |
+| --- | --- | --- |
+| `EffectParams` | 140 | 140 |
+| `EffectSlotState` | 160 | 160 |
+| `EngineCommand` | 136 | 136 |
+
+A layer's payload is the chain's payload and the discriminant had room, so
+the command ring's 136 bytes are still floored by the poly synth's parameter
+block, and `capacity_no_longer_moves_the_command_ring` still says so.
+
+### Acceptance
+
+- `a_layer_running_in_series_is_a_chain` (`container_tests.rs`) -- a Filter
+  → Drive → Delay run wrapped in a Layer and in a Chain renders sample for
+  sample the same at 64, 128 and 512 frames, at full wet and at 0.6, where
+  the Drive's 15 frames would comb a misaligned dry path.
+- `a_layer_round_trips_through_the_document` -- a layer inside a chain saves,
+  reopens as a layer at the same depth with the same mix and span, and
+  renders the same.
+- `a_layer_is_a_new_tag_on_the_same_state` -- an empty `layer` state decodes
+  to the defaults, and a chain written before `Layer` decodes unchanged.
+- The two the work order named under other names are the first two
+  commits': `container_predicates_agree_about_every_kind` (now also asking
+  for a flow) and `the_latency_walk_agrees_with_the_flat_sum_on_every_serial_arrangement`.
+- `the_insert_menu_offers_every_kind` clicks fifteen rows and gets fifteen
+  kinds back.
+
+### Not in this step
+
+The rack draws a layer as a chain's box, with "Layer" on its face -- the
+drawing is 09's, and waits on Adam's mock-up. The wrap button always makes a
+Chain, and a layer's preset carries its own row (its mix), not its run: both
+are step 10.
 
 ## Step 01 — a device is an identity, not a position
 
