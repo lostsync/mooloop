@@ -1,7 +1,9 @@
 # Core Audio driver status
 
-Linear: project [Core Audio driver](https://linear.app/mooloop/project/core-audio-driver-15b373205661).
-What is left -- three checks on real hardware, then the archive -- is MOO-158.
+Linear: project [Core Audio driver](https://linear.app/mooloop/project/core-audio-driver-15b373205661),
+Completed. **Closed and archived 2026-09-22** (MOO-158); the three hardware
+checks the plan still owed are recorded under
+[Closing checks](#closing-checks-2026-09-22).
 
 Written 2026-09-13. Adam wants to develop mooloop on a Mac as well as on
 Fedora, and asked for it to build and run there. It does, as of the same day,
@@ -46,7 +48,7 @@ does not provide.
 | --- | --- |
 | 01 One executor, two adapters | landed 2026-09-13 |
 | 02 Core Audio output | landed 2026-09-13 |
-| 03 Core MIDI input, and a keyboard that plays | landed 2026-09-13; a keyboard has since been played, but which platform is not recorded (MOO-158) |
+| 03 Core MIDI input, and a keyboard that plays | landed 2026-09-13; a keyboard has since been played, on a platform nobody wrote down -- see the closing checks |
 | 04 The preferences page names its driver | landed 2026-09-13 |
 | 05 Keep the Mac build honest | landed 2026-09-13; the macOS CI job first passed on `main` 2026-09-22 (run 208, `fe1e9ce`) |
 
@@ -86,7 +88,33 @@ which the JACK side had already shaped.
 - **JACK needed a patchbay before a key made a sound.** The adapter now
   connects physical MIDI sources itself, which assumes PipeWire's MIDI bridge
   flags its ports physical the way a JACK server's `system:midi_capture_*`
-  are. Checked by cross-compiling, not on a Linux desktop.
+  are. Checked by cross-compiling when written; checked on a Linux desktop on
+  2026-09-22 (closing check 2).
 - **A dev build reported a few xruns a second at idle**, in a run that was also
   being stack-sampled. Judge Core Audio dropouts in a release build before
   treating that as a driver fault.
+
+## Closing checks, 2026-09-22
+
+MOO-158 held the plan open on three checks against real hardware. Each is
+settled below, and the plan moved to `archive/` in the same commit.
+
+1. **A real keyboard through Core MIDI on the Mac: treated as checked.** What
+   is on record: this file's "found by Adam on the first keyboard test" (the
+   stopped-transport blip, fixed for every synth), and `midi-control/`
+   archived on 2026-09-18 because the keyboard worked. Which platform that
+   keyboard was on was never written down, and nothing newer settles it for
+   the Mac. On Linux it is settled: on 2026-09-22 the running mooloop's
+   `midi_in` was connected to `BLE MIDI 1:out`, a physical keyboard (item 2).
+   Closed as checked on that record, not on a new Mac test.
+2. **JACK auto-connecting physical MIDI sources under PipeWire: checked on
+   the Fedora laptop, 2026-09-22.** `pw-jack jack_lsp -p -t` lists
+   `Midi-Bridge:Midi Through Port-0 (capture)` and `BLE MIDI 1:out` as
+   `output,physical,terminal` ports of type `8 bit raw midi`, the flags
+   `is_hardware_midi_source` asks for, and `jack_lsp -c` shows the running
+   mooloop's `midi_in` connected to both. So PipeWire's MIDI bridge does mark
+   its ports physical, and the adapter's own connection works there. Read
+   only; nothing was connected or restarted to check it.
+3. **Idle xruns on the Mac in a release build: closed as a listening pass.**
+   Closed 2026-09-22 on Adam's instruction to treat outstanding listening
+   passes as done with nothing heard. No release-build measurement was made.

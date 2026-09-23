@@ -21,13 +21,14 @@ ring the same length as the live one keeps the live one. Its steps 03 and 04 --
 audio-thread structural commands -- were decided against in step 05, which
 records why. Adam heard it: *"sounds good. i think you can close it."*
 
-`coreaudio-driver/` was added 2026-09-13 and is **in progress, outside the
-`FOCUS.md` sequence**, because Adam asked for it directly: he wants to develop
-on a Mac as well as on Fedora. It builds a Core Audio driver beside JACK,
-chosen at compile time, and stops short of packaging or a macOS release. Every
-step has landed, and the macOS CI job first passed on `main` on 2026-09-22
-(run 208). What is left is three checks on real hardware, which are Adam's
-(MOO-158); then it archives.
+`coreaudio-driver/` **finished 2026-09-22 and is in `archive/`.** It was added
+2026-09-13, outside the `FOCUS.md` sequence, because Adam asked for it
+directly: he wants to develop on a Mac as well as on Fedora. It built a Core
+Audio driver beside JACK, chosen at compile time, and stopped short of
+packaging or a macOS release. Every step landed on 2026-09-13, and the macOS CI
+job first passed on `main` on 2026-09-22 (run 208). The three hardware checks it
+still owed were settled on 2026-09-22 (MOO-158): its status file says which
+was checked and which was closed on the record.
 
 `channel-identity/` **finished 2026-09-18 and is in `archive/`.** It was added
 2026-09-17 from Adam's answers to the architecture section of

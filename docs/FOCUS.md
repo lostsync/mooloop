@@ -175,7 +175,7 @@ work instead of folding it into the current branch.
   graph, which is why `containers/08` is affordable and sidechain is not yet.
 - **Plugin hosting** (`plans/plugin-hosting/`, thirteen steps). Not deferred —
   `SCOPE.md` put CLAP in for 0.2.0 — but outside this sequence, the way
-  `coreaudio-driver/` is.
+  `coreaudio-driver/` was.
 - **A curated factory bank.** Every device ships presets to prove its
   architecture reaches its range from the controls, and that is the only bar.
   Authoring content by taste across every device is a deliberate later push.

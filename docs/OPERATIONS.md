@@ -689,7 +689,7 @@ it, and do other work while it runs.
 ## Developing On macOS
 
 The workspace builds and runs on a Mac, where the engine plays through Core
-Audio instead of JACK (`docs/plans/coreaudio-driver/`). The Xcode command-line
+Audio instead of JACK (`docs/plans/archive/coreaudio-driver/`). The Xcode command-line
 tools and `rustup` are all it needs -- Homebrew's `rustup` is keg-only, so put
 `$(brew --prefix rustup)/bin` on `PATH` -- and `mold` is not used.
 

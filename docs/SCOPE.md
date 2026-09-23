@@ -563,7 +563,7 @@ model only with nothing drawn, so the release carries no half-built surface.
 (`ui/menubar.slint`), which is right on Linux and wrong on macOS, where the
 menu belongs in the system bar at the top of the screen. There is **no native
 menu integration anywhere in the tree** — no `NSMenu`, no platform branch, no
-mention in `plans/coreaudio-driver/`. The Slint menu components are
+mention in `plans/archive/coreaudio-driver/`. The Slint menu components are
 deliberately generic and know nothing about which actions exist, and the action
 registry (`actions.rs`) already separates an action's identity from its
 surface — so the menu structure is nameable independently of how it is drawn,
