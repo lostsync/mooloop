@@ -14704,6 +14704,10 @@ impl AppUi {
         // faster would only make the window smaller.
         let mut last_load_report = std::time::Instant::now();
         let mut xruns_this_window = 0u32;
+        // The output guard's fault count as of the last tick. The engine's
+        // count only ever grows, so a rise is a new fault however late it is
+        // seen, and zero is the one value that means nothing has gone wrong.
+        let mut output_faults_seen = 0u64;
         let mut reported_time_shared = false;
         // Reused across pumps rather than allocated per pump: a desk sending
         // a fader stream fills these sixty times a second.
@@ -15921,6 +15925,26 @@ impl AppUi {
                         w.set_editing_bus_held_right_db(right.held_db);
                         w.set_editing_bus_clipping(left.clipping || right.clipping);
                     }
+                }
+                // **A device produced NaN or infinity** (MOO-93). The output
+                // guard has already sent silence in its place and the master's
+                // clip lamp is lit; this is the half that says why. Logged on
+                // the first occurrence only: a broken device produces a fault
+                // every block, and a line per tick would bury the log.
+                let output_faults = handle.output_faults();
+                if output_faults > output_faults_seen {
+                    if output_faults_seen == 0 {
+                        log_warn!(
+                            "audio",
+                            "a device produced NaN or infinite samples ({output_faults} so far); \
+                             the master's output guard is sending silence in their place"
+                        );
+                        w.set_status_message(
+                            "A device produced invalid audio (NaN); it is being silenced at the output"
+                                .into(),
+                        );
+                    }
+                    output_faults_seen = output_faults;
                 }
                 // Device meters address channels and buses in one space: a
                 // bus's chain publishes at MAX_CHANNELS + bus index (see

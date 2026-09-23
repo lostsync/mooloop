@@ -9,7 +9,7 @@
 //! without re-running anything.
 
 use crate::render::RenderState;
-use crate::render_test_support::{peak_of, render_master, SAMPLE_RATE};
+use crate::render_test_support::{peak_of, render_master, render_mix, SAMPLE_RATE};
 use mooloop_core::{
     DeviceKind, DrumMode, EffectKind, EffectParams, EffectSlotState, FilterParams, MonoSynthParams,
     NoteEvent, OscParams, PlateParams, PolySynthParams, Project, ProjectChannel, ReverbParams,
@@ -31,8 +31,14 @@ fn full_bank_project() -> Project {
 }
 
 /// Render the project offline and return the master peak in dBFS.
+///
+/// The peak of the *mix*: the output guard's safety limiter is taken off,
+/// because this file measures gain structure, and a sum over 0 dBFS -- eight
+/// channels at the operating level is +6 -- would otherwise read as the
+/// limiter's ceiling (MOO-93).
 fn peak_dbfs(project: &Project, seconds: f32) -> f32 {
     let mut render = RenderState::from_project(SAMPLE_RATE, project, &[]);
+    render.unlimit_output();
     render.play();
     let mut remaining = (SAMPLE_RATE as f32 * seconds) as usize;
     let mut peak = 0.0f32;
@@ -554,9 +560,12 @@ fn superposition_error(pad_volume: f32, chain: &[u8]) -> (f32, f32) {
     let project = |pad_muted, drums_muted| {
         route_pad_through(pad_and_drums(pad_volume, pad_muted, drums_muted), chain)
     };
-    let (both_l, _) = render_master(&project(false, false), 2.5);
-    let (pad_l, _) = render_master(&project(false, true), 2.5);
-    let (drums_l, _) = render_master(&project(true, false), 2.5);
+    // The mix, not the output: at +12 dB the pad takes the master over
+    // 0 dBFS, where the output guard's limiter -- a nonlinearity on purpose,
+    // after the master -- would be what this measured.
+    let (both_l, _) = render_mix(&project(false, false), 2.5);
+    let (pad_l, _) = render_mix(&project(false, true), 2.5);
+    let (drums_l, _) = render_mix(&project(true, false), 2.5);
     let error = both_l
         .iter()
         .zip(pad_l.iter().zip(drums_l.iter()))

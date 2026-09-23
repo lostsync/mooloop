@@ -29,7 +29,26 @@ pub(crate) fn render_master_in_blocks(
     seconds: f32,
     block: usize,
 ) -> (Vec<f32>, Vec<f32>) {
+    render_in_blocks(project, seconds, block, true)
+}
+
+/// The master's two channels with the output guard's limiter taken off: the
+/// *mix*, for a test measuring summing above 0 dBFS, where the safety
+/// limiter would otherwise be what it measured (MOO-93).
+pub(crate) fn render_mix(project: &Project, seconds: f32) -> (Vec<f32>, Vec<f32>) {
+    render_in_blocks(project, seconds, BLOCK, false)
+}
+
+fn render_in_blocks(
+    project: &Project,
+    seconds: f32,
+    block: usize,
+    limited: bool,
+) -> (Vec<f32>, Vec<f32>) {
     let mut render = RenderState::from_project(SAMPLE_RATE, project, &[]);
+    if !limited {
+        render.unlimit_output();
+    }
     render.play();
     let mut remaining = (SAMPLE_RATE as f32 * seconds) as usize;
     let mut left = Vec::with_capacity(remaining);

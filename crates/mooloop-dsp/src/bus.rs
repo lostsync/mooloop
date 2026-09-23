@@ -77,12 +77,28 @@ impl StereoBus {
     }
 
     /// Peak absolute amplitude over the first `frames` samples, `(l, r)`.
+    ///
+    /// **A NaN or an infinity reads as an infinite peak, never as silence.**
+    /// `f32::max` returns its other operand when one is NaN, so this used to
+    /// drop every NaN sample: a bus full of them metered as silence while it
+    /// fed the DAC, and the effect host's sleep check -- which reads this same
+    /// peak -- could put the broken device to sleep (MOO-93). Infinity is the
+    /// honest reading of a sample with no magnitude, it is above every
+    /// threshold anything compares a peak with, and it survives the
+    /// `max(0.0)` every meter publish takes.
     pub fn peak(&self, frames: usize) -> (f32, f32) {
+        fn magnitude(sample: f32) -> f32 {
+            if sample.is_nan() {
+                f32::INFINITY
+            } else {
+                sample.abs()
+            }
+        }
         let mut pl = 0.0f32;
         let mut pr = 0.0f32;
         for i in 0..frames {
-            pl = pl.max(self.l[i].abs());
-            pr = pr.max(self.r[i].abs());
+            pl = pl.max(magnitude(self.l[i]));
+            pr = pr.max(magnitude(self.r[i]));
         }
         (pl, pr)
     }
@@ -124,6 +140,21 @@ mod tests {
         assert_eq!(a.peak(64), (1.0, 1.0));
         a.clear(64);
         assert_eq!(a.peak(64), (0.0, 0.0));
+    }
+
+    /// Shaped against the unfixed `f32::max` fold, which read both of these
+    /// buses as `(0.0, 0.0)`.
+    #[test]
+    fn a_non_finite_sample_never_reads_as_silence() {
+        let mut bus = StereoBus::with_capacity(8);
+        bus.l[3] = f32::NAN;
+        bus.r[5] = f32::NEG_INFINITY;
+        assert_eq!(bus.peak(8), (f32::INFINITY, f32::INFINITY));
+        // And a NaN after a louder sample is not outranked by it.
+        let mut bus = StereoBus::with_capacity(4);
+        bus.l[0] = 0.5;
+        bus.l[1] = f32::NAN;
+        assert_eq!(bus.peak(4).0, f32::INFINITY);
     }
 
     #[test]

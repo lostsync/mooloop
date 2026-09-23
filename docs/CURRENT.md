@@ -510,7 +510,12 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   rather than the graph's 8192-frame maximum, where one automated parameter
   filled a device's event list and every later one on it was dropped from
   the export. Parameter events that still find no room are counted, and an
-  export that lost any logs how many.
+  export that lost any logs how many. The render passes through the same
+  output guard as playback, so a file never holds NaN or a sample over
+  0 dBFS; `RenderSummary` counts the mix's overs (which the safety limiter
+  held at the ceiling), the non-finite samples written as silence, and any
+  sample the 24-bit encoder still had to clamp, and a non-zero count is
+  logged. The dialog does not show them yet.
 - A shared widget library in `crates/mooloop-ui/ui`: knobs with value arcs and a
   bipolar mode (`controls.slint`), LED-segment metering with scales, latching
   clip indicators, gain-reduction and correlation meters (`meters.slint`), and a
@@ -634,8 +639,20 @@ selected source (sampler / drum synth / DS-01 / v1 mono / ML-M1 / ML-P8 / poly /
                                             master effect chain -> gain/pan
                                                            |
                                                            v
+                               output guard: NaN/Inf -> silence, 0 dBFS limiter
+                                                           |
+                                                           v
                                   driver output (JACK ports or a Core Audio device)
 ```
+
+**The output guard** (MOO-93, `docs/GAIN_STRUCTURE.md`) is the last thing
+every block passes through, live or exported. A NaN or infinite sample from a
+device that blew up leaves as silence and is counted as a latched fault
+instead of reaching the speakers, and a zero-latency safety limiter holds the
+output at 0 dBFS. It is bit-transparent to a mix that stays under 0 dBFS.
+The master's meter reads the mix *before* the guard, so a mix that is over
+still lights the clip latch, and a non-finite sample reads as an infinite
+peak rather than as silence.
 
 The engine preallocates channel strips, pattern storage, event lists, and audio
 buses. A driver-independent render state owns transport, scheduling,

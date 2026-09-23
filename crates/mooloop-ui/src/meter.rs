@@ -1,7 +1,7 @@
 /// Bottom of every meter's scale. Shared so the mixer's strips start at the
 /// same floor the master meter uses.
 pub(crate) use mooloop_core::gain::MIN_DB;
-use mooloop_core::gain::linear_to_db;
+use mooloop_core::gain::{linear_to_db, MAX_DB};
 /// IEC 60268-18 digital peak fall rate: 20 dB in 1.7 s. Attack is
 /// instantaneous and the peak hold is 1 s; those were already standard.
 const DECAY_DB_PER_SECOND: f32 = 20.0 / 1.7;
@@ -72,7 +72,15 @@ impl MeterBallistics {
         decay_db_per_second: f32,
     ) -> MeterReading {
         let elapsed = elapsed_seconds.max(0.0);
-        let incoming_db = linear_to_db(linear_peak);
+        // A non-finite peak is a device that blew up -- the engine reads a NaN
+        // sample as an infinite one (`StereoBus::peak`). `linear_to_db` puts
+        // both at the floor, which is silence: the one reading such a bus
+        // must not get. It reads as the top of the scale instead (MOO-93).
+        let incoming_db = if linear_peak.is_finite() {
+            linear_to_db(linear_peak)
+        } else {
+            MAX_DB
+        };
         let decay = decay_db_per_second.max(0.0);
 
         self.level_db = if incoming_db >= self.level_db {
@@ -92,7 +100,7 @@ impl MeterBallistics {
             self.held_db = (self.held_db - decay * release_elapsed).max(self.level_db);
         }
 
-        self.clipped |= linear_peak >= 1.0;
+        self.clipped |= linear_peak >= 1.0 || linear_peak.is_nan();
 
         MeterReading {
             level_db: self.level_db,
@@ -215,6 +223,19 @@ mod tests {
         // Out-of-range indices come from a hand-edited settings file.
         assert_eq!(falloff_db_per_second(-3), FALLOFF_DB_PER_SECOND[0]);
         assert_eq!(falloff_db_per_second(99), FALLOFF_DB_PER_SECOND[3]);
+    }
+
+    /// Shaped against the unfixed meter, which read an infinite peak as
+    /// `MIN_DB` -- silence -- and did not latch a NaN at all, because
+    /// `NaN >= 1.0` is false.
+    #[test]
+    fn a_non_finite_peak_reads_full_scale_and_latches_the_clip() {
+        for peak in [f32::INFINITY, f32::NAN] {
+            let mut meter = MeterBallistics::default();
+            let reading = meter.update(peak, 0.01, DECAY_DB_PER_SECOND);
+            assert_eq!(reading.level_db, MAX_DB, "{peak} metered as {}", reading.level_db);
+            assert!(reading.clipping, "{peak} did not light the clip latch");
+        }
     }
 
     #[test]

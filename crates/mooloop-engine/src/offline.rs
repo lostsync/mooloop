@@ -67,6 +67,19 @@ pub struct RenderSummary {
     /// (`RenderState::refused_events`). Non-zero means the file is not
     /// quite what the project says, so it is also logged.
     pub refused_events: u64,
+    /// Samples (left and right counted separately) that reached the master's
+    /// output guard above 0 dBFS. The safety limiter brought each one down
+    /// to the ceiling -- the file holds none -- but a non-zero count means
+    /// the mix was over and what was written is limited, so it is logged.
+    pub overs: u64,
+    /// Samples the 24-bit encoder had to clamp to full scale. The limiter
+    /// runs first, so this is zero unless the limiter stopped holding its
+    /// ceiling; it is counted rather than assumed, because the clamp is
+    /// silent and a file damaged by one says nothing on its own.
+    pub clipped_samples: u64,
+    /// Samples the output guard found NaN or infinite and wrote as silence:
+    /// a device blew up during the render. Logged when non-zero.
+    pub non_finite_samples: u64,
 }
 
 #[derive(Debug)]
@@ -150,32 +163,75 @@ impl OfflineRenderer {
             tail_frames,
             total_frames: base_frames.saturating_add(tail_frames),
             refused_events: 0,
+            overs: 0,
+            clipped_samples: 0,
+            non_finite_samples: 0,
         };
 
         let temporary = temporary_path(&spec.path);
         let result = match spec.format {
             ExportFormat::Wav(encoding) => render_wav(&temporary, &mut state, summary, encoding),
-            ExportFormat::Mp3(bitrate) => render_mp3(&temporary, &mut state, summary, bitrate),
+            ExportFormat::Mp3(bitrate) => {
+                render_mp3(&temporary, &mut state, summary, bitrate).map(|()| 0)
+            }
         };
-        if let Err(error) = result {
-            let _ = fs::remove_file(&temporary);
-            return Err(error);
+        match result {
+            Ok(clipped) => summary.clipped_samples = clipped,
+            Err(error) => {
+                let _ = fs::remove_file(&temporary);
+                return Err(error);
+            }
         }
         summary.refused_events = state.refused_events();
-        if summary.refused_events > 0 {
-            mooloop_core::log_warn!(
-                "export",
-                "{} parameter events had no room in their device's event list; \
-                 {} is missing some automation or modulation",
-                summary.refused_events,
-                spec.path.display()
-            );
-        }
+        summary.overs = state.output_overs();
+        summary.non_finite_samples = state.output_non_finite();
+        report(&summary, &spec.path);
         if spec.path.exists() {
             fs::remove_file(&spec.path)?;
         }
         fs::rename(temporary, &spec.path)?;
         Ok(summary)
+    }
+}
+
+/// Log whatever the render found that makes the file not quite the project:
+/// the export itself succeeded, so these are warnings, and each one names
+/// the file it is about.
+fn report(summary: &RenderSummary, path: &Path) {
+    if summary.refused_events > 0 {
+        mooloop_core::log_warn!(
+            "export",
+            "{} parameter events had no room in their device's event list; \
+             {} is missing some automation or modulation",
+            summary.refused_events,
+            path.display()
+        );
+    }
+    if summary.non_finite_samples > 0 {
+        mooloop_core::log_warn!(
+            "export",
+            "{} samples were NaN or infinite and were written as silence; \
+             a device in the project blew up during the render of {}",
+            summary.non_finite_samples,
+            path.display()
+        );
+    }
+    if summary.overs > 0 {
+        mooloop_core::log_warn!(
+            "export",
+            "{} samples of the mix were over 0 dBFS; the master's safety \
+             limiter held {} at the ceiling",
+            summary.overs,
+            path.display()
+        );
+    }
+    if summary.clipped_samples > 0 {
+        mooloop_core::log_warn!(
+            "export",
+            "{} samples were clipped to full scale by the 24-bit encoder in {}",
+            summary.clipped_samples,
+            path.display()
+        );
     }
 }
 
@@ -227,12 +283,13 @@ fn render_blocks(
     Ok(())
 }
 
+/// Returns how many samples the 24-bit encoder had to clamp.
 fn render_wav(
     path: &Path,
     state: &mut RenderState,
     summary: RenderSummary,
     encoding: WavEncoding,
-) -> Result<(), ExportError> {
+) -> Result<u64, ExportError> {
     let spec = match encoding {
         WavEncoding::Pcm24 => hound::WavSpec {
             channels: 2,
@@ -248,10 +305,12 @@ fn render_wav(
         },
     };
     let mut writer = hound::WavWriter::create(path, spec)?;
+    let mut clipped = 0u64;
     render_blocks(state, summary, |left, right| {
         for (&left, &right) in left.iter().zip(right) {
             match encoding {
                 WavEncoding::Pcm24 => {
+                    clipped += u64::from(left.abs() > 1.0) + u64::from(right.abs() > 1.0);
                     writer.write_sample(pcm24(left))?;
                     writer.write_sample(pcm24(right))?;
                 }
@@ -264,9 +323,11 @@ fn render_wav(
         Ok(())
     })?;
     writer.finalize()?;
-    Ok(())
+    Ok(clipped)
 }
 
+/// The 24-bit encoder: full scale is the most it can say, so anything past
+/// it is clamped -- and counted by the caller, since the clamp is silent.
 fn pcm24(sample: f32) -> i32 {
     (sample.clamp(-1.0, 1.0) * 8_388_607.0).round() as i32
 }
@@ -433,6 +494,116 @@ mod tests {
         )
         .unwrap();
         assert_eq!(summary.refused_events, 0);
+    }
+
+    /// A sampler at unity trim playing `sample`, its fader at `volume`.
+    fn sampler_project(volume: f32) -> Project {
+        let mut channel = ProjectChannel::sampler(0, 1);
+        channel.setup.channel.volume = volume;
+        channel.setup.sampler_state_mut().unwrap().params.output_gain = 1.0;
+        channel.notes[0].push(NoteEvent::new(1, 0, 96, 60, 127));
+        Project {
+            channels: vec![channel],
+            ..Project::default()
+        }
+    }
+
+    fn sample_of(value: impl Fn(usize) -> f32) -> Arc<SampleData> {
+        Arc::new(SampleData {
+            frames: (0..24_000)
+                .map(|index| {
+                    let v = value(index);
+                    [v, v]
+                })
+                .collect(),
+            sample_rate: 48_000,
+            root_note: 60,
+        })
+    }
+
+    fn full_scale(index: usize) -> f32 {
+        (index as f32 * std::f32::consts::TAU * 220.0 / 48_000.0).sin()
+    }
+
+    fn export(
+        project: &Project,
+        sample: Arc<SampleData>,
+        path: &Path,
+        format: ExportFormat,
+    ) -> RenderSummary {
+        OfflineRenderer::render(
+            project,
+            &[Some(sample)],
+            48_000,
+            &ExportSpec {
+                path: path.to_path_buf(),
+                scope: RenderScope::Pattern { index: 0 },
+                tail_seconds: 0.0,
+                format,
+            },
+        )
+        .unwrap()
+    }
+
+    /// **An over is reported, and none is written** (MOO-94).
+    ///
+    /// Shaped against the unfixed tree, where a float file held the mix at
+    /// about +9 dBFS as it stood, a 24-bit one clipped it without a word, and
+    /// `RenderSummary` had no field that could have said either.
+    #[test]
+    fn an_export_over_full_scale_reports_its_overs_and_writes_none() {
+        let temp = tempdir().unwrap();
+        let project = sampler_project(mooloop_core::MAX_LINEAR_GAIN);
+
+        let path = temp.path().join("hot.wav");
+        let summary = export(
+            &project,
+            sample_of(full_scale),
+            &path,
+            ExportFormat::Wav(WavEncoding::Float32),
+        );
+        assert!(summary.overs > 0, "an export of a +9 dBFS mix reported no overs");
+        assert_eq!(summary.non_finite_samples, 0);
+        let written: Vec<f32> = hound::WavReader::open(&path)
+            .unwrap()
+            .samples::<f32>()
+            .map(Result::unwrap)
+            .collect();
+        let peak = written.iter().fold(0.0f32, |peak, s| peak.max(s.abs()));
+        assert!(peak <= 1.0, "the float file holds {peak}");
+        assert!(peak > 0.99, "the limiter held the file at {peak}");
+
+        let path = temp.path().join("hot-24.wav");
+        let summary = export(
+            &project,
+            sample_of(full_scale),
+            &path,
+            ExportFormat::Wav(WavEncoding::Pcm24),
+        );
+        assert!(summary.overs > 0);
+        assert_eq!(
+            summary.clipped_samples, 0,
+            "the encoder clamped what the limiter should have held"
+        );
+    }
+
+    /// **A device that blows up leaves silence in the file, not NaN, and the
+    /// summary says so** (MOO-94).
+    #[test]
+    fn an_export_of_a_device_that_emits_nan_writes_none_and_counts_them() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("broken.wav");
+        let summary = export(
+            &sampler_project(1.0),
+            sample_of(|_| f32::NAN),
+            &path,
+            ExportFormat::Wav(WavEncoding::Float32),
+        );
+        assert!(summary.non_finite_samples > 0, "the render reported no fault");
+        let mut reader = hound::WavReader::open(&path).unwrap();
+        for (index, sample) in reader.samples::<f32>().map(Result::unwrap).enumerate() {
+            assert!(sample.is_finite(), "sample {index} of the file is {sample}");
+        }
     }
 
     #[test]

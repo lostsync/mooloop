@@ -174,6 +174,8 @@ mod gain_structure_tests;
 #[cfg(test)]
 mod idle_skip_tests;
 #[cfg(test)]
+mod output_guard_tests;
+#[cfg(test)]
 mod strip_tests;
 #[cfg(test)]
 mod take_tests;
@@ -1289,6 +1291,14 @@ impl EngineHandle {
     /// Read and clear the hardware input's held peak.
     pub fn take_input_peak(&self) -> (f32, f32) {
         self.shared.bus_meters.take_input()
+    }
+
+    /// How many samples the master's output guard has replaced with silence
+    /// because they were NaN or infinite, since the engine started. Not
+    /// cleared by reading: zero means no device has blown up, and any other
+    /// value is the latched fault (MOO-93).
+    pub fn output_faults(&self) -> u64 {
+        self.shared.bus_meters.output_faults()
     }
 
     /// Read and clear how much gain reduction a track's channel strip took,

@@ -15,6 +15,8 @@
 //!   (see `docs/archive/EFFECTS_PLAN.md` and `docs/MODULATION.md`).
 //! - [`align`]: the dry-path latency delay the engine's effect container
 //!   blends against.
+//! - [`output_guard`]: the master's last stage -- the non-finite scrub and
+//!   the 0 dBFS safety limiter every block passes through on its way out.
 //! - [`env`], [`osc`], [`lfo`], [`filter`], [`biquad`], [`scale`],
 //!   [`shaper`], [`smooth`]: building blocks shared by the synths and
 //!   effects.
@@ -48,6 +50,7 @@ pub mod mlp8;
 pub mod monosynth;
 pub mod node;
 pub mod osc;
+pub mod output_guard;
 pub mod polysynth;
 pub mod preamp;
 pub mod sample_analysis;
@@ -72,6 +75,7 @@ pub use buffer_device::{
     buffer_allocation_key, BufferDevice, BufferDisplay, TimedBufferEvent, WAVEFORM_BINS,
 };
 pub use modulator::{ModulatorRack, NoteGateEvents, CONTROL_RATE_FRAMES};
+pub use output_guard::{GuardReport, OutputGuard, OUTPUT_CEILING};
 pub use bus::{balance_gains, pan_gains, StereoBus, MAX_BLOCK_SIZE};
 pub use delayline::{DelayLine, ReadHead};
 pub use drumsynth::DrumSynth;

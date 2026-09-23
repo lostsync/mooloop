@@ -61,8 +61,10 @@ was added for that.
 and nothing auto-attenuates as sources are added. N equal sources are up to
 20·log10(N) dB louder than one, and should be: channels sum into a bus at
 unity (`MixerBus::new`), buses sum into the master at unity. With the
-operating level, eight identical channels peak near +6 dBFS — inside the
-+12 dB clamp, audible, and the user's problem, not the engine's.
+operating level, eight identical channels peak near +6 dBFS at the master
+bus — inside the +12 dB clamp, audible on its meter, and the user's problem,
+not the engine's. (What leaves the master is held at 0 dBFS by the output
+guard below.)
 
 **No fader touches another track.** The whole summing path is linear: a
 channel's gain and pan, `StereoBus::add_from`, and the bus walk in
@@ -100,12 +102,6 @@ it in, and both are the point of the control rather than a side effect of it.
 The strip's EQ and compressor are level-dependent but bound nothing: a biquad
 and a gain are multiplies.
 
-The single place a sample is clipped anywhere else in the codebase is
-`pcm24`, in `mooloop-engine/src/offline.rs`: that is the 24-bit WAV encoder,
-so exports hard-clip at full scale and live playback does not. Sums above
-0 dBFS reach the output device intact, and pulling them down is the user's
-business.
-
 **The exception, and it is deliberate.** A strip switched to console summing
 (`mooloop_dsp::console`) leaves through `sin` and is decoded at its
 destination through `asin`, so **every summing point a console strip reaches
@@ -142,6 +138,54 @@ on a design decision about oscillators the user is not using. Enabling a
 second oscillator never changes the first one's level. The oscillator mix
 is followed by compensated saturation (`apply_drive`), anchored at the
 operating level, so raising drive changes character, not level.
+
+All of that is about the mix, and it still holds at every bus including the
+master. What changed on 2026-09-22 (MOO-93) is what happens *after* the
+master: **the output guard**, below, stands between the master bus and the
+driver, and it does bound a sample -- at 0 dBFS, and nowhere else. A mix under
+0 dBFS passes it bit for bit, so everything this section says is still what
+reaches the ports. Until then, sums above 0 dBFS reached the output device
+intact and a 24-bit export hard-clipped them without a word.
+
+## The output guard
+
+`mooloop_dsp::output_guard`, run by `RenderState::process_block_inner` on the
+master after everything else in the block -- the bus walk *and* the browser
+preview -- so live playback and export both pass through it. Two jobs:
+
+- **Non-finite samples become silence, and are counted.** A NaN or an
+  infinity is replaced by zero before it reaches a port or a file. The count
+  is a latched fault (`BusMeters::output_faults`, never cleared by a read) the
+  interface reads, and an export reports it
+  (`RenderSummary::non_finite_samples`). The master is scrubbed once more
+  before the takes run, so a resample of the master never records one.
+- **A safety limiter at 0 dBFS** (`OUTPUT_CEILING`). Engineering, not a
+  musical device -- the master bus compressor is a separate item (MOO-13).
+  Zero latency: instant attack, a 20 ms hold, a 150 ms release, both sides
+  linked, and a final clamp at the ceiling. **Transparent below 0 dBFS**: its
+  gain is held as a reduction from unity that is exactly zero at rest, and a
+  frame is only multiplied while it is not, so a mix that never goes over
+  leaves bit for bit (`a_signal_under_the_ceiling_passes_bit_identical`).
+  After an over it releases back to exactly unity, and is bit-transparent
+  again. No lookahead, because lookahead delays everything on the master --
+  monitoring latency and every recording's alignment -- for a stage that
+  should normally be doing nothing; the cost is that an over's first frame is
+  shaped rather than ducked ahead of time.
+
+**The master's meter reads the mix, before the guard.** A mix over 0 dBFS
+still lights the master's clip latch while nothing over 0 dBFS leaves, which
+is how a user learns the limiter is working rather than the limiter hiding it
+(`the_master_meter_reads_the_mix_and_the_ports_read_the_ceiling`). A
+non-finite sample reads as an infinite peak (`StereoBus::peak`), never as
+silence, so a broken device lights the latch too and is not put to sleep by
+the effect host's idle check.
+
+An export reports what the guard did (`RenderSummary::overs`,
+`non_finite_samples`) and logs it when either is non-zero. `pcm24`, the
+24-bit WAV encoder in `mooloop-engine/src/offline.rs`, still clamps at full
+scale, but the limiter has already held the signal there, so its own count
+(`RenderSummary::clipped_samples`) is zero unless the limiter stopped doing
+its job.
 
 ## Fader taper
 
@@ -305,3 +349,5 @@ existed.
 | Rust/Slint taper agreement | `mooloop-ui/tests/gain_slint_agreement.rs` |
 | Measured level pinning | `mooloop-engine/src/gain_structure_tests.rs` |
 | Meter ballistics | `mooloop-ui/src/meter.rs` |
+| The output guard: non-finite scrub and 0 dBFS safety limiter | `mooloop-dsp/src/output_guard.rs` |
+| The guard end to end: ports, fault count, master meter | `mooloop-engine/src/output_guard_tests.rs` |

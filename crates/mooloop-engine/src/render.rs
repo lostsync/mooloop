@@ -28,7 +28,7 @@ use mooloop_dsp::{
     balance_gains, buffer_allocation_key, build_effect_at_tempo, pan_gains, AudioNode, Ds01,
     Discontinuity, DrumSynth,
     AudioTaps, AuxIn, IntegerDelay, Event, EventList, ModulatorRack, MonoSynth, MlM1, MlP8,
-    NoteGateEvents, PolySynth,
+    NoteGateEvents, OutputGuard, PolySynth,
     ChannelAudioSnapshot,
     ProcessContext, SampleData, Sampler, SourceNode, SpectrumAnalyzer, StereoBus, StretchPool,
     TimedEvent,
@@ -4185,6 +4185,16 @@ pub(crate) struct RenderState {
     /// honest: a mechanism whose whole claim is that it changes nothing has
     /// to be checkable against the thing it claims not to change.
     skip_idle: bool,
+    /// The master's last stage: the non-finite scrub and the 0 dBFS safety
+    /// limiter every block passes through on its way to the ports or a file
+    /// (MOO-93, `mooloop_dsp::output_guard`).
+    output_guard: OutputGuard,
+    /// Samples the guard found NaN or infinite and replaced with silence,
+    /// since this state was built. See [`Self::output_non_finite`].
+    output_non_finite: u64,
+    /// Samples that reached the guard above 0 dBFS and were limited, since
+    /// this state was built. See [`Self::output_overs`].
+    output_overs: u64,
 }
 
 /// How long a preview that is stopped or replaced takes to fade out. Long
@@ -4338,6 +4348,9 @@ impl RenderState {
             preview_fading: None,
             preview_retired: RetiredPreviews::new(),
             preview_gain: Arc::new(AtomicU32::new(mooloop_core::gain::db_to_linear(mooloop_core::gain::REFERENCE_PEAK_DBFS).to_bits())),
+            output_guard: OutputGuard::new(sample_rate),
+            output_non_finite: 0,
+            output_overs: 0,
         };
         // The sequencer starts with one channel, so the graph starts with
         // storage for one. `live_channels` tolerates the two disagreeing, but
@@ -4776,6 +4789,9 @@ impl RenderState {
         self.transport.adopt_running_state(outgoing.transport());
         self.held_keys = outgoing.held_keys;
         self.recording = outgoing.recording;
+        // The limiter's envelope, so an install in the middle of an over does
+        // not jump the output back to unity for the release it still owed.
+        self.output_guard.adopt(&outgoing.output_guard);
         // Carried, not re-sent -- the lesson `incremental-structure/` paid
         // for. The control thread has no way to know an install happened
         // between its send and the edge, so a pending command left behind
@@ -7936,8 +7952,37 @@ impl RenderState {
         // After every strip and track has rendered, so each source buffer
         // holds this block's audio; before the preview, so a resample of the
         // master never records a browser audition.
+        // A resample of the master must not record a NaN either, and the
+        // takes run before the limiter can -- they have to precede the
+        // preview, and the limiter has to follow it. So the scrub runs twice
+        // on the master: here, and inside the guard below, which is what
+        // catches a preview's. Only the master, and a pass of `is_finite`.
+        let scrubbed = {
+            let master = &mut self.buses[MASTER_BUS as usize].bus;
+            OutputGuard::scrub(&mut master.l[..frames], &mut master.r[..frames])
+        };
         self.advance_takes(&spans[..span_count], ticks_per_sample, &heard);
         self.render_preview(frames);
+        // **The output guard, last of all** (MOO-93). Everything that reaches
+        // the ports or an export has passed it: the walk, the preview, all
+        // of it. It is after the master's meter on purpose -- the meter reads
+        // the mix, so a mix over 0 dBFS still lights the clip latch and says
+        // that the limiter is working, rather than the limiter hiding it.
+        let mut guarded = {
+            let master = &mut self.buses[MASTER_BUS as usize].bus;
+            self.output_guard
+                .process(&mut master.l[..frames], &mut master.r[..frames])
+        };
+        guarded.non_finite = guarded.non_finite.saturating_add(scrubbed);
+        if guarded.non_finite > 0 {
+            self.output_non_finite += u64::from(guarded.non_finite);
+            // Published as a running count that only grows, so it *is* the
+            // latched fault: the interface compares it with what it last
+            // saw, and a NaN in one block between two of its reads is not
+            // lost the way a flag set and cleared inside a block would be.
+            self.meters.publish_output_faults(guarded.non_finite);
+        }
+        self.output_overs += u64::from(guarded.overs);
         let (peak_l, peak_r) = master_peak;
         RenderReport {
             position_tick: self.transport.position_ticks as u64,
@@ -8043,6 +8088,15 @@ impl RenderState {
         self.skip_idle = enabled;
     }
 
+    /// Take the output guard's limiter off, keeping its scrub, for a test
+    /// that measures the *mix* above 0 dBFS. Not a user setting and not
+    /// exposed as a command: `mooloop_dsp::OutputGuard::without_limit`
+    /// says why it exists.
+    #[cfg(test)]
+    pub fn unlimit_output(&mut self) {
+        self.output_guard = OutputGuard::without_limit(self.sample_rate);
+    }
+
     /// Channel-blocks skipped since this state was built. See the field.
     #[cfg(test)]
     pub fn slept_strip_blocks(&self) -> u64 {
@@ -8075,6 +8129,21 @@ impl RenderState {
             .map(|chain| chain.refused_events + chain.curve_refusals);
         let lists = self.events.iter().map(|list| list.refused());
         self.refused_events + self.source_curve_refusals + chains.sum::<u64>() + lists.sum::<u64>()
+    }
+
+    /// Samples the output guard found NaN or infinite, and sent as silence
+    /// instead, since this state was built. Non-zero means a device blew up;
+    /// an export reports it (`RenderSummary::non_finite_samples`).
+    pub fn output_non_finite(&self) -> u64 {
+        self.output_non_finite
+    }
+
+    /// Samples that reached the output guard above 0 dBFS, since this state
+    /// was built. The limiter brought each of them down to the ceiling, so
+    /// what left is not quite what was mixed; an export reports it
+    /// (`RenderSummary::overs`).
+    pub fn output_overs(&self) -> u64 {
+        self.output_overs
     }
 
     pub fn play(&mut self) {

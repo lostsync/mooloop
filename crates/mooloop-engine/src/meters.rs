@@ -12,7 +12,7 @@
 //! frames is still seen, rather than being missed because the block that
 //! contained it was already overwritten.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use mooloop_core::MAX_BUSES;
@@ -43,6 +43,14 @@ pub struct BusMeters {
     /// Here rather than in a struct of its own because it is read at the same
     /// cadence as the bus peaks, by the same pump, with the same ballistics.
     input: [AtomicU32; 2],
+    /// Samples the master's output guard found NaN or infinite and sent as
+    /// silence instead, since the engine started (MOO-93).
+    ///
+    /// A running count rather than a flag, and never cleared by a read: a
+    /// count that only grows *is* the latch, and the reader tells a new
+    /// fault from an old one by comparing with what it saw last. Beside the
+    /// master's peak because it is the master's, read by the same pump.
+    output_faults: AtomicU64,
 }
 
 /// Held input/output peaks for every visible device, plus the held detector
@@ -568,7 +576,21 @@ impl BusMeters {
             cells: (0..MAX_BUSES * 2).map(|_| AtomicU32::new(0)).collect(),
             reduction: (0..MAX_BUSES).map(|_| AtomicU32::new(0)).collect(),
             input: [AtomicU32::new(0), AtomicU32::new(0)],
+            output_faults: AtomicU64::new(0),
         })
+    }
+
+    /// Count samples the output guard had to silence. Audio thread, and only
+    /// on a block that had any.
+    pub fn publish_output_faults(&self, samples: u32) {
+        self.output_faults
+            .fetch_add(u64::from(samples), Ordering::Relaxed);
+    }
+
+    /// How many samples the output guard has silenced since the engine
+    /// started. Zero until something blows up, and then never zero again.
+    pub fn output_faults(&self) -> u64 {
+        self.output_faults.load(Ordering::Relaxed)
     }
 
     /// Raise `bus`'s held peak. Called on the audio thread, once per block.

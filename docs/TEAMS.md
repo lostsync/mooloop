@@ -155,9 +155,10 @@ Files marked *shared* are split in the table above.
 
 - `core/src/`: `mixer.rs`, `gain.rs`, `strip.rs`, `outlet.rs`
 - `dsp/src/`: `strip.rs`, `console.rs`, `preamp.rs` (the strip's input stage;
-  the Preamp insert is Effects')
+  the Preamp insert is Effects'), `output_guard.rs` (the master's non-finite
+  scrub and safety limiter)
 - `engine/src/`: `meters.rs`, and the tests `console_tests.rs`,
-  `strip_tests.rs`, `gain_structure_tests.rs`
+  `strip_tests.rs`, `gain_structure_tests.rs`, `output_guard_tests.rs`
 - `session/src/mixer.rs`
 - `ui/src/meter.rs`; `ui/ui/`: `mixer.slint`, `strip.slint`, `meters.slint`,
   `bus-device.slint`, `gain.slint`
