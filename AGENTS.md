@@ -386,6 +386,17 @@ behaviour above looks like from the outside. At `HEAD` those eleven are
 clean. A version that could not see them would print a zero that meant
 nothing.
 
+**It then read zero for a day while seven kinds of edit were outside undo**
+(MOO-101, 2026-09-22). It started from `MainWindow` callbacks, and the pump
+is not a callback. The pump applies MIDI-recorded notes, controller moves,
+learned bindings, sample loads, and generator, channel-preset and kit loads.
+The check now starts from both ends: every place in the pump's closure that
+dirties the song is held against the unit of work around it (the drain loop,
+the match arm, or the pump statement). Validated at `128760d`, where it
+reports the four sites that carried those seven kinds. It is the macro
+lesson again from another side: a check's list of places to look is a claim
+about where edits come from, and this program has two front doors.
+
 There is a third limit, and it is the one to keep in mind when a check comes
 back clean. **`repeated-line` matches bytes, so a rename hides a copy from it
 completely.** On 2026-09-12 it reported the effect event-splitting loop in ten

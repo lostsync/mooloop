@@ -813,6 +813,13 @@ def unrecorded_edit():
         "queue_project_edit",
         "queue_structural_edit",
         "queue_history_target",
+        # The pump's `ProjectEdit` arm records the entry a callback queued,
+        # by hand rather than through a helper.
+        "history.record(",
+        # A stream of pump-side edits -- a controller sweep, a take of notes
+        # -- is one entry opened here and recorded when it closes (MOO-96,
+        # MOO-97).
+        "open_edit_stream",
     )
 
     # Handlers that reach the document and are right not to record.
@@ -981,7 +988,192 @@ def unrecorded_edit():
                     f"records nothing, so the next undo destroys it",
                 )
             )
+    hits += _pump_unrecorded(sources, helpers, owned, survey, free, ours)
     return hits
+
+
+def _pump_unrecorded(sources, helpers, owned, survey, free, ours):
+    """The pump's half of `unrecorded-edit`: edits no callback made.
+
+    **The callback half read zero while seven kinds of edit were outside
+    undo** (MOO-101). MIDI-recorded notes, controller moves, learned
+    bindings, sample loads, and generator, channel-preset and kit loads are
+    all applied by the 8 ms pump rather than by a `MainWindow` callback, so a
+    check that starts from callbacks never reads them. Its zero meant only
+    that the callbacks were clean.
+
+    So this starts from the other end: every place in the pump's closure
+    that dirties the song -- a `mark_dirty()`, a `dirty = true`, or a call
+    that reaches one of those three calls deep without recording, which is
+    how `apply_loaded_sample` does it -- and asks whether the *unit of work*
+    around it records. A unit is the innermost drain loop body, match arm
+    or closure the site sits in, or failing those the pump statement it
+    belongs to. Not the whole pump: the pump records in several places, and
+    a check that asked whether the pump records anywhere would have read
+    zero on the day it was written.
+
+    Comments and string literals are blanked before anything is matched. A
+    comment in the pump that *mentions* `record_project_history` is not a
+    recording, and the unit here is big enough to hold one.
+
+    Validated at `128760d`, the commit MOO-101 was filed against, where it
+    reports the four sites that carry those seven kinds: the document-load
+    arm (generator, channel-preset and kit loads), the control drain (notes,
+    controller moves and learned bindings), and the two sample loads -- onto
+    a channel, and into a new one.
+    """
+    hits = []
+    for path, text in sources.items():
+        at = text.find("pump.start(")
+        if at < 0:
+            continue
+        opening = text.find("{", text.find("||", at))
+        body = _brace_body(text, opening - 1)
+        if body is None:
+            continue
+        code = _code_only(body)
+        blocks = _blocks(code)
+        sites = []
+        for match in re.finditer(r"mark_dirty\(|\.dirty\s*=\s*true", code):
+            sites.append((match.start(), None))
+        calls = [(m, helpers) for m in free.finditer(code)]
+        calls += [(m, owned) for m in ours.finditer(code)]
+        for match, index in calls:
+            name = match.group(1)
+            callee = index.get(name)
+            # `mark_dirty()` itself is a direct site, matched above.
+            if callee is None or name == "mark_dirty":
+                continue
+            records, edits = survey(callee, 2, frozenset({name}))
+            if "mark_dirty" in edits and not records:
+                sites.append((match.start(), name))
+        reported = set()
+        for offset, via in sorted(sites):
+            line = text.count("\n", 0, opening + offset) + 1
+            # `state.session.mark_dirty()` is both a direct site and a call
+            # to a method that dirties; one line is one lead.
+            if line in reported:
+                continue
+            reported.add(line)
+            start, end = _unit(blocks, offset, len(code))
+            if start == end:
+                start = code.rfind("\n", 0, offset) + 1
+                end = code.find("\n", offset)
+            if survey(code[start:end], 3, frozenset())[0]:
+                continue
+            how = f"calls `{via}`, which dirties the song" if via else "dirties the song"
+            hits.append(
+                (
+                    f"{rel(path)}:{line}",
+                    f"the pump {how} and nothing around it records, so the next "
+                    f"undo destroys it",
+                )
+            )
+    return hits
+
+
+def _code_only(text: str) -> str:
+    """`text` with comments and string and char literals blanked.
+
+    Offsets are kept -- every blanked character becomes a space and every
+    newline stays -- so a position in the result is a position in `text`.
+    """
+    out = list(text)
+    index, size = 0, len(text)
+
+    def blank(start, stop):
+        for at in range(start, stop):
+            if out[at] != "\n":
+                out[at] = " "
+
+    while index < size:
+        if text.startswith("//", index):
+            stop = text.find("\n", index)
+            stop = size if stop < 0 else stop
+        elif text.startswith("/*", index):
+            stop = text.find("*/", index + 2)
+            stop = size if stop < 0 else stop + 2
+        elif text[index] == '"' or (
+            text[index] == "r"
+            and re.match(r'r#*"', text[index : index + 8])
+            and not (index and (text[index - 1].isalnum() or text[index - 1] == "_"))
+        ):
+            raw = re.match(r'r(#*)"', text[index : index + 8])
+            if raw:
+                close = '"' + raw.group(1)
+                stop = text.find(close, index + len(raw.group(0)))
+                stop = size if stop < 0 else stop + len(close)
+            else:
+                stop = index + 1
+                while stop < size and text[stop] != '"':
+                    stop += 2 if text[stop] == "\\" else 1
+                stop = min(stop + 1, size)
+        elif text[index] == "'":
+            char = re.match(r"'(?:\\.[^']*|[^\\'\n])'", text[index : index + 12])
+            if not char:
+                index += 1
+                continue
+            stop = index + len(char.group(0))
+        else:
+            index += 1
+            continue
+        blank(index, stop)
+        index = stop
+    return "".join(out)
+
+
+def _blocks(code: str) -> list[tuple[int, int, str, int]]:
+    """Every `{ ... }` in `code`: (open, close, header, parent index).
+
+    The header is the code between the previous `;`, `{` or `}` and the
+    brace, which is enough to tell a loop body (`while let ... =`), a match
+    arm (`... =>`) and a closure (`move |x|`) from a plain block.
+    """
+    blocks: list[tuple[int, int, str, int]] = []
+    stack: list[tuple[int, str, int]] = []
+    boundary = 0
+    for at, char in enumerate(code):
+        if char == "{":
+            parent = stack[-1][2] if stack else -1
+            stack.append((at, code[boundary:at].strip(), len(blocks)))
+            blocks.append((at, -1, code[boundary:at].strip(), parent))
+            boundary = at + 1
+        elif char == "}":
+            if stack:
+                start, header, slot = stack.pop()
+                blocks[slot] = (start, at, header, blocks[slot][3])
+            boundary = at + 1
+        elif char == ";":
+            boundary = at + 1
+    return blocks
+
+
+def _unit(blocks, offset: int, size: int) -> tuple[int, int]:
+    """The span of the unit of work that `offset` belongs to.
+
+    The innermost loop body, match arm or closure that holds it; failing
+    those, the block that is a direct child of the pump's own body, which is
+    one pump statement. A site directly in the body has no block, and is
+    answered with an empty span for the caller to read as its own line.
+    """
+    holding = [
+        slot
+        for slot, (start, stop, _, _) in enumerate(blocks)
+        if start < offset and (stop < 0 or offset < stop)
+    ]
+    holding.sort(key=lambda slot: blocks[slot][0], reverse=True)
+    for slot in holding:
+        start, stop, header, parent = blocks[slot]
+        if parent < 0:
+            break
+        unit = (
+            re.match(r"(?:'\w+:\s*)?(?:while|for|loop)\b", header)
+            or header.endswith("=>")
+            or re.search(r"\|[^|]*\|$", header)
+        )
+        if unit or blocks[parent][3] < 0:
+            return start, (stop if stop >= 0 else size)
+    return offset, offset
 
 
 def _parens(text: str, start: int) -> str:
