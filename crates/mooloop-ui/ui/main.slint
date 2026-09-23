@@ -886,6 +886,8 @@ export component MainWindow inherits Window {
     in-out property <int> preferences-appearance-font-weight: 400;
     in-out property <float> preferences-appearance-hairline: 1.0;
     in-out property <float> preferences-appearance-stroke-emphasis: 2.0;
+    in-out property <int> preferences-appearance-relief;
+    in-out property <float> preferences-appearance-relief-depth: 1.0;
     in-out property <string> preferences-appearance-theme-name;
     in-out property <bool> preferences-developer-mode;
     // False unless the build carries the `mockup` Cargo feature, in which
@@ -7540,6 +7542,8 @@ export component MainWindow inherits Window {
         appearance-font-weight <=> root.preferences-appearance-font-weight;
         appearance-hairline <=> root.preferences-appearance-hairline;
         appearance-stroke-emphasis <=> root.preferences-appearance-stroke-emphasis;
+        appearance-relief <=> root.preferences-appearance-relief;
+        appearance-relief-depth <=> root.preferences-appearance-relief-depth;
         appearance-theme-name <=> root.preferences-appearance-theme-name;
         developer-mode <=> root.preferences-developer-mode;
         mockup-tool-available: root.preferences-mockup-tool-available;

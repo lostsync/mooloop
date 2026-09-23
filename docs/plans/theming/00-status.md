@@ -161,9 +161,55 @@ shaped for.
   produced an unreadable interface and the page would show it to them without
   comment. The arithmetic had been sitting in `relative_luminance` since the
   palette was first derived and nothing ever called it.
-- **Not done:** reduced motion is still not *labelled* as an accessibility
-  setting, and screen-reader coverage is untouched. The plan already says the
+- **Reduced motion is labelled** (MOO-154): the Motion speed row says
+  "Instant is reduced motion: nothing animates". Instant is already the
+  default, so a first run animates nothing and there is no platform setting
+  to follow.
+- **Not done:** screen-reader coverage is untouched. The plan already says the
   second is its own work and no amount of theming touches it.
+
+### 02 — relief — **the drawing landed; the look waits on Adam** (MOO-153)
+
+`Theme.relief` (0 flat, 1 bevel, 2 inset) and `Theme.relief-depth`, a
+`Bevel` component in `controls.slint`, and `ToolButton` as the first adopter,
+which brings `ToggleButton`, `SegmentedControl`, the pane tabs and the mute
+buttons with it. A theme file's `[shape]` takes `relief` and `relief-depth`;
+the Appearance page has a Relief selector and a Depth fader, and says when a
+bevel is sitting on rounded corners rather than refusing it.
+
+Three things the doing decided:
+
+- **The edges are mixed toward white and black, not `brighter()`/`darker()`.**
+  Those scale lightness, so on mooloop's near-black surfaces they gave edges
+  within a few levels of the fill: a bevel that vanished on every dark theme
+  shipped. Measured on the sketch before choosing: top edge 106 on a fill of
+  42, bottom 21.
+- **Relief belongs to the theme.** Every other shape scalar is left alone by a
+  theme that doesn't state it, which keeps a type scale somebody set for their
+  eyes. A bevel is the look, not the reader's, so a theme that states no
+  relief goes back to flat. Without that, Nord drew Platinum's slabs.
+- **A latched button reads as pushed in**, the way a Platinum toggle stays
+  down, so `active` inverts the bevel as a press does.
+
+**Stopped here on purpose, per the step's own order:** "Do `ToolButton` alone,
+sketch it, and look at it before touching the other 27." The step's risk is
+whether a derived 1px bevel looks right at mooloop's sizes, and that is Adam's
+eye, not a pass. MOO-153 carries the question. The remaining adopters are the
+knobs' caps, the device header, the rack row, the panel and pane edges and
+the dock.
+
+### 05 — the homages — **landed as built-ins** (MOO-155)
+
+Platinum and Impulse are built-in themes now, not only worked examples. Both
+are authored ramps rather than the step's seeds-plus-contrast: the step's
+Impulse asked for a contrast of 2.2 to push grey boxes off a black field, and
+the page stops at 1.4, where a ramp just states the boxes. Both set
+`roundness = 0` and a bevel (Impulse deeper, at 1.4). Impulse names only a
+monospaced *readout* face: a monospaced face over every label is a layout
+change nobody has checked at every width. Neither can set motion, which a
+theme doesn't carry. `the_homages_are_square_and_bevelled_and_nothing_else_is`
+holds both, and every existing contrast test covers them and their derived
+variants.
 
 ### What the build found that the reasoning did not
 
@@ -196,13 +242,9 @@ one step out**:
 
 ## What is still ahead
 
-- **`02-relief.md` is unchanged and is still the only design problem here.**
-  A Slint `Rectangle` has one border colour, so a bevel needs a shared
-  `Surface` component rather than a token. Nothing landed here forecloses it:
-  a theme file can carry a `relief` field that nothing reads yet, and adding
-  the reader later is a no-op.
-- **`05-authoring-a-theme.md`'s guide landed as `docs/THEMES.md`**; its two
-  worked homages did not, because both of them are step 02.
+- **Relief's remaining adopters**, after Adam has looked at the bevel (MOO-153).
+- **`05-authoring-a-theme.md`'s guide landed as `docs/THEMES.md`**, and its two
+  homages as built-ins.
 - **The desktop is asked, not watched.** `system.rs` probes at startup and
   whenever Preferences opens. Following a desktop that changes its mind while
   mooloop is running means subscribing to the portal's `SettingChanged`

@@ -72,6 +72,16 @@ export global Theme {
     in-out property <length> hairline: 1px;
     in-out property <length> stroke-emphasis: 2px;
 
+    // Relief: a token that names a *drawing* rather than a value
+    // (`docs/plans/theming/02-relief.md`). A `Rectangle` has one border
+    // colour, so a lit block -- two light edges and two dark ones, swapped
+    // when it is pressed -- is more elements, which `Bevel` in
+    // `controls.slint` draws. 0 flat (a fill and a uniform hairline, as
+    // mooloop has always been), 1 bevel (raised), 2 inset (sunk).
+    in-out property <int> relief: 0;
+    // How far the bevel's edges depart from the fill they are derived from.
+    in-out property <float> relief-depth: 1.0;
+
     // Metrics. One `density` scalar over the control heights and the padding
     // ramp, which is what lets a theme open the interface up -- or a touch
     // display grow the hit targets -- without a per-face edit.

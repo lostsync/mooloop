@@ -32,6 +32,8 @@
 //! roundness = 1.0
 //! hairline = 1
 //! stroke-emphasis = 2
+//! relief = "flat"      # or "bevel" (lit blocks) or "inset"; see 02-relief.md
+//! relief-depth = 1.0
 //!
 //! [type]
 //! family = "Inter"
@@ -57,7 +59,7 @@
 
 use super::color::Rgb;
 use super::ramp::Ramp;
-use super::{ThemeColors, ThemeDefinition, ThemeStyle};
+use super::{Relief, ThemeColors, ThemeDefinition, ThemeStyle};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -220,6 +222,11 @@ struct ShapeSection {
     hairline: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stroke_emphasis: Option<f32>,
+    /// `flat`, `bevel` or `inset`; see [`Relief`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    relief: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    relief_depth: Option<f32>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
@@ -294,6 +301,8 @@ impl ThemeFile {
             roundness: self.shape.roundness,
             hairline: self.shape.hairline,
             stroke_emphasis: self.shape.stroke_emphasis,
+            relief: self.shape.relief.as_deref().and_then(Relief::parse),
+            relief_depth: self.shape.relief_depth,
             font_family: self.typography.family.clone(),
             font_family_mono: self.typography.family_mono.clone(),
             type_scale: self.typography.scale,
@@ -330,6 +339,8 @@ impl ThemeFile {
                 roundness: theme.style.roundness,
                 hairline: theme.style.hairline,
                 stroke_emphasis: theme.style.stroke_emphasis,
+                relief: theme.style.relief.map(|relief| relief.name().to_owned()),
+                relief_depth: theme.style.relief_depth,
             },
             typography: TypeSection {
                 family: theme.style.font_family.clone(),

@@ -576,6 +576,8 @@ fn apply_appearance(window: &MainWindow, appearance: &AppearanceSettings) {
     theme.set_font_weight(appearance.font_weight);
     theme.set_hairline(appearance.hairline);
     theme.set_stroke_emphasis(appearance.stroke_emphasis);
+    theme.set_relief(appearance.relief().token());
+    theme.set_relief_depth(appearance.relief_depth);
     // The swatch palette follows the colourscheme, so it is pushed from the
     // same funnel the palette is: selecting Nord has to change the channel
     // pickers in the same frame it changes everything else, and a live preview
@@ -615,6 +617,10 @@ fn window_appearance(window: &MainWindow, stored: &AppearanceSettings) -> Appear
         font_weight: window.get_preferences_appearance_font_weight(),
         hairline: window.get_preferences_appearance_hairline(),
         stroke_emphasis: window.get_preferences_appearance_stroke_emphasis(),
+        relief: crate::theme::Relief::from_token(window.get_preferences_appearance_relief())
+            .name()
+            .to_owned(),
+        relief_depth: window.get_preferences_appearance_relief_depth(),
         smooth_curves: window.get_preferences_smooth_curves(),
         motion_speed: settings::motion_speed_name(motion.get_speed()).to_owned(),
         motion_easing: settings::motion_easing_name(motion.get_easing()).to_owned(),
@@ -757,6 +763,8 @@ fn push_appearance_scalars(window: &MainWindow, appearance: &AppearanceSettings)
     window.set_preferences_appearance_font_weight(appearance.font_weight);
     window.set_preferences_appearance_hairline(appearance.hairline);
     window.set_preferences_appearance_stroke_emphasis(appearance.stroke_emphasis);
+    window.set_preferences_appearance_relief(appearance.relief().token());
+    window.set_preferences_appearance_relief_depth(appearance.relief_depth);
 }
 
 fn sync_preferences_properties(window: &MainWindow, settings: &UiSettings) {
@@ -779,6 +787,8 @@ fn sync_preferences_properties(window: &MainWindow, settings: &UiSettings) {
     window.set_preferences_appearance_font_weight(appearance.font_weight);
     window.set_preferences_appearance_hairline(appearance.hairline);
     window.set_preferences_appearance_stroke_emphasis(appearance.stroke_emphasis);
+    window.set_preferences_appearance_relief(appearance.relief().token());
+    window.set_preferences_appearance_relief_depth(appearance.relief_depth);
     window.set_preferences_appearance_variant_derived(variant_is_derived(appearance));
     push_appearance_contrast(window, appearance);
     push_appearance_swatches(window, appearance);

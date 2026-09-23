@@ -3,7 +3,7 @@ pub(crate) use crate::theme::ramp::ThemePalette;
 use crate::actions::SuperKeyMode;
 use crate::theme::ramp::Ramp;
 use crate::theme::{
-    builtins, catalog, file, wal, Mode, ThemeColors, ThemeDefinition, ThemeStyle,
+    builtins, catalog, file, wal, Mode, Relief, ThemeColors, ThemeDefinition, ThemeStyle,
     MIN_ACCENT_CONTRAST, MODES,
 };
 use mooloop_core::{DeviceKind, EffectKind};
@@ -42,6 +42,11 @@ pub(crate) const MIN_HAIRLINE: f32 = 0.0;
 pub(crate) const MAX_HAIRLINE: f32 = 3.0;
 pub(crate) const MIN_STROKE_EMPHASIS: f32 = 0.0;
 pub(crate) const MAX_STROKE_EMPHASIS: f32 = 5.0;
+
+/// A bevel's depth. Past 2 the light edge is white and the dark one black on
+/// every fill, so more says nothing.
+pub(crate) const MIN_RELIEF_DEPTH: f32 = 0.0;
+pub(crate) const MAX_RELIEF_DEPTH: f32 = 2.0;
 
 /// CSS weights, and the two that matter are 400 and 500 -- anything heavier at
 /// 9px is a smudge. The range is the full one because a bitmap face compiled
@@ -157,6 +162,13 @@ pub(crate) struct AppearanceSettings {
     pub hairline: f32,
     #[serde(default = "default_stroke_emphasis")]
     pub stroke_emphasis: f32,
+    /// `flat`, `bevel` or `inset` (`Relief`), and the bevel's depth. From
+    /// the theme, always: see `Relief` for why selecting a theme that says
+    /// nothing goes back to flat.
+    #[serde(default = "default_relief")]
+    pub relief: String,
+    #[serde(default = "default_unit")]
+    pub relief_depth: f32,
     #[serde(default = "default_true")]
     pub smooth_curves: bool,
     /// UI-motion speed and easing, by option name as shown on the
@@ -299,6 +311,10 @@ fn default_hairline() -> f32 {
 
 fn default_stroke_emphasis() -> f32 {
     2.0
+}
+
+fn default_relief() -> String {
+    Relief::Flat.name().to_owned()
 }
 
 fn default_base() -> String {
@@ -468,6 +484,8 @@ impl Default for AppearanceSettings {
             font_weight: default_font_weight(),
             hairline: default_hairline(),
             stroke_emphasis: default_stroke_emphasis(),
+            relief: default_relief(),
+            relief_depth: 1.0,
             smooth_curves: true,
             motion_speed: default_motion_speed(),
             motion_easing: default_motion_easing(),
@@ -541,6 +559,8 @@ impl AppearanceSettings {
             stroke_emphasis: self
                 .stroke_emphasis
                 .clamp(MIN_STROKE_EMPHASIS, MAX_STROKE_EMPHASIS),
+            relief: Relief::parse(&self.relief).unwrap_or_default().name().to_owned(),
+            relief_depth: self.relief_depth.clamp(MIN_RELIEF_DEPTH, MAX_RELIEF_DEPTH),
             smooth_curves: self.smooth_curves,
             motion_speed: if MOTION_SPEEDS.contains(&self.motion_speed.as_str()) {
                 self.motion_speed.clone()
@@ -626,6 +646,11 @@ impl AppearanceSettings {
         self.ramp().swatches()
     }
 
+    /// The relief in force, read from its spelling.
+    pub(crate) fn relief(&self) -> Relief {
+        Relief::parse(&self.relief).unwrap_or_default()
+    }
+
     /// Every theme, built-in and user, in list order.
     pub(crate) fn themes(&self) -> Vec<ThemeDefinition> {
         catalog::all()
@@ -660,6 +685,12 @@ impl AppearanceSettings {
         if let Some(value) = style.stroke_emphasis {
             self.stroke_emphasis = value.clamp(MIN_STROKE_EMPHASIS, MAX_STROKE_EMPHASIS);
         }
+        // Not left alone when the theme is silent, unlike the scalars above.
+        self.relief = style.relief.unwrap_or_default().name().to_owned();
+        self.relief_depth = style
+            .relief_depth
+            .unwrap_or(1.0)
+            .clamp(MIN_RELIEF_DEPTH, MAX_RELIEF_DEPTH);
         if let Some(value) = &style.font_family {
             self.font_family = value.trim().to_owned();
         }
@@ -737,6 +768,8 @@ impl AppearanceSettings {
                 roundness: Some(self.roundness),
                 hairline: Some(self.hairline),
                 stroke_emphasis: Some(self.stroke_emphasis),
+                relief: Some(self.relief()),
+                relief_depth: Some(self.relief_depth),
                 font_family: Some(self.font_family.clone()),
                 font_family_mono: Some(self.font_family_mono.clone()),
                 type_scale: Some(self.type_scale),
@@ -1754,6 +1787,30 @@ mod tests {
         assert_eq!(settings.theme, "Gruvbox");
         assert_eq!(settings.accent, "#83A598");
         assert!(settings.seeds_match_theme());
+    }
+
+    /// A relief is the theme's, where a roundness is left to the reader: a
+    /// homage brings its bevel and its square corners, and the next theme,
+    /// saying nothing about either, takes the bevel away and leaves the
+    /// corners (`Relief`, MOO-153).
+    #[test]
+    fn a_relief_goes_with_the_theme_that_brought_it() {
+        let mut settings = AppearanceSettings::default();
+        settings.apply_theme(&builtins::find("Impulse").unwrap());
+        assert_eq!(settings.relief(), Relief::Bevel);
+        assert_eq!(settings.relief_depth, 1.4);
+        assert_eq!(settings.roundness, 0.0);
+
+        settings.apply_theme(&builtins::find("Nord").unwrap());
+        assert_eq!(settings.relief(), Relief::Flat);
+        assert_eq!(settings.relief_depth, 1.0);
+        assert_eq!(settings.roundness, 0.0, "roundness is the reader's, and stays");
+
+        // And a bevel survives the trip through `settings.toml`.
+        settings.apply_theme(&builtins::find("Platinum").unwrap());
+        let text = toml::to_string(&settings).unwrap();
+        let back: AppearanceSettings = toml::from_str(&text).unwrap();
+        assert_eq!(back.validated().unwrap().relief(), Relief::Bevel);
     }
 
     /// An older config's `user-schemes` array becomes theme files once, and

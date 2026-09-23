@@ -200,6 +200,49 @@ export global NoteFormat {
     }
 }
 
+// A lit block's edges, drawn over a surface when `Theme.relief` asks for
+// one (`docs/plans/theming/02-relief.md`). Light from the top-left: the top
+// and left edges are the fill lightened, the bottom and right darkened, and
+// `inset` swaps them -- which is all "pressed" means on a bevelled surface.
+//
+// **Derived from the fill, not authored.** A theme names a relief and a
+// depth and never a bevel colour, so it works on any palette, a light one
+// included, and no theme can get four more colours wrong.
+//
+// Square by construction: a rounded bevel is a mitre problem, and the two
+// interfaces this exists for are square. A theme that sets a relief sets
+// `roundness = 0`; the surface under the edges stays whatever it was.
+export component Bevel inherits Rectangle {
+    in property <color> base;
+    in property <bool> inset;
+    in property <float> depth: Theme.relief-depth;
+    private property <length> edge: max(1px, Theme.hairline);
+    // Mixed toward white and black rather than `brighter()`/`darker()`,
+    // which scale lightness and so leave a near-black surface's edges
+    // near-black: invisible on exactly the dark themes mooloop ships.
+    private property <color> light: root.base.mix(#ffffff, 1 - 0.3 * root.depth);
+    private property <color> dark: root.base.mix(#000000, 1 - 0.5 * root.depth);
+    private property <color> lit: root.inset ? root.dark : root.light;
+    private property <color> shade: root.inset ? root.light : root.dark;
+
+    Rectangle { x: 0; y: 0; width: parent.width; height: root.edge; background: root.lit; }
+    Rectangle { x: 0; y: 0; width: root.edge; height: parent.height; background: root.lit; }
+    Rectangle {
+        x: 0;
+        y: parent.height - root.edge;
+        width: parent.width;
+        height: root.edge;
+        background: root.shade;
+    }
+    Rectangle {
+        x: parent.width - root.edge;
+        y: 0;
+        width: root.edge;
+        height: parent.height;
+        background: root.shade;
+    }
+}
+
 export component ToolButton inherits Rectangle {
     in property <string> text;
     // Line-art icon on a 16x16 grid, drawn instead of a glyph when set (see
@@ -234,7 +277,11 @@ export component ToolButton inherits Rectangle {
     preferred-width: 44px;
     preferred-height: 24px;
     border-radius: Theme.radius-md;
-    border-width: (tap.has-hover || button-keyboard.has-focus) && root.enabled ? Theme.hairline : 0px;
+    // Flat, a hover or focus draws the hairline. Bevelled, the edges are the
+    // outline and only focus draws over them: a hover ring on a lit block
+    // reads as a second, flat button laid on top of it.
+    border-width: root.enabled && (button-keyboard.has-focus
+        || (Theme.relief == 0 && tap.has-hover)) ? Theme.hairline : 0px;
     border-color: button-keyboard.has-focus ? Theme.focus : Theme.border;
     background: !root.enabled
         ? Theme.surface
@@ -242,6 +289,15 @@ export component ToolButton inherits Rectangle {
             ? Theme.surface-active
             : root.active ? root.active-color : Theme.surface-raised;
     accessible-role: button;
+
+    // The step's first adopter and its template (`02-relief.md`, "Order").
+    // Latched means pushed in, the way a Platinum toggle stays down.
+    if Theme.relief != 0 : Bevel {
+        width: 100%;
+        height: 100%;
+        base: root.background;
+        inset: (Theme.relief == 2) != (tap.pressed || root.active);
+    }
     accessible-label: root.hint == "" ? root.tooltip : root.hint + ": " + root.tooltip;
     forward-focus: button-keyboard;
 

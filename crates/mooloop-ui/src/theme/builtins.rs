@@ -6,6 +6,9 @@
 //! here too rather than being derived. A derived light Nord is a guess at
 //! Snow Storm; the real Snow Storm is four hex strings.
 //!
+//! Two are homages, Platinum and Impulse, which carry a shape as well as a
+//! palette (`docs/plans/theming/05-authoring-a-theme.md`).
+//!
 //! Four are the seed schemes Appearance shipped before a theme could be a
 //! ramp, kept byte-identical so that nobody's stored choice moved.
 //! `Daylight` is the exception and is not in the list: it *was* light-mode
@@ -19,7 +22,7 @@
 
 use super::color::Rgb;
 use super::ramp::Ramp;
-use super::{ThemeColors, ThemeDefinition};
+use super::{Relief, ThemeColors, ThemeDefinition, ThemeStyle};
 
 /// One authored variant: sixteen slots and, optionally, the colour the scheme
 /// is *known by*, which is rarely slot 0D. Nord is its frost cyan, Dracula is
@@ -78,6 +81,13 @@ fn seed_theme(
         light: light.map(seeds),
         ..ThemeDefinition::empty(name)
     }
+}
+
+/// A theme that is a look as well as a palette: the homages of
+/// `docs/plans/theming/05-authoring-a-theme.md`, which cannot look like
+/// themselves without square corners and a bevel.
+fn with_style(theme: ThemeDefinition, style: ThemeStyle) -> ThemeDefinition {
+    ThemeDefinition { style, ..theme }
 }
 
 /// The name of the theme a fresh configuration starts on.
@@ -281,6 +291,70 @@ pub(crate) fn all() -> Vec<ThemeDefinition> {
             },
             None,
         ),
+        // The two homages (step 05). Authored ramps rather than the plan's
+        // seeds-plus-contrast, which predates the ramp: the plan's Impulse
+        // asked for a contrast of 2.2 to push grey boxes off a black field,
+        // and the page stops at 1.4. A ramp states the boxes outright.
+        // Platinum is a light interface, so it authors the light side and
+        // lets the dark one be derived -- the other way round from every
+        // other ramp here.
+        with_style(
+            ThemeDefinition {
+                name: "Platinum".to_owned(),
+                description: "Grey slabs, square corners, light from the top-left. After Mac OS 8."
+                    .to_owned(),
+                light: Some(
+                    Authored {
+                        slots: [
+                            "#DDDDDD", "#D2D2D2", "#C4C4C4", "#8A8A8A", "#444444", "#111111",
+                            "#080808", "#000000", "#C02020", "#C07000", "#A86800", "#2A7A2A",
+                            "#1F7F8F", "#4A6FA5", "#8A3F9F", "#7A5230",
+                        ],
+                        // The selection blue, not the logo.
+                        accent: Some("#4A6FA5"),
+                    }
+                    .colors(),
+                ),
+                ..ThemeDefinition::empty("Platinum")
+            },
+            ThemeStyle {
+                roundness: Some(0.0),
+                relief: Some(Relief::Bevel),
+                relief_depth: Some(1.0),
+                hairline: Some(1.0),
+                font_family: Some("Charcoal, Geneva, Helvetica, sans-serif".to_owned()),
+                font_family_mono: Some("Monaco, monospace".to_owned()),
+                ..ThemeStyle::default()
+            },
+        ),
+        with_style(
+            ramp_theme(
+                "Impulse",
+                "Black field, grey boxes, one bright green. After Impulse Tracker.",
+                Authored {
+                    slots: [
+                        "#000000", "#3C3C44", "#50505A", "#7A7A84", "#B0B0B8", "#E8E8E8",
+                        "#F4F4F4", "#FFFFFF", "#E03030", "#E08830", "#DDDD33", "#33DD33",
+                        "#33CCCC", "#3366DD", "#CC44CC", "#AA6633",
+                    ],
+                    // The volume column's green.
+                    accent: Some("#33DD33"),
+                },
+                None,
+            ),
+            ThemeStyle {
+                roundness: Some(0.0),
+                relief: Some(Relief::Bevel),
+                // A tracker's bevels are heavier than Platinum's.
+                relief_depth: Some(1.4),
+                hairline: Some(1.0),
+                // Only the readouts: a monospaced face over every label is a
+                // layout change nobody has checked at every width.
+                font_family_mono: Some("Terminus, monospace".to_owned()),
+                density: Some(0.9),
+                ..ThemeStyle::default()
+            },
+        ),
         seed_theme(
             "Graphite",
             "Neutral and cool, with an amber accent.",
@@ -418,6 +492,25 @@ mod tests {
                     );
                     assert_ne!(a.to_hex(), b.to_hex(), "{} {pair}", theme.name);
                 }
+            }
+        }
+    }
+
+    /// The homages are the step 05 acceptance test for step 02: each has to
+    /// reach its look from the token surface, which means a relief and
+    /// square corners, and a colour-only theme has to leave both at flat.
+    #[test]
+    fn the_homages_are_square_and_bevelled_and_nothing_else_is() {
+        for theme in all() {
+            let homage = theme.name == "Platinum" || theme.name == "Impulse";
+            assert_eq!(
+                theme.style.relief == Some(Relief::Bevel),
+                homage,
+                "{} relief",
+                theme.name
+            );
+            if homage {
+                assert_eq!(theme.style.roundness, Some(0.0), "{}", theme.name);
             }
         }
     }

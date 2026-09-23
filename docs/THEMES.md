@@ -41,6 +41,8 @@ alert = "#846E15"
 roundness = 0.0
 hairline = 1
 stroke-emphasis = 2
+relief = "bevel"
+relief-depth = 1.0
 
 [type]
 family = "Charcoal, Geneva, sans-serif"
@@ -132,6 +134,21 @@ throughout. `hairline` and `stroke-emphasis` are the two stroke widths in
 pixels, and `hairline = 0` gives a borderless interface without any face
 knowing that is what it asked for.
 
+`relief` is how a surface is drawn: `flat` (a fill and a hairline, mooloop's
+own look), `bevel` (a lit block: light top and left edges, dark bottom and
+right, swapped while pressed or latched) or `inset` (the same block sunk).
+The edges are derived from the surface's own fill, so a theme names a relief
+and a `relief-depth` (0 to 2, default 1) and never a bevel colour. A bevel is
+square, so a theme with one sets `roundness = 0`; the Appearance page warns
+rather than refuses when the two disagree.
+
+**Relief belongs to the theme; the other shape values do not.** Selecting a
+theme that states no `relief` goes back to flat, where a theme that states no
+`roundness` leaves the reader's roundness alone. The built-in homages,
+Platinum and Impulse, carry one. So far `ToolButton`, and everything built on
+it, draws the bevel; the rest of the controls are still flat
+(`docs/plans/theming/00-status.md`).
+
 `density` multiplies control heights and the padding-and-spacing ramp. It is
 the control to reach for if the interface is too tight to hit rather than too
 small to read; `scale` is the other one.
@@ -179,9 +196,8 @@ surprising.
 
 - **Ship a font.** See above.
 - **Redraw a control.** Slint has no cascade: you change what a component
-  reads, and `Theme` is what it reads. A bevelled, Impulse-Tracker-shaped
-  interface needs a relief primitive that does not exist yet
-  (`docs/plans/theming/02-relief.md`).
+  reads, and `Theme` is what it reads. `relief` is the one drawing a theme
+  can choose, and only the controls that have adopted `Bevel` draw it.
 - **Decorate the window.** Slint does not draw the title bar and neither does
   this.
 - **Reskin a device.** The DS-01 and the EQ draw their own instrument

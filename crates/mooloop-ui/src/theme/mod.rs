@@ -199,6 +199,68 @@ pub(crate) struct ThemeStyle {
     pub font_weight: Option<i32>,
     pub density: Option<f32>,
     pub contrast: Option<f32>,
+    /// A drawing rather than a value (`docs/plans/theming/02-relief.md`):
+    /// whether surfaces are flat, lit blocks, or sunk ones.
+    pub relief: Option<Relief>,
+    /// How far a bevel's edges depart from the fill they are derived from.
+    pub relief_depth: Option<f32>,
+}
+
+/// How a surface is drawn: `Theme.relief` in `theme.slint`, by number.
+///
+/// **Belongs to the theme, unlike the other shape scalars.** Selecting a
+/// theme that does not state one goes back to flat
+/// ([`AppearanceSettings::apply_theme`](crate::settings::AppearanceSettings)),
+/// where a roundness or a type scale is left alone: a type scale is the
+/// reader's, a bevel is the look, and Nord drawn as Platinum's slabs is
+/// neither theme.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Relief {
+    #[default]
+    Flat,
+    Bevel,
+    Inset,
+}
+
+impl Relief {
+    /// The spelling a theme file and `settings.toml` use.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Flat => "flat",
+            Self::Bevel => "bevel",
+            Self::Inset => "inset",
+        }
+    }
+
+    /// A spelling read back, or `None` for one this build does not know --
+    /// which a later schema may write, and which then reads as flat.
+    pub(crate) fn parse(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "flat" => Some(Self::Flat),
+            "bevel" | "raised" => Some(Self::Bevel),
+            "inset" | "sunken" => Some(Self::Inset),
+            _ => None,
+        }
+    }
+
+    /// `Theme.relief`'s number read back from the Appearance page; anything
+    /// out of range is flat.
+    pub(crate) fn from_token(token: i32) -> Self {
+        match token {
+            1 => Self::Bevel,
+            2 => Self::Inset,
+            _ => Self::Flat,
+        }
+    }
+
+    /// `Theme.relief`'s number.
+    pub(crate) fn token(self) -> i32 {
+        match self {
+            Self::Flat => 0,
+            Self::Bevel => 1,
+            Self::Inset => 2,
+        }
+    }
 }
 
 impl ThemeStyle {

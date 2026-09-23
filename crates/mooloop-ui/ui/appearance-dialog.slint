@@ -436,6 +436,9 @@ export component AppearancePage inherits VerticalLayout {
     in-out property <int> font-weight;
     in-out property <float> hairline;
     in-out property <float> stroke-emphasis;
+    // `Theme.relief`'s number and depth (0 flat, 1 bevel, 2 inset).
+    in-out property <int> relief;
+    in-out property <float> relief-depth: 1.0;
     in-out property <string> theme-name;
     in-out property <bool> smooth-curves;
     /// The meter falloff rows, passed straight down from the dialog. See the
@@ -717,6 +720,45 @@ export component AppearancePage inherits VerticalLayout {
         value-text: root.stroke-emphasis + " px";
         changed(v) => { root.preview-changed(); }
     }
+    // Relief: flat, lit blocks, or sunk ones (`02-relief.md`). A bevel is
+    // square, so it reads best with Roundness at 0 -- said here, not
+    // enforced, as the step asks until the drawing has been looked at.
+    HorizontalBox {
+        height: 36px;
+        padding: 0px;
+        spacing: 8px;
+        VerticalBox {
+            spacing: 0px;
+            padding: 0px;
+            Text { text: "Relief"; color: Theme.text; font-size: Theme.text-xl; }
+            Text {
+                text: root.relief != 0 && root.roundness > 0
+                    ? "Bevels are square: set Roundness to 0"
+                    : "Flat surfaces, or lit blocks";
+                color: root.relief != 0 && root.roundness > 0 ? Theme.warning : Theme.text-muted;
+                font-size: Theme.text-lg;
+            }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        SegmentedControl {
+            options: ["Flat", "Bevel", "Inset"];
+            max-width: 180px;
+            selected-index <=> root.relief;
+            selected(i) => { root.preview-changed(); }
+        }
+    }
+    ParameterFader {
+        label: "Depth";
+        tooltip: "How far a bevel's edges depart from the surface";
+        label-width: 54px;
+        enabled: root.relief != 0;
+        minimum: 0;
+        maximum: 2;
+        step: 0.1;
+        value <=> root.relief-depth;
+        value-text: round(root.relief-depth * 100) + "%";
+        changed(v) => { root.preview-changed(); }
+    }
 
     // A theme names a font; it cannot ship one. Slint 1.17.1 has no runtime
     // font registration, so a family is resolved from what is installed and a
@@ -810,7 +852,10 @@ export component AppearancePage inherits VerticalLayout {
             spacing: 0px;
             padding: 0px;
             Text { text: "Speed"; color: Theme.text; font-size: Theme.text-xl; }
-            Text { text: "How long panel hide/show moves take"; color: Theme.text-muted; font-size: Theme.text-lg; }
+            // "Reduce motion" is what somebody looking for this setting
+            // searches for, and it is not a word a speed picker uses
+            // (MOO-154). Instant is that setting, and the default.
+            Text { text: "Panel moves. Instant is reduced motion: nothing animates"; color: Theme.text-muted; font-size: Theme.text-lg; }
         }
         Rectangle { horizontal-stretch: 1; }
         SegmentedControl {
@@ -1180,6 +1225,8 @@ export component PreferencesDialog inherits Rectangle {
     in-out property <int> appearance-font-weight: 400;
     in-out property <float> appearance-hairline: 1.0;
     in-out property <float> appearance-stroke-emphasis: 2.0;
+    in-out property <int> appearance-relief;
+    in-out property <float> appearance-relief-depth: 1.0;
     in-out property <string> appearance-theme-name;
     in-out property <bool> developer-mode;
     in-out property <bool> smooth-curves;
@@ -1435,6 +1482,8 @@ export component PreferencesDialog inherits Rectangle {
                                 font-weight <=> root.appearance-font-weight;
                                 hairline <=> root.appearance-hairline;
                                 stroke-emphasis <=> root.appearance-stroke-emphasis;
+                                relief <=> root.appearance-relief;
+                                relief-depth <=> root.appearance-relief-depth;
                                 theme-name <=> root.appearance-theme-name;
                                 smooth-curves <=> root.smooth-curves;
                                 meter-falloff-options: root.meter-falloff-options;
