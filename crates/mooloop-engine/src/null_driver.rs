@@ -80,6 +80,9 @@ impl Drop for NullDriver {
 /// late -- the machine was asleep, the thread was not scheduled -- is not
 /// made up for with a burst: the clock restarts from now.
 fn run(mut executor: Executor, running: &AtomicBool) {
+    // Before the first block, so the executor's first-block warm-up finds
+    // this thread already warm (MOO-177).
+    crate::executor::prepare_audio_thread();
     let frames = NULL_BLOCK as usize;
     let (mut out_l, mut out_r) = (vec![0.0f32; frames], vec![0.0f32; frames]);
     let period =

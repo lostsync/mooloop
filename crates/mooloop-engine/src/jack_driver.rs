@@ -153,6 +153,13 @@ struct Notifications {
 }
 
 impl jack::NotificationHandler for Notifications {
+    // JACK calls this on the process thread before its first `process`
+    // (MOO-177): the one allocation a fresh audio thread owes arc-swap happens
+    // here, not in a block.
+    fn thread_init(&self, _: &Client) {
+        crate::executor::prepare_audio_thread();
+    }
+
     fn xrun(&mut self, _: &Client) -> Control {
         self.xrun_count.fetch_add(1, Ordering::Relaxed);
         Control::Continue
