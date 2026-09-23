@@ -16,6 +16,7 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
     in-out property <float> release;   // normalized 0..1 (5..2000 ms)
     in-out property <float> knee;      // normalized 0..1 (0..24 dB)
     in-out property <float> makeup;    // normalized 0..1 (0..24 dB)
+    in-out property <float> mix;       // normalized 0..1 (dry..compressed)
     in property <float> detector-db: GainMath.min-db;
     in property <float> gain-reduction-db: 0;
     callback threshold-changed(float);
@@ -24,6 +25,7 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
     callback release-changed(float);
     callback knee-changed(float);
     callback makeup-changed(float);
+    callback mix-changed(float);
 
     // Normalized -> natural, matching the descriptor tables in mooloop-core.
     private property <float> threshold-db: -60 + root.threshold * 60;
@@ -62,7 +64,7 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
         HorizontalLayout {
             spacing: 0px;
             ParameterKnob {
-                width: 71px;
+                width: 61px;
                 diameter: 38px;
                 label: "Thresh";
                 tooltip: "Level compression starts at";
@@ -80,7 +82,7 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 modulation-edit-finished => { root.modulation-edit-finished(0); }
             }
             ParameterKnob {
-                width: 71px;
+                width: 61px;
                 diameter: 38px;
                 label: "Ratio";
                 tooltip: "How hard the signal is held above the threshold";
@@ -98,7 +100,7 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 modulation-edit-finished => { root.modulation-edit-finished(1); }
             }
             ParameterKnob {
-                width: 71px;
+                width: 61px;
                 diameter: 38px;
                 label: "Attack";
                 tooltip: "How fast the compressor responds";
@@ -116,7 +118,7 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 modulation-edit-finished => { root.modulation-edit-finished(2); }
             }
             ParameterKnob {
-                width: 71px;
+                width: 61px;
                 diameter: 38px;
                 label: "Release";
                 tooltip: "How fast it lets go";
@@ -134,7 +136,7 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 modulation-edit-finished => { root.modulation-edit-finished(3); }
             }
             ParameterKnob {
-                width: 71px;
+                width: 61px;
                 diameter: 38px;
                 label: "Knee";
                 tooltip: "Width of the soft transition at the threshold";
@@ -152,7 +154,7 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 modulation-edit-finished => { root.modulation-edit-finished(4); }
             }
             ParameterKnob {
-                width: 71px;
+                width: 61px;
                 diameter: 38px;
                 label: "Makeup";
                 tooltip: "Gain added after compression";
@@ -168,6 +170,27 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 modulation-depth-changed(v) => { root.modulation-depth-changed(5, v); }
                 modulation-edit-started => { root.modulation-edit-started(5); }
                 modulation-edit-finished => { root.modulation-edit-finished(5); }
+            }
+            // Its own parallel balance, linear like the channel strip's
+            // `w/d mix` (MOO-142): the header's Wet is an equal-power
+            // blend, which runs a compressor and its own input 3 dB hot.
+            ParameterKnob {
+                width: 61px;
+                diameter: 38px;
+                label: "Mix";
+                tooltip: round(root.mix * 100) + "%";
+                value <=> root.mix;
+                default-value: 1.0;
+                value-text: round(root.mix * 100) + "%";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[6];
+                modulation-depth: root.modulation-depths[6];
+                modulation-offset: root.modulation-offsets[6];
+                modulation-route-count: root.modulation-route-counts[6];
+                changed(v) => { root.mix-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(6, v); }
+                modulation-edit-started => { root.modulation-edit-started(6); }
+                modulation-edit-finished => { root.modulation-edit-finished(6); }
             }
         }
     }

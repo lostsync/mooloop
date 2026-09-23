@@ -1584,12 +1584,29 @@ land on its own when it starts to matter:
   strength tracks it. All three rest when nothing is coming in, so a gate shut
   on a silent channel does not sit lit up.
 - The dynamics effects detect on the louder of the two channels and apply one
-  gain to both, so compression cannot walk the stereo image around. The
-  limiter has no lookahead. The reason it was built that way -- the engine
-  had no delay compensation, so lookahead latency would have shifted a
-  channel against its neighbours -- expired on 2026-09-05 when the mixer
-  became latency compensated, and whether the limiter should now take
-  lookahead is an open decision rather than a settled no.
+  gain to both, so compression cannot walk the stereo image around.
+  **The limiter looks ahead and limits true peaks** (MOO-142, 2026-09-23).
+  It holds its audio back 96 frames (2 ms at 48 kHz) and declares that
+  latency, so the mixer compensates it like any other -- which means **every
+  existing Limiter now adds 96 frames of latency** to its channel, and every
+  other channel is delayed to meet it. Its gain computer
+  finds each frame's 4x-interpolated true peak, holds the deepest need across
+  the lookahead, and ramps into it so the gain has arrived when the peak comes
+  out. Nothing leaves above the ceiling, between samples included, without the
+  hard clamp that used to do the real work on every transient; the clamp is
+  now only a backstop. It sounds cleaner on transients: they come down
+  smoothly instead of being squared off, and there's no clipping distortion.
+  **The gate has two thresholds**: it opens at the knob and shuts only once
+  the level falls 6 dB under it (`GATE_HYSTERESIS_DB`), judged on a level
+  detector that holds across a waveform's troughs, so material sitting on
+  the threshold no longer flicks it open and shut. It sounds steadier on
+  sustained material near the line, and a sparse hit rings a few
+  milliseconds longer before the gate shuts. **The compressor has its own
+  Mix**, a linear parallel balance like the channel strip's `w/d mix` (0 is
+  the input exactly), where the header's equal-power Wet ran a compressor and
+  its own input 3 dB hot at 50%. Its gain computer was already the strip's
+  under the `Moo` voicing (the same detector and curve); the voicings'
+  programme dependence and ratio bend stay the strip's own.
 - Each kind publishes a static `ParamDescriptor` table
   (range, curve, unit, default) in `mooloop-core`, which is the single source
   of truth for normalization and clamping; `Event::ParamValue` carries natural

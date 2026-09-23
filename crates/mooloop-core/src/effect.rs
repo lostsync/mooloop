@@ -76,6 +76,17 @@ pub enum ContainerFlow {
 /// it from here, so there is one figure rather than two that must agree.
 pub const OVERSAMPLER_LATENCY_FRAMES: u32 = 15;
 
+/// Base-rate frames the Limiter holds its audio back by, so its gain
+/// computer sees every peak before it has to be let out (MOO-142).
+///
+/// An interface number for the same reason as
+/// [`OVERSAMPLER_LATENCY_FRAMES`]: the compensation plan is sized from it
+/// before any node exists. Frames rather than milliseconds, because a
+/// declared latency cannot depend on the rate: 2 ms at 48 kHz, 2.2 ms at
+/// 44.1 kHz, 1 ms at 96 kHz. The lookahead's length sets how fast the
+/// attack is, not whether the ceiling holds.
+pub const LIMITER_LATENCY_FRAMES: u32 = 96;
+
 impl EffectKind {
     /// Base-rate frames this kind adds to the signal passing through it.
     ///
@@ -93,6 +104,8 @@ impl EffectKind {
         match self {
             // The only device with an internal oversampled path today.
             Self::Drive => OVERSAMPLER_LATENCY_FRAMES,
+            // Lookahead (MOO-142).
+            Self::Limiter => LIMITER_LATENCY_FRAMES,
             Self::Eq
             | Self::Modulation
             | Self::Filter
@@ -105,7 +118,6 @@ impl EffectKind {
             | Self::Plate
             | Self::Gate
             | Self::Compressor
-            | Self::Limiter
             | Self::Buffer
             // A container declares nothing of its own. Its children are rows
             // of the same chain, so `chain_latency` already counts them; a
@@ -2335,8 +2347,13 @@ pub const COMP_PARAM_ATTACK_MS: u32 = 2;
 pub const COMP_PARAM_RELEASE_MS: u32 = 3;
 pub const COMP_PARAM_KNEE_DB: u32 = 4;
 pub const COMP_PARAM_MAKEUP_DB: u32 = 5;
+/// The compressor's own parallel balance (MOO-142): 0 is the input exactly,
+/// 1 the compressed signal alone, and in between a linear blend of the two,
+/// the way the channel strip's `w/d mix` is -- not the device host's
+/// equal-power Wet, which runs two correlated signals 3 dB hot at 50%.
+pub const COMP_PARAM_MIX: u32 = 6;
 
-static COMPRESSOR_DESCRIPTORS: [ParamDescriptor; 6] = [
+static COMPRESSOR_DESCRIPTORS: [ParamDescriptor; 7] = [
     ParamDescriptor {
         id: COMP_PARAM_THRESHOLD_DB,
         name: "Thresh",
@@ -2391,6 +2408,15 @@ static COMPRESSOR_DESCRIPTORS: [ParamDescriptor; 6] = [
         curve: ParamCurve::Linear,
         default: 0.0,
     },
+    ParamDescriptor {
+        id: COMP_PARAM_MIX,
+        name: "Mix",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 1.0,
+    },
 ];
 
 /// Parameters for the compressor effect (`CompressorEffect` in `mooloop-dsp`).
@@ -2403,6 +2429,14 @@ pub struct CompressorParams {
     /// Width of the soft knee around the threshold. 0 is a hard corner.
     pub knee_db: f32,
     pub makeup_db: f32,
+    /// Parallel balance; see [`COMP_PARAM_MIX`]. A song saved before it
+    /// existed loads fully compressed, which is what it always was.
+    #[serde(default = "default_compressor_mix")]
+    pub mix: f32,
+}
+
+fn default_compressor_mix() -> f32 {
+    1.0
 }
 
 impl Default for CompressorParams {
@@ -2414,6 +2448,7 @@ impl Default for CompressorParams {
             release_ms: 120.0,
             knee_db: 6.0,
             makeup_db: 0.0,
+            mix: default_compressor_mix(),
         }
     }
 }
@@ -3302,6 +3337,7 @@ impl EffectParams {
                 COMP_PARAM_RELEASE_MS => Some(p.release_ms),
                 COMP_PARAM_KNEE_DB => Some(p.knee_db),
                 COMP_PARAM_MAKEUP_DB => Some(p.makeup_db),
+                COMP_PARAM_MIX => Some(p.mix),
                 _ => None,
             },
             Self::Limiter(p) => match id {
@@ -3445,6 +3481,7 @@ impl EffectParams {
                 COMP_PARAM_RELEASE_MS => p.release_ms = value,
                 COMP_PARAM_KNEE_DB => p.knee_db = value,
                 COMP_PARAM_MAKEUP_DB => p.makeup_db = value,
+                COMP_PARAM_MIX => p.mix = value,
                 _ => return None,
             },
             Self::Limiter(p) => match id {

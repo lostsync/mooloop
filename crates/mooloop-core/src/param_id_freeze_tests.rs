@@ -195,6 +195,8 @@ const FROZEN: &[(Owner, &[(u32, &str)])] = &[
         (3, "Release"),
         (4, "Knee"),
         (5, "Makeup"),
+        // Appended by MOO-142, 2026-09-23.
+        (6, "Mix"),
     ]),
     (Effect(EffectKind::Limiter), &[
         (0, "Ceiling"),

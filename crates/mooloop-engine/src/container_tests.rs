@@ -738,3 +738,90 @@ fn a_containers_out_meter_reads_the_end_of_its_run() {
          made these equal: in {container_in:?}, out {container_out:?}"
     );
 }
+
+// --- The Limiter's lookahead is compensated (MOO-142) -----------------------
+
+/// **A Limiter channel lines up with a dry one at the master.** The Limiter
+/// holds its audio back `LIMITER_LATENCY_FRAMES` for its lookahead and says
+/// so, and the compensation plan delays every other channel to meet it. Two
+/// channels playing the same drum, one through a Limiter, must sum at the
+/// master exactly as the Limiter render plus the dry render moved late by the
+/// latency -- and measurably unlike the two summed where they lie, which is
+/// what an undeclared lookahead would comb into.
+#[test]
+fn a_limiter_channel_lines_up_with_a_dry_one_at_the_master() {
+    let latency = mooloop_core::effect::LIMITER_LATENCY_FRAMES as usize;
+    let quiet = |mut project: Project| {
+        for channel in &mut project.channels {
+            channel.setup.channel.volume = 0.25;
+        }
+        project
+    };
+    let limited = render_blocks(&quiet(drum_through(&[EffectKind::Limiter], &[])), 0.5, 128);
+    let dry = render_blocks(&quiet(drum_through(&[], &[])), 0.5, 128);
+    let late_dry: Vec<f32> = std::iter::repeat_n(0.0, latency)
+        .chain(dry.iter().copied())
+        .take(dry.len())
+        .collect();
+    let aligned = summed(&limited, &late_dry);
+    let combed = summed(&limited, &dry);
+
+    let mut both = quiet(drum_through(&[EffectKind::Limiter], &[]));
+    let mut plain = ProjectChannel::drum_synth(1, 1);
+    plain.notes[0].push(NoteEvent::new(1, 0, 96, 36, 127));
+    both.channels.push(plain);
+    let both = quiet(both);
+    assert_eq!(
+        mooloop_core::chain_latency(&both.channels[0].setup.effects),
+        mooloop_core::effect::LIMITER_LATENCY_FRAMES,
+        "the premise: the Limiter's channel declares the lookahead"
+    );
+    let rendered = render_blocks(&both, 0.5, 128);
+
+    let scale = peak_of(&aligned);
+    assert!(scale > 1.0e-3, "the reference render was silent, so this proves nothing");
+    assert!(
+        worst_difference(&aligned, &combed) > scale * 1.0e-2,
+        "aligned and combed are indistinguishable, so this proves nothing"
+    );
+    assert!(
+        worst_difference(&rendered, &aligned) <= scale * 1.0e-5,
+        "the dry channel is not delayed to meet the Limiter (worst {} against a peak of {scale})",
+        worst_difference(&rendered, &aligned)
+    );
+}
+
+/// **A Limiter in a layer's branch lines up with the branch beside it.** The
+/// layer delays its shorter branches to meet its longest, and a Limiter's
+/// lookahead is a branch's length like any other: the layer must be the
+/// Limiter branch plus the other branch moved late by the lookahead.
+#[test]
+fn a_limiter_in_a_layer_branch_lines_up_with_the_branch_beside_it() {
+    let mut layered = drum_through(&[EffectKind::Limiter, EffectKind::Filter], &[1]);
+    wrap_as(&mut layered, EffectKind::Layer, 0..2, 1.0);
+    assert_eq!(
+        mooloop_core::chain_latency(&layered.channels[0].setup.effects),
+        mooloop_core::effect::LIMITER_LATENCY_FRAMES,
+        "the layer declares its longest branch"
+    );
+
+    let limited = render_blocks(&drum_through(&[EffectKind::Limiter], &[]), 0.5, 128);
+    let mut late = drum_through(&[EffectKind::Limiter], &[]);
+    wrap(&mut late, 0..1, 1.0);
+    late.channels[0].setup.effects[0].bypassed = true;
+    let aligned = summed(&limited, &render_blocks(&late, 0.5, 128));
+    let combed = summed(&limited, &render_blocks(&drum_through(&[], &[]), 0.5, 128));
+
+    let rendered = render_blocks(&layered, 0.5, 128);
+    let scale = peak_of(&aligned);
+    assert!(scale > 1.0e-3, "the reference render was silent, so this proves nothing");
+    assert!(
+        worst_difference(&aligned, &combed) > scale * 1.0e-2,
+        "aligned and combed are indistinguishable, so this proves nothing"
+    );
+    assert!(
+        worst_difference(&rendered, &aligned) <= scale * 1.0e-6,
+        "the layer is not its branches aligned and summed (worst {} against a peak of {scale})",
+        worst_difference(&rendered, &aligned)
+    );
+}

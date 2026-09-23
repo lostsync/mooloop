@@ -5121,6 +5121,7 @@ export component MainWindow inherits Window {
                                                     release: slot.p3;
                                                     knee: slot.p4;
                                                     makeup: slot.p5;
+                                                    mix: slot.p6;
                                                     detector-db: slot.detector-db;
                                                     gain-reduction-db: slot.gain-reduction-db;
                                                     threshold-changed(v) => { root.effect-param-changed(index, 0, v); }
@@ -5129,6 +5130,7 @@ export component MainWindow inherits Window {
                                                     release-changed(v) => { root.effect-param-changed(index, 3, v); }
                                                     knee-changed(v) => { root.effect-param-changed(index, 4, v); }
                                                     makeup-changed(v) => { root.effect-param-changed(index, 5, v); }
+                                                    mix-changed(v) => { root.effect-param-changed(index, 6, v); }
                                                     reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     select-requested => { root.device-selected(index); }
                                                 }
