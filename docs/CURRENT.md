@@ -758,6 +758,13 @@ boundary.
   drive, Q, gain, frequency or smoothing target lands on the edge of its range
   rather than in a filter's or oscillator's state, where it would have made
   every later sample NaN.
+- The ML-M1's Ladder and Acid filters put their corner in the same place at
+  every sample rate: their stages are cornered by solving the stage's own
+  response rather than by the impulse-invariant pole, so one Cutoff is one
+  sound at 44.1, 48, 96 and 192 kHz (MOO-116). Below a few kHz at 48 kHz
+  nothing moves. `scale::cutoff_hz_from_normalized` is the one cutoff-knob
+  law: 20 Hz to 20 kHz whatever the rate, with the filter primitives' own
+  `0.45 x sample rate` clamp the only place the rate enters.
 - The v1 mono synth's LFO is one shape (sine, triangle, saw, square, or sample and
   hold) with a depth per destination: pitch, filter cutoff, pulse width, and
   tremolo. It free-runs across notes and silence unless set to retrigger.

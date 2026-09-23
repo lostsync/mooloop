@@ -386,6 +386,65 @@ const VOICE_CEILING_KNEE: f32 = 1.5;
 /// at full envelope and full velocity, still lands under full scale.
 const VOICE_CEILING: f32 = 2.5;
 
+/// A cascade of identical one-pole stages `y += g * (x - y)`: how many, and
+/// where its -3 dB point sits relative to one stage's.
+#[derive(Clone, Copy, Debug)]
+struct Cascade {
+    /// `sqrt(2^(1/n) - 1)`: an analog cascade of `n` one-poles at one corner
+    /// is -3 dB at this fraction of it.
+    spread: f32,
+    /// `r / (1 - r)` with `r = 2^(-1/n)`, the power each stage passes at the
+    /// cascade's -3 dB point.
+    share: f32,
+}
+
+const FOUR_POLES: Cascade = Cascade {
+    spread: 0.434_979_44,
+    share: 5.285_213_5,
+};
+
+const THREE_POLES: Cascade = Cascade {
+    spread: 0.509_824_5,
+    share: 3.847_322,
+};
+
+impl Cascade {
+    /// The per-stage coefficient that puts the whole cascade's -3 dB point
+    /// exactly on `corner_hz`, at any sample rate.
+    ///
+    /// The ladders used to take `g = 1 - exp(-2 pi fc / sr)`, the
+    /// impulse-invariant pole, which only approximates a one-pole's corner
+    /// and does so worse the larger `fc / sr` is -- so a Ladder or Acid patch
+    /// was a different sound at every rate (MOO-116). This solves the
+    /// stages' own magnitude response instead: each stage has
+    /// `|H(w)|^2 = g^2 / (1 - 2a cos w + a^2)` with `a = 1 - g`, and setting
+    /// that to `r = 2^(-1/n)` at the corner gives `a^2 - 2ab + 1 = 0` with
+    /// `b = 1 + e`, `e = r (1 - cos w) / (1 - r)`. The root inside the unit
+    /// circle is the pole, so `g = sqrt(e (2 + e)) - e`. `1 - cos w` is
+    /// computed as `2 sin^2(w / 2)`, so a 20 Hz corner at 192 kHz, where
+    /// `cos w` rounds to one in `f32`, is still exact.
+    ///
+    /// For small `w` this is `w - w^2 / 2 + ...`, the same as the old form to
+    /// second order, so below a few kHz at 48 kHz -- where both ladders are
+    /// voiced -- the sound is unchanged; the difference is at the top of the
+    /// knob and at the other rates. `g` stays below one for any corner below
+    /// Nyquist, so every stage is stable.
+    fn coeff(self, corner_hz: f32, sample_rate: f32) -> f32 {
+        let half = (core::f32::consts::PI * corner_hz / sample_rate).sin();
+        let e = self.share * 2.0 * half * half;
+        (e * (2.0 + e)).sqrt() - e
+    }
+
+    /// The coefficient for a cutoff knob in Hz and the model's stage
+    /// compensation: the stage corner `cutoff * compensation` is clamped to
+    /// the primitives' `0.45 * sr` exactly as it always was, and the cascade
+    /// is cornered at its [`Self::spread`] of that.
+    fn coeff_for(self, cutoff_hz: f32, compensation: f32, sample_rate: f32) -> f32 {
+        let stage = clamp_param(cutoff_hz * compensation, 20.0, sample_rate * 0.45);
+        self.coeff(stage * self.spread, sample_rate)
+    }
+}
+
 /// A nonlinear four-pole ladder low-pass: four cascaded one-pole stages with a
 /// resonance feedback path from the last stage back to the input, saturated
 /// inside the loop.
@@ -413,9 +472,17 @@ pub struct Ladder {
     feedback: f32,
 }
 
-/// Four cascaded one-poles reach -3 dB well below a single pole's corner --
-/// at `sqrt(sqrt(2) - 1)` of it -- so the per-stage corner is pushed up by the
-/// inverse to make the Cutoff knob mean the same frequency it does on `Svf`.
+/// Where each of the four stages is cornered, as a multiple of the cutoff.
+///
+/// Four one-poles at one corner are -3 dB at `sqrt(2^(1/4) - 1)`, 0.435, of it,
+/// so this puts the ladder's own -3 dB point at 0.676x the cutoff. That is
+/// deliberate company rather than an error: [`Svf`] at zero resonance (Q of a
+/// half) is -3 dB at 0.644x, so the two sit within a tenth of an octave and the
+/// Cutoff knob means much the same on either. (The constant is
+/// `1 / sqrt(sqrt(2) - 1)`, the two-pole figure; until 2026-09-23 this comment
+/// claimed it lined the ladder's corner up with the cutoff itself.) Since
+/// MOO-116 the cascade is cornered exactly (see `Cascade::coeff`), so the
+/// ratio holds at every sample rate.
 const LADDER_POLE_COMPENSATION: f32 = 1.5538;
 
 /// Feedback gain at full resonance, at a low corner frequency.
@@ -455,8 +522,7 @@ impl Ladder {
     /// re-derive it from [`LADDER_MAX_FEEDBACK`] and get it wrong later.
     pub fn feedback_at(cutoff_hz: f32, resonance: f32, sample_rate: u32) -> f32 {
         let sr = sample_rate as f32;
-        let cutoff = clamp_param(cutoff_hz * LADDER_POLE_COMPENSATION, 20.0, sr * 0.45);
-        let g = 1.0 - (-core::f32::consts::TAU * cutoff / sr).exp();
+        let g = FOUR_POLES.coeff_for(cutoff_hz, LADDER_POLE_COMPENSATION, sr);
         clamp_param(resonance, 0.0, 1.0) * LADDER_MAX_FEEDBACK * (1.0 + LADDER_FEEDBACK_TRACKING * g)
     }
 
@@ -470,8 +536,7 @@ impl Ladder {
         sample_rate: u32,
     ) -> f32 {
         let sr = sample_rate as f32;
-        let cutoff = clamp_param(cutoff_hz * LADDER_POLE_COMPENSATION, 20.0, sr * 0.45);
-        let g = 1.0 - (-core::f32::consts::TAU * cutoff / sr).exp();
+        let g = FOUR_POLES.coeff_for(cutoff_hz, LADDER_POLE_COMPENSATION, sr);
         let k = clamp_param(resonance, 0.0, 1.0)
             * LADDER_MAX_FEEDBACK
             * (1.0 + LADDER_FEEDBACK_TRACKING * g);
@@ -573,8 +638,7 @@ impl Acid {
     /// See [`Ladder::feedback_at`].
     pub fn feedback_at(cutoff_hz: f32, resonance: f32, sample_rate: u32) -> f32 {
         let sr = sample_rate as f32;
-        let cutoff = clamp_param(cutoff_hz * ACID_POLE_COMPENSATION, 20.0, sr * 0.45);
-        let g = 1.0 - (-core::f32::consts::TAU * cutoff / sr).exp();
+        let g = THREE_POLES.coeff_for(cutoff_hz, ACID_POLE_COMPENSATION, sr);
         clamp_param(resonance, 0.0, 1.0) * ACID_MAX_FEEDBACK * (1.0 + ACID_FEEDBACK_TRACKING * g)
     }
 
@@ -586,8 +650,7 @@ impl Acid {
         sample_rate: u32,
     ) -> f32 {
         let sr = sample_rate as f32;
-        let cutoff = clamp_param(cutoff_hz * ACID_POLE_COMPENSATION, 20.0, sr * 0.45);
-        let g = 1.0 - (-core::f32::consts::TAU * cutoff / sr).exp();
+        let g = THREE_POLES.coeff_for(cutoff_hz, ACID_POLE_COMPENSATION, sr);
         let k = clamp_param(resonance, 0.0, 1.0) * ACID_MAX_FEEDBACK * (1.0 + ACID_FEEDBACK_TRACKING * g);
 
         let driven = input * (1.0 + k * ACID_BASS_COMPENSATION) - k * self.feedback;
@@ -775,6 +838,109 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// **The corners hold still across sample rates (MOO-116).** One cutoff
+    /// in Hz puts the -3 dB point of `Svf`, `Ladder` and `Acid` in the same
+    /// place at 44.1, 48, 96 and 192 kHz, to within five cents of where it
+    /// sits at 48 kHz, and within ten of where it is stated to be. Until MOO-116 the ladders took their stage coefficient
+    /// from the impulse-invariant `1 - exp(-w)`, and a 5 kHz Ladder cornered
+    /// in a different place at every rate.
+    ///
+    /// Each filter's corner is also held to where it is stated to be. The
+    /// SVF's is the cutoff itself, where the bilinear prewarp puts its
+    /// prototype's corner and where at zero resonance (Q of a half) it is
+    /// -6.02 dB; its -3 dB point is *not* rate-independent near the top,
+    /// because the bilinear transform compresses everything but the prewarp
+    /// frequency. The ladders' corner is their -3 dB point, at 0.676x the
+    /// cutoff for the Ladder (`LADDER_POLE_COMPENSATION`) and 0.510x of 0.8x
+    /// for Acid (`ACID_POLE_COMPENSATION`, deliberately dark). Zero resonance,
+    /// small signal: a corner is a property of the linear filter.
+    #[test]
+    fn corners_are_one_frequency_at_every_rate() {
+        const TOLERANCE_CENTS: f32 = 5.0;
+        // Where each corner is stated to be, a little looser: Acid runs its
+        // input through the asymmetric Tape curve even at zero resonance, and
+        // its curvature at the probe level moves the measured corner by about
+        // six cents -- the same at every rate, which is the check that matters.
+        const STATED_TOLERANCE_CENTS: f32 = 10.0;
+        // (model, dB below the passband at the corner, corner over cutoff)
+        let models: [(&str, f32, f32); 3] = [
+            ("Svf", 6.0206, 1.0),
+            ("Ladder", 3.0103, LADDER_POLE_COMPENSATION * FOUR_POLES.spread),
+            ("Acid", 3.0103, ACID_POLE_COMPENSATION * THREE_POLES.spread),
+        ];
+        // A fresh filter for every measurement, so none hears the last one's
+        // state.
+        fn fresh(model: &str, cutoff: f32, sr: u32) -> Box<dyn FnMut(f32) -> f32> {
+            match model {
+                "Svf" => {
+                    let mut f = Svf::new();
+                    Box::new(move |x| f.next_sample(x, cutoff, 0.0, sr))
+                }
+                "Ladder" => {
+                    let mut f = Ladder::new();
+                    Box::new(move |x| f.next_sample(x, cutoff, 0.0, sr))
+                }
+                _ => {
+                    let mut f = Acid::new();
+                    Box::new(move |x| f.next_sample(x, cutoff, 0.0, sr))
+                }
+            }
+        }
+        let gain_db = |model: &str, cutoff: f32, sr: u32, freq: f32| -> f32 {
+            Probe::new(sr).gain_db(fresh(model, cutoff, sr), freq)
+        };
+        // The passband is the DC gain: a probe tone any distance below a
+        // low-pass corner is already a fraction of a dB down, which moves a
+        // crossing measured from it by tens of cents.
+        let dc_gain_db = |model: &str, cutoff: f32, sr: u32| -> f32 {
+            let mut filter = fresh(model, cutoff, sr);
+            let level = Probe::new(sr).amplitude;
+            let mut out = 0.0;
+            for _ in 0..sr {
+                out = filter(level);
+            }
+            crate::testkit::db(out / level)
+        };
+        for (model, depth, ratio) in models {
+            for cutoff in [200.0_f32, 1_000.0, 5_000.0] {
+                let low = cutoff * ratio / 8.0;
+                let mut at_48k = None;
+                for sr in [48_000].into_iter().chain(RATES.into_iter().filter(|&r| r != 48_000)) {
+                    let passband = dc_gain_db(model, cutoff, sr);
+                    let corner = crate::testkit::crossing_hz(
+                        |f| gain_db(model, cutoff, sr, f),
+                        passband - depth,
+                        low,
+                        cutoff * ratio * 4.0,
+                    );
+                    let reference = *at_48k.get_or_insert(corner);
+                    assert!(
+                        crate::testkit::cents(corner, reference).abs() < TOLERANCE_CENTS,
+                        "{model}, cutoff {cutoff} Hz: -3 dB at {corner:.1} Hz at {sr} Hz, \
+                         {reference:.1} Hz at 48 kHz"
+                    );
+                    assert!(
+                        crate::testkit::cents(corner, cutoff * ratio).abs() < STATED_TOLERANCE_CENTS,
+                        "{model}, cutoff {cutoff} Hz at {sr} Hz: -3 dB at {corner:.1} Hz, \
+                         stated {:.1} Hz",
+                        cutoff * ratio
+                    );
+                }
+            }
+        }
+    }
+
+    /// The cascade constants are the formulas their doc comments give.
+    #[test]
+    fn cascade_constants_are_their_formulas() {
+        for (cascade, stages) in [(FOUR_POLES, 4.0_f64), (THREE_POLES, 3.0)] {
+            let r = 2.0_f64.powf(-1.0 / stages);
+            let spread = (2.0_f64.powf(1.0 / stages) - 1.0).sqrt();
+            assert!((cascade.spread as f64 - spread).abs() < 1.0e-6);
+            assert!((cascade.share as f64 - r / (1.0 - r)).abs() < 1.0e-5);
         }
     }
 
