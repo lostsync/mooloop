@@ -688,7 +688,16 @@ fn prepare_song_asset(
     };
 
     let source = path.clone();
-    let keep_owned = *embedded && (source.starts_with(target) || source.starts_with(target_assets));
+    // Compared resolved, not as spelled (MOO-179): a song loaded through one
+    // spelling of its path and saved through another -- a `..`, a relative
+    // path from the command line, a symlinked parent -- made a sample already
+    // in its own sidecar look foreign, and it was copied in again under
+    // another `NN-`.
+    let resolved_source = resolved_path(&source);
+    let resolved_assets = resolved_path(target_assets);
+    let keep_owned = *embedded
+        && (resolved_source.starts_with(resolved_path(target))
+            || resolved_source.starts_with(&resolved_assets));
     let parent = target.parent().expect("validated song parent");
     // **A sample the bundle already owns cannot be un-embedded, and says
     // so.** Un-embedding for real means copying the bytes out to somewhere
@@ -754,8 +763,8 @@ fn prepare_song_asset(
     // `00-00-kick.wav` by three bytes a Ctrl+S until the song could not be
     // saved at all. A file in the sidecar but outside its two folders is not
     // one a save wrote, and is copied in like any other.
-    if let Some(rest) = source
-        .strip_prefix(target_assets)
+    if let Some(rest) = resolved_source
+        .strip_prefix(&resolved_assets)
         .ok()
         .filter(|rest| is_asset_folder_path(rest))
     {
@@ -802,6 +811,22 @@ fn prepare_song_asset(
     *path = relative;
     *embedded = true;
     Ok(())
+}
+
+/// `path` with symlinks, `.` and `..` resolved, as far as it exists: a file
+/// not written yet (a song on its first save, its sidecar) resolves its
+/// nearest existing ancestor and keeps the rest as spelled. Only for
+/// comparing; nothing is written under the resolved spelling.
+fn resolved_path(path: &Path) -> PathBuf {
+    if let Ok(resolved) = path.canonicalize() {
+        return resolved;
+    }
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => {
+            resolved_path(parent).join(name)
+        }
+        _ => path.to_path_buf(),
+    }
 }
 
 /// `wanted`, or `wanted` with `-2`, `-3`, ... before its extension, whichever
@@ -1613,6 +1638,91 @@ mod tests {
                 "the prefix accumulated on round {round}"
             );
         }
+    }
+
+    /// **MOO-179: the same file, spelled another way, is still the song's
+    /// own.** The containment checks in `prepare_song_asset` are lexical, so
+    /// the suspect was a song loaded through one spelling of its path and
+    /// saved through another -- a `..` in it, or a symlinked parent (a
+    /// portal, `/home` -> `/var/home`) -- making a sample already in the
+    /// sidecar look foreign and earn another `NN-`. And a name that grew
+    /// before the fix stays as it is and stops growing.
+    #[test]
+    fn an_embedded_sample_keeps_its_name_whichever_way_the_path_is_spelled() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        let source = root.join("kick.wav");
+        std::fs::write(&source, b"RIFF....WAVEfmt ").unwrap();
+        let plain = root.join("song.mooloop");
+        let dotted = root.join("sub").join("..").join("song.mooloop");
+        let mut spellings = vec![plain.clone(), dotted];
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&root, root.join("link")).unwrap();
+            spellings.push(root.join("link").join("song.mooloop"));
+        }
+
+        let leaf_of = |project: &Project| {
+            let mooloop_core::SampleReference::File { path, .. } =
+                &project.channels[0].setup.sampler_state().unwrap().sample
+            else {
+                panic!("the channel holds a file reference");
+            };
+            path.file_name().unwrap().to_string_lossy().into_owned()
+        };
+        let samples_in_sidecar = || {
+            std::fs::read_dir(root.join("song.mooloop-assets").join("samples"))
+                .unwrap()
+                .count()
+        };
+
+        let mut project = Project::default();
+        project.channels[0].setup.sampler_state_mut().unwrap().sample =
+            mooloop_core::SampleReference::File {
+                path: source,
+                embedded: true,
+            };
+        save_song(&plain, &project, AssetMode::Embedded).unwrap();
+        // Every pair: loaded through one spelling, saved through another.
+        for load in &spellings {
+            for save in &spellings {
+                let LoadedDocument::Song(reloaded) = load_bundle(load).unwrap().document else {
+                    panic!("a song");
+                };
+                save_song(save, &reloaded, AssetMode::Embedded).unwrap();
+                let LoadedDocument::Song(saved) = load_bundle(&plain).unwrap().document else {
+                    panic!("a song");
+                };
+                assert_eq!(
+                    leaf_of(&saved),
+                    "00-kick.wav",
+                    "loaded as {}, saved as {}",
+                    load.display(),
+                    save.display()
+                );
+                assert_eq!(samples_in_sidecar(), 1, "and no second copy");
+            }
+        }
+
+        // A song whose name had already grown before the fix: it keeps the
+        // long name and gets no longer.
+        let grown = root.join("song.mooloop-assets").join("samples").join("08-08-08-ohh.wav");
+        std::fs::write(&grown, b"RIFF....WAVEfmt ").unwrap();
+        project.channels[0].setup.sampler_state_mut().unwrap().sample =
+            mooloop_core::SampleReference::File {
+                path: grown,
+                embedded: true,
+            };
+        for _ in 0..3 {
+            save_song(&plain, &project, AssetMode::Embedded).unwrap();
+            let LoadedDocument::Song(reloaded) = load_bundle(&plain).unwrap().document else {
+                panic!("a song");
+            };
+            project = reloaded;
+            assert_eq!(leaf_of(&project), "08-08-08-ohh.wav");
+        }
+        assert_eq!(samples_in_sidecar(), 2);
     }
 
     #[test]
