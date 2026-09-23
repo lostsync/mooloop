@@ -9,14 +9,13 @@ use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
 use jack::{
-    AudioIn, AudioOut, Client, ClientOptions, Control, LatencyType, MidiIn, Port, PortFlags,
-    PortId, ProcessHandler,
-    ProcessScope,
+    AudioIn, AudioOut, Client, ClientOptions, ClientStatus, Control, Frames, LatencyType, MidiIn,
+    Port, PortFlags, PortId, ProcessHandler, ProcessScope,
 };
 
 use mooloop_core::{MidiPortId, MidiPortInfo};
 
-use crate::driver::{remember_output, AudioConfig, OutputTarget};
+use crate::driver::{remember_output, AudioConfig, DriverHealth, OutputTarget};
 use crate::executor::Executor;
 use crate::Error;
 
@@ -114,7 +113,9 @@ impl ProcessHandler for Graph {
             .midi_in
             .iter(scope)
             .map(|raw| (MidiPortId::FIRST, raw.time, raw.bytes));
-        self.executor.process_with_input(
+        // Contained: a panic in here used to reach jack-rs, which marks the
+        // client dead and stops calling it for the rest of the session.
+        self.executor.process_contained(
             midi,
             self.in_l.as_slice(scope),
             self.in_r.as_slice(scope),
@@ -147,11 +148,28 @@ struct Notifications {
     graph_generation: Arc<AtomicU64>,
     /// This client's MIDI input, by its full name.
     midi_in: String,
+    /// Shutdown and sample-rate reports, for [`JackDriver::stopped`].
+    health: Arc<DriverHealth>,
 }
 
 impl jack::NotificationHandler for Notifications {
     fn xrun(&mut self, _: &Client) -> Control {
         self.xrun_count.fetch_add(1, Ordering::Relaxed);
+        Control::Continue
+    }
+
+    // The server has let the client go: a PipeWire or JACK restart, or the
+    // server deciding the client is broken. Nothing will call the process
+    // callback again, and nothing but this says so. Written as the signal
+    // handler JACK's documentation says this is: one atomic store.
+    unsafe fn shutdown(&mut self, _status: ClientStatus, _reason: &str) {
+        self.health.shut_down.store(true, Ordering::Relaxed);
+    }
+
+    // The render state was built for the rate the server had at open, and
+    // nothing can rebuild it but a reconnect.
+    fn sample_rate(&mut self, _: &Client, rate: Frames) -> Control {
+        self.health.server_rate.store(rate, Ordering::Relaxed);
         Control::Continue
     }
 
@@ -239,6 +257,22 @@ fn connect_midi_sources(client: &Client, midi_in: &str) {
 
 type AsyncClient = jack::AsyncClient<Notifications, Graph>;
 
+/// Why a client would not open, in the two cases a user can act on and which
+/// need different actions: no libjack on the machine, which is a package to
+/// install, and no server answering, which is a service to start.
+fn open_error(error: jack::Error) -> Error {
+    match error {
+        jack::Error::LibraryError(detail) => Error::LibraryMissing(detail),
+        jack::Error::ClientError(status)
+            if status.intersects(ClientStatus::SERVER_FAILED | ClientStatus::SERVER_ERROR)
+                || status == ClientStatus::FAILURE =>
+        {
+            Error::ServerNotRunning
+        }
+        other => Error::ClientOpen(other.to_string()),
+    }
+}
+
 /// A JACK client that is open but not yet running: enough to learn the sample
 /// rate the render state has to be built for.
 pub(crate) struct Opening {
@@ -247,8 +281,8 @@ pub(crate) struct Opening {
 
 impl Opening {
     pub(crate) fn connect() -> Result<Self, Error> {
-        let (client, _status) = Client::new(CLIENT_NAME, ClientOptions::NO_START_SERVER)
-            .map_err(|e| Error::ClientOpen(e.to_string()))?;
+        let (client, _status) =
+            Client::new(CLIENT_NAME, ClientOptions::NO_START_SERVER).map_err(open_error)?;
         Ok(Self { client })
     }
 
@@ -320,6 +354,7 @@ impl Opening {
         }
         remember_output(&mut picks, target.clone());
         let graph_generation = Arc::new(AtomicU64::new(0));
+        let health = Arc::new(DriverHealth::default());
 
         let async_client = client
             .activate_async(
@@ -327,6 +362,7 @@ impl Opening {
                     xrun_count,
                     graph_generation: graph_generation.clone(),
                     midi_in: own.midi_in.clone(),
+                    health: health.clone(),
                 },
                 graph,
             )
@@ -375,6 +411,7 @@ impl Opening {
         Ok(JackDriver {
             client: async_client,
             own,
+            health,
             output_target,
             auto_reconnect,
             picks: Mutex::new(picks),
@@ -395,6 +432,7 @@ pub(crate) struct JackDriver {
     client: AsyncClient,
     /// This client's ports, by the name the server gave it.
     own: OwnPorts,
+    health: Arc<DriverHealth>,
     /// The pair the outputs are connected to, or were last.
     output_target: Arc<ArcSwap<(String, String)>>,
     auto_reconnect: Arc<AtomicBool>,
@@ -493,6 +531,12 @@ impl JackDriver {
 
     pub(crate) fn current_target(&self) -> (String, String) {
         (*self.output_target.load_full()).clone()
+    }
+
+    /// Why the engine has stopped being heard, if the server has said: it
+    /// shut the client down, or changed its sample rate from `engine_rate`.
+    pub(crate) fn stopped(&self, engine_rate: u32) -> Option<String> {
+        self.health.stopped(engine_rate)
     }
 
     /// Control-thread upkeep, called from the handle's event poll: when the
@@ -763,6 +807,34 @@ fn restore_output(
     }
     connect_first(bay, own, current, &output_candidates(own, picks, ports))
         .map_or(Restored::Nowhere, Restored::Moved)
+}
+
+#[cfg(test)]
+mod open_error_tests {
+    use super::{open_error, ClientStatus};
+    use crate::Error;
+
+    /// The two failures a user can act on come apart: a package to install,
+    /// and a server to start.
+    #[test]
+    fn a_missing_library_and_a_missing_server_are_told_apart() {
+        assert!(matches!(
+            open_error(jack::Error::LibraryError("libjack.so.0: not found".into())),
+            Error::LibraryMissing(_)
+        ));
+        assert!(matches!(
+            open_error(jack::Error::ClientError(ClientStatus::FAILURE | ClientStatus::SERVER_FAILED)),
+            Error::ServerNotRunning
+        ));
+        assert!(matches!(
+            open_error(jack::Error::ClientError(ClientStatus::FAILURE)),
+            Error::ServerNotRunning
+        ));
+        assert!(matches!(
+            open_error(jack::Error::ClientError(ClientStatus::FAILURE | ClientStatus::NAME_NOT_UNIQUE)),
+            Error::ClientOpen(_)
+        ));
+    }
 }
 
 #[cfg(test)]

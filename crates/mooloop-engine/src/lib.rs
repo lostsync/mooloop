@@ -3,14 +3,16 @@
 //! Workflow:
 //! ```no_run
 //! use mooloop_engine::CommandSink;
-//! let (engine, mut handle) = mooloop_engine::Engine::new(Default::default()).unwrap();
+//! let mut handle = mooloop_engine::EngineHandle::open(Default::default());
 //! let _ = handle.send(mooloop_core::EngineCommand::Play);
 //! while let Some(ev) = handle.poll() { /* update UI */ }
-//! # let _ = engine;
 //! ```
 //!
-//! `Engine` keeps the audio driver alive and must outlive the handle's use.
-//! Dropping it, with the handle, shuts the driver down.
+//! The handle owns the audio driver: dropping it shuts the driver down, and
+//! [`EngineHandle::reconnect`] replaces it. With no audio device to open --
+//! no JACK server, no libjack -- [`EngineHandle::open`] runs the engine on no
+//! driver at all ([`AudioState::NoDevice`]) rather than failing, so the
+//! application can open and say why it is silent.
 
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
@@ -145,6 +147,7 @@ mod executor;
 mod jack_driver;
 pub mod load;
 mod meters;
+mod null_driver;
 mod offline;
 mod render;
 mod sequencer;
@@ -184,13 +187,16 @@ mod take_tests;
 
 use executor::{Executor, ExecutorIo};
 #[cfg(target_os = "macos")]
-use coreaudio_driver::{CoreAudioDriver as Driver, Opening};
+use coreaudio_driver::{CoreAudioDriver as PlatformDriver, Opening};
 #[cfg(not(target_os = "macos"))]
-use jack_driver::{JackDriver as Driver, Opening};
+use jack_driver::{JackDriver as PlatformDriver, Opening};
+use null_driver::NullDriver;
 use render::{ReclaimedEffect, RenderState};
 pub use render::{AudioTapBank, ChannelStorage, ContainerScratch, EffectSlot, SendBank, SendSpec};
 
-pub use driver::{remember_output, AudioConfig, DriverStatus, OutputTarget, REMEMBERED_OUTPUTS};
+pub use driver::{
+    remember_output, AudioConfig, AudioState, DriverStatus, OutputTarget, REMEMBERED_OUTPUTS,
+};
 pub use take::{Take, TakeFrame, TakePhase, TakeStatus};
 pub use meters::{
     BufferMarks, BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters,
@@ -449,6 +455,10 @@ pub(crate) enum StructuralReclaim {
         align: Option<Box<IntegerDelay>>,
         scratch: Option<Box<ContainerScratch>>,
     },
+    /// What a panic in the callback unwound with, once
+    /// `Executor::process_contained` had caught it. Allocated by the unwind,
+    /// and freed here like everything else that reaches the audio thread.
+    PanicPayload(Box<dyn std::any::Any + Send>),
 }
 
 /// A project that has already been instantiated and allocated off the audio
@@ -544,6 +554,11 @@ const QUEUE_CAPACITY: usize = 1024;
 
 #[derive(Debug)]
 pub enum Error {
+    /// JACK: no JACK library could be loaded. libjack is opened at run time,
+    /// so no package pulls it in; PipeWire provides one as `pipewire-jack`.
+    LibraryMissing(String),
+    /// JACK: the library loaded and no server answered.
+    ServerNotRunning,
     ClientOpen(String),
     PortRegister(String),
     Activate(String),
@@ -556,6 +571,14 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Error::LibraryMissing(s) => write!(
+                f,
+                "no JACK library is installed ({s}); install PipeWire's JACK support \
+                 (pipewire-jack) or JACK"
+            ),
+            Error::ServerNotRunning => {
+                write!(f, "no JACK server is running; start PipeWire or JACK")
+            }
             Error::ClientOpen(s) => write!(f, "failed to open JACK client: {s}"),
             Error::PortRegister(s) => write!(f, "failed to register JACK port: {s}"),
             Error::Activate(s) => write!(f, "failed to activate JACK client: {s}"),
@@ -567,75 +590,181 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// Keep-alive guard for the audio engine. Dropping it, together with the
-/// handle, shuts the driver down.
-pub struct Engine {
-    _driver: Arc<Driver>,
+/// The driver running the engine: the platform's, or none.
+///
+/// Chosen at run time now, where it used to be a compile-time alias, because
+/// a machine with no JACK server still deserves a window that says so. Every
+/// method is the platform driver's, and the null driver's answer is the one a
+/// machine with no device would give.
+enum Driver {
+    // Boxed: the platform driver is large, and the null one is a handle to
+    // a thread.
+    Platform(Box<PlatformDriver>),
+    Null(NullDriver),
+    /// Between dropping one driver and opening the next, in
+    /// [`EngineHandle::reconnect`]. Never seen outside it.
+    Closed,
 }
 
-impl Engine {
-    /// Open the audio driver and start the realtime thread. All channel
-    /// devices and the pattern bank are pre-allocated to pool size; every
-    /// channel starts with an empty sample slot until the user loads an audio
-    /// file or a project assigns one.
-    pub fn new(config: AudioConfig) -> Result<(Engine, EngineHandle), Error> {
-        // The driver opens first because the render state is built for the
-        // sample rate it reports.
-        let opening = Opening::connect()?;
-        let sample_rate = opening.sample_rate();
+impl Driver {
+    fn platform(&self) -> Option<&PlatformDriver> {
+        match self {
+            Driver::Platform(driver) => Some(driver.as_ref()),
+            Driver::Null(_) | Driver::Closed => None,
+        }
+    }
 
-        let (cmd_tx, cmd_rx): (Producer<RealtimeCommand>, Consumer<RealtimeCommand>) =
-            rtrb::RingBuffer::new(QUEUE_CAPACITY);
-        let (evt_tx, evt_rx): (Producer<EngineEvent>, Consumer<EngineEvent>) =
-            rtrb::RingBuffer::new(QUEUE_CAPACITY);
-        let (reclaim_tx, reclaim_rx): (Producer<StructuralReclaim>, Consumer<StructuralReclaim>) =
-            rtrb::RingBuffer::new(QUEUE_CAPACITY);
+    fn service(&self) {
+        if let Some(driver) = self.platform() {
+            driver.service();
+        }
+    }
 
-        // Every channel's slot starts empty; a channel is silent until the
-        // user loads a sample or a project assigns one. Sample and slice map
-        // share one slot because they are one fact -- see
-        // `ChannelAudioSnapshot` -- and they take this route rather than the
-        // command ring because `EngineCommand` is `Copy` and unboxed by
-        // design, so neither a buffer nor a `Vec` of markers can ride it.
-        let audio_slots = render::empty_channel_audio_bank();
+    fn midi_ports(&self) -> Vec<mooloop_core::MidiPortInfo> {
+        self.platform().map_or_else(Vec::new, PlatformDriver::midi_ports)
+    }
 
-        let xrun_count = Arc::new(AtomicU64::new(0));
-        let load = load::LoadMeters::new();
-        let shared = SharedCells::new();
-        let mut render = RenderState::new(sample_rate, audio_slots.clone());
-        shared.attach(&mut render);
-        let executor = Executor::new(
-            ExecutorIo {
-                cmd_rx,
-                evt_tx,
-                reclaim_tx,
-            },
-            Box::new(render),
-            xrun_count.clone(),
-            sample_rate,
-            load.clone(),
-        );
-        let driver = Arc::new(opening.start(executor, xrun_count, config)?);
+    fn audio_input_label(&self) -> Option<String> {
+        self.platform().and_then(PlatformDriver::audio_input_label)
+    }
 
-        Ok((
-            Engine {
-                _driver: driver.clone(),
-            },
-            EngineHandle {
-                cmd_tx,
-                evt_rx,
-                reclaim_rx,
-                shared,
-                audio_slots,
-                sample_rate,
-                install_generation: 0,
-            // Nothing has been installed, so nothing can be carried: the
-            // startup generation is built rather than swapped in.
-            last_installed: None,
-                driver,
-                load,
-            },
-        ))
+    fn input_latency_frames(&self) -> u32 {
+        self.platform().map_or(0, PlatformDriver::input_latency_frames)
+    }
+
+    fn available_output_targets(&self) -> Vec<OutputTarget> {
+        self.platform()
+            .map_or_else(Vec::new, PlatformDriver::available_output_targets)
+    }
+
+    fn set_output_target(&self, target: Option<(String, String)>) -> Result<(), String> {
+        match self.platform() {
+            Some(driver) => driver.set_output_target(target),
+            None => Err(NO_DEVICE.to_owned()),
+        }
+    }
+
+    fn set_buffer_size(&self, frames: u32) -> Result<(), String> {
+        match self.platform() {
+            Some(driver) => driver.set_buffer_size(frames),
+            None => Err(NO_DEVICE.to_owned()),
+        }
+    }
+
+    fn set_auto_reconnect(&self, enabled: bool) {
+        if let Some(driver) = self.platform() {
+            driver.set_auto_reconnect(enabled);
+        }
+    }
+
+    fn buffer_size(&self) -> u32 {
+        match self {
+            Driver::Platform(driver) => driver.buffer_size(),
+            Driver::Null(_) => null_driver::NULL_BLOCK,
+            Driver::Closed => 0,
+        }
+    }
+
+    fn current_target(&self) -> (String, String) {
+        self.platform()
+            .map_or_else(Default::default, PlatformDriver::current_target)
+    }
+}
+
+/// What a driver call that needs a device answers when there is none.
+const NO_DEVICE: &str = "no audio device is open";
+
+/// How long the callback may go without running before the engine reads as
+/// stopped. Longer than Core Audio takes to reopen a stream whose device went
+/// away (about a second), and than a laptop's wake from sleep takes to
+/// restart one, so neither is reported as a dead engine.
+const STALL_AFTER: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// What [`EngineHandle::audio_state`] has seen of the callback.
+struct Watchdog {
+    callbacks: u64,
+    progressed: std::time::Instant,
+}
+
+/// Everything one driver run owns, built together because the render state
+/// is built for the sample rate the driver reports.
+struct Started {
+    driver: Driver,
+    cmd_tx: Producer<RealtimeCommand>,
+    evt_rx: Consumer<EngineEvent>,
+    reclaim_rx: Consumer<StructuralReclaim>,
+    audio_slots: render::ChannelAudioBank,
+    sample_rate: u32,
+    load: Arc<load::LoadMeters>,
+}
+
+/// Start the engine on `opening` -- the platform driver, or `Err` with why
+/// there is none -- or on the null driver when it will not start. The
+/// renderer is attached to `shared`, so a reconnect keeps every meter,
+/// subscription and setting the interface made through the old one.
+fn start(opening: Result<Opening, String>, config: AudioConfig, shared: &SharedCells) -> Started {
+    let (opening, reason) = match opening {
+        Ok(opening) => (Some(opening), None),
+        Err(reason) => (None, Some(reason)),
+    };
+    let sample_rate = opening
+        .as_ref()
+        .map_or(null_driver::NULL_SAMPLE_RATE, Opening::sample_rate);
+
+    let (cmd_tx, cmd_rx): (Producer<RealtimeCommand>, Consumer<RealtimeCommand>) =
+        rtrb::RingBuffer::new(QUEUE_CAPACITY);
+    let (evt_tx, evt_rx): (Producer<EngineEvent>, Consumer<EngineEvent>) =
+        rtrb::RingBuffer::new(QUEUE_CAPACITY);
+    let (reclaim_tx, reclaim_rx): (Producer<StructuralReclaim>, Consumer<StructuralReclaim>) =
+        rtrb::RingBuffer::new(QUEUE_CAPACITY);
+
+    // Every channel's slot starts empty; a channel is silent until the user
+    // loads a sample or a project assigns one. Sample and slice map share one
+    // slot because they are one fact -- see `ChannelAudioSnapshot` -- and they
+    // take this route rather than the command ring because `EngineCommand` is
+    // `Copy` and unboxed by design, so neither a buffer nor a `Vec` of markers
+    // can ride it.
+    let audio_slots = render::empty_channel_audio_bank();
+
+    let xrun_count = Arc::new(AtomicU64::new(0));
+    let load = load::LoadMeters::new();
+    let mut render = RenderState::new(sample_rate, audio_slots.clone());
+    shared.attach(&mut render);
+    let executor = Executor::new(
+        ExecutorIo {
+            cmd_rx,
+            evt_tx,
+            reclaim_tx,
+        },
+        Box::new(render),
+        xrun_count.clone(),
+        sample_rate,
+        load.clone(),
+    );
+    let driver = match opening {
+        Some(opening) => match opening.start(executor, xrun_count, config) {
+            Ok(driver) => Driver::Platform(Box::new(driver)),
+            Err(error) => {
+                // The executor went down with the refused start. The null
+                // driver needs one of its own, on the rings the handle holds,
+                // so the whole run is rebuilt at the null driver's rate.
+                mooloop_core::log_warn!("audio", "{error}; running with no audio device");
+                return start(Err(error.to_string()), AudioConfig::default(), shared);
+            }
+        },
+        None => Driver::Null(NullDriver::start(
+            executor,
+            reason.unwrap_or_else(|| NO_DEVICE.to_owned()),
+        )),
+    };
+    Started {
+        driver,
+        cmd_tx,
+        evt_rx,
+        reclaim_rx,
+        audio_slots,
+        sample_rate,
+        load,
     }
 }
 
@@ -1042,11 +1171,167 @@ pub struct EngineHandle {
     /// them and compares as different. That costs a rebuild that was not
     /// strictly needed; it cannot carry a strip whose chain has moved on.
     last_installed: Option<Arc<mooloop_core::Project>>,
-    driver: Arc<Driver>,
+    driver: Driver,
     load: Arc<load::LoadMeters>,
+    watchdog: Watchdog,
 }
 
 impl EngineHandle {
+    /// Open the platform's audio driver and start the engine on it -- or, when
+    /// it will not open, start the engine on no driver at all and say why in
+    /// [`Self::audio_state`]. Never fails: an application with no audio
+    /// device still opens, which is what a double-clicked AppImage on a
+    /// desktop without pipewire-jack needs to be able to tell anyone that
+    /// (P2 in `reports/teams-2026-09-22.md`).
+    ///
+    /// Channel storage and the pattern bank are allocated to pool size here;
+    /// every channel starts with an empty sample slot until the user loads an
+    /// audio file or a project assigns one.
+    pub fn open(config: AudioConfig) -> Self {
+        let opening = Opening::connect().map_err(|error| error.to_string());
+        if let Err(reason) = &opening {
+            mooloop_core::log_warn!("audio", "{reason}; running with no audio device");
+        }
+        let shared = SharedCells::new();
+        let started = start(opening, config, &shared);
+        Self::from_started(started, shared)
+    }
+
+    /// Open the platform's audio driver, or fail: [`Self::open`] without the
+    /// fallback, for a caller that has nothing to show when there is no audio.
+    pub fn connect(config: AudioConfig) -> Result<Self, Error> {
+        let opening = Opening::connect()?;
+        let shared = SharedCells::new();
+        let started = start(Ok(opening), config, &shared);
+        if let Driver::Null(null) = &started.driver {
+            return Err(Error::Stream(null.reason().to_owned()));
+        }
+        Ok(Self::from_started(started, shared))
+    }
+
+    /// The engine on no audio device: it renders on a thread of its own at a
+    /// device's pace, and nothing hears it. `reason` is what
+    /// [`Self::audio_state`] reports. For tests, and for a machine with no
+    /// audio.
+    pub fn without_device(reason: impl Into<String>) -> Self {
+        let shared = SharedCells::new();
+        let started = start(Err(reason.into()), AudioConfig::default(), &shared);
+        Self::from_started(started, shared)
+    }
+
+    fn from_started(started: Started, shared: SharedCells) -> Self {
+        let Started {
+            driver,
+            cmd_tx,
+            evt_rx,
+            reclaim_rx,
+            audio_slots,
+            sample_rate,
+            load,
+        } = started;
+        Self {
+            cmd_tx,
+            evt_rx,
+            reclaim_rx,
+            shared,
+            audio_slots,
+            sample_rate,
+            install_generation: 0,
+            // Nothing has been installed, so nothing can be carried: the
+            // startup generation is built rather than swapped in.
+            last_installed: None,
+            driver,
+            watchdog: Watchdog {
+                callbacks: load.callbacks(),
+                progressed: std::time::Instant::now(),
+            },
+            load,
+        }
+    }
+
+    /// Close the audio driver and open it again, with a new engine built for
+    /// whatever sample rate it now reports -- or, when it will not open, on
+    /// no driver, as [`Self::open`] does. The answer is the new
+    /// [`Self::audio_state`].
+    ///
+    /// **The new engine is empty.** The caller installs the open project into
+    /// it next, exactly as it would after opening a file. What the interface
+    /// set through the handle rather than through the project -- meters,
+    /// spectrum and waveform subscriptions, the keyboard channel, the preview
+    /// gain, the buffer MIDI map -- lives in cells the new renderer is
+    /// attached to, so it carries over without being sent again.
+    ///
+    /// The old driver is closed first: under JACK a client still registered
+    /// would push the new one to `mooloop-01`, and every patchbay connection
+    /// saved against `mooloop` would miss it.
+    pub fn reconnect(&mut self, config: AudioConfig) -> AudioState {
+        self.driver = Driver::Closed;
+        let opening = Opening::connect().map_err(|error| error.to_string());
+        if let Err(reason) = &opening {
+            mooloop_core::log_warn!("audio", "reconnect: {reason}; running with no audio device");
+        }
+        let started = start(opening, config, &self.shared);
+        let Started {
+            driver,
+            cmd_tx,
+            evt_rx,
+            reclaim_rx,
+            audio_slots,
+            sample_rate,
+            load,
+        } = started;
+        self.driver = driver;
+        self.cmd_tx = cmd_tx;
+        self.evt_rx = evt_rx;
+        self.reclaim_rx = reclaim_rx;
+        self.audio_slots = audio_slots;
+        self.sample_rate = sample_rate;
+        self.watchdog = Watchdog {
+            callbacks: load.callbacks(),
+            progressed: std::time::Instant::now(),
+        };
+        self.load = load;
+        self.last_installed = None;
+        self.shared.device_telemetry.clear_spectra();
+        self.audio_state()
+    }
+
+    /// Whether the engine is being heard, and if not, why.
+    ///
+    /// Meant to be polled about once a second. Besides what the driver
+    /// reports -- a JACK server that shut down, a sample rate that changed
+    /// under the engine -- it watches the callback itself: one that has not
+    /// run for [`STALL_AFTER`] reads as stopped, which is what a process
+    /// callback killed by a panic, or a server that went away without
+    /// saying so, looks like from here. That reading clears if the callback
+    /// comes back; the driver's own reports do not.
+    pub fn audio_state(&mut self) -> AudioState {
+        match &self.driver {
+            Driver::Null(null) => return AudioState::NoDevice(null.reason().to_owned()),
+            Driver::Closed => return AudioState::NoDevice(NO_DEVICE.to_owned()),
+            Driver::Platform(driver) => {
+                if let Some(stopped) = driver.stopped(self.sample_rate) {
+                    return AudioState::Stopped(stopped);
+                }
+            }
+        }
+        let now = std::time::Instant::now();
+        let callbacks = self.load.callbacks();
+        if callbacks != self.watchdog.callbacks {
+            self.watchdog.callbacks = callbacks;
+            self.watchdog.progressed = now;
+            return AudioState::Running;
+        }
+        let silent_for = now.duration_since(self.watchdog.progressed);
+        if silent_for >= STALL_AFTER {
+            return AudioState::Stopped(format!(
+                "the audio callback has not run for {} seconds",
+                silent_for.as_secs()
+            ));
+        }
+        AudioState::Running
+    }
+
     /// Read the audio callback's timing since this was last called, and start
     /// a new window.
     ///
@@ -1124,6 +1409,7 @@ impl EngineHandle {
                     drop(align);
                     drop(scratch);
                 }
+                StructuralReclaim::PanicPayload(payload) => drop(payload),
             }
         }
         loop {

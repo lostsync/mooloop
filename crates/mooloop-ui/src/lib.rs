@@ -2400,6 +2400,9 @@ pub struct AppUi {
     /// loop has stopped, which is the last moment a take in flight can still
     /// be written out and reported.
     state: Rc<RefCell<UiState>>,
+    /// Where a song opened from outside the window -- the command line --
+    /// reports, exactly as File > Open's chooser does.
+    document_tx: std::sync::mpsc::Sender<DocumentResult>,
 }
 
 /// Push a resolved marker back onto the face. The Slint side moves the marker
@@ -3959,8 +3962,8 @@ impl UiState {
     /// every model on the window.
     ///
     /// Extracted from `AppUi::new` so a `UiState` can be had without an
-    /// `EngineHandle`, which only `Engine::new` produces and only by opening
-    /// a real audio driver. That is what made every channel-rack callback
+    /// `EngineHandle`, which used to need a real audio driver
+    /// (`EngineHandle::without_device` no longer does). That is what made every channel-rack callback
     /// untestable; `add_channel_with_history` is tested through this.
     fn new(
         default_sample: Option<&SampleData>,
@@ -6341,6 +6344,7 @@ impl AppUi {
         window.set_app_version(env!("CARGO_PKG_VERSION").into());
 
         let (document_tx, document_rx) = std::sync::mpsc::channel::<DocumentResult>();
+        let open_tx = document_tx.clone();
         let command_state = Rc::new(RefCell::new(CommandState::default()));
         sync_command_availability(&window, &command_state.borrow());
         let export_sample_rate = handle.sample_rate();
@@ -6350,6 +6354,9 @@ impl AppUi {
         let quit_after_document = Rc::new(Cell::new(false));
         // The in-app question and what it is asking (MOO-91).
         let question: Rc<RefCell<Option<Question>>> = Rc::new(RefCell::new(None));
+        // Set by Reconnect in the audio question, read by the pump, which is
+        // the one place that holds the engine (MOO-115, MOO-118).
+        let reconnect_requested = Rc::new(Cell::new(false));
         // Set by an answer that has settled "unsaved changes?", just before
         // it re-enters Quit, New or Open, which read and clear it -- always,
         // so it can never outlive the one command it was set for.
@@ -7115,6 +7122,7 @@ impl AppUi {
             let after_save = after_save.clone();
             let kit_confirmed = kit_confirmed.clone();
             let tx = document_tx.clone();
+            let reconnect_requested = reconnect_requested.clone();
             window.on_question_answered(move |answer| {
                 let Some(window) = weak.upgrade() else {
                     return;
@@ -7156,6 +7164,14 @@ impl AppUi {
                         } else {
                             window.set_document_busy(false);
                             window.set_status_message("Kit load cancelled".into());
+                        }
+                    }
+                    Question::Reconnect => {
+                        if answer == 1 {
+                            reconnect_requested.set(true);
+                            window.set_status_message("Reconnecting audio...".into());
+                        } else {
+                            window.set_status_message(NO_AUDIO_STATUS.into());
                         }
                     }
                 }
@@ -14746,6 +14762,11 @@ impl AppUi {
         // seen, and zero is the one value that means nothing has gone wrong.
         let mut output_faults_seen = 0u64;
         let mut reported_time_shared = false;
+        // What the user has last been told about whether audio is heard. The
+        // engine starts out assumed running, so a start on no device is
+        // announced on the first report like any other change.
+        let mut audio_announced = mooloop_engine::AudioState::Running;
+        let reconnect_requested = reconnect_requested.clone();
         // Reused across pumps rather than allocated per pump: a desk sending
         // a fader stream fills these sixty times a second.
         let mut control_input: Vec<mooloop_core::MidiMessage> = Vec::new();
@@ -14779,6 +14800,22 @@ impl AppUi {
                     }
                     slint::quit_event_loop().ok();
                     return;
+                }
+                if reconnect_requested.take() {
+                    if let Some(window) = weak.upgrade() {
+                        reconnect_audio(
+                            &mut handle,
+                            default_sample_for_pump.as_ref(),
+                            &st,
+                            &window,
+                        );
+                        // Told afresh: the once-a-second report says what
+                        // the new engine is doing, whatever it is.
+                        audio_announced = mooloop_engine::AudioState::Running;
+                        reported_time_shared = false;
+                        last_load_report = std::time::Instant::now()
+                            - std::time::Duration::from_secs(1);
+                    }
                 }
                 // Applied here rather than in the callback because the
                 // settings and state live in non-Send Rc/RefCells, while the
@@ -15508,6 +15545,23 @@ impl AppUi {
                                     sync_audio_status(&handle, &window);
                                 }
                                 AudioAction::RefreshTargets => {
+                                    // With nothing heard there are no targets
+                                    // to refresh, and the one useful thing
+                                    // this button can do is try again: the
+                                    // way back after the audio question was
+                                    // dismissed.
+                                    if handle.audio_state() != mooloop_engine::AudioState::Running {
+                                        reconnect_audio(
+                                            &mut handle,
+                                            default_sample_for_pump.as_ref(),
+                                            &st,
+                                            &window,
+                                        );
+                                        audio_announced = mooloop_engine::AudioState::Running;
+                                        reported_time_shared = false;
+                                        last_load_report = std::time::Instant::now()
+                                            - std::time::Duration::from_secs(1);
+                                    }
                                     sync_audio_status(&handle, &window);
                                 }
                                 AudioAction::SelectOutput { port_l, port_r } => {
@@ -15816,10 +15870,16 @@ impl AppUi {
                 if now.duration_since(last_load_report) >= std::time::Duration::from_secs(1) {
                     last_load_report = now;
                     let load = handle.take_load();
+                    // Read first, because it decides whether the timing below
+                    // means anything: the null driver's thread is time-shared
+                    // and sleeps between blocks, and nobody hears either.
+                    let audio = handle.audio_state();
+                    let heard = audio == mooloop_engine::AudioState::Running;
                     // Once, not once a second: this cannot change without a
                     // new callback thread, and a warning that repeats forever
                     // is one that gets scrolled past.
-                    if !reported_time_shared
+                    if heard
+                        && !reported_time_shared
                         && load.realtime == mooloop_engine::load::RealtimeStatus::TimeShared
                     {
                         reported_time_shared = true;
@@ -15829,11 +15889,13 @@ impl AppUi {
                              not a realtime one; audio will drop out whenever the machine is \
                              busy no matter how light the project is. Under PipeWire, \
                              `systemctl --user restart pipewire pipewire-pulse wireplumber` \
-                             asks for realtime scheduling again, and putting your user in the \
-                             `pipewire` group makes the grant survive a busy machine"
+                             asks for realtime scheduling again -- which also disconnects \
+                             mooloop, so choose Reconnect when it says the audio stopped -- \
+                             and putting your user in the `pipewire` group makes the grant \
+                             survive a busy machine"
                         );
                     }
-                    if load.blocks > 0 && (load.had_trouble() || xruns_this_window > 0) {
+                    if heard && load.blocks > 0 && (load.had_trouble() || xruns_this_window > 0) {
                         log_warn!(
                             "audio",
                             "audio dropout in the last second: {} of {} blocks over budget, \
@@ -15850,6 +15912,26 @@ impl AppUi {
                         );
                     }
                     xruns_this_window = 0;
+                    if load.faults > 0 {
+                        log_error!(
+                            "audio",
+                            "{} audio blocks were played as silence because a device \
+                             panicked; the crash report beside the log has the first",
+                            load.faults
+                        );
+                        if let Some(window) = weak.upgrade() {
+                            window.set_status_message(
+                                "A device failed and was silenced; the log says which".into(),
+                            );
+                        }
+                    }
+                    if audio != audio_announced {
+                        if let Some(window) = weak.upgrade() {
+                            if announce_audio_state(&window, &question, &audio) {
+                                audio_announced = audio;
+                            }
+                        }
+                    }
                 }
                 // Bus peaks come from the shared atomic array, not the event
                 // ring. Always drain them, even while the mixer is hidden, so
@@ -16424,6 +16506,7 @@ impl AppUi {
             window,
             _pump: pump,
             state,
+            document_tx: open_tx,
         })
     }
 
@@ -16433,6 +16516,32 @@ impl AppUi {
 
     pub fn run(&self) -> Result<(), slint::PlatformError> {
         self.window.run()
+    }
+
+    /// Open the song at `path`, as File > Open would once its chooser
+    /// returned it: read off the UI thread, installed by the pump, and
+    /// reported in the status bar if it cannot be. For a song named on the
+    /// command line, which is how a desktop file's `%F` and a file manager's
+    /// Open With pass one. Call before [`Self::run`]; the fresh window has
+    /// nothing unsaved to ask about.
+    pub fn open_song_at_start(&self, path: PathBuf) {
+        if !begin_document_operation(&self.window, "Opening song...") {
+            return;
+        }
+        let tx = self.document_tx.clone();
+        std::thread::spawn(move || {
+            let result = resolve_document(&path)
+                .map(|document| DocumentResult::Loaded {
+                    path,
+                    target: LoadTarget::Song,
+                    document,
+                })
+                .unwrap_or_else(|problem| DocumentResult::Failed {
+                    action: "open this song",
+                    problem,
+                });
+            let _ = tx.send(result);
+        });
     }
 
     /// End every take still recording and write its file out. Call once the
@@ -17435,6 +17544,10 @@ enum Question {
     /// A kit shorter than the song would drop channels holding notes. The
     /// loaded result waits here and goes back through the pump on a yes.
     LoadKit(Box<DocumentResult>),
+    /// Nothing is being heard: no audio device opened, or the one that did
+    /// has stopped (MOO-115). Yes reconnects, through the pump, which holds
+    /// the engine.
+    Reconnect,
 }
 
 /// What the unsaved-changes question was standing in front of.
@@ -17482,6 +17595,90 @@ fn ask_question(
     window.set_question_primary(primary.into());
     window.set_question_secondary(secondary.into());
     window.set_question_open(true);
+}
+
+/// The status line while nothing is heard: what is wrong, and the way back
+/// once the question has been dismissed.
+const NO_AUDIO_STATUS: &str = "No audio -- Preferences > Audio > Refresh reconnects";
+
+/// Tell the user the audio has changed state (MOO-115): a question offering
+/// Reconnect when nothing is heard, a status line when it is again. Returns
+/// false when it could not ask because another question is open, so the pump
+/// tries again next second rather than dropping the news.
+fn announce_audio_state(
+    window: &MainWindow,
+    slot: &RefCell<Option<Question>>,
+    audio: &mooloop_engine::AudioState,
+) -> bool {
+    use mooloop_engine::AudioState;
+    let (title, why) = match audio {
+        AudioState::Running => {
+            log_info!("audio", "audio is running");
+            window.set_status_message("Audio is running".into());
+            return true;
+        }
+        AudioState::NoDevice(why) => ("mooloop is running with no audio", why),
+        AudioState::Stopped(why) => ("The audio stopped", why),
+    };
+    log_warn!("audio", "{title}: {why}");
+    window.set_status_message(NO_AUDIO_STATUS.into());
+    if window.get_question_open() {
+        return false;
+    }
+    ask_question(
+        window,
+        slot,
+        Question::Reconnect,
+        title,
+        &format!(
+            "{}. Editing still works; nothing is heard until mooloop reconnects. \
+             Start the audio server if it is not running, then Reconnect.",
+            capitalized(why)
+        ),
+        "Reconnect",
+        "",
+    );
+    true
+}
+
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
+}
+
+/// Replace the engine with a new one on a freshly opened driver, and install
+/// the open song into it (MOO-118): its samples, its routing and its mixer,
+/// rebuilt for whatever sample rate the driver now reports. What the
+/// interface set through the handle rather than the song -- meter and
+/// spectrum subscriptions, the keyboard channel -- carries over by itself
+/// (`EngineHandle::reconnect`). The transport stops; nothing else about the
+/// song changes, and nothing is marked unsaved.
+fn reconnect_audio(
+    handle: &mut EngineHandle,
+    default_sample: Option<&Arc<SampleData>>,
+    state: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+) {
+    let (project, samples) = {
+        let state = state.borrow();
+        (
+            project_snapshot(&state, window).project,
+            state.session.sample_snapshots(),
+        )
+    };
+    let audio = handle.reconnect(saved_audio_config());
+    let rate = handle.sample_rate();
+    log_info!("audio", "reconnected at {rate} Hz: {audio:?}");
+    // Before the install, which re-renders committed stretches at this rate.
+    state.borrow_mut().audio_sample_rate = rate;
+    window.set_audio_sample_rate(rate as i32);
+    window.global::<AudioFormat>().set_sample_rate(rate as i32);
+    if !install_project_in_ui(handle, default_sample, state, window, &project, &samples, false) {
+        log_error!("audio", "the new engine refused the song");
+    }
+    sync_audio_status(handle, window);
 }
 
 /// Save / Don't Save / Cancel, in front of `after` (MOO-91). One wording for
@@ -18797,6 +18994,47 @@ mod tests {
             window.get_question_title(),
             "Save changes to this song before opening another song?"
         );
+    }
+
+    /// **No audio is said, with a way back** (MOO-115): an engine on no
+    /// device, or one that stopped, puts the app's own question up with
+    /// Reconnect; another question already open is not overwritten, and the
+    /// pump is told to try again; audio running again only says so.
+    #[test]
+    fn no_audio_asks_to_reconnect_without_trampling_another_question() {
+        use mooloop_engine::AudioState;
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().expect("the testing backend builds a window");
+        let slot = RefCell::new(None);
+
+        assert!(announce_audio_state(
+            &window,
+            &slot,
+            &AudioState::NoDevice("no JACK server is running; start PipeWire or JACK".into()),
+        ));
+        assert!(window.get_question_open());
+        assert_eq!(window.get_question_title(), "mooloop is running with no audio");
+        assert!(window
+            .get_question_detail()
+            .starts_with("No JACK server is running"));
+        assert_eq!(window.get_question_primary(), "Reconnect");
+        assert_eq!(window.get_question_secondary(), "");
+        assert!(matches!(*slot.borrow(), Some(Question::Reconnect)));
+        assert_eq!(window.get_status_message(), NO_AUDIO_STATUS);
+
+        // The unsaved-changes question is up: the audio news waits.
+        ask_unsaved(&window, &slot, AfterUnsaved::Quit, None);
+        assert!(!announce_audio_state(
+            &window,
+            &slot,
+            &AudioState::Stopped("the audio server shut down".into()),
+        ));
+        assert!(matches!(*slot.borrow(), Some(Question::Unsaved(AfterUnsaved::Quit))));
+
+        window.set_question_open(false);
+        assert!(announce_audio_state(&window, &slot, &AudioState::Running));
+        assert!(!window.get_question_open());
+        assert_eq!(window.get_status_message(), "Audio is running");
     }
 
     /// **The takes dialog's ticks and total** (MOO-38): this session's takes

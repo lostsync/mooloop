@@ -143,6 +143,50 @@ impl Executor {
         self.process_with_input(midi, &[], &[], out_l, out_r);
     }
 
+    /// [`Self::process_with_input`], with a panic anywhere inside it costing
+    /// one block of silence rather than the audio for the rest of the
+    /// session. What every driver calls.
+    ///
+    /// Without it, a device that panics in `process` unwinds into the
+    /// driver: jack-rs catches it, marks the client invalid and returns
+    /// `Quit`, so JACK stops calling it for good, and the interface goes on
+    /// taking edits against an engine that will never render again (R1 in
+    /// `reports/teams-2026-09-22.md`). Here the block is silenced, the fault
+    /// is counted in the load meter for the interface to report, and the
+    /// next block renders -- with the same device, which may panic again.
+    /// That is a silent channel the user can find and remove, not a dead
+    /// program.
+    ///
+    /// The panic payload is the one allocation this has to answer for. The
+    /// unwind has already allocated on this thread, but freeing is still
+    /// kept off it: the payload leaves through the reclaim ring when there is
+    /// room, and is leaked otherwise, as jack-rs does with its own.
+    pub(crate) fn process_contained<'m>(
+        &mut self,
+        midi: impl IntoIterator<Item = (MidiPortId, u32, &'m [u8])>,
+        in_l: &[f32],
+        in_r: &[f32],
+        out_l: &mut [f32],
+        out_r: &mut [f32],
+    ) {
+        let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.process_with_input(midi, in_l, in_r, out_l, out_r);
+        }));
+        if let Err(payload) = rendered {
+            out_l.fill(0.0);
+            out_r.fill(0.0);
+            self.load.record_fault();
+            // A panic mid-block can leave this block's timing half-written;
+            // the next block starts a fresh wake-up measurement.
+            self.last_entered = None;
+            if let Err(rtrb::PushError::Full(StructuralReclaim::PanicPayload(payload))) =
+                self.reclaim_tx.push(StructuralReclaim::PanicPayload(payload))
+            {
+                std::mem::forget(payload);
+            }
+        }
+    }
+
     /// [`Self::process`] with the driver's audio input for this block
     /// (`audio-recording/01`). The input is copied into the renderer's input
     /// bus before anything renders, so a take reading it sees this block's
@@ -1401,6 +1445,79 @@ mod tests {
 
         assert!(!executor.render.transport().playing);
         assert_eq!(executor.render.transport().position_ticks, 0.0);
+    }
+
+    /// A master-bus device that writes a steady level, and panics in
+    /// `process` while `armed` is set.
+    struct PanicsWhenArmed {
+        armed: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl mooloop_dsp::AudioNode for PanicsWhenArmed {
+        fn process(
+            &mut self,
+            ctx: &mooloop_dsp::ProcessContext,
+            bus: &mut mooloop_dsp::StereoBus,
+            _events_in: &mooloop_dsp::EventList,
+            _events_out: Option<&mut mooloop_dsp::EventList>,
+        ) {
+            if self.armed.load(Ordering::Relaxed) {
+                panic!("a device that panics in process");
+            }
+            bus.l[..ctx.frames].fill(0.25);
+            bus.r[..ctx.frames].fill(0.25);
+        }
+    }
+
+    /// R1 in `reports/teams-2026-09-22.md`: a device that panics costs one
+    /// silent block and a fault the interface can report -- and the next
+    /// block renders. Before `process_contained` the panic unwound into the
+    /// driver, and under JACK that ended the client for the session.
+    #[test]
+    fn a_device_panic_costs_one_silent_block_and_is_reported() {
+        let (mut executor, mut cmd_tx, mut reclaim) = executor();
+        let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let node: Box<dyn mooloop_dsp::AudioNode + Send> =
+            Box::new(PanicsWhenArmed { armed: armed.clone() });
+        cmd_tx
+            .push(RealtimeCommand::Structural(crate::StructuralCommand::InstallEffect {
+                target: mooloop_core::EffectTarget::Bus(0),
+                slot: 0,
+                kind: mooloop_core::EffectKind::Filter,
+                resource_key: None,
+                node,
+                align: None,
+                analyzer: Box::new(mooloop_dsp::SpectrumAnalyzer::new()),
+                state: Box::new(crate::EffectSlot::for_device(mooloop_core::DeviceId(7))),
+            }))
+            .expect("room in the ring");
+        let mut out_l = [0.0f32; BLOCK];
+        let mut out_r = [0.0f32; BLOCK];
+        let none = || std::iter::empty::<(MidiPortId, u32, &[u8])>();
+
+        executor.process_contained(none(), &[], &[], &mut out_l, &mut out_r);
+        assert!(
+            out_l.iter().any(|sample| *sample != 0.0),
+            "the device is not reaching the output, so this test could not see a silenced block"
+        );
+        assert_eq!(executor.load.take().faults, 0);
+
+        armed.store(true, Ordering::Relaxed);
+        out_l.fill(1.0);
+        out_r.fill(1.0);
+        executor.process_contained(none(), &[], &[], &mut out_l, &mut out_r);
+        assert!(out_l.iter().chain(&out_r).all(|sample| *sample == 0.0), "the panicked block was not silenced");
+        assert_eq!(executor.load.take().faults, 1, "the fault was not reported");
+        assert!(
+            std::iter::from_fn(|| reclaim.pop().ok())
+                .any(|item| matches!(item, StructuralReclaim::PanicPayload(_))),
+            "the panic payload was freed on the audio thread instead of reclaimed"
+        );
+
+        armed.store(false, Ordering::Relaxed);
+        executor.process_contained(none(), &[], &[], &mut out_l, &mut out_r);
+        assert!(out_l.iter().any(|sample| *sample != 0.0), "the block after the panic did not render");
+        assert_eq!(executor.load.take().faults, 0);
     }
 }
 

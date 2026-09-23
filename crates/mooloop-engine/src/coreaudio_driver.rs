@@ -696,6 +696,15 @@ impl CoreAudioDriver {
         lock(&self.state).route.target()
     }
 
+    /// Core Audio has no server to shut the engine down, and the sample rate
+    /// is asked of each device rather than imposed by one, so there is
+    /// nothing to report here: a device that goes away is reopened by
+    /// [`Self::service`], and a stream that stops for good is seen by the
+    /// handle's own watch on the callback.
+    pub(crate) fn stopped(&self, _engine_rate: u32) -> Option<String> {
+        None
+    }
+
     /// Control-thread upkeep, called from the handle's event poll: listen to
     /// MIDI sources that have appeared, reopen a stream whose device went
     /// away, return to the asked-for device when it is back, and the same for
@@ -1006,7 +1015,9 @@ fn render_callback(
                 // silent, which is what every caller saw before this step.
                 None => (&[], &[]),
             };
-            executor.process_with_input(
+            // Contained, so a device that panics costs this block rather than
+            // unwinding into Core Audio's I/O thread.
+            executor.process_contained(
                 block_midi
                     .iter()
                     .map(|message| (message.port, 0, message.as_slice())),

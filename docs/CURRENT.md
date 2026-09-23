@@ -667,8 +667,26 @@ buses. A driver-independent render state owns transport, scheduling,
 instruments, effects, mixing, and metering. One executor drains fixed-size
 commands into that state and publishes position and master peak events, and a
 driver adapter hands it buffers: JACK on Linux, Core Audio through cpal on
-macOS, chosen at compile time. Offline export drives the same render path with
-no driver at all.
+macOS, chosen at compile time -- or, chosen at run time when that driver will
+not open, none. Offline export drives the same render path with no driver at
+all.
+
+**With no audio device the app still opens** (MOO-115). When JACK will not
+open -- no libjack installed, or no server answering, which the log and the
+window tell apart -- the engine runs on a null driver: a thread rendering
+512-frame blocks at 48 kHz into nothing, so editing, the transport and the
+meters all work and nothing is heard. The window asks "mooloop is running with
+no audio" and offers Reconnect. The same question, as "The audio stopped",
+appears when a running engine stops being heard: the JACK server shut the
+client down (a PipeWire restart does), changed its sample rate, or the
+callback has not run for three seconds. Reconnect closes the driver, opens it
+again, builds a new engine at whatever rate it now reports, and installs the
+open song into it -- samples, routing, mixer -- with the transport stopped and
+nothing marked unsaved (MOO-118). Dismissed, the status bar keeps saying so,
+and Preferences > Audio > Refresh reconnects. A device that panics in the
+audio callback costs a block of silence rather than the audio for the rest of
+the session: the block is silenced and counted, the log and the status bar say
+so, and the next block renders.
 
 Core Audio has no port graph, so an output target there names a device and two
 of its channels. The system default follows whatever the system output is; a

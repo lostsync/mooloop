@@ -6,13 +6,14 @@
 
 use mooloop_core::{EngineCommand, EngineEvent};
 use mooloop_dsp::{ChannelAudioSnapshot, SampleData};
-use mooloop_engine::{CommandSink, Engine};
+use mooloop_engine::{CommandSink, EngineHandle};
 use std::time::{Duration, Instant};
 
 fn main() {
-    let (engine, mut handle) =
-        Engine::new(mooloop_engine::AudioConfig::default()).expect("failed to open engine");
-    let _keep_alive = engine;
+    // `connect` rather than `open`: a self-test of the driver path that fell
+    // back to no driver would pass while testing nothing.
+    let mut handle = EngineHandle::connect(mooloop_engine::AudioConfig::default())
+        .expect("failed to open engine");
     handle.set_channel_audio(
         0,
         ChannelAudioSnapshot::sample(SampleData::default_kick(handle.sample_rate())),

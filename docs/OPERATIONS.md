@@ -894,6 +894,28 @@ even while the system default is playing; it has not been moved to this rule.
 To see the state directly: `pw-link -l | grep mooloop` lists the links, and no
 output at all means the outputs are connected to nothing.
 
+### The Audio Stopped, Or Never Started
+
+With no JACK -- no libjack installed, or no server answering -- mooloop opens
+anyway, on a null driver that renders into nothing, and asks "mooloop is
+running with no audio" with Reconnect (MOO-115). Once running, it asks "The
+audio stopped" when the JACK server shuts the client down (what a PipeWire
+restart does), changes its sample rate, or the callback has not run for
+three seconds. The log says which:
+
+```text
+warn  audio  no JACK server is running; start PipeWire or JACK; running with no audio device
+warn  audio  The audio stopped: the audio server shut down
+info  audio  reconnected at 48000 Hz: Running
+```
+
+Reconnect closes the JACK client, opens a new one, builds a new engine at
+the rate the server now has and installs the open song into it, with the
+transport stopped (MOO-118). Dismissed, the question stays in the status bar,
+and Preferences -> Audio -> Refresh reconnects. A device that panics in the
+callback is not this: that block plays as silence, the log counts it, and
+the next block renders.
+
 ### Reading An Audio Dropout
 
 A dropout has two possible causes and they need opposite fixes, so the log

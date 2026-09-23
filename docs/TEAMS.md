@@ -55,7 +55,7 @@ Paths are from the repository root, except that `engine/…` means
 | 7 | **Parameters & Control** | Parameter identity, and the three things that address it: automation, modulation, MIDI learn and mapping | `Event::ParamValue`, `EngineEvent::ControlInput`, `set_param_normalized` |
 | 8 | **Document & Session** | The live document, undo, the persisted format, and everything that touches disk | `Project`, `ProjectSnapshot`/`ProjectEdit`, `DocumentResult`, `edits_document` |
 | 9 | **Interface** | The application shell, the 8 ms pump, and the UI every team shares: actions, shortcuts, shared controls, themes, panes | Slint models and callbacks, the pump |
-| 10 | **Platform & Release** | The process boundary: drivers, MIDI port I/O, OS integration, startup and shutdown, packaging, CI, the toolchain | `AudioConfig`, `DriverStatus`, `OutputTarget`, `Engine::new` |
+| 10 | **Platform & Release** | The process boundary: drivers, MIDI port I/O, OS integration, startup and shutdown, packaging, CI, the toolchain | `AudioConfig`, `DriverStatus`, `OutputTarget`, `EngineHandle::open` |
 
 ## Seams that have an owner now
 
@@ -259,8 +259,9 @@ them belong to the device teams, and the container drawing in
 ### 10. Platform & Release
 
 - `app/src/` (the binary and `engine-selftest`)
-- `engine/src/`: `jack_driver.rs`, `coreaudio_driver.rs`, `driver.rs` — the
-  driver adapters, MIDI port I/O included
+- `engine/src/`: `jack_driver.rs`, `coreaudio_driver.rs`, `driver.rs`,
+  `null_driver.rs` — the driver adapters, MIDI port I/O included, and the
+  driver for no device
 - `core/src/log.rs` and its test `core/tests/crash_report.rs`,
   `session/src/dialogs.rs`
 - `ui/src/signals.rs` (quit signals routed to the pump)

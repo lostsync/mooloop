@@ -81,6 +81,10 @@ pub struct LoadSnapshot {
     pub late_wakeups: u32,
     /// The worst wake-up gap in the window, as a multiple of the budget.
     pub peak_period: f32,
+    /// Blocks played as silence because something in them panicked. The
+    /// callback survives a panic (`Executor::process_contained`); this is how
+    /// the rest of the program hears that one happened.
+    pub faults: u32,
     /// How the callback thread is scheduled.
     pub realtime: RealtimeStatus,
 }
@@ -107,7 +111,13 @@ pub struct LoadMeters {
     budget_nanos: AtomicU64,
     peak_work_permille: AtomicU32,
     peak_period_permille: AtomicU32,
+    faults: AtomicU32,
     realtime: AtomicU32,
+    /// Every callback since the engine started, never cleared: whether this
+    /// has moved is whether the engine is running at all, which is a
+    /// different question from the window's and must not be answered by
+    /// whoever last drained it.
+    callbacks: AtomicU64,
 }
 
 impl LoadMeters {
@@ -120,17 +130,33 @@ impl LoadMeters {
             budget_nanos: AtomicU64::new(0),
             peak_work_permille: AtomicU32::new(0),
             peak_period_permille: AtomicU32::new(0),
+            faults: AtomicU32::new(0),
             realtime: AtomicU32::new(RealtimeStatus::Unknown.code()),
+            callbacks: AtomicU64::new(0),
         })
+    }
+
+    /// Callbacks since the engine started, including those that panicked.
+    /// Never cleared, unlike the window [`Self::take`] drains.
+    pub fn callbacks(&self) -> u64 {
+        self.callbacks.load(Ordering::Relaxed)
+    }
+
+    /// Record a block that panicked and was played as silence. Called from
+    /// the audio thread; two relaxed increments.
+    pub fn record_fault(&self) {
+        self.callbacks.fetch_add(1, Ordering::Relaxed);
+        self.faults.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record one block. `work` and `budget` are nanoseconds; `period` is the
     /// gap since the previous callback entered, or `None` for the first block
     /// of a run, which has no previous callback to be late relative to.
     ///
-    /// Called from the audio thread. Eight relaxed atomic operations, no
+    /// Called from the audio thread. Nine relaxed atomic operations, no
     /// division by a runtime zero, no allocation, no branch on a lock.
     pub fn record(&self, work: u64, budget: u64, period: Option<u64>) {
+        self.callbacks.fetch_add(1, Ordering::Relaxed);
         if budget == 0 {
             return;
         }
@@ -179,6 +205,7 @@ impl LoadMeters {
         let late_wakeups = self.late_wakeups.swap(0, Ordering::Relaxed);
         let peak_work = self.peak_work_permille.swap(0, Ordering::Relaxed);
         let peak_period = self.peak_period_permille.swap(0, Ordering::Relaxed);
+        let faults = self.faults.swap(0, Ordering::Relaxed);
         LoadSnapshot {
             blocks,
             mean_load: if budget == 0 {
@@ -190,6 +217,7 @@ impl LoadMeters {
             over_budget,
             late_wakeups,
             peak_period: peak_period as f32 / 1000.0,
+            faults,
             realtime: self.realtime(),
         }
     }
