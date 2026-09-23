@@ -259,6 +259,18 @@ impl AdsrEnv {
         }
     }
 
+    /// Release so that the level reaches zero within `frames` samples, or
+    /// speed up a release already running. Never slows one down: a voice
+    /// being faded for a steal, a retired slot or the end of its region
+    /// keeps whichever of those fades is shortest.
+    fn fade_within(&mut self, frames: f32) {
+        let dec = self.level / frames.max(1.0);
+        if self.stage != Stage::Release || dec > self.release_dec {
+            self.release_dec = dec;
+            self.stage = Stage::Release;
+        }
+    }
+
     fn is_idle(&self) -> bool {
         self.stage == Stage::Idle
     }
@@ -269,6 +281,20 @@ impl AdsrEnv {
 }
 
 const CHOKE_RELEASE_S: f32 = 0.005;
+
+/// How long a voice takes to leave when something takes its place: a
+/// steal, or a Voices count lowered underneath it (MOO-110). The choke's
+/// fade, because it is the same event -- a voice told to go now -- and
+/// the one number a listener already hears for it.
+const VOICE_FADE_S: f32 = CHOKE_RELEASE_S;
+
+/// How long before the end of a non-looping region a voice starts fading,
+/// so it stops at silence rather than wherever the waveform was (MOO-110).
+const REGION_END_FADE_S: f32 = 0.002;
+
+/// The largest share of a region the end fade may take. A slice of a
+/// few milliseconds would otherwise be fading from its first frame.
+const REGION_END_FADE_MAX_SHARE: f64 = 0.25;
 
 /// One independently enveloped sample playback voice.
 struct Voice {
@@ -581,11 +607,18 @@ impl Sampler {
             // first hit swallowed 5 dB of a kick's transient.
             self.output_gain.reset_to(trim);
         }
+        let fade = VOICE_FADE_S * self.sample_rate as f32;
         for (index, voice) in self.voices.iter_mut().enumerate() {
             voice.env.configure(params.amp_env());
             voice.filter_env.configure(params.resolved_filter_env());
-            if index >= params.polyphony as usize {
-                voice.active = false;
+            // A slot the lowered Voices count no longer covers fades out
+            // rather than stopping mid-waveform. It keeps rendering until it
+            // has: `render_range` walks every slot, not only those in the
+            // limit, which is also where a stolen voice goes to fade.
+            if index >= params.polyphony as usize && voice.active {
+                voice.loop_enabled = false;
+                voice.env.fade_within(fade);
+                voice.filter_env.fade_within(fade);
             }
         }
     }
@@ -811,12 +844,41 @@ impl Sampler {
         if let Some(index) = voices.iter().position(|voice| !voice.active) {
             return index;
         }
+        // Every slot is busy: take one already on its way out before one
+        // still being held, and the oldest of either (MOO-110).
         voices
             .iter()
             .enumerate()
-            .min_by_key(|(_, voice)| voice.age)
+            .min_by_key(|(_, voice)| (!voice.env.is_releasing(), voice.age))
             .map(|(index, _)| index)
             .unwrap_or(0)
+    }
+
+    /// Move a sounding voice out of slot `index` so a new note can start
+    /// there fresh, and fade it where it lands (MOO-110).
+    ///
+    /// The pool holds sixteen slots whatever the Voices count, so the ones
+    /// above the count are free to carry a fading voice; the highest idle
+    /// slot is taken so the ones inside the count stay free for notes. The
+    /// voice and its stretch reader move together, by swap: nothing is
+    /// allocated or dropped. With no idle slot anywhere the voice is cut, as
+    /// every steal was before.
+    fn hand_off(&mut self, index: usize) {
+        let Some(spare) = (0..self.voices.len())
+            .rev()
+            .find(|&slot| slot != index && !self.voices[slot].active)
+        else {
+            return;
+        };
+        self.voices.swap(index, spare);
+        if let Some(pool) = self.stretch.as_mut() {
+            pool.swap_readers(index, spare);
+        }
+        let fade = VOICE_FADE_S * self.sample_rate as f32;
+        let leaving = &mut self.voices[spare];
+        leaving.loop_enabled = false;
+        leaving.env.fade_within(fade);
+        leaving.filter_env.fade_within(fade);
     }
 
     fn trigger(&mut self, event_id: u64, note: u8, velocity: u8) {
@@ -871,7 +933,28 @@ impl Sampler {
             )
         };
 
+        // A finished voice still holding some other sample gives it up now.
+        // Stolen voices fade out on spare slots (MOO-110) and keep what they
+        // played there, so without this a replaced sample could outlive its
+        // replacement for as long as nothing struck that slot again.
+        for voice in self.voices.iter_mut().filter(|voice| !voice.active) {
+            if self.retired.samples_full() {
+                break;
+            }
+            if voice
+                .sample
+                .as_ref()
+                .is_some_and(|held| !Arc::ptr_eq(held, &sample))
+            {
+                if let Some(held) = voice.sample.take() {
+                    voice.sample = self.retired.push_sample(held);
+                }
+            }
+        }
         let index = self.select_voice(note);
+        if self.voices[index].active {
+            self.hand_off(index);
+        }
         // A voice struck with a different sample gives its old one to the
         // ring rather than dropping it. With the ring full the note is
         // refused and the voice left as it was: a lost note in a backlog no
@@ -950,6 +1033,10 @@ impl Sampler {
             .filter(|voice| voice.active && voice.event_id == event_id)
         {
             match mode {
+                // Already fading -- stolen, retired or at its region end --
+                // and a note-off must not slow that down to the patch's own
+                // release.
+                VoiceMode::Gate if voice.env.is_releasing() => {}
                 VoiceMode::Gate => {
                     voice.env.release();
                     voice.filter_env.release();
@@ -1254,6 +1341,7 @@ impl Sampler {
             // and would end a one-shot before its tail had been played. The
             // reader has already wrapped inside a forward loop, so the wrap
             // below finds nothing to do.
+            let read_at = voice.play_pos;
             match stretch.as_ref() {
                 Some(reader) => voice.play_pos = reader.source_pos(),
                 None => voice.play_pos += voice.direction * voice.playback_rate,
@@ -1268,6 +1356,24 @@ impl Sampler {
                         // envelope tail would only hold its final sample value.
                         voice.active = false;
                         return;
+                    }
+                    // Fade to silence by the region's edge rather than stop
+                    // on whatever sample it holds (MOO-110). Measured in the
+                    // head's own steps, so a stretched or transposed voice
+                    // fades over the same output time as one at unity.
+                    let step = (voice.play_pos - read_at).abs();
+                    if step > 0.0 {
+                        let left = if voice.direction > 0.0 {
+                            play_end - voice.play_pos
+                        } else {
+                            voice.play_pos - play_start
+                        } / step;
+                        let span = (play_end - play_start) / step;
+                        let fade = f64::from(REGION_END_FADE_S * sample_rate as f32)
+                            .min(span * REGION_END_FADE_MAX_SHARE);
+                        if left <= fade {
+                            voice.env.fade_within(left as f32);
+                        }
                     }
                 }
                 LoopMode::Forward => {
@@ -1311,9 +1417,11 @@ impl Sampler {
         self.output_gain
             .set_target(clamp_output_gain(params.output_gain));
         let entry = self.output_gain;
-        let limit = params.polyphony.clamp(1, MAX_SAMPLER_VOICES) as usize;
+        // Every slot, not only the Voices count: the ones above it carry
+        // voices fading out after a steal or a lowered count. An idle slot
+        // returns at once.
         let mut readers = self.stretch.as_mut().map(|pool| pool.readers_mut());
-        for voice in &mut self.voices[..limit] {
+        for voice in &mut self.voices {
             let mut gain = entry;
             // Advanced in lockstep with the voices, so voice `n` always gets
             // reader `n` whether or not it is sounding.
@@ -1329,6 +1437,15 @@ impl Sampler {
     #[cfg(test)]
     fn active_voice_count(&self) -> usize {
         self.voices.iter().filter(|voice| voice.active).count()
+    }
+
+    /// Voices still sounding a note rather than fading out of one.
+    #[cfg(test)]
+    fn sounding_voice_count(&self) -> usize {
+        self.voices
+            .iter()
+            .filter(|voice| voice.active && !voice.env.is_releasing())
+            .count()
     }
 
     #[cfg(test)]
@@ -1483,6 +1600,14 @@ mod tests {
 
         audio.store(Some(Arc::new(ChannelAudioSnapshot::sample(sample(0.2)))));
         sampler.trigger(3, 60, 127);
+        // Each steal moved the stolen voice, and the sample it played, to a
+        // spare slot to fade out there (MOO-110). Those voices give the old
+        // sample up at the next note once their fades have run. Nothing
+        // here has rendered, so every envelope is still at zero and one
+        // frame finishes the fades.
+        let mut bus = StereoBus::with_capacity(8);
+        sampler.render_range(&mut bus, 0, 8);
+        sampler.trigger(4, 60, 127);
         let mut snapshots = 0;
         let mut samples = Vec::new();
         while let Some(retired) = sampler.pop_retired() {
@@ -1492,8 +1617,12 @@ mod tests {
             }
         }
         assert_eq!(snapshots, 1, "the snapshot the sampler held should be retired");
-        assert_eq!(samples.len(), 1, "the voice's old sample should be retired");
-        assert!(Arc::ptr_eq(&samples[0], &first_alive.upgrade().unwrap()));
+        // One handle per voice that held it: two, the first note's and the
+        // second's, both stolen.
+        assert_eq!(samples.len(), 2, "the voices' old sample should be retired");
+        let first = first_alive.upgrade().unwrap();
+        assert!(samples.iter().all(|sample| Arc::ptr_eq(sample, &first)));
+        drop(first);
         drop(samples);
         assert!(
             first_alive.upgrade().is_none(),
@@ -1837,6 +1966,10 @@ mod tests {
 
         for slice in 0..SLICE_COUNT {
             let note = DEFAULT_SLICE_BASE_NOTE + slice as u8;
+            // One slice at a time: the last one would otherwise still be
+            // fading out under this one after its steal, and the sum of two
+            // voices can leave the ramp's range without reading outside it.
+            sampler.reset();
             let bus = render_note(&mut sampler, sr, note, 64);
             for (index, sample) in bus.l[..64].iter().enumerate() {
                 assert!(
@@ -2262,11 +2395,13 @@ mod tests {
         assert_eq!(sampler.active_voice_count(), 3);
 
         sampler.trigger(4, 60, 100);
-        assert_eq!(sampler.active_voice_count(), 3);
-        assert!(!sampler
+        assert_eq!(sampler.sounding_voice_count(), 3);
+        // The stolen voice fades out on a spare slot rather than stopping.
+        assert!(sampler
             .voices
             .iter()
-            .any(|voice| voice.active && voice.event_id == 1));
+            .filter(|voice| voice.active && voice.event_id == 1)
+            .all(|voice| voice.env.is_releasing()));
         assert!(sampler
             .voices
             .iter()
@@ -2284,15 +2419,66 @@ mod tests {
         sampler.trigger(1, 60, 100);
         sampler.trigger(2, 64, 100);
         sampler.trigger(3, 60, 100);
-        assert_eq!(sampler.active_voice_count(), 2);
-        assert!(!sampler
+        assert_eq!(sampler.sounding_voice_count(), 2);
+        assert!(sampler
             .voices
             .iter()
-            .any(|voice| voice.active && voice.event_id == 1));
+            .filter(|voice| voice.active && voice.event_id == 1)
+            .all(|voice| voice.env.is_releasing()));
         assert!(sampler
             .voices
             .iter()
             .any(|voice| voice.active && voice.event_id == 3));
+    }
+
+    /// With every voice busy, a new note takes one that is releasing before
+    /// one still held, even a younger one (MOO-110).
+    #[test]
+    fn a_full_pool_steals_a_releasing_voice_before_a_held_one() {
+        let params = SamplerParams {
+            polyphony: 2,
+            voice_mode: VoiceMode::Gate,
+            retrigger_mode: RetriggerMode::Layer,
+            release: 1.0,
+            ..SamplerParams::default()
+        };
+        let mut sampler = sampler_with_frames(48_000, 4096, params);
+        sampler.trigger(1, 60, 100);
+        sampler.trigger(2, 62, 100);
+        sampler.release_note(2);
+        sampler.trigger(3, 64, 100);
+        assert!(
+            sampler
+                .voices
+                .iter()
+                .any(|v| v.active && v.event_id == 1 && !v.env.is_releasing()),
+            "the held note was stolen"
+        );
+        assert_eq!(sampler.sounding_voice_count(), 2);
+    }
+
+    /// A stolen voice and the voices a lowered Voices count retires fade
+    /// out on slots above the count, and are gone once the fade has run.
+    #[test]
+    fn stolen_and_retired_voices_fade_out_and_end() {
+        let params = SamplerParams {
+            polyphony: 3,
+            retrigger_mode: RetriggerMode::Layer,
+            ..SamplerParams::default()
+        };
+        let mut sampler = sampler_with_frames(48_000, 48_000, params);
+        for id in 1..=4 {
+            sampler.trigger(id, 60, 100);
+        }
+        // The fourth note stole the first, which is fading, not gone.
+        assert_eq!(sampler.active_voice_count(), 4);
+        let mut lowered = sampler.params();
+        lowered.polyphony = 1;
+        sampler.set_params(lowered);
+        assert_eq!(sampler.sounding_voice_count(), 1);
+        let mut bus = StereoBus::with_capacity(1_024);
+        sampler.render_range(&mut bus, 0, 1_024);
+        assert_eq!(sampler.active_voice_count(), 1, "a fade never ended");
     }
 
     #[test]
