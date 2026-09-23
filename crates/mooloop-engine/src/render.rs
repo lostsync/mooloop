@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
 use mooloop_core::{
-    audio_tap_index, compile_bus_graph, AutomationLane, AuxInParams, ChannelSource,
+    audio_tap_index, compile_bus_graph, AutomationLane, ChannelSource,
     CompiledAudioGraph, CompiledBusGraph, DeviceKind, OutletDescriptor, PublishesOutlets,
     Ds01Params, DrumSynthParams, EffectTarget, EngineCommand, GeneratorParams,
     LoopRange, ModDestinationDescriptor, MusicalEdge, PlaybackMode,
@@ -3208,15 +3208,21 @@ pub struct ChannelStorage {
 }
 
 pub struct ChannelStrip {
-    sampler: Sampler,
-    drum_synth: DrumSynth,
-    mono_synth: MonoSynth,
-    poly_synth: PolySynth,
-    mlm1: MlM1,
-    mlp8: MlP8,
-    ds01: Ds01,
-    aux_in: AuxIn,
-    active_source: DeviceKind,
+    /// The channel's instrument: one slot, whatever kind it is (MOO-56).
+    ///
+    /// It used to be eight concrete fields -- one of every generator, all
+    /// resident on every live channel -- and a `DeviceKind` tag picking one,
+    /// so a source change could flip the tag inline on the audio thread. Now
+    /// a source change is an ownership move: the new node is built on the
+    /// control thread, arrives through `StructuralCommand::InstallSource`,
+    /// and the one it displaces leaves through the reclaim ring. Adam ruled
+    /// on 2026-09-22 that the change may land a block or more after the
+    /// click when the ring is full: *"totally fine. there's no reason to
+    /// expect that this action should be instantaneous."*
+    ///
+    /// The node says which kind it is ([`SourceNode::kind`]); nothing beside
+    /// it keeps a second copy of that answer.
+    source: Box<dyn SourceNode + Send>,
     /// What this channel's generator published during the block just
     /// rendered, indexed by outlet id.
     ///
@@ -3274,20 +3280,101 @@ pub struct ChannelStrip {
     sequenced: SequencedVoices,
 }
 
+/// Build a channel source running `params`. Allocates, so it belongs on the
+/// control thread: in a project install, in `EngineHandle`'s source change,
+/// or in the storage an added channel arrives in.
+///
+/// **The one match over the kinds of source**, and the only place the engine
+/// names a concrete generator. Everything it does to a running one goes
+/// through [`SourceNode`].
+///
+/// Each is built at its defaults and then *sent* `params` -- the way the
+/// eight resident generators were reset and then sent a project's patch --
+/// rather than constructed with it, so a device whose constructor and
+/// `set_params` settle their smoothing differently still starts where it
+/// always did. Aux In is the exception and has always been: its level is
+/// snapped to the patch rather than ramped to it, because a loaded song
+/// starts at the level it was saved at with nothing to click, and building it
+/// with the patch is exactly that snap.
+///
+/// `audio_slot` is the channel's sample slot. Only a sampler reads it, but
+/// every channel has one whatever it is playing, so a channel switched to the
+/// sampler later is built reading the slot the channel already publishes to.
+pub(crate) fn build_source(
+    params: &GeneratorParams,
+    audio_slot: ChannelAudioSlot,
+    sample_rate: u32,
+) -> Box<dyn SourceNode + Send> {
+    match *params {
+        GeneratorParams::Sampler(params) => {
+            let mut node = Sampler::new(audio_slot, SamplerParams::default(), sample_rate);
+            node.set_params(params);
+            Box::new(node)
+        }
+        GeneratorParams::DrumSynth(params) => {
+            let mut node = DrumSynth::new(DrumSynthParams::default(), sample_rate);
+            node.set_params(params);
+            Box::new(node)
+        }
+        GeneratorParams::MonoSynth(params) => {
+            let mut node = MonoSynth::new(MonoSynthParams::default(), sample_rate);
+            node.set_params(params);
+            Box::new(node)
+        }
+        GeneratorParams::PolySynth(params) => {
+            let mut node = PolySynth::new(PolySynthParams::default(), sample_rate);
+            node.set_params(params);
+            Box::new(node)
+        }
+        GeneratorParams::MlM1(params) => {
+            let mut node = MlM1::new(MlM1Params::default(), sample_rate);
+            node.set_params(params);
+            Box::new(node)
+        }
+        GeneratorParams::MlP8(params) => {
+            let mut node = MlP8::new(MlP8Params::default(), sample_rate);
+            node.set_params(params);
+            Box::new(node)
+        }
+        GeneratorParams::Ds01(params) => {
+            let mut node = Ds01::new(Ds01Params::default(), sample_rate);
+            node.set_params(params);
+            Box::new(node)
+        }
+        GeneratorParams::AuxIn(params) => Box::new(AuxIn::new(params, sample_rate)),
+    }
+}
+
+/// Where a channel's sampler voices are, for the playhead meter: nowhere --
+/// every slot `NaN` -- on a channel that is not running the sampler, which
+/// is what an idle resident sampler used to report on one.
+fn sampler_playheads(source: &dyn SourceNode) -> [f32; MAX_SAMPLER_VOICES as usize] {
+    source
+        .as_sampler()
+        .map_or([f32::NAN; MAX_SAMPLER_VOICES as usize], Sampler::voice_positions)
+}
+
+/// The patch a saved source carries, as the typed block the engine keeps.
+fn saved_source_params(source: &ChannelSource) -> GeneratorParams {
+    match source {
+        ChannelSource::Sampler(state) => GeneratorParams::Sampler(state.params),
+        ChannelSource::DrumSynth(state) => GeneratorParams::DrumSynth(state.params),
+        ChannelSource::MonoSynth(state) => GeneratorParams::MonoSynth(state.params),
+        ChannelSource::PolySynth(state) => GeneratorParams::PolySynth(state.params),
+        ChannelSource::MlM1(state) => GeneratorParams::MlM1(state.params),
+        ChannelSource::MlP8(state) => GeneratorParams::MlP8(state.params),
+        ChannelSource::Ds01(state) => GeneratorParams::Ds01(state.params),
+        ChannelSource::AuxIn(state) => GeneratorParams::AuxIn(state.params),
+    }
+}
+
 impl ChannelStrip {
-    fn new(audio_slot: ChannelAudioSlot, sample_rate: u32) -> Self {
+    /// A strip running `source`, which arrives at its kind's defaults.
+    fn new(source: Box<dyn SourceNode + Send>, sample_rate: u32) -> Self {
         Self {
-            sampler: Sampler::new(audio_slot, SamplerParams::default(), sample_rate),
-            drum_synth: DrumSynth::new(DrumSynthParams::default(), sample_rate),
-            mono_synth: MonoSynth::new(MonoSynthParams::default(), sample_rate),
-            poly_synth: PolySynth::new(PolySynthParams::default(), sample_rate),
-            mlm1: MlM1::new(MlM1Params::default(), sample_rate),
-            mlp8: MlP8::new(MlP8Params::default(), sample_rate),
-            ds01: Ds01::new(Ds01Params::default(), sample_rate),
-            aux_in: AuxIn::new(AuxInParams::default(), sample_rate),
-            active_source: DeviceKind::Sampler,
+            source_base: source.kind().default_generator_params(),
+            source,
             published_outlets: [0.0; MAX_GENERATOR_OUTLETS],
-            source_base: GeneratorParams::Sampler(SamplerParams::default()),
             effects: EffectChain::new(),
             bus: StereoBus::with_capacity(MAX_BLOCK_SIZE),
             output: OutputStage::new(mooloop_core::DEFAULT_CHANNEL_VOLUME, pan_gains, sample_rate),
@@ -3301,29 +3388,26 @@ impl ChannelStrip {
         }
     }
 
-    fn reset_sources_to_defaults(&mut self, source: DeviceKind) {
-        self.source_base = source.default_generator_params();
-        self.sampler.reset();
-        self.drum_synth.reset();
-        self.mono_synth.reset();
-        self.poly_synth.reset();
-        self.mlm1.reset();
-        self.mlp8.reset();
-        self.ds01.reset();
-        self.aux_in.reset();
-        self.sampler.set_params(SamplerParams::default());
-        self.drum_synth.set_params(DrumSynthParams::default());
-        self.mono_synth.set_params(MonoSynthParams::default());
-        self.poly_synth.set_params(PolySynthParams::default());
-        self.mlm1.set_params(MlM1Params::default());
-        self.mlp8.set_params(MlP8Params::default());
-        self.ds01.set_params(Ds01Params::default());
-        self.aux_in.set_params(AuxInParams::default());
-        self.active_source = source;
+    /// Put `source` in the slot and hand back the one it displaces, which
+    /// the caller must not drop on the audio thread.
+    ///
+    /// Moves two boxes and writes the base; allocates and frees nothing,
+    /// which is what makes it callable from `apply_structural`. `source`
+    /// arrives at its kind's defaults (see [`build_source`]), so the base
+    /// is those defaults too, and the patch follows as parameter commands
+    /// the way it always has.
+    fn install_source(
+        &mut self,
+        source: Box<dyn SourceNode + Send>,
+    ) -> Box<dyn SourceNode + Send> {
+        self.source_base = source.kind().default_generator_params();
+        std::mem::replace(&mut self.source, source)
     }
 
-    fn reset_slot(&mut self, source: DeviceKind, reclaim: &mut Reclaim) {
-        self.reset_sources_to_defaults(source);
+    /// Put the mixer half of the strip back to a fresh channel's: no
+    /// effects, the default fader, the master. The source is not touched --
+    /// replacing it is an ownership move, and the caller has the node.
+    fn reset_slot(&mut self, reclaim: &mut Reclaim) {
         self.effects.clear(reclaim);
         self.output.reset(mooloop_core::DEFAULT_CHANNEL_VOLUME);
         self.solo_silenced = false;
@@ -3343,136 +3427,86 @@ impl ChannelStrip {
         if !moved {
             return;
         }
-        if matches!(self.source_base, GeneratorParams::MlP8(_)) {
-            self.mlp8.set_route_amount(route, amount);
-        }
+        // Only a device with internal routes has one to move; the default
+        // does nothing, which is what every other kind always did here.
+        self.source.set_route_amount(route, amount);
     }
 
-    /// Hand the authored base to whichever generator this channel is running.
+    /// Hand the authored base to the generator this channel is running.
     ///
     /// Allocation-free for every kind, which is what makes it callable from
     /// the audio thread: a generator keeps no queue between blocks, so its
     /// base is applied straight through rather than staged.
     fn push_source_base(&mut self) {
-        match self.source_base {
-            GeneratorParams::Sampler(params) => self.sampler.set_params(params),
-            GeneratorParams::MonoSynth(params) => self.mono_synth.set_params(params),
-            GeneratorParams::PolySynth(params) => self.poly_synth.set_params(params),
-            GeneratorParams::MlM1(params) => self.mlm1.set_params(params),
-            GeneratorParams::MlP8(params) => self.mlp8.set_params(params),
-            GeneratorParams::Ds01(params) => self.ds01.set_params(params),
-            GeneratorParams::DrumSynth(params) => self.drum_synth.set_params(params),
-            GeneratorParams::AuxIn(params) => self.aux_in.set_params(params),
+        let _ = self.source.set_generator_params(&self.source_base);
+    }
+
+    /// Take a whole typed parameter block from a command, if it is for the
+    /// device this channel is running.
+    ///
+    /// One aimed at another kind changes nothing, the base included. The
+    /// eight resident generators used to take such a block into the idle one
+    /// and point the base at it, leaving the base describing a device the
+    /// channel was not playing -- so the next single-parameter edit was
+    /// applied to the wrong table.
+    fn set_source_params(&mut self, params: GeneratorParams) {
+        if self.source.set_generator_params(&params) {
+            self.source_base = params;
         }
     }
 
-    /// Install a channel's source device state.
+    /// Install a channel's saved source, returning the node it displaces.
     ///
-    /// Takes `sample_rate` because the sampler's stretch pool is sized to it
-    /// and provisioned here. That is safe precisely because `load_project`
-    /// only ever runs while a `RenderState` is being prepared on the control
-    /// thread or for an offline render -- never from the audio callback -- so
-    /// this is the one path that may allocate the pool inline instead of
+    /// Control thread only, and the caller drops what comes back: this
+    /// builds a node, and `load_project` only ever runs while a `RenderState`
+    /// is being prepared on the control thread or for an offline render --
+    /// never from the audio callback. The same reason makes this the one
+    /// path that may allocate the sampler's stretch pool inline instead of
     /// installing it structurally.
-    fn load_source(&mut self, source: &ChannelSource, sample_rate: u32) {
-        self.reset_sources_to_defaults(source.kind());
-        self.source_base = match source {
-            ChannelSource::Sampler(state) => {
-                self.sampler.set_params(state.params);
-                // Reconcile intent with state, so a saved project plays
-                // stretched from its first note rather than after a round
-                // trip through the structural queue.
-                if state.params.stretch_enabled {
-                    self.sampler.install_stretch(Box::new(StretchPool::new(
-                        state.params.stretch_mode,
-                        sample_rate,
-                        MAX_SAMPLER_VOICES as usize,
-                    )));
-                } else {
-                    self.sampler.take_stretch();
-                }
-                GeneratorParams::Sampler(state.params)
+    fn load_source(
+        &mut self,
+        source: &ChannelSource,
+        audio_slot: ChannelAudioSlot,
+        sample_rate: u32,
+    ) -> Box<dyn SourceNode + Send> {
+        let params = saved_source_params(source);
+        let mut node = build_source(&params, audio_slot, sample_rate);
+        // Reconcile intent with state, so a saved project plays stretched
+        // from its first note rather than after a round trip through the
+        // structural queue.
+        if let (GeneratorParams::Sampler(sampler), Some(node)) = (params, node.as_sampler_mut()) {
+            if sampler.stretch_enabled {
+                node.install_stretch(Box::new(StretchPool::new(
+                    sampler.stretch_mode,
+                    sample_rate,
+                    MAX_SAMPLER_VOICES as usize,
+                )));
             }
-            ChannelSource::DrumSynth(state) => {
-                self.drum_synth.set_params(state.params);
-                GeneratorParams::DrumSynth(state.params)
-            }
-            ChannelSource::MonoSynth(state) => {
-                self.mono_synth.set_params(state.params);
-                GeneratorParams::MonoSynth(state.params)
-            }
-            ChannelSource::PolySynth(state) => {
-                self.poly_synth.set_params(state.params);
-                GeneratorParams::PolySynth(state.params)
-            }
-            ChannelSource::MlM1(state) => {
-                self.mlm1.set_params(state.params);
-                GeneratorParams::MlM1(state.params)
-            }
-            ChannelSource::MlP8(state) => {
-                self.mlp8.set_params(state.params);
-                GeneratorParams::MlP8(state.params)
-            }
-            ChannelSource::Ds01(state) => {
-                self.ds01.set_params(state.params);
-                GeneratorParams::Ds01(state.params)
-            }
-            ChannelSource::AuxIn(state) => {
-                self.aux_in.set_params(state.params);
-                // Snapped rather than ramped: a loaded project starts at the
-                // level it was saved at, with nothing to click.
-                self.aux_in.reset();
-                GeneratorParams::AuxIn(state.params)
-            }
-        };
+        }
+        let displaced = std::mem::replace(&mut self.source, node);
+        self.source_base = params;
+        displaced
     }
 
     /// The generator this channel is running, as the node it is.
     ///
-    /// The rest contract is on `AudioNode`, so asking a channel whether its
-    /// source has anything left to do should not mean a second `match` over
-    /// the eight device kinds every time. This is that match, once.
-    ///
     /// `SourceNode` rather than `AudioNode` because `SourceNode: AudioNode`:
     /// the rest contract is inherited, so this answers `is_at_rest` and
-    /// `tail_frames` exactly as before, and also answers the one call the
-    /// strip makes into its generator.
+    /// `tail_frames`, and also answers the one call the strip makes into its
+    /// generator.
     fn source_node(&self) -> &dyn SourceNode {
-        match self.active_source {
-            DeviceKind::Sampler => &self.sampler,
-            DeviceKind::DrumSynth => &self.drum_synth,
-            DeviceKind::MonoSynth => &self.mono_synth,
-            DeviceKind::PolySynth => &self.poly_synth,
-            DeviceKind::MlM1 => &self.mlm1,
-            DeviceKind::MlP8 => &self.mlp8,
-            DeviceKind::Ds01 => &self.ds01,
-            DeviceKind::AuxIn => &self.aux_in,
-        }
+        &*self.source
     }
 
     /// The generator and this channel's bus, borrowed apart.
     ///
-    /// This is the mutable half of the match above, and it hands back the bus
-    /// with the node because it has to. A `source_node_mut(&mut self)`
-    /// borrows the *whole* strip, so `node.process_source(.., &mut self.bus,
-    /// ..)` at a call site is two mutable borrows of `self` and does not
-    /// compile — while the eight arms it replaced each borrowed one generator
-    /// field and `self.bus`, which are disjoint and always did. Doing the
-    /// match and the field split in the same function is what lets the
-    /// compiler see that disjointness, and it is why this returns a pair
-    /// rather than the node alone.
+    /// It hands back the bus with the node because it has to. A
+    /// `source_node_mut(&mut self)` borrows the *whole* strip, so
+    /// `node.process_source(.., &mut self.bus, ..)` at a call site is two
+    /// mutable borrows of `self` and does not compile. Splitting the two
+    /// fields here is what lets the compiler see they are disjoint.
     fn source_and_bus(&mut self) -> (&mut dyn SourceNode, &mut StereoBus) {
-        let source: &mut dyn SourceNode = match self.active_source {
-            DeviceKind::Sampler => &mut self.sampler,
-            DeviceKind::DrumSynth => &mut self.drum_synth,
-            DeviceKind::MonoSynth => &mut self.mono_synth,
-            DeviceKind::PolySynth => &mut self.poly_synth,
-            DeviceKind::MlM1 => &mut self.mlm1,
-            DeviceKind::MlP8 => &mut self.mlp8,
-            DeviceKind::Ds01 => &mut self.ds01,
-            DeviceKind::AuxIn => &mut self.aux_in,
-        };
-        (source, &mut self.bus)
+        (&mut *self.source, &mut self.bus)
     }
 
     /// The generator alone, for the callers that touch nothing else.
@@ -3542,16 +3576,7 @@ impl ChannelStrip {
     }
 
     fn choke_group(&self) -> u8 {
-        match self.active_source {
-            DeviceKind::Sampler => self.sampler.choke_group(),
-            DeviceKind::DrumSynth => self.drum_synth.choke_group(),
-            DeviceKind::Ds01 => self.ds01.choke_group(),
-            DeviceKind::MonoSynth
-            | DeviceKind::PolySynth
-            | DeviceKind::MlM1
-            | DeviceKind::MlP8
-            | DeviceKind::AuxIn => 0,
-        }
+        self.source.choke_group()
     }
 
     /// Render the generator, filling whatever audio outlets are subscribed
@@ -4449,10 +4474,13 @@ impl RenderState {
     /// disposal off the realtime thread. Every materialised strip, not just
     /// the live ones: a strip the project stopped using can still be holding
     /// what it displaced before the ring had room.
+    ///
+    /// Only a strip running the sampler can be holding any. One whose sampler
+    /// was replaced took what it held with it, through the reclaim ring.
     pub(crate) fn pop_retired_sampler_audio(&mut self) -> Option<mooloop_dsp::RetiredAudio> {
         self.strips
             .iter_mut()
-            .find_map(|strip| strip.sampler.pop_retired())
+            .find_map(|strip| strip.source.as_sampler_mut().and_then(Sampler::pop_retired))
     }
 
 
@@ -4574,12 +4602,18 @@ impl RenderState {
     /// Build one channel's storage. Allocates, so it belongs on the control
     /// thread — either here during a project install, or in the `AddChannel`
     /// structural command that carries the result across.
+    ///
+    /// The strip arrives running `source` at its defaults, built here too:
+    /// an added channel's instrument is part of what has to be allocated off
+    /// the audio thread.
     pub(crate) fn build_channel(
         audio_slot: ChannelAudioSlot,
+        source: DeviceKind,
         sample_rate: u32,
     ) -> Box<ChannelStorage> {
+        let source = build_source(&source.default_generator_params(), audio_slot, sample_rate);
         Box::new(ChannelStorage {
-            strip: Box::new(ChannelStrip::new(audio_slot, sample_rate)),
+            strip: Box::new(ChannelStrip::new(source, sample_rate)),
             events: Box::new(EventList::empty()),
             control_outputs: Box::new(
                 [[0.0; MAX_MODULATORS_PER_CHANNEL]; MAX_CONTROL_TICKS_PER_BLOCK],
@@ -4630,7 +4664,7 @@ impl RenderState {
         let sample_rate = self.sample_rate;
         while self.strips.len() < count.min(MAX_CHANNELS) {
             let slot = self.audio_slots[self.strips.len()].clone();
-            self.push_channel(Self::build_channel(slot, sample_rate));
+            self.push_channel(Self::build_channel(slot, DeviceKind::Sampler, sample_rate));
         }
     }
 
@@ -4687,6 +4721,19 @@ impl RenderState {
             let Some(fresh) = self.strips.get_mut(to) else {
                 continue;
             };
+            // **Only a strip running the instrument it was built for.** The
+            // plan compares the incoming project with the last one
+            // *installed*, and a source change is not an install: it moves
+            // the live strip's node on and leaves that comparison behind. A
+            // channel switched away and back between two installs compares
+            // equal while the live strip may hold another kind, and carrying
+            // it would play the wrong instrument -- a sampler bound to the
+            // retired generation's audio slot, or no sampler to rebind.
+            // Leaving the fresh one is a rebuild, which is the safe direction
+            // every other stale comparison already fails in.
+            if live.source.kind() != fresh.source.kind() {
+                continue;
+            }
             std::mem::swap(live, fresh);
             // **The audio slot has to come across too.** Every install builds
             // a fresh `ChannelAudioBank`, and a strip binds to its slot at
@@ -4697,8 +4744,12 @@ impl RenderState {
             // handle addresses the new bank, so a sample loaded onto that
             // channel would land somewhere the strip never looks and the
             // channel would go on playing the old file with nothing to say
-            // why.
-            fresh.sampler.swap_audio_slot_with(&mut live.sampler);
+            // why. Both are samplers or neither is: the kinds matched above.
+            if let (Some(carried), Some(built)) =
+                (fresh.source.as_sampler_mut(), live.source.as_sampler_mut())
+            {
+                carried.swap_audio_slot_with(built);
+            }
             // `fresh` now holds the carried strip and `live` the one built
             // for it. The carried strip has the live ring; give it the fresh
             // one only if the delay it is owed changed.
@@ -4777,7 +4828,28 @@ impl RenderState {
 
     #[cfg(test)]
     pub(crate) fn strip_audio_slot_ptr(&self, index: usize) -> usize {
-        self.strips[index].sampler.audio_slot_ptr()
+        self.strips[index]
+            .source
+            .as_sampler()
+            .map_or(0, Sampler::audio_slot_ptr)
+    }
+
+    /// The node `channel` is running, for tests that ask what it holds.
+    #[cfg(test)]
+    pub(crate) fn channel_source(&self, channel: usize) -> &dyn SourceNode {
+        self.strips[channel].source_node()
+    }
+
+    /// Build `params`' device for `channel`, reading this generation's audio
+    /// slot for it -- what `EngineHandle::set_channel_source` builds, for the
+    /// tests that drive a `RenderState` without a handle.
+    #[cfg(test)]
+    pub(crate) fn build_source_for(
+        &self,
+        channel: usize,
+        params: &GeneratorParams,
+    ) -> Box<dyn SourceNode + Send> {
+        build_source(params, self.audio_slots[channel].clone(), self.sample_rate)
     }
 
     #[cfg(test)]
@@ -4874,8 +4946,11 @@ impl RenderState {
         self.loop_range = project.loop_range;
         self.sequencer.load_project(project);
         for (index, strip) in self.strips.iter_mut().enumerate() {
+            let audio_slot = self.audio_slots[index].clone();
             if let Some(channel) = project.channels.get(index) {
-                strip.load_source(&channel.setup.source, self.sample_rate);
+                // Dropped here, on the control thread, like everything else
+                // this function displaces.
+                drop(strip.load_source(&channel.setup.source, audio_slot, self.sample_rate));
                 strip.output.muted = channel.setup.channel.muted;
                 strip.output.set_volume(channel.setup.channel.volume);
                 strip.output.set_pan(channel.setup.channel.pan);
@@ -4902,7 +4977,14 @@ impl RenderState {
                     &mut self.reclaim,
                 );
             } else {
-                strip.reset_slot(DeviceKind::Sampler, &mut self.reclaim);
+                // A strip past the end of the project is a spare, and goes
+                // back to a fresh sampler channel.
+                strip.reset_slot(&mut self.reclaim);
+                drop(strip.install_source(build_source(
+                    &DeviceKind::Sampler.default_generator_params(),
+                    audio_slot,
+                    self.sample_rate,
+                )));
             }
         }
         for index in 0..MAX_CHANNELS {
@@ -5631,7 +5713,7 @@ impl RenderState {
                 .filter(|displaced| !displaced.is_empty())
                 .map(StructuralReclaim::Effect)
             }
-            StructuralCommand::AddChannel { storage, source } => {
+            StructuralCommand::AddChannel { mut storage } => {
                 let channel = self.sequencer.active_channels();
                 if channel >= MAX_CHANNELS {
                     return Some(StructuralReclaim::Effect(ReclaimedEffect {
@@ -5647,6 +5729,13 @@ impl RenderState {
                 // in which case the storage that arrived goes straight back
                 // rather than being dropped on this thread.
                 let spare = channel < self.strips.len();
+                // A spare slot takes the instrument that arrived and sends
+                // its own back in the storage it came in, so the old node is
+                // dropped off this thread with the rest of that storage.
+                if let Some(strip) = spare.then(|| self.strips.get_mut(channel)).flatten() {
+                    std::mem::swap(&mut strip.source, &mut storage.strip.source);
+                    strip.source_base = strip.source.kind().default_generator_params();
+                }
                 let returned = if spare { Some(storage) } else { self.push_channel(storage); None };
                 // A spare slot keeps whatever chain it had until now. Clearing
                 // it pushes up to one chain's worth into `reclaim`, which the
@@ -5657,7 +5746,7 @@ impl RenderState {
                     "a structural edit ran while displaced effects were still queued"
                 );
                 if let Some(strip) = self.strips.get_mut(channel) {
-                    strip.reset_slot(source, &mut self.reclaim);
+                    strip.reset_slot(&mut self.reclaim);
                 }
                 self.set_channel_modulation(channel, ModRack::default());
                 self.sequencer.clear_channel(channel);
@@ -5749,18 +5838,32 @@ impl RenderState {
                     .map(StructuralReclaim::Effect)
             }
             StructuralCommand::SetSamplerStretch { channel, pool } => {
-                let Some(strip) = self.strips.get_mut(channel as usize) else {
-                    // Nothing to install into. Hand the pool straight back
-                    // rather than dropping it here -- this is the realtime
-                    // thread, and an unaddressable channel is not a reason to
-                    // free 1.6 MB on it.
+                let Some(sampler) = self
+                    .strips
+                    .get_mut(channel as usize)
+                    .and_then(|strip| strip.source.as_sampler_mut())
+                else {
+                    // Nothing to install into -- no such channel, or it is
+                    // not running the sampler any more. Hand the pool
+                    // straight back rather than dropping it here: this is the
+                    // realtime thread, and neither is a reason to free 1.6 MB
+                    // on it.
                     return pool.map(StructuralReclaim::SamplerStretch);
                 };
                 match pool {
-                    Some(pool) => strip.sampler.install_stretch(pool),
-                    None => strip.sampler.take_stretch(),
+                    Some(pool) => sampler.install_stretch(pool),
+                    None => sampler.take_stretch(),
                 }
                 .map(StructuralReclaim::SamplerStretch)
+            }
+            StructuralCommand::InstallSource { channel, node } => {
+                let displaced = match self.strips.get_mut(usize::from(channel)) {
+                    Some(strip) => strip.install_source(node),
+                    // No such channel: the node goes straight back, like
+                    // every other arrival with nowhere to go.
+                    None => node,
+                };
+                Some(StructuralReclaim::Source(displaced))
             }
             StructuralCommand::SetCompensation { target, delay } => {
                 let slot = match target {
@@ -6387,32 +6490,31 @@ impl RenderState {
             }
             EngineCommand::SetChannelSamplerParams { channel, params } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
-                    strip.sampler.set_params(params);
-                    strip.source_base = GeneratorParams::Sampler(params);
+                    strip.set_source_params(GeneratorParams::Sampler(params));
                 }
             }
-            EngineCommand::SetChannelSource { channel, source } => {
-                if let Some(strip) = self.strips.get_mut(channel as usize) {
-                    strip.reset_sources_to_defaults(source);
-                    strip.source_base = source.default_generator_params();
-                }
-            }
+            // **Never reaches a renderer.** A source change moves ownership of
+            // a heap node, which this thread may neither build nor free, so
+            // `EngineHandle` turns the command into
+            // `StructuralCommand::InstallSource` with the node built. It stays
+            // an `EngineCommand` because it is still the *edit* the session
+            // records and dirties the document for; see its doc comment in
+            // `mooloop_core::bridge`. Ignored if it arrives anyway, which only
+            // a test pushing it by hand can do.
+            EngineCommand::SetChannelSource { .. } => {}
             EngineCommand::SetChannelDrumSynthParams { channel, params } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
-                    strip.drum_synth.set_params(params);
-                    strip.source_base = GeneratorParams::DrumSynth(params);
+                    strip.set_source_params(GeneratorParams::DrumSynth(params));
                 }
             }
             EngineCommand::SetChannelMonoSynthParams { channel, params } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
-                    strip.mono_synth.set_params(params);
-                    strip.source_base = GeneratorParams::MonoSynth(params);
+                    strip.set_source_params(GeneratorParams::MonoSynth(params));
                 }
             }
             EngineCommand::SetChannelMlM1Params { channel, params } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
-                    strip.mlm1.set_params(params);
-                    strip.source_base = GeneratorParams::MlM1(params);
+                    strip.set_source_params(GeneratorParams::MlM1(params));
                 }
             }
             EngineCommand::SetChannelGeneratorParam { channel, id, value } => {
@@ -6464,8 +6566,7 @@ impl RenderState {
             }
             EngineCommand::SetChannelPolySynthParams { channel, params } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
-                    strip.poly_synth.set_params(params);
-                    strip.source_base = GeneratorParams::PolySynth(params);
+                    strip.set_source_params(GeneratorParams::PolySynth(params));
                 }
             }
             EngineCommand::MoveEffect { target, from, to } => {
@@ -7693,7 +7794,7 @@ impl RenderState {
             // Scoped, because the port group holds the bank borrowed and the
             // mute check below needs it back.
             {
-                let published = self.strips[index].active_source.outlets();
+                let published = self.strips[index].source.kind().outlets();
                 let mut ports = self.audio.ports(index, published);
                 // A small on-stack array of slice references, not a `Vec`:
                 // `apply_curves` takes a slice, and this is the realtime
@@ -7748,7 +7849,7 @@ impl RenderState {
             self.device_meters
                 .publish_output(index, 0, source_peak.0, source_peak.1);
             self.playhead_meters
-                .publish(index, &strip.sampler.voice_positions());
+                .publish(index, &sampler_playheads(&*strip.source));
             strip.effects.process(
                 &context,
                 &mut strip.bus,
@@ -8270,7 +8371,14 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
     use mooloop_core::{NoteEvent, ProjectChannel};
 
     fn test_strip() -> ChannelStrip {
-        ChannelStrip::new(Arc::new(ArcSwapOption::empty()), 48_000)
+        ChannelStrip::new(
+            build_source(
+                &DeviceKind::Sampler.default_generator_params(),
+                Arc::new(ArcSwapOption::empty()),
+                48_000,
+            ),
+            48_000,
+        )
     }
 
     /// A strip starts, and resets, at the channel default the session and
@@ -8280,7 +8388,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         let mut strip = test_strip();
         assert_eq!(strip.output.gain, mooloop_core::DEFAULT_CHANNEL_VOLUME);
         strip.output.set_volume(0.25);
-        strip.reset_slot(DeviceKind::Sampler, &mut Reclaim::default());
+        strip.reset_slot(&mut Reclaim::default());
         assert_eq!(strip.output.gain, mooloop_core::DEFAULT_CHANNEL_VOLUME);
     }
 
@@ -8446,7 +8554,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         let keyboard = Arc::new(AtomicU8::new(NO_KEYBOARD_CHANNEL));
         render.attach_keyboard_channel(keyboard.clone());
         let sounding = |render: &RenderState, channel: usize| {
-            !render.strips[channel].sampler.voice_positions()[0].is_nan()
+            !render.strips[channel].source.as_sampler().expect("a sampler channel").voice_positions()[0].is_nan()
         };
         let key = |kind| MidiMessage {
             offset: 0,
@@ -9150,7 +9258,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
 
         // Stopped and untouched, the channel is silent.
         render.process_block(128);
-        assert!(render.strips[0].sampler.voice_positions()[0].is_nan());
+        assert!(render.strips[0].source.as_sampler().expect("a sampler channel").voice_positions()[0].is_nan());
 
         render.apply_command(EngineCommand::TriggerChannelNote {
             channel: 0,
@@ -9159,7 +9267,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         });
         let opening = render.process_block(128);
         assert!(
-            !render.strips[0].sampler.voice_positions()[0].is_nan(),
+            !render.strips[0].source.as_sampler().expect("a sampler channel").voice_positions()[0].is_nan(),
             "the audition should have started a voice on the channel's sampler"
         );
         assert!(opening.peak_l > 0.01, "the audition made no sound");
@@ -9198,7 +9306,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             render.process_block(128);
         }
         assert!(
-            render.strips[0].sampler.voice_positions()[0].is_nan(),
+            render.strips[0].source.as_sampler().expect("a sampler channel").voice_positions()[0].is_nan(),
             "stopping the transport must still release what is sounding"
         );
     }
@@ -9374,7 +9482,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         render.process_block(512);
         render.process_block(512);
         render.process_block(512);
-        assert!(render.strips[0].sampler.voice_positions()[0].is_nan());
+        assert!(render.strips[0].source.as_sampler().expect("a sampler channel").voice_positions()[0].is_nan());
 
         // The control thread publishes B -- long enough to still be sounding
         // after the block under test -- and nothing but the voice still holds
@@ -9390,7 +9498,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         let frees = crate::COUNTING.frees() - frees;
 
         assert!(
-            !render.strips[0].sampler.voice_positions()[0].is_nan(),
+            !render.strips[0].source.as_sampler().expect("a sampler channel").voice_positions()[0].is_nan(),
             "the block has to actually play B, or this measures the wrong thing"
         );
         assert_eq!(
@@ -9925,8 +10033,8 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             state.params.stretch_ratio = 2.0;
         }
         let render = RenderState::from_project(48_000, &project, &[]);
-        assert!(render.strips[0].sampler.has_stretch());
-        assert!(render.strips[0].sampler.wants_stretch());
+        assert!(render.strips[0].source.as_sampler().expect("a sampler channel").has_stretch());
+        assert!(render.strips[0].source.as_sampler().expect("a sampler channel").wants_stretch());
         // Channels the project does not describe are not provisioned because
         // they are not built at all -- a stronger statement than "built and
         // left empty", and the one the graph actually makes now.
@@ -9939,7 +10047,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
     fn loading_a_project_without_stretch_provisions_nothing() {
         let project = synth_project(ProjectChannel::sampler(0, 1));
         let render = RenderState::from_project(48_000, &project, &[]);
-        assert!(!render.strips[0].sampler.has_stretch());
+        assert!(!render.strips[0].source.as_sampler().expect("a sampler channel").has_stretch());
     }
 
     /// Installing and removing through the structural path, with the displaced
@@ -9958,7 +10066,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             ))),
         });
         assert!(installed.is_none(), "nothing was displaced by the first install");
-        assert!(render.strips[0].sampler.has_stretch());
+        assert!(render.strips[0].source.as_sampler().expect("a sampler channel").has_stretch());
 
         let replaced = render.apply_structural(StructuralCommand::SetSamplerStretch {
             channel: 0,
@@ -9981,7 +10089,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             removed,
             Some(StructuralReclaim::SamplerStretch(_))
         ));
-        assert!(!render.strips[0].sampler.has_stretch());
+        assert!(!render.strips[0].source.as_sampler().expect("a sampler channel").has_stretch());
     }
 
     /// `apply_structural` hands the pool back when the channel does not
@@ -10195,6 +10303,14 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         }
     }
 
+    /// Install `kind`'s device on `channel` the way a source change does,
+    /// and drop the displaced one here, off the "audio thread".
+    fn switch_source(render: &mut RenderState, channel: u8, kind: DeviceKind) {
+        let node = render.build_source_for(channel as usize, &kind.default_generator_params());
+        let displaced = render.apply_structural(StructuralCommand::InstallSource { channel, node });
+        assert!(matches!(displaced, Some(StructuralReclaim::Source(_))));
+    }
+
     #[test]
     fn source_switch_resets_inactive_voice_state() {
         let project = synth_project(ProjectChannel::sampler(0, 1));
@@ -10202,23 +10318,18 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         render.play();
         assert!(render.process_block(256).peak_l > 0.001);
 
-        render.apply_command(EngineCommand::SetChannelSource {
-            channel: 0,
-            source: DeviceKind::MonoSynth,
-        });
+        switch_source(&mut render, 0, DeviceKind::MonoSynth);
         render.process_block(256);
-        render.apply_command(EngineCommand::SetChannelSource {
-            channel: 0,
-            source: DeviceKind::Sampler,
-        });
+        switch_source(&mut render, 0, DeviceKind::Sampler);
         assert_eq!(render.process_block(256).peak_l, 0.0);
     }
 
     /// Adding a channel allocates, so it goes through the structural ring
     /// with storage built off-thread — the same route an effect node takes.
     fn add_channel(render: &mut RenderState, source: DeviceKind) {
-        let storage = RenderState::build_channel(Arc::new(ArcSwapOption::from(None)), 48_000);
-        let returned = render.apply_structural(StructuralCommand::AddChannel { storage, source });
+        let storage =
+            RenderState::build_channel(Arc::new(ArcSwapOption::from(None)), source, 48_000);
+        let returned = render.apply_structural(StructuralCommand::AddChannel { storage });
         // Reused storage comes straight back rather than being dropped here.
         drop(returned);
     }
@@ -10299,12 +10410,13 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         // touches whatever is lazily initialised.
         executor.process(no_midi(), &mut left, &mut right);
 
-        let storage = RenderState::build_channel(Arc::new(ArcSwapOption::from(None)), 48_000);
+        let storage = RenderState::build_channel(
+            Arc::new(ArcSwapOption::from(None)),
+            DeviceKind::Sampler,
+            48_000,
+        );
         assert!(cmd_tx
-            .push(RealtimeCommand::Structural(StructuralCommand::AddChannel {
-                storage,
-                source: DeviceKind::Sampler,
-            }))
+            .push(RealtimeCommand::Structural(StructuralCommand::AddChannel { storage }))
             .is_ok());
         let before = crate::COUNTING.allocations();
         executor.process(no_midi(), &mut left, &mut right);
@@ -12415,6 +12527,14 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         }
     }
 
+    /// The parameters channel 0's drum synth is running.
+    fn drum_params(render: &RenderState) -> mooloop_core::DrumSynthParams {
+        match render.strips[0].source.generator_params() {
+            GeneratorParams::DrumSynth(params) => params,
+            other => panic!("channel 0 is not a drum synth: {:?}", other.kind()),
+        }
+    }
+
     /// The whole acceptance case of the v1 drum synth's descriptor table
     /// (`docs/FOCUS.md`, 2026-09-05, closed): a modulation route and an
     /// automation lane both reach the v1 drum synth, which until then was the
@@ -12486,9 +12606,9 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
 
         // The lane reached the device: full-scale on a 20..1000 Hz control.
         assert!(
-            (render.strips[0].drum_synth.params().kick_start_hz - 1_000.0).abs() < 1.0,
+            (drum_params(&render).kick_start_hz - 1_000.0).abs() < 1.0,
             "the lane did not reach the drum synth: {}",
-            render.strips[0].drum_synth.params().kick_start_hz
+            drum_params(&render).kick_start_hz
         );
 
         // The route resolved every control tick and actually moved Punch off
@@ -12514,7 +12634,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         // Mode is untouched by either, which is what makes the inert-kick
         // case an audibility gate rather than an addressing accident.
         assert_eq!(
-            render.strips[0].drum_synth.params().mode,
+            drum_params(&render).mode,
             mooloop_core::DrumMode::Snare
         );
 
@@ -12527,7 +12647,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         });
         render.process_block(128);
         assert_eq!(
-            render.strips[0].drum_synth.params().kick_start_hz,
+            drum_params(&render).kick_start_hz,
             mooloop_core::DrumSynthParams::default().kick_start_hz
         );
     }
@@ -12550,9 +12670,9 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         render.play();
         render.process_block(128);
         assert!(
-            (render.strips[0].sampler.params().drive - 1.0).abs() < 1e-3,
+            (render.strips[0].source.as_sampler().expect("a sampler channel").params().drive - 1.0).abs() < 1e-3,
             "the lane did not reach the sampler: {}",
-            render.strips[0].sampler.params().drive
+            render.strips[0].source.as_sampler().expect("a sampler channel").params().drive
         );
 
         // Clearing it returns the device to the knob rather than leaving it
@@ -12563,7 +12683,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             target,
         });
         render.process_block(128);
-        assert_eq!(render.strips[0].sampler.params().drive, 0.0);
+        assert_eq!(render.strips[0].source.as_sampler().expect("a sampler channel").params().drive, 0.0);
     }
 
     #[test]
@@ -15393,8 +15513,11 @@ mod footprint {
         // and fifty-six ticks is real size, and a chain with nothing driven
         // pays only the pointer) and the `u64` refusal counter beside it.
         assert_eq!(size_of::<EffectChain>(), 20_576);
-        // A strip holds one node of every generator kind, so a new device is
-        // paid for on every live channel whether or not anything uses it.
+        // A strip used to hold one node of every generator kind, so a new
+        // device was paid for on every live channel whether or not anything
+        // used it; since MOO-56 it holds only the one it plays, boxed, and
+        // `per_live` below pays for the widest. The history of these two
+        // nodes is kept because it is still what a channel running one pays.
         // The ML-P8 is 5,776 bytes of it. Its eight voices are the bulk -- a
         // voice carries three oscillators, their modulation taps and sync
         // carries, a sub, coloured noise, two envelopes, two filter stages, a
@@ -15598,7 +15721,19 @@ mod footprint {
         // MOO-145 added 624, one 24-byte `Glide` per synth voice the strip
         // holds by value: the ML-P8's eight (192, above), the poly synth's
         // sixteen (384), and one each for the v1 mono and the ML-M1 (48).
-        assert_eq!(size_of::<ChannelStrip>(), 44_728);
+        //
+        // MOO-56 took 21,928 back off, the most any entry here has moved it
+        // in either direction. The eight generators the strip held by value
+        // -- 21,944 bytes, of which a live channel ever played one -- became
+        // one `Box<dyn SourceNode + Send>`, sixteen bytes, and the
+        // `active_source` tag went with them into padding. The device the
+        // channel plays is still paid, once, on the heap: see `per_live`.
+        // What it bought besides the bytes is that a ninth kind of source,
+        // a hosted plugin among them, costs a channel nothing until it is
+        // played. Much of the history above is now the history of the nodes
+        // rather than of the strip; it stays, because it is still what a
+        // channel running that node pays.
+        assert_eq!(size_of::<ChannelStrip>(), 22_800);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -15620,8 +15755,26 @@ mod footprint {
             + MAX_CHANNELS * size_of::<usize>() * 3;
         assert_eq!(fixed / 1024, 487);
 
-        // Paid per channel the project actually has.
+        // Paid per channel the project actually has. The source is boxed
+        // since MOO-56, so it is not in `ChannelStrip`'s own size, and the
+        // figure pays for the widest one a live channel can hold: DS-01's
+        // eight-voice pool, just ahead of the ML-P8's.
+        let widest_source = [
+            size_of::<Sampler>(),
+            size_of::<DrumSynth>(),
+            size_of::<MonoSynth>(),
+            size_of::<PolySynth>(),
+            size_of::<MlM1>(),
+            size_of::<MlP8>(),
+            size_of::<Ds01>(),
+            size_of::<AuxIn>(),
+        ]
+        .into_iter()
+        .max()
+        .unwrap_or(0);
+        assert_eq!(widest_source, size_of::<Ds01>());
         let per_live = size_of::<ChannelStrip>()
+            + widest_source
             + size_of::<EventList>()
             + size_of::<ControlOutputs>()
             + size_of::<SourceCurvePool>();
@@ -15648,7 +15801,12 @@ mod footprint {
         // And by 1,552 with it for MOO-99: the sequenced-voice table.
         //
         // And by 624 with it for MOO-145: a `Glide` per synth voice.
-        assert_eq!(per_live, 157_760);
+        //
+        // MOO-56 took 14,968 off: the strip's 21,928 above, less the 6,960
+        // of the one source now counted on its own. A channel running a
+        // smaller source than DS-01 pays less than this; a v1 mono pays
+        // 6,624 less again.
+        assert_eq!(per_live, 142_792);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
@@ -15735,7 +15893,11 @@ mod footprint {
         //
         // MOO-145's per-voice `Glide`: 624 bytes a live channel, about
         // 10 KiB across sixteen.
-        assert_eq!((fixed + per_live * 16) / 1024, 2_952);
+        //
+        // MOO-56's one boxed source: 14,968 bytes less a live channel,
+        // 234 KiB across sixteen, and that at the widest source. Sixteen
+        // v1 monos are 104 KiB lighter again.
+        assert_eq!((fixed + per_live * 16) / 1024, 2_718);
     }
 
 }

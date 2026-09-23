@@ -549,14 +549,13 @@ fn idle_bus_cost() {
 /// and fifteen channels with a full chain each add a few tens of megabytes on
 /// top of it. The floor is the number.
 ///
-/// It is a floor because [`ChannelStrip`] holds *every* generator at once --
-/// sampler, drum synth, mono, poly, ML-M1, ML-P8, DS-01 and aux in -- with
-/// `active_source` choosing which one runs, and because `RenderState`
-/// preallocates `MAX_CHANNELS` of them whether or not the song has that many
-/// channels. Both halves are deliberate: switching a channel's generator, or
-/// adding a channel, then allocates nothing on the audio thread. The price is
-/// two hundred and fifty-six unused strips holding eight unused generators
-/// each, which is most of this figure.
+/// It was a floor because [`ChannelStrip`] held *every* generator at once,
+/// with a tag choosing which one ran, so switching a channel's generator
+/// allocated nothing on the audio thread. Since MOO-56 a strip holds one boxed
+/// source -- a change builds the new one on the control thread and sends the
+/// old one back through the reclaim ring -- so a live strip pays for the one
+/// generator it plays. Strips are built only for the channels a song has
+/// (`RenderState::grow_channels`), not all `MAX_CHANNELS` of them.
 ///
 /// Recorded here rather than argued about, so that any later decision to make
 /// strips or generators arrive on demand has a before to point at.
@@ -565,9 +564,8 @@ fn idle_bus_cost() {
 fn prepared_project_memory() {
     println!();
     println!(
-        "  one ChannelStrip is {:.1} KB inline and holds all {} generator kinds",
+        "  one ChannelStrip is {:.1} KB inline, plus the one generator it plays",
         std::mem::size_of::<crate::render::ChannelStrip>() as f64 / 1024.0,
-        8,
     );
     println!();
     println!("  channels   effects each   live MB after RenderState::from_project");

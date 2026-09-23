@@ -259,6 +259,16 @@ pub enum EngineCommand {
     /// Replace a channel's sampler parameter set.
     SetChannelSamplerParams { channel: u8, params: SamplerParams },
     /// Replace a channel's sound source while retaining its mixer strip.
+    ///
+    /// **The one command that does not cross as itself.** A channel's
+    /// instrument is one boxed node (MOO-56), and a new one is a heap
+    /// allocation the audio thread may not make, so the engine handle builds
+    /// the device on the control thread and sends it as a structural install
+    /// in this command's place. It is still an `EngineCommand` because it is
+    /// still the edit: the session sends it, records it and dirties the
+    /// document for it like any other. The change can land a block or more
+    /// after the click when the reclaim ring is full, which Adam accepted on
+    /// 2026-09-22.
     SetChannelSource { channel: u8, source: DeviceKind },
     /// Replace a channel's drum synth parameter set.
     SetChannelDrumSynthParams {

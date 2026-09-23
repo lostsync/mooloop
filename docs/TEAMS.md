@@ -104,7 +104,7 @@ lines. Until then, this table is the boundary.
 
 | File | Default owner | Except |
 | --- | --- | --- |
-| `engine/src/render.rs` | Engine: `RenderState`, `process_block_inner`, `apply_command`, install, takes, the discontinuity fan-out, the tests | **Effects:** `EffectChain`, `EffectSlot`, `ContainerScratch`, `PendingEffectParams`, `ReclaimedEffect`. **Mixer:** `SendBank`, `OutputStage`, `BusStrip`, `AudioTapBank`, `mix_into`, the bus walk. **Sequencing:** `release_all_voices`, `inject_choke_events`, `HeldKeys`, `Audition`, `RecordingNote`, the transport and sequencer arms. **Control:** `apply_midi`, `AutomationBlock`, `AutomationCurve`, `AutomationPosition`, `ModulationBlock`, the modulator ticks. **Instruments:** `PreviewVoice`, `RetiredPreviews`, `render_preview`. |
+| `engine/src/render.rs` | Engine: `RenderState`, `process_block_inner`, `apply_command`, install, takes, the discontinuity fan-out, the tests | **Effects:** `EffectChain`, `EffectSlot`, `ContainerScratch`, `PendingEffectParams`, `ReclaimedEffect`. **Mixer:** `SendBank`, `OutputStage`, `BusStrip`, `AudioTapBank`, `mix_into`, the bus walk. **Sequencing:** `release_all_voices`, `inject_choke_events`, `HeldKeys`, `Audition`, `RecordingNote`, the transport and sequencer arms. **Control:** `apply_midi`, `AutomationBlock`, `AutomationCurve`, `AutomationPosition`, `ModulationBlock`, the modulator ticks. **Instruments:** `PreviewVoice`, `RetiredPreviews`, `render_preview`, and each source's arm in `build_source` (the one match over the native kinds since MOO-56; `ChannelStrip` and its one `source` slot are Engine's). |
 | `ui/src/lib.rs` | Interface: `AppUi::new` as a shell, the pump, the `wire_*!` macros as a framework | **Each feature team:** the wiring for its own faces and views inside `AppUi::new`. **Document:** the document lifecycle, and tempo, swing and embed. **Control:** the pump's control drain. |
 | `ui/ui/main.slint` | Interface | **Sequencing:** the step grid and the playlist, both inline. **Each device team:** its entries in the DEVICES block. |
 | `ui/src/settings.rs` | Interface | **Platform:** the XDG paths and the settings-load policy. |
@@ -127,7 +127,8 @@ Files marked *shared* are split in the table above.
   `offline.rs`, `take.rs`, `block_cost.rs`, `render.rs` (*shared*), and the
   tests `render_test_support.rs`, `idle_skip_tests.rs`, `audio_edge_tests.rs`,
   `take_tests.rs`, `soak_tests.rs` (every device kind through the executor,
-  MOO-113; a failure in a device it drives is that device's team's), and
+  MOO-113; a failure in a device it drives is that device's team's),
+  `source_slot_tests.rs` (the one boxed source slot, MOO-56), and
   `continuity_tests.rs` (the "control changes are
   continuous" family, MOO-104, whose cases each team adds for its own
   transitions)

@@ -922,10 +922,11 @@ impl Chorus {
     /// The state [`Self::new`] would build, reached in place.
     ///
     /// Not `*self = Self::new(..)`: that allocates a fresh delay line and
-    /// frees the old one, and this runs on the audio thread whenever a
-    /// channel's source is reset (`SetChannelSource`, or `AddChannel` reusing
-    /// a spare slot). The sample rate never changes under a device, so the
-    /// line already has the length `new` would give it.
+    /// frees the old one, and [`MlP8::reset`] is realtime-safe. (A source
+    /// change no longer resets a resident device: since MOO-56 it installs
+    /// a new one built on the control thread.) The sample rate never changes
+    /// under a device, so the line already has the length `new` would give
+    /// it.
     fn reset(&mut self, mode: MlP8Chorus, sample_rate: u32) {
         self.effect.reset();
         self.effect.set_params(mode_params(mode));
@@ -2629,6 +2630,28 @@ impl SourceNode for MlP8 {
     fn publish_outlets_into(&mut self, out: &mut [f32; MAX_GENERATOR_OUTLETS]) {
         let published = self.publish_outlets();
         out[..published.len()].copy_from_slice(&published);
+    }
+
+    fn kind(&self) -> mooloop_core::DeviceKind {
+        mooloop_core::DeviceKind::MlP8
+    }
+
+    fn set_generator_params(&mut self, params: &mooloop_core::GeneratorParams) -> bool {
+        match params {
+            mooloop_core::GeneratorParams::MlP8(params) => {
+                self.set_params(*params);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn generator_params(&self) -> mooloop_core::GeneratorParams {
+        mooloop_core::GeneratorParams::MlP8(self.params)
+    }
+
+    fn set_route_amount(&mut self, route: u16, amount: f32) {
+        MlP8::set_route_amount(self, route, amount);
     }
 }
 

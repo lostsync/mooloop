@@ -62,6 +62,13 @@ pub(crate) struct Executor {
 }
 
 impl Executor {
+    /// The renderer this executor is running, for tests outside this module
+    /// that ask what a command did to it.
+    #[cfg(test)]
+    pub(crate) fn render(&self) -> &RenderState {
+        &self.render
+    }
+
     pub(crate) fn new(
         io: ExecutorIo,
         render: Box<RenderState>,
@@ -727,9 +734,15 @@ mod tests {
     /// It sounds right at the moment of the swap, which is what makes it the
     /// dangerous kind of bug, so this asserts against the slot rather than
     /// against the audio.
+    ///
+    /// Samplers, because only a sampler holds a slot: since MOO-56 a strip
+    /// running another kind has no sampler resident to bind one.
     #[test]
     fn a_carried_strip_reads_the_new_generations_audio_slot() {
-        let project = two_held_notes();
+        let mut project = two_held_notes();
+        for (index, channel) in project.channels.iter_mut().enumerate() {
+            channel.setup = mooloop_core::ChannelSetup::sampler(format!("held {index}"));
+        }
         let mut reordered = project.clone();
         reordered.move_channel(0, 1).expect("a real move");
 
@@ -1118,15 +1131,16 @@ mod tests {
                 );
             }
             let slot = crate::render::empty_channel_audio_bank()[1].clone();
-            let storage = crate::render::RenderState::build_channel(slot, SAMPLE_RATE);
+            let storage = crate::render::RenderState::build_channel(
+                slot,
+                mooloop_core::DeviceKind::Sampler,
+                SAMPLE_RATE,
+            );
             allocation_of(
                 &mut executor,
                 &mut cmd_tx,
                 vec![RealtimeCommand::Structural(
-                    crate::StructuralCommand::AddChannel {
-                        storage,
-                        source: mooloop_core::DeviceKind::Sampler,
-                    },
+                    crate::StructuralCommand::AddChannel { storage },
                 )],
             )
             .1

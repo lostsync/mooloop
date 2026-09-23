@@ -35,6 +35,15 @@ Nowhere can hold a node that is built outside the engine.
   than instantly. It is MOO-56, and `00-status.md` ("Adam's answers,
   2026-09-22") has his words. This step still does not do it. If MOO-56
   lands first, the plugin source goes into that one slot, not a ninth field.
+
+  *2026-09-23:* MOO-56 has landed. There is no `hosted` field and no
+  `active_source` tag to add a `Plugin` arm to: the strip's `source` is a
+  `Box<dyn SourceNode + Send>`, and `StructuralCommand::InstallSource
+  { channel, node }` already exists. This step's work is a `SourceNode`
+  that wraps a plugin instance (`kind()` answering a new
+  `DeviceKind::Plugin`, `set_generator_params` refusing native blocks) and
+  building it where `EngineHandle::send` builds a native one. The silent
+  missing-instrument placeholder is a `SourceNode` that renders nothing.
 - Choke: `Event::Choke` goes to `hosted` like any other event. Step 10 turns
   it into CLAP note-offs.
 - Generator parameters are addressed with `ParamOwner::Source` and the

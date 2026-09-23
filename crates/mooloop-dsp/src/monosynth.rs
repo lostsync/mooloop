@@ -372,6 +372,24 @@ impl SourceNode for MonoSynth {
     ) {
         self.process(ctx, bus, events_in, None);
     }
+
+    fn kind(&self) -> mooloop_core::DeviceKind {
+        mooloop_core::DeviceKind::MonoSynth
+    }
+
+    fn set_generator_params(&mut self, params: &mooloop_core::GeneratorParams) -> bool {
+        match params {
+            mooloop_core::GeneratorParams::MonoSynth(params) => {
+                self.set_params(*params);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn generator_params(&self) -> mooloop_core::GeneratorParams {
+        mooloop_core::GeneratorParams::MonoSynth(self.params)
+    }
 }
 
 #[cfg(test)]

@@ -598,6 +598,24 @@ impl SourceNode for PolySynth {
     ) {
         self.process(ctx, bus, events_in, None);
     }
+
+    fn kind(&self) -> mooloop_core::DeviceKind {
+        mooloop_core::DeviceKind::PolySynth
+    }
+
+    fn set_generator_params(&mut self, params: &mooloop_core::GeneratorParams) -> bool {
+        match params {
+            mooloop_core::GeneratorParams::PolySynth(params) => {
+                self.set_params(*params);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn generator_params(&self) -> mooloop_core::GeneratorParams {
+        mooloop_core::GeneratorParams::PolySynth(self.params)
+    }
 }
 
 #[cfg(test)]

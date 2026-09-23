@@ -470,6 +470,28 @@ impl SourceNode for DrumSynth {
     ) {
         self.process(ctx, bus, events_in, None);
     }
+
+    fn kind(&self) -> mooloop_core::DeviceKind {
+        mooloop_core::DeviceKind::DrumSynth
+    }
+
+    fn set_generator_params(&mut self, params: &mooloop_core::GeneratorParams) -> bool {
+        match params {
+            mooloop_core::GeneratorParams::DrumSynth(params) => {
+                self.set_params(*params);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn generator_params(&self) -> mooloop_core::GeneratorParams {
+        mooloop_core::GeneratorParams::DrumSynth(self.params)
+    }
+
+    fn choke_group(&self) -> u8 {
+        DrumSynth::choke_group(self)
+    }
 }
 
 #[cfg(test)]

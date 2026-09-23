@@ -24,7 +24,7 @@ use mooloop_core::{
 };
 use mooloop_dsp::{
     buffer_allocation_key, build_effect_at_tempo, AudioNode, ChannelAudioSnapshot, IntegerDelay,
-    SampleData, SpectrumAnalyzer, StereoBus, StretchPool, SPECTRUM_BINS,
+    SampleData, SourceNode, SpectrumAnalyzer, StereoBus, StretchPool, SPECTRUM_BINS,
 };
 use rtrb::{Consumer, Producer};
 
@@ -185,6 +185,8 @@ mod output_guard_tests;
 #[cfg(test)]
 mod soak_tests;
 #[cfg(test)]
+mod source_slot_tests;
+#[cfg(test)]
 mod strip_tests;
 #[cfg(test)]
 mod take_tests;
@@ -288,10 +290,26 @@ pub enum StructuralCommand {
     /// Append one channel's storage, built on this thread. The graph only
     /// grows: a removed channel's storage stays for the next one rather than
     /// being freed on the audio thread, so this arrives with storage the
-    /// graph may already have and hands it straight back if so.
-    AddChannel {
-        storage: Box<ChannelStorage>,
-        source: DeviceKind,
+    /// graph may already have and hands it straight back if so -- carrying
+    /// the spare's old instrument, which the arriving one replaces.
+    ///
+    /// The storage's strip is already running the channel's instrument, so
+    /// there is no separate kind to disagree with it.
+    AddChannel { storage: Box<ChannelStorage> },
+    /// Replace what `channel` plays with `node`, built on this thread at its
+    /// kind's defaults; the patch follows as parameter commands.
+    ///
+    /// This is a source change (MOO-56). A channel's instrument is one boxed
+    /// slot, so changing it moves ownership: the node it displaces comes back
+    /// through the reclaim ring and is dropped on the control thread, and the
+    /// executor applies the edit only when that ring has room. When it does
+    /// not, the change lands a block or more after the click, which Adam
+    /// accepted on 2026-09-22 (`docs/plans/plugin-hosting/00-status.md`).
+    /// Commands queued behind it wait with it, so a patch sent after the
+    /// change can never reach the device it replaced.
+    InstallSource {
+        channel: u8,
+        node: Box<dyn SourceNode + Send>,
     },
     /// Arm a take on `channel`: it waits for the next bar line, then records
     /// the channel's audio input into the take's ring (`audio-recording/03`).
@@ -406,6 +424,11 @@ pub enum PreviewCommand {
 /// effect of `EngineHandle::poll` — there is nothing to inspect.
 pub(crate) enum StructuralReclaim {
     Effect(ReclaimedEffect),
+    /// A channel's instrument, displaced by a source change. A generator is
+    /// kilobytes of voices, and a sampler's can hold the last references to
+    /// sample buffers and a 1.6 MB stretch pool, so it is freed here rather
+    /// than where it stopped playing.
+    Source(Box<dyn SourceNode + Send>),
     /// A complete executor displaced by a project install, and the
     /// [`CarryPlan`] that install was made under. Keeping the renderer boxed
     /// lets the realtime thread swap ownership without allocating; both are
@@ -1393,6 +1416,7 @@ impl EngineHandle {
         while let Ok(reclaim) = self.reclaim_rx.pop() {
             match reclaim {
                 StructuralReclaim::Effect(effect) => drop(effect),
+                StructuralReclaim::Source(node) => drop(node),
                 StructuralReclaim::RenderState { retired, carry } => {
                     drop(retired);
                     drop(carry);
@@ -1468,8 +1492,8 @@ impl EngineHandle {
         let Some(slot) = self.audio_slots.get(channel).cloned() else {
             return false;
         };
-        let storage = RenderState::build_channel(slot, self.sample_rate);
-        self.send_structural(StructuralCommand::AddChannel { storage, source })
+        let storage = RenderState::build_channel(slot, source, self.sample_rate);
+        self.send_structural(StructuralCommand::AddChannel { storage })
     }
 
     /// Sets the preview voice's linear output gain. Live: the voice reads
@@ -1844,9 +1868,40 @@ impl EngineHandle {
     }
 }
 
+/// What a POD command crosses to the audio thread as.
+///
+/// Every command crosses as itself but one. A source change names a device,
+/// and the device is a heap node the audio thread may neither build nor
+/// free, so it is built here -- at its defaults, reading the channel's audio
+/// slot -- and crosses as [`StructuralCommand::InstallSource`], in the
+/// command's own place in the one ordered stream (MOO-56). `None` when the
+/// channel is outside the addressable range, so there is nothing to build.
+///
+/// A free function so a test can ask what a command becomes without an
+/// `EngineHandle`, which cannot be built without opening an audio driver.
+fn realtime_command(
+    cmd: EngineCommand,
+    audio_slots: &render::ChannelAudioBank,
+    sample_rate: u32,
+) -> Option<RealtimeCommand> {
+    match cmd {
+        EngineCommand::SetChannelSource { channel, source } => {
+            let slot = audio_slots.get(usize::from(channel))?.clone();
+            let node = render::build_source(&source.default_generator_params(), slot, sample_rate);
+            Some(RealtimeCommand::Structural(StructuralCommand::InstallSource { channel, node }))
+        }
+        cmd => Some(RealtimeCommand::Engine(cmd)),
+    }
+}
+
 impl CommandSink for EngineHandle {
+    /// `false` also for a source change to a channel outside the addressable
+    /// range; see [`realtime_command`].
     fn send(&mut self, cmd: EngineCommand) -> bool {
-        self.cmd_tx.push(RealtimeCommand::Engine(cmd)).is_ok()
+        match realtime_command(cmd, &self.audio_slots, self.sample_rate) {
+            Some(command) => self.cmd_tx.push(command).is_ok(),
+            None => false,
+        }
     }
 
     fn send_structural(&mut self, cmd: StructuralCommand) -> bool {

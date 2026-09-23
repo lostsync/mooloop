@@ -630,6 +630,24 @@ impl SourceNode for MlM1 {
     ) {
         self.process(ctx, bus, events_in, None);
     }
+
+    fn kind(&self) -> mooloop_core::DeviceKind {
+        mooloop_core::DeviceKind::MlM1
+    }
+
+    fn set_generator_params(&mut self, params: &mooloop_core::GeneratorParams) -> bool {
+        match params {
+            mooloop_core::GeneratorParams::MlM1(params) => {
+                self.set_params(*params);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn generator_params(&self) -> mooloop_core::GeneratorParams {
+        mooloop_core::GeneratorParams::MlM1(self.params)
+    }
 }
 
 #[cfg(test)]

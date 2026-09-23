@@ -1536,6 +1536,36 @@ impl SourceNode for Sampler {
     ) {
         self.process(ctx, bus, events_in, None);
     }
+
+    fn kind(&self) -> mooloop_core::DeviceKind {
+        mooloop_core::DeviceKind::Sampler
+    }
+
+    fn set_generator_params(&mut self, params: &mooloop_core::GeneratorParams) -> bool {
+        match params {
+            mooloop_core::GeneratorParams::Sampler(params) => {
+                self.set_params(*params);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn generator_params(&self) -> mooloop_core::GeneratorParams {
+        mooloop_core::GeneratorParams::Sampler(self.params)
+    }
+
+    fn choke_group(&self) -> u8 {
+        Sampler::choke_group(self)
+    }
+
+    fn as_sampler(&self) -> Option<&Sampler> {
+        Some(self)
+    }
+
+    fn as_sampler_mut(&mut self) -> Option<&mut Sampler> {
+        Some(self)
+    }
 }
 
 #[cfg(test)]

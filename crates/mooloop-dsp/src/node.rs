@@ -34,8 +34,10 @@
 
 use crate::bus::StereoBus;
 use crate::event::{Event, EventList, TimedEvent};
+use crate::sampler::Sampler;
 use crate::taps::AudioTaps;
 use mooloop_core::modulation::MAX_GENERATOR_OUTLETS;
+use mooloop_core::{DeviceKind, GeneratorParams};
 
 /// Control subdivisions in the largest block the engine will ever hand a
 /// node, so a per-destination curve buffer can be sized once and shared.
@@ -569,6 +571,15 @@ const FALLBACK_HEADROOM: usize = 8;
 /// `events_out` is deliberately absent: no generator emits events through a
 /// strip today, and a parameter for it would be inventing a capability
 /// rather than preserving one. It comes back the day something needs it.
+///
+/// **The strip holds one of these, boxed, and nothing else** (MOO-56). It
+/// used to hold all eight generators as fields and pick one with a tag, so
+/// everything it did to a generator outside this trait was a `match` over the
+/// eight. The methods below `publish_outlets_into` are those matches, moved
+/// onto the device: which kind it is, its typed parameter block in and out,
+/// its choke group, ML-P8's route depth, and the one device-specific handle
+/// the host still needs, the sampler's. Each has the default a device that
+/// lacks the feature would give, so a new source implements what it has.
 pub trait SourceNode: AudioNode {
     /// Render one block as a channel's source.
     ///
@@ -601,6 +612,52 @@ pub trait SourceNode: AudioNode {
     /// device that has not implemented outlets yet.
     fn publish_outlets_into(&mut self, out: &mut [f32; MAX_GENERATOR_OUTLETS]) {
         let _ = out;
+    }
+
+    /// Which device this is.
+    ///
+    /// The strip asks the node rather than keeping a tag beside it: a tag
+    /// and the box it describes are one fact written twice, and the first
+    /// install that updated one and not the other would play one device
+    /// while routing, choking and publishing as another.
+    fn kind(&self) -> DeviceKind;
+
+    /// Take a whole authored parameter block, as the concrete type's
+    /// `set_params` does. Realtime-safe for every native kind.
+    ///
+    /// Returns whether the block was this device's. A block for another kind
+    /// is refused and changes nothing -- which is what a command addressed
+    /// to the channel's *previous* device is, once a source change has moved
+    /// the slot on.
+    fn set_generator_params(&mut self, params: &GeneratorParams) -> bool;
+
+    /// The parameter block this device is running: what it was last sent,
+    /// which after a control tick is base plus modulation, not the knob.
+    fn generator_params(&self) -> GeneratorParams;
+
+    /// The choke group a note on this device belongs to, or 0 for none.
+    fn choke_group(&self) -> u8 {
+        0
+    }
+
+    /// Move one internal modulation route's depth without recompiling the
+    /// route table. Only a device with internal routes has anything to move.
+    fn set_route_amount(&mut self, route: u16, amount: f32) {
+        let _ = (route, amount);
+    }
+
+    /// This device as the sampler, for the host's five sampler-only calls:
+    /// the channel's audio slot, its retired buffers, its stretch pool and
+    /// its playheads. A typed handle rather than five trait methods, because
+    /// all five are about the sample a *channel* owns, which no other kind
+    /// has.
+    fn as_sampler(&self) -> Option<&Sampler> {
+        None
+    }
+
+    /// [`Self::as_sampler`], mutably.
+    fn as_sampler_mut(&mut self) -> Option<&mut Sampler> {
+        None
     }
 }
 

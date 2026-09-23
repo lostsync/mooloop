@@ -1866,6 +1866,28 @@ impl SourceNode for Ds01 {
         let published = self.publish_outlets();
         out[..published.len()].copy_from_slice(&published);
     }
+
+    fn kind(&self) -> mooloop_core::DeviceKind {
+        mooloop_core::DeviceKind::Ds01
+    }
+
+    fn set_generator_params(&mut self, params: &mooloop_core::GeneratorParams) -> bool {
+        match params {
+            mooloop_core::GeneratorParams::Ds01(params) => {
+                self.set_params(*params);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn generator_params(&self) -> mooloop_core::GeneratorParams {
+        mooloop_core::GeneratorParams::Ds01(self.params)
+    }
+
+    fn choke_group(&self) -> u8 {
+        Ds01::choke_group(self)
+    }
 }
 
 #[cfg(test)]

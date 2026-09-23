@@ -181,6 +181,24 @@ impl SourceNode for AuxIn {
     ) {
         self.process_from(ctx, bus, source, events_in, ports);
     }
+
+    fn kind(&self) -> mooloop_core::DeviceKind {
+        mooloop_core::DeviceKind::AuxIn
+    }
+
+    fn set_generator_params(&mut self, params: &mooloop_core::GeneratorParams) -> bool {
+        match params {
+            mooloop_core::GeneratorParams::AuxIn(params) => {
+                self.set_params(*params);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn generator_params(&self) -> mooloop_core::GeneratorParams {
+        mooloop_core::GeneratorParams::AuxIn(*self.params())
+    }
 }
 
 #[cfg(test)]

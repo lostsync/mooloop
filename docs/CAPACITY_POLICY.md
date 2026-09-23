@@ -306,6 +306,22 @@ rather than during it.
   the Aux In selector can name, eight times the widest table declared, with a
   test that fails the day a device publishes an id past it.
 
+- **A channel holds one instrument, not all eight** (MOO-56, 2026-09-23).
+  `ChannelStrip` used to carry every generator kind by value and pick one
+  with a tag, so each new source kind was paid on every live channel whether
+  or not anything played it. It now holds one `Box<dyn SourceNode + Send>`.
+  The strip went from 44,728 bytes to 22,800. A live channel still pays for
+  the device it plays, on the heap, and the footprint test
+  (`render.rs`, `the_render_graph_costs_what_the_project_uses`) counts the
+  widest one, DS-01 at 6,960 bytes. At that worst case a live channel is
+  142,792 bytes rather than 157,760, and a sixteen-channel project 2,718 KiB
+  rather than 2,952. The price is that a source change is an ownership move:
+  the new device is built on the control thread and the old one leaves
+  through the reclaim ring, so the change can land a block or more late when
+  the ring is full (Adam, 2026-09-22: *"totally fine"*). The slot has no
+  per-kind cap, so a ninth kind, a hosted plugin included, costs nothing
+  until a channel plays it.
+
 - **Sends reserve nothing**, the way typed audio edges do not. A track's
   sends are a `Vec` in the document and a `Vec` in the prepared plan; the
   audio thread holds one compensation ring and one `Smoothed` per send that

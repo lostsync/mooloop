@@ -330,10 +330,21 @@ this plan.
    `ChannelStrip::source_and_bus` (`engine/src/render.rs`) returns the
    generator and the bus together so the match and the field split happen in
    one place. The strip still holds its eight generators as concrete fields
-   and still has no slot for a boxed source -- that half of this blocker is
-   untouched and remains **step 09** -- but the call shape a boxed source
+   and still has no slot for a boxed source -- that half of this blocker was
+   untouched then (see the next paragraph) -- but the call shape a boxed source
    would have to satisfy now exists, and it has one signature rather than
    three.
+
+   **Landed 2026-09-23: the slot (MOO-56).** `ChannelStrip` holds one
+   `source: Box<dyn SourceNode + Send>` and nothing else of its instrument.
+   `SourceNode` grew what the strip used to reach past the trait for:
+   `kind`, `set_generator_params`/`generator_params`, `choke_group`,
+   `set_route_amount` and `as_sampler(_mut)`. A source change is
+   `StructuralCommand::InstallSource`, built on the control thread by
+   `EngineHandle::send`, and the displaced node comes back as
+   `StructuralReclaim::Source`. `render::build_source` is the one match over
+   the native kinds. **Blocker 4 is closed**; step 09 now only has to write a
+   `SourceNode` for a plugin and put it in that slot.
 5. Once a node is installed, the control thread has no handle to it, and
    nothing lets the audio thread ask for main-thread work. **Step 04.**
 6. The effect menu is not driven by data: 14 hard-coded `EffectTypeRow`s in

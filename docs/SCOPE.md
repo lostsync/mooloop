@@ -401,15 +401,15 @@ is the audience.
    plugin needs an opaque id plus an opaque state blob.
 3. `EffectKind::latency_frames()` is static and asserted to match the node
    (`effects/mod.rs:446-472`); for a plugin it must be discovered at runtime.
-4. **Instruments are worse than effects.** `ChannelStrip` holds all eight
-   generators as concrete fields (`pub struct ChannelStrip` in
-   `engine/src/render.rs`, the eight named right under it) with
-   `active_source` selecting among them. There is no `Box<dyn AudioNode>`
-   source slot, so a hosted plugin *instrument* has nowhere to live at all.
-   Searched for by name rather than cited by line on 2026-09-20: the line
-   had been `:2020-2029` here and `:2154`, then `:2189`, then `:2273` in
-   `plans/plugin-hosting/00-status.md`, four numbers for one struct, and the
-   name has not moved once.
+4. **Instruments were worse than effects; the slot now exists.** Until
+   2026-09-23 `ChannelStrip` held all eight generators as concrete fields
+   with an `active_source` tag selecting among them, so a hosted plugin
+   *instrument* had nowhere to live. MOO-56 replaced them with one
+   `source: Box<dyn SourceNode + Send>` (`pub struct ChannelStrip` in
+   `engine/src/render.rs`); a source change is now
+   `StructuralCommand::InstallSource`, and the displaced instrument leaves
+   through the reclaim ring. What is still missing for a plugin is a
+   `SourceNode` that wraps one, which is `plans/plugin-hosting/` step 09.
 
 The good news is real: `AudioNode` (`node.rs:142-281`) takes a whole block plus
 a sorted event list, which is CLAP's own shape, and the install path already
