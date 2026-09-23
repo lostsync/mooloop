@@ -877,3 +877,61 @@ fn installing_over_a_bypassed_effect_keeps_it_bypassed() {
         "the swapped-in device is in the path: it differs from the bypassed chain by {worst}"
     );
 }
+
+// --- Effects: MOO-137 --------------------------------------------------------
+
+/// **An undo that changed one device keeps the rest of the channel
+/// sounding.** Every undo is a whole-project install. A channel whose chain
+/// differed in any device used to be rebuilt, which cut its voice and
+/// emptied every device on it. Now it is carried: the voice keeps playing,
+/// the delay keeps its repeats, and only the device that changed is new --
+/// here an EQ band moved while it sits at 0 dB, which changes nothing
+/// audible, so any step is the install's.
+#[test]
+fn an_install_that_changed_one_device_keeps_the_channel_sounding() {
+    let mut channel = sine_channel();
+    channel
+        .setup
+        .push_effect(EffectSlotState::new(EffectParams::Delay(DelayParams {
+            time_ms: 120.0,
+            tempo_sync: false,
+            feedback: 0.5,
+            mix: 0.5,
+            ..DelayParams::default()
+        })))
+        .expect("room");
+    channel
+        .setup
+        .push_effect(EffectSlotState::of_kind(EffectKind::Eq))
+        .expect("room");
+    let mut project = Project {
+        channels: vec![channel],
+        pattern_lengths: vec![DEFAULT_STEPS],
+        ..Project::default()
+    };
+    // The carry matches channels by identity, as a loaded song has them.
+    project.assign_channel_ids();
+    let mut edited = project.clone();
+    let EffectParams::Eq(eq) = &mut edited.channels[0].setup.effects[1].params else {
+        panic!("the second row is the EQ");
+    };
+    eq.bands[0].frequency_hz *= 2.0;
+    let plan = crate::carry_plan(&project, &edited);
+    assert_eq!(plan.rechained_channels, vec![(0, 0)], "the premise: only the chain changed");
+
+    let mut render = playing(&project);
+    assert_continuous(
+        "an install that changed one device on a sounding channel",
+        step_across(
+            &mut render,
+            LEAD,
+            |render| {
+                let mut incoming = RenderState::from_project(SAMPLE_RATE, &edited, &[]);
+                incoming.adopt_performance_state(render);
+                incoming.carry_strips_from(render, &plan);
+                std::mem::swap(render, &mut incoming);
+            },
+            TAIL,
+        ),
+    );
+}

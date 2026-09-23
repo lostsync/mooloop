@@ -542,6 +542,44 @@ pub struct CarryPlan {
     pub channel_seats: Vec<(u8, u8)>,
     /// `channel_seats` for the track list.
     pub track_seats: Vec<(u8, u8)>,
+    /// Channels carried whole although their effect chain changed (MOO-137).
+    ///
+    /// Everything else about the channel is the same, so its source, its
+    /// voices, its modulators and its output stage keep running; the chain
+    /// it plays through is the incoming one, with every device that did not
+    /// change moved across into it ([`Self::effects`]). An undo of an effect
+    /// edit used to rebuild the whole strip, which cut every voice on the
+    /// channel and emptied every device in the chain.
+    pub rechained_channels: Vec<(u8, u8)>,
+    /// [`Self::rechained_channels`] for the track list.
+    pub rechained_tracks: Vec<(u8, u8)>,
+    /// For every surviving chain not carried as it stands, the devices in it
+    /// that did not change (MOO-137). See [`ChainCarry`].
+    pub effects: Vec<ChainCarry>,
+}
+
+/// The devices one chain keeps across an install: those whose whole
+/// [`mooloop_core::EffectSlotState`] compares equal on both sides, matched by
+/// their `DeviceId`.
+///
+/// Equal means everything -- kind, parameters, bypass, wet/dry, trims, span
+/// -- so the node built for the incoming row would be the node that is
+/// already running, and moving the running one across keeps its state: a
+/// delay's repeats, a reverb's tail, a compressor's envelope, a Buffer's
+/// ring. A plugin device (`EffectParams::Plugin`) carries its live processor
+/// the same way, rather than coming back as a placeholder. The chain's
+/// structure -- spans, dry-path rings of containers, branch alignment, and so
+/// the latency it declares -- is the incoming chain's, derived from the
+/// incoming project as an install always did; a carried device declares the
+/// same latency as the one it replaces because it is the same device.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChainCarry {
+    /// The chain in the outgoing generation...
+    pub from: EffectTarget,
+    /// ...and in the incoming one.
+    pub to: EffectTarget,
+    /// `(outgoing row, incoming row)` for each device carried.
+    pub rows: Vec<(u8, u8)>,
 }
 
 impl CarryPlan {
@@ -908,7 +946,7 @@ pub(crate) fn carry_plan(
     live: &mooloop_core::Project,
     incoming: &mooloop_core::Project,
 ) -> CarryPlan {
-    CarryPlan {
+    let mut plan = CarryPlan {
         channels: carry_channels(live, incoming),
         tracks: carry_tracks(live, incoming),
         channel_seats: seats(
@@ -921,7 +959,77 @@ pub(crate) fn carry_plan(
             incoming.buses.iter().take(mooloop_core::MAX_BUSES).map(|track| track.id),
             mooloop_core::TrackId::is_assigned,
         ),
+        ..CarryPlan::default()
+    };
+    // Every surviving channel not carried as it stands keeps the devices
+    // that did not change, and is carried whole anyway when its chain is
+    // the only thing that did (MOO-137).
+    for &(from, to) in &plan.channel_seats {
+        if plan.channels.contains(&(from, to)) {
+            continue;
+        }
+        let (Some(held), Some(now)) = (
+            live.channels.get(usize::from(from)),
+            incoming.channels.get(usize::from(to)),
+        ) else {
+            continue;
+        };
+        let rechained = same_strip_but_effects(&held.setup, &now.setup);
+        if rechained {
+            plan.rechained_channels.push((from, to));
+        }
+        let chain = chain_carry(
+            EffectTarget::Channel(from),
+            EffectTarget::Channel(to),
+            &held.setup.effects,
+            &now.setup.effects,
+        );
+        if rechained || !chain.rows.is_empty() {
+            plan.effects.push(chain);
+        }
     }
+    for &(from, to) in &plan.track_seats {
+        if plan.tracks.contains(&(from, to)) {
+            continue;
+        }
+        let (Some(held), Some(now)) = (
+            live.buses.get(usize::from(from)),
+            incoming.buses.get(usize::from(to)),
+        ) else {
+            continue;
+        };
+        let rechained = same_track_but_effects(held, now);
+        if rechained {
+            plan.rechained_tracks.push((from, to));
+        }
+        let chain = chain_carry(EffectTarget::Bus(from), EffectTarget::Bus(to), &held.effects, &now.effects);
+        if rechained || !chain.rows.is_empty() {
+            plan.effects.push(chain);
+        }
+    }
+    plan
+}
+
+/// The devices of `now` that `held` already has, identical in every field:
+/// see [`ChainCarry`].
+fn chain_carry(
+    from: EffectTarget,
+    to: EffectTarget,
+    held: &[mooloop_core::EffectSlotState],
+    now: &[mooloop_core::EffectSlotState],
+) -> ChainCarry {
+    let held = &held[..held.len().min(mooloop_core::MAX_EFFECTS_PER_CHANNEL)];
+    let rows: Vec<(u8, u8)> = now
+        .iter()
+        .take(mooloop_core::MAX_EFFECTS_PER_CHANNEL)
+        .enumerate()
+        .filter(|(_, effect)| effect.id.is_assigned())
+        .filter_map(|(row, effect)| {
+            let was = held.iter().position(|kept| kept == effect)?;
+            Some((u8::try_from(was).ok()?, u8::try_from(row).ok()?))
+        })
+        .collect();
+    ChainCarry { from, to, rows }
 }
 
 /// `(outgoing seat, incoming seat)` for every assigned id present in both.
@@ -1000,11 +1108,19 @@ fn carry_tracks(
 ///
 /// Destructured for [`same_strip`]'s reason.
 fn same_track(held: &mooloop_core::BusSetup, incoming: &mooloop_core::BusSetup) -> bool {
+    same_track_but_effects(held, incoming)
+        && held.effects == incoming.effects
+        && held.next_device_id == incoming.next_device_id
+}
+
+/// [`same_track`] without the effect chain: [`same_strip_but_effects`]'s
+/// question for a track.
+fn same_track_but_effects(held: &mooloop_core::BusSetup, incoming: &mooloop_core::BusSetup) -> bool {
     let mooloop_core::BusSetup {
         id: _,
         bus,
-        effects,
-        next_device_id,
+        effects: _,
+        next_device_id: _,
         sends: _,
     } = held;
     let mooloop_core::MixerBus {
@@ -1028,8 +1144,6 @@ fn same_track(held: &mooloop_core::BusSetup, incoming: &mooloop_core::BusSetup) 
         && *polarity == other.polarity
         && *strip == other.strip
         && *color == other.color
-        && *effects == incoming.effects
-        && *next_device_id == incoming.next_device_id
 }
 
 /// Whether a strip built for `held` can stand in for one built for
@@ -1046,12 +1160,24 @@ fn same_track(held: &mooloop_core::BusSetup, incoming: &mooloop_core::BusSetup) 
 /// that a field added to either struct fails to compile here until somebody
 /// decides whether it belongs to the strip.
 fn same_strip(held: &mooloop_core::ChannelSetup, incoming: &mooloop_core::ChannelSetup) -> bool {
+    same_strip_but_effects(held, incoming)
+        && held.effects == incoming.effects
+        && held.next_device_id == incoming.next_device_id
+}
+
+/// [`same_strip`] without the effect chain and the device-id mint that goes
+/// with it: a strip that can be carried whole and given the incoming chain
+/// (MOO-137, [`CarryPlan::rechained_channels`]).
+fn same_strip_but_effects(
+    held: &mooloop_core::ChannelSetup,
+    incoming: &mooloop_core::ChannelSetup,
+) -> bool {
     let mooloop_core::ChannelSetup {
         channel,
         source,
-        effects,
+        effects: _,
         modulation,
-        next_device_id,
+        next_device_id: _,
     } = held;
     let mooloop_core::Channel {
         name,
@@ -1082,9 +1208,7 @@ fn same_strip(held: &mooloop_core::ChannelSetup, incoming: &mooloop_core::Channe
         && *color == other.color
         && *midi_input == other.midi_input
         && *source == incoming.source
-        && *effects == incoming.effects
         && *modulation == incoming.modulation
-        && *next_device_id == incoming.next_device_id
 }
 
 /// The renderer a project install hands the audio thread, built and attached

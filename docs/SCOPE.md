@@ -251,8 +251,8 @@ thirteen sit downstream of, or that the definition in §1 forces.
   Free, and it changes what the board looks like.
 - **A safety limiter on the master output** — see item 13. Landed 2026-09-22
   (MOO-93); the lookahead question is MOO-169.
-- **The Buffer's tempo-change bug** (§7). This one is a defect, not a
-  decision, and it is real.
+- ~~**The Buffer's tempo-change bug** (§7).~~ Fixed 2026-09-23 (MOO-137):
+  a resized ring takes over the history.
 - **74 loose ends** in `LOOSE_ENDS.md`, across 12 groups. Not all are 0.2
   blockers; the ones that are get picked per polish pass rather than enumerated
   here.
@@ -467,12 +467,11 @@ What is worth knowing before answering:
 - **The gestures on the face are an admitted debug surface**
   (`lib.rs:1415-1420`) standing in for a note layer and parameter locks that
   do not exist. Judging the workflow through them judges the wrong thing.
-- **One real bug, independent of the decision: a tempo change destroys the
-  retained history.** `ResizeBuffers` constructs a new zeroed device and swaps
-  it in (`session/engine.rs:501`, `engine/lib.rs:524`). Nothing tests it and
-  `BUFFER_ENGINE.md` lists tempo-change behaviour as an unrun engineering
-  test. Fix this before any listening pass, or the pass will be judging a
-  device that silently forgets.
+- ~~**One real bug, independent of the decision: a tempo change destroys the
+  retained history.**~~ Fixed 2026-09-23 (MOO-137). `ResizeBuffers` still
+  builds a new device at the new length, and the swap now hands it the
+  outgoing ring's history
+  (`render::tests::a_tempo_change_keeps_an_unfrozen_buffers_history`).
 
 ---
 

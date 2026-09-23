@@ -1799,6 +1799,18 @@ impl EffectChain {
             if let Some(state) = self.slot_mut(slot) {
                 state.resource_key = Some(resource_key);
             }
+            // **The history comes across** (MOO-137). A tempo change or a
+            // HISTORY change builds a buffer at the new length, and until
+            // this every unfrozen one arrived empty. Two copies bounded by
+            // the smaller ring and no allocation, which is what makes it an
+            // audio-thread job.
+            let mut node = node;
+            if let (Some(incoming), Some(outgoing)) = (
+                node.as_buffer_device_mut(),
+                self.nodes[slot].as_mut().and_then(|live| live.as_buffer_device_mut()),
+            ) {
+                incoming.adopt_history_from(outgoing);
+            }
             ReclaimedEffect {
                 node: self.nodes[slot].replace(node),
                 align: std::mem::replace(&mut self.dry_align[slot], align),
@@ -1813,6 +1825,60 @@ impl EffectChain {
                 analyzer: None,
                 state: None,
                 channel: None,
+            }
+        }
+    }
+
+    /// Move the devices `rows` names from `live` into this chain, and this
+    /// chain's own nodes for those rows into `live` in their place (MOO-137).
+    ///
+    /// Boxes change places and nothing else happens: no allocation, and
+    /// nothing is dropped here -- `live` leaves with the retired generation.
+    /// What goes with a device is what it has been doing: its node, the dry
+    /// ring that is aligned to it, its analyzer, its host ramps, its silence
+    /// count and any knob moves queued for it. What stays is the structure
+    /// the incoming project describes -- the slot's span, its containers'
+    /// dry rings and its branch alignment. A row is only ever named here when
+    /// its whole document state is identical on both sides, so the node that
+    /// arrives is the one the row would have been built with.
+    ///
+    /// With `fade_in_the_rest`, every other device in this chain starts faded
+    /// out of the path and fades in, as an installed one does.
+    fn adopt_devices_from(
+        &mut self,
+        live: &mut EffectChain,
+        rows: &[(u8, u8)],
+        fade_in_the_rest: bool,
+    ) {
+        let mut carried = [false; MAX_EFFECTS_PER_CHANNEL];
+        for &(from, to) in rows {
+            let (from, to) = (usize::from(from), usize::from(to));
+            if from >= MAX_EFFECTS_PER_CHANNEL || to >= MAX_EFFECTS_PER_CHANNEL {
+                continue;
+            }
+            if self.nodes[to].is_none() || live.nodes[from].is_none() {
+                continue;
+            }
+            carried[to] = true;
+            std::mem::swap(&mut self.nodes[to], &mut live.nodes[from]);
+            std::mem::swap(&mut self.dry_align[to], &mut live.dry_align[from]);
+            std::mem::swap(&mut self.analyzers[to], &mut live.analyzers[from]);
+            if let (Some(fresh), Some(held)) =
+                (self.slots[to].as_deref_mut(), live.slots[from].as_deref_mut())
+            {
+                std::mem::swap(&mut fresh.ramps, &mut held.ramps);
+                std::mem::swap(&mut fresh.silent_frames, &mut held.silent_frames);
+                std::mem::swap(&mut fresh.events, &mut held.events);
+            }
+        }
+        if fade_in_the_rest {
+            for (slot, state) in self.slots[..self.bound].iter_mut().enumerate() {
+                let Some(state) = state.as_deref_mut() else {
+                    continue;
+                };
+                if !carried[slot] && !state.kind.is_some_and(mooloop_core::EffectKind::is_container) {
+                    state.ramps.active.reset_to(0.0);
+                }
             }
         }
     }
@@ -4872,7 +4938,7 @@ impl RenderState {
     /// path from silence -- [`keep_live_ring`]. The sends' rings follow the
     /// same rule, matched through `carry`'s seat maps.
     pub fn carry_strips_from(&mut self, outgoing: &mut Self, carry: &crate::CarryPlan) {
-        for &(from, to) in &carry.channels {
+        for &(from, to) in carry.channels.iter().chain(&carry.rechained_channels) {
             let (from, to) = (usize::from(from), usize::from(to));
             let Some(live) = outgoing.strips.get_mut(from) else {
                 continue;
@@ -4894,6 +4960,12 @@ impl RenderState {
                 continue;
             }
             std::mem::swap(live, fresh);
+            // Carried although its chain changed (MOO-137): the incoming
+            // chain goes onto the carried strip, and the live one stays
+            // behind for the devices below to be taken out of.
+            if carry.rechained_channels.contains(&(from as u8, to as u8)) {
+                std::mem::swap(&mut fresh.effects, &mut live.effects);
+            }
             // **The audio slot has to come across too.** Every install builds
             // a fresh `ChannelAudioBank`, and a strip binds to its slot at
             // construction -- so a carried strip is still reading the retired
@@ -4957,13 +5029,16 @@ impl RenderState {
         // for the reason a channel's compensation stays behind above: an
         // untouched track can still be owed a different answer because the
         // graph around it moved.
-        for &(from, to) in &carry.tracks {
+        for &(from, to) in carry.tracks.iter().chain(&carry.rechained_tracks) {
             let (from, to) = (usize::from(from), usize::from(to));
             let (Some(live), Some(fresh)) = (outgoing.buses.get_mut(from), self.buses.get_mut(to))
             else {
                 continue;
             };
             std::mem::swap(live, fresh);
+            if carry.rechained_tracks.contains(&(from as u8, to as u8)) {
+                std::mem::swap(&mut fresh.effects, &mut live.effects);
+            }
             if ring_frames(&fresh.compensation) != ring_frames(&live.compensation) {
                 std::mem::swap(&mut fresh.compensation, &mut live.compensation);
             }
@@ -4975,6 +5050,40 @@ impl RenderState {
         // The sends are compiled whole from the incoming project, so their
         // rings are matched by edge rather than carried with a strip.
         self.sends.adopt_rings_from(&mut outgoing.sends, |seat| carry.seat(seat));
+        // **The devices that did not change** (MOO-137). Rebuilt strip or
+        // carried one -- which the loops above have already given the
+        // incoming chain -- every device the edit left alone moves from the
+        // live chain into its incoming row, and the node built for that row
+        // leaves with the retired generation in its place.
+        //
+        // On a strip that kept sounding, every device that did *not* come
+        // across is new to the sound, and fades in along the bypass
+        // crossfade the way an installed one does (MOO-172) -- an undo that
+        // puts a removed device back brings it in rather than switching it
+        // in. A rebuilt strip starts from silence, so its devices need not.
+        for chain in &carry.effects {
+            let kept_sounding = match (chain.from, chain.to) {
+                (EffectTarget::Channel(from), EffectTarget::Channel(to)) => carry
+                    .rechained_channels
+                    .contains(&(from, to))
+                    && self
+                        .strips
+                        .get(usize::from(to))
+                        .zip(outgoing.strips.get(usize::from(from)))
+                        .is_some_and(|(carried, left)| carried.source.kind() == left.source.kind()),
+                (EffectTarget::Bus(from), EffectTarget::Bus(to)) => {
+                    carry.rechained_tracks.contains(&(from, to))
+                }
+                _ => false,
+            };
+            let (Some(incoming), Some(live)) = (
+                Self::chain_for(&mut self.strips, &mut self.buses, chain.to),
+                Self::chain_for(&mut outgoing.strips, &mut outgoing.buses, chain.from),
+            ) else {
+                continue;
+            };
+            incoming.adopt_devices_from(live, &chain.rows, kept_sounding);
+        }
     }
 
     /// The identity of the audio slot in this generation's bank at `index`,
@@ -10376,6 +10485,134 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             chain.slot(0).unwrap().resource_key,
             Some(1),
             "and the slot must still be describing the ring that is playing"
+        );
+    }
+
+    /// **A tempo change keeps what an unfrozen Buffer holds** (MOO-137). The
+    /// session answers a tempo change by building every Buffer again at the
+    /// new length and swapping it in; the swap now hands the new ring the
+    /// history the old one was holding, where it used to arrive empty.
+    #[test]
+    fn a_tempo_change_keeps_an_unfrozen_buffers_history() {
+        let mut chain = EffectChain::new();
+        let live = Box::new(mooloop_dsp::BufferDevice::with_bars(48_000, 120.0, 1));
+        let displaced = chain.install(
+            0,
+            mooloop_core::EffectKind::Buffer,
+            Some(1),
+            live,
+            None,
+            Box::new(SpectrumAnalyzer::new()),
+            Box::new(EffectSlot::new()),
+        );
+        assert!(displaced.is_empty());
+        let context = ProcessContext {
+            sample_rate: 48_000,
+            frames: 4_800,
+            playing: false,
+            bpm: 120.0,
+            position_ticks: 0.0,
+            position_frames: 0,
+        };
+        let mut bus = StereoBus::with_capacity(4_800);
+        for frame in 0..4_800 {
+            bus.l[frame] = 0.5;
+            bus.r[frame] = -0.5;
+        }
+        chain.nodes[0]
+            .as_mut()
+            .and_then(|node| node.as_buffer_device_mut())
+            .expect("a buffer")
+            .process(&context, &mut bus, &[]);
+
+        let slower = Box::new(mooloop_dsp::BufferDevice::with_bars(48_000, 90.0, 1));
+        let displaced = chain.replace_if_kind(
+            0,
+            mooloop_core::EffectKind::Buffer,
+            1,
+            1,
+            slower,
+            None,
+        );
+        assert!(
+            displaced.node.is_some(),
+            "the outgoing ring must leave through the reclaim ring"
+        );
+        let replaced = chain.nodes[0]
+            .as_mut()
+            .and_then(|node| node.as_buffer_device_mut())
+            .expect("still a buffer");
+        assert!(
+            replaced.capacity_frames() > 96_000,
+            "the premise: the replacement is the slower tempo's longer ring"
+        );
+        assert!(
+            replaced.waveform_peaks().iter().any(|peak| *peak >= 0.5),
+            "the tempo change emptied the ring"
+        );
+    }
+
+    /// **An undo of an unrelated effect edit keeps what a Buffer holds**
+    /// (MOO-137). Every undo is a whole-project install, and a channel whose
+    /// chain differed from the live one in any device used to be rebuilt,
+    /// Buffer included. Now the channel is carried, and the Buffer -- whose
+    /// document state did not change -- moves into the incoming chain with
+    /// its ring.
+    #[test]
+    fn an_install_that_changed_another_device_keeps_the_buffers_history() {
+        let mut channel = ProjectChannel::poly_synth(0, 1);
+        channel.notes[0].push(NoteEvent::new(1, 0, 8_000, 48, 110));
+        channel
+            .setup
+            .push_effect(mooloop_core::EffectSlotState::new(mooloop_core::EffectParams::Buffer(
+                mooloop_core::BufferParams {
+                    bars: 1,
+                    ..Default::default()
+                },
+            )))
+            .expect("room");
+        channel
+            .setup
+            .push_effect(mooloop_core::EffectSlotState::of_kind(mooloop_core::EffectKind::Filter))
+            .expect("room");
+        channel.setup.assign_device_ids();
+        let mut project = Project {
+            channels: vec![channel],
+            ..Project::default()
+        };
+        // The carry matches channels by identity, as a loaded song has them.
+        project.assign_channel_ids();
+        let mut live = RenderState::from_project(48_000, &project, &[]);
+        live.play();
+        for _ in 0..(48_000 / 512) {
+            live.process_once_block(512);
+        }
+
+        // The unrelated edit, as an undo would install it: the filter moved.
+        let mut edited = project.clone();
+        let mooloop_core::EffectParams::Filter(filter) = &mut edited.channels[0].setup.effects[1].params else {
+            panic!("the second row is the filter");
+        };
+        filter.cutoff_hz = 800.0;
+        let plan = crate::carry_plan(&project, &edited);
+        assert_eq!(plan.channels, Vec::<(u8, u8)>::new(), "the premise: the chain changed");
+        assert_eq!(plan.rechained_channels, vec![(0, 0)]);
+
+        let mut incoming = RenderState::from_project(48_000, &edited, &[]);
+        incoming.adopt_performance_state(&live);
+        incoming.carry_strips_from(&mut live, &plan);
+        let buffer = incoming.strips[0].effects.nodes[0]
+            .as_mut()
+            .and_then(|node| node.as_buffer_device_mut())
+            .expect("the first row is still the Buffer");
+        assert!(
+            buffer.waveform_peaks().iter().any(|peak| *peak > 0.01),
+            "the install emptied the Buffer"
+        );
+        // And the filter's row describes the incoming document, not the live one.
+        assert_eq!(
+            incoming.strips[0].effects.slot(1).and_then(|state| state.base_params),
+            Some(edited.channels[0].setup.effects[1].params)
         );
     }
 

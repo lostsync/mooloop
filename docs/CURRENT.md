@@ -1748,12 +1748,21 @@ land on its own when it starts to matter:
   face's HISTORY stepper. `bars` is not a descriptor parameter and cannot
   become one: resizing reallocates, so the replacement is built on the control
   thread and swapped in at a block boundary, down the road a tempo change
-  travels. A frozen buffer refuses that swap rather than losing what is
-  playing, which also means **changing HISTORY while frozen does nothing to
-  the running ring** until it thaws and something resizes it again.
-  `Freeze` persists, and a project saved frozen reopens frozen over an
-  **empty ring**, because the frozen audio itself is not saved yet. A
-  document saved with a gesture held reopens holding it.
+  travels. **The replacement takes over the history** (MOO-137): the most
+  recent frames the old ring held, as many as the new one has room for, so a
+  tempo change or a HISTORY change no longer empties an unfrozen Buffer. A
+  frozen buffer refuses that swap rather than losing what is playing, which
+  also means **changing HISTORY while frozen does nothing to the running
+  ring** until it thaws and something resizes it again. An undo, a redo or
+  any other whole-project install keeps a Buffer whose own settings did not
+  change, with its ring, and keeps the channel it sits on sounding.
+  `Freeze` persists, but the frozen audio itself is not saved (MOO-196 asks
+  whether it should be). So a Buffer that arrives with Freeze on and an empty
+  ring -- a reopened song, a preset, a paste -- records, with the freeze
+  armed (the face shows ARMED), and the freeze lands once the ring holds a
+  full history. It used to latch the empty ring and play silence under a
+  face reading FROZEN. A document saved with a gesture held reopens holding
+  it.
   The face's SEAMS readout counts wraps and cuts — a stutter's repeats, a
   reverse head lapping the ring — which is the number that says whether the
   head is doing what the picture claims. It replaced RETURNS, a count of

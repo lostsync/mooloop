@@ -214,6 +214,28 @@ be arriving around rows that are already playing. `ReplaceEffect` (a
 prepared resource swapped under the same device) and a whole-project
 install are unchanged: a document load settles every ramp at its control.
 
+**A project install carries effect devices by `DeviceId`** (MOO-137, agreed
+with Realtime Engine on 2026-09-23). `carry_plan` still carries a channel or
+track strip whole when its setup is identical. A strip whose setup differs
+**only in its effect chain** is also carried whole
+(`CarryPlan::rechained_channels`/`rechained_tracks`), so its voices, source,
+modulators and output stage keep running. The strip then takes the incoming
+chain. For every surviving chain not carried as it stands, each device whose
+**whole** `EffectSlotState` compares equal on both sides moves from the live
+chain into its incoming row (`CarryPlan::effects`,
+`EffectChain::adopt_devices_from`): its node, its dry-path ring, its analyzer,
+its host ramps and its queued knob moves. The node built for that row leaves
+with the retired generation. The chain's structure (spans, container dry
+rings, branch alignment, and so the declared latency) is always the incoming
+project's, and a carried device declares the same latency because it is the
+same device. The plan is computed on the control thread, and the audio thread
+only swaps boxes. On a strip that kept sounding, every device that did not
+come across fades in, as an installed one does. A plugin device carries its
+live processor the same way. **A ring resize** (`ReplaceEffect` on a Buffer,
+after a tempo or HISTORY change) hands the replacement the history the
+outgoing ring holds, which is a bounded copy with no allocation. A frozen
+Buffer still refuses the resize.
+
 Every structural edit now honours the second bullet. The three routing
 tables -- MIDI routing, audio-input routing and the buffer MIDI map -- were
 the one exception: `ArcSwap`s the callback `load()`ed, so a control-thread

@@ -252,7 +252,11 @@ It must also pass these engineering tests:
 - No allocation, locks, I/O, or large-object destruction in the JACK callback.
 - Deterministic write/read-head behavior across varying block sizes.
 - Defined results for wraparound, read/write proximity, transport stop, tempo
-  change, and project reload.
+  change, and project reload. *Tempo change and reload are defined as of
+  2026-09-23 (MOO-137). A resized ring takes over the retained history, and
+  an undo or any other install keeps an unchanged Buffer with its ring. A
+  reloaded freeze records until the ring is full and then latches, because
+  the frozen audio is not saved (MOO-196).*
 - Buffer history and head states are always visible.
 
 Reject or revise the thesis if the normal Follow state cannot behave like a

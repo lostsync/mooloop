@@ -333,6 +333,17 @@ pub trait AudioNode {
         false
     }
 
+    /// This node as a retained-audio buffer, if it is one.
+    ///
+    /// For the one thing the host does with a buffer that no other node
+    /// needs: when a ring resize swaps a replacement in, the replacement takes
+    /// over the history the outgoing ring holds (MOO-137,
+    /// `BufferDevice::adopt_history_from`). The same shape as
+    /// `SourceNode::as_sampler_mut`.
+    fn as_buffer_device_mut(&mut self) -> Option<&mut crate::buffer_device::BufferDevice> {
+        None
+    }
+
     /// What this node's gain computer did over the block just processed, if
     /// it has one. Only the dynamics devices report a value; the host
     /// publishes it as display telemetry, the same way `buffer_collisions`

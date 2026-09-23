@@ -357,10 +357,40 @@ impl BufferDevice {
         params: &[TimedBufferParam],
     ) {
         debug_assert!(context.frames <= bus.capacity());
+        // A non-finite sample would stay in the ring for as long as it is
+        // retained, and every gesture over it would replay it (MOO-176). One
+        // pass over the block finds it, and it is stored, and passed, as
+        // silence.
+        let frames = context.frames.min(bus.capacity());
+        let finite = |samples: &[f32]| samples.iter().all(|sample| sample.is_finite());
+        if !(finite(&bus.l[..frames]) && finite(&bus.r[..frames])) {
+            for sample in bus.l[..frames].iter_mut().chain(&mut bus.r[..frames]) {
+                if !sample.is_finite() {
+                    *sample = 0.0;
+                }
+            }
+        }
         if std::mem::take(&mut self.pending_freeze) {
             // A saved freeze is a state the document was in, not a gesture
-            // somebody just made, so it is restored rather than quantized.
-            self.apply_freeze(true);
+            // somebody just made, so it is restored rather than quantized --
+            // **once there is something to hold** (MOO-137). The ring's audio
+            // is not saved, so a device built with Freeze on (a reopened
+            // song, a preset, a paste, an undo that rebuilt it) starts empty,
+            // and latching that played silence under a face reading FROZEN.
+            // It records instead, with the freeze armed to land the moment
+            // the ring holds a full history. A ring that already does -- one
+            // that adopted another's history -- latches at once. Whether the
+            // frozen audio itself should be saved is MOO-196.
+            let unfilled = (self.capacity_frames() as u64).saturating_sub(self.write_head);
+            if unfilled == 0 {
+                self.apply_freeze(true);
+                self.reconsider(context);
+            } else {
+                self.armed_freeze = Some(ArmedFreeze {
+                    freeze: true,
+                    frames_remaining: unfilled as f64,
+                });
+            }
         }
         for (index, held) in std::mem::take(&mut self.pending_gates).into_iter().enumerate() {
             if held {
@@ -1016,6 +1046,59 @@ impl BufferDevice {
         }
     }
 
+    /// Take over what `previous` has retained: its most recent history, as
+    /// much of it as this ring holds, and where its writer is (MOO-137).
+    ///
+    /// For a replacement ring -- a tempo change or a HISTORY change builds a
+    /// new device at the new length -- so the audio the player has been
+    /// capturing is still there to be played. Until this, a tempo change
+    /// gave every unfrozen Buffer an empty ring.
+    ///
+    /// Realtime-safe: two copies per channel, bounded by the smaller ring,
+    /// and a pass over this ring's picture. No allocation.
+    ///
+    /// What is taken is the *history*. A gesture or a playhead the previous
+    /// device was running is not: the replacement starts following, with
+    /// whatever its own parameters say is held, which is what it was built
+    /// from.
+    pub fn adopt_history_from(&mut self, previous: &BufferDevice) {
+        let frames = self
+            .capacity_frames()
+            .min(previous.capacity_frames())
+            .min(usize::try_from(previous.write_head).unwrap_or(usize::MAX));
+        let end = previous.write_head;
+        let mut copied = 0usize;
+        while copied < frames {
+            let position = end - (frames - copied) as u64;
+            let from = (position % previous.capacity_frames() as u64) as usize;
+            let to = (position % self.capacity_frames() as u64) as usize;
+            // The longest run that wraps neither ring.
+            let run = (frames - copied)
+                .min(previous.capacity_frames() - from)
+                .min(self.capacity_frames() - to);
+            self.left[to..to + run].copy_from_slice(&previous.left[from..from + run]);
+            self.right[to..to + run].copy_from_slice(&previous.right[from..from + run]);
+            copied += run;
+        }
+        self.write_head = previous.write_head;
+        self.frames_elapsed = previous.frames_elapsed;
+        self.seam_count = previous.seam_count;
+        self.rebuild_peaks();
+    }
+
+    /// The picture, redrawn from the ring as it stands.
+    fn rebuild_peaks(&mut self) {
+        let capacity = self.capacity_frames();
+        for (bin, peak) in self.peaks.iter_mut().enumerate() {
+            let start = bin * capacity / WAVEFORM_BINS;
+            let end = ((bin + 1) * capacity / WAVEFORM_BINS).max(start + 1).min(capacity);
+            *peak = self.left[start..end]
+                .iter()
+                .zip(&self.right[start..end])
+                .fold(0.0f32, |peak, (l, r)| peak.max(l.abs()).max(r.abs()));
+        }
+    }
+
     // --- telemetry ---------------------------------------------------------
 
     /// Fold one frame's magnitude into the bin it belongs to.
@@ -1187,6 +1270,10 @@ impl AudioNode for BufferDevice {
 
     fn holds_frozen_audio(&self) -> bool {
         self.is_frozen()
+    }
+
+    fn as_buffer_device_mut(&mut self) -> Option<&mut BufferDevice> {
+        Some(self)
     }
 
     fn buffer_waveform(&self) -> Option<BufferDisplay<'_>> {
@@ -1842,5 +1929,98 @@ mod tests {
                 "frame {index} differs by block size: {a} vs {b}"
             );
         }
+    }
+
+    /// **A replacement ring keeps the history** (MOO-137). A tempo change
+    /// builds a buffer at the new length; the replacement takes the most
+    /// recent frames the outgoing ring held, as many as it has room for, at
+    /// the same absolute positions, and carries on writing from there.
+    #[test]
+    fn a_replacement_ring_takes_over_the_history() {
+        let mut live = BufferDevice::with_capacity(BAR);
+        let mut bus = StereoBus::with_capacity(BAR + BEAT);
+        fill_ramp(&mut bus, 1, BAR + BEAT);
+        live.process(&context(BAR + BEAT), &mut bus, &[]);
+        assert_eq!(live.write_head, (BAR + BEAT) as u64);
+
+        for capacity in [BAR / 2, BAR, BAR * 2] {
+            let mut next = BufferDevice::with_capacity(capacity);
+            next.adopt_history_from(&live);
+            assert_eq!(next.write_head, live.write_head);
+            let kept = capacity.min(BAR);
+            for back in 1..=kept {
+                let position = live.write_head - back as u64;
+                let index = (position % capacity as u64) as usize;
+                // `fill_ramp` wrote frame `n` as `n + 1`.
+                assert_eq!(
+                    next.left[index],
+                    (position + 1) as f32,
+                    "{capacity}: {back} frames back was lost"
+                );
+                assert_eq!(next.right[index], -((position + 1) as f32));
+            }
+            assert!(
+                next.waveform_peaks().iter().any(|peak| *peak > 0.0),
+                "{capacity}: the picture was not redrawn"
+            );
+        }
+    }
+
+    /// A ring that has been written for less than its length hands over
+    /// only what it has, and the rest of the replacement stays silent.
+    #[test]
+    fn a_young_ring_hands_over_only_what_it_wrote() {
+        let mut live = BufferDevice::with_capacity(BAR);
+        let mut bus = StereoBus::with_capacity(BEAT);
+        fill_ramp(&mut bus, 1, BEAT);
+        live.process(&context(BEAT), &mut bus, &[]);
+        let mut next = BufferDevice::with_capacity(BAR * 2);
+        next.adopt_history_from(&live);
+        assert_eq!(&next.left[..BEAT], &live.left[..BEAT]);
+        assert!(next.left[BEAT..].iter().all(|sample| *sample == 0.0));
+    }
+
+    /// **A restored freeze waits for something to hold** (MOO-137). The
+    /// ring's audio is not saved, so a device built with Freeze on used to
+    /// latch an empty ring and play silence under a face reading FROZEN.
+    /// It records until the ring is full, and then the freeze lands.
+    #[test]
+    fn a_restored_freeze_lands_once_the_ring_is_full() {
+        let params = BufferParams {
+            bars: 1,
+            freeze: 1.0,
+            ..BufferParams::default()
+        };
+        let mut device = BufferDevice::new(params, 48_000, 120.0);
+        assert_eq!(device.capacity_frames(), BAR);
+
+        let mut bus = StereoBus::with_capacity(BAR / 2);
+        fill_ramp(&mut bus, 1, BAR / 2);
+        device.process(&context(BAR / 2), &mut bus, &[]);
+        assert!(!device.is_frozen(), "froze over a half-empty ring");
+        assert!(device.is_writing());
+        assert_eq!(device.armed_freeze(), Some(true), "the face has to show it coming");
+
+        let mut bus = StereoBus::with_capacity(BAR / 2);
+        fill_ramp(&mut bus, BAR / 2 + 1, BAR / 2);
+        device.process(&context(BAR / 2), &mut bus, &[]);
+        assert!(device.is_frozen(), "the freeze never landed on a full ring");
+        assert_eq!(device.armed_freeze(), None);
+        // And what it holds is the bar it recorded, not silence.
+        assert!(device.left.iter().all(|sample| *sample != 0.0));
+    }
+
+    /// A NaN reaching the writer is stored as silence rather than kept for
+    /// every later gesture to replay (MOO-176).
+    #[test]
+    fn a_nan_is_never_written_into_the_ring() {
+        let mut device = BufferDevice::with_capacity(BEAT);
+        let mut bus = StereoBus::with_capacity(BEAT);
+        fill_ramp(&mut bus, 1, BEAT);
+        bus.l[100] = f32::NAN;
+        bus.r[200] = f32::INFINITY;
+        device.process(&context(BEAT), &mut bus, &[]);
+        assert!(device.left.iter().chain(&device.right).all(|sample| sample.is_finite()));
+        assert!(bus.l[..BEAT].iter().all(|sample| sample.is_finite()));
     }
 }
