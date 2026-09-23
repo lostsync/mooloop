@@ -415,7 +415,10 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   empty Developer page. The MIDI page lists the inputs the driver is offering,
   every controller mapping in the project, and all seven transport gestures
   with whatever is mapped to each. A mapping row can be relearned, removed,
-  switched between pickup and jump takeover, and inverted; a transport gesture
+  switched between pickup and jump takeover, and inverted. Relearning moves the
+  row to the next control touched, keeping its takeover and direction when the
+  new control is the same kind, and the old control stops driving the
+  parameter; cancelling leaves the row as it was. A transport gesture
   is learned from its own row, since it has no on-screen control to press. One
   preference lives there, *bind to the controller it hears*, which is off by
   default and decides whether a learned mapping listens to one controller or

@@ -242,6 +242,13 @@ impl Session {
         if let Some(learn) = self.control_learn.clone() {
             if let Some(binding) = learn.resolve(message, ports) {
                 self.control_learn = None;
+                // A RELEARN replaces its row. `bind` alone drops only the
+                // bindings on the *control* just touched, so the row's old
+                // knob would have gone on driving the same parameter beside
+                // the new one (MOO-136).
+                self.control_map
+                    .bindings
+                    .retain(|existing| !learn.is_replacing(existing));
                 self.control_map.bind(binding.clone());
                 self.control_state.resolve(&self.control_map, ports);
                 effects.learned = Some(binding);
@@ -340,7 +347,28 @@ impl Session {
 
     /// Begin a learn gesture: the next control touched binds to `target`.
     pub fn begin_control_learn(&mut self, target: ControlTarget, bind_port: bool) {
-        self.control_learn = Some(ControlLearn { target, bind_port });
+        self.control_learn = Some(ControlLearn {
+            target,
+            bind_port,
+            replaces: None,
+        });
+    }
+
+    /// Begin relearning one mapping row, by its position in the map: the next
+    /// control touched takes that row's place. Answers the row's target, for
+    /// the status line, or `None` for a position the map does not have.
+    ///
+    /// The row stays until a control arrives, so cancelling leaves it as it
+    /// was.
+    pub fn begin_control_relearn(&mut self, index: usize, bind_port: bool) -> Option<ControlTarget> {
+        let previous = self.control_map.bindings.get(index)?.clone();
+        let target = previous.target;
+        self.control_learn = Some(ControlLearn {
+            target,
+            bind_port,
+            replaces: Some(previous),
+        });
+        Some(target)
     }
 
     /// What a binding's target is called, for a mapping list.
@@ -1199,6 +1227,87 @@ mod tests {
         );
         session.cancel_control_learn();
         assert_eq!(session.control_learn_target(), None);
+    }
+
+    /// RELEARN moves a row to another knob. The row's old knob stops driving
+    /// the parameter, the map holds one binding for it, and what the row said
+    /// about its knob -- takeover and direction -- goes with it. MOO-136: the
+    /// relearn used to bind the new knob beside the old one, so both moved
+    /// the parameter and the list showed two rows.
+    #[test]
+    fn a_relearn_replaces_its_row_rather_than_adding_one() {
+        let mut session = Session::default();
+        let target = ControlTarget::Param(VOLUME);
+        let mut binding = ControlBinding::new(
+            ControlSource::Cc {
+                port: MidiPortFilter::Any,
+                channel: MidiChannelFilter::Omni,
+                controller: 7,
+            },
+            target,
+        );
+        binding.mode = ControlMode::Absolute {
+            takeover: Takeover::Jump,
+        };
+        binding.set_inverted(true);
+        session.control_map.bind(binding);
+        session.resolve_control_map(&ports());
+
+        assert_eq!(session.begin_control_relearn(0, false), Some(target));
+        let effects = session.apply_control_input(&cc(21, 64), &ports(), false);
+        assert!(effects.learned.is_some());
+        assert_eq!(session.control_learn_target(), None);
+
+        let onto_volume: Vec<_> = session
+            .control_map
+            .bindings
+            .iter()
+            .filter(|binding| binding.target == target)
+            .collect();
+        assert_eq!(onto_volume.len(), 1, "one row for the target, not two");
+        assert_eq!(onto_volume[0].source.label(), "CC 21");
+        assert!(onto_volume[0].inverted(), "the row keeps its direction");
+        assert_eq!(onto_volume[0].mode.takeover(), Some(Takeover::Jump));
+
+        // The old knob does nothing now.
+        let volume_before = session.channels[0].volume;
+        let effects = session.apply_control_input(&cc(7, 0), &ports(), false);
+        assert!(effects.commands.is_empty() && effects.moved.is_empty());
+        assert_eq!(session.channels[0].volume, volume_before);
+        // The new one does, inverted and without having to catch it first.
+        let effects = session.apply_control_input(&cc(21, 0), &ports(), false);
+        assert_eq!(effects.moved.len(), 1);
+        assert_ne!(session.channels[0].volume, volume_before);
+    }
+
+    /// A relearn that is cancelled leaves its row as it was: the row is
+    /// removed only when a control arrives to take its place.
+    #[test]
+    fn a_cancelled_relearn_leaves_its_row_alone() {
+        let mut session = Session::default();
+        let binding = ControlBinding::new(
+            ControlSource::Cc {
+                port: MidiPortFilter::Any,
+                channel: MidiChannelFilter::Omni,
+                controller: 7,
+            },
+            ControlTarget::Param(VOLUME),
+        );
+        session.control_map.bind(binding.clone());
+        session.resolve_control_map(&ports());
+
+        assert!(session.begin_control_relearn(0, false).is_some());
+        // A note-off names no control, so the gesture is still waiting.
+        let release = MidiMessage {
+            offset: 0,
+            port: MidiPortId(0),
+            channel: 0,
+            kind: MidiKind::NoteOff { note: 36 },
+        };
+        session.apply_control_input(&release, &ports(), false);
+        session.cancel_control_learn();
+        assert_eq!(session.control_map.bindings, vec![binding]);
+        assert_eq!(session.begin_control_relearn(1, false), None, "no such row");
     }
 
     /// A binding reaches a device parameter, not only the strip, and the

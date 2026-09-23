@@ -4970,8 +4970,14 @@ impl UiState {
         binds_port: bool,
         target: ControlTarget,
     ) {
-        let label = self.session.control_target_label(&target);
         self.session.begin_control_learn(target, binds_port);
+        self.announce_control_learn(window, target);
+    }
+
+    /// The status line and the mapping list for a learn gesture that has just
+    /// started, whichever of the session's two ways began it.
+    fn announce_control_learn(&self, window: &MainWindow, target: ControlTarget) {
+        let label = self.session.control_target_label(&target);
         window.set_status_message(format!("Move a control to map {label}").as_str().into());
         self.refresh_midi_mappings(window);
     }
@@ -9998,14 +10004,15 @@ impl AppUi {
                     return;
                 };
                 let mut state = st.borrow_mut();
-                let Some(target) = state.session.control_binding_target(index) else {
-                    return;
-                };
                 // Relearn is the arm and the target at once: there is no
                 // control on screen to press, because the row already says
-                // which parameter it means.
+                // which parameter it means. The session remembers the row, so
+                // the control that answers replaces it rather than joining it.
                 let binds_port = settings.borrow().midi.learn_binds_port;
-                state.begin_control_learn(&window, binds_port, target);
+                let Some(target) = state.session.begin_control_relearn(index, binds_port) else {
+                    return;
+                };
+                state.announce_control_learn(&window, target);
             });
         }
         {

@@ -807,6 +807,13 @@ pub struct ControlLearn {
     /// Whether to bind the port the message arrives on, rather than any port.
     /// On for a studio with several controllers, off for one.
     pub bind_port: bool,
+    /// The mapping row a RELEARN started from, which the new binding
+    /// replaces rather than joins. `None` for an ordinary learn.
+    ///
+    /// Held here rather than removed when the gesture starts, so a relearn
+    /// that is cancelled -- or never answered, because the controller was
+    /// not plugged in -- leaves the row exactly as it was.
+    pub replaces: Option<ControlBinding>,
 }
 
 impl ControlLearn {
@@ -841,7 +848,29 @@ impl ControlLearn {
         if matches!(binding.source, ControlSource::Note { .. }) {
             binding.mode = ControlMode::Toggle;
         }
+        // A relearn moves a row to another control and keeps what the row
+        // said about it -- its mode, its takeover and its range -- as long as
+        // the new control is the same kind of thing. A pad relearned onto a
+        // knob gets a knob's defaults: Toggle means nothing to a fader.
+        if let Some(previous) = &self.replaces {
+            if std::mem::discriminant(&previous.source) == std::mem::discriminant(&binding.source)
+            {
+                binding.mode = previous.mode;
+                binding.min = previous.min;
+                binding.max = previous.max;
+            }
+        }
         Some(binding)
+    }
+
+    /// Whether `binding` is the row this gesture is relearning: the same
+    /// control onto the same target. Matched on those two rather than on the
+    /// whole binding, so switching the row's takeover or invert while the
+    /// gesture waits does not leave the old row behind.
+    pub fn is_replacing(&self, binding: &ControlBinding) -> bool {
+        self.replaces.as_ref().is_some_and(|previous| {
+            previous.source == binding.source && previous.target == binding.target
+        })
     }
 }
 
@@ -1249,6 +1278,7 @@ mod tests {
         let learn = ControlLearn {
             target: CUTOFF,
             bind_port: true,
+            replaces: None,
         };
         let binding = learn
             .resolve(&cc(1, 5, 21, 64), &ports())
@@ -1272,6 +1302,7 @@ mod tests {
         let anywhere = ControlLearn {
             target: CUTOFF,
             bind_port: false,
+            replaces: None,
         };
         let binding = anywhere.resolve(&cc(1, 5, 21, 64), &ports()).unwrap();
         assert_eq!(
