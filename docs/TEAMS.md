@@ -126,7 +126,9 @@ Files marked *shared* are split in the table above.
 - `engine/src/`: `executor.rs`, `lib.rs` (`EngineHandle`), `load.rs`,
   `offline.rs`, `take.rs`, `block_cost.rs`, `render.rs` (*shared*), and the
   tests `render_test_support.rs`, `idle_skip_tests.rs`, `audio_edge_tests.rs`,
-  `take_tests.rs`, and `continuity_tests.rs` (the "control changes are
+  `take_tests.rs`, `soak_tests.rs` (every device kind through the executor,
+  MOO-113; a failure in a device it drives is that device's team's), and
+  `continuity_tests.rs` (the "control changes are
   continuous" family, MOO-104, whose cases each team adds for its own
   transitions)
 - `dsp/src/`: `node.rs` (*shared*), `event.rs`, `bus.rs` (*shared*), `taps.rs`

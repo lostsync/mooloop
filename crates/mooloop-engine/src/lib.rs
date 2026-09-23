@@ -176,6 +176,8 @@ mod idle_skip_tests;
 #[cfg(test)]
 mod output_guard_tests;
 #[cfg(test)]
+mod soak_tests;
+#[cfg(test)]
 mod strip_tests;
 #[cfg(test)]
 mod take_tests;

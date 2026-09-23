@@ -165,6 +165,9 @@ impl Executor {
         // why.
         if !self.checked_scheduling {
             self.checked_scheduling = true;
+            // Once per thread, and on the first block only when the driver
+            // gave no earlier chance: see `prepare_audio_thread`.
+            prepare_audio_thread();
             self.load.set_realtime(crate::load::thread_realtime_status());
         }
         // `Instant::now` is a vDSO read of the monotonic clock on Linux and
@@ -460,6 +463,25 @@ fn enable_flush_to_zero() {
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 #[inline]
 fn enable_flush_to_zero() {}
+
+/// Do, on the audio thread, the one-time work its first block would
+/// otherwise do by allocating.
+///
+/// `arc-swap` keeps a per-thread "debt" node, allocated (128 bytes) the first
+/// time a thread loads *any* `ArcSwap` and reused for the life of the
+/// thread. The sampler loads its channel's audio that way on every trigger,
+/// so on a fresh callback thread the first note a sampler plays mallocs --
+/// found by the engine soak (MOO-113), which no per-path test had reached
+/// because each warmed its thread first.
+///
+/// A driver with a thread-start hook (JACK's `thread_init`) should call this
+/// there, before the first callback. The executor also calls it at the top of
+/// the first block it runs on a thread, so a driver without one allocates
+/// once, in a block with nothing yet playing, rather than mid-song on a note.
+pub(crate) fn prepare_audio_thread() {
+    let warm: arc_swap::ArcSwapOption<()> = arc_swap::ArcSwapOption::empty();
+    drop(warm.load());
+}
 
 #[cfg(test)]
 mod tests {
