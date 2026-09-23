@@ -3499,6 +3499,10 @@ pub(crate) struct RenderState {
     /// How each channel takes MIDI input. Rebuilt by the control layer when a
     /// channel's setting changes or a port appears, and swapped in whole.
     midi_routing: Box<MidiRouting>,
+    /// The keys the control map takes from the instruments: a pad bound to
+    /// something, or every key while a learn gesture waits. Asked before a
+    /// note is played, and swapped in whole like `midi_routing` (MOO-129).
+    claimed_notes: Box<mooloop_core::ClaimedNotes>,
     /// Which buffer each channel records from, read every block by
     /// [`Self::advance_takes`]. Swapped in whole like `midi_routing`.
     audio_input_routing: Box<AudioInputRouting>,
@@ -3734,6 +3738,7 @@ impl RenderState {
             buffer_cc: BufferCcState::default(),
             keyboard_channel: Arc::new(AtomicU8::new(NO_KEYBOARD_CHANNEL)),
             midi_routing: Box::new(MidiRouting::default()),
+            claimed_notes: Box::default(),
             audio_input_routing: Box::new(AudioInputRouting::default()),
             input: StereoBus::with_capacity(MAX_BLOCK_SIZE),
             input_dirty: false,
@@ -5085,6 +5090,9 @@ impl RenderState {
             StructuralCommand::SetBufferMidi(map) => {
                 self.set_buffer_midi(map).map(StructuralReclaim::BufferMidi)
             }
+            StructuralCommand::SetClaimedNotes(claimed) => Some(StructuralReclaim::ClaimedNotes(
+                self.set_claimed_notes(claimed),
+            )),
             StructuralCommand::StartTake { channel, take } => {
                 let Some(strip) = self.strips.get_mut(channel as usize) else {
                     // Nothing to record on. Handed straight back, so the
@@ -5802,6 +5810,15 @@ impl RenderState {
         std::mem::replace(&mut self.midi_routing, routing)
     }
 
+    /// Install which keys the control map claims, returning the table it
+    /// displaces. Same transport as [`Self::set_buffer_midi`].
+    pub(crate) fn set_claimed_notes(
+        &mut self,
+        claimed: Box<mooloop_core::ClaimedNotes>,
+    ) -> Box<mooloop_core::ClaimedNotes> {
+        std::mem::replace(&mut self.claimed_notes, claimed)
+    }
+
     /// Install the audio input routing, returning the table it displaces.
     pub(crate) fn set_audio_input_routing(
         &mut self,
@@ -5895,7 +5912,10 @@ impl RenderState {
     /// - **Notes are realtime.** A note a buffer mapping claims drives the
     ///   buffer; otherwise every channel whose input claims the message sounds
     ///   it, and if none does, the selected channel does. All of that happens
-    ///   here, at the message's own frame offset.
+    ///   here, at the message's own frame offset. The exception is a key the
+    ///   control map has claimed -- a bound pad, or any key while a learn
+    ///   gesture waits -- which is forwarded like a control instead
+    ///   ([`mooloop_core::ClaimedNotes`]).
     /// - **Control is not.** Control changes, pitch bends and transport
     ///   messages are *forwarded* to the control layer, which maps them
     ///   against the project's bindings and issues the same edits the
@@ -5925,6 +5945,24 @@ impl RenderState {
                 map.filter(|map| map.accepts(message))
                     .filter(|map| map.note_event(note, 1).is_some())
             };
+            // A key the control map has claimed -- a bound pad, or any key
+            // while a learn gesture waits -- is a control, not a note: it goes
+            // up to be learned or to fire its binding, and is neither played,
+            // recorded nor given to the buffer (MOO-129).
+            //
+            // Its release still lifts anything the same key started as a
+            // note. A key held down when learn was armed, or when its pad was
+            // bound, went down as a note, and a claimed release that only went
+            // up would leave it sounding until Stop. `stop_note` releases only
+            // what is held, so for a key that went down as a control it does
+            // nothing.
+            if self.claimed_notes.claims(message) {
+                self.emit(mooloop_core::EngineEvent::ControlInput(*message));
+                if let MidiKind::NoteOff { note } = message.kind {
+                    self.stop_note(message.offset, note);
+                }
+                continue;
+            }
             match message.kind {
                 MidiKind::NoteOn { note, velocity } => match claimed(note) {
                     Some(map) => {
@@ -7563,6 +7601,121 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 EngineEvent::ControlInput(bend),
             ]
         );
+    }
+
+    /// A pad can be learned, and a learned pad fires rather than plays.
+    ///
+    /// MOO-129: `apply_midi` gave every note to an instrument, so a pad
+    /// pressed during learn only ever sounded and a Note binding never heard
+    /// anything -- while the session's own test, which hands the session the
+    /// message directly, stayed green. This one starts where the key arrives:
+    /// the engine is told a learn is waiting, the pad goes up instead of
+    /// sounding, the learn that the *forwarded* message completes is what
+    /// claims the pad, and the next press goes up again and fires its target.
+    #[test]
+    fn a_pad_is_learned_through_the_engine_and_then_fires_instead_of_playing() {
+        use mooloop_core::{
+            ClaimedNotes, ControlLearn, ControlMap, ControlMapState, ControlOutcome,
+            ControlTarget, EngineEvent, MidiChannelFilter, MidiInputRoute, MidiKind, MidiMessage,
+            MidiPortId, MidiPortInfo, MidiRouteSource, TransportControl,
+        };
+
+        let mut render = two_channel_render();
+        render.set_midi_routing(Box::new(MidiRouting {
+            routes: vec![MidiInputRoute {
+                source: MidiRouteSource::AllPorts,
+                channel: MidiChannelFilter::Omni,
+            }],
+        }));
+        let ports = vec![MidiPortInfo {
+            id: MidiPortId::FIRST,
+            name: "Pads".to_owned(),
+        }];
+        let key = |kind| MidiMessage {
+            offset: 0,
+            port: MidiPortId::FIRST,
+            channel: 9,
+            kind,
+        };
+        let pad_down = key(MidiKind::NoteOn {
+            note: 36,
+            velocity: 110,
+        });
+        let pad_up = key(MidiKind::NoteOff { note: 36 });
+        let forwarded = |render: &mut RenderState| -> Vec<EngineEvent> {
+            std::iter::from_fn(|| render.pop_outgoing()).collect()
+        };
+        let sounding = |render: &RenderState| render.auditions.iter().flatten().count();
+
+        // Nothing claimed: a key is a note, and nothing goes up.
+        render.apply_midi(&[key(MidiKind::NoteOn {
+            note: 38,
+            velocity: 100,
+        })]);
+        assert!(render.key_is_held(38, 0));
+        assert!(forwarded(&mut render).is_empty());
+
+        // A learn is waiting. The pad goes up and sounds nothing.
+        let learn = ControlLearn {
+            target: ControlTarget::Transport(TransportControl::Play),
+            bind_port: true,
+            replaces: None,
+        };
+        let map = ControlMap::default();
+        drop(render.set_claimed_notes(Box::new(map.claimed_notes(&ports, true))));
+        let before = sounding(&render);
+        render.apply_midi(&[pad_down]);
+        assert_eq!(sounding(&render), before, "a pad pressed during learn is not played");
+        assert!(!render.key_is_held(36, 0));
+        let up = forwarded(&mut render);
+        assert_eq!(up, vec![EngineEvent::ControlInput(pad_down)]);
+
+        // A key that went down as a note before the learn still lifts: its
+        // release goes up too, and the note it started stops.
+        render.apply_midi(&[key(MidiKind::NoteOff { note: 38 })]);
+        assert!(!render.key_is_held(38, 0), "a claimed release still lifts a held key");
+        assert_eq!(forwarded(&mut render).len(), 1);
+
+        // The control layer learns from what the engine sent, not from a
+        // message the test made up.
+        let EngineEvent::ControlInput(message) = up[0] else {
+            unreachable!()
+        };
+        let mut map = map;
+        map.bind(learn.resolve(&message, &ports).expect("a pad completes a learn"));
+        let mut state = ControlMapState::default();
+        state.resolve(&map, &ports);
+        let claimed: ClaimedNotes = map.claimed_notes(&ports, false);
+        drop(render.set_claimed_notes(Box::new(claimed)));
+
+        // The bound pad fires its target and plays no note, press and release.
+        let before = sounding(&render);
+        render.apply_midi(&[pad_up, pad_down]);
+        assert_eq!(sounding(&render), before);
+        assert!(!render.key_is_held(36, 0));
+        let up = forwarded(&mut render);
+        assert_eq!(
+            up,
+            vec![
+                EngineEvent::ControlInput(pad_up),
+                EngineEvent::ControlInput(pad_down)
+            ]
+        );
+        let EngineEvent::ControlInput(press) = up[1] else {
+            unreachable!()
+        };
+        assert_eq!(
+            state.apply(&map, &press, |_| 0.0),
+            vec![(0, ControlOutcome::Fire)]
+        );
+
+        // Any other key is still a note.
+        render.apply_midi(&[key(MidiKind::NoteOn {
+            note: 37,
+            velocity: 100,
+        })]);
+        assert!(render.key_is_held(37, 0));
+        assert!(forwarded(&mut render).is_empty());
     }
 
     /// A swap takes the outgoing renderer's held keys and its open take notes,

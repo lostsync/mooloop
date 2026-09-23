@@ -14921,6 +14921,19 @@ impl AppUi {
                 // compensation a send's arrival moves has already been sent
                 // for the generation this schedule belongs to.
                 st.borrow_mut().session.sync_track_graph(&mut handle);
+                // Which keys the control map takes from the instruments: its
+                // pads, and every key while a learn gesture waits (MOO-129).
+                // Derived and diffed here like the plans above, because a
+                // learn arming, a binding landing, a removal, an undo, a load
+                // and a port appearing all change it, and a call at each of
+                // them is a call somebody forgets. Sends nothing when it has
+                // not changed; a refused send is retried on the next tick.
+                {
+                    let state = st.borrow();
+                    let claimed = state.session.claimed_notes(&state.midi_ports);
+                    drop(state);
+                    let _ = handle.set_claimed_notes(claimed);
+                }
                 if document_title_needs_refresh {
                     let Some(window) = weak.upgrade() else { return };
                     st.borrow().update_document_title(&window);

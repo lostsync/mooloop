@@ -14,10 +14,10 @@
 
 use mooloop_core::{
     audio_input_taps, audio_source_rows, AudioInputSource, AudioSourceRow, AudioTap,
-    ChannelMidiInput, ControlBinding, ControlLearn, ControlMode, ControlOutcome, ControlTarget,
-    EffectSlotState, EffectTarget, EngineCommand, MidiInputRoute, MidiKind, MidiMessage,
-    MidiPortInfo, NoteEvent, ParamAddr, ParamDescriptor, ParamOwner, Project, Takeover,
-    TransportControl, STRIP_PARAM_PAN, STRIP_PARAM_VOLUME,
+    ChannelMidiInput, ClaimedNotes, ControlBinding, ControlLearn, ControlMode, ControlOutcome,
+    ControlTarget, EffectSlotState, EffectTarget, EngineCommand, MidiInputRoute, MidiKind,
+    MidiMessage, MidiPortInfo, NoteEvent, ParamAddr, ParamDescriptor, ParamOwner, Project,
+    Takeover, TransportControl, STRIP_PARAM_PAN, STRIP_PARAM_VOLUME,
 };
 
 use crate::roll::NoteEdit;
@@ -509,6 +509,19 @@ impl Session {
 
     pub fn control_learn_target(&self) -> Option<ControlTarget> {
         self.control_learn.as_ref().map(|learn| learn.target)
+    }
+
+    /// The keys the engine should hand up rather than play, for
+    /// [`EngineHandle::set_claimed_notes`]: the map's pads, and every key
+    /// while a learn gesture waits.
+    ///
+    /// Derived rather than kept, so the caller can ask once a tick and a
+    /// learn arming, a binding landing, an undo, a load and a port appearing
+    /// all reach the engine without a call at each of them.
+    ///
+    /// [`EngineHandle::set_claimed_notes`]: mooloop_engine::EngineHandle::set_claimed_notes
+    pub fn claimed_notes(&self, ports: &[MidiPortInfo]) -> ClaimedNotes {
+        self.control_map.claimed_notes(ports, self.control_learn.is_some())
     }
 
     /// Re-resolve every binding's port. Call it when a project loads and when
@@ -1308,6 +1321,44 @@ mod tests {
         session.cancel_control_learn();
         assert_eq!(session.control_map.bindings, vec![binding]);
         assert_eq!(session.begin_control_relearn(1, false), None, "no such row");
+    }
+
+    /// What the session tells the engine to hand up rather than play: every
+    /// key while a learn waits, then only the pad the learn bound. MOO-129's
+    /// engine half is `a_pad_is_learned_through_the_engine_and_then_fires_
+    /// instead_of_playing` in `mooloop-engine`; this is the derivation that
+    /// feeds it.
+    #[test]
+    fn a_learn_claims_every_key_until_a_pad_answers_it() {
+        let mut session = Session::default();
+        let pad = |kind| MidiMessage {
+            offset: 0,
+            port: MidiPortId(0),
+            channel: 9,
+            kind,
+        };
+        let press = pad(MidiKind::NoteOn {
+            note: 36,
+            velocity: 100,
+        });
+        let other = pad(MidiKind::NoteOn {
+            note: 37,
+            velocity: 100,
+        });
+        assert!(session.claimed_notes(&ports()).is_empty());
+
+        session.begin_control_learn(ControlTarget::Param(VOLUME), false);
+        assert!(session.claimed_notes(&ports()).claims(&other));
+
+        let effects = session.apply_control_input(&press, &ports(), false);
+        assert!(effects.learned.is_some());
+        let claimed = session.claimed_notes(&ports());
+        assert!(claimed.claims(&press));
+        assert!(!claimed.claims(&other), "the learn is over, so only the pad");
+
+        session.cancel_control_learn();
+        assert!(session.remove_control_binding(0, &ports()));
+        assert!(session.claimed_notes(&ports()).is_empty());
     }
 
     /// A binding reaches a device parameter, not only the strip, and the

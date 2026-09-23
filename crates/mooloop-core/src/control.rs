@@ -21,6 +21,10 @@
 //! which is the right trade for a mapping layer; a performance subset that
 //! needs tighter timing can be given a realtime fast path later, against these
 //! same types.
+//!
+//! The renderer has to know one thing about the map in advance: which keys
+//! are controls rather than notes, since it would otherwise play a pad before
+//! the control thread ever heard it. [`ClaimedNotes`] is that table.
 
 use crate::midi::{MidiChannelFilter, MidiPortFilter, MidiPortInfo, MidiPortMatch, MidiPortId};
 use crate::midi::{MidiKind, MidiMessage, RelativeEncoding};
@@ -874,6 +878,88 @@ impl ControlLearn {
     }
 }
 
+/// Which incoming keys belong to the control map rather than to the
+/// instruments: what the renderer asks before it plays a note.
+///
+/// **This is the one exception to the header's rule**, and it is a narrow
+/// one. A CC reaches the control layer whatever else happens to it, so a knob
+/// can always be learned and always fire. A note cannot: the renderer plays it
+/// the moment it arrives, so a pad could be pressed during learn and only ever
+/// sound, and a Note binding loaded from a file never heard anything (MOO-129).
+/// So the renderer is told, in advance, which keys to hand up instead -- every
+/// key while a learn gesture waits, and the bound ones otherwise -- and a
+/// claimed key is neither played nor recorded.
+///
+/// Built on the control thread from the map and the ports that exist now, and
+/// resolved the same way [`ControlMapState::resolve`] resolves a binding: a
+/// binding on a port that is not plugged in claims nothing, so the keyboard it
+/// shares a note number with still plays.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClaimedNotes {
+    /// A learn gesture is waiting, so every key is a candidate control.
+    pub learning: bool,
+    notes: Vec<ClaimedNote>,
+}
+
+/// One bound key, resolved for matching against a message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ClaimedNote {
+    port: MidiPortMatch,
+    channel: MidiChannelFilter,
+    note: u8,
+}
+
+impl ClaimedNotes {
+    /// Whether nothing is claimed, which is the state the renderer starts in
+    /// and every project without a pad binding stays in.
+    pub fn is_empty(&self) -> bool {
+        !self.learning && self.notes.is_empty()
+    }
+
+    /// Whether this note-on or note-off goes to the control layer rather than
+    /// to an instrument. Anything that is not a note is not this table's
+    /// business and answers `false`.
+    pub fn claims(&self, message: &MidiMessage) -> bool {
+        let note = match message.kind {
+            MidiKind::NoteOn { note, .. } | MidiKind::NoteOff { note } => note,
+            _ => return false,
+        };
+        self.learning
+            || self.notes.iter().any(|claimed| {
+                claimed.note == note
+                    && claimed.port.accepts(message.port)
+                    && claimed.channel.accepts(message.channel)
+            })
+    }
+}
+
+impl ControlMap {
+    /// The keys this map takes from the instruments, against the ports that
+    /// exist now. `learning` is whether a learn gesture is waiting, which
+    /// claims every key: the gesture is "touch the control", and a pad has to
+    /// be able to be that control.
+    pub fn claimed_notes(&self, ports: &[MidiPortInfo], learning: bool) -> ClaimedNotes {
+        let notes = self
+            .bindings
+            .iter()
+            .filter_map(|binding| match &binding.source {
+                ControlSource::Note {
+                    port,
+                    channel,
+                    note,
+                } => Some(ClaimedNote {
+                    port: port.resolve(ports),
+                    channel: *channel,
+                    note: *note,
+                }),
+                ControlSource::Cc { .. } | ControlSource::PitchBend { .. } => None,
+            })
+            .filter(|claimed| claimed.port != MidiPortMatch::Missing)
+            .collect();
+        ClaimedNotes { learning, notes }
+    }
+}
+
 fn port_name(port: MidiPortId, ports: &[MidiPortInfo]) -> Option<&str> {
     ports
         .iter()
@@ -1455,6 +1541,50 @@ mod tests {
             ControlTarget::Transport(TransportControl::Play),
         ));
         assert_eq!(map.unresolved(&ports()), vec![1]);
+    }
+
+    /// The keys a map takes from the instruments: its pads, on the port and
+    /// channel each was learned on, and nothing else -- and every key while a
+    /// learn gesture waits. A pad bound to a controller that is not plugged in
+    /// claims nothing, so a keyboard sharing its note number still plays.
+    #[test]
+    fn a_map_claims_its_pads_and_a_learn_claims_every_key() {
+        let mut map = ControlMap::default();
+        map.bind(ControlBinding::new(
+            ControlSource::Note {
+                port: MidiPortFilter::Named("Launchkey MK3".to_owned()),
+                channel: MidiChannelFilter::One(9),
+                note: 36,
+            },
+            ControlTarget::Transport(TransportControl::Play),
+        ));
+        map.bind(ControlBinding::new(
+            ControlSource::Note {
+                port: MidiPortFilter::Named("Not plugged in".to_owned()),
+                channel: MidiChannelFilter::Omni,
+                note: 40,
+            },
+            CUTOFF,
+        ));
+        map.bind(param_binding(36));
+
+        let claimed = map.claimed_notes(&ports(), false);
+        assert!(claimed.claims(&note_on(0, 9, 36, 100)), "the pad itself");
+        let release = MidiMessage {
+            kind: MidiKind::NoteOff { note: 36 },
+            ..note_on(0, 9, 36, 0)
+        };
+        assert!(claimed.claims(&release), "and its release");
+        assert!(!claimed.claims(&note_on(1, 9, 36, 100)), "another port");
+        assert!(!claimed.claims(&note_on(0, 0, 36, 100)), "another channel");
+        assert!(!claimed.claims(&note_on(0, 9, 37, 100)), "another key");
+        assert!(!claimed.claims(&note_on(0, 0, 40, 100)), "a missing port claims nothing");
+        assert!(!claimed.claims(&cc(0, 9, 36, 100)), "a CC is never a claimed note");
+
+        let learning = map.claimed_notes(&ports(), true);
+        assert!(learning.claims(&note_on(1, 3, 60, 100)));
+        assert!(!learning.claims(&cc(1, 3, 60, 100)));
+        assert!(ControlMap::default().claimed_notes(&ports(), false).is_empty());
     }
 
     /// Every transport gesture is named, so a eighth cannot be added without

@@ -574,7 +574,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   press names the control rather than moving it — mapping a knob does not
   change the value it is about to follow. It reaches the same parameters
   modulation does: a device's own controls, the generator's, and the channel
-  strip's volume and pan. A mapped control takes over on **pickup** by
+  strip's volume and pan. **A pad or a key can be learned too**: while a
+  learn waits, every key a keyboard or pad controller sends goes to the learn
+  rather than to an instrument, and a key that is bound afterwards fires its
+  target instead of playing a note (a pad defaults to a toggle, or fires a
+  transport gesture). Every other key still plays. A mapped control takes over on **pickup** by
   default, so a fader left at zero does not slam a filter shut the first time
   it is touched, and a control that has taken over gives the parameter back
   the moment anything else moves it. The map is reviewed and edited on

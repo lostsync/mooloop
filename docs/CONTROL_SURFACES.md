@@ -76,6 +76,14 @@ performance subset that needs tighter timing can be given a realtime fast path
 later against these same types; the buffer insert's note mapping already is
 one, for exactly that reason.
 
+A key that is a control is the one place the two halves meet. The renderer
+would play a pad before the control thread ever heard it, so the control thread
+tells it in advance which keys are controls: `ClaimedNotes`, derived from the
+map once a pump tick and sent with `EngineHandle::set_claimed_notes`. A claimed
+key -- a bound pad, or any key while a learn gesture waits -- is forwarded like
+a CC and is neither played nor recorded. Its release still lifts a note the
+same key started before it was claimed (MOO-129).
+
 ## Decisions that are made
 
 - **Pickup is the default takeover.** A potentiometer left at zero must not

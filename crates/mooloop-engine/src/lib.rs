@@ -279,6 +279,9 @@ pub enum StructuralCommand {
     SetAudioInputRouting(Box<render::AudioInputRouting>),
     /// Replace, or clear, the MIDI mapping that drives a buffer insert.
     SetBufferMidi(Option<Box<mooloop_core::midi::BufferMidiMap>>),
+    /// Replace which keys the control map takes from the instruments. As
+    /// `SetMidiRouting`; see [`EngineHandle::set_claimed_notes`].
+    SetClaimedNotes(Box<mooloop_core::ClaimedNotes>),
     /// Install (or clear) a producer's latency compensation delay.
     ///
     /// `target` is the channel or bus whose *output* waits; `None` means it
@@ -419,6 +422,7 @@ pub(crate) enum StructuralReclaim {
     MidiRouting(Box<render::MidiRouting>),
     AudioInputRouting(Box<render::AudioInputRouting>),
     BufferMidi(Box<mooloop_core::midi::BufferMidiMap>),
+    ClaimedNotes(Box<mooloop_core::ClaimedNotes>),
     /// A container's dry-path ring displaced by a resize, or the per-depth
     /// scratch handed to a chain that already had it. Same rule as every
     /// other box that reaches the audio thread: it comes back to be dropped.
@@ -634,6 +638,9 @@ struct SharedCells {
     /// built for an install starts with it. Not a cell: the live renderer
     /// holds its own copy, replaced by `StructuralCommand::SetBufferMidi`.
     buffer_midi: Option<mooloop_core::midi::BufferMidiMap>,
+    /// The claimed keys last sent, kept for the same reason as
+    /// `buffer_midi`: a renderer built for an install starts with them.
+    claimed_notes: mooloop_core::ClaimedNotes,
     keyboard_channel: Arc<AtomicU8>,
     playhead_meters: Arc<PlayheadMeters>,
     modulator_meters: Arc<ModulatorMeters>,
@@ -647,6 +654,7 @@ impl SharedCells {
             device_meters: DeviceMeters::new(),
             device_telemetry: DeviceTelemetry::new(),
             buffer_midi: None,
+            claimed_notes: mooloop_core::ClaimedNotes::default(),
             keyboard_channel: Arc::new(AtomicU8::new(render::NO_KEYBOARD_CHANNEL)),
             playhead_meters: PlayheadMeters::new(),
             modulator_meters: ModulatorMeters::new(),
@@ -664,6 +672,7 @@ impl SharedCells {
         render.attach_device_meters(self.device_meters.clone());
         render.attach_device_telemetry(self.device_telemetry.clone());
         drop(render.set_buffer_midi(self.buffer_midi.map(Box::new)));
+        drop(render.set_claimed_notes(Box::new(self.claimed_notes.clone())));
         render.attach_keyboard_channel(self.keyboard_channel.clone());
         render.attach_playhead_meters(self.playhead_meters.clone());
         render.attach_modulator_meters(self.modulator_meters.clone());
@@ -1091,6 +1100,7 @@ impl EngineHandle {
                 StructuralReclaim::MidiRouting(routing) => drop(routing),
                 StructuralReclaim::AudioInputRouting(routing) => drop(routing),
                 StructuralReclaim::BufferMidi(map) => drop(map),
+                StructuralReclaim::ClaimedNotes(claimed) => drop(claimed),
                 StructuralReclaim::Container { align, scratch } => {
                     drop(align);
                     drop(scratch);
@@ -1344,6 +1354,27 @@ impl EngineHandle {
     pub fn set_buffer_midi_map(&mut self, map: Option<mooloop_core::midi::BufferMidiMap>) -> bool {
         self.shared.buffer_midi = map;
         self.send_structural(StructuralCommand::SetBufferMidi(map.map(Box::new)))
+    }
+
+    /// Tell the renderer which keys belong to the control map rather than to
+    /// the instruments, as `Session::claimed_notes` derives them.
+    ///
+    /// Cheap to call every pump tick, which is how it is meant to be called:
+    /// a table equal to the one last sent sends nothing. A refused send
+    /// leaves the last-sent copy alone, so the next call tries again. The copy
+    /// kept here is what a renderer built for an install starts with, so a
+    /// project swap cannot put a bound pad back on the instruments for a
+    /// block.
+    #[must_use]
+    pub fn set_claimed_notes(&mut self, claimed: mooloop_core::ClaimedNotes) -> bool {
+        if claimed == self.shared.claimed_notes {
+            return true;
+        }
+        if !self.send_structural(StructuralCommand::SetClaimedNotes(Box::new(claimed.clone()))) {
+            return false;
+        }
+        self.shared.claimed_notes = claimed;
+        true
     }
 
     /// Install how each channel takes MIDI input, indexed by channel.

@@ -56,8 +56,9 @@ pub use ds01::{
 };
 pub use buffer::{BufferDuration, BufferEvent};
 pub use control::{
-    ControlBinding, ControlLearn, ControlMap, ControlMapState, ControlMode, ControlOutcome,
-    ControlSource, ControlTarget, ControlValue, PickupState, Takeover, TransportControl,
+    ClaimedNotes, ControlBinding, ControlLearn, ControlMap, ControlMapState, ControlMode,
+    ControlOutcome, ControlSource, ControlTarget, ControlValue, PickupState, Takeover,
+    TransportControl,
 };
 pub use input::{
     audio_input_is_off, audio_input_taps, audio_source_rows, AudioInputPicker, AudioInputSource,
