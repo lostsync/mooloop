@@ -404,6 +404,18 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   realtime; it shows "DSP –" while no audio is heard, rather than the null
   driver's timing. Hovering either segment explains it in the hint line.
   `status_bar::notify` in `ui/src/status_bar.rs` is the one door.
+- **An edit the engine's command ring has no room for waits instead of
+  being lost** (MOO-134). The pump asks `EngineHandle::command_room()` before
+  each message and holds what would not fit, in order, with everything
+  queued behind it (`mooloop_session::engine::EngineBacklog`), delivering it
+  first on a later tick. A parameter change used to be logged and dropped,
+  and a refused channel edit said "waiting for audio" and was then thrown
+  away with its undo step. Two installs waiting together merge into the
+  newest, keeping the older one's undo step; a load or a Reconnect clears
+  what was addressed to the old song. A backlog lasting a second raises a
+  warning in the status bar -- "the audio engine has stopped" when the
+  callback is not running, which is what a full ring usually means -- and
+  it comes down when the backlog drains.
 - The window holds three pieces of furniture around the work area, none of
   which is a dockable-pane system: an always-visible docked status bar
   carrying hover hints and the panel toggles, a draggable splitter that

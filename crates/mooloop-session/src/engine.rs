@@ -6,7 +6,8 @@
 //! the typed senders keep the convenient `.send(...)` shape the callers use.
 
 use crate::channel::ChannelState;
-use crate::project::ProjectEdit;
+use crate::history::Entry as HistoryEntry;
+use crate::project::{HistoryMove, ProjectEdit, ProjectSnapshot};
 use mooloop_core::{
     chain_latency, compensable_send_edges, compile_audio_graph, compile_bus_graph,
     compile_latency, log_error, sends_are_compensable,
@@ -200,6 +201,175 @@ pub fn discard_document_messages(
         .collect();
     for message in kept {
         let _ = tx.send(message);
+    }
+}
+
+/// What a [`ProjectEdit`] leaves behind when a newer one replaces its
+/// install in the [`EngineBacklog`].
+///
+/// The newer edit's project already contains this one's change, so its
+/// project and samples -- a whole song, and the reason two waiting installs
+/// must not both be kept -- are dropped. What is *not* in the newer
+/// project is the bookkeeping around it: the history step that makes it
+/// undoable, and the list edit the session's own selections are renumbered
+/// by. Both still have to happen, in order, before the newer edit's own.
+pub struct SupersededEdit {
+    pub status: String,
+    pub history: Option<(HistoryMove, HistoryEntry<ProjectSnapshot>)>,
+    pub edit: Option<mooloop_core::ListEdit>,
+}
+
+/// Messages the command ring had no room for, kept in order for the next
+/// pump tick (MOO-134).
+///
+/// A refused command used to be logged and dropped. For a reconciled value
+/// that was harmless -- its mirror did not advance, so the next tick resent
+/// it -- but a one-shot edit (a parameter change, an effect install) has no
+/// mirror, so the engine stayed out of step with the screen for good. A
+/// refused `ProjectEdit` said "Channel edit is waiting for audio" and was
+/// then thrown away, history step and all.
+///
+/// So the pump no longer offers the ring a message it cannot take. It asks
+/// [`Self::next_ready`] for the next one, which comes from here first and
+/// from the queue after, and is handed out only if the ring has room for
+/// it. The first one that does not fit is put back at the front, and the
+/// rest of the queue is moved in behind it, so nothing overtakes it: the
+/// order the user made the edits in is the order the engine applies them.
+///
+/// **Installs merge.** Each waiting install is a whole prepared song, so two
+/// of them behind a full ring are held as one: the newest project, with the
+/// older edits' history steps and list edits kept as
+/// [`SupersededEdit`]s to be applied first. Document-addressed messages
+/// queued between the two go too, because the newer project already
+/// contains what they did; transport, record-arm and machine settings stay.
+#[derive(Default)]
+pub struct EngineBacklog {
+    held: std::collections::VecDeque<PendingEngineMessage>,
+    /// Belongs to the one `ProjectEdit` in `held` (there is never more than
+    /// one), and is handed to the pump when that edit installs.
+    superseded: Vec<SupersededEdit>,
+    /// When the backlog last went from empty to holding something.
+    since: Option<std::time::Instant>,
+}
+
+impl EngineBacklog {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The next message to deliver, if the ring has room for it.
+    ///
+    /// `room` is the ring's free slots now ([`EngineHandle::command_room`]),
+    /// and `slots` says how many a message takes. The pump is the ring's only
+    /// producer, so room read here cannot shrink before the message is sent.
+    /// `None` means either that nothing is waiting or that the next message
+    /// is held; [`Self::is_empty`] tells the two apart.
+    pub fn next_ready(
+        &mut self,
+        rx: &std::sync::mpsc::Receiver<PendingEngineMessage>,
+        room: usize,
+        slots: impl Fn(&PendingEngineMessage) -> usize,
+    ) -> Option<PendingEngineMessage> {
+        let message = match self.held.pop_front() {
+            Some(message) => message,
+            None => rx.try_recv().ok()?,
+        };
+        if slots(&message) <= room {
+            if self.held.is_empty() {
+                self.since = None;
+            }
+            return Some(message);
+        }
+        self.hold_back(message, rx);
+        None
+    }
+
+    /// Put `message` back at the front, and everything still queued behind
+    /// it, merging installs on the way.
+    ///
+    /// For the pump's own refusals too: a message [`Self::next_ready`]
+    /// handed out that failed anyway (an install that could not be
+    /// prepared) comes back here rather than being lost.
+    pub fn hold_back(
+        &mut self,
+        message: PendingEngineMessage,
+        rx: &std::sync::mpsc::Receiver<PendingEngineMessage>,
+    ) {
+        if self.since.is_none() {
+            self.since = Some(std::time::Instant::now());
+        }
+        let behind: Vec<_> = self.held.drain(..).chain(rx.try_iter()).collect();
+        self.held.push_back(message);
+        for message in behind {
+            self.push(message);
+        }
+    }
+
+    fn push(&mut self, message: PendingEngineMessage) {
+        let PendingEngineMessage::ProjectEdit(newer) = message else {
+            self.held.push_back(message);
+            return;
+        };
+        let Some(at) = self
+            .held
+            .iter()
+            .position(|held| matches!(held, PendingEngineMessage::ProjectEdit(_)))
+        else {
+            self.held.push_back(PendingEngineMessage::ProjectEdit(newer));
+            return;
+        };
+        // Everything from the older install on: the older install itself
+        // becomes a trail, what the newer project already contains goes,
+        // and what is addressed to the machine or the transport stays.
+        let after: Vec<_> = self.held.drain(at..).collect();
+        for message in after {
+            match message {
+                PendingEngineMessage::ProjectEdit(older) => {
+                    self.superseded.push(SupersededEdit {
+                        status: older.status,
+                        history: older.history,
+                        edit: older.edit,
+                    });
+                }
+                PendingEngineMessage::Command(command) if !command.edits_document() => {
+                    self.held.push_back(PendingEngineMessage::Command(command));
+                }
+                message if message.survives_project_load() => self.held.push_back(message),
+                _ => {}
+            }
+        }
+        self.held.push_back(PendingEngineMessage::ProjectEdit(newer));
+    }
+
+    /// The older edits a delivered install stands for, oldest first. The
+    /// pump applies their history steps and list edits before the delivered
+    /// edit's own, once the install has gone through.
+    pub fn take_superseded(&mut self) -> Vec<SupersededEdit> {
+        std::mem::take(&mut self.superseded)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.held.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.held.len()
+    }
+
+    /// How long something has been waiting, if anything is.
+    pub fn waiting_for(&self) -> Option<std::time::Duration> {
+        self.since.map(|since| since.elapsed())
+    }
+
+    /// Forget everything addressed to the document, as a load or a
+    /// reconnect does to the queue: the song installed next contains it.
+    /// Superseded edits go with their install.
+    pub fn discard_document_messages(&mut self) {
+        self.held.retain(PendingEngineMessage::survives_project_load);
+        self.superseded.clear();
+        if self.held.is_empty() {
+            self.since = None;
+        }
     }
 }
 
@@ -805,6 +975,28 @@ impl Session {
         }
     }
 
+    /// How many slots of the command ring delivering `message` takes, for
+    /// [`EngineBacklog::next_ready`].
+    ///
+    /// One per push. A tempo change rebuilds every Buffer's ring, one push
+    /// each; the preview gain and a spectrum subscription are shared cells,
+    /// and an Audio action is a driver call, so those take none.
+    pub fn engine_ring_slots(&self, message: &PendingEngineMessage) -> usize {
+        match message {
+            PendingEngineMessage::PreviewGain(_)
+            | PendingEngineMessage::Telemetry(_)
+            | PendingEngineMessage::Audio(_) => 0,
+            PendingEngineMessage::ResizeBuffers { .. } => self.buffer_effects().len(),
+            PendingEngineMessage::Command(_)
+            | PendingEngineMessage::ResizeBuffer(..)
+            | PendingEngineMessage::Structural(_)
+            | PendingEngineMessage::AddChannel { .. }
+            | PendingEngineMessage::ProjectEdit(_)
+            | PendingEngineMessage::MidiRouting(_)
+            | PendingEngineMessage::AudioInputRouting(_) => 1,
+        }
+    }
+
     /// Says, once for the document now open, that the command ring refused
     /// something.
     ///
@@ -846,8 +1038,9 @@ impl Session {
             "engine",
             "the command queue refused {what}. Reconciled state -- routing, \
              compensation, console sums, solo, audio edges -- is re-derived \
-             and resent on the next pump tick; a one-shot edit is not, and \
-             has diverged from the visible project."
+             and resent on the next pump tick. A one-shot edit is held back \
+             by the pump's backlog before the ring can refuse it, so one \
+             refused here was sent around the backlog and has diverged."
         );
     }
 
@@ -920,6 +1113,170 @@ impl Session {
 mod tests {
     use super::*;
     use mooloop_core::{PatternPlacement, BEATS_PER_BAR, TICKS_PER_BAR, TICKS_PER_STEP};
+
+    fn edit(status: &str, history: bool) -> ProjectEdit {
+        let snapshot = || ProjectSnapshot {
+            project: mooloop_core::Project::default(),
+            samples: Default::default(),
+        };
+        ProjectEdit {
+            project: mooloop_core::Project::default(),
+            samples: Vec::new(),
+            status: status.into(),
+            history: history.then(|| {
+                (
+                    HistoryMove::Record,
+                    HistoryEntry {
+                        before: snapshot(),
+                        after: snapshot(),
+                        label: "Edit",
+                        gesture: None,
+                    },
+                )
+            }),
+            edit: None,
+        }
+    }
+
+    fn describe(message: &PendingEngineMessage) -> String {
+        match message {
+            PendingEngineMessage::Command(command) => format!("{command:?}"),
+            PendingEngineMessage::ProjectEdit(edit) => format!("install {}", edit.status),
+            PendingEngineMessage::PreviewGain(gain) => format!("gain {gain}"),
+            _ => "other".into(),
+        }
+    }
+
+    /// Drain the way the pump does: take what fits, stop at what does not.
+    fn drain(
+        backlog: &mut EngineBacklog,
+        rx: &std::sync::mpsc::Receiver<PendingEngineMessage>,
+        session: &Session,
+        mut room: usize,
+    ) -> Vec<String> {
+        let mut delivered = Vec::new();
+        while let Some(message) =
+            backlog.next_ready(rx, room, |message| session.engine_ring_slots(message))
+        {
+            room -= session.engine_ring_slots(&message);
+            delivered.push(describe(&message));
+        }
+        delivered
+    }
+
+    /// **A refused edit waits and then arrives, in order** (MOO-134). With
+    /// the ring full, a parameter change and a project edit are held, and
+    /// nothing queued after them overtakes them; once the ring drains, both
+    /// arrive, in the order they were made.
+    ///
+    /// On the unfixed tree the pump offered each to the ring, which refused
+    /// it: the parameter change was logged and dropped, and the install said
+    /// "waiting for audio" and was dropped too.
+    #[test]
+    fn a_refused_parameter_change_and_edit_arrive_in_order_once_the_ring_drains() {
+        let session = Session::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut backlog = EngineBacklog::new();
+        let volume = EngineCommand::SetChannelVolume {
+            channel: 0,
+            volume: 0.25,
+        };
+        tx.send(PendingEngineMessage::Command(volume)).unwrap();
+        tx.send(PendingEngineMessage::ProjectEdit(edit("Paste", true)))
+            .unwrap();
+
+        assert!(drain(&mut backlog, &rx, &session, 0).is_empty());
+        assert_eq!(backlog.len(), 2, "both should be held, not dropped");
+        assert!(backlog.waiting_for().is_some());
+
+        // Something queued while they wait goes behind them, even though it
+        // takes no ring slot and could have gone first.
+        tx.send(PendingEngineMessage::PreviewGain(0.5)).unwrap();
+        assert!(drain(&mut backlog, &rx, &session, 0).is_empty());
+
+        assert_eq!(
+            drain(&mut backlog, &rx, &session, 1024),
+            vec![
+                format!("{volume:?}"),
+                "install Paste".to_string(),
+                "gain 0.5".to_string()
+            ]
+        );
+        assert!(backlog.is_empty());
+        assert!(backlog.waiting_for().is_none());
+    }
+
+    /// A ring with room for one delivers one and holds the rest, rather
+    /// than skipping ahead to something smaller.
+    #[test]
+    fn a_partly_drained_ring_delivers_in_order_and_holds_the_rest() {
+        let session = Session::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut backlog = EngineBacklog::new();
+        for channel in 0..3 {
+            tx.send(PendingEngineMessage::Command(EngineCommand::SetChannelVolume {
+                channel,
+                volume: 0.5,
+            }))
+            .unwrap();
+        }
+        assert_eq!(drain(&mut backlog, &rx, &session, 1).len(), 1);
+        assert_eq!(backlog.len(), 2);
+        assert_eq!(drain(&mut backlog, &rx, &session, 8).len(), 2);
+    }
+
+    /// **Two installs behind a full ring leave one pending**, and it is the
+    /// newest -- with the older one's history step kept, first, so the undo
+    /// list loses nothing. A document edit queued between them goes, because
+    /// the newer project contains it; the transport command stays.
+    #[test]
+    fn two_installs_behind_a_full_ring_leave_one_pending() {
+        let session = Session::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut backlog = EngineBacklog::new();
+        tx.send(PendingEngineMessage::ProjectEdit(edit("Delete Channel", true)))
+            .unwrap();
+        tx.send(PendingEngineMessage::Command(EngineCommand::SetChannelVolume {
+            channel: 0,
+            volume: 0.25,
+        }))
+        .unwrap();
+        tx.send(PendingEngineMessage::Command(EngineCommand::Play))
+            .unwrap();
+        tx.send(PendingEngineMessage::ProjectEdit(edit("Paste", true)))
+            .unwrap();
+
+        assert!(drain(&mut backlog, &rx, &session, 0).is_empty());
+        assert_eq!(backlog.len(), 2, "one install and the Play");
+
+        assert_eq!(
+            drain(&mut backlog, &rx, &session, 1024),
+            vec![format!("{:?}", EngineCommand::Play), "install Paste".to_string()]
+        );
+        let superseded = backlog.take_superseded();
+        assert_eq!(superseded.len(), 1);
+        assert_eq!(superseded[0].status, "Delete Channel");
+        assert!(
+            superseded[0].history.is_some(),
+            "the superseded edit's history step was lost"
+        );
+    }
+
+    /// A load forgets what was addressed to the outgoing document, held or
+    /// queued, and keeps the machine's settings.
+    #[test]
+    fn a_load_clears_the_backlog_of_document_messages() {
+        let session = Session::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut backlog = EngineBacklog::new();
+        tx.send(PendingEngineMessage::ProjectEdit(edit("Paste", true)))
+            .unwrap();
+        tx.send(PendingEngineMessage::PreviewGain(0.5)).unwrap();
+        assert!(drain(&mut backlog, &rx, &session, 0).is_empty());
+        backlog.discard_document_messages();
+        assert_eq!(drain(&mut backlog, &rx, &session, 0), vec!["gain 0.5".to_string()]);
+        assert!(backlog.take_superseded().is_empty());
+    }
 
     /// **A second song gets its own first refusal.** The latch that stops a
     /// burst of identical lines used to be set for the life of the process

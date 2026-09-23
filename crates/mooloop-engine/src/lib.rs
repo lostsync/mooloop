@@ -1480,6 +1480,18 @@ impl EngineHandle {
         self.cmd_tx.push(RealtimeCommand::Preview(command)).is_ok()
     }
 
+    /// Free slots in the realtime command ring right now (MOO-134).
+    ///
+    /// Every command, structural edit and preview goes through this one
+    /// ring, one slot a push. The pump is its only producer, so the room read
+    /// here can only grow (as the callback drains) before the pump's next
+    /// push: a message that fits now will not be refused. The pump reads it
+    /// to hold back what would not fit, in order, instead of offering it and
+    /// losing it.
+    pub fn command_room(&self) -> usize {
+        self.cmd_tx.slots()
+    }
+
     /// Add a channel. Its strip, event list and control-output buffer are
     /// built here rather than reserved at startup, and travel to the graph
     /// through the structural ring like any other allocation.

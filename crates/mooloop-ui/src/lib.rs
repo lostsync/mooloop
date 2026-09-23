@@ -99,8 +99,8 @@ use mooloop_session::document::{
 };
 use mooloop_session::engine::{
     discard_document_messages, publish_channel_audio_to, AudioAction, AudioActionSender,
-    ChannelAudio, ChannelAudioSender, EngineCommandSender, PendingEngineMessage, PreviewSender,
-    ProjectEditSender, StructuralCommandSender, TelemetryAction, TelemetryActionSender,
+    ChannelAudio, ChannelAudioSender, EngineBacklog, EngineCommandSender, PendingEngineMessage,
+    PreviewSender, ProjectEditSender, StructuralCommandSender, TelemetryAction, TelemetryActionSender,
 };
 use mooloop_session::history::{Entry as HistoryEntry, Stream};
 use mooloop_session::recordings;
@@ -14766,6 +14766,11 @@ impl AppUi {
         // count only ever grows, so a rise is a new fault however late it is
         // seen, and zero is the one value that means nothing has gone wrong.
         let mut output_faults_seen = 0u64;
+        // What the command ring had no room for, in order (MOO-134), and the
+        // notice that says so once it has lasted, kept so exactly that text
+        // can be withdrawn when the backlog drains.
+        let mut engine_backlog = EngineBacklog::new();
+        let mut backlog_notice: Option<(bool, String)> = None;
         let mut reported_time_shared = false;
         // What the user has last been told about whether audio is heard. The
         // engine starts out assumed running, so a start on no device is
@@ -14810,6 +14815,7 @@ impl AppUi {
                     if let Some(window) = weak.upgrade() {
                         reconnect_audio(
                             &mut handle,
+                            &mut engine_backlog,
                             default_sample_for_pump.as_ref(),
                             &st,
                             &window,
@@ -14947,6 +14953,7 @@ impl AppUi {
                             // lands on top of the starter kit -- the drains
                             // below this arm run later in the same tick.
                             discard_document_messages(&pending_rx, &requeue_tx);
+                            engine_backlog.discard_document_messages();
                             while sample_reset_rx.try_recv().is_ok() {}
                             install_project_in_ui(
                                 &mut handle,
@@ -15231,6 +15238,7 @@ impl AppUi {
                             // are a function in `mooloop-session` and not
                             // written out here.
                             discard_document_messages(&pending_rx, &requeue_tx);
+                            engine_backlog.discard_document_messages();
                             while sample_reset_rx.try_recv().is_ok() {}
                             if !install_project_in_ui(
                                 &mut handle,
@@ -15473,7 +15481,20 @@ impl AppUi {
                 }
                 let mut forwarded = 0usize;
                 let mut document_title_needs_refresh = false;
-                while let Ok(message) = pending_rx.try_recv() {
+                // Held messages first, then the queue, and each only if the
+                // ring has room for it: a message the ring would refuse is
+                // kept, with everything behind it, for the next tick
+                // (`EngineBacklog`, MOO-134), rather than offered, refused,
+                // logged and lost.
+                loop {
+                    let room = handle.command_room();
+                    let next = {
+                        let state = st.borrow();
+                        engine_backlog.next_ready(&pending_rx, room, |message| {
+                            state.session.engine_ring_slots(message)
+                        })
+                    };
+                    let Some(message) = next else { break };
                     if autodrive_verbose {
                         if let PendingEngineMessage::Command(cmd) = &message {
                             eprintln!("autodrive cmd: {cmd:?}");
@@ -15482,9 +15503,6 @@ impl AppUi {
                     match message {
                         PendingEngineMessage::ProjectEdit(edit) => {
                             let Some(window) = weak.upgrade() else { return };
-                            if edit.history.is_some() {
-                                commands.borrow_mut().project_edit_pending = false;
-                            }
                             // Read before the install, which sends the rack
                             // back to a channel; a track move puts it back.
                             let rack_was = st.borrow().session.effect_target;
@@ -15517,31 +15535,50 @@ impl AppUi {
                                 // edit to the song you are listening to.
                                 true,
                             ) {
+                                // An install that waited behind a full ring
+                                // may stand for older edits merged into it
+                                // (`EngineBacklog`): their list edits and
+                                // history steps come first, in order.
+                                let steps: Vec<_> = engine_backlog
+                                    .take_superseded()
+                                    .into_iter()
+                                    .map(|older| (older.edit, older.history))
+                                    .chain(std::iter::once((edit.edit, edit.history)))
+                                    .collect();
+                                let restores = steps.iter().any(|(_, history)| {
+                                    matches!(
+                                        history,
+                                        Some((HistoryMove::Undo | HistoryMove::Redo, _))
+                                    )
+                                });
+                                let records = steps.iter().any(|(_, history)| history.is_some());
                                 let mut state = st.borrow_mut();
                                 // The song's own addresses were renumbered
                                 // before this was queued; the session's --
                                 // the selected device, the open lane, the
                                 // preset labels -- are not in the snapshot
                                 // and are renumbered here.
-                                match edit.edit {
-                                    Some(ListEdit::Channel(edit)) => {
-                                        state.session.rescope_after(edit);
-                                    }
-                                    Some(ListEdit::Track(edit)) => {
-                                        state.session.rescope_after_track(edit, rack_was);
-                                        // The install left the rack on a
-                                        // channel, so a track here is the
-                                        // rescope putting it back.
-                                        if matches!(
-                                            state.session.effect_target,
-                                            EffectTarget::Bus(_)
-                                        ) {
-                                            state.sync_mixer_selection();
-                                            state.sync_effects();
-                                            state.sync_bus_editor(&window);
+                                for (list_edit, _) in &steps {
+                                    match *list_edit {
+                                        Some(ListEdit::Channel(edit)) => {
+                                            state.session.rescope_after(edit);
                                         }
+                                        Some(ListEdit::Track(edit)) => {
+                                            state.session.rescope_after_track(edit, rack_was);
+                                            // The install left the rack on a
+                                            // channel, so a track here is the
+                                            // rescope putting it back.
+                                            if matches!(
+                                                state.session.effect_target,
+                                                EffectTarget::Bus(_)
+                                            ) {
+                                                state.sync_mixer_selection();
+                                                state.sync_effects();
+                                                state.sync_bus_editor(&window);
+                                            }
+                                        }
+                                        None => {}
                                     }
-                                    None => {}
                                 }
                                 // An undo carries no `edit`, so
                                 // nothing above renumbered the label maps --
@@ -15558,10 +15595,7 @@ impl AppUi {
                                 // channel's device rather than merely
                                 // vanishing. Dropping them is what the
                                 // comments describe.
-                                if matches!(
-                                    edit.history,
-                                    Some((HistoryMove::Undo | HistoryMove::Redo, _))
-                                ) {
+                                if restores {
                                     state.session.source_preset_names.clear();
                                     state.session.effect_preset_names.clear();
                                     window.set_source_preset_name(Default::default());
@@ -15572,18 +15606,29 @@ impl AppUi {
                                 state.update_document_title(&window);
                                 window.set_status_message(edit.status.into());
                                 drop(state);
-                                if let Some((movement, entry)) = edit.history {
-                                    let mut commands = commands.borrow_mut();
+                                let mut commands = commands.borrow_mut();
+                                if records {
+                                    commands.project_edit_pending = false;
+                                }
+                                for (_, history) in steps {
+                                    let Some((movement, entry)) = history else { continue };
                                     match movement {
                                         HistoryMove::Record => commands.history.record(entry),
                                         HistoryMove::Undo => commands.history.commit_undo(),
                                         HistoryMove::Redo => commands.history.commit_redo(),
                                     }
-                                    sync_command_availability(&window, &commands);
                                 }
+                                sync_command_availability(&window, &commands);
                             } else {
+                                // The ring had room when this was taken, and
+                                // the pump is its only producer, so this is
+                                // not expected. Kept rather than dropped
+                                // either way: undo stays gated until it
+                                // installs, and it goes first next tick.
                                 window.set_status_message("Channel edit is waiting for audio".into());
-                                sync_command_availability(&window, &commands.borrow());
+                                engine_backlog
+                                    .hold_back(PendingEngineMessage::ProjectEdit(edit), &pending_rx);
+                                break;
                             }
                         }
                         PendingEngineMessage::Audio(action) => {
@@ -15610,6 +15655,7 @@ impl AppUi {
                                     if handle.audio_state() != mooloop_engine::AudioState::Running {
                                         reconnect_audio(
                                             &mut handle,
+                                            &mut engine_backlog,
                                             default_sample_for_pump.as_ref(),
                                             &st,
                                             &window,
@@ -15695,6 +15741,36 @@ impl AppUi {
                                 .borrow_mut()
                                 .session
                                 .apply_engine_message(&mut handle, message);
+                        }
+                    }
+                }
+                // A backlog that lasts is said where it stays until read,
+                // and taken down when the backlog drains. A second of it
+                // rather than one tick, because a burst of edits against a
+                // busy ring clears on its own within a few. Said once per
+                // cause, not once per tick: a count that moves every tick
+                // would bring a notice back the moment it was clicked away.
+                // The cause is re-read while it lasts, because a ring that
+                // was only busy can become a callback that stopped.
+                if let Some(window) = weak.upgrade() {
+                    let lasting = engine_backlog
+                        .waiting_for()
+                        .is_some_and(|waited| waited >= std::time::Duration::from_secs(1));
+                    if lasting {
+                        let stopped =
+                            handle.audio_state() != mooloop_engine::AudioState::Running;
+                        if backlog_notice.as_ref().is_none_or(|(was, _)| *was != stopped) {
+                            let text = engine_backlog_notice(stopped, engine_backlog.len());
+                            log_warn!("engine", "{text}");
+                            if let Some((_, old)) = backlog_notice.take() {
+                                status_bar::withdraw(&window, &old);
+                            }
+                            status_bar::notify(&window, Severity::Warning, &text);
+                            backlog_notice = Some((stopped, text));
+                        }
+                    } else if engine_backlog.is_empty() {
+                        if let Some((_, text)) = backlog_notice.take() {
+                            status_bar::withdraw(&window, &text);
                         }
                     }
                 }
@@ -16677,6 +16753,28 @@ fn operation_status(
         warning_suffix(warnings.len()),
         repair_suffix(repairs.len())
     )
+}
+
+/// What the status bar says when edits have waited on the command ring for
+/// a second (MOO-134).
+///
+/// The ring fills when the audio callback stops draining it, so a full ring
+/// is usually a stopped engine, not a busy one, and saying "the queue is
+/// full" would blame the wrong thing. `stopped` is
+/// [`EngineHandle::audio_state`] reading anything but Running (MOO-115):
+/// then the notice says so, and that the edits are kept for when it comes
+/// back, rather than that the audio is merely behind.
+fn engine_backlog_notice(stopped: bool, waiting: usize) -> String {
+    let edits = if waiting == 1 {
+        "1 change is".to_string()
+    } else {
+        format!("{waiting} changes are")
+    };
+    if stopped {
+        format!("The audio engine has stopped: {edits} kept until it is running again")
+    } else {
+        format!("Audio is behind: {edits} waiting to reach the engine")
+    }
 }
 
 fn install_project_in_ui(
@@ -17740,10 +17838,15 @@ fn capitalized(text: &str) -> String {
 /// song changes, and nothing is marked unsaved.
 fn reconnect_audio(
     handle: &mut EngineHandle,
+    backlog: &mut EngineBacklog,
     default_sample: Option<&Arc<SampleData>>,
     state: &Rc<RefCell<UiState>>,
     window: &MainWindow,
 ) {
+    // What waited for the old engine is in the song installed below, and a
+    // held install of an older snapshot would otherwise land on top of it
+    // (MOO-134). What is addressed to the machine or the transport stays.
+    backlog.discard_document_messages();
     let (project, samples) = {
         let state = state.borrow();
         (
@@ -19131,6 +19234,21 @@ mod tests {
         assert!(!window.get_question_open());
         assert_eq!(window.get_status_message(), "Audio is running");
         assert_eq!(window.get_status_notice(), "", "the no-audio notice comes down");
+    }
+
+    /// **A backlog behind a stopped engine says the engine stopped**
+    /// (MOO-134): a full ring is usually a callback that no longer drains it,
+    /// and "behind" would blame the queue for a dead engine.
+    #[test]
+    fn a_backlog_names_a_stopped_engine_rather_than_a_full_queue() {
+        assert_eq!(
+            engine_backlog_notice(false, 1),
+            "Audio is behind: 1 change is waiting to reach the engine"
+        );
+        assert_eq!(
+            engine_backlog_notice(true, 3),
+            "The audio engine has stopped: 3 changes are kept until it is running again"
+        );
     }
 
     /// **The takes dialog's ticks and total** (MOO-38): this session's takes
