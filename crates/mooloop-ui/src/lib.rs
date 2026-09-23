@@ -100,7 +100,7 @@ use mooloop_session::engine::{
     ChannelAudio, ChannelAudioSender, EngineCommandSender, PendingEngineMessage, PreviewSender,
     ProjectEditSender, StructuralCommandSender, TelemetryAction, TelemetryActionSender,
 };
-use mooloop_session::history::Entry as HistoryEntry;
+use mooloop_session::history::{Entry as HistoryEntry, Stream};
 use mooloop_session::recordings;
 use mooloop_session::roll::NoteEdit;
 use mooloop_session::steps::StepEdit;
@@ -1439,10 +1439,24 @@ fn record_project_history(
     window: &MainWindow,
     label: &'static str,
 ) {
+    let gesture = commands.borrow().gesture;
+    record_project_history_as(commands, before, state, window, label, gesture);
+}
+
+/// [`record_project_history`] under a gesture token the caller chose, rather
+/// than the piano roll's pointer gesture. An entry carrying the same token as
+/// the one below it is folded into it by `History::record`.
+fn record_project_history_as(
+    commands: &Rc<RefCell<CommandState>>,
+    before: ProjectSnapshot,
+    state: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    label: &'static str,
+    gesture: Option<u64>,
+) {
     let after = project_snapshot(&state.borrow(), window);
     {
         let mut open = commands.borrow_mut();
-        let gesture = open.gesture;
         open.history.record(HistoryEntry {
             before,
             after,
@@ -1451,6 +1465,223 @@ fn record_project_history(
         });
     }
     sync_command_availability(window, &commands.borrow());
+}
+
+/// Start collecting a stream of pump-side edits into one undo entry.
+///
+/// `before` is the document as the stream found it, taken before the first
+/// edit landed. See [`Stream`] for what a stream is and why a stream is one
+/// entry rather than one per message or none at all.
+fn open_edit_stream(
+    commands: &Rc<RefCell<CommandState>>,
+    window: &MainWindow,
+    stream: Stream,
+    before: ProjectSnapshot,
+    label: &'static str,
+) {
+    let mut open = commands.borrow_mut();
+    open.history.open(stream, before, label);
+    sync_command_availability(window, &open);
+}
+
+/// Record the open stream, if there is one, at the document as it is now.
+///
+/// Anything that records goes through `History::record`, which closes a
+/// stream by itself at the new entry's `before`. What needs this is what
+/// *reads* the history rather than adding to it: Undo and Redo, and the
+/// pump when a stream has gone quiet.
+fn close_edit_stream(
+    state: &Rc<RefCell<UiState>>,
+    commands: &Rc<RefCell<CommandState>>,
+    window: &MainWindow,
+) {
+    if commands.borrow().history.open_stream().is_none() {
+        return;
+    }
+    let after = project_snapshot(&state.borrow(), window);
+    let mut open = commands.borrow_mut();
+    open.history.close(after);
+    sync_command_availability(window, &open);
+}
+
+/// How long a mapped hardware control has to rest before its moves are one
+/// undo step.
+///
+/// A desk has no press and release to say where a gesture ends, so the pause
+/// has to. Half a second is the gap the issue asked for (MOO-96) and the one
+/// [`VALUE_RUN_GAP`] uses for a run of wheel notches: long enough that one
+/// sweep with a hand repositioned mid-way is one step, short enough that the
+/// next deliberate move is another.
+const CONTROLLER_IDLE: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Close a stream whose edits have stopped arriving: a controller that has
+/// been still for [`CONTROLLER_IDLE`], or a take of notes whose transport has
+/// stopped or whose record arm is off.
+///
+/// Called on every pump tick, after the control drain, so notes the engine
+/// reports in the same tick as the stop are in the take they were played in.
+fn settle_edit_streams(
+    state: &Rc<RefCell<UiState>>,
+    commands: &Rc<RefCell<CommandState>>,
+    window: &MainWindow,
+    playing: bool,
+    controller_idle: bool,
+) {
+    let settled = match commands.borrow().history.open_stream() {
+        Some(Stream::Controller) => controller_idle,
+        Some(Stream::Recording) => !(playing && state.borrow().session.record_armed()),
+        None => false,
+    };
+    if settled {
+        close_edit_stream(state, commands, window);
+    }
+}
+
+/// What one pump's worth of control-surface input did, for the pump to act
+/// on once the session is no longer borrowed.
+#[derive(Default)]
+struct ControlDrain {
+    /// Engine commands, in the order the messages produced them.
+    commands: Vec<EngineCommand>,
+    /// `(source, target)` of each binding a learn gesture completed.
+    learned: Vec<(String, String)>,
+    /// Whether anything visible moved, so the editor is republished.
+    moved: bool,
+    /// Whether the document changed at all.
+    edited: bool,
+    /// Whether a mapped control moved a parameter, which restarts the
+    /// controller's idle clock.
+    controller_moved: bool,
+    /// Channels a recorded note was written to.
+    written: Vec<usize>,
+}
+
+/// Apply the control messages and recorded notes the engine forwarded, and
+/// put every document change they made into the history (MOO-96, MOO-97).
+///
+/// These used to be applied, marked dirty and recorded nowhere, so the next
+/// Ctrl+Z -- which installs a snapshot taken before them -- destroyed them
+/// with no redo: eight knobs mapped in one LEARN pass, gone with an undo of
+/// an earlier step edit; sixteen bars played in, gone with an undo of a stray
+/// note before them.
+///
+/// - **A learned binding is one entry**, labelled "MIDI learn". It is a
+///   discrete edit, like a menu pick.
+/// - **A mapped control's moves are one entry per gesture**, held open as a
+///   [`Stream::Controller`] until the controls go idle for
+///   [`CONTROLLER_IDLE`] (see [`settle_edit_streams`]). One snapshot opens
+///   it and one closes it, however many messages a sweep sends.
+/// - **Recorded notes are one entry per take**, a [`Stream::Recording`] that
+///   stays open until the transport stops or recording is disarmed.
+///
+/// The snapshot a stream opens with has to be the document *before* the
+/// first edit, so it is taken before anything is applied -- and only when
+/// [`Session::control_input_may_edit`] says one of the messages can change
+/// the document, because a transport message or an unmapped knob must not
+/// cost a whole-project clone every tick.
+///
+/// A free function rather than the pump's body so it can be tested without
+/// an `EngineHandle`: the commands come back for the pump to send.
+fn drain_control_surface(
+    state: &Rc<RefCell<UiState>>,
+    commands: &Rc<RefCell<CommandState>>,
+    window: &MainWindow,
+    messages: &mut Vec<mooloop_core::MidiMessage>,
+    recorded: &mut Vec<(u8, u8, u8, u8, u32, u32)>,
+    playing: bool,
+) -> ControlDrain {
+    let mut drain = ControlDrain::default();
+    if !messages.is_empty() {
+        let ports = state.borrow().midi_ports.clone();
+        let (may_edit, learning) = {
+            let st = state.borrow();
+            (
+                messages
+                    .iter()
+                    .any(|message| st.session.control_input_may_edit(message, &ports)),
+                st.session.control_learn.is_some(),
+            )
+        };
+        let streaming = commands.borrow().history.open_stream() == Some(Stream::Controller);
+        // A learn is its own entry, so it needs its own `before` even when a
+        // controller stream is already open; a move inside an open stream
+        // needs nothing.
+        let before =
+            (may_edit && (learning || !streaming)).then(|| project_snapshot(&state.borrow(), window));
+        let mut first_moved = None;
+        {
+            let mut st = state.borrow_mut();
+            for message in messages.drain(..) {
+                let effects = st.session.apply_control_input(&message, &ports, playing);
+                drain.commands.extend(effects.commands.iter().copied());
+                if let Some(binding) = &effects.learned {
+                    drain.learned.push((
+                        binding.source.detail_label(),
+                        st.session.control_target_label(&binding.target),
+                    ));
+                }
+                first_moved = first_moved.or(effects.moved.first().copied());
+                drain.moved |= !effects.is_empty();
+                // A parameter moved by a knob is an edit; a transport gesture
+                // is not. `ControlEffects` has already drawn that line.
+                drain.edited |= effects.edits;
+            }
+            if drain.edited {
+                st.session.mark_dirty();
+            }
+        }
+        if !drain.learned.is_empty() {
+            if let Some(before) = before {
+                record_project_history(commands, before, state, window, "MIDI learn");
+            }
+        } else if drain.edited {
+            drain.controller_moved = true;
+            if !streaming {
+                if let Some(before) = before {
+                    // The parameter's own name, as a knob on screen records
+                    // under: the descriptor table cannot drift from the face.
+                    let label = first_moved
+                        .and_then(|address| state.borrow().session.param_descriptor(address))
+                        .map_or("Controller move", |descriptor| descriptor.name);
+                    open_edit_stream(commands, window, Stream::Controller, before, label);
+                }
+            }
+        }
+    }
+    if !recorded.is_empty() {
+        let taking = commands.borrow().history.open_stream() == Some(Stream::Recording);
+        let before = (!taking).then(|| project_snapshot(&state.borrow(), window));
+        let mut wrote = false;
+        {
+            let mut st = state.borrow_mut();
+            for (channel, pattern, note, velocity, start, length) in recorded.drain(..) {
+                let channel = usize::from(channel);
+                let Some(edit) = st.session.record_note(
+                    channel,
+                    usize::from(pattern),
+                    note,
+                    velocity,
+                    start,
+                    length,
+                ) else {
+                    continue;
+                };
+                drain.commands.extend(edit.commands.iter().copied());
+                drain.written.push(channel);
+                wrote = true;
+            }
+            if wrote {
+                st.session.mark_dirty();
+            }
+        }
+        drain.edited |= wrote;
+        if wrote {
+            if let Some(before) = before {
+                open_edit_stream(commands, window, Stream::Recording, before, "Record notes");
+            }
+        }
+    }
+    drain
 }
 
 /// Snapshot, run one console or rack verb, and record the undo entry for it.
@@ -1591,7 +1822,17 @@ fn gesture_closed(
     // own name, and took the snapshot with it, so this never runs twice for
     // one press.
     let label = commands.borrow_mut().gesture_label.take().unwrap_or("Edit");
-    record_project_history(commands, before, state, window, label);
+    // A wheel notch, an arrow press and a double-click reset are each a
+    // gesture of their own, so a sweep of notches on one knob joins one run
+    // and undoes as one step (MOO-95, `CommandState::value_run_token`).
+    let scope = {
+        let st = state.borrow();
+        (st.session.selected, st.session.effect_target)
+    };
+    let token = commands
+        .borrow_mut()
+        .value_run_token(label, scope, std::time::Instant::now());
+    record_project_history_as(commands, before, state, window, label, Some(token));
 }
 
 /// Append a channel, show it, tell the engine about it, and record the undo
@@ -8822,7 +9063,13 @@ impl AppUi {
                 match kind {
                     // Undo and redo use a target snapshot but only advance
                     // their cursor in the pump after installation succeeds.
+                    //
+                    // A stream still collecting -- a knob on a desk that has
+                    // not settled, a take still running -- is closed first,
+                    // at the document as it is now, so Ctrl+Z undoes *it*
+                    // rather than reaching past it into the entry below.
                     0 => {
+                        close_edit_stream(&st, &commands, &window);
                         let entry = commands.borrow().history.undo_target().cloned();
                         if let Some(entry) = entry {
                             if queue_history_target(&tx, entry, HistoryMove::Undo) {
@@ -8832,6 +9079,7 @@ impl AppUi {
                         }
                     }
                     1 => {
+                        close_edit_stream(&st, &commands, &window);
                         let entry = commands.borrow().history.redo_target().cloned();
                         if let Some(entry) = entry {
                             if queue_history_target(&tx, entry, HistoryMove::Redo) {
@@ -14026,6 +14274,10 @@ impl AppUi {
         // a fader stream fills these sixty times a second.
         let mut control_input: Vec<mooloop_core::MidiMessage> = Vec::new();
         let mut recorded: Vec<(u8, u8, u8, u8, u32, u32)> = Vec::new();
+        // When a mapped hardware control last moved a parameter, which is
+        // how the pump knows a controller gesture has ended: a desk sends no
+        // release.
+        let mut controller_moved_at: Option<std::time::Instant> = None;
         let mut last_port_scan = std::time::Instant::now()
             - std::time::Duration::from_secs(2);
         let autodrive_verbose = std::env::var_os("MOOLOOP_AUTODRIVE_VERBOSE").is_some();
@@ -14312,241 +14564,81 @@ impl AppUi {
                                 .borrow()
                                 .session.project_snapshot(window.get_bpm(), window.get_swing_percent());
                             let current_samples = st.borrow().session.sample_snapshots();
-                            // Cloned before the match consumes `target`, and
+                            let opens = load_opens_document(&target);
+                            // Cloned before the merge consumes `target`, and
                             // applied after the install: a preset label
                             // describes the device in front of the user, and a
                             // load has just replaced some or all of them.
                             let load_target = target.clone();
-                            let merged = match (target, document) {
-                                (LoadTarget::Song, LoadedDocument::Song(project)) => {
-                                    Some((project, loaded_samples, true))
-                                }
-                                (LoadTarget::Kit, LoadedDocument::Kit(kit)) => {
-                                    let dropping_notes = kit.channels.len()
-                                        < current.channels.len()
-                                        && current.channels[kit.channels.len()..].iter().any(
-                                            |channel| {
-                                                channel.notes.iter().any(|lane| !lane.is_empty())
-                                            },
-                                        );
-                                    if dropping_notes
-                                        && !confirm_dialog(
-                                            "This kit removes channels containing notes. Continue?",
-                                        )
-                                    {
-                                        window.set_status_message("Kit load cancelled".into());
-                                        None
-                                    } else {
-                                        let mut project = current.clone();
-                                        let mut next_channel_id =
-                                            project.next_channel_id;
-                                        project.channels = kit
-                                            .channels
-                                            .into_iter()
-                                            .enumerate()
-                                            .map(|(index, mut setup)| {
-                                                // A kit entry's routes name
-                                                // the channel they were saved
-                                                // from; they mean this one.
-                                                setup.rescope_modulation(index as u8);
-                                                if let Some(mut channel) =
-                                                    current.channels.get(index).cloned()
-                                                {
-                                                    channel.setup = setup;
-                                                    channel
-                                                } else {
-                                                    ProjectChannel {
-                                                        // A kit entry past
-                                                        // the end of the song
-                                                        // makes a channel,
-                                                        // and a channel that
-                                                        // joins the bank is
-                                                        // minted. An entry
-                                                        // landing on a live
-                                                        // channel keeps that
-                                                        // channel's id above,
-                                                        // because it changes
-                                                        // what the channel
-                                                        // plays rather than
-                                                        // which one it is.
-                                                        id: mooloop_core::mint_channel_id(
-                                                            &mut next_channel_id,
-                                                        ),
-                                                        setup,
-                                                        notes: vec![
-                                                            Vec::new();
-                                                            current.pattern_lengths.len()
-                                                        ],
-                                                        automation: vec![
-                                                            Vec::new();
-                                                            current.pattern_lengths.len()
-                                                        ],
-                                                        next_note_id: 1,
-                                                    }
-                                                }
-                                            })
-                                            .collect();
-                                        project.next_channel_id = next_channel_id;
-                                        // A kit can be shorter than the
-                                        // song, so the selected channel may
-                                        // be one of the ones it dropped.
-                                        if project
-                                            .channel_index(project.selected_channel)
-                                            .is_none()
-                                        {
-                                            if let Some(first) =
-                                                project.channels.first().map(|c| c.id)
-                                            {
-                                                project.selected_channel = first;
-                                            }
-                                        }
-                                        let mut samples = current_samples;
-                                        samples.resize(project.channels.len(), None);
-                                        samples.truncate(project.channels.len());
-                                        for (index, sample) in
-                                            loaded_samples.into_iter().enumerate()
-                                        {
-                                            if let Some(slot) = samples.get_mut(index) {
-                                                *slot = sample;
-                                            }
-                                        }
-                                        Some((project, samples, false))
-                                    }
-                                }
-                                (LoadTarget::Channel, LoadedDocument::Channel(setup)) => {
-                                    let mut project = current;
-                                    let selected = project.selected_index();
-                                    project.channels[selected].setup = *setup;
-                                    // A saved rack still names the channel it
-                                    // was authored on. Point it at this one,
-                                    // or a preset saved from channel 3 would
-                                    // modulate channel 3 from wherever it
-                                    // landed.
-                                    mooloop_project::rescope_modulation(
-                                        &mut project.channels[selected].setup,
-                                        selected as u8,
-                                    );
-                                    let mut samples = current_samples;
-                                    samples[selected] = loaded_samples.into_iter().next().flatten();
-                                    Some((project, samples, false))
-                                }
-                                (LoadTarget::Generator { .. }, LoadedDocument::Generator(source)) => {
-                                    let mut project = current;
-                                    let selected = project.selected_index();
-                                    project.channels[selected].setup.channel.kind = source.kind();
-                                    project.channels[selected].setup.source = *source;
-                                    let mut samples = current_samples;
-                                    samples[selected] = loaded_samples.into_iter().next().flatten();
-                                    Some((project, samples, false))
-                                }
-                                _ => {
-                                    window.set_status_message(
-                                        "Selected bundle has the wrong document type".into(),
-                                    );
-                                    None
-                                }
-                            };
-                            if let Some((project, samples, is_song)) = merged {
-                                // UI edits are mirrored into `project` before
-                                // they enter this relay. Discard any that have
-                                // not reached the engine yet: the prepared
-                                // project already contains them (or, for a
-                                // song load, deliberately supersedes them).
-                                // What is addressed to the machine rather
-                                // than the document goes back on the queue,
-                                // in order, for the drain below. New Song
-                                // runs the same two lines, which is why they
-                                // are a function in `mooloop-session` and not
-                                // written out here.
-                                discard_document_messages(&pending_rx, &requeue_tx);
-                                while sample_reset_rx.try_recv().is_ok() {}
-                                if !install_project_in_ui(
-                                    &mut handle,
-                                    default_sample_for_pump.as_ref(),
-                                    &st,
-                                    &window,
-                                    &project,
-                                    &samples,
-                                    // Opening a document stops and rewinds:
-                                    // it is a different song, and its
-                                    // playhead is not this one's.
-                                    false,
-                                ) {
-                                    window.set_status_message(
-                                        "Audio engine is busy; project was not installed".into(),
-                                    );
+                            let (project, samples) = match merge_loaded_document(
+                                current,
+                                current_samples,
+                                target,
+                                document,
+                                loaded_samples,
+                                confirm_dialog,
+                            ) {
+                                Ok(merged) => merged,
+                                Err(status) => {
+                                    window.set_status_message(status.into());
                                     continue;
                                 }
-                                let mut state = st.borrow_mut();
-                                if is_song {
-                                    state.session.bundle_path = Some(path.clone());
-                                    state.session.dirty = false;
-                                    // The per-sample flags, not the
-                                    // document's mode: a bundle saved
-                                    // `referenced` can still hold every
-                                    // sample, because un-embedding is
-                                    // refused rather than performed.
-                                    window.set_embed_assets(
-                                        asset_mode == AssetMode::Embedded
-                                            || state.session.has_embedded_samples(),
-                                    );
-                                } else {
-                                    state.session.dirty = true;
-                                    state.session.revision = state.session.revision.wrapping_add(1);
-                                }
-                                // A preset label says where a device's
-                                // settings came from, so a load either sets it
-                                // -- the device now wears the preset it came
-                                // from, the same way a rack row does -- or
-                                // drops the ones it just invalidated.
-                                match &load_target {
-                                    LoadTarget::Generator { preset_name } => {
-                                        let channel = state.session.selected as u8;
-                                        state
-                                            .session
-                                            .set_source_preset_name(channel, preset_name);
-                                        window.set_source_preset_name(preset_name.as_str().into());
-                                    }
-                                    // A channel preset brought its own
-                                    // generator, which did not come from
-                                    // whatever the seat was wearing.
-                                    LoadTarget::Channel => {
-                                        let channel = state.session.selected as u8;
-                                        state.session.set_source_preset_name(channel, "");
-                                        window.set_source_preset_name(Default::default());
-                                    }
-                                    // A song or kit replaced every device in
-                                    // the rack, so every label describes one
-                                    // that is no longer there.
-                                    LoadTarget::Song | LoadTarget::Kit => {
-                                        state.session.source_preset_names.clear();
-                                        state.session.effect_preset_names.clear();
-                                        window.set_source_preset_name(Default::default());
-                                        state.sync_effects();
-                                        // And the history, for the sharper
-                                        // version of the same reason: a
-                                        // label that outlives its document
-                                        // is wrong on screen, where an undo
-                                        // that outlives its document
-                                        // installs the closed song over this
-                                        // one and saves it to this one's
-                                        // path.
-                                        let mut commands = commands.borrow_mut();
-                                        commands.history.clear();
-                                        sync_command_availability(&window, &commands);
-                                    }
-                                }
-                                state.update_document_title(&window);
+                            };
+                            // A preset or a kit edits the song that is open,
+                            // so it is an undo step like any other edit, and
+                            // the snapshot it is undone to is taken before
+                            // the install replaces it (MOO-95).
+                            let before = (!opens).then(|| project_snapshot(&st.borrow(), &window));
+                            // UI edits are mirrored into `project` before
+                            // they enter this relay. Discard any that have
+                            // not reached the engine yet: the prepared
+                            // project already contains them (or, for a
+                            // song load, deliberately supersedes them).
+                            // What is addressed to the machine rather
+                            // than the document goes back on the queue,
+                            // in order, for the drain below. New Song
+                            // runs the same two lines, which is why they
+                            // are a function in `mooloop-session` and not
+                            // written out here.
+                            discard_document_messages(&pending_rx, &requeue_tx);
+                            while sample_reset_rx.try_recv().is_ok() {}
+                            if !install_project_in_ui(
+                                &mut handle,
+                                default_sample_for_pump.as_ref(),
+                                &st,
+                                &window,
+                                &project,
+                                &samples,
+                                // Opening a song stops and rewinds: it is a
+                                // different song, and its playhead is not
+                                // this one's. A preset or a kit is an edit to
+                                // the song that is playing, and keeps it
+                                // playing, as every `ProjectEdit` does.
+                                !opens,
+                            ) {
                                 window.set_status_message(
-                                    format!(
-                                        "Loaded {}{}{}",
-                                        path.display(),
-                                        warning_suffix(warnings.len()),
-                                        repair_suffix(repairs.len())
-                                    )
-                                    .into(),
+                                    "Audio engine is busy; project was not installed".into(),
                                 );
+                                continue;
                             }
+                            finish_document_load(
+                                &st,
+                                &commands,
+                                &window,
+                                &path,
+                                &load_target,
+                                asset_mode,
+                                before,
+                            );
+                            window.set_status_message(
+                                format!(
+                                    "Loaded {}{}{}",
+                                    path.display(),
+                                    warning_suffix(warnings.len()),
+                                    repair_suffix(repairs.len())
+                                )
+                                .into(),
+                            );
                         }
                     }
                 }
@@ -14628,7 +14720,14 @@ impl AppUi {
                         deferred_new_channel_loads.push(loaded);
                         continue;
                     }
-                    apply_loaded_sample(&handle, &st, &weak, load.channel, loaded);
+                    load_sample_with_history(
+                        |channel, audio| handle.set_channel_audio(channel, audio),
+                        &st,
+                        &commands,
+                        &weak,
+                        load.channel,
+                        loaded,
+                    );
                 }
                 for loaded in deferred_new_channel_loads {
                     if let Some(window) = weak.upgrade() {
@@ -14649,7 +14748,17 @@ impl AppUi {
                             );
                         }
                         let channel = st.borrow().session.channels.len().saturating_sub(1);
-                        apply_loaded_sample(&handle, &st, &weak, channel, loaded);
+                        // Its own entry, after the add's: undo leaves the
+                        // new channel holding the default sample, and undo
+                        // again removes the channel.
+                        load_sample_with_history(
+                            |channel, audio| handle.set_channel_audio(channel, audio),
+                            &st,
+                            &commands,
+                            &weak,
+                            channel,
+                            loaded,
+                        );
                     }
                 }
                 // Takes whose drain has finished go to a worker to be decoded,
@@ -14992,68 +15101,27 @@ impl AppUi {
                 }
                 if !control_input.is_empty() || !recorded.is_empty() {
                     let playing = w.get_playing();
-                    let mut moved = false;
-                    let mut edited = false;
-                    let mut written: Vec<usize> = Vec::new();
+                    let drain = drain_control_surface(
+                        &st,
+                        &commands,
+                        &w,
+                        &mut control_input,
+                        &mut recorded,
+                        playing,
+                    );
                     // A refused command is a command the session has already
                     // recorded as delivered -- the seam `control-plane-seams`
                     // closed everywhere else. Counted across the whole drain
                     // and reported once: a fader sweep is a hundred messages a
                     // second, and a line per message would bury the log it is
                     // meant to warn in.
-                    let mut refused = 0usize;
-                    // What a completed learn gesture bound, for the status
-                    // bar. Collected rather than reported inside the borrow,
-                    // because saying it needs the window.
-                    let mut learned: Vec<(String, String)> = Vec::new();
-                    {
-                        let mut state = st.borrow_mut();
-                        let ports = state.midi_ports.clone();
-                        for message in control_input.drain(..) {
-                            let effects =
-                                state.session.apply_control_input(&message, &ports, playing);
-                            for command in &effects.commands {
-                                if !handle.send(*command) {
-                                    refused += 1;
-                                }
-                            }
-                            if let Some(binding) = &effects.learned {
-                                learned.push((
-                                    binding.source.detail_label(),
-                                    state.session.control_target_label(&binding.target),
-                                ));
-                            }
-                            moved |= !effects.is_empty();
-                            // A parameter moved by a knob is an edit; a
-                            // transport gesture is not. `ControlEffects` has
-                            // already drawn that line.
-                            edited |= effects.edits;
-                        }
-                        for (channel, pattern, note, velocity, start, length) in
-                            recorded.drain(..)
-                        {
-                            let channel = usize::from(channel);
-                            let Some(edit) = state.session.record_note(
-                                channel,
-                                usize::from(pattern),
-                                note,
-                                velocity,
-                                start,
-                                length,
-                            ) else {
-                                continue;
-                            };
-                            for command in &edit.commands {
-                                if !handle.send(*command) {
-                                    refused += 1;
-                                }
-                            }
-                            written.push(channel);
-                            edited = true;
-                        }
-                        if edited {
-                            state.session.mark_dirty();
-                        }
+                    let refused = drain
+                        .commands
+                        .iter()
+                        .filter(|command| !handle.send(**command))
+                        .count();
+                    if drain.controller_moved {
+                        controller_moved_at = Some(std::time::Instant::now());
                     }
                     if refused > 0 {
                         log_error!(
@@ -15067,7 +15135,7 @@ impl AppUi {
                     // mapped knob after knob without reaching for the toolbar
                     // between each. The status line is what says the last one
                     // took.
-                    if let Some((source, target)) = learned.last() {
+                    if let Some((source, target)) = drain.learned.last() {
                         w.set_status_message(
                             format!("{source} now moves {target}").as_str().into(),
                         );
@@ -15077,23 +15145,34 @@ impl AppUi {
                     // message: a fader sweep is a hundred messages a second,
                     // and redrawing the editor for each would cost more than
                     // the sweep.
-                    if moved {
+                    if drain.moved {
                         let state = st.borrow();
                         state.refresh_editor(&w);
                         state.sync_row_flags();
                     }
-                    if !written.is_empty() {
+                    if !drain.written.is_empty() {
                         let state = st.borrow();
+                        let mut written = drain.written;
                         written.sort_unstable();
                         written.dedup();
                         for channel in &written {
                             state.refresh_rack_row(*channel);
                         }
                     }
-                    if edited {
+                    if drain.edited {
                         st.borrow().update_document_title(&w);
                     }
                 }
+                // Every tick, not only a tick with input: a stream closes
+                // because its input *stopped*.
+                settle_edit_streams(
+                    &st,
+                    &commands,
+                    &w,
+                    w.get_playing(),
+                    controller_moved_at
+                        .is_none_or(|moved| moved.elapsed() >= CONTROLLER_IDLE),
+                );
                 let now = std::time::Instant::now();
                 let elapsed = now.duration_since(last_meter_update).as_secs_f32();
                 last_meter_update = now;
@@ -16086,8 +16165,59 @@ fn publish_channel_audio(handle: &EngineHandle, index: usize, channel: &ChannelS
 /// Publish a finished background load to `channel`: hand the decoded sample
 /// to the engine, record it on the channel state, and refresh the visible
 /// editor when that channel is the one on screen.
+///
+/// Records nothing. A load from the browser or the file dialog goes through
+/// [`load_sample_with_history`] and a take through [`apply_take`], and both
+/// record around this.
 fn apply_loaded_sample(
     handle: &EngineHandle,
+    st: &Rc<RefCell<UiState>>,
+    weak: &slint::Weak<MainWindow>,
+    channel: usize,
+    loaded: LoadedSample,
+) {
+    adopt_loaded_sample(
+        |channel, audio| handle.set_channel_audio(channel, audio),
+        st,
+        weak,
+        channel,
+        loaded,
+    );
+}
+
+/// A sample loaded from the browser or the file dialog, as one undo step
+/// (MOO-98).
+///
+/// It was applied and marked dirty with nothing recorded, and a load is not a
+/// small edit: it retires the channel's slices and its stretch commit, which
+/// named frames in the old audio. The next Ctrl+Z then installed a snapshot
+/// from before some earlier edit -- reverting the load with no redo, and with
+/// the old slices unrecoverable. Recorded the way [`apply_take`] records a
+/// take, so undo brings back the old sample *and* its slices, and redo the
+/// new one.
+///
+/// `publish` hands the audio to the engine; the pump passes the handle's
+/// store, and a test passes nothing, because the engine handle needs a live
+/// driver.
+fn load_sample_with_history(
+    publish: impl FnOnce(usize, ChannelAudioSnapshot),
+    st: &Rc<RefCell<UiState>>,
+    commands: &Rc<RefCell<CommandState>>,
+    weak: &slint::Weak<MainWindow>,
+    channel: usize,
+    loaded: LoadedSample,
+) {
+    let Some(window) = weak.upgrade() else {
+        return;
+    };
+    let before = project_snapshot(&st.borrow(), &window);
+    adopt_loaded_sample(publish, st, weak, channel, loaded);
+    record_project_history(commands, before, st, &window, "Load sample");
+}
+
+/// [`apply_loaded_sample`] with the engine store passed in.
+fn adopt_loaded_sample(
+    publish: impl FnOnce(usize, ChannelAudioSnapshot),
     st: &Rc<RefCell<UiState>>,
     weak: &slint::Weak<MainWindow>,
     channel: usize,
@@ -16107,10 +16237,7 @@ fn apply_loaded_sample(
     // engine must not keep playing a map that names frames in audio it no
     // longer holds, and now it cannot, because the buffer and the map arrive
     // as one store.
-    handle.set_channel_audio(
-        channel,
-        ChannelAudioSnapshot::sample(loaded.sample.clone()),
-    );
+    publish(channel, ChannelAudioSnapshot::sample(loaded.sample.clone()));
     let mut st = st.borrow_mut();
     if let Some(ch) = st.session.channels.get_mut(channel) {
         ch.sample_name = name;
@@ -16211,6 +16338,214 @@ fn apply_take(
             )
             .into(),
         );
+    }
+}
+
+/// Whether loading `target` opens a document rather than editing the one
+/// that is open.
+///
+/// Only a song does. A kit, a channel preset and a generator preset all
+/// change the song in front of the user, which decides three things
+/// together (MOO-95): they keep the transport running, as every `ProjectEdit`
+/// does; they are recorded as undo steps; and they leave the history alone,
+/// where an open clears it because its entries are snapshots of another
+/// song.
+fn load_opens_document(target: &LoadTarget) -> bool {
+    matches!(target, LoadTarget::Song)
+}
+
+/// The undo entry a load that edits the song is recorded under.
+fn load_label(target: &LoadTarget) -> &'static str {
+    match target {
+        LoadTarget::Song => "Open song",
+        LoadTarget::Kit => "Load kit",
+        LoadTarget::Channel => "Load channel preset",
+        LoadTarget::Generator { .. } => "Load preset",
+    }
+}
+
+/// One decoded sample per channel of a project being installed, `None` for a
+/// channel that plays none.
+type LoadedSamples = Vec<Option<Arc<SampleData>>>;
+
+/// The project a finished load installs, built from the song that is open.
+///
+/// A song replaces it; a kit replaces its channels' setups and keeps their
+/// notes, ids and automation; a channel or generator preset replaces the
+/// selected channel's setup or source. `Err` is the status line for a load
+/// that installs nothing: a kit the user declined, or a bundle whose type is
+/// not the one that was asked for.
+///
+/// `confirm` asks whether to go on when a kit is shorter than the song and
+/// would drop channels that hold notes. The pump passes `confirm_dialog`.
+fn merge_loaded_document(
+    current: Project,
+    current_samples: Vec<Option<Arc<SampleData>>>,
+    target: LoadTarget,
+    document: LoadedDocument,
+    loaded_samples: Vec<Option<Arc<SampleData>>>,
+    confirm: impl FnOnce(&str) -> bool,
+) -> Result<(Project, LoadedSamples), &'static str> {
+    match (target, document) {
+        (LoadTarget::Song, LoadedDocument::Song(project)) => Ok((project, loaded_samples)),
+        (LoadTarget::Kit, LoadedDocument::Kit(kit)) => {
+            let dropping_notes = kit.channels.len() < current.channels.len()
+                && current.channels[kit.channels.len()..]
+                    .iter()
+                    .any(|channel| channel.notes.iter().any(|lane| !lane.is_empty()));
+            if dropping_notes && !confirm("This kit removes channels containing notes. Continue?")
+            {
+                return Err("Kit load cancelled");
+            }
+            let mut project = current.clone();
+            let mut next_channel_id = project.next_channel_id;
+            project.channels = kit
+                .channels
+                .into_iter()
+                .enumerate()
+                .map(|(index, mut setup)| {
+                    // A kit entry's routes name the channel they were saved
+                    // from; they mean this one.
+                    setup.rescope_modulation(index as u8);
+                    if let Some(mut channel) = current.channels.get(index).cloned() {
+                        channel.setup = setup;
+                        channel
+                    } else {
+                        ProjectChannel {
+                            // A kit entry past the end of the song makes a
+                            // channel, and a channel that joins the bank is
+                            // minted. An entry landing on a live channel
+                            // keeps that channel's id above, because it
+                            // changes what the channel plays rather than
+                            // which one it is.
+                            id: mooloop_core::mint_channel_id(&mut next_channel_id),
+                            setup,
+                            notes: vec![Vec::new(); current.pattern_lengths.len()],
+                            automation: vec![Vec::new(); current.pattern_lengths.len()],
+                            next_note_id: 1,
+                        }
+                    }
+                })
+                .collect();
+            project.next_channel_id = next_channel_id;
+            // A kit can be shorter than the song, so the selected channel may
+            // be one of the ones it dropped.
+            if project.channel_index(project.selected_channel).is_none() {
+                if let Some(first) = project.channels.first().map(|c| c.id) {
+                    project.selected_channel = first;
+                }
+            }
+            let mut samples = current_samples;
+            samples.resize(project.channels.len(), None);
+            samples.truncate(project.channels.len());
+            for (index, sample) in loaded_samples.into_iter().enumerate() {
+                if let Some(slot) = samples.get_mut(index) {
+                    *slot = sample;
+                }
+            }
+            Ok((project, samples))
+        }
+        (LoadTarget::Channel, LoadedDocument::Channel(setup)) => {
+            let mut project = current;
+            let selected = project.selected_index();
+            project.channels[selected].setup = *setup;
+            // A saved rack still names the channel it was authored on. Point
+            // it at this one, or a preset saved from channel 3 would modulate
+            // channel 3 from wherever it landed.
+            mooloop_project::rescope_modulation(
+                &mut project.channels[selected].setup,
+                selected as u8,
+            );
+            let mut samples = current_samples;
+            samples[selected] = loaded_samples.into_iter().next().flatten();
+            Ok((project, samples))
+        }
+        (LoadTarget::Generator { .. }, LoadedDocument::Generator(source)) => {
+            let mut project = current;
+            let selected = project.selected_index();
+            project.channels[selected].setup.channel.kind = source.kind();
+            project.channels[selected].setup.source = *source;
+            let mut samples = current_samples;
+            samples[selected] = loaded_samples.into_iter().next().flatten();
+            Ok((project, samples))
+        }
+        _ => Err("Selected bundle has the wrong document type"),
+    }
+}
+
+/// Everything a load does once its project is installed: the dirty flag, the
+/// preset labels, and the history.
+///
+/// `before` is the song as it was, for a load that edits it; `None` for a
+/// song, which is opened rather than recorded.
+///
+/// **A load that edits the song is one undo step (MOO-95).** Generator and
+/// channel presets marked the song dirty and recorded nothing, so the next
+/// Ctrl+Z installed a snapshot from before them and took the preset away with
+/// no redo; a kit load cleared the history outright, as though a different
+/// song had been opened. `CURRENT.md` said undo covered presets. Now all
+/// three record here, and only opening a song clears the history.
+fn finish_document_load(
+    st: &Rc<RefCell<UiState>>,
+    commands: &Rc<RefCell<CommandState>>,
+    window: &MainWindow,
+    path: &Path,
+    target: &LoadTarget,
+    asset_mode: AssetMode,
+    before: Option<ProjectSnapshot>,
+) {
+    let mut state = st.borrow_mut();
+    if load_opens_document(target) {
+        state.session.bundle_path = Some(path.to_path_buf());
+        state.session.dirty = false;
+        // The per-sample flags, not the document's mode: a bundle saved
+        // `referenced` can still hold every sample, because un-embedding is
+        // refused rather than performed.
+        window.set_embed_assets(
+            asset_mode == AssetMode::Embedded || state.session.has_embedded_samples(),
+        );
+    } else {
+        state.session.mark_dirty();
+    }
+    // A preset label says where a device's settings came from, so a load
+    // either sets it -- the device now wears the preset it came from, the
+    // same way a rack row does -- or drops the ones it just invalidated.
+    match target {
+        LoadTarget::Generator { preset_name } => {
+            let channel = state.session.selected as u8;
+            state.session.set_source_preset_name(channel, preset_name);
+            window.set_source_preset_name(preset_name.as_str().into());
+        }
+        // A channel preset brought its own generator, which did not come
+        // from whatever the seat was wearing.
+        LoadTarget::Channel => {
+            let channel = state.session.selected as u8;
+            state.session.set_source_preset_name(channel, "");
+            window.set_source_preset_name(Default::default());
+        }
+        // A song or kit replaced every device in the rack, so every label
+        // describes one that is no longer there.
+        LoadTarget::Song | LoadTarget::Kit => {
+            state.session.source_preset_names.clear();
+            state.session.effect_preset_names.clear();
+            window.set_source_preset_name(Default::default());
+            state.sync_effects();
+        }
+    }
+    // And a song clears the history, for the sharper version of the same
+    // reason: a label that outlives its document is wrong on screen, where
+    // an undo that outlives its document installs the closed song over this
+    // one and saves it to this one's path. A kit does not: it edits this
+    // song, and undoing it is exactly what the history is for.
+    if load_opens_document(target) {
+        let mut commands = commands.borrow_mut();
+        commands.history.clear();
+        sync_command_availability(window, &commands);
+    }
+    state.update_document_title(window);
+    drop(state);
+    if let Some(before) = before {
+        record_project_history(commands, before, st, window, load_label(target));
     }
 }
 
@@ -17545,5 +17880,395 @@ mod tests {
             index,
             "and the channel it added is the one left selected"
         );
+    }
+
+    /// A window, a one-channel song and an empty history: what every undo
+    /// test below starts from.
+    fn undo_fixture() -> (MainWindow, Rc<RefCell<UiState>>, Rc<RefCell<CommandState>>) {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().expect("the testing backend builds a window");
+        let state = Rc::new(RefCell::new(UiState::new(None, 48_000, &window)));
+        let commands = Rc::new(RefCell::new(CommandState::default()));
+        (window, state, commands)
+    }
+
+    /// An ordinary recorded edit, for the edits under test to land on top
+    /// of: the failure they fix is that the *next* Ctrl+Z reached past them
+    /// to this one and destroyed them.
+    fn an_earlier_edit(
+        state: &Rc<RefCell<UiState>>,
+        commands: &Rc<RefCell<CommandState>>,
+        window: &MainWindow,
+    ) {
+        with_project_history(state, commands, window, "Rename channel", || {
+            state.borrow_mut().session.channels[0].name = "Earlier".to_owned();
+            true
+        });
+    }
+
+    /// Undo once, and say what the next undo would reach.
+    fn label_under_top(commands: &Rc<RefCell<CommandState>>) -> &'static str {
+        commands.borrow_mut().history.commit_undo();
+        commands
+            .borrow()
+            .history
+            .undo_target()
+            .map_or("nothing", |entry| entry.label)
+    }
+
+    fn desk() -> Vec<mooloop_core::MidiPortInfo> {
+        vec![mooloop_core::MidiPortInfo {
+            id: mooloop_core::MidiPortId(0),
+            name: "Desk".to_owned(),
+        }]
+    }
+
+    fn cc(controller: u8, value: u8) -> mooloop_core::MidiMessage {
+        mooloop_core::MidiMessage {
+            offset: 0,
+            port: mooloop_core::MidiPortId(0),
+            channel: 0,
+            kind: mooloop_core::MidiKind::ControlChange { controller, value },
+        }
+    }
+
+    fn channel_volume(state: &Rc<RefCell<UiState>>) -> mooloop_core::ControlTarget {
+        let id = state.borrow().session.channels[0].id;
+        mooloop_core::ControlTarget::Param(mooloop_core::ParamKey::strip(
+            mooloop_core::ChainKey::Channel(id),
+            mooloop_core::STRIP_PARAM_VOLUME,
+        ))
+    }
+
+    /// A binding made by MIDI learn is an undo step of its own (MOO-96).
+    ///
+    /// It was applied in the pump, marked dirty and recorded nowhere: map
+    /// eight knobs in one LEARN pass, press Ctrl+Z for an earlier edit, and
+    /// the undo installed a snapshot from before all eight. Now the binding
+    /// is the entry Ctrl+Z reaches first, the earlier edit is one further
+    /// back, and Redo brings the binding back.
+    #[test]
+    fn a_learned_binding_is_an_undo_step_of_its_own() {
+        let (window, state, commands) = undo_fixture();
+        state.borrow_mut().midi_ports = desk();
+        an_earlier_edit(&state, &commands, &window);
+        let target = channel_volume(&state);
+        state.borrow_mut().session.begin_control_learn(target, false);
+
+        let drain = drain_control_surface(
+            &state,
+            &commands,
+            &window,
+            &mut vec![cc(7, 64)],
+            &mut Vec::new(),
+            false,
+        );
+        assert_eq!(drain.learned.len(), 1, "the press bound the knob");
+
+        {
+            let open = commands.borrow();
+            let entry = open.history.undo_target().expect("the binding is an undo step");
+            assert_eq!(entry.label, "MIDI learn");
+            assert!(entry.before.project.control_map.bindings.is_empty());
+            assert_eq!(entry.after.project.control_map.bindings.len(), 1);
+        }
+        assert_eq!(label_under_top(&commands), "Rename channel");
+        let redo = commands.borrow().history.redo_target().map(|entry| {
+            entry.after.project.control_map.bindings.len()
+        });
+        assert_eq!(redo, Some(1), "and Redo brings the binding back");
+    }
+
+    /// A sweep of a mapped knob is one undo step, however many messages it
+    /// sends, and the step closes when the knob goes idle (MOO-96).
+    #[test]
+    fn a_sweep_of_a_mapped_knob_is_one_undo_step() {
+        let (window, state, commands) = undo_fixture();
+        state.borrow_mut().midi_ports = desk();
+        // A binding names its channel by identity, and the window's first
+        // channel has none until a project install mints one.
+        state.borrow_mut().session.channels[0].id = mooloop_core::ChannelId(0);
+        let target = channel_volume(&state);
+        {
+            let mut st = state.borrow_mut();
+            let mut binding = mooloop_core::ControlBinding::new(
+                mooloop_core::ControlSource::Cc {
+                    port: mooloop_core::MidiPortFilter::Any,
+                    channel: mooloop_core::MidiChannelFilter::Omni,
+                    controller: 7,
+                },
+                target,
+            );
+            binding.mode = mooloop_core::ControlMode::Absolute {
+                takeover: mooloop_core::Takeover::Jump,
+            };
+            st.session.control_map.bind(binding);
+            let ports = st.midi_ports.clone();
+            st.session.resolve_control_map(&ports);
+        }
+        an_earlier_edit(&state, &commands, &window);
+        let start = state.borrow().session.channels[0].volume;
+
+        for value in [10, 60, 120] {
+            let drain = drain_control_surface(
+                &state,
+                &commands,
+                &window,
+                &mut vec![cc(7, value)],
+                &mut Vec::new(),
+                false,
+            );
+            assert!(drain.controller_moved && drain.edited);
+            // A tick where the knob is still moving leaves the step open.
+            settle_edit_streams(&state, &commands, &window, false, false);
+            assert_eq!(
+                commands.borrow().history.open_stream(),
+                Some(Stream::Controller)
+            );
+            assert!(commands.borrow().history.can_undo(), "Undo is live mid-sweep");
+        }
+        let end = state.borrow().session.channels[0].volume;
+        assert_ne!(start, end, "the sweep moved the fader");
+
+        settle_edit_streams(&state, &commands, &window, false, true);
+        {
+            let open = commands.borrow();
+            assert_eq!(open.history.open_stream(), None, "an idle knob closes its step");
+            let entry = open.history.undo_target().expect("the sweep is an undo step");
+            assert_eq!(entry.before.project.channels[0].setup.channel.volume, start);
+            assert_eq!(entry.after.project.channels[0].setup.channel.volume, end);
+        }
+        assert_eq!(label_under_top(&commands), "Rename channel");
+    }
+
+    /// Notes played into an armed pattern are one undo step per take, and
+    /// the edit made before the take is one step further back (MOO-97).
+    #[test]
+    fn a_take_of_recorded_notes_is_one_undo_step() {
+        let (window, state, commands) = undo_fixture();
+        an_earlier_edit(&state, &commands, &window);
+        let _ = state.borrow_mut().session.set_record_armed(true);
+        let notes = |project: &Project| project.channels[0].notes[0].len();
+        let before = state.borrow().session.channels[0].notes[0].len();
+
+        for (start, note) in [(0u32, 60u8), (96, 62), (192, 64)] {
+            let drain = drain_control_surface(
+                &state,
+                &commands,
+                &window,
+                &mut Vec::new(),
+                &mut vec![(0, 0, note, 100, start, 24)],
+                true,
+            );
+            assert_eq!(drain.written, vec![0]);
+            settle_edit_streams(&state, &commands, &window, true, true);
+        }
+        assert_eq!(
+            commands.borrow().history.open_stream(),
+            Some(Stream::Recording),
+            "a take still playing is still one take"
+        );
+
+        // The transport stops: the take is done.
+        settle_edit_streams(&state, &commands, &window, false, true);
+        {
+            let open = commands.borrow();
+            let entry = open.history.undo_target().expect("the take is an undo step");
+            assert_eq!(entry.label, "Record notes");
+            assert_eq!(notes(&entry.before.project), before);
+            assert_eq!(notes(&entry.after.project), before + 3);
+        }
+        assert_eq!(label_under_top(&commands), "Rename channel");
+        let redo = commands
+            .borrow()
+            .history
+            .redo_target()
+            .map(|entry| notes(&entry.after.project));
+        assert_eq!(redo, Some(before + 3), "and Redo brings the take back");
+    }
+
+    /// A sample loaded onto a sliced channel is one undo step, and undoing it
+    /// brings back the old sample *and* its slices, which the load retired
+    /// (MOO-98).
+    #[test]
+    fn loading_a_sample_onto_a_sliced_channel_is_one_undo_step() {
+        let (window, state, commands) = undo_fixture();
+        let old = SampleData::default_kick(48_000);
+        {
+            let mut st = state.borrow_mut();
+            let channel = &mut st.session.channels[0];
+            assert_eq!(channel.kind, DeviceKind::Sampler);
+            channel.sample_data = Some(old.clone());
+            channel.sample_path = Some(PathBuf::from("/tmp/old.wav"));
+            channel.slices.add(100);
+            channel.slices.add(2_000);
+        }
+        an_earlier_edit(&state, &commands, &window);
+        let new = SampleData::default_kick(48_000);
+        let mut published = None;
+        load_sample_with_history(
+            |channel, _| published = Some(channel),
+            &state,
+            &commands,
+            &window.as_weak(),
+            0,
+            LoadedSample {
+                path: PathBuf::from("/tmp/new.wav"),
+                sample: new.clone(),
+                can_previous: false,
+                can_next: false,
+            },
+        );
+        assert_eq!(published, Some(0), "the engine is handed the new audio");
+
+        {
+            let open = commands.borrow();
+            let entry = open.history.undo_target().expect("the load is an undo step");
+            assert_eq!(entry.label, "Load sample");
+            let slices = |project: &Project| {
+                project.channels[0]
+                    .setup
+                    .source
+                    .sampler_state()
+                    .map_or(0, |sampler| sampler.slices.len())
+            };
+            assert_eq!(slices(&entry.before.project), 2, "undo brings the slices back");
+            assert_eq!(slices(&entry.after.project), 0, "the load retired them");
+            let id = entry.before.project.channels[0].id;
+            assert!(Arc::ptr_eq(&entry.before.samples[&id], &old));
+            assert!(Arc::ptr_eq(&entry.after.samples[&id], &new), "and redo the new file");
+        }
+        assert_eq!(label_under_top(&commands), "Rename channel");
+    }
+
+    /// A generator preset load is one undo step, keeps the song playing, and
+    /// leaves the history it lands on alone (MOO-95).
+    #[test]
+    fn a_generator_preset_load_is_one_undo_step_and_keeps_the_song_playing() {
+        let (window, state, commands) = undo_fixture();
+        an_earlier_edit(&state, &commands, &window);
+        let target = LoadTarget::Generator {
+            preset_name: "Thump".to_owned(),
+        };
+        assert!(
+            !load_opens_document(&target),
+            "a preset edits the song that is playing, so its install keeps the transport"
+        );
+
+        let current = state
+            .borrow()
+            .session
+            .project_snapshot(window.get_bpm(), window.get_swing_percent());
+        let samples = state.borrow().session.sample_snapshots();
+        let (project, samples) = merge_loaded_document(
+            current,
+            samples,
+            target.clone(),
+            LoadedDocument::Generator(Box::new(mooloop_core::ChannelSetup::drum_synth("Thump").source)),
+            vec![None],
+            |_| panic!("a preset has nothing to ask"),
+        )
+        .expect("a generator preset lands on the selected channel");
+        let before = project_snapshot(&state.borrow(), &window);
+        // What the pump's install does to the session.
+        state.borrow_mut().replace_project(&project, &samples, &window);
+        finish_document_load(
+            &state,
+            &commands,
+            &window,
+            Path::new("/tmp/thump.mooloop"),
+            &target,
+            AssetMode::Referenced,
+            Some(before),
+        );
+
+        {
+            let open = commands.borrow();
+            let entry = open.history.undo_target().expect("the preset is an undo step");
+            assert_eq!(entry.label, "Load preset");
+            assert_eq!(entry.before.project.channels[0].setup.source.kind(), DeviceKind::Sampler);
+            assert_eq!(entry.after.project.channels[0].setup.source.kind(), DeviceKind::DrumSynth);
+        }
+        assert!(state.borrow().session.dirty);
+        assert_eq!(label_under_top(&commands), "Rename channel");
+    }
+
+    /// A kit load edits the song that is open, so it is an undo step and the
+    /// history survives it (MOO-95). It used to clear the history, as if
+    /// another song had been opened.
+    #[test]
+    fn a_kit_load_is_one_undo_step_and_keeps_the_history() {
+        let (window, state, commands) = undo_fixture();
+        an_earlier_edit(&state, &commands, &window);
+        let target = LoadTarget::Kit;
+        assert!(!load_opens_document(&target));
+
+        let current = state
+            .borrow()
+            .session
+            .project_snapshot(window.get_bpm(), window.get_swing_percent());
+        let samples = state.borrow().session.sample_snapshots();
+        let kit = mooloop_core::Kit {
+            channels: vec![mooloop_core::ChannelSetup::drum_synth("A"), mooloop_core::ChannelSetup::drum_synth("B")],
+        };
+        let (project, samples) = merge_loaded_document(
+            current,
+            samples,
+            target.clone(),
+            LoadedDocument::Kit(kit),
+            vec![None, None],
+            |_| panic!("a kit longer than the song drops nothing"),
+        )
+        .expect("the kit merges");
+        let before = project_snapshot(&state.borrow(), &window);
+        state.borrow_mut().replace_project(&project, &samples, &window);
+        finish_document_load(
+            &state,
+            &commands,
+            &window,
+            Path::new("/tmp/kit.mooloop"),
+            &target,
+            AssetMode::Referenced,
+            Some(before),
+        );
+
+        {
+            let open = commands.borrow();
+            let entry = open.history.undo_target().expect("the kit is an undo step");
+            assert_eq!(entry.label, "Load kit");
+            assert_eq!(entry.before.project.channels.len(), 1, "undo brings the old channels back");
+            assert_eq!(entry.after.project.channels.len(), 2);
+        }
+        assert_eq!(label_under_top(&commands), "Rename channel", "the history survived");
+    }
+
+    /// Wheel notches on one knob within half a second undo as one step
+    /// (MOO-95). Each notch is a `Gesture.begin()`/`end()` of its own, so a
+    /// trackpad sweep was forty whole-project entries.
+    #[test]
+    fn wheel_notches_on_one_knob_undo_as_one_step() {
+        let (window, state, commands) = undo_fixture();
+        an_earlier_edit(&state, &commands, &window);
+        let start = state.borrow().session.channels[0].volume;
+        for _ in 0..3 {
+            // What `ParameterKnob`'s scroll-event does: begin, one change,
+            // end.
+            gesture_opened(&state, &commands, &window);
+            with_gesture_history(&state, &commands, &window, "Volume", || {
+                state.borrow_mut().session.channels[0].volume += 0.05;
+                true
+            });
+            gesture_closed(&state, &commands, &window);
+        }
+        let end = state.borrow().session.channels[0].volume;
+
+        {
+            let open = commands.borrow();
+            let entry = open.history.undo_target().expect("the notches are an undo step");
+            assert_eq!(entry.label, "Volume");
+            assert_eq!(entry.before.project.channels[0].setup.channel.volume, start);
+            assert_eq!(entry.after.project.channels[0].setup.channel.volume, end);
+        }
+        assert_eq!(label_under_top(&commands), "Rename channel", "three notches, one step");
     }
 }

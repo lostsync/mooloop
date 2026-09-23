@@ -405,11 +405,10 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   greyed otherwise. **An effect preset appends a device to the end of the
   selected channel's chain rather than replacing one**, so it is always
   loadable; the rack row's own rail is still where a preset replaces what is
-  already in a row. An **effect** preset loads as one undoable edit; a
-  channel or generator preset does not -- it installs the document without
-  recording history, so Ctrl+Z after one reaches past it to the previous
-  recorded edit (`docs/LOOSE_ENDS.md`). Neither tab can be driven from the
-  keyboard.
+  already in a row. **Every preset load is one undoable edit**, effect,
+  channel and generator alike, and so is a kit load; none of them stops the
+  song, because each edits the song that is playing rather than opening
+  another (MOO-95). Neither tab can be driven from the keyboard.
 - A two-pane Preferences dialog with General, Audio, MIDI, Appearance, and
   Shortcuts pages; General persists developer mode and reveals the presently
   empty Developer page. The MIDI page lists the inputs the driver is offering,
@@ -1832,9 +1831,12 @@ land on its own when it starts to matter:
   Note multi-selection supports Select All and bulk deletion. **Undo covers
   every edit that changes the document**, on one project-snapshot undo/redo
   stack: channel structure, pattern verbs, note and step-grid edits, pattern
-  length, playlist placements, both renames, modulation, automation, presets,
-  the sampler's slice verbs, the mixer's own verbs, and every device and
-  generator parameter.
+  length, playlist placements, both renames, modulation, automation, presets
+  and kits, sample loads, the sampler's slice verbs, the mixer's own verbs,
+  every device and generator parameter, and what arrives from MIDI -- a
+  learned binding, a mapped control's moves, and notes recorded from a
+  keyboard. Only opening or starting a song clears the history; a kit load
+  does not, because it edits the song that is open.
 
   **One gesture is one undo step.** A knob emits a value on every pointer
   frame, so the control says where a gesture starts and stops -- `Gesture` in
@@ -1842,12 +1844,24 @@ land on its own when it starts to matter:
   about. A knob drag, a fader drag, a painted run of steps, a dragged
   envelope handle and a typed rename are each a single Ctrl+Z, whatever their
   length; a wheel notch, an arrow-key nudge, a double-click reset and a menu
-  pick are each one on their own. A press that moved nothing records nothing,
-  and naming a control for MIDI learn is not an edit.
+  pick are each one on their own -- except that wheel notches, arrow presses
+  and resets on one control less than half a second apart join one step, so
+  a trackpad sweep of a cutoff is one Ctrl+Z rather than forty. A press that
+  moved nothing records nothing, and naming a control for MIDI learn is not
+  an edit.
+
+  **What has no press and release is bracketed by what it is.** A mapped
+  hardware control's moves are one step, closed when the desk has been
+  still for half a second; a take of notes recorded from a keyboard is one
+  step, closed when the transport stops or recording is disarmed; a learned
+  binding and a sample load are one step each. Undo while a knob is still
+  settling or a take is still running undoes that stream, not the edit
+  before it.
 
   `scripts/dupe-audit unrecorded-edit` is the guard: it reports every
-  callback whose handler changes the document without recording it, and its
-  expected answer is zero. Project-level navigation remains limited.
+  callback whose handler changes the document without recording it, and
+  every place the pump does, and its expected answer is zero. Project-level
+  navigation remains limited.
 
 ## Architecture Risks To Resolve Early
 

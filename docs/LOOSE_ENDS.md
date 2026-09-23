@@ -90,7 +90,9 @@ incoming one **at the moment it swaps**, which is the only place the current
 position exists -- the song goes on playing while the install is prepared on
 the control thread, so a position captured earlier would step the song back by
 the length of its own install. Opening a document still stops and rewinds,
-which is what opening a document means.
+which is what opening a document means. A generator, channel-preset or kit
+load no longer does, since 2026-09-22 (MOO-95): each edits the song that is
+playing, and installs the way a `ProjectEdit` does.
 
 **Closed for channels, 2026-09-17 (step 05).** An install carries the live
 strip of any channel it did not change -- matched by `ChannelId` and
