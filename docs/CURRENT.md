@@ -948,12 +948,16 @@ land on its own when it starts to matter:
   channel's source, loading a channel preset over it, or opening a song or
   kit, which replaces the whole rack.
 - File > New Song (Ctrl+N) starts a fresh starter song, asking first when the
-  current one has unsaved changes, as Open Song does. Every file and
-  confirmation dialog is a separate program: `zenity` on Linux, and on macOS
-  the system's own panels through `osascript`. The `.deb` and `.rpm` depend
-  on `zenity`; the AppImage cannot, so there it has to be installed. A dialog
-  program that will not start is logged, since to its caller it looks
-  exactly like a cancel.
+  current one has unsaved changes, as Open Song does. **A file chooser is
+  asked of the desktop's file chooser portal first**
+  (`org.freedesktop.portal.FileChooser`, which KDE, GNOME and most tiling
+  setups provide), then of `zenity`, then of `kdialog`; on macOS it is the
+  system's own panels through `osascript`. **When none of them can show one,
+  that is not a cancel** (MOO-90): Save, Save As, Open, Export and the kit,
+  channel and bundle pickers raise the error dialog, listing what was tried
+  and what to install, and Load Sample and Add Folder say so in the status
+  bar. It used to read as Cancel, so on a desktop without zenity those
+  commands did nothing and said nothing.
 - Missing samples are recoverable by loading a replacement audio file, but
   there is no dedicated path-search/relink dialog, autosave, or crash recovery
   yet.

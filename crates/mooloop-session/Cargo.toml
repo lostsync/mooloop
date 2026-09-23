@@ -25,5 +25,12 @@ symphonia = {
 # unused take is a crash leftover, where being wrong costs a recording.
 trash = "5"
 
+# The desktop's file chooser portal (`dialogs.rs`, MOO-90), spoken over
+# D-Bus. Already in the tree through the window system's accessibility
+# layer, which is why this is zbus rather than `rfd` or `ashpd`: no new
+# crate, only the blocking half of one already built.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+
 [dev-dependencies]
 tempfile = "3"

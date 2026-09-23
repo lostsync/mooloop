@@ -124,7 +124,7 @@ xattr -dr com.apple.quarantine Mooloop.app
 
 Start JACK first, or use PipeWire with JACK compatibility enabled, then run `mooloop`.
 
-File dialogs and confirmations use `zenity`. The `.deb` and `.rpm` install it; with the AppImage or a source build, install it yourself, or Open, Save and Export will have no way to ask for a file.
+File choosers come from the desktop's file chooser portal (xdg-desktop-portal, which KDE, GNOME and most desktops run), and fall back to `zenity` and then `kdialog`. The `.deb` and `.rpm` also install `zenity`. With none of the three, Open, Save and Export say so rather than doing nothing.
 
 If Mooloop is running but nothing is making noise, the JACK graph is a good place to start.
 

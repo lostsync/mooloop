@@ -88,11 +88,11 @@ use mooloop_session::command::{cycle_pane, CommandState, Pane};
 use mooloop_session::effects::EffectParamWrite;
 use mooloop_session::dialogs::{
     confirm_dialog, pick_bundle_dialog, pick_export_dialog, pick_sample_dialog,
-    pick_save_dialog, pick_song_dialog,
+    pick_save_dialog, pick_song_dialog, Picked,
 };
 use mooloop_session::document::{
-    log_asset_warnings, log_repairs, quarantine_song, repair_suffix, resolve_document,
-    warning_suffix, DocumentProblem,
+    chosen_path, log_asset_warnings, log_repairs, quarantine_song, repair_suffix,
+    resolve_document, warning_suffix, DocumentProblem,
     DocumentResult, LoadTarget, PresetNaming, ResolvedDocument,
 };
 use mooloop_session::engine::{
@@ -6320,9 +6320,12 @@ impl AppUi {
                         let _ = tx.send(DocumentResult::Cancelled);
                         return;
                     }
-                    let Some(path) = pick_song_dialog("Open mooloop song") else {
-                        let _ = tx.send(DocumentResult::Cancelled);
-                        return;
+                    let path = match chosen_path(pick_song_dialog("Open mooloop song"), "open a song") {
+                        Ok(path) => path,
+                        Err(result) => {
+                            let _ = tx.send(result);
+                            return;
+                        }
                     };
                     let result = resolve_document(&path)
                         .map(|document| DocumentResult::Loaded {
@@ -6367,11 +6370,15 @@ impl AppUi {
                 }
                 let tx = tx.clone();
                 std::thread::spawn(move || {
-                    let path = current
-                        .or_else(|| pick_save_dialog("Save mooloop song", "Untitled.mooloop"));
-                    let Some(path) = path else {
-                        let _ = tx.send(DocumentResult::Cancelled);
-                        return;
+                    let picked = current.map(Picked::Path).unwrap_or_else(|| {
+                        pick_save_dialog("Save mooloop song", "Untitled.mooloop")
+                    });
+                    let path = match chosen_path(picked, "save this song") {
+                        Ok(path) => path,
+                        Err(result) => {
+                            let _ = tx.send(result);
+                            return;
+                        }
                     };
                     log_info!(
                         "project",
@@ -6469,11 +6476,15 @@ impl AppUi {
                 }
                 let tx = tx.clone();
                 std::thread::spawn(move || {
-                    let Some(path) =
-                        pick_save_dialog("Save mooloop kit", "Untitled.mooloop-kit")
-                    else {
-                        let _ = tx.send(DocumentResult::Cancelled);
-                        return;
+                    let path = match chosen_path(
+                        pick_save_dialog("Save mooloop kit", "Untitled.mooloop-kit"),
+                        "save this kit",
+                    ) {
+                        Ok(path) => path,
+                        Err(result) => {
+                            let _ = tx.send(result);
+                            return;
+                        }
                     };
                     let result = mooloop_project::save_kit(&path, &kit, mode)
                         .map(|report| DocumentResult::SavedOther {
@@ -6508,11 +6519,15 @@ impl AppUi {
                 }
                 let tx = tx.clone();
                 std::thread::spawn(move || {
-                    let Some(path) =
-                        pick_save_dialog("Save mooloop channel", "Untitled.mooloop-channel")
-                    else {
-                        let _ = tx.send(DocumentResult::Cancelled);
-                        return;
+                    let path = match chosen_path(
+                        pick_save_dialog("Save mooloop channel", "Untitled.mooloop-channel"),
+                        "save this channel",
+                    ) {
+                        Ok(path) => path,
+                        Err(result) => {
+                            let _ = tx.send(result);
+                            return;
+                        }
                     };
                     let result = mooloop_project::save_channel(&path, &channel, mode)
                         .map(|report| DocumentResult::SavedOther {
@@ -6540,9 +6555,12 @@ impl AppUi {
                 }
                 let tx = tx.clone();
                 std::thread::spawn(move || {
-                    let Some(path) = pick_bundle_dialog(title) else {
-                        let _ = tx.send(DocumentResult::Cancelled);
-                        return;
+                    let path = match chosen_path(pick_bundle_dialog(title), "open this file") {
+                        Ok(path) => path,
+                        Err(result) => {
+                            let _ = tx.send(result);
+                            return;
+                        }
                     };
                     let target = if kit {
                         LoadTarget::Kit
@@ -6810,9 +6828,15 @@ impl AppUi {
                 window.set_export_open(false);
                 let tx = tx.clone();
                 std::thread::spawn(move || {
-                    let Some(path) = pick_export_dialog(request.extension()) else {
-                        let _ = tx.send(DocumentResult::Cancelled);
-                        return;
+                    let path = match chosen_path(
+                        pick_export_dialog(request.extension()),
+                        "export this song",
+                    ) {
+                        Ok(path) => path,
+                        Err(result) => {
+                            let _ = tx.send(result);
+                            return;
+                        }
                     };
                     let spec = ExportSpec {
                         path: path.clone(),
@@ -14021,7 +14045,8 @@ impl AppUi {
         //     tree re-flattens on every change. The folder picker runs on a
         //     worker thread like every other dialog call, handing the picked
         //     path to the pump, which applies it on the UI thread. ---
-        let (browser_pick_tx, browser_pick_rx) = std::sync::mpsc::channel::<PathBuf>();
+        let (browser_pick_tx, browser_pick_rx) =
+            std::sync::mpsc::channel::<Result<PathBuf, String>>();
         let (browser_info_tx, browser_info_rx) = std::sync::mpsc::channel::<(
             PathBuf,
             Result<SampleInspection, (String, String)>,
@@ -14062,9 +14087,15 @@ impl AppUi {
             let browser_pick_tx = browser_pick_tx.clone();
             window.on_browser_add_location(move || {
                 let tx = browser_pick_tx.clone();
-                std::thread::spawn(move || {
-                    if let Some(path) = pick_bundle_dialog("Add sample folder") {
-                        let _ = tx.send(path);
+                std::thread::spawn(move || match pick_bundle_dialog("Add sample folder") {
+                    Picked::Path(path) => {
+                        let _ = tx.send(Ok(path));
+                    }
+                    Picked::Cancelled => {}
+                    // Said, not dropped: without it the button does nothing
+                    // on a desktop with no chooser (MOO-90).
+                    Picked::Unavailable(none) => {
+                        let _ = tx.send(Err(none.one_line()));
                     }
                 });
             });
@@ -14265,7 +14296,14 @@ impl AppUi {
                 let tx = load_tx.clone();
                 log_debug!("ui", "loading sample for channel {channel}");
                 std::thread::spawn(move || {
-                    let result = pick_sample_dialog().map(|path| load_sample_at_path(&path));
+                    let result = match pick_sample_dialog() {
+                        Picked::Path(path) => Some(load_sample_at_path(&path)),
+                        Picked::Cancelled => None,
+                        // A failure, not a cancel (MOO-90): it reaches the
+                        // status bar the way a sample that will not decode
+                        // does.
+                        Picked::Unavailable(none) => Some(Err(none.one_line())),
+                    };
                     let _ = tx.send(LoadResult {
                         channel,
                         source_revision,
@@ -14388,9 +14426,16 @@ impl AppUi {
                 // Applied here rather than in the callback because the
                 // settings and state live in non-Send Rc/RefCells, while the
                 // picked path crosses the thread boundary as plain data.
-                while let Ok(path) = browser_pick_rx.try_recv() {
+                while let Ok(picked) = browser_pick_rx.try_recv() {
                     let Some(window) = weak.upgrade() else {
                         continue;
+                    };
+                    let path = match picked {
+                        Ok(path) => path,
+                        Err(message) => {
+                            window.set_status_message(message.into());
+                            continue;
+                        }
                     };
                     if st.borrow().session.browser_locations.contains(&path) {
                         window.set_status_message(

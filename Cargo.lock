@@ -3272,6 +3272,7 @@ dependencies = [
  "symphonia",
  "tempfile",
  "trash",
+ "zbus",
 ]
 
 [[package]]

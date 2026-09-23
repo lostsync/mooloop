@@ -176,6 +176,31 @@ pub enum DocumentResult {
     },
 }
 
+/// The path a chooser picked, or the result to send instead.
+///
+/// A cancel is [`DocumentResult::Cancelled`], which clears the status bar.
+/// **A chooser that could not be shown at all is a failure** (MOO-90), and
+/// gets the error dialog with everything that was tried: it used to be a
+/// cancel, so on a desktop without zenity Save As, Open and Export did
+/// nothing and said nothing. `action` completes "Could not ...".
+///
+/// The large `Err` is the value the caller sends on as it is, once per
+/// chooser, on a worker thread: boxing it would only be unboxed again.
+#[allow(clippy::result_large_err)]
+pub fn chosen_path(
+    picked: crate::dialogs::Picked,
+    action: &'static str,
+) -> Result<PathBuf, DocumentResult> {
+    match picked {
+        crate::dialogs::Picked::Path(path) => Ok(path),
+        crate::dialogs::Picked::Cancelled => Err(DocumentResult::Cancelled),
+        crate::dialogs::Picked::Unavailable(none) => Err(DocumentResult::Failed {
+            action,
+            problem: none.explain().into(),
+        }),
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum LoadTarget {
     Song,
