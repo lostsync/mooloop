@@ -6,7 +6,7 @@ mirror this file step-for-step the way MOO-5/16/30 do. The GitHub issue
 numbers below (`#10`, `#26`-`#30`) predate Adam's move away from GitHub
 issues; MOO-11 is the live tracking issue.
 
-**Written 2026-09-16.** Steps 01 (the spike) and 02 (the neutral contract) landed on 2026-09-23, and so did MOO-56's one boxed source slot, which closes blocker 4 below. Adam asked for it directly:
+**Written 2026-09-16.** Steps 01 (the spike), 02 (the neutral contract) and 03 (parameters belong to an instance) landed on 2026-09-23, and so did MOO-56's one boxed source slot, which closes blocker 4 below. Adam asked for it directly:
 *"let's go ahead and plan out how we'll add CLAP support. Later we'll add
 VST/3 and AU. instrument support as well."* `SCOPE.md` already put CLAP in
 for 0.2.0 (item 9). This plan is outside the `FOCUS.md` sequence for the same
@@ -121,9 +121,11 @@ crate.
   default, stepped: Option<u16>, automatable, modulatable, hidden }`. Names
   are owned `String`s, which is why these are not `ParamDescriptor`s
   (`ParamDescriptor`'s names are `&'static str`, `effect.rs:197`).
-- `PluginState { format, chunks: Vec<(String, Vec<u8>)> }`. It holds chunks,
-  not a single blob, because VST3 saves component state and controller state
-  separately. CLAP writes one chunk.
+- `PluginState { chunks: Vec<PluginStateChunk { tag, data }> }`. It holds
+  chunks, not a single blob, because VST3 saves component state and
+  controller state separately. CLAP writes one chunk. (Planned with a
+  `format` too, and built without one, because the `PluginRef` beside it
+  already says the format. See "Step 02, recorded".)
 - `PluginSlotId(u32)`, `Copy`, minted **per project**, not per chain.
   `DeviceId` is minted per chain ("every chain mints its ids from zero"), and
   a per-chain key would have to be renumbered whenever a channel moves.
@@ -522,7 +524,7 @@ words. **Do not reopen this as a version-bump question.**
 | --- | --- | --- | --- | --- |
 | 01 | Spike: `clack-host` loads and runs a CLAP; an in-repo test plugin | — (MOO-76) | new crate only | **done 2026-09-23** |
 | 02 | The neutral contract: types, `Project.plugins`, TOML state, a fake plugin end to end | #26 | core, project | **done 2026-09-23** (MOO-77) |
-| 03 | Parameters belong to an instance | #26 | core, session | not started |
+| 03 | Parameters belong to an instance | #26 | core, session | **done 2026-09-23** (MOO-78) |
 | 04 | `PluginRack`, main-thread requests, latency known at runtime | #26 | engine, session | not started |
 | 05 | The scanner, out of process, with its cache | #27 | plugin-host, app, settings | not started |
 | 06 | A headless CLAP effect in a chain | #27 | plugin-host, session | not started |
@@ -673,6 +675,48 @@ also what a missing plugin plays as. `PROJECT_FORMAT.md` has "Hosted plugins".
   and the engine half (`a_plugin_device_with_no_plugin_passes_the_signal_through`).
   Step 03's test (ids `{7, 1000, 4_000_000_000}` modulated, automated and
   saved) and step 04's rack take the rest. Both step files say so.
+
+## Step 03, recorded 2026-09-23 (MOO-78)
+
+**What landed.** `ParamOwner::PluginParam { device }`, saved as
+`owner.plugin_param.device`, with `ParamAddr::plugin_param` and
+`ParamKey::plugin_param`. `size_of::<ParamAddr>()` is still 16. Every
+exhaustive owner match has a real arm. `ParamAddr::device()` lists every owner
+now instead of ending in `_ => None`, so it answers for a plugin device. The
+three sites that found a device's lanes and routes by matching `Effect`
+(`slot_of`, `lane_drives_device`, `ModRack::forget_device`) read `device()`
+instead. So removing a plugin device takes its lanes and routes, the same as
+a native one. The two Buffer migrations in `project.rs` still match `Effect`
+on purpose: they only concern the Buffer.
+
+**The integrity pass (C.6).** A `PluginParam` address is checked only for its
+device: it must be on the chain, and it must be a plugin. Its `param` is never
+checked, so a missing parameter is kept. The `Effect` arm, on a channel and on
+a bus, now has the `Source` arm's `descriptors().is_empty()` guard.
+`a_plugin_parameter_is_never_dropped_for_its_id` pins both.
+
+**What waits for step 07, and why.** The session's descriptor lookups
+(`param_descriptor`, `modulation_destination`, `channel_modulation_destination`)
+return a `&'static ParamDescriptor`, and a plugin's parameter has no such
+thing. For a plugin address they return `None`, so a plugin parameter reads
+as "unavailable" in the shelf and the mapping list until step 07 gives the
+session the instance's values. The engine's control pass finds destinations
+by walking each kind's descriptor table, and a plugin's table is empty. So a
+lane or route on a plugin parameter is saved, kept and shown, but it produces
+no events yet. Step 07's "nothing changes in `control_events_for_slot`" was
+written against the old option 1, and it no longer holds: delivering plugin
+automation needs the control pass to walk what is driven rather than what is
+described, which is MOO-195.
+
+**Not built here, deliberately.** The `DeviceParams` view, and moving
+`descriptor_slots`' callers onto it. Every caller of `descriptor_slots` is
+still fed a `&'static` table, and for a plugin that table is empty, so none of
+them can allocate by a plugin's id. The view is only needed once something
+draws or edits a plugin's parameters (steps 07 and 08), and it belongs there,
+built against the real callers rather than guessed at now. Step 03's
+four-billion-id test is here in the form that applies today: the address, the
+save and the integrity pass all carry `4_000_000_000` and nothing is sized by
+it.
 
 ## The test plugins
 

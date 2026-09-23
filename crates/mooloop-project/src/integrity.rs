@@ -1520,6 +1520,13 @@ impl ChainShape {
                     "it drives a device that is not on this channel's chain, which holds {}",
                     self.effects.len()
                 )),
+                // The `Source` arm's guard, for the `Source` arm's reason: a
+                // kind with no table is not descriptor-addressed, and judging
+                // an address against nothing would delete authored work. A
+                // plugin is such a kind (MOO-74, C.6); its parameters are
+                // `PluginParam` addresses, and an `Effect` one on it is left
+                // alone rather than dropped.
+                Some((_, kind)) if kind.descriptors().is_empty() => None,
                 Some((slot, kind)) => kind.descriptor(id).is_none().then(|| {
                     format!(
                         "it drives control {id} of the {} in slot {}, which has no such control",
@@ -1528,6 +1535,7 @@ impl ChainShape {
                     )
                 }),
             },
+            ParamOwner::PluginParam { device } => plugin_param_problem(&self.effects, device, None),
             ParamOwner::Modulator { slot } => match self.modulators.get(slot as usize).copied().flatten() {
                 None => Some(format!("it drives modulator slot {}, which is empty", slot + 1)),
                 Some(kind) => kind.descriptor(id).is_none().then(|| {
@@ -1539,6 +1547,37 @@ impl ChainShape {
                 }),
             },
         }
+    }
+}
+
+/// Why a plugin-parameter address on `device` names nothing, or `None` when
+/// it names a plugin device on the chain.
+///
+/// **The parameter id is never judged.** It is the plugin's own, and the
+/// only list it could be checked against is the one the plugin last
+/// reported -- which is exactly what is out of date when the plugin is
+/// missing, updated, or has rescanned. An id not in that list is a *missing*
+/// parameter: kept, saved back unchanged, shown as missing, and reunited
+/// with its parameter if that returns (Adam, 2026-09-23, MOO-74). Only the
+/// device is checked, as it is for a native effect: a lane on a device that
+/// is not on the chain at all names nothing.
+fn plugin_param_problem(
+    chain: &[(DeviceId, EffectKind)],
+    device: DeviceId,
+    bus: Option<u8>,
+) -> Option<String> {
+    let chain_name = bus.map_or_else(|| "this channel's chain".to_owned(), |bus| format!("bus {bus}'s chain"));
+    match find_device(chain, device) {
+        None => Some(format!(
+            "it drives a plugin device that is not on {chain_name}, which holds {}",
+            chain.len()
+        )),
+        Some((_, EffectKind::Plugin)) => None,
+        Some((slot, kind)) => Some(format!(
+            "it drives a plugin parameter of the {} in slot {} on {chain_name}, which is not a plugin",
+            kind.label(),
+            slot + 1
+        )),
     }
 }
 
@@ -1571,6 +1610,8 @@ fn address_problem(
                         "it drives a device that is not on bus {bus}'s chain, which holds {}",
                         chain.len()
                     )),
+                    // As on a channel: nothing is judged against an empty table.
+                    Some((_, kind)) if kind.descriptors().is_empty() => None,
                     Some((slot, kind)) => kind.descriptor(id).is_none().then(|| {
                         format!(
                             "it drives control {id} of the {} in slot {} of bus {bus}, which has no such control",
@@ -1579,6 +1620,7 @@ fn address_problem(
                         )
                     }),
                 },
+                ParamOwner::PluginParam { device } => plugin_param_problem(chain, device, Some(bus)),
                 ParamOwner::Source
                 | ParamOwner::SourceRoute { .. }
                 | ParamOwner::Modulator { .. } => {
@@ -3213,6 +3255,65 @@ mod tests {
         assert_eq!(codes(&diagnosis), ["modulation.route.scope"]);
         let route = project.channels[0].setup.modulation.routes[0].unwrap();
         assert_eq!(route.destination.scope, EffectTarget::Channel(0));
+    }
+
+    /// MOO-74's C.6, and Adam's ruling on it: nothing about a plugin
+    /// parameter's *id* is judged on load. The plugin here was never scanned
+    /// -- `Project::plugins` has no entry for its slot -- so there is no list
+    /// to check the ids against, and the lane and routes must survive
+    /// exactly as authored: a parameter that is missing is kept, and
+    /// reunited with its address if it comes back. An `Effect` address on the
+    /// plugin device is left alone too, because its kind has no table to
+    /// judge it against. What *is* judged is the device: a plugin-parameter
+    /// address on a device that is not a plugin names nothing.
+    #[test]
+    fn a_plugin_parameter_is_never_dropped_for_its_id() {
+        let mut project = Project::default();
+        project.channels[0].setup = lfo_channel("Lead");
+        project.channels[0].setup.push_effect(EffectSlotState::of_kind(EffectKind::Filter));
+        let mut plugin = EffectSlotState::of_kind(EffectKind::Plugin);
+        plugin.params = mooloop_core::EffectParams::Plugin(mooloop_core::PluginSlotId(0));
+        project.channels[0].setup.push_effect(plugin);
+        let here = EffectTarget::Channel(0);
+        let (filter, plugin) = (DeviceId(0), DeviceId(1));
+        assert!(project.plugins.is_empty(), "test setup: the plugin was never scanned");
+
+        let kept = [
+            ParamAddr::plugin_param(here, plugin, 7),
+            ParamAddr::plugin_param(here, plugin, 4_000_000_000),
+            ParamAddr::effect(here, plugin, 1000),
+        ];
+        let dropped = ParamAddr::plugin_param(here, filter, 7);
+        let rack = &mut project.channels[0].setup.modulation;
+        for destination in kept.into_iter().chain([dropped]) {
+            rack.add_route(mooloop_core::ModRoute::to_slot(
+                0,
+                destination,
+                0.5,
+                mooloop_core::ModPolarity::Bipolar,
+            ))
+            .unwrap();
+        }
+        project.channels[0].automation[0]
+            .push(mooloop_core::AutomationLane::new(ParamAddr::plugin_param(here, plugin, 4_000_000_000)));
+
+        let diagnosis = repair_project(&mut project);
+        assert_eq!(codes(&diagnosis), ["modulation.route.destination"]);
+        assert!(
+            diagnosis.issues[0].problem.contains("which is not a plugin"),
+            "{}",
+            diagnosis.issues[0].problem
+        );
+        let surviving: Vec<ParamAddr> = project.channels[0]
+            .setup
+            .modulation
+            .routes
+            .iter()
+            .flatten()
+            .map(|route| route.destination)
+            .collect();
+        assert_eq!(surviving, kept);
+        assert_eq!(project.channels[0].automation[0].len(), 1, "the lane was dropped");
     }
 
     #[test]

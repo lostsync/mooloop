@@ -32,7 +32,7 @@
 use crate::automation::AutomationLane;
 use crate::effect::{ChannelId, DeviceId, EffectParams, EffectSlotState};
 use crate::mixer::EffectTarget;
-use crate::modulation::{ParamAddr, ParamOwner};
+use crate::modulation::ParamAddr;
 use crate::MAX_EFFECTS_PER_CHANNEL;
 
 /// How deeply containers may nest through the gestures the interface offers.
@@ -734,10 +734,7 @@ pub fn wrap_in_container(
 /// commands, never in a sample loop, which is the same bargain
 /// `ModRack::slot_for` already makes for modulator sources.
 pub fn slot_of(effects: &[EffectSlotState], address: ParamAddr) -> Option<usize> {
-    let ParamOwner::Effect { device } = address.owner else {
-        return None;
-    };
-    device_slot(effects, device)
+    device_slot(effects, address.device()?)
 }
 
 /// Where `device` currently sits in `effects`.
@@ -769,8 +766,9 @@ pub fn drop_lanes_for_device(
 /// `retain` above: the engine's lane bank vacates a slot and keeps its point
 /// storage, because dropping it would be a free on the audio thread.
 pub fn lane_drives_device(lane: &AutomationLane, scope: EffectTarget, device: DeviceId) -> bool {
-    lane.target.scope == scope
-        && matches!(lane.target.owner, ParamOwner::Effect { device: d } if d == device)
+    // `device()` rather than a match on `Effect`, so a plugin device's lanes
+    // go with it too (`ParamOwner::PluginParam`).
+    lane.target.scope == scope && lane.target.device() == Some(device)
 }
 
 /// Where the item that was at `old` sits after the one at `from` is lifted out

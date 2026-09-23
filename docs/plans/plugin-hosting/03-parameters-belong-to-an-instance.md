@@ -68,11 +68,13 @@ variant:
   crosses into Slint as `i32`, so a plugin id above `i32::MAX` wraps. Carry
   the dense index (`index_of`) across the boundary, not the raw id, and map
   it back on the Rust side.
-- **A plugin instrument (step 10) has no `DeviceId` today.** A channel's
-  source is `ParamOwner::Source`. Before step 10, decide how the source slot
-  gets a `DeviceId` without widening the payload. Minting one from the
-  channel's chain counter is the obvious answer. Don't answer it here by
-  adding a second payload field.
+- **A plugin instrument's parameters use the same owner.** At step 10 a
+  hosted instrument's parameter is `PluginParam { device }` too, with the
+  `DeviceId` its channel's source slot is given. It is never `Source` with the
+  plugin's id reinterpreted, which would bring back option 1 for
+  instruments only. A channel's source has no `DeviceId` today. Step 10 gives
+  it one without widening the payload: minting it from the channel's chain
+  counter is the obvious way. The variant's doc comment says the same.
 
 ## The integrity pass must not judge a plugin address against a static table
 

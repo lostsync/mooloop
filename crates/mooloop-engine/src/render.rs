@@ -5748,6 +5748,10 @@ impl RenderState {
             // a modulator's own parameters are not modulation destinations
             // yet, so there is nothing left holding a stale resolved value.
             ParamOwner::Modulator { .. } | ParamOwner::Strip => {}
+            // Nothing resolves a plugin parameter in the control pass yet
+            // (`docs/plans/plugin-hosting/`, step 07, and MOO-195), so there
+            // is no resolved value to go stale.
+            ParamOwner::PluginParam { .. } => {}
         }
     }
 

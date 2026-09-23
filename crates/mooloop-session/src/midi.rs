@@ -452,6 +452,13 @@ impl Session {
                 })
                 .unwrap_or_else(|| "?".to_owned()),
             ParamOwner::Strip => "Strip".to_owned(),
+            ParamOwner::PluginParam { device } => self
+                .chain_for(address.scope)
+                .and_then(|chain| {
+                    let slot = mooloop_core::device_slot(chain, device)?;
+                    Some(format!("{} {}", chain.get(slot)?.kind().label(), slot + 1))
+                })
+                .unwrap_or_else(|| "?".to_owned()),
             ParamOwner::Modulator { .. } | ParamOwner::SourceRoute { .. } => "?".to_owned(),
         };
         format!("{scope} \u{b7} {owner} \u{b7} {}", descriptor.name)
@@ -679,6 +686,11 @@ impl Session {
                 chain.get(slot)?.kind().descriptor(address.param)
             }
             ParamOwner::Strip => mooloop_core::modulation::strip_descriptor(address.param),
+            // A plugin's parameters have no `&'static` descriptor. Their
+            // ranges and values come from the instance, which step 07 of
+            // `docs/plans/plugin-hosting/` reaches; until then a plugin
+            // parameter reads as unavailable rather than as a native one.
+            ParamOwner::PluginParam { .. } => None,
             ParamOwner::Modulator { .. } | ParamOwner::SourceRoute { .. } => None,
         }
     }
@@ -715,6 +727,11 @@ impl Session {
                 }
                 _ => None,
             },
+            // A plugin's parameters have no `&'static` descriptor. Their
+            // ranges and values come from the instance, which step 07 of
+            // `docs/plans/plugin-hosting/` reaches; until then a plugin
+            // parameter reads as unavailable rather than as a native one.
+            ParamOwner::PluginParam { .. } => None,
             ParamOwner::Modulator { .. } | ParamOwner::SourceRoute { .. } => None,
         }
     }
@@ -786,6 +803,11 @@ impl Session {
                 }
                 _ => None,
             },
+            // A plugin's parameters have no `&'static` descriptor. Their
+            // ranges and values come from the instance, which step 07 of
+            // `docs/plans/plugin-hosting/` reaches; until then a plugin
+            // parameter reads as unavailable rather than as a native one.
+            ParamOwner::PluginParam { .. } => None,
             ParamOwner::Modulator { .. } | ParamOwner::SourceRoute { .. } => None,
         }
     }

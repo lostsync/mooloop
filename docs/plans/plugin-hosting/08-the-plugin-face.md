@@ -54,6 +54,29 @@ has already chosen their names and order.
 - Register actions (`ACTIONS.md`) for `plugins.rescan` and
   `browser.plugins`.
 
+## A parameter that is missing (Adam, 2026-09-23, MOO-74)
+
+A lane, route or binding whose plugin parameter doesn't exist is kept, never
+dropped. That happens when the plugin is missing, when an update removed the
+parameter, or after a `params.rescan`. Step 03 has the rule. This step draws
+it, and Adam gave the treatment in his own words: *"represented in the UI as
+missing somehow (greyed out/crosshatched, or like itallicized/thin weight
+title in the lane selection menu)"*.
+
+- **Lane selection menu:** the missing parameter's row stays in the list,
+  with its title in italic or thin weight, and it names the parameter by the
+  name it last had (`PluginSlotState.params`). If there is none, it uses its
+  id.
+- **The lane itself, and the route row on the shelf:** drawn greyed or
+  crosshatched. They're still selectable, deletable and saved, but they play
+  nothing.
+- **Reunion:** when the parameter comes back, the same rows draw normally
+  again, with no action from the user and no repair step.
+
+A test loads a song whose plugin reports no such id, reads the lane menu row
+and the lane as missing, then rescans with the id present and reads them as
+normal.
+
 ## Tests
 
 - A `slint_face_agreement`-style test: the face declares no ranges (the

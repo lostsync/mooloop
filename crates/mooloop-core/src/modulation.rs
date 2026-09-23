@@ -52,6 +52,32 @@ pub enum ParamOwner {
     },
     /// Volume, pan, mute — the strip itself rather than a device on it.
     Strip,
+    /// One parameter of a **hosted plugin** on the channel's or bus's chain,
+    /// by the device's durable id. `param` is the plugin's own parameter id:
+    /// sparse, arbitrary, and meaningful only against the list the instance
+    /// reports (`PluginSlotState::params`), never against a `&'static`
+    /// descriptor table.
+    ///
+    /// Its own owner rather than `Effect { device }` with the plugin's id
+    /// reinterpreted in `param`, so the address says what it belongs to
+    /// (Adam, 2026-09-23, MOO-74): every exhaustive match over the owner has
+    /// to decide what a plugin parameter means instead of judging it against
+    /// a native table. The payload is only a `DeviceId`, so `ParamAddr` stays
+    /// sixteen bytes. `docs/MODULATION.md` records the amendment.
+    ///
+    /// **A plugin parameter that is missing is kept, never dropped**: the
+    /// plugin may not be installed, or may have removed or not yet re-reported
+    /// the id. The address resolves again when the parameter comes back.
+    ///
+    /// **Effects and instruments alike.** A plugin *instrument*'s parameters
+    /// (step 10 of `docs/plans/plugin-hosting/`) use this same owner, with the
+    /// `DeviceId` its channel's source slot is given, not `Source` with the
+    /// plugin's id reinterpreted. The source has no device id today; step 10
+    /// gives it one without widening this payload.
+    #[serde(rename = "plugin_param")]
+    PluginParam {
+        device: DeviceId,
+    },
 }
 
 /// A parameter, anywhere in the project.
@@ -77,6 +103,16 @@ impl ParamAddr {
         }
     }
 
+    /// Address parameter `param` -- the plugin's own id -- of the hosted
+    /// plugin that is device `device`.
+    pub const fn plugin_param(scope: EffectTarget, device: DeviceId, param: u32) -> Self {
+        Self {
+            scope,
+            owner: ParamOwner::PluginParam { device },
+            param,
+        }
+    }
+
     /// Address one internal route's field inside a channel's generator.
     pub const fn source_route(scope: EffectTarget, route: u16, param: u32) -> Self {
         Self {
@@ -86,11 +122,20 @@ impl ParamAddr {
         }
     }
 
-    /// The device this address names, when it names one at all.
+    /// The device this address names, when it names one at all: a native
+    /// effect's or a hosted plugin's.
+    ///
+    /// Spelled out rather than ending in `_ => None`, so a new owner that
+    /// names a device cannot compile into "names none". That arm is what
+    /// would have hidden `PluginParam` from every caller that finds a
+    /// device's lanes and routes this way.
     pub const fn device(self) -> Option<DeviceId> {
         match self.owner {
-            ParamOwner::Effect { device } => Some(device),
-            _ => None,
+            ParamOwner::Effect { device } | ParamOwner::PluginParam { device } => Some(device),
+            ParamOwner::Source
+            | ParamOwner::SourceRoute { .. }
+            | ParamOwner::Modulator { .. }
+            | ParamOwner::Strip => None,
         }
     }
 
@@ -141,6 +186,10 @@ impl ParamKey {
 
     pub const fn effect(scope: ChainKey, device: DeviceId, param: u32) -> Self {
         Self::new(scope, ParamOwner::Effect { device }, param)
+    }
+
+    pub const fn plugin_param(scope: ChainKey, device: DeviceId, param: u32) -> Self {
+        Self::new(scope, ParamOwner::PluginParam { device }, param)
     }
 
     /// The addressable form, against whoever can say where a channel sits.
@@ -2161,9 +2210,9 @@ impl ModRack {
             let Some(route) = entry else {
                 continue;
             };
-            if route.destination.scope == scope
-                && matches!(route.destination.owner, ParamOwner::Effect { device: d } if d == device)
-            {
+            // `device()`, not a match on `Effect`: a removed plugin device
+            // takes its routes with it exactly as a native one does.
+            if route.destination.scope == scope && route.destination.device() == Some(device) {
                 *entry = None;
                 changed = true;
             }
@@ -2763,6 +2812,36 @@ retrigger = true
             ParamAddr::strip(EffectTarget::Channel(0), STRIP_PARAM_PAN).owner,
             ParamOwner::Strip
         );
+    }
+
+    /// A plugin parameter's address names its owner, costs nothing, and is
+    /// spelled on disk as `owner.plugin_param.device` (MOO-74). The device
+    /// is found through `device()`, so removing the device takes its routes
+    /// with it exactly as a native effect's.
+    #[test]
+    fn a_plugin_parameter_address_names_its_device_and_costs_nothing() {
+        use std::mem::size_of;
+        assert_eq!(size_of::<ParamAddr>(), 16, "the variant widened the address");
+        let here = EffectTarget::Channel(0);
+        let address = ParamAddr::plugin_param(here, DeviceId(3), 4_000_000_000);
+        assert_eq!(address.device(), Some(DeviceId(3)));
+        assert_ne!(address, ParamAddr::effect(here, DeviceId(3), 4_000_000_000));
+
+        #[derive(serde::Serialize, serde::Deserialize)]
+        struct Wrap {
+            target: ParamAddr,
+        }
+        let text = toml::to_string(&Wrap { target: address }).unwrap();
+        assert!(text.contains("[target.owner.plugin_param]"), "{text}");
+        assert!(text.contains("param = 4000000000"), "{text}");
+        assert_eq!(toml::from_str::<Wrap>(&text).unwrap().target, address);
+
+        let mut rack = rack_with_sources(1);
+        rack.add_route(ModRoute::to_slot(0, address, 1.0, ModPolarity::Bipolar));
+        rack.add_route(ModRoute::to_slot(0, ParamAddr::plugin_param(here, DeviceId(4), 7), 1.0, ModPolarity::Bipolar));
+        assert!(rack.forget_device(here, DeviceId(3)));
+        let left: Vec<ParamAddr> = rack.routes.iter().flatten().map(|route| route.destination).collect();
+        assert_eq!(left, [ParamAddr::plugin_param(here, DeviceId(4), 7)]);
     }
 
     #[test]

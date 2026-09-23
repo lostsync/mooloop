@@ -24,12 +24,31 @@ can depend on.
 - **Parameters the plugin marks non-automatable** can't take lanes or
   routes. **Hidden** parameters don't appear in the face.
 
+## Requirement: a plugin parameter id never crosses into Slint as `i32`
+
+A CLAP parameter id is any `u32`. Every Slint model that carries a parameter
+(`ModulationRouteRow.param`, the lane rows, a face's knob rows) is `int`,
+which is `i32`, so an id above `i32::MAX` wraps negative on the way to the
+face and comes back naming a different parameter, or none. For a
+`PluginParam` address, what crosses is the **dense index** into the slot's
+`params` (`DeviceParams::index_of`). It is mapped back to the id on the Rust
+side, where it came from, and never cast. A test drives an id of
+`4_000_000_000` through a route row and a knob and back. (Orchestrator's
+condition on MOO-78, 2026-09-23.)
+
 ## Automation and modulation
 
-Nothing changes in `control_events_for_slot` (`engine/src/render.rs:~1200`).
-It already works in normalized space and produces sample-timed `ParamValue`
-events, and step 03 made the normalization per instance. The only check
-needed here is a test.
+**Rewritten 2026-09-23, after step 03.** This section used to say nothing
+changes in `control_events_for_slot`. That was true under the old option 1,
+where a plugin's parameter was an `Effect` address, and it stopped being true
+when Adam chose `ParamOwner::PluginParam` (MOO-74). The control pass finds
+destinations by walking each kind's descriptor table, and a plugin has none.
+So a lane or route on a plugin parameter is saved and kept, but it produces
+no events until the pass walks what is driven rather than what is described
+(MOO-195). This step needs that, or a plugin-only equivalent, plus
+normalization against the slot's `PluginParamInfo`: the `DeviceParams` view
+step 03 describes, built here against the session and UI callers that
+actually draw and edit a plugin's parameters.
 
 ## State
 

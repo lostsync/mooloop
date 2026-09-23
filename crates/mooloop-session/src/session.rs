@@ -849,6 +849,11 @@ impl Session {
                 effects[slot].kind().descriptor(target.param)
             }
             ParamOwner::Strip => strip_descriptor(target.param),
+            // A plugin's parameters have no `&'static` descriptor. Their
+            // ranges and values come from the instance, which step 07 of
+            // `docs/plans/plugin-hosting/` reaches; until then a plugin
+            // parameter reads as unavailable rather than as a native one.
+            ParamOwner::PluginParam { .. } => None,
             ParamOwner::Modulator { .. } => None,
         }
     }
@@ -1226,6 +1231,11 @@ impl Session {
             // belongs to the patch's internal modulation rather than to the
             // device's control surface.
             ParamOwner::Modulator { .. } | ParamOwner::SourceRoute { .. } => None,
+            // A plugin's parameters have no `&'static` descriptor. Their
+            // ranges and values come from the instance, which step 07 of
+            // `docs/plans/plugin-hosting/` reaches; until then a plugin
+            // parameter reads as unavailable rather than as a native one.
+            ParamOwner::PluginParam { .. } => None,
         }
     }
 

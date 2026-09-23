@@ -5169,7 +5169,9 @@ impl UiState {
                     // bus device, which the shelf already labels as
                     // unavailable -- resolves to nothing and takes the
                     // no-row token rather than colliding with `Source`.
-                    ParamOwner::Effect { device } => self
+                    // A plugin's parameter points at its device's row, as a
+                    // native effect's does.
+                    ParamOwner::Effect { device } | ParamOwner::PluginParam { device } => self
                         .session
                         .channels
                         .get(self.session.selected)

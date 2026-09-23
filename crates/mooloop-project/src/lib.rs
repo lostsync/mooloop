@@ -4033,6 +4033,54 @@ id = "default_kick"
         assert!(fs::read(&bundle).unwrap() == first, "the second save changed the file");
     }
 
+    /// A plugin parameter's lanes and routes survive a save and a load byte
+    /// for byte (MOO-78, Adam's MOO-74 ruling): the device is the pass-through
+    /// placeholder a missing plugin plays as, one id is in the slot's
+    /// reported list and one is in no list at all, and the integrity pass
+    /// that runs on load judges neither id. `owner.plugin_param` is the
+    /// spelling on disk.
+    #[test]
+    fn plugin_parameter_lanes_and_routes_save_back_unchanged() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("plugin-lanes.mooloop");
+        let mut project = song_with_a_plugin();
+        let setup = &mut project.channels[0].setup;
+        setup
+            .modulation
+            .install(0, mooloop_core::ModulatorParams::Lfo(Default::default()));
+        let device = setup.effects.last().unwrap().id;
+        assert!(device.is_assigned(), "test setup: the plugin device has no id");
+        let here = mooloop_core::EffectTarget::Channel(0);
+        let reported = mooloop_core::ParamAddr::plugin_param(here, device, 4_000_000_000);
+        let unknown = mooloop_core::ParamAddr::plugin_param(here, device, 123_456);
+        for destination in [reported, unknown] {
+            setup
+                .modulation
+                .add_route(mooloop_core::ModRoute::to_slot(
+                    0,
+                    destination,
+                    0.5,
+                    mooloop_core::ModPolarity::Bipolar,
+                ))
+                .unwrap();
+        }
+        project.channels[0].automation[0].push(mooloop_core::AutomationLane::new(unknown));
+
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+        let first = fs::read(&bundle).unwrap();
+        let manifest = String::from_utf8(first.clone()).unwrap();
+        assert!(manifest.contains("plugin_param"), "the owner is not spelled on disk");
+
+        let loaded = load_bundle(&bundle).unwrap();
+        assert!(loaded.repairs.is_empty(), "the load repaired something: {:?}", loaded.repairs);
+        let LoadedDocument::Song(loaded) = loaded.document else {
+            panic!("expected a song");
+        };
+        assert_eq!(loaded, project);
+        save_song(&bundle, &loaded, AssetMode::Embedded).unwrap();
+        assert!(fs::read(&bundle).unwrap() == first, "the second save changed the file");
+    }
+
     /// A song with no plugins says nothing about plugins, so it is
     /// byte-identical to one written before the table existed.
     #[test]
