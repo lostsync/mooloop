@@ -289,12 +289,27 @@ telling the one inside, so a seek rang across it
 (`reports/fable-2026-09-21.md`, finding 4). The plugin slot is the same shape
 at a larger size, and `docs/plans/plugin-hosting/` should read it that way.
 
-**A fold and a seek are different kinds.** `Discontinuity::LoopFold` says the
-transport turned back at a loop end: time is discontinuous and the music
-usually is not. Every node that clears on a `Seek` clears on a `LoopFold`
-today, so the sound is what it always was; the variant exists so that a
-device *can* keep its tail across the fold without also keeping it across a
-seek, which under one name it could not.
+**A fold and a seek are different kinds, and tails survive a fold.**
+`Discontinuity::LoopFold` says the transport turned back at a loop end: time
+is discontinuous and the music usually is not. Adam's ruling, 2026-09-22
+(MOO-59): a delay repeat or a reverb tail wraps from the end of the loop into
+its start, the way a groove box plays a loop. So the four devices that hold a
+tail -- delay, modulation (and through it ML-P8's chorus), reverb and plate --
+clear on a `Seek` and a `Stop` and decline a `LoopFold` and a `ProgramChange`.
+The rule is written once, as `Discontinuity::invalidates_tails`
+(`mooloop-dsp/src/node.rs`), a `match` with no wildcard so a new kind has to
+be decided rather than inherited; every tail device asks it instead of
+keeping its own list. `a_loop_fold_is_inaudible_in_every_effect_kind_and_a_seek_is_not`
+(`effects/mod.rs`) pins it for every effect kind, and
+`a_delay_tail_crosses_the_loop_point` (`render.rs`) hears it end to end.
+
+**A pattern switch is a program change and nothing else.** The engine records
+*why* the note schedule broke, not only *that* it did: a seek sets `seeked`, a
+Pattern-mode switch under a running transport sets `program_changed`. Both
+owe the next block a release of every sounding voice; only the seek owes it a
+`Seek`. Until 2026-09-22 the switch set `seeked` too, so every tail device
+was told `Seek` straight after declining the `ProgramChange` (MOO-59).
+Whether a tail should ring out past **Stop** is open: MOO-171.
 
 **Not yet covered:** the console channel strip (`mooloop-dsp/src/strip.rs`) is
 not an `AudioNode` and is not reached by the fan-out, so its EQ and compressor

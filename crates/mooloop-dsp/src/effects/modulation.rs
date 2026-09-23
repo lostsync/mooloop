@@ -338,8 +338,11 @@ impl AudioNode for ModulationEffect {
     /// which is right when the device's own mode changes and wrong here. A
     /// free-running modulator has to arrive at the same phase whether or not
     /// the transport was seeked, for the same reason `skip_block` exists.
+    ///
+    /// Only on a kind that [invalidates tails](Discontinuity::invalidates_tails):
+    /// a program change and a loop fold leave the line ringing.
     fn on_discontinuity(&mut self, kind: Discontinuity) {
-        if kind == Discontinuity::ProgramChange {
+        if !kind.invalidates_tails() {
             return;
         }
         self.line.clear();

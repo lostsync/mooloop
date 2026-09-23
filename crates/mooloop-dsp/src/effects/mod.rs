@@ -769,4 +769,74 @@ mod tests {
             }
         }
     }
+
+    /// **Tails survive a loop fold, and not a seek** -- Adam's ruling on
+    /// MOO-59, checked against every kind rather than only the four it
+    /// changed, so a device that starts clearing on a discontinuity later has
+    /// to answer the fold as well.
+    ///
+    /// Each kind is rendered twice from the same noise burst, once told
+    /// nothing and once told the transport folded, and what follows must be
+    /// identical: a fold is inaudible in every effect. The four that hold a
+    /// tail are then told of a seek instead, which must be audible. Without
+    /// that half the first would pass just as well for a device whose line
+    /// was already empty, and would prove nothing.
+    #[test]
+    fn a_loop_fold_is_inaudible_in_every_effect_kind_and_a_seek_is_not() {
+        use crate::node::Discontinuity;
+
+        let holds_a_tail = [
+            EffectKind::Delay,
+            EffectKind::Modulation,
+            EffectKind::Reverb,
+            EffectKind::Plate,
+        ];
+        let render_after = |kind: EffectKind, told: Option<Discontinuity>| {
+            let mut node = build_effect_at_tempo(kind.default_params(), SAMPLE_RATE, 120.0);
+            let mut bus = StereoBus::with_capacity(BLOCK);
+            let events = EventList::empty();
+            let mut state = 0x5eed_f01d;
+            for _ in 0..(SAMPLE_RATE as usize / 2 / BLOCK) {
+                fill_burst(&mut bus, BLOCK, &mut state);
+                node.process(&context(BLOCK), &mut bus, &events, None);
+            }
+            if let Some(discontinuity) = told {
+                node.on_discontinuity(discontinuity);
+            }
+            let mut out = Vec::with_capacity(8 * BLOCK);
+            for _ in 0..4 {
+                bus.clear(BLOCK);
+                node.process(&context(BLOCK), &mut bus, &events, None);
+                out.extend_from_slice(&bus.l[..BLOCK]);
+                out.extend_from_slice(&bus.r[..BLOCK]);
+            }
+            out
+        };
+        let largest_difference = |a: &[f32], b: &[f32]| {
+            a.iter()
+                .zip(b)
+                .fold(0.0f32, |peak, (a, b)| peak.max((a - b).abs()))
+        };
+
+        for kind in EffectKind::ALL {
+            let untold = render_after(kind, None);
+            let folded = render_after(kind, Some(Discontinuity::LoopFold));
+            let moved = largest_difference(&untold, &folded);
+            assert!(
+                moved == 0.0,
+                "{kind:?} changed its output on a loop fold, by up to {moved}: \
+                 a tail that should have wrapped into the loop's start was cut"
+            );
+            if holds_a_tail.contains(&kind) {
+                let seeked = render_after(kind, Some(Discontinuity::Seek));
+                let cleared = largest_difference(&untold, &seeked);
+                assert!(
+                    cleared > 1.0e-3,
+                    "{kind:?} sounded the same after a seek as after nothing, \
+                     so its line held nothing and the fold half proves nothing: \
+                     {cleared}"
+                );
+            }
+        }
+    }
 }

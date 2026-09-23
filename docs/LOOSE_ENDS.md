@@ -506,28 +506,6 @@ other seven each call an `EngineHandle` method the trait does not carry
 the parameter is concrete. So the seam is real but it is a signature change,
 not a test. Found 2026-09-22, closing MOO-58.
 
-**A pattern switch flushes every delay, reverb and plate in the project, and
-the code says two lines above that it must not.** `RenderState::seeked` means
-two different facts. `EngineCommand::Seek` sets it (`render.rs:4770`), and so
-does a Pattern-mode `SetCurrentPattern` under a running transport
-(`:4731`) -- there for a real reason, a note-off stranded in the pattern being
-left, and immediately followed by `on_discontinuity(ProgramChange)` (`:4739`)
-under a comment saying *"a node that flushes a tail on this is wrong ... it is
-here so the engine stops having one word for two different facts"*. It is
-still one word: the same block reaches `if seeked || jumped` (`:5708`) and
-sends `Discontinuity::Seek` too, so every device that declines
-`ProgramChange` clears anyway. `AUDIO_ARCHITECTURE.md`'s discontinuity rules
-name this exact artefact as the one worse than the problem being solved.
-
-The devices are not at fault -- each checks the kind and declines -- and
-`render.rs:12158-12172` is honest about it (*"the node hears both"*), which is
-why this survived review: the test documents the behaviour instead of
-rejecting it, and what it asserts (the program change is *said*) is true. The
-fix is that `seeked` carries the reason rather than a bool; MOO-59's step 1
-does it. Found 2026-09-21 while filing that issue -- not in
-`reports/fable-2026-09-21.md`, whose finding 2 is the neighbouring cost of the
-*loop fold* doing the same thing on purpose.
-
 **A refused one-shot command is reported once per process and then never.**
 `Session::report_refused_command` (`mooloop-session/src/engine.rs:788-800`)
 latches `engine_queue_refused` (`session.rs:192`) and nothing clears it, so a

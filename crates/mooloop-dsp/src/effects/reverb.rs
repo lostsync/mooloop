@@ -725,11 +725,13 @@ impl AudioNode for ReverbEffect {
     ///
     /// **Not on a program change.** Time is still continuous there -- the
     /// player looked at another pattern -- and flushing a reverb for it would
-    /// be a worse artefact than the stranded note-off it came with.
+    /// be a worse artefact than the stranded note-off it came with. **Nor on
+    /// a loop fold**: the tail wraps from the end of the loop into its start
+    /// (MOO-59). [`Discontinuity::invalidates_tails`] is the rule.
     ///
     /// The lines' modulation phase is deliberately kept; see `Line::clear`.
     fn on_discontinuity(&mut self, kind: Discontinuity) {
-        if kind == Discontinuity::ProgramChange {
+        if !kind.invalidates_tails() {
             return;
         }
         self.predelay.clear();

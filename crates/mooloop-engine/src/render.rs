@@ -3661,7 +3661,23 @@ pub(crate) struct RenderState {
     /// `auditions` is: the command drain runs before the event lists are
     /// cleared, so the release this owes every sounding voice cannot be
     /// pushed at the moment the seek arrives.
+    ///
+    /// **Only a seek.** A Pattern-mode pattern switch owes the same release
+    /// and none of the rest, and until 2026-09-22 it set this flag too -- so
+    /// the block after it told every node `Seek`, straight after the switch
+    /// had told them `ProgramChange`, and every delay, reverb and plate in
+    /// the project flushed on a pattern switch (MOO-59). The switch has its
+    /// own flag now, [`Self::program_changed`]: the engine records *why* the
+    /// schedule broke, not only *that* it did.
     seeked: bool,
+    /// Whether the note source changed under a running transport since the
+    /// last block -- a Pattern-mode pattern switch -- stranding the note-offs
+    /// of whatever was sounding.
+    ///
+    /// Consumed by the next block exactly as [`Self::seeked`] is, and owes
+    /// the same release. It owes no `Seek`: time is continuous, and the nodes
+    /// were already told `ProgramChange` when the switch was applied.
+    program_changed: bool,
     /// Commands waiting for a musical edge, one slot per kind.
     ///
     /// `docs/plans/transport-discontinuity/02-deferred-commands.md`.
@@ -3841,6 +3857,7 @@ impl RenderState {
             auditions: [None; MAX_AUDITIONS_PER_BLOCK],
             loop_range: LoopRange::default(),
             seeked: false,
+            program_changed: false,
             deferred: [None; MAX_DEFERRED],
             preview: None,
             preview_fading: None,
@@ -5424,14 +5441,16 @@ impl RenderState {
                     // key, which belongs to the player rather than to the
                     // pattern being left.
                     if self.transport.playing {
-                        self.seeked = true;
-                        // Named for what it is, and distinct from the seek
-                        // above. Time is still continuous -- what changed is
-                        // which notes are being scheduled -- so a node that
-                        // flushes a tail on this is wrong, and every one that
-                        // opted in checks the kind and declines it. It is
-                        // here so the engine stops having one word for two
-                        // different facts.
+                        // Its own flag, not `seeked`: the block owes the
+                        // release a seek owes and must not say `Seek`.
+                        self.program_changed = true;
+                        // Named for what it is, and distinct from a seek.
+                        // Time is still continuous -- what changed is which
+                        // notes are being scheduled -- so a node that flushes
+                        // a tail on this is wrong, and every one that opted
+                        // in checks the kind and declines it. It is here so
+                        // the engine stops having one word for two different
+                        // facts.
                         self.on_discontinuity(Discontinuity::ProgramChange);
                     }
                     // A *lane* in that pattern owes the same debt, and it is
@@ -6391,6 +6410,7 @@ impl RenderState {
         let start_tick = spans[0].start_tick;
         let end_tick = spans[span_count - 1].end_tick;
         let seeked = std::mem::take(&mut self.seeked);
+        let program_changed = std::mem::take(&mut self.program_changed);
 
         for events in &mut self.events {
             events.clear();
@@ -6468,7 +6488,7 @@ impl RenderState {
             // deferred command from being silently immortal.
             self.cancel_deferred();
         }
-        if seeked {
+        if seeked || program_changed {
             release_all_voices(0, self.live_channels(), &mut self.events);
         }
         // Before the block's events, as the contract promises, and once for
@@ -6481,11 +6501,16 @@ impl RenderState {
         // lines, the reverb tails and the splice positions being told that
         // what they are holding came from somewhere the transport has left.
         //
-        // A fold says so. It clears exactly what a seek clears today, so the
-        // sound is unchanged; what the kind buys is that a node *can* decline
-        // a fold without also declining a seek, which it could not before
+        // A fold says so, in its own word, and the tail devices decline it:
+        // a delay repeat or a reverb tail wraps from the end of the loop into
+        // its start (Adam, 2026-09-22, MOO-59). Under one name a node could
+        // not keep a tail across a fold without keeping it across a seek too
         // (`reports/fable-2026-09-21.md`, finding 2). A block that both
         // seeked and folded is a seek: the stronger claim is the true one.
+        //
+        // A pattern switch is neither, and says nothing here: it said
+        // `ProgramChange` when it was applied, and the release above is all
+        // it owes the block.
         if seeked {
             self.on_discontinuity(Discontinuity::Seek);
         } else if jumped {
@@ -13606,16 +13631,16 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         let heard = spied(&mut render);
         render.apply_command(EngineCommand::SetCurrentPattern(1));
         render.process_once_block(1_024);
-        // A program change sets `seeked` too -- step 01's rule, since the
-        // note-off is stranded either way -- so the node hears both. What
-        // matters is that the program change is *said*, in its own word, so a
-        // device can tell the two apart; before this it could not.
-        assert!(
-            heard
-                .lock()
-                .expect("spy lock")
-                .contains(&Discontinuity::ProgramChange),
-            "a pattern switch has to reach the node named as a program change"
+        // Exactly one, and not followed by a seek. Until 2026-09-22 a switch
+        // set `seeked` as well -- the note-off is stranded either way -- so
+        // the block after it said `Seek` too, and every delay, reverb and
+        // plate flushed on a pattern switch (MOO-59). This asserted with
+        // `contains` then, and a comment that "the node hears both".
+        assert_eq!(
+            heard.lock().expect("spy lock").as_slice(),
+            [Discontinuity::ProgramChange],
+            "a pattern switch has to reach the node named as a program change, \
+             and as nothing else"
         );
 
         let mut render = render_with_a_slot();
@@ -13725,6 +13750,127 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             heard.lock().expect("spy lock").as_slice(),
             [Discontinuity::LoopFold],
             "the fold reached the node as something other than a fold"
+        );
+    }
+
+    /// One short, dry-sounding note into a fully wet delay whose echo lands
+    /// half a second later, with no feedback: whatever is heard in the gap
+    /// after the note is the delay line and nothing else. Two patterns, and
+    /// only pattern 0 carries the note, as in [`held_note_project`].
+    fn echo_project(note_start_tick: u32) -> Project {
+        let params = mooloop_core::MlP8Params {
+            attack: 0.0,
+            decay: 0.0,
+            sustain: 1.0,
+            release: 0.0,
+            ..mooloop_core::MlP8Params::default()
+        };
+        let mut channel = ProjectChannel::mlp8_with_params(0, 2, params);
+        channel.setup.channel.volume = 1.0;
+        channel.notes[0].push(NoteEvent::new(1, note_start_tick, 6, 60, 127));
+        let mut delay = mooloop_core::EffectSlotState::of_kind(mooloop_core::EffectKind::Delay);
+        delay.params = mooloop_core::EffectParams::Delay(mooloop_core::DelayParams {
+            time_ms: ECHO_MS,
+            feedback: 0.0,
+            mix: 1.0,
+            tone: 1.0,
+            ..mooloop_core::DelayParams::default()
+        });
+        channel.setup.push_effect(delay).expect("pushed");
+
+        Project {
+            channels: vec![channel],
+            pattern_lengths: vec![DEFAULT_STEPS, DEFAULT_STEPS],
+            ..Project::default()
+        }
+    }
+
+    const ECHO_MS: f32 = 500.0;
+
+    /// **A delay tail crosses the loop point** -- Adam's ruling on MOO-59,
+    /// heard rather than spied on. The note sits a quarter of a second before
+    /// the loop end and its echo is due a quarter of a second after it, so
+    /// the only way to hear the echo is for the delay line to survive the
+    /// fold. Until 2026-09-22 a fold told every node `LoopFold`, the delay
+    /// cleared on it as it does on a seek, and the gap after the fold was
+    /// silent.
+    #[test]
+    fn a_delay_tail_crosses_the_loop_point() {
+        use crate::render_test_support::{peak_of, SAMPLE_RATE};
+
+        const BLOCK: usize = 512;
+        let end = mooloop_core::TICKS_PER_BAR;
+        // 48 ticks is a quarter of a second at 120 bpm.
+        let mut project = echo_project(end - 48);
+        project.playback_mode = PlaybackMode::Song;
+        project.playlist = vec![mooloop_core::PatternPlacement {
+            pattern: 0,
+            start_tick: 0,
+        }];
+        project.loop_range = mooloop_core::LoopRange {
+            start_tick: 0,
+            end_tick: end,
+            enabled: true,
+        };
+        let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        render.play();
+
+        // Up to the block the transport turns back in.
+        let mut folded = false;
+        for _ in 0..(4 * SAMPLE_RATE as usize / BLOCK) {
+            let before = render.transport.position_ticks;
+            render.process_block(BLOCK);
+            if render.transport.position_ticks < before {
+                folded = true;
+                break;
+            }
+        }
+        assert!(folded, "the transport never reached the loop end");
+
+        // Half a second after the fold: the echo is due at a quarter, and the
+        // next lap's note is more than a second away.
+        let mut after = 0.0f32;
+        for _ in 0..(SAMPLE_RATE as usize / 2 / BLOCK) {
+            render.process_block(BLOCK);
+            after = after.max(peak_of(&render.master().l[..BLOCK]));
+        }
+        assert!(
+            after > 0.01,
+            "the echo of a note played before the loop end never arrived after \
+             it: the fold emptied the delay line ({after})"
+        );
+    }
+
+    /// **A pattern switch is only a program change**, heard. The note's echo
+    /// is in flight in the delay line when the player switches to an empty
+    /// pattern; the switch releases the voice, and must leave the echo to
+    /// arrive. Until 2026-09-22 the switch set the seek flag as well, the
+    /// block after it told every node `Seek`, and the delay flushed (MOO-59).
+    #[test]
+    fn a_pattern_switch_is_only_a_program_change() {
+        use crate::render_test_support::{peak_of, SAMPLE_RATE};
+
+        const BLOCK: usize = 512;
+        let project = echo_project(0);
+        let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        render.play();
+
+        // A tenth of a second: the note has played and ended, and its echo is
+        // four tenths away.
+        for _ in 0..(SAMPLE_RATE as usize / 10 / BLOCK) {
+            render.process_block(BLOCK);
+        }
+        render.apply_command(EngineCommand::SetCurrentPattern(1));
+
+        let mut after = 0.0f32;
+        for _ in 0..(SAMPLE_RATE as usize / 2 / BLOCK) {
+            render.process_block(BLOCK);
+            after = after.max(peak_of(&render.master().l[..BLOCK]));
+        }
+        assert!(
+            after > 0.01,
+            "the echo of a note played before the switch never arrived: the \
+             switch flushed the delay line as though it were a seek ({after})"
         );
     }
 

@@ -216,10 +216,12 @@ impl AudioNode for DelayEffect {
     /// it. The read head goes back with it: its crossfade is mid-flight
     /// between two points in audio that no longer exists.
     ///
-    /// **Not on a program change**, where time is still continuous and the
-    /// repeats in flight are still the right ones.
+    /// **Not on a program change or a loop fold** -- see
+    /// [`Discontinuity::invalidates_tails`]. Time is still continuous across
+    /// the first, and across the second the repeats wrap from the end of the
+    /// loop into its start, which is what Adam asked for (MOO-59).
     fn on_discontinuity(&mut self, kind: Discontinuity) {
-        if kind == Discontinuity::ProgramChange {
+        if !kind.invalidates_tails() {
             return;
         }
         self.line.clear();

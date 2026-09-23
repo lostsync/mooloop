@@ -461,10 +461,11 @@ impl RangeProcessor for PlateEffect {
 
 impl AudioNode for PlateEffect {
     /// The same argument as the FDN reverb's: the tail belongs to the
-    /// position the transport has left, and a program change is not a
-    /// position change.
+    /// position the transport has left, and neither a program change nor a
+    /// loop fold is a position the player left
+    /// ([`Discontinuity::invalidates_tails`]).
     fn on_discontinuity(&mut self, kind: Discontinuity) {
-        if kind == Discontinuity::ProgramChange {
+        if !kind.invalidates_tails() {
             return;
         }
         self.predelay.clear();

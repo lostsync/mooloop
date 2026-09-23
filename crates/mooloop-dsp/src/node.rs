@@ -186,12 +186,12 @@ pub enum Discontinuity {
     /// tail that crosses the fold is the sound a groove box is expected to
     /// make, where a tail that crosses a seek is not.
     ///
-    /// Every node that clears on [`Self::Seek`] clears on this too, which is
-    /// the behaviour a fold has always had -- the fold used to arrive *as* a
-    /// `Seek` and a node had no way to tell the two apart
-    /// (`reports/fable-2026-09-21.md`, finding 2). What this variant changes
-    /// is that declining it is now one `match` arm per device, and whether a
-    /// device should is Adam's call, per device.
+    /// **Tails survive it** -- Adam, 2026-09-22 (MOO-59): a delay repeat or a
+    /// reverb tail wraps from the end of the loop into its start. So it does
+    /// not [invalidate tails](Self::invalidates_tails), and the four devices
+    /// that clear on a seek decline it. Until then it arrived *as* a `Seek`
+    /// (`reports/fable-2026-09-21.md`, finding 2), and every lap of every
+    /// loop zeroed every delay line, reverb and plate in the project.
     LoopFold,
     /// The transport stopped. Everything a node holds is about to be
     /// inaudible anyway; the reason to say so is that it must not come back
@@ -202,6 +202,34 @@ pub enum Discontinuity {
     /// continuous**, so audio in flight is still correct and a node that
     /// flushes on this is wrong. What is lost is a note-off, not a position.
     ProgramChange,
+}
+
+impl Discontinuity {
+    /// Whether audio a node is holding -- a delay's repeats, a reverb's
+    /// tail, a chorus line -- belongs to somewhere the transport has left,
+    /// and so must not be heard over where it is now.
+    ///
+    /// The one copy of that rule: the delay, the modulation effect (and
+    /// through it ML-P8's chorus), the reverb and the plate all ask it
+    /// rather than each spelling its own list of kinds, because four lists
+    /// are how one of them comes to disagree. A `match` with no wildcard, so
+    /// a fifth kind cannot arrive without somebody deciding this for it.
+    ///
+    /// - [`Self::Seek`]: yes. The tail is the sound of a bar the player has
+    ///   left.
+    /// - [`Self::Stop`]: yes, today -- the playhead returns to the start and
+    ///   the tail must not come back on the next play. Whether a tail should
+    ///   ring out *past* the Stop instead is a question for Adam (MOO-171),
+    ///   and this arm is where its answer lands.
+    /// - [`Self::LoopFold`]: no. Adam's ruling, 2026-09-22 (MOO-59): tails
+    ///   survive a loop fold.
+    /// - [`Self::ProgramChange`]: no. Time is still continuous.
+    pub fn invalidates_tails(self) -> bool {
+        match self {
+            Self::Seek | Self::Stop => true,
+            Self::LoopFold | Self::ProgramChange => false,
+        }
+    }
 }
 
 pub trait AudioNode {
@@ -367,9 +395,10 @@ pub trait AudioNode {
     ///   across a seek too, or a bounce stops matching a take. A node wanting
     ///   that gets it by not implementing this.
     /// - **Read the kind.** A seek invalidates the audio a node is holding; a
-    ///   program change does not, and flushing a reverb because the player
-    ///   looked at another pattern would be a worse artefact than the one
-    ///   this exists to fix.
+    ///   program change and a loop fold do not, and flushing a reverb because
+    ///   the player looked at another pattern, or because the loop came round
+    ///   again, would be a worse artefact than the one this exists to fix.
+    ///   [`Discontinuity::invalidates_tails`] is the rule, written once.
     /// - **A node that cannot honour it declines in writing**, the way Aux In
     ///   and the retained-audio buffer decline rest-and-tail in their own
     ///   comments rather than by omission.

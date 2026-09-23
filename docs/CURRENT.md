@@ -874,12 +874,17 @@ land on its own when it starts to matter:
   goes -- and the engine charges for what changed rather than for the fact
   that a command arrived. `scripts/dupe-audit navigation-sends` reports a
   selection handler that breaks the rule, and its clean run is its answer.
-- **A seek no longer rings the old position over the new one.** Delay and
-  reverb tails are cleared when the transport jumps, because what they hold
-  is audio from a part of the song that is no longer playing; a pattern
-  switch deliberately does not clear them, because time is still continuous
-  there. Free-running modulation keeps its phase across a seek, so a bounce
-  still matches the take it was rendered against.
+- **A seek no longer rings the old position over the new one.** Delay,
+  modulation, reverb and plate tails are cleared when the transport is seeked
+  or stopped, because what they hold is audio from a part of the song that is
+  no longer playing. Free-running modulation keeps its phase across a seek,
+  so a bounce still matches the take it was rendered against.
+- **Tails survive a loop fold and a pattern switch**, as of 2026-09-22
+  (MOO-59). A delay repeat or a reverb tail from the end of a song loop wraps
+  into its start, the way a groove box plays a loop; before this every lap
+  emptied every delay line, reverb and plate in the project. A Pattern-mode
+  pattern switch under a running transport no longer clears them either: it
+  was meant not to, and was sending a seek behind its own program change.
 - The playhead can be moved with the transport running or stopped, snapped to
   the playlist's own musical snap, and it reaches the end of the *song* --
   including the part of a long clip that overhangs the 64-bar start canvas --
