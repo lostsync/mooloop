@@ -70,3 +70,121 @@ pub(crate) fn worst_difference(a: &[f32], b: &[f32]) -> f32 {
         .zip(b.iter())
         .fold(0.0f32, |worst, (x, y)| worst.max((x - y).abs()))
 }
+
+/// The largest sample-to-sample step in either channel of a stereo render.
+///
+/// A click is a step: whatever else a control change does to the sound, the
+/// part a listener hears as a tick is the output moving further in one sample
+/// than the material ever moves by itself. So this is the one number the
+/// "control changes are continuous" family (MOO-104) reads, and each case
+/// compares it against the same measurement taken on the material alone.
+pub(crate) fn largest_step(left: &[f32], right: &[f32]) -> f32 {
+    let side = |samples: &[f32]| {
+        samples
+            .windows(2)
+            .fold(0.0f32, |worst, pair| worst.max((pair[1] - pair[0]).abs()))
+    };
+    side(left).max(side(right))
+}
+
+/// What [`step_across`] measured on one side of a control change and across it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Transition {
+    /// The largest step the material took by itself, over a window as long
+    /// as the one measured after the change and ending where it begins.
+    pub before: f32,
+    /// The largest step from the last frame before the change to the end of
+    /// the window after it. Includes the step *onto* the first frame after
+    /// the change, which is where a block-boundary switch lands.
+    pub across: f32,
+    /// The largest step the material takes once the change has settled:
+    /// over the second half of the window after it, long past any ramp.
+    ///
+    /// Needed because a change can make the material itself step further.
+    /// A pan to one side puts the whole of a sine on that side, which is
+    /// forty percent louder there than at centre, and its own steps are
+    /// forty percent larger with it -- the first draft of this family failed
+    /// a perfectly smooth pan for exactly that.
+    pub after: f32,
+    /// The loudest sample in the window before the change, so a bound can be
+    /// stated as a fraction of the signal rather than as a bare number.
+    pub peak: f32,
+}
+
+impl Transition {
+    /// The family's step bound: a change may add no more than **one percent
+    /// of the signal's peak** to the largest step the material takes on its
+    /// own, either side of the change.
+    ///
+    /// Why that figure. A hard switch on a sustained tone steps by up to the
+    /// whole peak -- a hundred times this. A 5 ms one-pole ramp, which is what
+    /// the sends and the output stages use, moves a full-scale gain change by
+    /// 1/240 of it in its first sample at 48 kHz, and a polarity flip, which is
+    /// a change of two, by 1/120: both land under one percent. So the bound
+    /// passes any real ramp and fails any switch, with room on both sides.
+    pub fn is_continuous(&self) -> bool {
+        self.across <= self.bound()
+    }
+
+    /// The largest step [`Self::is_continuous`] allows.
+    pub fn bound(&self) -> f32 {
+        self.before.max(self.after) + 0.01 * self.peak
+    }
+}
+
+/// Render `render` for `lead_frames`, apply `change`, render `tail_frames`
+/// more, and measure the master's largest step before and across the change.
+///
+/// `change` gets the renderer itself rather than a command, so the same
+/// helper serves an `apply_command`, an install or anything else a test can
+/// do between two blocks. The change lands exactly at `lead_frames`: the lead
+/// is rendered in [`BLOCK`]-sized blocks and a shorter last one, so the
+/// transition falls where the test says it does rather than at the next
+/// boundary.
+///
+/// The renderer should already be playing, and the material should be
+/// sustained across the whole window -- a note starting or ending inside it
+/// would be measured as the change's step.
+pub(crate) fn step_across(
+    render: &mut RenderState,
+    lead_frames: usize,
+    change: impl FnOnce(&mut RenderState),
+    tail_frames: usize,
+) -> Transition {
+    let (lead_l, lead_r) = render_frames(render, lead_frames);
+    change(render);
+    let (tail_l, tail_r) = render_frames(render, tail_frames);
+
+    let window = tail_frames.min(lead_frames);
+    let from = lead_frames - window;
+    let before = largest_step(&lead_l[from..], &lead_r[from..]);
+    let peak = peak_of(&lead_l[from..]).max(peak_of(&lead_r[from..]));
+    // The last frame before the change leads each side, so the step onto the
+    // first frame after it is counted.
+    let across_l: Vec<f32> = lead_l.last().into_iter().chain(&tail_l).copied().collect();
+    let across_r: Vec<f32> = lead_r.last().into_iter().chain(&tail_r).copied().collect();
+    let settled = tail_frames / 2;
+    Transition {
+        before,
+        across: largest_step(&across_l, &across_r),
+        after: largest_step(&tail_l[settled..], &tail_r[settled..]),
+        peak,
+    }
+}
+
+/// Render `frames` more of `render` in [`BLOCK`]-sized blocks, returning the
+/// master's two channels.
+pub(crate) fn render_frames(render: &mut RenderState, frames: usize) -> (Vec<f32>, Vec<f32>) {
+    let mut remaining = frames;
+    let mut left = Vec::with_capacity(frames);
+    let mut right = Vec::with_capacity(frames);
+    while remaining > 0 {
+        let block = remaining.min(BLOCK);
+        render.process_once_block(block);
+        let master = render.master();
+        left.extend_from_slice(&master.l[..block]);
+        right.extend_from_slice(&master.r[..block]);
+        remaining -= block;
+    }
+    (left, right)
+}

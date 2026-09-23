@@ -944,6 +944,20 @@ land on its own when it starts to matter:
   mute as one 18px chip split across its middle — yellow above, red below.
   Neither half wears a letter; the colour of the lit half is what says which
   is on.
+- **Every mixer move ramps** (MOO-107, 2026-09-22). A channel's or a track's
+  fader, pan or balance, its mute, a solo silencing it or giving it back, and
+  a track's polarity all reach the audio through a one-pole lag of 5 ms
+  (`STRIP_GAIN_SMOOTH_S` in `engine/src/render.rs`), the one sends already
+  used, per sample -- including when a lane or a modulator drives the fader,
+  whose control-rate staircase the lag rounds off. A mute is a fade: the
+  channel or track goes on rendering, its output and its sends aimed at
+  silence, and stops contributing only once both have arrived, about a
+  hundred milliseconds later. Polarity crossfades through zero. A document
+  arriving starts at its own values rather than ramping into them, so a
+  bounce's first milliseconds are at the levels the song holds.
+  `continuity_tests.rs` holds each of these moves on a sustained sine to the
+  largest-step bound in `render_test_support.rs`; before the change each one
+  stepped by up to the whole signal, and a polarity flip by twice it.
 - **Solo in place, per channel**, since 2026-09-22. A soloed channel silences
   the *other* channels and is heard through its own volume, pan, mute and
   track, exactly as a soloed track is. It is the same ruling one level down
@@ -1003,8 +1017,10 @@ land on its own when it starts to matter:
   is not the same as turning it down: it keeps its level and stays in the
   routing, so nothing re-times.
 
-  Send levels are **smoothed**, per sample. They are the first gain at strip
-  level that is: a fader still stamps its value per block.
+  Send levels are **smoothed**, per sample, over the same 5 ms every other
+  strip-level gain uses (see *Every mixer move ramps*). A send that appears
+  mid-song fades in from silence; one that survives a routing rebuild keeps
+  the level it had.
 - Each send is compensated on its own edge. A producer with a send reaches two
   summing points, which generally arrive at different times and are owed
   different delays, so a track feeding a latency-bearing return waits for it

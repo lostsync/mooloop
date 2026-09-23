@@ -165,6 +165,8 @@ mod container_tests;
 #[cfg(test)]
 mod console_tests;
 #[cfg(test)]
+mod continuity_tests;
+#[cfg(test)]
 mod ds01_tests;
 #[cfg(test)]
 mod gain_structure_tests;

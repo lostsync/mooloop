@@ -238,14 +238,21 @@ impl AudioTapBank {
     }
 }
 
-/// Lag on a send's level, in seconds.
+/// Lag on every strip-level gain, in seconds: a send's level, a fader, a pan
+/// or balance, the fade a mute or a solo makes, and a track's polarity.
 ///
 /// The same figure every other gain that scales the signal directly uses
-/// (`mooloop_dsp::synth_voice::PARAM_SMOOTH_S`). It is here rather than
-/// borrowed because this is the first *strip-level* gain in the engine that
-/// smooths at all: a fader still stamps its value per block, or per control
-/// tick when something drives it, and that zipper is a separate known gap.
-const SEND_LEVEL_SMOOTH_S: f32 = 0.005;
+/// (`mooloop_dsp::synth_voice::PARAM_SMOOTH_S`), as a time constant for
+/// [`Smoothed`]: a full-scale change moves 1/240 of the way in its first
+/// sample at 48 kHz and is inaudibly close to its target within 25 ms.
+///
+/// Sends smoothed first and alone, and until MOO-107 the comment here called
+/// the fader's zipper "a separate known gap": the output stage stamped its
+/// value per block, or per control tick when something drove it, and a mute
+/// was a branch. One constant for all of them, because a mute that faded
+/// faster than the send leaving the same strip would be heard as the send
+/// arriving late.
+const STRIP_GAIN_SMOOTH_S: f32 = 0.005;
 
 /// Where a strip's send reads from, and what it owes when it arrives.
 ///
@@ -258,6 +265,10 @@ struct CompiledSend {
     target: u8,
     tap: SendTap,
     enabled: bool,
+    /// The level the send was authored at. `level` is aimed at it while its
+    /// producer is heard and at silence while its producer is muted or
+    /// solo-silenced, so a mute fades the send with the strip's own output.
+    authored: f32,
     /// Smoothed, because unlike a fader a send level has no automation path
     /// stepping it per control tick -- an unsmoothed one would zipper on
     /// every drag.
@@ -407,7 +418,15 @@ impl SendBank {
                     target: spec.target,
                     tap: spec.tap,
                     enabled: spec.enabled,
-                    level: Smoothed::new(spec.level, SEND_LEVEL_SMOOTH_S, sample_rate),
+                    authored: spec.level,
+                    // From silence: a send that did not exist a moment ago
+                    // fades in rather than arriving at its level in one
+                    // sample. A document arriving settles every send to its
+                    // level (`RenderState::load_project`), and a bank
+                    // replacing a live one takes each surviving edge's level
+                    // over (`adopt_rings_from`), so only a send that is new
+                    // in the middle of a song is heard to ramp.
+                    level: Smoothed::new(0.0, STRIP_GAIN_SMOOTH_S, sample_rate),
                     compensation: IntegerDelay::new(spec.delay).map(Box::new),
                 })
                 .collect(),
@@ -465,6 +484,11 @@ impl SendBank {
                 else {
                     continue;
                 };
+                // The level where the live send has it, mid-ramp or mid-fade
+                // included: `emit` aims it at this bank's authored level on
+                // the next block, so a rebuild never steps a send that
+                // survived it.
+                self.sends[matched].level = old.sends[index].level;
                 keep_live_ring(
                     &mut self.sends[matched].compensation,
                     &mut old.sends[index].compensation,
@@ -544,12 +568,61 @@ impl SendBank {
         }
     }
 
+    /// Whether every one of `producer`'s sends has faded all the way out, so
+    /// that skipping [`Self::emit`] for it drops nothing anybody could hear.
+    ///
+    /// The send half of a mute's fade (MOO-107). A muted producer keeps
+    /// emitting, aimed at silence, until this and its own output stage both
+    /// say so -- and only then takes the path that skips the sends and empties
+    /// their rings. Disabled sends count too, because `emit` holds them at
+    /// silence: one enabled while its producer is muted must not arrive at
+    /// its authored level and fade from there.
+    fn is_silent(&self, producer: EffectTarget) -> bool {
+        self.is_empty()
+            || self.sends[self.range(producer)]
+                .iter()
+                .all(|send| send.level.is_settled() && send.level.value() == 0.0)
+    }
+
+    /// Jump `producer`'s send levels to where [`Self::emit`] would aim them:
+    /// silence while `silenced` or switched off, the authored level
+    /// otherwise. For a document arriving, where there is nothing sounding
+    /// to be continuous with -- and where a muted track's send starting at
+    /// its level would leak the first milliseconds of a muted part into its
+    /// return.
+    fn settle(&mut self, producer: EffectTarget, silenced: bool) {
+        if self.is_empty() {
+            return;
+        }
+        let range = self.range(producer);
+        for send in &mut self.sends[range] {
+            send.level.reset_to(if silenced || !send.enabled {
+                0.0
+            } else {
+                send.authored
+            });
+        }
+    }
+
     /// Sum `producer`'s captured sends into the tracks they feed.
     ///
     /// Called once the strip's own borrow has ended. A disabled send resets
     /// its ring rather than advancing it, so re-enabling one does not emit the
     /// audio it was holding when it was switched off.
-    fn emit(&mut self, producer: EffectTarget, buses: &mut [BusStrip], frames: usize) {
+    ///
+    /// `silenced` is the producer's mute or solo verdict: while it holds,
+    /// every send is aimed at silence rather than at its authored level, and
+    /// fades there with the producer's own output. A disabled send is held at
+    /// silence outright -- nothing of it is heard, so there is nothing to
+    /// fade -- which also means switching one on ramps it in from nothing
+    /// rather than stepping.
+    fn emit(
+        &mut self,
+        producer: EffectTarget,
+        buses: &mut [BusStrip],
+        frames: usize,
+        silenced: bool,
+    ) {
         if self.is_empty() {
             return;
         }
@@ -563,8 +636,11 @@ impl SendBank {
                 if let Some(delay) = send.compensation.as_mut() {
                     delay.reset();
                 }
+                send.level.reset_to(0.0);
                 continue;
             }
+            send.level
+                .set_target(if silenced { 0.0 } else { send.authored });
             let Some(destination) = buses.get_mut(send.target as usize) else {
                 continue;
             };
@@ -576,7 +652,7 @@ impl SendBank {
                 },
                 frames,
             );
-            apply_send_level(&mut send.level, work, frames);
+            apply_smoothed_gain(&mut send.level, work, frames);
             if let Some(delay) = send.compensation.as_mut() {
                 delay.process(&mut work.l[..frames], &mut work.r[..frames]);
             }
@@ -590,15 +666,19 @@ impl SendBank {
     }
 
     /// Aim a send at a new level, which it reaches over
-    /// [`SEND_LEVEL_SMOOTH_S`].
+    /// [`STRIP_GAIN_SMOOTH_S`].
     ///
     /// `index` is the send's position in its own producer's run, which is the
     /// order it was authored in and survives a bank rebuild -- so a fader drag
     /// keeps addressing the same send while the plan around it changes.
+    ///
+    /// Only the authored level moves here. `emit` aims the smoother, because
+    /// only `emit` knows whether the producer is muted: a send dragged on a
+    /// muted track must not start fading up.
     fn set_level(&mut self, producer: EffectTarget, index: usize, level: f32) {
         let range = self.range(producer);
         if let Some(send) = self.sends[range].get_mut(index) {
-            send.level.set_target(level);
+            send.authored = level;
         }
     }
 
@@ -617,22 +697,23 @@ impl SendBank {
     }
 }
 
-/// Apply a smoothed level to a block.
+/// Apply a smoothed gain to both sides of a block: a send's level, or a
+/// track's polarity.
 ///
-/// A settled level is one pass over the block, which is what it is on every
+/// A settled gain is one pass over the block, which is what it is on every
 /// block but the few after a drag -- so the ordinary case costs exactly what
-/// an unsmoothed gain would.
+/// an unsmoothed gain would, and a settled unity costs nothing at all.
 ///
-/// A moving one steps **per sample**, not per control tick. That is the one
-/// place this deliberately does not copy `OutputStage::apply_pan_segments`:
-/// that stepper is 32 frames wide because its values come from the control
-/// rate and it has no finer answer to give, where a `Smoothed` does. Reusing
-/// the coarse subdivision here would throw away the resolution that is the
-/// whole reason to smooth.
-fn apply_send_level(level: &mut Smoothed, bus: &mut StereoBus, frames: usize) {
+/// A moving one steps **per sample**, not per control tick: a `Smoothed` has
+/// a finer answer to give than the 32-frame control rate, and reusing that
+/// coarse subdivision would throw away the resolution that is the whole
+/// reason to smooth. [`OutputStage`] does the same per side.
+fn apply_smoothed_gain(level: &mut Smoothed, bus: &mut StereoBus, frames: usize) {
     if level.is_settled() {
         let gain = level.value();
-        bus.apply_stereo_gain(gain, gain, frames);
+        if gain != 1.0 {
+            bus.apply_stereo_gain(gain, gain, frames);
+        }
         return;
     }
     for frame in 0..frames {
@@ -2237,22 +2318,67 @@ fn resolve_strip_segments(
     driven.then_some(segments)
 }
 
+/// How a stage turns its pan knob into a gain per side: a channel's
+/// constant-power [`pan_gains`], or a track's level-neutral [`balance_gains`].
+type PanLaw = fn(f32) -> (f32, f32);
+
 /// Shared output stage: linear gain, a source-pan or bus-balance application,
 /// and a mute that stops the strip contributing without stopping it processing
 /// (so effect tails on a muted strip still decay instead of freezing).
+///
+/// **Every change it makes is a ramp** (MOO-107). What reaches the bus is a
+/// gain per side, `left` and `right`, each a [`Smoothed`] lagging the knob
+/// over [`STRIP_GAIN_SMOOTH_S`]: the fader and the pan through the stage's
+/// law while the strip is heard, and silence while it is muted or
+/// solo-silenced. So a fader ride, a pan move, a mute and an unmute all move
+/// the output continuously, and so does a lane or a modulator driving the
+/// fader, whose control-rate staircase the lag rounds off.
+///
+/// Smoothing the two sides rather than the gain and the pan separately is
+/// what keeps the ordinary case cheap: a pan swept through the law per sample
+/// would be a sine and a cosine a frame, where this is two multiplies. The
+/// price is that the few milliseconds of a pan move travel a straight line
+/// between the two ends of the law rather than along its curve, which is a
+/// dip in level nobody can hear in the time it takes.
+///
+/// A settled stage is one pass over the block with exactly the gains the
+/// unsmoothed stage applied, so a still fader renders bit-identically to the
+/// way it always did.
 struct OutputStage {
+    /// The fader, as the knob holds it. Resolved through `law` with the pan
+    /// into what `left` and `right` aim at.
     gain: f32,
     pan: f32,
     muted: bool,
+    law: PanLaw,
+    /// The gain actually applied to each side, lagging what [`Self::aim`]
+    /// last asked for.
+    left: Smoothed,
+    right: Smoothed,
 }
 
 impl OutputStage {
-    fn new(gain: f32) -> Self {
+    fn new(gain: f32, law: PanLaw, sample_rate: u32) -> Self {
+        let (left, right) = law(0.0);
         Self {
             gain,
             pan: 0.0,
             muted: false,
+            law,
+            left: Smoothed::new(gain * left, STRIP_GAIN_SMOOTH_S, sample_rate),
+            right: Smoothed::new(gain * right, STRIP_GAIN_SMOOTH_S, sample_rate),
         }
+    }
+
+    /// Put the stage back to a fresh one at `gain`, keeping its law and its
+    /// smoothing rate. Snaps rather than ramps: a reset is a strip being
+    /// reused for something else, and there is nothing to be continuous with.
+    fn reset(&mut self, gain: f32) {
+        self.gain = gain;
+        self.pan = 0.0;
+        self.muted = false;
+        self.aim(false);
+        self.settle();
     }
 
     fn set_volume(&mut self, volume: f32) {
@@ -2265,38 +2391,103 @@ impl OutputStage {
         self.pan = pan.clamp(-1.0, 1.0);
     }
 
-    fn apply_pan(&self, bus: &mut StereoBus, frames: usize) {
-        let (pan_l, pan_r) = pan_gains(self.pan);
-        bus.apply_stereo_gain(self.gain * pan_l, self.gain * pan_r, frames);
+    /// The gain per side a fader at `gain` and a pan at `pan` resolve to.
+    fn sides(&self, gain: f32, pan: f32) -> (f32, f32) {
+        let (left, right) = (self.law)(pan);
+        (gain * left, gain * right)
     }
 
-    /// Apply gain and pan, stepping them per control subdivision when a
-    /// source or a lane is driving them. `segments` is `None` for the ordinary
-    /// case of a still fader, which stays a single pass over the block.
-    fn apply_pan_segments(
-        &self,
+    /// Aim both sides at what the knobs say, or at silence while `silenced`
+    /// -- the strip's own mute or a solo somewhere else. The stage is told
+    /// the verdict rather than holding it, because solo is a property of the
+    /// whole graph.
+    ///
+    /// Called at the top of the strip's block, before anything asks whether
+    /// the stage is settled or silent, so that those answers are about this
+    /// block's knobs and not the last one's.
+    fn aim(&mut self, silenced: bool) {
+        let (left, right) = if silenced {
+            (0.0, 0.0)
+        } else {
+            self.sides(self.gain, self.pan)
+        };
+        self.left.set_target(left);
+        self.right.set_target(right);
+    }
+
+    /// Jump to wherever the stage is aimed. For a document arriving, where
+    /// there is nothing sounding to be continuous with -- and where a ramp
+    /// would put the first milliseconds of every bounce at the wrong level.
+    fn settle(&mut self) {
+        self.left.reset_to(self.left.target());
+        self.right.reset_to(self.right.target());
+    }
+
+    /// Whether both sides have arrived where they were aimed, so a block
+    /// rendered or skipped would leave the stage in the same place.
+    fn is_settled(&self) -> bool {
+        self.left.is_settled() && self.right.is_settled()
+    }
+
+    /// Whether the stage has faded all the way out: settled, and at silence.
+    /// What a muted strip waits for before it stops contributing.
+    fn is_silent(&self) -> bool {
+        self.is_settled() && self.left.value() == 0.0 && self.right.value() == 0.0
+    }
+
+    /// Apply the stage to the block, per sample while either side is moving.
+    fn apply(&mut self, bus: &mut StereoBus, frames: usize) {
+        if self.is_settled() {
+            bus.apply_stereo_gain(self.left.value(), self.right.value(), frames);
+            return;
+        }
+        self.apply_range(bus, 0, frames);
+    }
+
+    /// Advance both sides one sample per frame over `start..end`.
+    fn apply_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
+        for frame in start..end {
+            bus.l[frame] *= self.left.advance();
+            bus.r[frame] *= self.right.advance();
+        }
+    }
+
+    /// Apply gain and pan, re-aimed per control subdivision when a source or
+    /// a lane is driving them. `segments` is `None` for the ordinary case of a
+    /// still fader, which stays a single pass over the block once settled.
+    ///
+    /// A driven fader used to *step* per subdivision, which is a zipper at
+    /// the control rate. Each subdivision now moves the target and the lag
+    /// walks to it a sample at a time. `silenced` wins over any lane: a
+    /// muted strip fades out whatever is driving its fader.
+    fn apply_segments(
+        &mut self,
         bus: &mut StereoBus,
         frames: usize,
         segments: Option<&StripSegments>,
+        silenced: bool,
     ) {
-        let Some(segments) = segments else {
-            self.apply_pan(bus, frames);
+        let Some(segments) = segments.filter(|_| !silenced) else {
+            self.apply(bus, frames);
             return;
         };
+        let mut done = 0;
         for (tick, &(gain, pan)) in segments.values.iter().take(segments.count).enumerate() {
             let start = tick * CONTROL_RATE_FRAMES;
             if start >= frames {
                 break;
             }
             let end = (start + CONTROL_RATE_FRAMES).min(frames);
-            let (pan_l, pan_r) = pan_gains(pan);
-            bus.apply_stereo_gain_range(gain * pan_l, gain * pan_r, start, end);
+            let (left, right) = self.sides(gain, pan);
+            self.left.set_target(left);
+            self.right.set_target(right);
+            self.apply_range(bus, start, end);
+            done = end;
         }
-    }
-
-    fn apply_balance(&self, bus: &mut StereoBus, frames: usize) {
-        let (balance_l, balance_r) = balance_gains(self.pan);
-        bus.apply_stereo_gain(self.gain * balance_l, self.gain * balance_r, frames);
+        // A block longer than its segments -- which the resolver does not
+        // produce, but nothing here can see that -- keeps walking toward the
+        // last target rather than leaving its tail unscaled.
+        self.apply_range(bus, done, frames);
     }
 }
 
@@ -2327,6 +2518,11 @@ struct BusStrip {
     /// Whether this track's signal is inverted, applied at the top of its
     /// block so everything downstream sees the flip.
     polarity: bool,
+    /// The sign actually applied: `1` or `-1` once settled, and passing
+    /// through zero for the few milliseconds after the switch, so a flip is
+    /// a crossfade through silence rather than a step of twice the signal
+    /// (MOO-107).
+    sign: Smoothed,
     /// Whether something *else* is soloed and this track is not part of it.
     ///
     /// Derived on the control thread by `mooloop_core::mixer::solo_silenced`
@@ -2383,9 +2579,10 @@ impl BusStrip {
             effects: EffectChain::new(),
             bus: StereoBus::with_capacity(MAX_BLOCK_SIZE),
             // Unity, as a channel is: see `mooloop_core::MixerBus::new`.
-            output: OutputStage::new(1.0),
+            output: OutputStage::new(1.0, balance_gains, sample_rate),
             strip: Strip::new(StripParams::default(), sample_rate),
             polarity: false,
+            sign: Smoothed::new(1.0, STRIP_GAIN_SMOOTH_S, sample_rate),
             solo_silenced: false,
             compensation: None,
             console: false,
@@ -2417,11 +2614,40 @@ impl BusStrip {
             && self.strip.is_at_rest()
             && self.silent_frames
                 >= self.compensation.as_ref().map_or(0, |delay| delay.frames() as u32)
+            // And its ramps have to have arrived. A bus that slept through a
+            // fader move or a polarity flip would make the move when it woke,
+            // on whatever reached it first, where a bus that never slept made
+            // it on silence -- and the two renders must agree.
+            && self.output.is_settled()
+            && self.sign.is_settled()
+    }
+
+    /// Aim the output stage and the polarity at this block's knobs. First
+    /// thing in the track's block, so `is_resting` and every mute decision
+    /// after it are answered about this block rather than the last.
+    fn aim(&mut self) {
+        let silenced = self.output.muted || self.solo_silenced;
+        self.output.aim(silenced);
+        self.sign.set_target(if self.polarity { -1.0 } else { 1.0 });
+    }
+
+    /// Jump every ramp to where it is aimed. For a document arriving.
+    fn settle(&mut self) {
+        self.aim();
+        self.output.settle();
+        self.sign.reset_to(self.sign.target());
+    }
+
+    /// Whether what this track holds after its output stage is what is
+    /// heard from it: anything but a muted or solo-silenced track whose fade
+    /// has finished. A take reading a track reads this.
+    fn is_heard(&self) -> bool {
+        !((self.output.muted || self.solo_silenced) && self.output.is_silent())
     }
 
     fn reset(&mut self, reclaim: &mut Reclaim) {
         self.effects.clear(reclaim);
-        self.output = OutputStage::new(1.0);
+        self.output.reset(1.0);
         // Cleared as well as defaulted, and in that order, for the reason
         // `load_project`'s `Some` arm gives: `set_params` moves the values
         // and deliberately leaves the filter state alone, so a strip put
@@ -2439,6 +2665,7 @@ impl BusStrip {
         self.strip.reset();
         self.strip.set_params(StripParams::default());
         self.polarity = false;
+        self.sign.reset_to(1.0);
         self.solo_silenced = false;
         // The displaced ring leaves on the same carrier a displaced dry-path
         // aligner does: it is the same type doing the same job one level out,
@@ -2546,7 +2773,7 @@ impl ChannelStrip {
             source_base: GeneratorParams::Sampler(SamplerParams::default()),
             effects: EffectChain::new(),
             bus: StereoBus::with_capacity(MAX_BLOCK_SIZE),
-            output: OutputStage::new(mooloop_core::DEFAULT_CHANNEL_VOLUME),
+            output: OutputStage::new(mooloop_core::DEFAULT_CHANNEL_VOLUME, pan_gains, sample_rate),
             solo_silenced: false,
             destination: MASTER_BUS,
             compensation: None,
@@ -2580,7 +2807,7 @@ impl ChannelStrip {
     fn reset_slot(&mut self, source: DeviceKind, reclaim: &mut Reclaim) {
         self.reset_sources_to_defaults(source);
         self.effects.clear(reclaim);
-        self.output = OutputStage::new(mooloop_core::DEFAULT_CHANNEL_VOLUME);
+        self.output.reset(mooloop_core::DEFAULT_CHANNEL_VOLUME);
         self.solo_silenced = false;
         self.destination = MASTER_BUS;
     }
@@ -4067,11 +4294,44 @@ impl RenderState {
         self.install_compensation(project);
         self.install_console(project);
         self.install_solo(project);
+        // Every output stage, polarity and send at the document's values from
+        // the first sample, rather than ramping there from whatever the strip
+        // held: a document arriving has nothing sounding to be continuous
+        // with, and a ramp here would put the first milliseconds of every
+        // bounce at the wrong level. After `install_solo`, because the solo
+        // verdict is half of where a stage is aimed, and after
+        // `install_compensation`, which builds the sends. A strip carried
+        // across an install is swapped in after this and keeps its own
+        // ramps, which is the point of carrying it.
+        self.settle_mixer();
         // Here as well as through the session's incremental sync, and for the
         // same reason `install_compensation` is: an offline render builds its
         // own `RenderState` and never runs a pump, so without this an export
         // would be the one place the channels rendered in index order.
         *self.audio = AudioTapBank::new(project.audio_graph());
+    }
+
+    /// Jump every output stage, polarity and send level to where it is
+    /// aimed, skipping the ramps MOO-107 put on them.
+    ///
+    /// For a document arriving, which is the one moment there is nothing
+    /// sounding to be continuous with. Also what a test calls when it sets a
+    /// mix up with commands and then measures it: the question there is the
+    /// mix, not the few milliseconds of ramp between the project it loaded
+    /// and the one it configured.
+    pub(crate) fn settle_mixer(&mut self) {
+        for (index, strip) in self.strips.iter_mut().enumerate() {
+            let silenced = strip.output.muted || strip.solo_silenced;
+            strip.output.aim(silenced);
+            strip.output.settle();
+            self.sends
+                .settle(EffectTarget::Channel(index as u8), silenced);
+        }
+        for (index, strip) in self.buses.iter_mut().enumerate() {
+            strip.settle();
+            let silenced = strip.output.muted || strip.solo_silenced;
+            self.sends.settle(EffectTarget::Bus(index as u8), silenced);
+        }
     }
 
     /// Install the solo state from `project`.
@@ -6205,13 +6465,24 @@ impl RenderState {
             // still filling a tap that something reads.
             let muted =
                 self.strips[index].output.muted || self.strips[index].solo_silenced;
+            self.strips[index].output.aim(muted);
+            // **A mute is a fade first** (MOO-107). A channel muted mid-note
+            // goes on rendering in full, its output stage and its sends
+            // ramping to silence, and only once both have arrived is it
+            // `faded` and allowed to take the paths below that stop it
+            // contributing. Before that it stopped in the block the button
+            // was pressed, which on anything sustained is a click.
+            let producer = EffectTarget::Channel(index as u8);
+            let faded = muted
+                && self.strips[index].output.is_silent()
+                && self.sends.is_silent(producer);
             // A muted producer that nobody reads still skips, which is what
             // keeps mute a way of not spending the work. One that somebody
             // reads renders its generator and stops there: mute is an
             // output-stage decision about what reaches the bus, and a
             // pre-level tap is exactly the signal a source muted in its own
             // mix still has.
-            if muted && !self.audio.produces(index) {
+            if faded && !self.audio.produces(index) {
                 // A muted channel renders nothing, so its compensation ring
                 // would still be holding the audio from before the mute and
                 // would emit it on unmute. Emptying it is fifteen writes, and
@@ -6414,8 +6685,17 @@ impl RenderState {
             // A monitored channel never sleeps: its input can start at any
             // moment, and the generator's own silence says nothing about it.
             let monitored = self.monitors_input(index);
+            // Nor while its output stage is still moving, for the reason a
+            // driven source keeps it awake: a strip that slept through a
+            // fader move would make it on the first note after waking, where
+            // a strip that stayed awake made it on silence. A driven fader is
+            // the exception -- it never settles, and a strip must not be kept
+            // awake for ever by a lane on its fader.
+            let stage_still =
+                strip_segments.is_some() || self.strips[index].output.is_settled();
             if skip_idle
                 && !monitored
+                && stage_still
                 && self.events[index].is_empty()
                 && self.strips[index].is_idle()
             {
@@ -6466,9 +6746,9 @@ impl RenderState {
             if monitored {
                 self.strips[index].bus.add_from(&self.input, frames);
             }
-            if muted {
+            if faded {
                 // Its tap is filled and its bus is not read: a muted producer
-                // publishes, and reaches nothing else.
+                // publishes, and reaches nothing else -- once it has faded out.
                 //
                 // It also publishes its *control* outlets, where a muted
                 // channel nobody reads freezes them at the last audible
@@ -6508,12 +6788,11 @@ impl RenderState {
             // tracks it reaches are not reachable while this strip is
             // borrowed -- and skipped entirely when nothing reads this tap,
             // which is every strip in a project that has no sends.
-            let producer = EffectTarget::Channel(index as u8);
             self.sends
                 .capture(producer, SendTap::PreFader, &strip.bus, frames);
             strip
                 .output
-                .apply_pan_segments(&mut strip.bus, frames, strip_segments.as_ref());
+                .apply_segments(&mut strip.bus, frames, strip_segments.as_ref(), muted);
             // And a post-fader one from here, which is the same signal the
             // strip's own output carries -- but *before* the compensation
             // below, because that is what this strip's output owes its own
@@ -6535,7 +6814,7 @@ impl RenderState {
                 destination.bus.add_from(&strip.bus, frames);
                 destination.dirty = true;
             }
-            self.sends.emit(producer, &mut self.buses, frames);
+            self.sends.emit(producer, &mut self.buses, frames, muted);
         }
 
         // Walk the compiled schedule. Every bus is guaranteed to appear after
@@ -6553,6 +6832,8 @@ impl RenderState {
             let Some(strip) = self.buses.get_mut(index) else {
                 continue;
             };
+            // Before `is_resting` asks whether its ramps have arrived.
+            strip.aim();
             // Everything feeding this bus has already run -- that is what the
             // compiled order guarantees -- so `dirty` is the settled answer to
             // whether anything reached it this block, and costs no pass over
@@ -6632,12 +6913,12 @@ impl RenderState {
             // -- the strip, the chain, both send taps and the fader -- sees
             // the flipped signal, which is what a desk's input invert does.
             // It cannot move a meter, because it does not move a magnitude.
-            if strip.polarity {
-                // A multiply by -1 rather than a dedicated pass: it is
-                // exact, and the gain stage that already walks the buffer is
-                // the honest place for a sign.
-                strip.bus.apply_stereo_gain(-1.0, -1.0, frames);
-            }
+            //
+            // A multiply by the smoothed sign: exactly -1 or nothing at all
+            // once settled, and a pass through zero for the few milliseconds
+            // after a flip, so the switch is a crossfade to the inverted
+            // signal rather than a step of twice its level (MOO-107).
+            apply_smoothed_gain(&mut strip.sign, &mut strip.bus, frames);
             // The bus head's input meter reads what the bus received this
             // block, before its own chain touches it.
             let (input_l, input_r) = strip.bus.peak(frames);
@@ -6686,12 +6967,20 @@ impl RenderState {
             // the reading a desk gives -- a muted strip contributes nothing
             // anywhere -- and it is what the channel loop already does by
             // skipping the whole tail of its body on a muted channel.
-            if !muted {
+            //
+            // **Once it has faded** (MOO-107). Until the output stage and the
+            // sends have both ramped to silence, a muted track goes on
+            // capturing, summing and emitting, all of it aimed at nothing;
+            // only a `faded` one takes the branches below that stop it
+            // contributing, and those are exactly the branches every muted
+            // track took at once before.
+            let faded = muted && strip.output.is_silent() && self.sends.is_silent(producer);
+            if !faded {
                 self.sends
                     .capture(producer, SendTap::PreFader, &strip.bus, frames);
             }
-            strip.output.apply_balance(&mut strip.bus, frames);
-            if !muted {
+            strip.output.apply(&mut strip.bus, frames);
+            if !faded {
                 self.sends
                     .capture(producer, SendTap::PostFader, &strip.bus, frames);
             }
@@ -6722,17 +7011,22 @@ impl RenderState {
                 // state was full level too. Buses are cleared at the top of
                 // every block, so emptying it here is safe, and the preview
                 // is summed after this walk on purpose and stays audible.
-                if strip.output.muted {
+                //
+                // The output stage fades the master like any other track now,
+                // so this only makes the faded master exactly silent -- which
+                // a gain settled at zero already is, for everything but a
+                // non-finite sample.
+                if faded {
                     strip.bus.clear(frames);
                 }
                 master_peak = (peak_l, peak_r);
-            } else if !muted {
+            } else if !faded {
                 let console = strip.console;
                 let destination = self.bus_graph.destination(index) as usize;
                 mix_into(&mut self.buses, index, destination, frames, console);
             }
-            if !muted {
-                self.sends.emit(producer, &mut self.buses, frames);
+            if !faded {
+                self.sends.emit(producer, &mut self.buses, frames, muted);
             } else {
                 self.sends.reset(producer);
             }
@@ -6791,7 +7085,7 @@ impl RenderState {
                     Some(mooloop_core::AudioTap::Track(track)) => self
                         .buses
                         .get(track as usize)
-                        .filter(|track| !track.output.muted && !track.solo_silenced)
+                        .filter(|track| track.is_heard())
                         .map(|track| &track.bus),
                     Some(mooloop_core::AudioTap::Master) => {
                         Some(&self.buses[MASTER_BUS as usize].bus)
@@ -10948,6 +11242,8 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
     fn rendered_energy(project: &Project, configure: impl FnOnce(&mut RenderState)) -> f32 {
         let mut render = RenderState::from_project(48_000, project, &[]);
         configure(&mut render);
+        // The mix as configured, not the ramp into it: see `settle_mixer`.
+        render.settle_mixer();
         render.play();
         render.process_block(1024);
         let master = render.master();
@@ -11024,6 +11320,8 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
     fn wet_energy(project: &Project, track: usize, configure: impl FnOnce(&mut RenderState)) -> f32 {
         let mut render = RenderState::from_project(48_000, project, &[]);
         configure(&mut render);
+        // The mix as configured, not the ramp into it: see `settle_mixer`.
+        render.settle_mixer();
         render.play();
         render.process_block(1024);
         track_energy(&render, track, 1024)
@@ -11196,20 +11494,20 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         render.master().l[..frames].to_vec()
     }
 
-    /// A level change ramps rather than steps. There is no gain smoothing at
-    /// strip level at all today -- a fader stamps its value per block -- so a
-    /// send is the first place in the engine this is true, and it is asserted
-    /// rather than assumed.
+    /// A level change ramps rather than steps. A send was the first place at
+    /// strip level this was true; the faders, pans, mutes and polarity
+    /// followed with MOO-107, and `continuity_tests` holds them to it through
+    /// a whole render.
     #[test]
     fn a_send_level_is_smoothed() {
-        let mut level = Smoothed::new(0.0, SEND_LEVEL_SMOOTH_S, 48_000);
+        let mut level = Smoothed::new(0.0, STRIP_GAIN_SMOOTH_S, 48_000);
         level.set_target(1.0);
         let mut bus = StereoBus::with_capacity(512);
         for frame in 0..512 {
             bus.l[frame] = 1.0;
             bus.r[frame] = 1.0;
         }
-        apply_send_level(&mut level, &mut bus, 512);
+        apply_smoothed_gain(&mut level, &mut bus, 512);
 
         let biggest_step = bus.l[..512]
             .windows(2)
@@ -11855,6 +12153,10 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                     bus: mooloop_core::MASTER_BUS,
                     muted: true,
                 });
+                // Muted from the start rather than faded into: the fade is
+                // `continuity_tests`' question, this one is whether a muted
+                // master is silent at all.
+                render.settle_mixer();
             }
             render.play();
             render.process_block(1024);
@@ -13396,7 +13698,12 @@ mod footprint {
         // (`reports/fable-2026-09-22.md` finding 2, Plan C step 1): the
         // strip holds one `MlP8` by value, so its finishing chorus's new
         // `tilt` table is paid here too.
-        assert_eq!(size_of::<ChannelStrip>(), 42_512);
+        //
+        // MOO-107 added 40, in the output stage: the pan law it applies, as
+        // a function pointer (8), and the gain actually reaching each side,
+        // two `Smoothed` of twelve bytes each, so a fader, a pan and a mute
+        // ramp instead of stepping. The rest is alignment.
+        assert_eq!(size_of::<ChannelStrip>(), 42_552);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -13440,7 +13747,9 @@ mod footprint {
         //
         // Grew by 48 with `ChannelStrip` above (Plan C step 1, same
         // finding): the phaser's tilt table again, once per live channel.
-        assert_eq!(per_live, 155_544);
+        //
+        // And by 40 with it for MOO-107: the output stage's ramps.
+        assert_eq!(per_live, 155_584);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
@@ -13518,7 +13827,10 @@ mod footprint {
         // Crossed one more KiB boundary with `per_live` above: the phaser's
         // tilt table is 768 bytes across sixteen live channels (Plan C
         // step 1, `reports/fable-2026-09-22.md` finding 2).
-        assert_eq!((fixed + per_live * 16) / 1024, 2_917);
+        //
+        // And one more with MOO-107's output-stage ramps: 40 bytes a live
+        // channel, 640 across sixteen.
+        assert_eq!((fixed + per_live * 16) / 1024, 2_918);
     }
 
 }

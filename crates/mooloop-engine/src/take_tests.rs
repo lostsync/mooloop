@@ -137,19 +137,29 @@ fn a_one_bar_clip_is_one_bar_long() {
 /// plays first and is muted just before the take starts, so its buffer is
 /// full of real audio when it goes quiet -- a source that never sounded would
 /// hold zeros anyway and prove nothing.
+///
+/// A mute fades now (MOO-107), and what a take of a channel records is what
+/// the channel sounds like -- so the fade is let run out before the take is
+/// armed, and what is asserted is the muted channel rather than its last
+/// hundred milliseconds of fading.
 #[test]
 fn a_muted_source_records_silence() {
     let project = sounding(2);
     let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
     route(&mut render, vec![Some(AudioTap::Channel(1)), None]);
     render.play();
-    for _ in 0..(BAR_FRAMES / BLOCK - 4) {
+    for _ in 0..(BAR_FRAMES / BLOCK - 28) {
         render.process_block(BLOCK);
     }
     render.apply_command(EngineCommand::SetChannelMuted {
         channel: 1,
         muted: true,
     });
+    // 128 ms: the fade is inaudible after 25 and exactly silent after about
+    // a hundred, when the channel stops rendering.
+    for _ in 0..24 {
+        render.process_block(BLOCK);
+    }
     let (status, mut ring) = arm(&mut render, 0, None);
     for _ in 0..24 {
         render.process_block(BLOCK);
