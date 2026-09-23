@@ -84,6 +84,14 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
+      # Two steps, not one, so `mooloop-ui`'s library and its unit-test
+      # harness never compile at once. Each peaks at 9 to 12 GB and the
+      # runner has 16 GB, and the pair together is what killed dry run
+      # 35873627542 with exit code 143 (MOO-141). The reasoning and the
+      # measurement are in ci.yml, beside the same two steps.
+      - name: cargo test (build the unit-test harnesses first)
+        run: cargo test --locked --workspace --lib --no-run
+
       - name: cargo test
         run: cargo test --locked --workspace
 

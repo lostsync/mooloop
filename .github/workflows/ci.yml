@@ -51,6 +51,26 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
+      # Why the test build is two steps (MOO-141). `mooloop-ui`'s library and
+      # its unit-test harness are two rustc processes, and each one compiles
+      # the ~395k lines Slint generates from ui/main.slint. Cold, each peaks
+      # at 9 to 12 GB. Cargo starts both at once, and their summed peak was
+      # 19 GB and 22 GB in two runs (measured on the build box, 2026-09-23,
+      # with this job's RUSTFLAGS and -j3 from .cargo/config.toml). This
+      # runner has 16 GB. When the two peaks overlapped, the machine ran out
+      # and the runner was shut down mid-compile: "Process completed with
+      # exit code 143", after minutes with no output. It was intermittent
+      # because the overlap was.
+      #
+      # So the unit-test harnesses are built first. `--workspace --lib`
+      # resolves features exactly as the step after it does, so the harness
+      # it builds is the one that step reuses. (`-p mooloop-ui --lib` would
+      # resolve them differently, and the ui harness would be built twice
+      # and overlap anyway, which was measured too.) Measured this way, the
+      # harness step peaked at 12 GB alone and the rest at 7 GB.
+      - name: cargo test (build the unit-test harnesses first)
+        run: cargo test --locked --workspace --lib --no-run
+
       - name: cargo test
         run: cargo test --locked --workspace
 
@@ -72,6 +92,13 @@ jobs:
 
       - name: cargo clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      # The same split as the Linux job, and for the same reason. The macOS
+      # runner has 7 GB and doesn't die: it swaps, which is likely part of
+      # why this job takes over an hour. Two ~10 GB compiles one after the
+      # other swap less than two at once.
+      - name: cargo test (build the unit-test harnesses first)
+        run: cargo test --locked --workspace --lib --no-run
 
       - name: cargo test
         run: cargo test --locked --workspace
