@@ -1754,6 +1754,15 @@ impl EngineHandle {
         self.shared.bus_meters.output_faults()
     }
 
+    /// How many times an effect slot's input has arrived carrying a NaN or
+    /// an infinity, since the engine started. Each was silenced before the
+    /// device saw it, so a blown-up source or device costs one block of
+    /// silence downstream instead of silencing every device after it for
+    /// good. Not cleared by reading (MOO-176).
+    pub fn effect_faults(&self) -> u64 {
+        self.shared.bus_meters.effect_faults()
+    }
+
     /// Read and clear how much gain reduction a track's channel strip took,
     /// in dB as a positive amount. Zero while its compressor is out.
     pub fn take_strip_reduction(&self, bus: usize) -> f32 {

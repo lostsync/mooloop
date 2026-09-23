@@ -51,6 +51,12 @@ pub struct BusMeters {
     /// fault from an old one by comparing with what it saw last. Beside the
     /// master's peak because it is the master's, read by the same pump.
     output_faults: AtomicU64,
+    /// Effect-slot inputs that arrived carrying a NaN or an infinity, since
+    /// the engine started, each silenced before the device saw it
+    /// (MOO-176). A count that only grows, read the way `output_faults` is.
+    /// It counts blocks at a slot, not samples: the host finds a fault in
+    /// the fold it already takes over each slot's input.
+    effect_faults: AtomicU64,
 }
 
 /// Held input/output peaks for every visible device, plus the held detector
@@ -577,6 +583,7 @@ impl BusMeters {
             reduction: (0..MAX_BUSES).map(|_| AtomicU32::new(0)).collect(),
             input: [AtomicU32::new(0), AtomicU32::new(0)],
             output_faults: AtomicU64::new(0),
+            effect_faults: AtomicU64::new(0),
         })
     }
 
@@ -591,6 +598,19 @@ impl BusMeters {
     /// started. Zero until something blows up, and then never zero again.
     pub fn output_faults(&self) -> u64 {
         self.output_faults.load(Ordering::Relaxed)
+    }
+
+    /// Count slot inputs the effect host had to silence. Audio thread, and
+    /// only on a block that had any.
+    pub fn publish_effect_faults(&self, blocks: u32) {
+        self.effect_faults
+            .fetch_add(u64::from(blocks), Ordering::Relaxed);
+    }
+
+    /// How many effect-slot inputs have arrived non-finite since the engine
+    /// started. Zero until something upstream of a device blows up.
+    pub fn effect_faults(&self) -> u64 {
+        self.effect_faults.load(Ordering::Relaxed)
     }
 
     /// Raise `bus`'s held peak. Called on the audio thread, once per block.

@@ -332,6 +332,20 @@ impl RangeProcessor for ModulationEffect {
     }
 }
 
+impl ModulationEffect {
+    /// Empty the line, the feedback and the filters, keeping the LFO phase.
+    fn clear_tail(&mut self) {
+        self.line.clear();
+        self.feedback_l = 0.0;
+        self.feedback_r = 0.0;
+        self.tone_l.reset();
+        self.tone_r.reset();
+        for stage in self.phaser_l.iter_mut().chain(&mut self.phaser_r) {
+            stage.reset();
+        }
+    }
+}
+
 impl AudioNode for ModulationEffect {
     /// Clears the line and the filters, and **keeps the LFO phase**. This is
     /// the narrower reset `Self::reset` is not: that one restarts the LFO,
@@ -345,14 +359,7 @@ impl AudioNode for ModulationEffect {
         if !kind.invalidates_tails() {
             return;
         }
-        self.line.clear();
-        self.feedback_l = 0.0;
-        self.feedback_r = 0.0;
-        self.tone_l.reset();
-        self.tone_r.reset();
-        for stage in self.phaser_l.iter_mut().chain(&mut self.phaser_r) {
-            stage.reset();
-        }
+        self.clear_tail();
     }
 
     /// Measured against the longest tap the device can be asked for rather
@@ -415,6 +422,11 @@ impl AudioNode for ModulationEffect {
         }
         let frames = ctx.frames.min(bus.capacity());
         process_param_split(self, bus, events_in, frames);
+        // A NaN or an infinity that got into the line or the all-passes would stay there for
+        // good (MOO-176). It comes out as silence, and they start clean.
+        if super::scrub_non_finite(bus, frames) {
+            self.clear_tail();
+        }
     }
 }
 

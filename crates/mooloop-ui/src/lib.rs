@@ -15055,6 +15055,9 @@ impl AppUi {
         // count only ever grows, so a rise is a new fault however late it is
         // seen, and zero is the one value that means nothing has gone wrong.
         let mut output_faults_seen = 0u64;
+        // The effect host's count of slot inputs it had to silence, as of
+        // the last tick (MOO-176). Read the same way.
+        let mut effect_faults_seen = 0u64;
         // What the command ring had no room for, in order (MOO-134), and the
         // notice that says so once it has lasted, kept so exactly that text
         // can be withdrawn when the backlog drains.
@@ -16570,6 +16573,27 @@ impl AppUi {
                         );
                     }
                     output_faults_seen = output_faults;
+                }
+                // A device's input arrived as NaN or infinity and the effect
+                // host silenced it (MOO-176). Beside the output guard's
+                // notice and read the same way, but a warning: the chain
+                // has already recovered, and what is left to know is that
+                // something upstream of a device misbehaved.
+                let effect_faults = handle.effect_faults();
+                if effect_faults > effect_faults_seen {
+                    if effect_faults_seen == 0 {
+                        log_warn!(
+                            "audio",
+                            "a device received NaN or infinite samples ({effect_faults} so far); \
+                             the effect host silenced them before they reached it"
+                        );
+                        status_bar::notify(
+                            &w,
+                            Severity::Warning,
+                            "A device received invalid audio (NaN); it was silenced before the device",
+                        );
+                    }
+                    effect_faults_seen = effect_faults;
                 }
                 // Device meters address channels and buses in one space: a
                 // bus's chain publishes at MAX_CHANNELS + bus index (see

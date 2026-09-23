@@ -717,6 +717,16 @@ The master's meter reads the mix *before* the guard, so a mix that is over
 still lights the clip latch, and a non-finite sample reads as an infinite
 peak rather than as silence.
 
+**Inside the graph** (MOO-176), the effect host checks each device's input in
+the peak fold it already takes for the meters. A block carrying a NaN or an
+infinity has those samples silenced before the device sees them, and it's
+counted (`EngineHandle::effect_faults`). The status bar raises a warning the
+first time that happens. The reverb, plate, modulation effect, gate,
+compressor, limiter and Buffer also clear their own state if a non-finite
+value gets in, one pass over the block, the way MOO-174 made the shared
+filters do. So a device that blows up costs one block of silence downstream,
+where it used to silence every device after it until the song was reloaded.
+
 The engine preallocates channel strips, pattern storage, event lists, and audio
 buses. A driver-independent render state owns transport, scheduling,
 instruments, effects, mixing, and metering. One executor drains fixed-size

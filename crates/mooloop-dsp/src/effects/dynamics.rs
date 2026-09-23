@@ -247,6 +247,14 @@ impl AudioNode for GateEffect {
         }
         let frames = ctx.frames.min(bus.capacity());
         process_param_split(self, bus, events_in, frames);
+        // A NaN or an infinity that got into the detector or the gain would stay there for
+        // good (MOO-176). It comes out as silence, and the gate starts shut.
+        if super::scrub_non_finite(bus, frames) {
+            self.detector.reset();
+            self.open = false;
+            self.hold_remaining = 0;
+            self.gain_db = self.params.range_db;
+        }
     }
 }
 
@@ -425,6 +433,11 @@ impl AudioNode for CompressorEffect {
         }
         let frames = ctx.frames.min(bus.capacity());
         process_param_split(self, bus, events_in, frames);
+        // A NaN or an infinity that got into the detector would stay there for
+        // good (MOO-176). It comes out as silence, and it starts released.
+        if super::scrub_non_finite(bus, frames) {
+            self.detector.reset();
+        }
     }
 }
 
@@ -805,6 +818,11 @@ impl AudioNode for LimiterEffect {
         }
         let frames = ctx.frames.min(bus.capacity());
         process_param_split(self, bus, events_in, frames);
+        // A NaN or an infinity that got into the lookahead would stay there for
+        // good (MOO-176). It comes out as silence, and the limiter starts clean.
+        if super::scrub_non_finite(bus, frames) {
+            self.clear();
+        }
     }
 }
 

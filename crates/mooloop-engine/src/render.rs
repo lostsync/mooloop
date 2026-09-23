@@ -1463,6 +1463,13 @@ struct EffectChain {
     /// Parameter events `event_scratch` had no room for, since this chain was
     /// built. See [`RenderState::refused_events`].
     refused_events: u64,
+    /// Slot inputs that arrived carrying a NaN or an infinity since the
+    /// render loop last collected them (MOO-176). Each was silenced before
+    /// the device saw it. The loop drains this into
+    /// `BusMeters::effect_faults` after running the chain, so the count
+    /// crosses to the interface with one relaxed add, and only on a block
+    /// that had a fault.
+    faults_unpublished: u32,
     /// Per-slot dry-path delay matching the installed node's reported
     /// latency, so the wet/dry blend never mixes time-misaligned signals.
     /// Allocated off the realtime thread, next to the node it belongs to.
@@ -1588,6 +1595,7 @@ impl EffectChain {
             curve_scratch: Box::new(EffectCurvePool::empty()),
             curve_refusals: 0,
             refused_events: 0,
+            faults_unpublished: 0,
             dry_align: std::array::from_fn(|_| None),
             analyzers: std::array::from_fn(|_| None),
             dry: StereoBus::with_capacity(MAX_BLOCK_SIZE),
@@ -2574,7 +2582,19 @@ impl EffectChain {
                 // Silence detection therefore costs nothing the meters were
                 // not already paying, and the chain does one scan a slot
                 // rather than two.
-                let (peak_l, peak_r) = bus.peak(context.frames);
+                let (mut peak_l, mut peak_r) = bus.peak(context.frames);
+                // **A non-finite input stops here** (MOO-176). `peak` reads a
+                // NaN as an infinite peak, so the fold the meters and the
+                // silence count already pay for is the check: a finite block
+                // is not touched. One that is not has its NaNs and
+                // infinities silenced before the device sees them -- a
+                // feedback network or a detector would keep one for good --
+                // and is counted where the interface can read it.
+                if !(peak_l.is_finite() && peak_r.is_finite()) {
+                    mooloop_dsp::effects::scrub_non_finite(bus, context.frames);
+                    self.faults_unpublished = self.faults_unpublished.saturating_add(1);
+                    (peak_l, peak_r) = bus.peak(context.frames);
+                }
                 let silent = self.note_input_level(slot, peak_l.max(peak_r), context.frames);
                 if skip_idle && self.may_sleep(slot, silent) {
                     // The one thing a sleeping node is still owed: whatever
@@ -8269,6 +8289,12 @@ impl RenderState {
                 automation.as_ref(),
                 skip_idle,
             );
+            // Slot inputs the chain found non-finite (MOO-176). One branch a
+            // chain a block, and a relaxed add only when there were any.
+            let faults = std::mem::take(&mut strip.effects.faults_unpublished);
+            if faults > 0 {
+                self.meters.publish_effect_faults(faults);
+            }
             // A pre-fader send leaves from here: after the chain, before the
             // fader and the pan. Copied rather than emitted, because the
             // tracks it reaches are not reachable while this strip is
@@ -8440,6 +8466,10 @@ impl RenderState {
                 automation.as_ref(),
                 skip_idle,
             );
+            let faults = std::mem::take(&mut strip.effects.faults_unpublished);
+            if faults > 0 {
+                self.meters.publish_effect_faults(faults);
+            }
             if self.strip_pin == StripPin::Tail {
                 strip.strip.process_block(&mut strip.bus, frames);
             }
@@ -16330,7 +16360,10 @@ mod footprint {
         // `EffectSlot`'s own applies here too -- fifty rows of two hundred
         // and fifty-six ticks is real size, and a chain with nothing driven
         // pays only the pointer) and the `u64` refusal counter beside it.
-        assert_eq!(size_of::<EffectChain>(), 20_576);
+        //
+        // MOO-176 added eight: the count of slot inputs found non-finite
+        // since the render loop last published it (a `u32` and padding).
+        assert_eq!(size_of::<EffectChain>(), 20_584);
         // A strip used to hold one node of every generator kind, so a new
         // device was paid for on every live channel whether or not anything
         // used it; since MOO-56 it holds only the one it plays, boxed, and
@@ -16554,7 +16587,9 @@ mod footprint {
         // played. Much of the history above is now the history of the nodes
         // rather than of the strip; it stays, because it is still what a
         // channel running that node pays.
-        assert_eq!(size_of::<ChannelStrip>(), 22_800);
+        //
+        // MOO-176 added eight, its chain's unpublished fault count.
+        assert_eq!(size_of::<ChannelStrip>(), 22_808);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -16627,7 +16662,9 @@ mod footprint {
         // of the one source now counted on its own. A channel running a
         // smaller source than DS-01 pays less than this; a v1 mono pays
         // 6,624 less again.
-        assert_eq!(per_live, 142_792);
+        //
+        // And by 8 with it for MOO-176: the chain's unpublished fault count.
+        assert_eq!(per_live, 142_800);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved

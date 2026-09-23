@@ -161,6 +161,67 @@ mod tests {
         assert!(moved, "the reconnected engine never reported the transport moving");
     }
 
+    /// The effect host's fault count (MOO-176) works the way the output
+    /// guard's does: on an engine with no device, and on the engine a
+    /// reconnect builds, with the count carried across rather than started
+    /// again.
+    #[test]
+    fn the_effect_host_counts_faults_before_and_after_a_reconnect() {
+        let mut handle = EngineHandle::without_device("effect faults");
+        install_nan_through_an_effect(&mut handle);
+        let before = effect_faults_past(&mut handle, 0);
+
+        handle.reconnect(crate::AudioConfig::default());
+        let carried = handle.effect_faults();
+        assert!(carried >= before, "the reconnect reset the effect fault count to {carried}");
+
+        install_nan_through_an_effect(&mut handle);
+        effect_faults_past(&mut handle, carried);
+    }
+
+    fn effect_faults_past(handle: &mut EngineHandle, floor: u64) -> u64 {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            while handle.poll().is_some() {}
+            let faults = handle.effect_faults();
+            if faults > floor {
+                return faults;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("the effect host counted nothing past {floor}");
+    }
+
+    /// The NaN sampler below, through a filter: the first slot's input is
+    /// where the effect host finds it.
+    fn install_nan_through_an_effect(handle: &mut EngineHandle) {
+        use mooloop_core::{EffectKind, EffectSlotState, NoteEvent, Project, ProjectChannel};
+        use mooloop_dsp::{ChannelAudioSnapshot, SampleData};
+        use std::sync::Arc;
+        let mut channel = ProjectChannel::sampler(0, 1);
+        channel.notes[0].push(NoteEvent::new(1, 0, 96, 60, 127));
+        channel
+            .setup
+            .push_effect(EffectSlotState::of_kind(EffectKind::Filter))
+            .expect("room");
+        let project = Project {
+            channels: vec![channel],
+            ..Project::default()
+        };
+        let nan = Arc::new(SampleData {
+            frames: vec![[f32::NAN, f32::NAN]; 24_000],
+            sample_rate: super::NULL_SAMPLE_RATE,
+            root_note: 60,
+        });
+        assert!(handle.install_project(
+            Arc::new(project),
+            vec![ChannelAudioSnapshot::sample(nan)],
+            crate::InputState::default(),
+            false,
+        ));
+        assert!(handle.send(EngineCommand::Play));
+    }
+
     /// A sampler at unity playing a file of NaN from the downbeat: the
     /// device the output guard (MOO-93) exists for.
     fn install_a_device_that_emits_nan(handle: &mut EngineHandle) {

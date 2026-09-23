@@ -718,6 +718,21 @@ impl RangeProcessor for ReverbEffect {
     }
 }
 
+impl ReverbEffect {
+    /// Empty the network: the pre-delay, the input filter, the diffusers and
+    /// the lines. The lines' modulation phase is kept; see `Line::clear`.
+    fn clear_tail(&mut self) {
+        self.predelay.clear();
+        self.low_cut.reset();
+        for diffuser in &mut self.diffusers {
+            diffuser.clear();
+        }
+        for line in &mut self.lines {
+            line.clear();
+        }
+    }
+}
+
 impl AudioNode for ReverbEffect {
     /// A seek invalidates every sample in the tail: it is the sound of a part
     /// of the song the transport has left. Ringing it out over the new
@@ -734,14 +749,7 @@ impl AudioNode for ReverbEffect {
         if !kind.invalidates_tails() {
             return;
         }
-        self.predelay.clear();
-        self.low_cut.reset();
-        for diffuser in &mut self.diffusers {
-            diffuser.clear();
-        }
-        for line in &mut self.lines {
-            line.clear();
-        }
+        self.clear_tail();
     }
 
     /// `decay_s` is an RT60, and it is an *upper* bound on the real one: the
@@ -827,6 +835,11 @@ impl AudioNode for ReverbEffect {
         }
         let frames = ctx.frames.min(bus.capacity());
         process_param_split(self, bus, events_in, frames);
+        // A NaN or an infinity that got into the network would stay there for
+        // good (MOO-176). It comes out as silence, and the tail starts clean.
+        if super::scrub_non_finite(bus, frames) {
+            self.clear_tail();
+        }
     }
 }
 

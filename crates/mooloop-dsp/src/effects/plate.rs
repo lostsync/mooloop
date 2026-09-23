@@ -459,6 +459,19 @@ impl RangeProcessor for PlateEffect {
     }
 }
 
+impl PlateEffect {
+    /// Empty the pre-delay, the combs and the all-passes.
+    fn clear_tail(&mut self) {
+        self.predelay.clear();
+        for comb in self.combs_l.iter_mut().chain(&mut self.combs_r) {
+            comb.clear();
+        }
+        for allpass in self.allpass_l.iter_mut().chain(&mut self.allpass_r) {
+            allpass.clear();
+        }
+    }
+}
+
 impl AudioNode for PlateEffect {
     /// The same argument as the FDN reverb's: the tail belongs to the
     /// position the transport has left, and neither a program change nor a
@@ -468,13 +481,7 @@ impl AudioNode for PlateEffect {
         if !kind.invalidates_tails() {
             return;
         }
-        self.predelay.clear();
-        for comb in self.combs_l.iter_mut().chain(&mut self.combs_r) {
-            comb.clear();
-        }
-        for allpass in self.allpass_l.iter_mut().chain(&mut self.allpass_r) {
-            allpass.clear();
-        }
+        self.clear_tail();
     }
 
     /// The same derivation as the FDN's: `decay_s` is the RT60 the comb gains
@@ -527,6 +534,11 @@ impl AudioNode for PlateEffect {
         }
         let frames = ctx.frames.min(bus.capacity());
         process_param_split(self, bus, events_in, frames);
+        // A NaN or an infinity that got into the combs would stay there for
+        // good (MOO-176). It comes out as silence, and the tail starts clean.
+        if super::scrub_non_finite(bus, frames) {
+            self.clear_tail();
+        }
     }
 }
 

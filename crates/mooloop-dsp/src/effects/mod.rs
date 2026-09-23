@@ -58,6 +58,28 @@ pub(crate) trait RangeProcessor {
     fn apply_param(&mut self, id: u32, value: f32);
 }
 
+/// Whether a block came out of a device carrying a NaN or an infinity, and
+/// if it did, silence in their place (MOO-176).
+///
+/// For a device whose own recursive state would keep a non-finite value for
+/// good -- a feedback network, a detector -- to call once after its block
+/// and clear that state when it answers yes. One pass over the block when it
+/// is clean, which is every block that matters, and it writes nothing then,
+/// so a finite block is untouched to the bit.
+pub fn scrub_non_finite(bus: &mut StereoBus, frames: usize) -> bool {
+    let frames = frames.min(bus.capacity());
+    let finite = |samples: &[f32]| samples.iter().all(|sample| sample.is_finite());
+    if finite(&bus.l[..frames]) && finite(&bus.r[..frames]) {
+        return false;
+    }
+    for sample in bus.l[..frames].iter_mut().chain(&mut bus.r[..frames]) {
+        if !sample.is_finite() {
+            *sample = 0.0;
+        }
+    }
+    true
+}
+
 /// Render `frames` of `bus`, splitting at each parameter event so a value
 /// lands on the sample it was timed for.
 ///
@@ -1104,5 +1126,110 @@ mod tests {
             n += BLOCK;
         }
         crate::testkit::db(peak / level)
+    }
+
+    /// Every insert, with the settings most likely to hold on to what it is
+    /// fed: the longest tails, the most feedback.
+    fn every_kind_at_its_stickiest() -> Vec<EffectParams> {
+        let mut kinds = Vec::new();
+        for kind in EffectKind::ALL {
+            let params = match kind.default_params() {
+                EffectParams::Compressor(mut p) => {
+                    p.threshold_db = -40.0;
+                    EffectParams::Compressor(p)
+                }
+                EffectParams::Reverb(mut p) => {
+                    p.decay_s = 20.0;
+                    p.size = 1.0;
+                    EffectParams::Reverb(p)
+                }
+                EffectParams::Plate(mut p) => {
+                    p.decay_s = 10.0;
+                    p.size = 1.0;
+                    EffectParams::Plate(p)
+                }
+                EffectParams::Delay(mut p) => {
+                    p.feedback = 0.95;
+                    EffectParams::Delay(p)
+                }
+                other => other,
+            };
+            kinds.push(params);
+        }
+        for mode in 0..5 {
+            kinds.push(EffectParams::Modulation(mooloop_core::ModulationParams {
+                mode: mooloop_core::ModulationMode::from_index(mode),
+                feedback: 0.92,
+                ..mooloop_core::ModulationParams::default()
+            }));
+        }
+        kinds
+    }
+
+    /// **A NaN in the input is gone within a block, in every insert**
+    /// (MOO-176). MOO-174 fixed the shared filter blocks; this is the rest:
+    /// the reverb's and plate's networks, the modulation effect's line and
+    /// all-passes, the dynamics detectors, the limiter's lookahead and the
+    /// Buffer's ring. One NaN frame goes in, finite audio follows, and from
+    /// the block after it every sample is finite and the device still makes
+    /// sound.
+    #[test]
+    fn a_nan_in_the_input_is_gone_within_a_block_in_every_insert() {
+        for params in every_kind_at_its_stickiest() {
+            let mut node = build_effect(params, SAMPLE_RATE);
+            let context = ProcessContext {
+                sample_rate: SAMPLE_RATE,
+                frames: BLOCK,
+                playing: true,
+                bpm: 120.0,
+                position_ticks: 0.0,
+                position_frames: 0,
+            };
+            let mut phase = 0usize;
+            for block in 0..8 {
+                let mut bus = StereoBus::with_capacity(BLOCK);
+                for index in 0..BLOCK {
+                    let s = (phase as f32 * 440.0 / SAMPLE_RATE as f32 * core::f32::consts::TAU)
+                        .sin()
+                        * 0.25;
+                    bus.l[index] = s;
+                    bus.r[index] = s;
+                    phase += 1;
+                }
+                if block == 1 {
+                    bus.l[100] = f32::NAN;
+                    bus.r[100] = f32::INFINITY;
+                }
+                node.process(&context, &mut bus, &EventList::empty(), None);
+                if block >= 2 {
+                    assert!(
+                        crate::testkit::all_finite(&bus.l[..BLOCK])
+                            && crate::testkit::all_finite(&bus.r[..BLOCK]),
+                        "{:?}: block {block} still carries the NaN",
+                        params.kind()
+                    );
+                }
+            }
+        }
+    }
+
+    /// The host's helper leaves a finite block untouched to the bit, and
+    /// silences only what is not finite.
+    #[test]
+    fn scrubbing_a_finite_block_changes_nothing() {
+        let mut bus = StereoBus::with_capacity(BLOCK);
+        for index in 0..BLOCK {
+            bus.l[index] = (index as f32 * 0.37).sin() * 0.9;
+            bus.r[index] = -bus.l[index];
+        }
+        let (left, right) = (bus.l[..BLOCK].to_vec(), bus.r[..BLOCK].to_vec());
+        assert!(!scrub_non_finite(&mut bus, BLOCK));
+        assert_eq!(bus.l[..BLOCK], left[..]);
+        assert_eq!(bus.r[..BLOCK], right[..]);
+        bus.l[7] = f32::NAN;
+        bus.r[9] = f32::NEG_INFINITY;
+        assert!(scrub_non_finite(&mut bus, BLOCK));
+        assert_eq!((bus.l[7], bus.r[9]), (0.0, 0.0));
+        assert_eq!(bus.l[8], left[8]);
     }
 }
