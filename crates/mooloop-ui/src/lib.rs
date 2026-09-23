@@ -87,7 +87,7 @@ use mooloop_session::channel::{
 use mooloop_session::command::{cycle_pane, CommandState, Pane};
 use mooloop_session::effects::EffectParamWrite;
 use mooloop_session::dialogs::{
-    confirm_dialog, pick_bundle_dialog, pick_export_dialog, pick_sample_dialog,
+    pick_bundle_dialog, pick_export_dialog, pick_sample_dialog,
     pick_save_dialog, pick_song_dialog, Picked,
 };
 use mooloop_session::document::{
@@ -2240,14 +2240,14 @@ fn feeding_track_color(
 /// The takes made this run that nothing in the app still refers to
 /// (`audio-recording/06`).
 ///
-/// Crash leftovers are filtered out here rather than in the scan: the quit
-/// prompt is a yes/no question and must not be the thing that sweeps away a
-/// file that may be the only copy of an unsaved song's take. Those belong to
-/// the clean-up dialog, which can list them unticked and say why.
+/// Crash leftovers are filtered out here rather than in the scan: what a quit
+/// offers is this session's takes, and a file that may be the only copy of an
+/// unsaved song's take is not the quit's to sweep. Those belong to File >
+/// Clean Up Takes, which lists them unticked and says why.
 fn unused_session_takes(st: &UiState, commands: &CommandState) -> Vec<recordings::UnusedTake> {
     let referenced = recordings::referenced_by(&st.session, &commands.history);
     recordings::unused_takes(
-        &settings::config_dir().join("recordings"),
+        &settings::recordings_dir(),
         &referenced,
         st.session_start,
     )
@@ -2256,33 +2256,108 @@ fn unused_session_takes(st: &UiState, commands: &CommandState) -> Vec<recordings
     .collect()
 }
 
-/// Ask whether to move `unused` to the trash, and do it if told to.
-///
-/// **Blocks on a dialog**, so it belongs on a thread that may block: the
-/// menu's Quit runs it on the dialog thread it already spawns, and the
-/// window's close runs it where that path already blocks for its own
-/// confirmation.
-fn offer_unused_takes(unused: &[recordings::UnusedTake]) {
-    if unused.is_empty() {
-        return;
+/// The takes dialog's state while it is up (MOO-38): the two lists, a tick
+/// for each row, and whether it was opened by a quit -- which then goes on to
+/// quit whichever button is pressed.
+struct TakesReview {
+    lists: recordings::CleanUp,
+    not_used: Vec<bool>,
+    earlier: Vec<bool>,
+    quitting: bool,
+}
+
+impl TakesReview {
+    /// "Not used by this song" starts ticked; "left from earlier sessions"
+    /// does not, and says why (`recordings::EARLIER_SESSIONS_NOTE`).
+    fn new(lists: recordings::CleanUp, quitting: bool) -> Self {
+        Self {
+            not_used: vec![true; lists.not_used.len()],
+            earlier: vec![false; lists.earlier.len()],
+            lists,
+            quitting,
+        }
     }
-    let (verb, them) = if unused.len() == 1 {
-        ("is", "it")
+
+    fn toggle(&mut self, earlier: bool, index: usize) {
+        let ticks = if earlier { &mut self.earlier } else { &mut self.not_used };
+        if let Some(tick) = ticks.get_mut(index) {
+            *tick = !*tick;
+        }
+    }
+
+    /// Every ticked take, in list order.
+    fn ticked(&self) -> Vec<recordings::UnusedTake> {
+        let pick = |takes: &[recordings::UnusedTake], ticks: &[bool]| {
+            takes
+                .iter()
+                .zip(ticks)
+                .filter(|(_, ticked)| **ticked)
+                .map(|(take, _)| take.clone())
+                .collect::<Vec<_>>()
+        };
+        let mut ticked = pick(&self.lists.not_used, &self.not_used);
+        ticked.extend(pick(&self.lists.earlier, &self.earlier));
+        ticked
+    }
+
+    /// The running total the confirm button acts on.
+    fn total(&self) -> String {
+        let ticked = self.ticked();
+        if ticked.is_empty() {
+            "Nothing ticked".into()
+        } else {
+            format!("Move {} to the trash", recordings::summary(&ticked))
+        }
+    }
+}
+
+fn take_rows(takes: &[recordings::UnusedTake], ticks: &[bool]) -> ModelRc<TakeRow> {
+    let rows: Vec<TakeRow> = takes
+        .iter()
+        .zip(ticks)
+        .map(|(take, ticked)| TakeRow {
+            name: take
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default()
+                .into(),
+            length: recordings::length_text(&take.path).into(),
+            size: recordings::size_text(take.bytes).into(),
+            date: recordings::date_text(take.modified).into(),
+            ticked: *ticked,
+        })
+        .collect();
+    ModelRc::new(VecModel::from(rows))
+}
+
+/// Put `review` on screen: rows, ticks, the total and the buttons' words.
+fn show_takes_review(window: &MainWindow, review: &TakesReview) {
+    window.set_takes_session_rows(take_rows(&review.lists.not_used, &review.not_used));
+    window.set_takes_earlier_rows(take_rows(&review.lists.earlier, &review.earlier));
+    window.set_takes_earlier_note(recordings::EARLIER_SESSIONS_NOTE.into());
+    window.set_takes_total(review.total().into());
+    window.set_takes_can_confirm(!review.ticked().is_empty());
+    if review.quitting {
+        window.set_takes_title("Before you quit".into());
+        window.set_takes_intro(
+            "These takes were recorded this session and this song does not use them. Ticked \
+             ones go to the desktop trash, where they can still be restored."
+                .into(),
+        );
+        window.set_takes_confirm_label("Trash and Quit".into());
+        window.set_takes_cancel_label("Keep and Quit".into());
     } else {
-        ("are", "them")
-    };
-    let question = format!(
-        "{} recorded this session {verb} not used by this song. Move {them} to the trash?",
-        recordings::summary(unused),
-    );
-    if !confirm_dialog(&question) {
-        return;
+        window.set_takes_title("Clean up recordings".into());
+        window.set_takes_intro(
+            "Recordings nothing in this song or its undo history uses. Ticked ones go to the \
+             desktop trash, where they can still be restored."
+                .into(),
+        );
+        window.set_takes_confirm_label("Move to Trash".into());
+        window.set_takes_cancel_label("Cancel".into());
     }
-    let (moved, failures) = recordings::discard_all(&recordings::DesktopTrash, unused);
-    log_info!("ui", "moved {moved} unused take(s) to the trash");
-    for failure in &failures {
-        log_error!("ui", "a take could not be moved to the trash: {failure}");
-    }
+    window.set_takes_open(true);
 }
 
 pub struct AppUi {
@@ -3955,7 +4030,7 @@ impl UiState {
             automation_point_model,
             automation_target_model,
             audio_sample_rate,
-            takes: TakeRecorder::new(settings::config_dir().join("recordings")),
+            takes: TakeRecorder::new(settings::recordings_dir()),
             session_start: SystemTime::now(),
             // Both come from the driver, which this constructor deliberately
             // cannot reach: it takes no `EngineHandle` so the channel-rack
@@ -6232,20 +6307,42 @@ impl AppUi {
         // Set when Quit or the window's close button arrives during a save,
         // and read by the pump once the operation has reported (MOO-92).
         let quit_after_document = Rc::new(Cell::new(false));
+        // The in-app question and what it is asking (MOO-91).
+        let question: Rc<RefCell<Option<Question>>> = Rc::new(RefCell::new(None));
+        // Set by an answer that has settled "unsaved changes?", just before
+        // it re-enters Quit, New or Open, which read and clear it -- always,
+        // so it can never outlive the one command it was set for.
+        let unsaved_settled = Rc::new(Cell::new(false));
+        // What a Save answer goes on to once the song has been saved. The
+        // pump takes it with the save's result, so a failed or cancelled
+        // save drops it and leaves the user where they were.
+        let after_save: Rc<Cell<Option<AfterUnsaved>>> = Rc::new(Cell::new(None));
+        // Set by a yes to "this kit drops channels", read by the pump when
+        // the waiting result comes back round.
+        let kit_confirmed = Rc::new(Cell::new(false));
+        // The takes dialog, while it is up (MOO-38).
+        let takes_review: Rc<RefCell<Option<TakesReview>>> = Rc::new(RefCell::new(None));
         {
             let st = state.clone();
             let quit_commands = command_state.clone();
             let weak = window.as_weak();
             let quit_after_document = quit_after_document.clone();
+            let question = question.clone();
+            let unsaved_settled = unsaved_settled.clone();
+            let takes_review = takes_review.clone();
             window.on_quit_requested(move || {
-                if weak
-                    .upgrade()
-                    .is_some_and(|window| defer_quit_while_busy(&window, &quit_after_document))
-                {
+                let Some(window) = weak.upgrade() else {
+                    return;
+                };
+                // A save in flight finishes first; the pump asks again after
+                // it (MOO-92).
+                if defer_quit_while_busy(&window, &quit_after_document) {
                     return;
                 }
-                // Same guard as Open Song: unsaved work must be confirmed
-                // away, and the dialog round-trip must not block the UI.
+                // **Never blocks on a program that may not be there** (MOO-91):
+                // the question is the app's own, and every answer leads
+                // somewhere -- saved and gone, dropped and gone, or still
+                // open. With a zenity question, no zenity meant no quit.
                 //
                 // **A live take is not asked about** (open question 9,
                 // answered 2026-09-21): quit finishes it the way Stop would and leaves,
@@ -6253,48 +6350,56 @@ impl AppUi {
                 // than something worth a dialog. `AppUi::finish_takes` does
                 // that work after the loop. It is not `dirty` either way -- a
                 // take is not an edit until it lands on a channel.
-                let prompt = st
-                    .borrow()
-                    .session
-                    .dirty
-                    .then_some("Discard unsaved song changes and quit?");
-                // Scanned here for the same reason the prompt is decided
-                // here -- the dialog thread cannot hold `UiState` -- and the
-                // list is plain data, so it crosses.
+                let settled = unsaved_settled.replace(false);
+                if st.borrow().session.dirty && !settled {
+                    let name = song_name(&st.borrow());
+                    ask_unsaved(&window, &question, AfterUnsaved::Quit, name.as_deref());
+                    return;
+                }
+                // After the decision to quit, never before it: a cancelled
+                // quit must not have tidied anything away.
                 let unused = unused_session_takes(&st.borrow(), &quit_commands.borrow());
-                std::thread::spawn(move || {
-                    if let Some(prompt) = prompt {
-                        if !confirm_dialog(prompt) {
-                            return;
-                        }
-                    }
-                    // After the decision to quit, never before it: a
-                    // cancelled quit must not have tidied anything away.
-                    offer_unused_takes(&unused);
-                    let _ = slint::invoke_from_event_loop(|| {
-                        slint::quit_event_loop().ok();
-                    });
-                });
+                if unused.is_empty() {
+                    slint::quit_event_loop().ok();
+                    return;
+                }
+                let review = TakesReview::new(
+                    recordings::CleanUp {
+                        not_used: unused,
+                        earlier: Vec::new(),
+                    },
+                    true,
+                );
+                show_takes_review(&window, &review);
+                *takes_review.borrow_mut() = Some(review);
             });
         }
         {
             let st = state.clone();
             let tx = document_tx.clone();
             let weak = window.as_weak();
+            let question = question.clone();
+            let unsaved_settled = unsaved_settled.clone();
             window.on_new_song(move || {
                 let dirty = st.borrow().session.dirty;
+                let settled = unsaved_settled.replace(false);
                 let Some(window) = weak.upgrade() else {
                     return;
                 };
+                if dirty && !settled {
+                    if window.get_document_busy() {
+                        say_busy(&window);
+                    } else {
+                        let name = song_name(&st.borrow());
+                        ask_unsaved(&window, &question, AfterUnsaved::NewSong, name.as_deref());
+                    }
+                    return;
+                }
                 if !begin_document_operation(&window, "Creating new song...") {
                     return;
                 }
                 let tx = tx.clone();
                 std::thread::spawn(move || {
-                    if dirty && !confirm_dialog("Discard unsaved song changes?") {
-                        let _ = tx.send(DocumentResult::Cancelled);
-                        return;
-                    }
                     let _ = tx.send(DocumentResult::NewSong(Project::starter_kit(
                         fresh_starter_seed(),
                     )));
@@ -6306,20 +6411,28 @@ impl AppUi {
             let st = state.clone();
             let tx = document_tx.clone();
             let weak = window.as_weak();
+            let question = question.clone();
+            let unsaved_settled = unsaved_settled.clone();
             window.on_open_song(move || {
                 let dirty = st.borrow().session.dirty;
+                let settled = unsaved_settled.replace(false);
                 let Some(window) = weak.upgrade() else {
                     return;
                 };
+                if dirty && !settled {
+                    if window.get_document_busy() {
+                        say_busy(&window);
+                    } else {
+                        let name = song_name(&st.borrow());
+                        ask_unsaved(&window, &question, AfterUnsaved::OpenSong, name.as_deref());
+                    }
+                    return;
+                }
                 if !begin_document_operation(&window, "Opening song...") {
                     return;
                 }
                 let tx = tx.clone();
                 std::thread::spawn(move || {
-                    if dirty && !confirm_dialog("Discard unsaved song changes?") {
-                        let _ = tx.send(DocumentResult::Cancelled);
-                        return;
-                    }
                     let path = match chosen_path(pick_song_dialog("Open mooloop song"), "open a song") {
                         Ok(path) => path,
                         Err(result) => {
@@ -6657,6 +6770,7 @@ impl AppUi {
             let st = state.clone();
             let tx = document_tx.clone();
             let weak = window.as_weak();
+            let question = question.clone();
             window.on_save_preset_confirmed(move |name, category| {
                 let Some(window) = weak.upgrade() else {
                     return;
@@ -6741,62 +6855,79 @@ impl AppUi {
                 // code could do" -- and the ordinary save dialog was doing it
                 // on every confirm. Note the collision can also come from
                 // sanitising: "My Delay" and "My/Delay" are both `My_Delay`.
-                if path.exists()
-                    && !confirm_dialog(&format!(
-                        "A preset called \"{file_stem}\" already exists here. Replace it?"
-                    ))
-                {
-                    return;
-                }
-                if !begin_document_operation(&window, "Saving preset...") {
-                    return;
-                }
+                //
+                // Asked in the app's own dialog (MOO-91): the zenity question
+                // this was ran on the UI thread and froze it, meters and MIDI
+                // included, until it was answered.
+                let target = source.target;
+                let taken = path.exists();
                 let tx = tx.clone();
-                std::thread::spawn(move || {
-                    let result = match source.target {
-                        PresetSaveTarget::Generator => mooloop_project::save_generator_preset(
-                            &path,
-                            &source.setup.source,
-                            info,
-                            AssetMode::Embedded,
-                        ),
-                        PresetSaveTarget::Channel => mooloop_project::save_channel_preset(
-                            &path,
-                            &source.setup,
-                            info,
-                            AssetMode::Embedded,
-                        ),
-                        PresetSaveTarget::Effect { .. } => match (&source.run, source.effect) {
-                            // A container saves as its run: the box and
-                            // everything in it, which is the whole point of
-                            // there being a box.
-                            (Some(run), _) => mooloop_project::save_effect_run_preset(
+                let save = move |window: &MainWindow| {
+                    if !begin_document_operation(window, "Saving preset...") {
+                        return;
+                    }
+                    std::thread::spawn(move || {
+                        let result = match source.target {
+                            PresetSaveTarget::Generator => mooloop_project::save_generator_preset(
                                 &path,
-                                run,
+                                &source.setup.source,
                                 info,
                                 AssetMode::Embedded,
                             ),
-                            (None, Some(effect)) => mooloop_project::save_effect_preset(
+                            PresetSaveTarget::Channel => mooloop_project::save_channel_preset(
                                 &path,
-                                &effect,
+                                &source.setup,
                                 info,
                                 AssetMode::Embedded,
                             ),
-                            (None, None) => return,
+                            PresetSaveTarget::Effect { .. } => match (&source.run, source.effect) {
+                                // A container saves as its run: the box and
+                                // everything in it, which is the whole point of
+                                // there being a box.
+                                (Some(run), _) => mooloop_project::save_effect_run_preset(
+                                    &path,
+                                    run,
+                                    info,
+                                    AssetMode::Embedded,
+                                ),
+                                (None, Some(effect)) => mooloop_project::save_effect_preset(
+                                    &path,
+                                    &effect,
+                                    info,
+                                    AssetMode::Embedded,
+                                ),
+                                (None, None) => return,
+                            },
+                        };
+                        let result = result
+                            .map(|report| DocumentResult::SavedPreset {
+                                label,
+                                report,
+                                named,
+                            })
+                            .unwrap_or_else(|error| DocumentResult::Failed {
+                                action: "save this preset",
+                                problem: error.into(),
+                            });
+                        let _ = tx.send(result);
+                    });
+                };
+                if taken {
+                    ask_question(
+                        &window,
+                        &question,
+                        Question::ReplacePreset {
+                            target,
+                            save: Box::new(save),
                         },
-                    };
-                    let result = result
-                        .map(|report| DocumentResult::SavedPreset {
-                            label,
-                            report,
-                            named,
-                        })
-                        .unwrap_or_else(|error| DocumentResult::Failed {
-                            action: "save this preset",
-                            problem: error.into(),
-                        });
-                    let _ = tx.send(result);
-                });
+                        &format!("Replace the preset \"{file_stem}\"?"),
+                        "A preset of that name is already saved here. Replacing it cannot be undone.",
+                        "Replace",
+                        "",
+                    );
+                    return;
+                }
+                save(&window);
             });
         }
 
@@ -6865,32 +6996,198 @@ impl AppUi {
             let close_commands = command_state.clone();
             let weak = window.as_weak();
             let quit_after_document = quit_after_document.clone();
+            let question = question.clone();
+            let takes_review = takes_review.clone();
             window.window().on_close_requested(move || {
+                let Some(window) = weak.upgrade() else {
+                    return CloseRequestResponse::HideWindow;
+                };
                 // A save in flight finishes first; the pump quits after it.
-                if weak
-                    .upgrade()
-                    .is_some_and(|window| defer_quit_while_busy(&window, &quit_after_document))
-                {
+                if defer_quit_while_busy(&window, &quit_after_document) {
                     return CloseRequestResponse::KeepWindowShown;
                 }
                 // Closing the window is the other way out, and it asks the
-                // same two questions as the Quit menu row in the same order.
-                // A take in flight first: it is not `dirty`, so this path used
-                // to close on it silently.
+                // same questions as the Quit menu row, in the same order and
+                // the same words. The window stays up only while a question
+                // is on screen: every answer to it goes through Quit's own
+                // path (MOO-91), which leaves by `quit_event_loop`.
                 // No prompt for a live take here either; see the Quit row.
-                let prompt = st
-                    .borrow()
-                    .session
-                    .dirty
-                    .then_some("Quit without saving this song?");
-                if let Some(prompt) = prompt {
-                    if !confirm_dialog(prompt) {
-                        return CloseRequestResponse::KeepWindowShown;
-                    }
+                if st.borrow().session.dirty {
+                    let name = song_name(&st.borrow());
+                    ask_unsaved(&window, &question, AfterUnsaved::Quit, name.as_deref());
+                    return CloseRequestResponse::KeepWindowShown;
                 }
                 let unused = unused_session_takes(&st.borrow(), &close_commands.borrow());
-                offer_unused_takes(&unused);
-                CloseRequestResponse::HideWindow
+                if unused.is_empty() {
+                    return CloseRequestResponse::HideWindow;
+                }
+                let review = TakesReview::new(
+                    recordings::CleanUp {
+                        not_used: unused,
+                        earlier: Vec::new(),
+                    },
+                    true,
+                );
+                show_takes_review(&window, &review);
+                *takes_review.borrow_mut() = Some(review);
+                CloseRequestResponse::KeepWindowShown
+            });
+        }
+        // --- The in-app question's answers (MOO-91) ---
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            let question = question.clone();
+            let unsaved_settled = unsaved_settled.clone();
+            let after_save = after_save.clone();
+            let kit_confirmed = kit_confirmed.clone();
+            let tx = document_tx.clone();
+            window.on_question_answered(move |answer| {
+                let Some(window) = weak.upgrade() else {
+                    return;
+                };
+                let Some(asked) = question.borrow_mut().take() else {
+                    return;
+                };
+                match asked {
+                    Question::Unsaved(after) => match unsaved_step(after, answer) {
+                        UnsavedStep::SaveThen(after) => {
+                            after_save.set(Some(after));
+                            // The ordinary save, chooser and all. Refused only
+                            // if something is already running, and then the
+                            // continuation must not wait for a save that never
+                            // started.
+                            window.invoke_save_song();
+                            if !window.get_document_busy() {
+                                after_save.set(None);
+                            }
+                        }
+                        UnsavedStep::Go(after) => {
+                            go_on_after_unsaved(&window, &unsaved_settled, after);
+                        }
+                        UnsavedStep::Stay => window.set_status_message("".into()),
+                    },
+                    Question::ReplacePreset { target, save } => {
+                        if answer == 1 {
+                            save(&window);
+                        } else {
+                            // Back to the preset dialog, which still saves
+                            // under another name.
+                            st.borrow_mut().session.pending_preset_save = Some(target);
+                        }
+                    }
+                    Question::LoadKit(result) => {
+                        if answer == 1 {
+                            kit_confirmed.set(true);
+                            let _ = tx.send(*result);
+                        } else {
+                            window.set_document_busy(false);
+                            window.set_status_message("Kit load cancelled".into());
+                        }
+                    }
+                }
+            });
+        }
+        // --- Unused takes (MOO-38) ---
+        {
+            let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            let takes_review = takes_review.clone();
+            window.on_clean_up_takes(move || {
+                let Some(window) = weak.upgrade() else {
+                    return;
+                };
+                let lists = {
+                    let st = st.borrow();
+                    let referenced = recordings::referenced_by(&st.session, &commands.borrow().history);
+                    // The song's own `recordings/`, held against the song as
+                    // saved on disk as well: a file it plays there is not
+                    // unused because an unsaved edit stopped playing it.
+                    let song = st.session.bundle_path.as_deref().and_then(|song| {
+                        let folder = mooloop_project::song_assets_dir(song)?
+                            .join(mooloop_project::RECORDINGS_DIR);
+                        Some((folder, recordings::saved_song_references(song)?))
+                    });
+                    recordings::clean_up(
+                        &settings::recordings_dir(),
+                        song.as_ref().map(|(folder, saved)| (folder.as_path(), saved)),
+                        &referenced,
+                        st.session_start,
+                    )
+                };
+                if lists.not_used.is_empty() && lists.earlier.is_empty() {
+                    window.set_status_message(
+                        "No unused takes: this song or its undo history uses every recording"
+                            .into(),
+                    );
+                    return;
+                }
+                let review = TakesReview::new(lists, false);
+                show_takes_review(&window, &review);
+                *takes_review.borrow_mut() = Some(review);
+            });
+        }
+        {
+            let weak = window.as_weak();
+            let takes_review = takes_review.clone();
+            window.on_take_toggled(move |earlier, index| {
+                let (Some(window), Ok(index)) = (weak.upgrade(), usize::try_from(index)) else {
+                    return;
+                };
+                let mut review = takes_review.borrow_mut();
+                let Some(review) = review.as_mut() else {
+                    return;
+                };
+                review.toggle(earlier, index);
+                show_takes_review(&window, review);
+            });
+        }
+        {
+            let weak = window.as_weak();
+            let takes_review = takes_review.clone();
+            window.on_takes_confirmed(move || {
+                let Some(review) = takes_review.borrow_mut().take() else {
+                    return;
+                };
+                let ticked = review.ticked();
+                let quitting = review.quitting;
+                let weak = weak.clone();
+                // Off the UI thread: the desktop's trash is a file move on
+                // Linux and a conversation with Finder on macOS.
+                std::thread::spawn(move || {
+                    let (moved, failures) =
+                        recordings::discard_all(&recordings::DesktopTrash, &ticked);
+                    log_info!("ui", "moved {moved} unused take(s) to the trash");
+                    for failure in &failures {
+                        log_error!("ui", "a take could not be moved to the trash: {failure}");
+                    }
+                    let _ = weak.upgrade_in_event_loop(move |window| {
+                        if quitting {
+                            slint::quit_event_loop().ok();
+                            return;
+                        }
+                        let noun = if moved == 1 { "take" } else { "takes" };
+                        let message = if failures.is_empty() {
+                            format!("Moved {moved} {noun} to the trash")
+                        } else {
+                            format!(
+                                "Moved {moved} {noun} to the trash; {} could not be moved (see the log)",
+                                failures.len()
+                            )
+                        };
+                        window.set_status_message(message.into());
+                    });
+                });
+            });
+        }
+        {
+            let takes_review = takes_review.clone();
+            window.on_takes_cancelled(move || {
+                // Opened by a quit: "Keep and Quit" still quits.
+                if takes_review.borrow_mut().take().is_some_and(|review| review.quitting) {
+                    slint::quit_event_loop().ok();
+                }
             });
         }
 
@@ -7011,6 +7308,7 @@ impl AppUi {
                     "file.save" => window.invoke_save_song(),
                     "file.save-as" => window.invoke_save_song_as(),
                     "file.export" => window.invoke_export_audio(),
+                    "recording.clean-up" => window.invoke_clean_up_takes(),
                     "file.quit" => window.invoke_quit_requested(),
                     "edit.undo" => window.invoke_edit_command_requested(0, channel),
                     "edit.redo" => window.invoke_edit_command_requested(1, channel),
@@ -14381,6 +14679,14 @@ impl AppUi {
         // Finished takes, decoded off the UI thread like any other file.
         let (take_tx, take_rx) = std::sync::mpsc::channel::<TakeLoad>();
         let pump = Timer::default();
+        // The in-app question's state, for the answers only the pump can
+        // give: a save that finished, a kit that would drop notes (MOO-91).
+        let (after_save, unsaved_settled, question, kit_confirmed) = (
+            after_save.clone(),
+            unsaved_settled.clone(),
+            question.clone(),
+            kit_confirmed.clone(),
+        );
         // Diagnostics shared with the autodrive self-test (MOOLOOP_AUTODRIVE=1).
         let stats = Rc::new(Cell::new((0.0f32, false, 0usize)));
         let stats_in = stats.clone();
@@ -14513,6 +14819,11 @@ impl AppUi {
                         return;
                     };
                     window.set_document_busy(false);
+                    // Whatever a Save answer to "unsaved changes?" was
+                    // waiting to do. Only a song save that succeeded goes on
+                    // to it; every other result -- a failure, a cancelled
+                    // chooser -- drops it, and the user stays where they are.
+                    let continuation = after_save.take();
                     match result {
                         DocumentResult::Cancelled => {
                             window.set_status_message("".into());
@@ -14613,6 +14924,19 @@ impl AppUi {
                                 )
                                 .into(),
                             );
+                            let still_dirty = state.session.dirty;
+                            let name = song_name(&state);
+                            drop(state);
+                            if let Some(after) = continuation {
+                                // Changed while it was saving -- a MIDI take,
+                                // a controller -- so it is not what was saved:
+                                // ask again rather than drop the difference.
+                                if still_dirty {
+                                    ask_unsaved(&window, &question, after, name.as_deref());
+                                } else {
+                                    go_on_after_unsaved(&window, &unsaved_settled, after);
+                                }
+                            }
                         }
                         DocumentResult::SavedOther { label, report } => {
                             log_info!("project", "{label}");
@@ -14700,6 +15024,33 @@ impl AppUi {
                             target,
                             document,
                         } => {
+                            // A kit shorter than the song drops channels, and
+                            // with them their notes: asked first, in the app
+                            // (MOO-91). The result waits in the question and
+                            // comes back round on a yes, with the flag set.
+                            if matches!(target, LoadTarget::Kit) && !kit_confirmed.replace(false) {
+                                let current = st
+                                    .borrow()
+                                    .session
+                                    .project_snapshot(window.get_bpm(), window.get_swing_percent());
+                                if kit_drops_notes(&current, &document.report.document) {
+                                    window.set_document_busy(true);
+                                    ask_question(
+                                        &window,
+                                        &question,
+                                        Question::LoadKit(Box::new(DocumentResult::Loaded {
+                                            path,
+                                            target,
+                                            document,
+                                        })),
+                                        "Load this kit?",
+                                        "It has fewer channels than the song, so the channels past its end go, and the notes on them with them.",
+                                        "Load Kit",
+                                        "",
+                                    );
+                                    continue;
+                                }
+                            }
                             let ResolvedDocument {
                                 report,
                                 samples: loaded_samples,
@@ -14735,7 +15086,9 @@ impl AppUi {
                                 target,
                                 document,
                                 loaded_samples,
-                                confirm_dialog,
+                                // Asked above, before anything was taken
+                                // apart.
+                                |_| true,
                             ) {
                                 Ok(merged) => merged,
                                 Err(status) => {
@@ -15948,7 +16301,7 @@ impl AppUi {
                     let path = channel.and_then(|channel| channel.sample_path.clone());
                     let in_recordings = path
                         .as_ref()
-                        .is_some_and(|path| path.starts_with(settings::config_dir().join("recordings")));
+                        .is_some_and(|path| path.starts_with(settings::recordings_dir()));
                     let embedded = channel.is_some_and(|channel| channel.sample_embedded);
                     let label = commands
                         .borrow()
@@ -16541,6 +16894,19 @@ fn load_label(target: &LoadTarget) -> &'static str {
 /// channel that plays none.
 type LoadedSamples = Vec<Option<Arc<SampleData>>>;
 
+/// Whether loading `document` as a kit over `current` would drop channels
+/// that hold notes: a kit shorter than the song ends the channels past it.
+fn kit_drops_notes(current: &Project, document: &LoadedDocument) -> bool {
+    let LoadedDocument::Kit(kit) = document else {
+        return false;
+    };
+    let kept = kit.channels.len();
+    kept < current.channels.len()
+        && current.channels[kept..]
+            .iter()
+            .any(|channel| channel.notes.iter().any(|lane| !lane.is_empty()))
+}
+
 /// The project a finished load installs, built from the song that is open.
 ///
 /// A song replaces it; a kit replaces its channels' setups and keeps their
@@ -16550,7 +16916,8 @@ type LoadedSamples = Vec<Option<Arc<SampleData>>>;
 /// not the one that was asked for.
 ///
 /// `confirm` asks whether to go on when a kit is shorter than the song and
-/// would drop channels that hold notes. The pump passes `confirm_dialog`.
+/// would drop channels that hold notes. The pump has already asked in the
+/// app's own dialog by then (`kit_drops_notes`), so it passes `|_| true`.
 fn merge_loaded_document(
     current: Project,
     current_samples: Vec<Option<Arc<SampleData>>>,
@@ -16559,13 +16926,10 @@ fn merge_loaded_document(
     loaded_samples: Vec<Option<Arc<SampleData>>>,
     confirm: impl FnOnce(&str) -> bool,
 ) -> Result<(Project, LoadedSamples), &'static str> {
+    let dropping_notes = kit_drops_notes(&current, &document);
     match (target, document) {
         (LoadTarget::Song, LoadedDocument::Song(project)) => Ok((project, loaded_samples)),
         (LoadTarget::Kit, LoadedDocument::Kit(kit)) => {
-            let dropping_notes = kit.channels.len() < current.channels.len()
-                && current.channels[kit.channels.len()..]
-                    .iter()
-                    .any(|channel| channel.notes.iter().any(|lane| !lane.is_empty()));
             if dropping_notes && !confirm("This kit removes channels containing notes. Continue?")
             {
                 return Err("Kit load cancelled");
@@ -16963,6 +17327,124 @@ fn build_preset_rows(
     rows
 }
 
+/// What the in-app question is asking (MOO-91), so its answer knows what to
+/// go on to. Held by Rust rather than the markup, because what an answer
+/// does -- save and then quit, load the kit that was waiting -- is data the
+/// markup has no business holding.
+enum Question {
+    /// Unsaved changes, before doing `AfterUnsaved`.
+    Unsaved(AfterUnsaved),
+    /// A preset of that name exists. `save` writes over it; a cancel puts
+    /// `target` back so the preset dialog still saves.
+    ReplacePreset {
+        target: PresetSaveTarget,
+        save: Box<dyn FnOnce(&MainWindow)>,
+    },
+    /// A kit shorter than the song would drop channels holding notes. The
+    /// loaded result waits here and goes back through the pump on a yes.
+    LoadKit(Box<DocumentResult>),
+}
+
+/// What the unsaved-changes question was standing in front of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AfterUnsaved {
+    Quit,
+    NewSong,
+    OpenSong,
+}
+
+/// What an answer to the unsaved-changes question does. `answer` is the
+/// dialog's: 1 Save, 2 Don't Save, anything else Cancel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UnsavedStep {
+    /// Save, and go on only once the save has succeeded.
+    SaveThen(AfterUnsaved),
+    /// Go on, dropping the changes.
+    Go(AfterUnsaved),
+    /// Stay where you are.
+    Stay,
+}
+
+fn unsaved_step(after: AfterUnsaved, answer: i32) -> UnsavedStep {
+    match answer {
+        1 => UnsavedStep::SaveThen(after),
+        2 => UnsavedStep::Go(after),
+        _ => UnsavedStep::Stay,
+    }
+}
+
+/// Ask `question` in the app's own dialog. `secondary` empty hides the third
+/// button.
+fn ask_question(
+    window: &MainWindow,
+    slot: &RefCell<Option<Question>>,
+    question: Question,
+    title: &str,
+    detail: &str,
+    primary: &str,
+    secondary: &str,
+) {
+    *slot.borrow_mut() = Some(question);
+    window.set_question_title(title.into());
+    window.set_question_detail(detail.into());
+    window.set_question_primary(primary.into());
+    window.set_question_secondary(secondary.into());
+    window.set_question_open(true);
+}
+
+/// Save / Don't Save / Cancel, in front of `after` (MOO-91). One wording for
+/// Quit and the window's close button, which used to ask two different
+/// questions. `song` is the open song's name, when it has one.
+fn ask_unsaved(
+    window: &MainWindow,
+    slot: &RefCell<Option<Question>>,
+    after: AfterUnsaved,
+    song: Option<&str>,
+) {
+    let what = song.map_or_else(|| "this song".to_string(), |name| format!("\"{name}\""));
+    let before = match after {
+        AfterUnsaved::Quit => "quitting",
+        AfterUnsaved::NewSong => "starting a new song",
+        AfterUnsaved::OpenSong => "opening another song",
+    };
+    ask_question(
+        window,
+        slot,
+        Question::Unsaved(after),
+        &format!("Save changes to {what} before {before}?"),
+        "If you don't save, the changes since the last save are lost.",
+        "Save",
+        "Don't Save",
+    );
+}
+
+/// The open song's name for a question: its file's stem, or `None` while it
+/// has never been saved.
+fn song_name(state: &UiState) -> Option<String> {
+    state
+        .session
+        .bundle_path
+        .as_deref()
+        .and_then(Path::file_stem)
+        .map(|stem| stem.to_string_lossy().into_owned())
+}
+
+/// Do what the unsaved-changes question stood in front of, now that it has
+/// been answered. `settled` tells the command it re-enters not to ask again.
+fn go_on_after_unsaved(window: &MainWindow, settled: &Cell<bool>, after: AfterUnsaved) {
+    settled.set(true);
+    match after {
+        AfterUnsaved::Quit => window.invoke_quit_requested(),
+        AfterUnsaved::NewSong => window.invoke_new_song(),
+        AfterUnsaved::OpenSong => window.invoke_open_song(),
+    }
+}
+
+/// Say that a document operation is running, without starting one.
+fn say_busy(window: &MainWindow) {
+    window.set_status_message("Busy: wait for the file operation in progress to finish".into());
+}
+
 /// Starts a document operation -- a save, an open, a load, an export -- or
 /// refuses it because one is already running, and says so.
 ///
@@ -16975,9 +17457,7 @@ fn build_preset_rows(
 /// on the UI thread, makes "one at a time" true of every entry point at once.
 fn begin_document_operation(window: &MainWindow, status: &str) -> bool {
     if window.get_document_busy() {
-        window.set_status_message(
-            "Busy: wait for the file operation in progress to finish".into(),
-        );
+        say_busy(window);
         return false;
     }
     window.set_document_busy(true);
@@ -18188,6 +18668,76 @@ mod tests {
 
         window.set_document_busy(false);
         assert!(begin_document_operation(&window, "Creating new song..."));
+    }
+
+    /// **The unsaved-changes question's three answers** (MOO-91): Save goes
+    /// on only through a save, Don't Save goes on, and Cancel -- or anything
+    /// the dialog did not mean, such as Escape's 0 -- stays.
+    #[test]
+    fn the_unsaved_question_answers_save_then_go_or_stay() {
+        for after in [AfterUnsaved::Quit, AfterUnsaved::NewSong, AfterUnsaved::OpenSong] {
+            assert_eq!(unsaved_step(after, 1), UnsavedStep::SaveThen(after));
+            assert_eq!(unsaved_step(after, 2), UnsavedStep::Go(after));
+            assert_eq!(unsaved_step(after, 0), UnsavedStep::Stay);
+            assert_eq!(unsaved_step(after, 7), UnsavedStep::Stay);
+        }
+    }
+
+    /// **Asking never quits and never blocks** (MOO-91): it puts the
+    /// question on the window and remembers what it stands in front of, in
+    /// one wording for Quit and the close button.
+    #[test]
+    fn asking_about_unsaved_changes_opens_the_apps_own_question() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().expect("the testing backend builds a window");
+        let slot = RefCell::new(None);
+
+        ask_unsaved(&window, &slot, AfterUnsaved::Quit, Some("beat"));
+
+        assert!(window.get_question_open());
+        assert_eq!(window.get_question_title(), "Save changes to \"beat\" before quitting?");
+        assert_eq!(window.get_question_primary(), "Save");
+        assert_eq!(window.get_question_secondary(), "Don't Save");
+        assert!(matches!(*slot.borrow(), Some(Question::Unsaved(AfterUnsaved::Quit))));
+
+        ask_unsaved(&window, &slot, AfterUnsaved::OpenSong, None);
+        assert_eq!(
+            window.get_question_title(),
+            "Save changes to this song before opening another song?"
+        );
+    }
+
+    /// **The takes dialog's ticks and total** (MOO-38): this session's takes
+    /// start ticked, earlier sessions' do not, and the total is what the
+    /// confirm will move.
+    #[test]
+    fn the_takes_dialog_starts_with_only_this_sessions_takes_ticked() {
+        let take = |name: &str, bytes: u64, earlier: bool| recordings::UnusedTake {
+            path: PathBuf::from(format!("/r/{name}.wav")),
+            bytes,
+            modified: SystemTime::UNIX_EPOCH,
+            from_earlier_session: earlier,
+        };
+        let mut review = TakesReview::new(
+            recordings::CleanUp {
+                not_used: vec![take("a", 1024 * 1024, false), take("b", 1024 * 1024, false)],
+                earlier: vec![take("old", 4 * 1024 * 1024, true)],
+            },
+            false,
+        );
+        assert_eq!(review.total(), "Move 2 takes (2.0 MB) to the trash");
+
+        review.toggle(true, 0);
+        review.toggle(false, 1);
+        let ticked: Vec<_> = review.ticked().into_iter().map(|take| take.path).collect();
+        assert_eq!(ticked, [PathBuf::from("/r/a.wav"), PathBuf::from("/r/old.wav")]);
+        assert_eq!(review.total(), "Move 2 takes (5.0 MB) to the trash");
+
+        review.toggle(false, 0);
+        review.toggle(true, 0);
+        review.toggle(false, 99);
+        assert!(review.ticked().is_empty());
+        assert_eq!(review.total(), "Nothing ticked");
     }
 
     /// **Quit waits for a save in flight** (MOO-92): it is remembered rather

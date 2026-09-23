@@ -6,7 +6,7 @@ plan (same `SCOPE.md` item, filed before the migration) and is kept open as
 the earlier tracking issue for the input side; MOO-16 is where the plan's
 current shape lives.
 
-**Written 2026-09-17. Steps 02-05 landed 2026-09-18, 01's JACK half 2026-09-19 and its Core Audio half 2026-09-20; step 06 is half landed, 2026-09-20.** This is `SCOPE.md` §2 item 3
+**Written 2026-09-17. Steps 02-05 landed 2026-09-18, 01's JACK half 2026-09-19 and its Core Audio half 2026-09-20; step 06's quit prompt 2026-09-20 and the rest of it 2026-09-23.** This is `SCOPE.md` §2 item 3
 (audio input) together with the audio half of item 5 (recording), in the shape
 Adam settled on 2026-09-17, and since 2026-09-18 item 6 (resampling) as well,
 which turned out to be the same feature with the source inside the app.
@@ -118,7 +118,7 @@ order.
 | [04](04-the-take.md) | A finished take becomes the channel's sample, with an undo entry and no notes | session, UI | **landed 2026-09-18** -- see below |
 | [05](05-interface.md) | Record button, source meter, the growing waveform, the non-sampler rule. **Acceptance: resample a loop into a sampler and play it back** | UI build | **landed 2026-09-18** -- see below |
 | [01](01-input-in-the-engine.md) | Drivers deliver hardware input into an input bus, which becomes one more source; monitoring | engine | **Landed**: JACK 2026-09-19 with monitoring and the input meter, Core Audio 2026-09-20 -- see below |
-| [06](06-unused-takes.md) | Find and delete takes nothing refers to | session, project, UI build | **quit prompt landed 2026-09-20**; the clean-up dialog is not built |
+| [06](06-unused-takes.md) | Find and delete takes nothing refers to | session, project, UI build | **landed**: quit prompt 2026-09-20, the clean-up command and dialog 2026-09-23 (MOO-38) -- see below |
 
 **Why internal sources can go first without new scheduling:** capture is a
 sink, not a consumer. It reads a buffer after the whole block has rendered,
@@ -495,11 +495,11 @@ else the same work twice.
 This is step 04's contract rather than step 06's, so it is written here and
 not in `06-unused-takes.md`.
 
-## What step 06 has, and what it is still missing
+## What step 06 actually did
 
-**The quit prompt landed 2026-09-20; the clean-up dialog did not**, on Adam's
-call, taking the half the step file itself says "handles the common case
-without ever opening the dialog".
+**The quit prompt landed 2026-09-20 and the clean-up dialog 2026-09-23**
+(MOO-38). The prompt went first on Adam's call, as the half the step file
+itself says "handles the common case without ever opening the dialog".
 
 What is in: `mooloop-session/src/recordings.rs` answers which takes nothing
 refers to -- the open session's channels *and* every undo and redo snapshot,
@@ -527,18 +527,38 @@ sequence MOO-89 suspected (a save deleting the copy of a take the undo history
 still points at): `an_earlier_take_survives_the_save_after_the_retake_that_replaced_it`.
 `PROJECT_FORMAT.md` has the folder and the rule.
 
-Still missing from step 06, all of it dialog-side: the `recording.clean-up`
-command and its `ACTIONS.md` row, the two-list dialog with name/length/size/date
-and a running total, and the project-assets half -- sweeping a song's own
-`recordings/` folder, which needs the saved file on disk read as a third
-reference source. The scanner takes any set of projects, so that is an
-argument rather than a rewrite.
+**The dialog, 2026-09-23.** `recording.clean-up` (File > Clean Up Takes, in
+`ACTIONS.md`) opens `TakesDialog` with the plan's two lists, built by
+`recordings::clean_up`:
 
-**A note for whoever builds the dialog.** This codebase has no in-app dialog
-framework: `dialogs.rs` shells out to `zenity` and `osascript`. A two-list
-tickable dialog is a new Slint surface and therefore a `main.slint` crossing,
-which is the expensive kind of change (`AGENTS.md`, "order device work so the
-face contract comes last"). That cost is why the prompt went first.
+- *Not used by this song*, ticked: this session's shared-folder takes that
+  nothing reaches, and takes in the song's own `recordings/` that neither the
+  live song, its history **nor the song as saved on disk** reaches
+  (`saved_song_references`, the third reference source). A song never saved,
+  or one whose file will not read, offers nothing from its folder.
+- *Left from earlier sessions*, unticked, with the reason stated
+  (`EARLIER_SESSIONS_NOTE`).
+
+Each row has its name, length (from the WAV header), size and date (in UTC,
+labelled so: the take's own file name is UTC and the crate carries no
+time-zone database), and the button says the running total it will move.
+**The quit prompt is the same dialog now**, opened with "Trash and Quit" and
+"Keep and Quit", because MOO-91 took every question off `confirm_dialog`: a
+zenity question that would not start read as No, and one that did blocked the
+UI thread.
+
+**The quit scan still counts the undo history and the unsaved song** (MOO-38
+question 2). Adam, 2026-09-22: *"i dont know. i dont really have enough
+context to understand the question. this seems like it is regarding only an
+edge case?"* That is not a ruling, so the option that loses nothing was
+taken: at quit, a take the history or the unsaved song still reaches is not
+offered. The cost is the edge case he named -- a retake that replaced an
+earlier take keeps the earlier one "referenced" through its Record Take entry,
+so the quit does not offer it -- and it is not lost track of: by the next run
+it is an earlier-session file, listed by the dialog, unticked, with the reason
+stated. Ignoring the history at quit would have offered, ticked, a take whose
+only reference is a song the user chose not to save; the trash would make
+that recoverable, but not obviously so.
 
 ## Not in this plan
 

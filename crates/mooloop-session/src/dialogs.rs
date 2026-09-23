@@ -1,4 +1,10 @@
-//! File and confirmation dialogs from the desktop.
+//! File choosers from the desktop.
+//!
+//! Questions are not asked here any more: the unsaved-changes, preset and
+//! kit questions are the application's own `QuestionDialog` (MOO-91),
+//! because a question program that would not start read as No -- so with
+//! no zenity a song with unsaved changes could not be quit -- and one that
+//! did start blocked the UI thread until it was answered.
 //!
 //! On Linux a file chooser is asked of the desktop's **file chooser portal**
 //! (`org.freedesktop.portal.FileChooser`, over D-Bus), then of **zenity**,
@@ -230,19 +236,6 @@ pub fn pick_export_dialog(extension: &str) -> Picked {
     })
 }
 
-/// Ask a yes/no question. `false` for No, and for a dialog program that
-/// would not start -- which is why nothing that decides whether the user can
-/// leave may call this (MOO-91).
-pub fn confirm_dialog(question: &str) -> bool {
-    match backend::confirm(question).status() {
-        Ok(status) => status.success(),
-        Err(error) => {
-            mooloop_core::log_warn!("dialog", "could not ask a question: {error}");
-            false
-        }
-    }
-}
-
 /// Pick a supported audio file.
 pub fn pick_sample_dialog() -> Picked {
     let filter = Filter::new(
@@ -353,16 +346,6 @@ mod backend {
                 command.args(spelled(filter));
             }
         }
-        command
-    }
-
-    pub(super) fn confirm(question: &str) -> Command {
-        let mut command = Command::new("zenity");
-        command
-            .arg("--question")
-            .arg(format!("--text={question}"))
-            .arg("--ok-label=Continue")
-            .arg("--cancel-label=Cancel");
         command
     }
 
@@ -609,15 +592,6 @@ mod backend {
             ),
         }
     }
-
-    /// Cancel is AppleScript error -128, which osascript turns into a failing
-    /// exit status, as zenity does for its Cancel button.
-    pub(super) fn confirm(question: &str) -> Command {
-        osascript(
-            r#"display dialog (item 1 of argv) buttons {"Cancel", "Continue"} default button "Continue" cancel button "Cancel" with icon caution"#,
-            &[question],
-        )
-    }
 }
 
 #[cfg(test)]
@@ -747,10 +721,6 @@ mod tests {
                 "--title=Open mooloop song",
                 "--file-filter=Mooloop songs | *.mooloop manifest.toml",
             ]
-        );
-        assert_eq!(
-            args(&backend::confirm("Discard?")),
-            ["--question", "--text=Discard?", "--ok-label=Continue", "--cancel-label=Cancel"]
         );
     }
 

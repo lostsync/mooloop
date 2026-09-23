@@ -483,8 +483,8 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   samples in its `samples/`, recorded takes in its `recordings/`. **A save
   adds to that directory and never rebuilds it** (since 2026-09-22): a file
   already there keeps its place and its name and is not copied again, and a
-  file the song stops using stays until the clean-up dialog moves it to the
-  trash, so an undo back to it still finds it. Older
+  file the song stops using stays until File > Clean Up Takes moves it to
+  the trash, so an undo back to it still finds it. Older
   directory-style song bundles remain loadable and migrate when resaved.
   Missing or corrupt samples warn and load as silent slots. **Renaming a song
   and its assets folder together, in a file manager, works**: the document
@@ -808,16 +808,22 @@ sampler does (`docs/plans/audio-recording/`, steps 02-05, 2026-09-18):
   get is a finished *file*, not a sample in the song -- the song is closing.
 - **Quitting also offers to clear up takes nothing used.** Once quitting is
   settled, takes recorded this session that neither the song nor its undo
-  history still points at are offered, as a count and a total size, and
-  **moved to the desktop trash** rather than deleted. A take an undo could
-  still reach is never offered, which is why the offer is made at quit:
+  history still points at are listed in the app's own takes dialog, ticked,
+  with each one's length, size and date and the total it frees: **Trash and
+  Quit** moves the ticked ones to the desktop trash rather than deleting them,
+  and **Keep and Quit** leaves them. Either way the app quits. A take an undo
+  could still reach is never offered, which is why the offer is made at quit:
   closing the project is when history-only takes stop being reachable.
-  Answering no leaves everything alone, and cancelling the quit clears up
-  nothing.
-- **Takes left by a crash are not touched by that prompt.** A recording in
-  the shared folder older than this run of the app may be the only copy of a
-  take from a song that was never saved, so it is deliberately left for the
-  clean-up dialog (`audio-recording/06`), which is not built yet.
+  Cancelling the quit clears up nothing.
+- **File > Clean Up Takes** (`recording.clean-up`, MOO-38) opens the same
+  dialog at any time, with two lists. *Not used by this song*, ticked: this
+  session's takes in the shared folder that nothing reaches, and takes in the
+  song's own `recordings/` that neither the open song, its undo history nor
+  the song as saved on disk plays. *Left from earlier sessions*, unticked and
+  saying why: shared-folder takes older than this run, which a crash (or a
+  quit while only the undo history used them) leaves behind and which may be
+  the only copy of a take from a song that was never saved. Nothing moves
+  until **Move to Trash**, and then only to the trash.
 - **The hardware input is an AUDIO source** under both drivers. Under JACK,
   since 2026-09-19, it is "Audio In": `mooloop:in_l`/`in_r` wired to the first
   physical capture pair. Under Core Audio, since 2026-09-20, it is the
@@ -961,7 +967,16 @@ land on its own when it starts to matter:
   channel's source, loading a channel preset over it, or opening a song or
   kit, which replaces the whole rack.
 - File > New Song (Ctrl+N) starts a fresh starter song, asking first when the
-  current one has unsaved changes, as Open Song does. **A file chooser is
+  current one has unsaved changes, as Open Song, Quit and the window's close
+  button do. **That question is the app's own dialog, Save / Don't Save /
+  Cancel** (MOO-91): Save runs the ordinary save, and goes on to quit, open or
+  start the new song only once the save has succeeded -- a failed or cancelled
+  save leaves you where you were. Quit and the close button ask it in the same
+  words. It used to be a zenity question with no Save button, and with no
+  zenity it read as Cancel, so a song with unsaved changes could not be quit
+  at all. Replacing a preset of the same name and loading a kit that drops
+  channels holding notes are asked in the same dialog, and none of them blocks
+  the UI thread. **A file chooser is
   asked of the desktop's file chooser portal first**
   (`org.freedesktop.portal.FileChooser`, which KDE, GNOME and most tiling
   setups provide), then of `zenity`, then of `kdialog`; on macOS it is the

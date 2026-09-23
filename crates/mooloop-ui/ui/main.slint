@@ -23,6 +23,8 @@ import { PreferencesDialog, AppearanceSchemeRow, AudioDriverCopy, OutputTargetRo
 import { SavePresetDialog } from "save-preset-dialog.slint";
 import { SaveErrorDialog } from "save-error-dialog.slint";
 import { AboutDialog } from "about-dialog.slint";
+import { QuestionDialog } from "question-dialog.slint";
+import { TakesDialog, TakeRow } from "takes-dialog.slint";
 import { ExportDialog } from "export-dialog.slint";
 import { MenuBar, MenuBarItem, MenuRow, MenuSeparator } from "menubar.slint";
 import { PianoGrid, NoteCell, NoteHit, GestureMod, PianoGestures, RollMetrics } from "piano-grid.slint";
@@ -959,6 +961,36 @@ export component MainWindow inherits Window {
     callback export-audio();
     callback export-confirmed(int, int, int);
     callback quit-requested();
+
+    // ---- questions the app asks itself (MOO-91) ----
+    // Unsaved changes, a preset name that is taken, a kit that drops
+    // channels. `question-answered` carries 0 for Cancel, 1 for the primary
+    // button and 2 for the secondary one; Rust remembers what was asked.
+    in-out property <bool> question-open;
+    in property <string> question-title;
+    in property <string> question-detail;
+    in property <string> question-primary;
+    in property <string> question-secondary;
+    callback question-answered(int);
+
+    // ---- unused takes (`audio-recording/06`, MOO-38) ----
+    // File > Clean Up Takes, and a quit that leaves this session's takes
+    // unused. Rust owns the ticks: `take-toggled(earlier, index)` asks it to
+    // flip one, and it sends the rows and the total back.
+    in-out property <bool> takes-open;
+    in property <string> takes-title;
+    in property <string> takes-intro;
+    in property <[TakeRow]> takes-session-rows;
+    in property <[TakeRow]> takes-earlier-rows;
+    in property <string> takes-earlier-note;
+    in property <string> takes-total;
+    in property <bool> takes-can-confirm;
+    in property <string> takes-confirm-label;
+    in property <string> takes-cancel-label;
+    callback take-toggled(bool, int);
+    callback takes-confirmed();
+    callback takes-cancelled();
+    callback clean-up-takes();
 
     // ---- presets (per-generator and whole-channel) ----
     in-out property <[string]> generator-preset-options;
@@ -2474,7 +2506,8 @@ export component MainWindow inherits Window {
             // gets bound to Esc still receives it.
             } else if (event.text == Key.Escape && root.zoomed >= 0
                     && !root.save-error-open && !root.export-open
-                    && !root.save-preset-open && !root.about-open) {
+                    && !root.save-preset-open && !root.about-open
+                    && !root.question-open && !root.takes-open) {
                 root.zoomed = -1;
                 accept
             } else if (event.text == Key.Escape) {
@@ -2644,6 +2677,11 @@ export component MainWindow inherits Window {
                         text: "Export Audio...";
                         shortcut: "Ctrl+E";
                         selected => { root.export-audio(); }
+                    }
+                    // Takes nothing refers to any more (MOO-38).
+                    MenuRow {
+                        text: "Clean Up Takes...";
+                        selected => { root.clean-up-takes(); }
                     }
                     MenuSeparator {}
                     MenuRow {
@@ -7458,5 +7496,34 @@ export component MainWindow inherits Window {
         open <=> root.about-open;
         app-version: root.app-version;
         closed => { root.about-open = false; }
+    }
+    TakesDialog {
+        width: parent.width;
+        height: parent.height;
+        open <=> root.takes-open;
+        title: root.takes-title;
+        intro: root.takes-intro;
+        session-rows: root.takes-session-rows;
+        earlier-rows: root.takes-earlier-rows;
+        earlier-note: root.takes-earlier-note;
+        total: root.takes-total;
+        can-confirm: root.takes-can-confirm;
+        confirm-label: root.takes-confirm-label;
+        cancel-label: root.takes-cancel-label;
+        toggled(earlier, index) => { root.take-toggled(earlier, index); }
+        confirmed => { root.takes-confirmed(); }
+        cancelled => { root.takes-cancelled(); }
+    }
+    // Last, so it sits over every other dialog: the unsaved-changes question
+    // can arrive while the takes dialog is up.
+    QuestionDialog {
+        width: parent.width;
+        height: parent.height;
+        open <=> root.question-open;
+        title: root.question-title;
+        detail: root.question-detail;
+        primary-label: root.question-primary;
+        secondary-label: root.question-secondary;
+        answered(answer) => { root.question-answered(answer); }
     }
 }

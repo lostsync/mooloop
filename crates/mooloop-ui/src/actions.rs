@@ -222,6 +222,10 @@ pub(crate) static ACTIONS: &[ActionSpec] = &[
     action!("file.save", "Save Song", "File", ctrl + "s"),
     action!("file.save-as", "Save Song As", "File", ctrl + shift + "s"),
     action!("file.export", "Export Audio", "File", ctrl + "e"),
+    // Takes nothing refers to any more (`audio-recording/06`, MOO-38). The
+    // plan names the id; it sits in File with the rest of the song's
+    // housekeeping, and ships unbound like `pattern.clear`.
+    action!("recording.clean-up", "Clean Up Takes", "File"),
     action!("file.quit", "Quit", "File", ctrl + "q"),
     action!("edit.undo", "Undo", "Edit", ctrl + "z"),
     action!("edit.redo", "Redo", "Edit", ctrl + shift + "z"),

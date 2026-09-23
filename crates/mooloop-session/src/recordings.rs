@@ -203,6 +203,97 @@ fn human_bytes(bytes: u64) -> String {
     }
 }
 
+/// What the clean-up dialog lists (`audio-recording/06`, MOO-38).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CleanUp {
+    /// **Not used by this song**, ticked by default: this session's takes in
+    /// the shared folder that nothing reaches, and takes in the song's own
+    /// `recordings/` that neither the open song, its history nor the song as
+    /// saved on disk reaches.
+    pub not_used: Vec<UnusedTake>,
+    /// **Left from earlier sessions**, unticked by default: shared-folder
+    /// takes older than this run. See [`EARLIER_SESSIONS_NOTE`].
+    pub earlier: Vec<UnusedTake>,
+}
+
+/// Why the earlier-session list starts unticked, in the dialog's words.
+///
+/// Two things leave a take there: a crash, and a quit while only the undo
+/// history still reached it (MOO-38 question 2, decided conservatively --
+/// see `docs/plans/audio-recording/00-status.md`). Either way it may be the
+/// only copy of a take from a song that was never saved.
+pub const EARLIER_SESSIONS_NOTE: &str = "Older than this session. A crash, or a quit while \
+     only the undo history still used a take, leaves one here, and it may be the only copy \
+     of a take from a song that was never saved. These start unticked.";
+
+/// Build the clean-up dialog's two lists.
+///
+/// `shared` is the shared recordings folder. `song` is the open song's own
+/// `recordings/` folder and what the song **as saved on disk** refers to --
+/// the third reference source the plan names, because the song in memory
+/// may not be saved yet, and a file the saved song plays is not unused just
+/// because the unsaved edit stopped playing it. `None` when the song has
+/// never been saved, or its saved file could not be read: then its folder is
+/// not offered at all, which loses nothing.
+pub fn clean_up(
+    shared: &Path,
+    song: Option<(&Path, &HashSet<PathBuf>)>,
+    referenced: &HashSet<PathBuf>,
+    session_start: SystemTime,
+) -> CleanUp {
+    let mut lists = CleanUp::default();
+    for take in unused_takes(shared, referenced, session_start) {
+        if take.from_earlier_session {
+            lists.earlier.push(take);
+        } else {
+            lists.not_used.push(take);
+        }
+    }
+    if let Some((folder, saved)) = song {
+        let both: HashSet<PathBuf> = referenced.union(saved).cloned().collect();
+        // A song's own folder has no "earlier session": everything in it was
+        // put there by a save of this song, so nothing else can be using it.
+        for mut take in unused_takes(folder, &both, SystemTime::UNIX_EPOCH) {
+            take.from_earlier_session = false;
+            lists.not_used.push(take);
+        }
+    }
+    lists
+}
+
+/// Every sample file the song saved at `song` refers to, read from disk.
+/// `None` when it cannot be read, which the caller treats as "offer nothing
+/// from its folder".
+pub fn saved_song_references(song: &Path) -> Option<HashSet<PathBuf>> {
+    let loaded = mooloop_project::load_bundle(song).ok()?;
+    let mooloop_project::LoadedDocument::Song(project) = loaded.document else {
+        return None;
+    };
+    Some(referenced_paths([&project]))
+}
+
+/// A take's length, from its WAV header: `"0:12.4"`. Empty when the header
+/// cannot be read.
+pub fn length_text(path: &Path) -> String {
+    let Ok(reader) = hound::WavReader::open(path) else {
+        return String::new();
+    };
+    let rate = reader.spec().sample_rate.max(1);
+    let seconds = f64::from(reader.duration()) / f64::from(rate);
+    let minutes = (seconds / 60.0).floor();
+    format!("{}:{:04.1}", minutes as u64, seconds - minutes * 60.0)
+}
+
+/// When a take was last written, in UTC and labelled so: `"2026-09-23 01:12 UTC"`.
+pub fn date_text(when: SystemTime) -> String {
+    crate::take::utc_minutes(when)
+}
+
+/// The size, as [`summary`] prints it.
+pub fn size_text(bytes: u64) -> String {
+    human_bytes(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -351,6 +442,72 @@ mod tests {
             std::fs::read_dir(dir.path()).unwrap().count(),
             2,
             "discarding is the trash's job, not this crate's"
+        );
+    }
+
+    /// **The dialog's two lists** (MOO-38). This session's unused shared
+    /// takes and the song's own unused takes are "not used by this song";
+    /// older shared takes are "left from earlier sessions". A take in the
+    /// song's folder that only the song **as saved on disk** plays is not
+    /// offered: the unsaved edit that stopped playing it may never be saved.
+    #[test]
+    fn the_clean_up_lists_split_by_session_and_keep_what_the_saved_song_plays() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = dir.path().join("recordings");
+        let song = dir.path().join("song.mooloop-assets").join("recordings");
+        let old = write_take(&shared, "20260919-120000-old.wav");
+        let session_start = SystemTime::now();
+        std::thread::sleep(Duration::from_millis(20));
+        let fresh = write_take(&shared, "20260923-120000-fresh.wav");
+        let replaced = write_take(&song, "20260922-120000-replaced.wav");
+        let saved_only = write_take(&song, "20260922-130000-saved.wav");
+        let playing = write_take(&song, "20260922-140000-playing.wav");
+        // `old` predates the session however fast the disk is.
+        let an_hour_ago = SystemTime::now() - Duration::from_secs(3600);
+        std::fs::File::options()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_modified(an_hour_ago)
+            .unwrap();
+
+        let referenced = referenced_paths([&project_playing(&playing)]);
+        let saved = referenced_paths([&project_playing(&saved_only)]);
+        let lists = clean_up(&shared, Some((&song, &saved)), &referenced, session_start);
+
+        let names = |takes: &[UnusedTake]| -> Vec<PathBuf> {
+            takes.iter().map(|take| take.path.clone()).collect()
+        };
+        assert_eq!(names(&lists.not_used), [fresh, replaced]);
+        assert_eq!(names(&lists.earlier), [old]);
+        assert!(lists.not_used.iter().all(|take| !take.from_earlier_session));
+
+        // A song never saved, or one whose file will not read: its folder is
+        // not offered at all.
+        let unsaved = clean_up(&shared, None, &referenced, session_start);
+        assert_eq!(unsaved.not_used.len(), 1, "{unsaved:?}");
+    }
+
+    #[test]
+    fn a_takes_length_and_date_read_as_a_person_would_say_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("take.wav");
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 1000,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut writer = hound::WavWriter::create(&path, spec).unwrap();
+        for _ in 0..(2 * 72_500) {
+            writer.write_sample(0.0f32).unwrap();
+        }
+        writer.finalize().unwrap();
+        assert_eq!(length_text(&path), "1:12.5");
+        assert_eq!(length_text(&dir.path().join("missing.wav")), "");
+        assert_eq!(
+            date_text(SystemTime::UNIX_EPOCH + Duration::from_secs(1_790_125_920)),
+            "2026-09-23 01:12 UTC"
         );
     }
 

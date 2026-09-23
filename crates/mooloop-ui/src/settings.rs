@@ -1210,6 +1210,12 @@ pub(crate) fn log_path() -> PathBuf {
     config_dir().join("mooloop.log")
 }
 
+/// The shared recordings folder: every take is written here first, and a
+/// save copies it into the song's own `recordings/`.
+pub(crate) fn recordings_dir() -> PathBuf {
+    config_dir().join("recordings")
+}
+
 /// Where a song that could not be saved is parked so it is not lost. Kept out
 /// of the user's own folders: these are failures, and they should not turn up
 /// mixed in with real songs.

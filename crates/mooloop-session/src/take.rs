@@ -713,6 +713,22 @@ fn take_file_name(channel: &str, when: SystemTime) -> String {
     )
 }
 
+/// `"2026-09-23 01:12 UTC"`, for the clean-up dialog's date column. UTC and
+/// labelled so, like the take's own file name: local time needs a time-zone
+/// database this crate does not carry.
+pub(crate) fn utc_minutes(when: SystemTime) -> String {
+    let seconds = when
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    let (days, rest) = (seconds / 86_400, seconds % 86_400);
+    let (year, month, day) = civil_from_days(days as i64);
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02} UTC",
+        rest / 3600,
+        rest / 60 % 60
+    )
+}
+
 /// Days since 1970-01-01 to a proleptic Gregorian date (Howard Hinnant's
 /// `civil_from_days`), so naming a file needs no date crate.
 fn civil_from_days(days: i64) -> (i64, u32, u32) {

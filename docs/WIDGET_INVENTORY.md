@@ -154,10 +154,12 @@ wants to show a buffer starts from zero.
 
 ## 6. `DialogShell`
 
-Five copies of scrim + card + title + footer. `#00000099` is hardcoded in all
-five (`about-dialog.slint:10`, `export-dialog.slint:13`,
+Seven copies of scrim + card + title + footer. `#00000099` is hardcoded in
+all seven (`about-dialog.slint:10`, `export-dialog.slint:13`,
 `appearance-dialog.slint:684`, `save-preset-dialog.slint:14`,
-`save-error-dialog.slint:31`), and `z: 200` in three of them.
+`save-error-dialog.slint:31`, and since 2026-09-23 `question-dialog.slint` and
+`takes-dialog.slint`), and `z: 200` in three of them; the two new ones sit at
+205 and 210 so the unsaved-changes question lands over the takes dialog.
 `about-dialog.slint` documents the duplication in a comment rather than
 resolving it.
 

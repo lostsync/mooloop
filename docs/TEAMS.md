@@ -236,9 +236,10 @@ Files marked *shared* are split in the table above.
   `about-dialog.slint`, `color-picker.slint`, `theme.slint`, `reorder.slint`,
   `device-rack.slint` (*shared*), `device-displays.slint`,
   `device-concepts.slint`, `device-drag-harness.slint`,
-  `save-error-dialog.slint`, `mockup.slint`, `mockup-catalog.slint`,
+  `save-error-dialog.slint`, `question-dialog.slint`, `takes-dialog.slint`,
+  `mockup.slint`, `mockup-catalog.slint`,
   `mockup-tool.slint`
-- `ui/tests/`: `menubar.rs`, `panes.rs`, `pane_drag.rs`, `first_click.rs`,
+- `ui/tests/`: `menubar.rs`, `question_dialog.rs`, `panes.rs`, `pane_drag.rs`, `first_click.rs`,
   `name_field.rs`, `picker_chip.rs`, `color_picker.rs`, `sidebar.rs`,
   `browser.rs`, `gesture_bracket.rs`, `rack_keyboard.rs`,
   `save_error_snapshot.rs`, `preferences_appearance_snapshot.rs`,

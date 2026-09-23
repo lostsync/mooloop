@@ -1,0 +1,227 @@
+import { CheckBox, ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { ToolButton } from "controls.slint";
+
+// One recorded take in the clean-up dialog. Every field is text the Rust side
+// has already formatted, so the markup spells no unit and no rounding.
+export struct TakeRow {
+    name: string,
+    length: string,
+    size: string,
+    date: string,
+    ticked: bool,
+}
+
+component TakeList inherits VerticalLayout {
+    in property <string> heading;
+    in property <string> note;
+    in property <[TakeRow]> rows;
+    callback toggled(int);
+    spacing: 4px;
+
+    Text {
+        text: root.heading;
+        color: Theme.text;
+        font-size: Theme.text-xl;
+        font-weight: 600;
+    }
+    if root.note != "": Text {
+        text: root.note;
+        color: Theme.warning;
+        font-size: Theme.text-lg;
+        wrap: word-wrap;
+    }
+    for row[index] in root.rows: Rectangle {
+        height: 26px;
+        background: index.mod(2) == 0 ? Theme.panel : transparent;
+        border-radius: Theme.radius-md;
+        HorizontalLayout {
+            padding-left: 4px;
+            padding-right: 8px;
+            spacing: 8px;
+            CheckBox {
+                checked: row.ticked;
+                toggled => { root.toggled(index); }
+            }
+            Text {
+                text: row.name;
+                horizontal-stretch: 1;
+                overflow: elide;
+                vertical-alignment: center;
+                color: Theme.text;
+                font-size: Theme.text-lg;
+            }
+            Text {
+                text: row.length;
+                width: 56px;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                color: Theme.text-muted;
+                font-size: Theme.text-lg;
+            }
+            Text {
+                text: row.size;
+                width: 64px;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                color: Theme.text-muted;
+                font-size: Theme.text-lg;
+            }
+            Text {
+                text: row.date;
+                width: 116px;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                color: Theme.text-muted;
+                font-size: Theme.text-lg;
+            }
+        }
+    }
+}
+
+// Takes nothing refers to any more (`audio-recording/06`, MOO-38): the
+// `recording.clean-up` command opens it, and so does a quit that leaves takes
+// from this session unused.
+//
+// Two lists. **Not used by this song** is ticked; **Left from earlier
+// sessions** is not, and says why: only a crash leaves one there, so it may be
+// the only copy of a take from a song that was never saved. Ticked rows go to
+// the desktop trash, never a permanent delete, and the total says how much
+// that frees before anything moves.
+//
+// The Rust side owns the ticks: `toggled` asks it to flip one, and it sends
+// back the rows and the total, so the figure on the button is always the one
+// the confirm will act on.
+export component TakesDialog inherits Rectangle {
+    in-out property <bool> open;
+    in property <string> title: "Clean up recordings";
+    in property <string> intro;
+    in property <[TakeRow]> session-rows;
+    in property <[TakeRow]> earlier-rows;
+    in property <string> earlier-note;
+    // "Move 3 takes (12.4 MB) to the trash", or "Nothing ticked".
+    in property <string> total;
+    in property <bool> can-confirm;
+    in property <string> confirm-label: "Move to Trash";
+    in property <string> cancel-label: "Cancel";
+    // Toggle the row at `index` in the earlier list when `earlier` is set,
+    // else in the session list.
+    callback toggled(bool, int);
+    callback confirmed;
+    callback cancelled;
+
+    visible: root.open;
+    background: #00000099;
+    z: 205;
+
+    changed open => {
+        if (root.open) {
+            keys.focus();
+        }
+    }
+
+    TouchArea { }
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                root.open = false;
+                root.cancelled();
+            }
+            accept
+        }
+    }
+
+    Rectangle {
+        width: min(parent.width - 32px, 640px);
+        height: min(parent.height - 32px, 460px);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Theme.surface;
+        border-width: Theme.hairline;
+        border-color: Theme.border;
+        border-radius: Theme.radius-lg;
+
+        VerticalLayout {
+            padding: 18px;
+            spacing: 10px;
+
+            Text {
+                text: root.title;
+                color: Theme.text;
+                font-size: Theme.text-3xl;
+            }
+            if root.intro != "": Text {
+                text: root.intro;
+                color: Theme.text-muted;
+                font-size: Theme.text-xl;
+                wrap: word-wrap;
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+                background: Theme.background;
+                border-radius: Theme.radius-lg;
+                border-width: Theme.hairline;
+                border-color: Theme.border;
+
+                ScrollView {
+                    x: 8px;
+                    y: 8px;
+                    width: parent.width - 16px;
+                    height: parent.height - 16px;
+                    viewport-width: self.width;
+                    viewport-height: lists.preferred-height;
+
+                    lists := VerticalLayout {
+                        width: parent.width;
+                        spacing: 14px;
+                        TakeList {
+                            heading: "Not used by this song";
+                            note: root.session-rows.length == 0 ? "None." : "";
+                            rows: root.session-rows;
+                            toggled(index) => { root.toggled(false, index); }
+                        }
+                        if root.earlier-rows.length > 0: TakeList {
+                            heading: "Left from earlier sessions";
+                            note: root.earlier-note;
+                            rows: root.earlier-rows;
+                            toggled(index) => { root.toggled(true, index); }
+                        }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 6px;
+                Text {
+                    text: root.total;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                    color: Theme.text-muted;
+                    font-size: Theme.text-xl;
+                }
+                ToolButton {
+                    text: root.cancel-label;
+                    width: 120px;
+                    height: 30px;
+                    clicked => {
+                        root.open = false;
+                        root.cancelled();
+                    }
+                }
+                ToolButton {
+                    text: root.confirm-label;
+                    active: true;
+                    enabled: root.can-confirm;
+                    width: 150px;
+                    height: 30px;
+                    clicked => {
+                        root.open = false;
+                        root.confirmed();
+                    }
+                }
+            }
+        }
+    }
+}

@@ -43,8 +43,8 @@ the command layer, and applies equally to any future console/MCP command.
 ## What's registered today
 
 `actions.rs`'s `ACTIONS` table is the source of truth; read it rather than
-this document for the current list. **It holds 68 actions in 12 categories**
-as of 2026-09-19, and a test in `actions.rs` reads that sentence and fails if
+this document for the current list. **It holds 70 actions in 12 categories**
+as of 2026-09-23, and a test in `actions.rs` reads that sentence and fails if
 either number stops being true.
 
 This sentence has been wrong twice. On 2026-09-08 it said 46 where the table
@@ -54,7 +54,9 @@ times — which is why the third fix is a test rather than a fourth count.
 
 The categories are:
 Transport (play/pause on Space, stop on Shift+Space, return-to-start on Home,
-the song loop on L, and arming MIDI recording), File, Edit (undo/redo, the
+the song loop on L, and arming MIDI recording), File (including
+`recording.clean-up`, Clean Up Takes, which opens the unused-takes dialog of
+`audio-recording/06`), Edit (undo/redo, the
 three contextual clipboard verbs, select-all and delete), Navigation (the
 four arrow keys — transpose lives there now, because the same key picks a
 channel or walks the browser tree when the roll is not where you are), Notes
@@ -67,7 +69,7 @@ Device (the clipboard's four on Ctrl+Shift+C/X/V/D, plus bypass, remove,
 wrap in a container, save a preset, and stepping the selection along the
 chain), Browser (focus it on Ctrl+B, then Enter and Ctrl+Enter), Pattern
 (including lengthening and shortening the pattern by a beat, on
-Ctrl+Shift+= and Ctrl+Shift+-), and MIDI (arming controller mapping). Seven
+Ctrl+Shift+= and Ctrl+Shift+-), and MIDI (arming controller mapping). Eight
 entries are registered with no default chord and are listed so they can be
 bound. `pattern.clear` has none because every nearby Pattern action already
 claims a Ctrl+modifier combination. `channel.solo` has none for the same
@@ -82,7 +84,9 @@ because both were toolbar-only until 2026-09-19 — added to the registry so
 they can be bound and appear on the Shortcuts page, not because either ships
 with a default binding. `transport.panic` (all notes off, MOO-99) has none
 for the same reason: it is registered so a stuck note has a way out that can
-be bound, and every chord near the transport's is already taken.
+be bound, and every chord near the transport's is already taken. `recording.clean-up` has none because it is
+housekeeping reached from the File menu, not something done often enough to
+earn a chord.
 
 ## Scope: where a chord applies
 
