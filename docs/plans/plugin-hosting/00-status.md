@@ -168,12 +168,57 @@ thread id, both recorded when the thread starts.
 
 ### Parameters
 
-A plugin parameter's saved address is
-`ParamAddr { scope, owner: Effect { device } | Source, param }` with the
-**plugin's own `u32` id** in `param` (`core/src/modulation.rs:64`). That
-field needs no change. Arrays sized by id (`descriptor_slots`,
-`session/values.rs:125`) become sparse-safe. A dense per-instance index
-exists only in session and UI.
+**Adam's decision, 2026-09-23 (MOO-74).** This section used to say a plugin
+parameter's address was the existing `Effect { device }` or `Source` owner
+with the plugin's own `u32` id reinterpreted in `param` and no new variant.
+That was the plan author's default, not a ruling, and Adam overturned it.
+Asked to choose, he answered in his own words:
+
+> i think option 2 is the 'most right'? we don't want to not know what
+> something belongs to
+
+and, told that a variant carrying only a `DeviceId` costs no bytes:
+
+> that sounds like it would also id the device. and be free. so i would
+> probably choose that, all else being equal
+
+So a plugin parameter's saved address is
+`ParamAddr { scope, owner: ParamOwner::PluginParam { device }, param }`: a
+**new `ParamOwner` variant whose only payload is a `DeviceId`**, with the
+plugin's own `u32` id in `param` (`ParamOwner`, `core/src/modulation.rs`).
+The address says what it belongs to. `size_of::<ParamAddr>()` stays 16,
+because the discriminant fits in the padding the `DeviceId` payload already
+has. The ten exhaustive `owner` matches become compile errors that force an
+arm, the integrity pass included, instead of a native table silently judging
+a plugin id. `ParamAddr::device()` has a `_ => None` arm and compiles either
+way, so step 03 gives it the new arm by hand. Step 03 lands the variant
+(MOO-78).
+
+**Missing parameters are never dropped** (Adam, 2026-09-23: *"i'd say ignore
+it, maybe it gets represented in the UI as missing somehow (greyed
+out/crosshatched, or like itallicized/thin weight title in the lane selection
+menu)"*). A lane, route or binding that names a plugin parameter that does not
+exist, because the plugin is missing or because its list no longer has that
+id, is **kept, saved back unchanged, and shown as missing**. When the
+parameter comes back, the address finds it again. Step 03 has the rule.
+
+**`params.rescan` is supported** (Adam: *"if its possible in the plugin
+format then we should support it. a lane in this situation (automated param
+was removed) would be handled by the missing lane handler and reunited with
+its param should it return"*). A rescan replaces `PluginSlotState.params`,
+and the lanes and routes whose ids went away go through the same
+missing-parameter handling.
+
+**The callback should iterate what is actually driven.** Adam didn't follow
+the question about scanning (*"shouldnt the plugin just have a list? idk what
+is being scanned or why"*). The reading recorded on MOO-74 is that the
+per-block control pass should walk a per-channel list of the parameters that
+are actually automated or modulated, not every descriptor with a route scan
+for each one. That is its own issue (MOO-195), not part of this plan's steps.
+
+Arrays sized by id (`descriptor_slots`, `session/values.rs`) become
+sparse-safe (step 03). A dense per-instance index exists only in session and
+UI.
 
 Values travel in the plugin's own plain units. Those are mooloop's
 "natural" units, so `Event::ParamValue { id, value }` needs no change, and

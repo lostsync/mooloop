@@ -45,6 +45,13 @@ needed here is a test.
 - **Parameters that changed since the song was saved:** compare the
   plugin's current parameter list with the saved `params`, and log the ids
   that were added or removed. Handle removed ids with step 03's orphan rule.
+- **`params.rescan` while the song is open** is supported (Adam,
+  2026-09-23, MOO-74). The plugin's request sets a bit in the instance's flag
+  word, and the pump reads the new list on its next tick and replaces
+  `PluginSlotState.params`. A lane or route whose id is gone goes through step
+  03's missing-parameter rule, and it resolves again if a later rescan brings
+  the id back. A rescan is not an undoable edit, but it does mark the song
+  dirty, because `params` is saved.
 
 ## Presets
 

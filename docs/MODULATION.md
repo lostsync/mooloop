@@ -101,6 +101,22 @@ effect slot, modulator slot, or strip), and that owner's stable descriptor id.
 It is persisted and must never be retyped merely because a new routing surface
 is added.
 
+**Amended 2026-09-23, deliberately (Adam, MOO-74).** A hosted plugin's
+parameters get their own owner, `ParamOwner::PluginParam { device }`, rather
+than reusing `Effect { device }` with the plugin's id reinterpreted in `param`.
+The rule above protects the *saved bytes* of existing addresses, and this
+keeps them: no existing variant changes shape, and `size_of::<ParamAddr>()`
+stays 16, because a variant whose only payload is a `DeviceId` fits in the
+padding the other variants already have. What the rule must not be read to
+forbid is an owner for a new *kind of namespace*. A plugin's `param` is the
+plugin's own sparse `u32`, meaningful only against the instance's reported
+parameter list, never against a `&'static` descriptor table. Folding it into
+`Effect` would make `param` mean two different things with nothing on disk to
+say which, and every exhaustive `owner` match (the integrity pass among them)
+would judge a plugin id against a native table without a compiler error.
+Adam's words: *"we don't want to not know what something belongs to"*.
+`docs/plans/plugin-hosting/00-status.md`, "Parameters", has the ruling.
+
 This is deliberately a destination address, not a claim that every parameter
 is already a legal modulation target. Descriptors declare range and curve;
 destination metadata declares whether modulation is meaningful and how its
