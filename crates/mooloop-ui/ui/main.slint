@@ -888,9 +888,7 @@ export component MainWindow inherits Window {
     // case the Developer page hides the row rather than offering a button
     // that opens nothing.
     in-out property <bool> preferences-mockup-tool-available;
-    in-out property <bool> preferences-log-to-file;
     in-out property <string> preferences-log-path;
-    callback preferences-log-to-file-toggled(bool);
     in-out property <bool> preferences-smooth-curves;
     in-out property <string> preferences-error;
     in property <[OutputTargetRow]> preferences-audio-output-targets;
@@ -7414,7 +7412,6 @@ export component MainWindow inherits Window {
         developer-mode <=> root.preferences-developer-mode;
         mockup-tool-available: root.preferences-mockup-tool-available;
         smooth-curves <=> root.preferences-smooth-curves;
-        log-to-file: root.preferences-log-to-file;
         log-path: root.preferences-log-path;
         validation-error: root.preferences-error;
         audio-output-targets: root.preferences-audio-output-targets;
@@ -7458,7 +7455,6 @@ export component MainWindow inherits Window {
         gesture-rebound(id, index) => { root.preferences-gesture-rebound(id, index); }
         shortcut-super-key-changed(index) => { root.preferences-shortcut-super-key-changed(index); }
         open-mockup-tool => { root.preferences-open-mockup-tool(); }
-        log-to-file-toggled(v) => { root.preferences-log-to-file-toggled(v); }
     }
     SavePresetDialog {
         width: parent.width;

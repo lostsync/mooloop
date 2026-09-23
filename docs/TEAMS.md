@@ -255,7 +255,9 @@ them belong to the device teams, and the container drawing in
 - `app/src/` (the binary and `engine-selftest`)
 - `engine/src/`: `jack_driver.rs`, `coreaudio_driver.rs`, `driver.rs` — the
   driver adapters, MIDI port I/O included
-- `core/src/log.rs`, `session/src/dialogs.rs`
+- `core/src/log.rs` and its test `core/tests/crash_report.rs`,
+  `session/src/dialogs.rs`
+- `ui/src/signals.rs` (quit signals routed to the pump)
 - `ui/ui/audio-preferences.slint`, `ui/tests/preferences_audio_snapshot.rs`
 - `packaging/`, `.github/`, `scripts/`, `.githooks/`, `.cargo/`,
   `rust-toolchain.toml`, `Cargo.toml`, `Cargo.lock`, and every crate's

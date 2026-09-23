@@ -3290,6 +3290,7 @@ version = "0.1.4"
 dependencies = [
  "hound",
  "i-slint-backend-testing",
+ "libc",
  "mooloop-core",
  "mooloop-dsp",
  "mooloop-engine",

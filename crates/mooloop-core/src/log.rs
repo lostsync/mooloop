@@ -2,10 +2,13 @@
 //! problem that only shows up once can still be looked at afterwards.
 //!
 //! Records always go to stderr, which is where a run started from a terminal
-//! shows them. They additionally go to a file once [`start_file`] is called;
-//! the preferences toggle that turns that on is the only reason this module
-//! keeps a sink at all, because a user who hits a problem is rarely the same
-//! person who thought to run the app from a terminal first.
+//! shows them. They also go to a file once [`start_file`] is called, which the
+//! application does on every run: a user who hits a problem is rarely the same
+//! person who thought to run the app from a terminal first, and a program
+//! started from a desktop file has a stderr that reaches nobody.
+//!
+//! A panic is written up separately, with a backtrace, by the hook
+//! [`install_panic_hook`] installs.
 //!
 //! # Not from the audio thread
 //!
@@ -29,7 +32,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -91,6 +94,35 @@ static FILE_OPEN: AtomicBool = AtomicBool::new(false);
 struct Sink {
     file: File,
     path: PathBuf,
+    /// Bytes in the file, counted as they are written, so the file can be
+    /// rolled aside mid-run rather than only at the next start.
+    written: u64,
+}
+
+impl Sink {
+    /// Move the file to `<path>.1` and start a fresh one, once it passes
+    /// [`MAX_LOG_BYTES`]. Best effort, like the roll at start: a log that
+    /// cannot roll keeps growing rather than stopping.
+    fn roll_if_full(&mut self) {
+        if self.written <= MAX_LOG_BYTES {
+            return;
+        }
+        let _ = self.file.flush();
+        if std::fs::rename(&self.path, rolled(&self.path)).is_err() {
+            return;
+        }
+        if let Ok(file) = OpenOptions::new().create(true).append(true).open(&self.path) {
+            self.file = file;
+            self.written = 0;
+        }
+    }
+}
+
+/// Where a full log is moved: `mooloop.log` becomes `mooloop.log.1`.
+fn rolled(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".1");
+    PathBuf::from(name)
 }
 
 fn sink() -> &'static Mutex<Option<Sink>> {
@@ -154,20 +186,22 @@ pub fn record(level: Level, target: &str, message: &str) {
                 // buffered tail is exactly the part that explains it.
                 let _ = writeln!(sink.file, "{line}");
                 let _ = sink.file.flush();
+                sink.written += line.len() as u64 + 1;
+                sink.roll_if_full();
             }
         }
     }
 }
 
-/// Largest log kept before the previous run's file is rolled aside. One
-/// generation of history is enough to cover "it did it again just now" while
-/// staying small enough to attach to a bug report.
+/// Largest log kept before it is rolled aside, at the start of a run or
+/// during one. One generation of history is enough to cover "it did it again
+/// just now" while staying small enough to attach to a bug report.
 const MAX_LOG_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Starts writing records to `path`, creating its directory. Appends, so a
 /// problem that only appears every few runs still has its history; once the
-/// file passes [`MAX_LOG_BYTES`] the existing one is moved to `<path>.1` and a
-/// fresh one starts.
+/// file passes [`MAX_LOG_BYTES`] -- at this call, or while records are being
+/// written -- the existing one is moved to `<path>.1` and a fresh one starts.
 ///
 /// Replaces any previously open file. `header` is written first, and should
 /// say what build produced the run.
@@ -178,15 +212,17 @@ pub fn start_file(path: &Path, header: &str) -> std::io::Result<()> {
     if std::fs::metadata(path).is_ok_and(|meta| meta.len() > MAX_LOG_BYTES) {
         // Best effort: a rename that fails leaves a large file that keeps
         // growing, which is still better than refusing to log at all.
-        let _ = std::fs::rename(path, path.with_extension("log.1"));
+        let _ = std::fs::rename(path, rolled(path));
     }
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     writeln!(file, "\n=== {} {header}", timestamp(SystemTime::now()))?;
     file.flush()?;
+    let written = file.metadata().map_or(0, |meta| meta.len());
     let mut guard = sink().lock().unwrap_or_else(|e| e.into_inner());
     *guard = Some(Sink {
         file,
         path: path.to_path_buf(),
+        written,
     });
     // Published last, while the lock is still held: a writer that sees this
     // set is guaranteed to find the sink behind it.
@@ -199,6 +235,105 @@ pub fn stop_file() {
     let mut guard = sink().lock().unwrap_or_else(|e| e.into_inner());
     FILE_OPEN.store(false, Ordering::Relaxed);
     *guard = None;
+}
+
+/// How many panics in one run are logged. The first writes a crash report;
+/// past this many they are counted and not written, because a device that
+/// panics once a block would otherwise write a line for every block.
+const PANICS_REPORTED: u32 = 16;
+
+/// Panics seen this run, by the hook [`install_panic_hook`] installs.
+static PANICS: AtomicU32 = AtomicU32::new(0);
+
+/// How many crash reports are kept. Older ones are removed when a new one is
+/// written.
+const CRASH_REPORTS_KEPT: usize = 10;
+
+/// Installs the panic hook: every panic is logged, and the first of a run
+/// also leaves a crash report with a backtrace in `crash_dir`, named for when
+/// it happened (`crash-20260922-231503.txt`).
+///
+/// Chained rather than replacing the default hook, which still prints its
+/// message to stderr. Past [`PANICS_REPORTED`] panics in one run the hook
+/// goes quiet, the default one included.
+///
+/// `header` says what build is running, as [`start_file`]'s does. A panic on
+/// the audio thread runs this hook there: writing the report takes time the
+/// callback does not have, which is one late block in a run that has already
+/// panicked.
+pub fn install_panic_hook(crash_dir: PathBuf, header: String) {
+    let inherited = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let seen = PANICS.fetch_add(1, Ordering::Relaxed);
+        if seen >= PANICS_REPORTED {
+            return;
+        }
+        let thread = std::thread::current();
+        let name = thread.name().unwrap_or("an unnamed thread");
+        if seen == 0 {
+            let backtrace = std::backtrace::Backtrace::force_capture();
+            match write_crash_report(&crash_dir, &header, name, &info.to_string(), &backtrace) {
+                Ok(path) => crate::log_error!(
+                    "app",
+                    "panic on {name}: {info}; crash report written to {}",
+                    path.display()
+                ),
+                Err(error) => crate::log_error!(
+                    "app",
+                    "panic on {name}: {info} (the crash report could not be written: {error})"
+                ),
+            }
+        } else {
+            crate::log_error!("app", "panic on {name}: {info}");
+            if seen + 1 == PANICS_REPORTED {
+                crate::log_error!("app", "further panics this run are not reported");
+            }
+        }
+        inherited(info);
+    }));
+}
+
+/// Writes one crash report into `dir`, and returns where. Separate from the
+/// hook so what goes into a report can be tested without panicking.
+pub fn write_crash_report(
+    dir: &Path,
+    header: &str,
+    thread: &str,
+    message: &str,
+    backtrace: &dyn std::fmt::Display,
+) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(dir)?;
+    let path = dir.join(format!("crash-{}.txt", file_stamp()));
+    let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+    writeln!(
+        file,
+        "mooloop crash report\nbuild: {header}\ntime: {}\nthread: {thread}\n\n{message}\n\nbacktrace:\n{backtrace}",
+        timestamp(SystemTime::now())
+    )?;
+    file.flush()?;
+    prune_crash_reports(dir);
+    Ok(path)
+}
+
+/// Keeps the newest [`CRASH_REPORTS_KEPT`] reports. Their names sort by time,
+/// so the oldest are the first in name order.
+fn prune_crash_reports(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut reports: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("crash-") && name.ends_with(".txt"))
+        })
+        .collect();
+    reports.sort();
+    let excess = reports.len().saturating_sub(CRASH_REPORTS_KEPT);
+    for old in &reports[..excess] {
+        let _ = std::fs::remove_file(old);
+    }
 }
 
 /// Where records are currently being written, if anywhere.
@@ -335,6 +470,73 @@ mod tests {
             assert_eq!(Level::parse(name), Some(level), "{name}");
         }
         assert_eq!(Level::parse("verbose"), None);
+    }
+
+    /// A crash report carries the build, the thread, the message and the
+    /// backtrace -- what someone reading it later needs and cannot ask for.
+    #[test]
+    fn a_crash_report_says_what_panicked_and_where() {
+        let dir = std::env::temp_dir().join(format!("mooloop-crash-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let backtrace = "   0: mooloop_dsp::sampler::render\n   1: mooloop_engine::executor";
+        let path =
+            write_crash_report(&dir, "0.0.0 (test build)", "data-loop", "boom at x.rs:1:1", &backtrace)
+                .expect("write the report");
+        let written = std::fs::read_to_string(&path).expect("read the report back");
+        for expected in ["0.0.0 (test build)", "thread: data-loop", "boom at x.rs:1:1", "backtrace:", "mooloop_dsp::sampler::render"] {
+            assert!(written.contains(expected), "{expected:?} missing from {written}");
+        }
+        assert!(path.file_name().unwrap().to_str().unwrap().starts_with("crash-"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Only the newest reports are kept.
+    #[test]
+    fn old_crash_reports_are_pruned() {
+        let dir = std::env::temp_dir().join(format!("mooloop-crash-prune-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for index in 0..CRASH_REPORTS_KEPT + 3 {
+            std::fs::write(dir.join(format!("crash-2026010{index:02}.txt")), "old").unwrap();
+        }
+        std::fs::write(dir.join("notes.txt"), "not a report").unwrap();
+        prune_crash_reports(&dir);
+        let mut left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(left.len(), CRASH_REPORTS_KEPT + 1, "{left:?}");
+        assert!(left.contains(&"notes.txt".to_owned()));
+        assert!(!left.contains(&"crash-202601000.txt".to_owned()), "{left:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A run that writes past the limit rolls its own file aside, rather than
+    /// growing until the next start. Built by hand rather than through
+    /// `start_file`, whose sink is process-wide.
+    #[test]
+    fn a_full_sink_rolls_itself_aside() {
+        let dir = std::env::temp_dir().join(format!("mooloop-roll-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mooloop.log");
+        let file = OpenOptions::new().create(true).append(true).open(&path).unwrap();
+        let mut sink = Sink {
+            file,
+            path: path.clone(),
+            written: MAX_LOG_BYTES + 1,
+        };
+        writeln!(sink.file, "the line that filled it").unwrap();
+        sink.roll_if_full();
+        assert_eq!(sink.written, 0);
+        writeln!(sink.file, "the first line after").unwrap();
+        let rolled_text = std::fs::read_to_string(rolled(&path)).unwrap();
+        let fresh_text = std::fs::read_to_string(&path).unwrap();
+        assert!(rolled_text.contains("the line that filled it"), "{rolled_text}");
+        assert_eq!(fresh_text, "the first line after\n");
+        assert_eq!(rolled(&path), dir.join("mooloop.log.1"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

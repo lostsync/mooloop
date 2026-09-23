@@ -34,8 +34,7 @@ fn render_preferences_developer_snapshot() {
     ui.window().set_size(LogicalSize::new(800.0, 600.0));
     ui.set_preferences_open(true);
     ui.set_preferences_developer_mode(true);
-    ui.set_preferences_log_to_file(true);
-    ui.set_preferences_log_path(SharedString::from("/home/adam/.config/mooloop/mooloop.log"));
+    ui.set_preferences_log_path(SharedString::from("/home/adam/.local/state/mooloop/mooloop.log"));
 
     // `page` is private to `PreferencesDialog`, so the page is reached the way
     // the user reaches it.

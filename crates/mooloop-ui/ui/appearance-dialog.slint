@@ -1183,11 +1183,9 @@ export component PreferencesDialog inherits Rectangle {
     in-out property <string> appearance-theme-name;
     in-out property <bool> developer-mode;
     in-out property <bool> smooth-curves;
-    // Applied the moment it is toggled rather than on OK, like the audio page:
-    // a diagnostic is wanted for the very next thing the user does, and making
-    // them confirm a dialog first is one more step between a problem and the
-    // record of it.
-    in property <bool> log-to-file;
+    // Where the diagnostic log is written. Always written, so this is a place
+    // to find, not a switch: a log that had to be turned on first was missing
+    // from exactly the runs that ended in a crash.
     in property <string> log-path;
     in property <string> validation-error;
     in property <[OutputTargetRow]> audio-output-targets;
@@ -1244,7 +1242,6 @@ export component PreferencesDialog inherits Rectangle {
     // Off unless the build compiled the mockup tool in; see main.slint.
     in property <bool> mockup-tool-available;
     callback open-mockup-tool();
-    callback log-to-file-toggled(bool);
 
     private property <int> page: 0;
 
@@ -1555,16 +1552,10 @@ export component PreferencesDialog inherits Rectangle {
                                 spacing: 8px;
                                 VerticalBox {
                                     spacing: 0px;
-                                    Text { text: "Write a log file"; color: Theme.text; font-size: Theme.text-xl; }
-                                    Text { text: "Keep what the console reports, so a problem can be read back later"; color: Theme.text-muted; font-size: Theme.text-lg; }
+                                    Text { text: "Log file"; color: Theme.text; font-size: Theme.text-xl; }
+                                    Text { text: "Everything the console reports, kept on every run; a crash also leaves a report in crashes/ beside it"; color: Theme.text-muted; font-size: Theme.text-lg; }
                                 }
                                 Rectangle { horizontal-stretch: 1; }
-                                ToggleButton {
-                                    text: "Enabled";
-                                    tooltip: "Log to file"; hint: "Mirror the diagnostic log to a file";
-                                    checked: root.log-to-file;
-                                    toggled(v) => { root.log-to-file-toggled(v); }
-                                }
                             }
                             // Wrapped so it picks up the same horizontal
                             // padding as the rows above; a bare child of the

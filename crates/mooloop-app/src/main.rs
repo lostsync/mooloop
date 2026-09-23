@@ -29,11 +29,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // `engine` stays alive on the stack for the duration of the event loop and
     // is dropped (stopping the audio driver) when `run` returns.
     let _ = &engine;
-    app.run()?;
+    let ran = app.run();
     // After the loop and before `engine` drops: a take still recording is not
     // an unsaved *edit*, so nothing on the quit path has dealt with it, and
     // its WAV header counts only up to its last one-second checkpoint until
     // its drain finishes.
+    // Whether or not the loop ended in an error -- a `?` on `run` skipped
+    // this, and lost the take along with the event loop.
     app.finish_takes();
+    ran?;
     Ok(())
 }

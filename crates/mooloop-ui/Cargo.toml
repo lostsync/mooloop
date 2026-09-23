@@ -35,6 +35,11 @@ symphonia = {
 serde = { workspace = true }
 toml = { workspace = true }
 
+# SIGTERM, SIGINT and SIGHUP routed to the quit path (`src/signals.rs`).
+# Already in the lock through `mooloop-engine`.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # The standalone tool cannot build without the module it is a front end for.
 [[example]]
 name = "mockup"

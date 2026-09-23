@@ -1023,6 +1023,15 @@ land on its own when it starts to matter:
 - Missing samples are recoverable by loading a replacement audio file, but
   there is no dedicated path-search/relink dialog, autosave, or crash recovery
   yet.
+- **Every run leaves a trace.** The diagnostic log is written on every run to
+  `~/.local/state/mooloop/mooloop.log` (`$XDG_STATE_HOME`; `~/Library/Logs/mooloop/`
+  on a Mac), rolled aside past 4 MB, and Preferences > Developer shows where;
+  it is no longer a preference. A panic leaves a crash report with a
+  backtrace in `crashes/` beside it. SIGTERM, SIGINT and SIGHUP -- a logout,
+  `kill`, Ctrl+C -- quit through the quit path without its dialog: the log
+  says which signal, a take still recording is finished, and unsaved song
+  changes are not kept (that waits on autosave). `docs/OPERATIONS.md`,
+  "Diagnostic Log", has the details.
 - **A song old enough to reference the built-in kick opens with it audible.**
   Projects saved before the sampler stopped auto-loading a kick carry a
   `SampleReference::Builtin`, which the install substitutes the cached default

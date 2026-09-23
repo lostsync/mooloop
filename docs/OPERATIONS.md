@@ -822,11 +822,25 @@ MOOLOOP_LOG=debug cargo run -p mooloop-app --bin mooloop -j 2
 `MOOLOOP_LOG` takes `error`, `warn`, `info` (the default), or `debug`. The
 older `MOOLOOP_DEBUG=1` still works and now means `debug`.
 
-Most problems are not reported from a terminal, so **Preferences → Developer →
-Write a log file** mirrors everything, `debug` included, to
-`$MOOLOOP_CONFIG_DIR/mooloop.log` (by default `~/.config/mooloop/mooloop.log`).
-It appends across runs and rolls to `mooloop.log.1` past 4 MB. The preference
-sticks, so it can be switched on before trying to reproduce something.
+Most problems are not reported from a terminal, so **every run also writes
+everything, `debug` included, to a log file**: `$XDG_STATE_HOME/mooloop/mooloop.log`
+(by default `~/.local/state/mooloop/mooloop.log`; `~/Library/Logs/mooloop/` on
+a Mac). It appends across runs and rolls to `mooloop.log.1` past 4 MB, at
+startup or mid-run. Preferences → Developer shows the path. Until 2026-09-22
+this was a preference, off by default, under the config directory -- so the
+runs that ended in a crash or a logout were the ones with no log (MOO-106).
+`MOOLOOP_STATE_DIR` moves it; so does `MOOLOOP_CONFIG_DIR`, which keeps a
+disposable run's log beside its settings.
+
+**A panic leaves a crash report** in `crashes/` beside the log:
+`crash-<UTC stamp>.txt`, with the build, the thread, the message and a
+backtrace, for the first panic of a run (the log gets a line for each of the
+first sixteen). The newest ten reports are kept.
+
+**SIGTERM, SIGINT and SIGHUP quit the way Quit does**, without its dialog: a
+logout, `kill` or Ctrl+C logs `quitting on SIGTERM` (and whether the song had
+unsaved changes, which are not kept), leaves the event loop, and finishes any
+take still recording before the process ends. A second signal ends it at once.
 
 ### The Output Went Missing
 

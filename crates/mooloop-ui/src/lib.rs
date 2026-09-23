@@ -13,6 +13,7 @@ mod meter;
 #[cfg(feature = "mockup")]
 mod mockup;
 mod settings;
+mod signals;
 mod theme;
 
 slint::include_modules!();
@@ -776,7 +777,6 @@ fn sync_preferences_properties(window: &MainWindow, settings: &UiSettings) {
     push_appearance_contrast(window, appearance);
     push_appearance_swatches(window, appearance);
     window.set_preferences_developer_mode(settings.general.developer_mode);
-    window.set_preferences_log_to_file(settings.general.log_to_file);
     window.set_preferences_log_path(settings::log_path().display().to_string().into());
     window.set_snap_to_zero(settings.general.snap_markers_to_zero);
     window.set_preferences_smooth_curves(appearance.smooth_curves);
@@ -3122,14 +3122,14 @@ fn descriptor_route_counts(
         .into()
 }
 
-/// Starts diagnostic logging, honouring the saved preference for whether to
-/// write a file.
+/// Starts diagnostic logging: the console, the log file, and the panic hook
+/// that leaves a crash report.
 ///
 /// Separate from [`AppUi::new`] and public so the binary can call it first:
 /// bringing up the audio engine is one of the things worth having in the log,
 /// and it happens before there is any UI to attach to.
 pub fn start_logging() {
-    init_logging(UiSettings::load_or_default().general.log_to_file);
+    init_logging();
 }
 
 /// The audio configuration the user saved, for opening the engine on.
@@ -3152,10 +3152,16 @@ pub fn saved_audio_config() -> mooloop_engine::AudioConfig {
 /// started from a terminal still reports what it opened, saved, and repaired
 /// without being asked.
 ///
-/// `to_file` mirrors everything, `debug` included, into [`settings::log_path`].
-/// A file that cannot be opened is reported and then dropped: no preference is
-/// worth refusing to start over.
-fn init_logging(to_file: bool) {
+/// Everything, `debug` included, also goes to [`settings::log_path`], on every
+/// run. It used to be a preference, off by default, on the Developer page --
+/// so the runs that ended in a crash or a logout were the ones with no log,
+/// since nobody turns a log on before the problem they did not expect (P5 in
+/// `reports/teams-2026-09-22.md`). A file that cannot be opened is reported
+/// on stderr and the run goes on: a log is not worth refusing to start over.
+///
+/// The panic hook writes the first panic of a run to a crash report, with a
+/// backtrace, in [`settings::crash_dir`].
+fn init_logging() {
     let level = match std::env::var("MOOLOOP_LOG") {
         Ok(name) => Level::parse(&name).unwrap_or_else(|| {
             eprintln!("mooloop: MOOLOOP_LOG={name:?} is not a level, using info");
@@ -3165,26 +3171,21 @@ fn init_logging(to_file: bool) {
         Err(_) => Level::Info,
     };
     mooloop_core::log::set_level(level);
-    if to_file {
-        let path = settings::log_path();
-        if let Err(error) = mooloop_core::log::start_file(&path, &build_description()) {
-            eprintln!("mooloop: could not write the log to {}: {error}", path.display());
-        }
+    let path = settings::log_path();
+    if let Err(error) = mooloop_core::log::start_file(&path, &build_description()) {
+        eprintln!("mooloop: could not write the log to {}: {error}", path.display());
     }
     // A panic is the one failure with no dialog and no status bar to carry it,
-    // which makes it the one that most needs to reach the file. Chained rather
-    // than replaced, so the default hook still prints its message and
-    // backtrace; this only adds a copy to wherever else records are going.
-    let inherited = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        log_error!("app", "panic: {info}");
-        inherited(info);
-    }));
+    // which makes it the one that most needs to reach the file -- and the one
+    // whose backtrace is worth keeping, since the stderr of a program started
+    // from a desktop file reaches nobody.
+    mooloop_core::log::install_panic_hook(settings::crash_dir(), build_description());
     log_info!("app", "mooloop {} starting", build_description());
     log_info!(
         "app",
-        "settings: {}, log level: {level:?}",
-        settings::config_dir().display()
+        "settings: {}, log: {}, log level: {level:?}",
+        settings::config_dir().display(),
+        path.display()
     );
 }
 
@@ -6198,6 +6199,8 @@ impl AppUi {
     pub fn new(mut handle: EngineHandle) -> Result<Self, slint::PlatformError> {
         let window = MainWindow::new()?;
         prepare_recordings_folder(&window);
+        // From here on a quit signal is the pump's to answer; see `signals`.
+        signals::install();
 
         // A Wayland compositor identifies a window by its xdg app id, and
         // Slint sends none unless it is set: Hyprland reported `class: ""`,
@@ -12202,51 +12205,6 @@ impl AppUi {
         wire_marker_param!(on_loop_end_changed, SampleMarker::LoopEnd);
 
         {
-            // Applied now, not on OK: someone turning this on is about to go
-            // and reproduce something, and a log that only starts after they
-            // confirm a dialog can miss the very run they wanted.
-            let settings = ui_settings.clone();
-            let weak = window.as_weak();
-            window.on_preferences_log_to_file_toggled(move |enabled| {
-                let path = settings::log_path();
-                let started = if enabled {
-                    match mooloop_core::log::start_file(&path, &build_description()) {
-                        Ok(()) => {
-                            log_info!("app", "logging to {}", path.display());
-                            true
-                        }
-                        Err(error) => {
-                            log_error!(
-                                "app",
-                                "could not write the log to {}: {error}",
-                                path.display()
-                            );
-                            if let Some(window) = weak.upgrade() {
-                                window.set_preferences_error(
-                                    format!("Could not write {}: {error}", path.display()).into(),
-                                );
-                            }
-                            false
-                        }
-                    }
-                } else {
-                    log_info!("app", "logging to file switched off");
-                    mooloop_core::log::stop_file();
-                    false
-                };
-                // Persist what actually happened, not what was asked for: a
-                // preference recorded as on when the file could not be opened
-                // would fail again silently on every future run.
-                let mut settings = settings.borrow_mut();
-                settings.general.log_to_file = started;
-                let _ = settings.save();
-                if let Some(window) = weak.upgrade() {
-                    window.set_preferences_log_to_file(started);
-                }
-            });
-        }
-
-        {
             // The pane arrangement outlives both the session and the project:
             // it is how this user works, not what this song is. Fired on
             // discrete changes and at the end of a drag, never per frame, so
@@ -14769,6 +14727,18 @@ impl AppUi {
             TimerMode::Repeated,
             std::time::Duration::from_millis(PUMP_INTERVAL_MS),
             move || {
+                // A logout, a `kill` or Ctrl+C: leave the way Quit does, but
+                // with no dialog, because nobody is there to answer one.
+                // `main` finishes the takes after the loop. Unsaved changes
+                // are not kept (that is autosave, MOO-103); the log says so.
+                if let Some(signal) = signals::take() {
+                    log_warn!("app", "quitting on {signal}");
+                    if st.borrow().session.dirty {
+                        log_warn!("app", "the song had unsaved changes, which were not saved");
+                    }
+                    slint::quit_event_loop().ok();
+                    return;
+                }
                 // Applied here rather than in the callback because the
                 // settings and state live in non-Send Rc/RefCells, while the
                 // picked path crosses the thread boundary as plain data.

@@ -254,13 +254,6 @@ pub(crate) fn meter_falloff_name(index: i32) -> &'static str {
 pub(crate) struct GeneralSettings {
     #[serde(default)]
     pub developer_mode: bool,
-    /// Whether the diagnostic log is also written to a file. Off by default:
-    /// the console output costs nothing, but a file is state on the user's
-    /// disk and they should be the one to ask for it. Survives restarts on
-    /// purpose -- a problem worth logging is usually one that has to be caught
-    /// on a later run.
-    #[serde(default)]
-    pub log_to_file: bool,
     /// Whether marker edits resolve onto zero crossings. An editing
     /// preference, not saved sampler state: it changes how an edit lands, not
     /// what any instrument sounds like, so it belongs to the user rather than
@@ -1200,14 +1193,55 @@ pub(crate) fn effect_presets_dir(kind: EffectKind) -> PathBuf {
         .join(effect_kind_slug(kind))
 }
 
-/// The diagnostic log, when the preference to write one is on.
+/// Where mooloop keeps what it writes about its own runs: the diagnostic log
+/// and crash reports.
 ///
-/// Under the config directory rather than a state or cache directory: mooloop
-/// keeps everything of its own in one place already, and someone being asked
-/// for their log should find it next to the `settings.toml` they have seen
-/// before, not in a second directory they have to be told about.
+/// `$MOOLOOP_STATE_DIR`; else `$MOOLOOP_CONFIG_DIR`, so a run pointed at a
+/// disposable config directory leaves nothing anywhere else; else the
+/// platform's place for it (`~/Library/Logs/mooloop`, `%APPDATA%\mooloop`, or
+/// `$XDG_STATE_HOME/mooloop`, by default `~/.local/state/mooloop`).
+///
+/// Not the config directory, where the log used to live when it was a
+/// preference: it is written on every run now, and a log is exactly what the
+/// XDG base directory spec means by state -- worth keeping across restarts,
+/// not worth backing up with the settings.
+pub(crate) fn state_dir() -> PathBuf {
+    state_dir_from(|name| std::env::var_os(name))
+}
+
+/// [`state_dir`] against a given environment, so the rule can be tested
+/// without changing the process's own.
+fn state_dir_from(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> PathBuf {
+    if let Some(path) = var("MOOLOOP_STATE_DIR") {
+        return PathBuf::from(path);
+    }
+    if let Some(path) = var("MOOLOOP_CONFIG_DIR") {
+        return PathBuf::from(path);
+    }
+    #[cfg(target_os = "windows")]
+    if let Some(path) = var("APPDATA") {
+        return PathBuf::from(path).join("mooloop");
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(home) = var("HOME") {
+        return PathBuf::from(home).join("Library/Logs/mooloop");
+    }
+    // The spec says a relative path is to be ignored.
+    if let Some(path) = var("XDG_STATE_HOME").filter(|path| PathBuf::from(path).is_absolute()) {
+        return PathBuf::from(path).join("mooloop");
+    }
+    PathBuf::from(var("HOME").unwrap_or_else(|| ".".into())).join(".local/state/mooloop")
+}
+
+/// The diagnostic log. Written on every run, and rolled aside past a few
+/// megabytes (`mooloop_core::log::start_file`).
 pub(crate) fn log_path() -> PathBuf {
-    config_dir().join("mooloop.log")
+    state_dir().join("mooloop.log")
+}
+
+/// Where a panic leaves its crash report (`mooloop_core::log::install_panic_hook`).
+pub(crate) fn crash_dir() -> PathBuf {
+    state_dir().join("crashes")
 }
 
 /// Directory mooloop keeps its own *data* in, as opposed to its settings:
@@ -1764,7 +1798,6 @@ mod tests {
             general: GeneralSettings {
                 developer_mode: true,
                 snap_markers_to_zero: true,
-                log_to_file: true,
             },
             // Every scalar off its default, for the reason the layout section
             // below gives: a round trip through a default value passes even
@@ -1963,6 +1996,43 @@ mod tests {
         assert!(!written.contains(unused), "{written}");
         other.buffer_size = Some(2048);
         assert_eq!(audio.engine_config().buffer_size, None);
+    }
+
+    /// The log is state, not configuration: under `$XDG_STATE_HOME`, or
+    /// `~/.local/state` without it -- unless a run was pointed at a
+    /// disposable directory, which then holds everything.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_log_lives_in_the_state_directory() {
+        use std::ffi::OsString;
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| OsString::from(value))
+            }
+        };
+        assert_eq!(
+            state_dir_from(env(&[("HOME", "/home/a"), ("XDG_STATE_HOME", "/var/state")])),
+            PathBuf::from("/var/state/mooloop")
+        );
+        assert_eq!(
+            state_dir_from(env(&[("HOME", "/home/a")])),
+            PathBuf::from("/home/a/.local/state/mooloop")
+        );
+        assert_eq!(
+            state_dir_from(env(&[("HOME", "/home/a"), ("XDG_STATE_HOME", "relative")])),
+            PathBuf::from("/home/a/.local/state/mooloop")
+        );
+        assert_eq!(
+            state_dir_from(env(&[("HOME", "/home/a"), ("MOOLOOP_CONFIG_DIR", "/tmp/run")])),
+            PathBuf::from("/tmp/run")
+        );
+        assert_eq!(
+            state_dir_from(env(&[("MOOLOOP_CONFIG_DIR", "/tmp/run"), ("MOOLOOP_STATE_DIR", "/tmp/s")])),
+            PathBuf::from("/tmp/s")
+        );
     }
 
     /// A fresh install asks the driver for nothing: under JACK the buffer is
