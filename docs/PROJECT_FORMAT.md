@@ -21,10 +21,21 @@ A song with embedded assets has this layout:
 ```text
 |-- beat.mooloop
 `-- beat.mooloop-assets/
-    `-- samples/
-        |-- 00-kick.wav
-        `-- 01-snare.wav
+    |-- samples/
+    |   |-- 00-kick.wav
+    |   `-- 01-snare.wav
+    `-- recordings/
+        `-- 20260922-141503-Sampler_1.wav
 ```
+
+`recordings/` holds the song's recorded takes, under the names they were
+recorded with (`audio-recording/06`; Adam, 2026-09-22: *"having a
+recordings/ doesnt sound like a terrible idea"*). A save tells a take from any
+other sample by the folder its file is in: the shared folder a take is
+recorded into is also called `recordings`, and so is another song's on a
+Save As. Everything else a song owns goes into `samples/`, prefixed with its
+channel the one time it is copied in (`00-kick.wav`), and with `-2`, `-3`
+before the extension if that name is taken.
 
 Directory bundles retain the original layout:
 
@@ -36,11 +47,26 @@ drums.mooloop-kit/
     `-- 01-snare.wav
 ```
 
-Saving replaces a song file and its asset directory through sibling staging
-paths. Existing paths are moved to temporary backups until both replacements
-are in place, so a failed save can restore the previous document. Loading and
-resaving an older directory-style `.mooloop` song migrates it to the file and
-sidecar layout. Other bundle types retain their directory replacement flow.
+Saving replaces the song file through a sibling staging path, with the old
+file moved to a temporary backup until the new one is in place, so a failed
+save can restore the previous document.
+
+**The asset directory is added to, never rebuilt** (since 2026-09-22). A file
+already in it stays where it is, under the name it has, and is not copied
+again; a file new to the song is copied in once, through a hidden `.part`
+sibling renamed into place, under a name nothing in the folder has. A file the
+song stops using stays in the folder -- an undo can bring it back -- until the
+clean-up dialog (`recording.clean-up`, `ACTIONS.md`) moves it to the trash. A
+save that fails removes only what it copied in. Before, every save staged a
+whole new folder from what that save referenced and deleted the old one:
+every Ctrl+S copied every embedded sample again, and a take replaced before
+the next save was deleted while the undo history still pointed at it
+(MOO-89). Adam, 2026-09-22: *"that rebuild is a problem, too. it keeps
+rewriting the filenames every save."*
+
+Loading and resaving an older directory-style `.mooloop` song migrates it to
+the file and sidecar layout. Other bundle types retain their directory
+replacement flow.
 
 ## Envelope
 
@@ -570,11 +596,15 @@ embedded = true
 ```
 
 For a song file, the corresponding embedded path includes the sidecar name,
-for example `beat.mooloop-assets/samples/00-kick.wav`. Both forms are resolved
-relative to their document container and checked for path traversal.
+for example `beat.mooloop-assets/samples/00-kick.wav` or
+`beat.mooloop-assets/recordings/20260922-141503-Sampler_1.wav`. Both forms
+are resolved relative to their document container and checked for path
+traversal.
 
-Embedded paths must remain below the document's `samples/` directory or a song
-sidecar; absolute paths and `..` traversal are rejected. **The sidecar's name
+Embedded paths must remain below the document's `samples/` directory, or a
+song sidecar's `samples/` or `recordings/`; absolute paths and `..` traversal
+are rejected. A build from before 2026-09-22 rejects a `recordings/` path, so
+a song holding a take does not open in one. **The sidecar's name
 is not required to match** -- a song renamed in a file manager, together with
 its sidecar, stores a first component naming the *old* name, and the loader
 substitutes the one this song actually has and reports it as an asset warning.

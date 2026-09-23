@@ -477,7 +477,12 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   toggle, export, and quit; Ctrl+O / Ctrl+S / Ctrl+Shift+S / Ctrl+E / Ctrl+Q
   mirror it by default. Help has an About dialog with the crate version.
   Song documents are inspectable versioned TOML files with
-  optional copied WAV assets in a sibling `.mooloop-assets` directory. Older
+  optional copied WAV assets in a sibling `.mooloop-assets` directory:
+  samples in its `samples/`, recorded takes in its `recordings/`. **A save
+  adds to that directory and never rebuilds it** (since 2026-09-22): a file
+  already there keeps its place and its name and is not copied again, and a
+  file the song stops using stays until the clean-up dialog moves it to the
+  trash, so an undo back to it still finds it. Older
   directory-style song bundles remain loadable and migrate when resaved.
   Missing or corrupt samples warn and load as silent slots. **Renaming a song
   and its assets folder together, in a file manager, works**: the document
@@ -739,7 +744,8 @@ sampler does (`docs/plans/audio-recording/`, steps 02-05, 2026-09-18):
   recorded it whichever is selected, as one "Record Take" undo step. Nothing
   is written into a pattern; the take is heard through whatever triggers the
   sampler. Takes are written to `recordings/` beside the settings file, and a
-  save copies a take into the song whichever asset mode it uses.
+  save copies a take into the song's own `recordings/`, under the name it was
+  recorded with, whichever asset mode it uses.
 - **A take that has nowhere to land says so and keeps the file.** A take
   outlives what it was armed against: its channel can be deleted while it
   records, and -- a channel being a dumb slot -- its sampler can be swapped

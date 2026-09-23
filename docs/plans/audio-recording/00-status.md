@@ -515,6 +515,18 @@ question, so `UnusedTake::from_earlier_session` marks them and the quit path
 filters them out. Listing them, unticked and with the reason stated, is the
 dialog's job.
 
+**The project-assets half stays in, and a song has a `recordings/` folder**
+(Adam, 2026-09-22, MOO-38 question 1: *"having a recordings/ doesnt sound like
+a terrible idea. that rebuild is a problem, too. it keeps rewriting the
+filenames every save."*). Landed the same day in `mooloop-project`: a save
+copies a take into `<song>.mooloop-assets/recordings/` under the name it was
+recorded with, and **the sidecar is added to rather than rebuilt** -- a file
+already in it keeps its place and name and is not copied again, and a file the
+song stops using stays there for the clean-up dialog. That also closes the
+sequence MOO-89 suspected (a save deleting the copy of a take the undo history
+still points at): `an_earlier_take_survives_the_save_after_the_retake_that_replaced_it`.
+`PROJECT_FORMAT.md` has the folder and the rule.
+
 Still missing from step 06, all of it dialog-side: the `recording.clean-up`
 command and its `ACTIONS.md` row, the two-list dialog with name/length/size/date
 and a running total, and the project-assets half -- sweeping a song's own

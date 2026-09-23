@@ -547,6 +547,60 @@ pub fn save_effect_run_preset(
     Ok(report)
 }
 
+/// The folder inside a song's sidecar that recorded takes are copied into,
+/// and the name of the shared folder a take is written to before any song
+/// owns it (`audio-recording/06`).
+///
+/// **One name for both, and that is how a save tells a take from a sample.**
+/// A take is recorded into a folder called `recordings` and nothing else in
+/// the application writes one, so an owned sample whose file sits in a
+/// `recordings` folder -- the shared one, or another song's on a Save As --
+/// is copied into this song's `recordings/` under the name it already has.
+/// Everything else goes into `samples/`.
+pub const RECORDINGS_DIR: &str = "recordings";
+
+/// The folder inside a song's sidecar, or a directory bundle, that samples
+/// are copied into.
+const SAMPLES_DIR: &str = "samples";
+
+/// Whether `rest`, a path inside a sidecar, names one of the two folders a
+/// save writes into. The loader follows nothing else.
+fn is_asset_folder_path(rest: &Path) -> bool {
+    rest.starts_with(SAMPLES_DIR) || rest.starts_with(RECORDINGS_DIR)
+}
+
+/// The sidecar folder a song at `song` keeps its embedded samples and takes
+/// in, whether or not it exists yet.
+pub fn song_assets_dir(song: &Path) -> Option<PathBuf> {
+    song_assets_path(song).ok()
+}
+
+/// The two folders inside a song's sidecar that a save writes files into.
+pub fn song_asset_folders(song: &Path) -> Vec<PathBuf> {
+    song_assets_dir(song)
+        .map(|assets| vec![assets.join(SAMPLES_DIR), assets.join(RECORDINGS_DIR)])
+        .unwrap_or_default()
+}
+
+/// Writes the song file, and copies into its sidecar whatever it owns that is
+/// not there yet.
+///
+/// **The sidecar is added to, never rebuilt.** Until 2026-09-22 every save
+/// staged a whole new assets folder from what that save referenced, renamed
+/// it over the old one and deleted the old one: a 500 MB embedded kit copied
+/// 500 MB per Ctrl+S (report finding D9), and a take that one save copied in
+/// and a retake replaced was deleted by the next save while the undo history
+/// still pointed at it (MOO-89). Adam, 2026-09-22: *"that rebuild is a
+/// problem, too. it keeps rewriting the filenames every save."*
+///
+/// So a file already in the sidecar stays exactly where it is, under the name
+/// it has, and is not copied again; a file new to the song is copied in once,
+/// under a name nothing in the sidecar has, and never over an existing file.
+/// A file the song stops using stays too, until the clean-up dialog
+/// (`recording.clean-up`) is asked to move it to the trash.
+///
+/// A save that fails removes what it copied in, and leaves the song file and
+/// everything already in the sidecar as they were.
 fn save_song_file(path: &Path, project: &Project, mode: AssetMode) -> Result<SaveReport, Error> {
     let parent = path
         .parent()
@@ -562,8 +616,8 @@ fn save_song_file(path: &Path, project: &Project, mode: AssetMode) -> Result<Sav
         .and_then(|name| name.to_str())
         .unwrap_or("mooloop");
     let staging_file = parent.join(format!(".{stem}.tmp-{}-{nonce}", std::process::id()));
-    let staging_assets = parent.join(format!(".{stem}-assets.tmp-{}-{nonce}", std::process::id()));
 
+    let mut added = Vec::<PathBuf>::new();
     let result = (|| {
         let mut document = project.clone();
         let mut report = SaveReport::default();
@@ -574,9 +628,9 @@ fn save_song_file(path: &Path, project: &Project, mode: AssetMode) -> Result<Sav
                 &mut channel.setup.source,
                 path,
                 &target_assets,
-                &staging_assets,
                 mode,
                 &mut copied,
+                &mut added,
                 &mut report.warnings,
             )?;
         }
@@ -589,15 +643,19 @@ fn save_song_file(path: &Path, project: &Project, mode: AssetMode) -> Result<Sav
             document,
         };
         fs::write(&staging_file, toml::to_string_pretty(&envelope)?)?;
-        replace_song_file(path, &staging_file, &target_assets, &staging_assets)?;
+        replace_song_file(path, &staging_file)?;
         Ok(report)
     })();
 
     if staging_file.exists() {
         let _ = fs::remove_file(&staging_file);
     }
-    if staging_assets.exists() {
-        let _ = fs::remove_dir_all(&staging_assets);
+    if result.is_err() {
+        // Only what this save added: the song file on disk still names
+        // everything else in the sidecar.
+        for file in &added {
+            let _ = fs::remove_file(file);
+        }
     }
     result
 }
@@ -608,9 +666,9 @@ fn prepare_song_asset(
     source: &mut ChannelSource,
     target: &Path,
     target_assets: &Path,
-    staging_assets: &Path,
     mode: AssetMode,
     copied: &mut HashMap<PathBuf, PathBuf>,
+    added: &mut Vec<PathBuf>,
     warnings: &mut Vec<AssetWarning>,
 ) -> Result<(), Error> {
     let ChannelSource::Sampler(sampler) = source else {
@@ -623,27 +681,23 @@ fn prepare_song_asset(
     let source = path.clone();
     let keep_owned = *embedded && (source.starts_with(target) || source.starts_with(target_assets));
     let parent = target.parent().expect("validated song parent");
-    // **A sample the bundle already owns cannot be un-embedded, and now says
-    // so.** The guard itself is necessary: without it `replace_song_file`
-    // deletes the sidecar the new reference would point at, destroying the
-    // only copy. What was wrong was the silence -- unticking "Embed assets"
-    // and saving produced no warning, no status message and no change, so
-    // `CURRENT.md`'s "embedded and referenced asset policies are available
-    // per save" was true only of a song that had never been embedded.
-    //
-    // A warning rather than a refusal, because the save itself is correct and
-    // the rest of the document does follow the mode. Un-embedding for real
-    // means copying the bytes out to somewhere the user has chosen, which is
-    // a gesture that does not exist; `docs/LOOSE_ENDS.md` carries it.
+    // **A sample the bundle already owns cannot be un-embedded, and says
+    // so.** Un-embedding for real means copying the bytes out to somewhere
+    // the user has chosen, which is a gesture that does not exist;
+    // `docs/LOOSE_ENDS.md` carries it. Before the warning, unticking "Embed
+    // assets" and saving produced no warning, no status message and no
+    // change, so `CURRENT.md`'s "embedded and referenced asset policies are
+    // available per save" was true only of a song that had never been
+    // embedded. A warning rather than a refusal, because the save itself is
+    // correct and the rest of the document does follow the mode.
     //
     // **And a sample the song owns but has not stored yet is embedded too.**
-    // `embedded` means *owned by the song*, and until 2026-09-18 every owned
-    // sample was already inside the bundle. A recorded take is the first that
-    // is not: it is owned from the moment it lands (`audio-recording/04`),
-    // but it sits in the shared recordings folder until a save copies it in.
-    // Referencing it there instead would leave the song depending on a folder
-    // whose unused takes can be deleted (`audio-recording/06`). The same rule
-    // stops a Save As in Referenced mode pointing into another song's sidecar.
+    // `embedded` means *owned by the song*. A recorded take is owned from the
+    // moment it lands (`audio-recording/04`), but it sits in the shared
+    // recordings folder until a save copies it in. Referencing it there
+    // instead would leave the song depending on a folder whose unused takes
+    // can be moved to the trash (`audio-recording/06`). The same rule stops a
+    // Save As in Referenced mode pointing into another song's sidecar.
     if mode == AssetMode::Referenced && *embedded {
         warnings.push(AssetWarning {
             channel,
@@ -679,6 +733,28 @@ fn prepare_song_asset(
         return Ok(());
     }
 
+    let asset_name = PathBuf::from(
+        target_assets
+            .file_name()
+            .expect("song assets path has a file name"),
+    );
+    // **Already in this song's sidecar: stays where it is, as it is.** No
+    // copy and no new name. Before 2026-09-22 this is where a sample the
+    // bundle owned was copied into a fresh folder under a name worked out
+    // again, and a mistake in that working-out once grew `00-kick.wav` into
+    // `00-00-kick.wav` by three bytes a Ctrl+S until the song could not be
+    // saved at all. A file in the sidecar but outside its two folders is not
+    // one a save wrote, and is copied in like any other.
+    if let Some(rest) = source
+        .strip_prefix(target_assets)
+        .ok()
+        .filter(|rest| is_asset_folder_path(rest))
+    {
+        *path = asset_name.join(rest);
+        *embedded = true;
+        return Ok(());
+    }
+
     let canonical = source.canonicalize().unwrap_or_else(|_| source.clone());
     let relative = if let Some(relative) = copied.get(&canonical) {
         relative.clone()
@@ -689,31 +765,74 @@ fn prepare_song_asset(
             .map(sanitize_preset_name)
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| "sample.wav".into());
-        let asset_name = target_assets
-            .file_name()
-            .expect("song assets path has a file name");
-        // A sample the bundle already owns keeps the leaf name it has. It was
-        // given its `NN-` on the save that embedded it, and the app writes the
-        // resolved path back into the live session afterwards -- so prefixing
-        // again turned `00-kick.wav` into `00-00-kick.wav`, three bytes per
-        // Ctrl+S, until the name hit `NAME_MAX` and the song could not be
-        // saved at all. Permanently: the long name is in the manifest, so
-        // every later save fails too and a restart reloads it.
-        let leaf = if keep_owned {
+        let is_take = source
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|folder| folder == RECORDINGS_DIR);
+        let folder = if is_take { RECORDINGS_DIR } else { SAMPLES_DIR };
+        // A take keeps the name it was recorded under, which already says
+        // when and on what. So does a file coming out of a legacy directory
+        // bundle, which was given its `NN-` when it was embedded there.
+        // Anything else is prefixed with its channel, once, as it is copied
+        // in, so two `kick.wav`s from two folders start out apart.
+        let wanted = if is_take || keep_owned {
             name
         } else {
             format!("{channel:02}-{name}")
         };
-        let relative = PathBuf::from(asset_name).join("samples").join(&leaf);
-        let destination = staging_assets.join("samples").join(&leaf);
-        fs::create_dir_all(destination.parent().expect("sample destination has parent"))?;
-        fs::copy(&source, destination)?;
+        let directory = target_assets.join(folder);
+        fs::create_dir_all(&directory)?;
+        let leaf = unclaimed_name(&directory, &wanted);
+        let destination = directory.join(&leaf);
+        copy_new_file(&source, &destination)?;
+        added.push(destination);
+        let relative = asset_name.join(folder).join(&leaf);
         copied.insert(canonical, relative.clone());
         relative
     };
     *path = relative;
     *embedded = true;
     Ok(())
+}
+
+/// `wanted`, or `wanted` with `-2`, `-3`, ... before its extension, whichever
+/// is the first name nothing in `directory` has.
+///
+/// A sidecar keeps files the song no longer uses -- an undo may want them
+/// back -- so a new file can arrive under a name an old one already has. It
+/// must never be copied over it.
+fn unclaimed_name(directory: &Path, wanted: &str) -> String {
+    if !directory.join(wanted).exists() {
+        return wanted.to_string();
+    }
+    let (stem, extension) = match wanted.rsplit_once('.') {
+        Some((stem, extension)) if !stem.is_empty() => (stem, Some(extension)),
+        _ => (wanted, None),
+    };
+    (2..)
+        .map(|n| match extension {
+            Some(extension) => format!("{stem}-{n}.{extension}"),
+            None => format!("{stem}-{n}"),
+        })
+        .find(|candidate| !directory.join(candidate).exists())
+        .expect("an unbounded search finds a free name")
+}
+
+/// Copy `source` to `destination`, which does not exist, so that nothing ever
+/// sees a half-copied file under its final name: the bytes go to a hidden
+/// sibling first and are renamed into place.
+fn copy_new_file(source: &Path, destination: &Path) -> Result<(), Error> {
+    let directory = destination.parent().expect("an asset has a folder");
+    let leaf = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("asset");
+    let partial = directory.join(format!(".{leaf}.part-{}", std::process::id()));
+    let result = fs::copy(source, &partial).and_then(|_| fs::rename(&partial, destination));
+    if result.is_err() {
+        let _ = fs::remove_file(&partial);
+    }
+    result.map_err(Error::Io)
 }
 
 /// What a song's sidecar directory is called, after the song's own file name.
@@ -744,69 +863,36 @@ fn remove_path(path: &Path) -> Result<(), std::io::Error> {
     }
 }
 
-fn replace_song_file(
-    target: &Path,
-    staging_file: &Path,
-    target_assets: &Path,
-    staging_assets: &Path,
-) -> Result<(), Error> {
+/// Put the staged song file at `target`, keeping the old one aside until the
+/// new one is in place so a failed rename can put it back.
+///
+/// The song file only. Its sidecar is written to in place and never swapped
+/// out (see [`save_song_file`]). `target` may be a legacy directory-style
+/// song, which is replaced by the file here; its samples have already been
+/// copied into the sidecar by then.
+fn replace_song_file(target: &Path, staging_file: &Path) -> Result<(), Error> {
     let parent = target.parent().expect("validated song parent");
     let name = target
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("mooloop");
     let backup = parent.join(format!(".{name}.backup-{}", std::process::id()));
-    let assets_backup = parent.join(format!(".{name}-assets.backup-{}", std::process::id()));
-    for stale in [&backup, &assets_backup] {
-        if stale.exists() {
-            remove_path(stale)?;
-        }
+    if backup.exists() {
+        remove_path(&backup)?;
     }
 
     let had_target = target.exists();
-    let had_assets = target_assets.exists();
     if had_target {
         fs::rename(target, &backup)?;
     }
-    if had_assets {
-        if let Err(error) = fs::rename(target_assets, &assets_backup) {
-            if had_target {
-                let _ = fs::rename(&backup, target);
-            }
-            return Err(Error::Io(error));
-        }
-    }
-
-    let installs_assets = staging_assets.exists();
-    if installs_assets {
-        if let Err(error) = fs::rename(staging_assets, target_assets) {
-            if had_assets {
-                let _ = fs::rename(&assets_backup, target_assets);
-            }
-            if had_target {
-                let _ = fs::rename(&backup, target);
-            }
-            return Err(Error::Io(error));
-        }
-    }
     if let Err(error) = fs::rename(staging_file, target) {
-        if installs_assets {
-            let _ = fs::rename(target_assets, staging_assets);
-        }
-        if had_assets {
-            let _ = fs::rename(&assets_backup, target_assets);
-        }
         if had_target {
             let _ = fs::rename(&backup, target);
         }
         return Err(Error::Io(error));
     }
-
     if had_target {
         remove_path(&backup)?;
-    }
-    if had_assets {
-        remove_path(&assets_backup)?;
     }
     Ok(())
 }
@@ -1290,8 +1376,9 @@ fn resolve_setup_asset(
 /// the first component is called.
 ///
 /// So the shape is checked and the *name* is substituted: a first component
-/// ending in `-assets`, a second of `samples`, and the answer is that path
-/// with the first component replaced by the sidecar this song actually has.
+/// ending in `-assets`, a second of `samples` or `recordings`, and the
+/// answer is that path with the first component replaced by the sidecar this
+/// song actually has.
 /// A rename therefore self-repairs, which is what a user expects and is the
 /// only option that leaves the song playing -- merely relaxing the equality
 /// would open the song with every sample missing, turning a brick into a
@@ -1310,7 +1397,7 @@ fn embedded_bundle_path(bundle: &Path, path: &Path) -> Option<PathBuf> {
     // A directory bundle *is* the song, so its assets sit directly inside it
     // and there is no sidecar name to substitute.
     if bundle.is_dir() {
-        return path.starts_with("samples").then(|| path.to_path_buf());
+        return path.starts_with(SAMPLES_DIR).then(|| path.to_path_buf());
     }
     let sidecar = song_assets_path(bundle)
         .ok()
@@ -1323,7 +1410,7 @@ fn embedded_bundle_path(bundle: &Path, path: &Path) -> Option<PathBuf> {
         return None;
     }
     let rest: PathBuf = components.collect();
-    rest.starts_with("samples").then(|| sidecar.join(rest))
+    is_asset_folder_path(&rest).then(|| sidecar.join(rest))
 }
 
 /// Whether `project` is already exactly what the format stores, with no
@@ -2040,8 +2127,14 @@ mod tests {
         assert!(report.warnings.is_empty(), "{:?}", report.warnings);
     }
 
+    /// **A sample the song stops using stays in its sidecar.** Until
+    /// 2026-09-22 this test was the opposite -- the old sidecar was removed --
+    /// because every save rebuilt the folder from what that save referenced.
+    /// An undo can bring a sample back, so the save that dropped it must not
+    /// delete it; moving an unused one to the trash is the clean-up dialog's
+    /// job.
     #[test]
-    fn resaving_without_embedded_samples_removes_the_old_sidecar() {
+    fn resaving_without_a_sample_leaves_it_in_the_sidecar() {
         let temp = tempdir().unwrap();
         let source = temp.path().join("kick.wav");
         fs::write(&source, b"wav bytes").unwrap();
@@ -2058,7 +2151,8 @@ mod tests {
 
         save_song(&bundle, &project, AssetMode::Embedded).unwrap();
         let assets = song_assets_path(&bundle).unwrap();
-        assert!(assets.is_dir());
+        let kept = assets.join("samples/00-kick.wav");
+        assert!(kept.is_file());
 
         project.channels[0]
             .setup
@@ -2066,11 +2160,162 @@ mod tests {
             .unwrap()
             .sample = SampleReference::default();
         save_song(&bundle, &project, AssetMode::Embedded).unwrap();
-        assert!(!assets.exists());
+        assert_eq!(fs::read(&kept).unwrap(), b"wav bytes");
         assert_eq!(
             load_bundle(&bundle).unwrap().document,
             LoadedDocument::Song(project)
         );
+    }
+
+    /// A take the song plays, as a save would find it: owned, and still in
+    /// the shared recordings folder under `root`.
+    fn record_take(root: &Path, name: &str, bytes: &[u8]) -> SampleReference {
+        let recordings = root.join(RECORDINGS_DIR);
+        fs::create_dir_all(&recordings).unwrap();
+        let take = recordings.join(name);
+        fs::write(&take, bytes).unwrap();
+        SampleReference::File {
+            path: take,
+            embedded: true,
+        }
+    }
+
+    fn sample_of(project: &Project) -> PathBuf {
+        let SampleReference::File { path, .. } =
+            &project.channels[0].setup.sampler_state().unwrap().sample
+        else {
+            panic!("the channel holds a file reference");
+        };
+        path.clone()
+    }
+
+    /// Save, then take back the document the save produced, as the
+    /// application does after every save.
+    fn save_and_reload(bundle: &Path, project: &Project) -> Project {
+        save_song(bundle, project, AssetMode::Embedded).unwrap();
+        let LoadedDocument::Song(saved) = load_bundle(bundle).unwrap().document else {
+            panic!("a song bundle loads as a song");
+        };
+        saved
+    }
+
+    /// **A take goes into the song's own `recordings/`, under the name it
+    /// was recorded with** (Adam, 2026-09-22, MOO-38: *"having a recordings/
+    /// doesnt sound like a terrible idea"*). Before, it went into `samples/`
+    /// with a channel prefix, so a file called `20260922-...-Sampler_1.wav`
+    /// in the recordings folder turned up as `00-20260922-...` in the song.
+    #[test]
+    fn a_take_lands_in_the_songs_recordings_folder_under_its_own_name() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("song.mooloop");
+        let mut project = Project::default();
+        project.channels[0].setup.sampler_state_mut().unwrap().sample =
+            record_take(temp.path(), "20260922-120000-Sampler_1.wav", b"take");
+
+        let saved = save_and_reload(&bundle, &project);
+
+        assert_eq!(
+            sample_of(&saved),
+            song_assets_path(&bundle)
+                .unwrap()
+                .join("recordings/20260922-120000-Sampler_1.wav")
+        );
+        let manifest = fs::read_to_string(&bundle).unwrap();
+        assert!(
+            manifest.contains("song.mooloop-assets/recordings/20260922-120000-Sampler_1.wav"),
+            "{manifest}"
+        );
+    }
+
+    /// **The sequence MOO-89 suspected, at the level of the files.** Record
+    /// a take and save; record a retake over it and save again; go back to
+    /// the first take, as an undo does, and save a third time. The first
+    /// take's copy in the song has to still be there at every step: the
+    /// history holds its path, and until 2026-09-22 the second save rebuilt
+    /// the sidecar without it.
+    #[test]
+    fn an_earlier_take_survives_the_save_after_the_retake_that_replaced_it() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("song.mooloop");
+        let mut project = Project::default();
+        project.channels[0].setup.sampler_state_mut().unwrap().sample =
+            record_take(temp.path(), "20260922-120000-Sampler_1.wav", b"first take");
+        let after_first = save_and_reload(&bundle, &project);
+        // What the "Record Take" entry for the retake holds as its `before`.
+        let undo_to = after_first.clone();
+
+        let mut retaken = after_first;
+        retaken.channels[0].setup.sampler_state_mut().unwrap().sample =
+            record_take(temp.path(), "20260922-120100-Sampler_1.wav", b"second take");
+        let after_second = save_and_reload(&bundle, &retaken);
+        assert_eq!(fs::read(sample_of(&after_second)).unwrap(), b"second take");
+        assert!(
+            sample_of(&undo_to).is_file(),
+            "the save after the retake deleted the take an undo goes back to"
+        );
+
+        let after_undo = save_and_reload(&bundle, &undo_to);
+        assert_eq!(fs::read(sample_of(&after_undo)).unwrap(), b"first take");
+        assert_eq!(sample_of(&after_undo), sample_of(&undo_to));
+    }
+
+    /// **A file already in the sidecar is not copied again.** The bytes in
+    /// the sidecar are changed behind the save's back, and the next save
+    /// leaves them changed: it did not rewrite the file from anywhere.
+    #[test]
+    fn a_sample_already_in_the_sidecar_is_left_as_it_is() {
+        let temp = tempdir().unwrap();
+        let source = temp.path().join("kick.wav");
+        fs::write(&source, b"original").unwrap();
+        let bundle = temp.path().join("song.mooloop");
+        let mut project = Project::default();
+        project.channels[0].setup.sampler_state_mut().unwrap().sample = SampleReference::File {
+            path: source,
+            embedded: false,
+        };
+        let saved = save_and_reload(&bundle, &project);
+        let stored = sample_of(&saved);
+        fs::write(&stored, b"touched in place").unwrap();
+
+        let saved_again = save_and_reload(&bundle, &saved);
+
+        assert_eq!(sample_of(&saved_again), stored);
+        assert_eq!(fs::read(&stored).unwrap(), b"touched in place");
+    }
+
+    /// **A new file never lands on an old one's name.** The sidecar keeps
+    /// what the song stopped using, so a later sample can want a name that is
+    /// taken; it gets a fresh one and the old file is untouched.
+    #[test]
+    fn a_new_sample_is_never_copied_over_one_the_sidecar_kept() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("song.mooloop");
+        let first_dir = temp.path().join("a");
+        let second_dir = temp.path().join("b");
+        fs::create_dir_all(&first_dir).unwrap();
+        fs::create_dir_all(&second_dir).unwrap();
+        fs::write(first_dir.join("kick.wav"), b"first kick").unwrap();
+        fs::write(second_dir.join("kick.wav"), b"second kick").unwrap();
+
+        let mut project = Project::default();
+        project.channels[0].setup.sampler_state_mut().unwrap().sample = SampleReference::File {
+            path: first_dir.join("kick.wav"),
+            embedded: false,
+        };
+        let first = save_and_reload(&bundle, &project);
+        let first_copy = sample_of(&first);
+
+        let mut replaced = first;
+        replaced.channels[0].setup.sampler_state_mut().unwrap().sample = SampleReference::File {
+            path: second_dir.join("kick.wav"),
+            embedded: false,
+        };
+        let second = save_and_reload(&bundle, &replaced);
+
+        assert_ne!(sample_of(&second), first_copy);
+        assert!(sample_of(&second).ends_with("samples/00-kick-2.wav"));
+        assert_eq!(fs::read(sample_of(&second)).unwrap(), b"second kick");
+        assert_eq!(fs::read(&first_copy).unwrap(), b"first kick");
     }
 
     #[test]
