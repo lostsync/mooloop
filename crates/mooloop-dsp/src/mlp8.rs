@@ -55,7 +55,7 @@ use crate::taps::AudioTaps;
 use crate::effects::ModulationEffect;
 use crate::env::Adsr;
 use crate::event::{Event, EventList};
-use crate::filter::Svf;
+use crate::filter::{SvfCascade, SvfOutput, SvfSlope};
 use crate::shaper::{soft_ceiling, PreDrive};
 use crate::node::{AudioNode, Discontinuity, ProcessContext, SourceNode};
 use crate::osc::{sync_blep, Noise, Osc};
@@ -292,23 +292,26 @@ impl ColoredNoise {
 /// below, and it is about slope rather than about character.
 #[derive(Clone, Copy)]
 struct VoiceFilter {
-    first: Svf,
-    second: Svf,
+    cascade: SvfCascade,
 }
 
 impl VoiceFilter {
     fn new() -> Self {
         Self {
-            first: Svf::new(),
-            second: Svf::new(),
+            cascade: SvfCascade::new(),
         }
     }
 
     fn reset(&mut self) {
-        self.first.reset();
-        self.second.reset();
+        self.cascade.reset();
     }
 
+    /// LP24 is the shared compensated cascade (MOO-123): its corner is
+    /// pushed up by the amount a cascade drops it, so the Cutoff knob means
+    /// one frequency at either slope, and the resonance is shared between
+    /// the stages so the pair peaks about as hard as one stage. That
+    /// compensation was this file's own until it became the Filter effect's
+    /// too.
     fn next_sample(
         &mut self,
         mode: MlP8FilterMode,
@@ -317,46 +320,16 @@ impl VoiceFilter {
         resonance: f32,
         sample_rate: u32,
     ) -> f32 {
-        match mode {
-            MlP8FilterMode::Lp12 => self.first.next_sample(input, cutoff_hz, resonance, sample_rate),
-            MlP8FilterMode::Lp24 => {
-                // Two identical stages put the -3 dB point most of an octave
-                // below one stage's, so the Cutoff knob would mean two
-                // different frequencies depending on the slope. The corner is
-                // pushed up by the amount a cascade drops it, and the
-                // resonance is split so the pair peaks about as hard as the
-                // single stage rather than twice as hard.
-                let corrected = (cutoff_hz * LP24_CORNER_SCALE).min(sample_rate as f32 * 0.45);
-                let shared = resonance * LP24_RESONANCE_SHARE;
-                let first = self
-                    .first
-                    .next_sample(input, corrected, shared, sample_rate);
-                self.second
-                    .next_sample(first, corrected, shared, sample_rate)
-            }
-            MlP8FilterMode::Bp12 => {
-                self.first
-                    .next_sample_lp_bp_hp(input, cutoff_hz, resonance, sample_rate)
-                    .1
-            }
-            MlP8FilterMode::Hp12 => {
-                self.first
-                    .next_sample_lp_hp(input, cutoff_hz, resonance, sample_rate)
-                    .1
-            }
-        }
+        let (output, slope) = match mode {
+            MlP8FilterMode::Lp12 => (SvfOutput::Low, SvfSlope::Db12),
+            MlP8FilterMode::Lp24 => (SvfOutput::Low, SvfSlope::Db24),
+            MlP8FilterMode::Bp12 => (SvfOutput::Band, SvfSlope::Db12),
+            MlP8FilterMode::Hp12 => (SvfOutput::High, SvfSlope::Db12),
+        };
+        self.cascade
+            .next_sample(input, output, slope, cutoff_hz, resonance, sample_rate)
     }
 }
-
-/// Cutoff multiplier that puts LP24's corner where LP12's is. Two cascaded
-/// one-pole-pair sections reach -3 dB at `sqrt(sqrt(2) - 1)` of a single
-/// section's corner; this is its reciprocal.
-const LP24_CORNER_SCALE: f32 = 1.553_774;
-
-/// How much of the Resonance knob each LP24 stage gets. Resonance compounds
-/// through a cascade, so splitting it keeps the knob meaning roughly the same
-/// amount of peak in both low-pass modes.
-const LP24_RESONANCE_SHARE: f32 = 0.62;
 
 /// How much of one cycle full Slew rounds off.
 ///

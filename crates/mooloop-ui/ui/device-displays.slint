@@ -116,7 +116,8 @@ export component FilterResponseDisplay inherits Rectangle {
         let cutoff-angle = cutoff-hz / root.sample-rate * 180deg;
         let ratio = (sin(frequency-angle) / cos(frequency-angle))
             / max(0.0001, sin(cutoff-angle) / cos(cutoff-angle));
-        let damping = clamp(2 - clamp(root.resonance, 0, 1) * 1.9, 0.1, 2);
+        // `mooloop_dsp::filter::svf_damping`'s exponential taper (MOO-123).
+        let damping = 2 * pow(0.05, clamp(root.resonance, 0, 1));
         let denominator = max(0.0001, pow(pow(1 - ratio * ratio, 2) + pow(damping * ratio, 2), 0.5));
         let stage = root.mode == 0 ? 1 / denominator : root.mode == 1 ? ratio / denominator : ratio * ratio / denominator;
         return root.slope > 0 ? pow(stage, 1 + root.slope) : stage;

@@ -46,14 +46,17 @@ impl Svf {
 
     /// Whether the stage's stored energy has decayed far enough that silent
     /// input produces silent output. At high resonance this stays false for
-    /// a long time, which is the honest answer: a nearly self-oscillating
-    /// SVF is still ringing.
+    /// a long time, which is the honest answer: a sharply resonant SVF is
+    /// still ringing.
     pub fn is_at_rest(&self) -> bool {
         self.low.abs() <= crate::node::REST_EPSILON && self.band.abs() <= crate::node::REST_EPSILON
     }
 
     /// Process one sample. `cutoff_hz` is clamped to a safe range;
-    /// `resonance` in `[0, 1]` approaches self-oscillation at the top.
+    /// `resonance` in `[0, 1]` follows [`svf_damping`]'s taper, from no peak
+    /// at 0 to Q = 10 (a +20 dB peak at the cutoff) at 1. It does not
+    /// self-oscillate: the damping floor is what keeps the linear SVF's gain
+    /// bounded (MOO-123).
     pub fn next_sample(
         &mut self,
         input: f32,
@@ -146,7 +149,7 @@ impl SvfCoeffs {
         let sr = sample_rate as f32;
         let cutoff = clamp_param(cutoff_hz, 20.0, sr * 0.45);
         let g = (core::f32::consts::PI * cutoff / sr).tan();
-        let damping = (2.0 - clamp_param(resonance, 0.0, 1.0) * 1.9).clamp(0.1, 2.0);
+        let damping = svf_damping(resonance);
         let a1 = 1.0 / (1.0 + g * (g + damping));
         let a2 = g * a1;
         let a3 = g * a2;
@@ -178,6 +181,162 @@ impl SvfCoeffs {
             a3: mix(self.a3, other.a3),
             damping: mix(self.damping, other.damping),
         }
+    }
+}
+
+/// The SVF's damping at its lowest: Q = 10, a +20 dB peak at the cutoff. This
+/// floor is the SVF's whole gain bound -- it is linear, and nothing else
+/// stops a resonant peak growing.
+pub const SVF_MIN_DAMPING: f32 = 0.1;
+
+/// The SVF's damping at no resonance: Q of a half, no peak.
+pub const SVF_MAX_DAMPING: f32 = 2.0;
+
+/// `log2(SVF_MIN_DAMPING / SVF_MAX_DAMPING)`, for [`svf_damping`].
+const SVF_DAMPING_OCTAVES: f32 = -4.321_928;
+
+/// The Resonance knob's taper: damping falls *exponentially* from
+/// [`SVF_MAX_DAMPING`] at 0 to [`SVF_MIN_DAMPING`] at 1.
+///
+/// A resonant peak is about `1 / damping`, so this makes the peak grow by the
+/// same number of dB for each step of the knob -- about 2.6 dB a tenth, once
+/// it is above the passband. Until MOO-123 damping fell linearly
+/// (`2 - 1.9 r`), which spent most of the knob doing nothing and put 9 dB of
+/// the peak in its last tenth. A NaN resonance is no resonance.
+pub fn svf_damping(resonance: f32) -> f32 {
+    SVF_MAX_DAMPING * (clamp_param(resonance, 0.0, 1.0) * SVF_DAMPING_OCTAVES).exp2()
+}
+
+/// Which of a state-variable filter's three simultaneous outputs to take.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SvfOutput {
+    Low,
+    Band,
+    High,
+}
+
+impl SvfOutput {
+    fn select(self, (low, band, high): (f32, f32, f32)) -> f32 {
+        match self {
+            Self::Low => low,
+            Self::Band => band,
+            Self::High => high,
+        }
+    }
+}
+
+/// One SVF stage, 12 dB/oct, or two in series, 24.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SvfSlope {
+    Db12,
+    Db24,
+}
+
+/// How far a 24 dB cascade's stages are moved from the cutoff so the pair's
+/// corner lands where one stage's does: two identical stages put the -3 dB
+/// point most of an octave inside one stage's. `1 / sqrt(sqrt(2) - 1)`.
+/// Up for a low-pass, down for a high-pass, unmoved for a band-pass, whose
+/// centre two identical stages leave where it was. This was ML-P8's private
+/// `LP24_CORNER_SCALE` until MOO-123.
+pub const CASCADE_CORNER_SCALE: f32 = 1.553_774;
+
+/// How much of the Resonance knob each stage of a 24 dB cascade gets.
+///
+/// The two stages' peaks coincide and multiply, so the pair at full knob
+/// with the full knob on each stage would peak at +40 dB -- which is what the
+/// Filter effect's 24 dB mode did until MOO-124. Under [`svf_damping`]'s taper
+/// a share of 0.62 gives each stage about +10 dB, so the pair peaks about as
+/// hard as one stage at full knob (+20 dB) and the knob means the same
+/// amount of peak at either slope. Was ML-P8's private `LP24_RESONANCE_SHARE`.
+pub const CASCADE_RESONANCE_SHARE: f32 = 0.62;
+
+/// A 12 or 24 dB/oct state-variable filter, low-, band- or high-pass, with
+/// the 24 dB cascade compensated so its corner and its resonant peak mean
+/// what the 12 dB filter's do.
+///
+/// ```text
+/// SvfCascade
+/// in:  audio, output (low/band/high), slope (12/24), cutoff (Hz),
+///      resonance (0..1)
+/// out: audio
+/// ```
+///
+/// The ML-P8's voice filter and the Filter effect are both built on this
+/// (MOO-123, MOO-124); they used to disagree by about 35 dB at "24 dB, full
+/// resonance". Its peak over its input is bounded at every output, slope and
+/// resonance: see `every_svf_cascade_peak_is_bounded`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SvfCascade {
+    stages: [Svf; 2],
+}
+
+impl SvfCascade {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn reset(&mut self) {
+        self.stages[0].reset();
+        self.stages[1].reset();
+    }
+
+    pub fn is_at_rest(&self) -> bool {
+        self.stages.iter().all(Svf::is_at_rest)
+    }
+
+    /// The coefficient set each stage runs for these settings. Separate from
+    /// ticking so a caller can interpolate two of them across a block, as the
+    /// Filter effect does.
+    pub fn coeffs(
+        output: SvfOutput,
+        slope: SvfSlope,
+        cutoff_hz: f32,
+        resonance: f32,
+        sample_rate: u32,
+    ) -> SvfCoeffs {
+        match slope {
+            SvfSlope::Db12 => SvfCoeffs::for_cutoff(cutoff_hz, resonance, sample_rate),
+            SvfSlope::Db24 => {
+                let cutoff = match output {
+                    SvfOutput::Low => cutoff_hz * CASCADE_CORNER_SCALE,
+                    SvfOutput::Band => cutoff_hz,
+                    SvfOutput::High => cutoff_hz / CASCADE_CORNER_SCALE,
+                };
+                let shared = clamp_param(resonance, 0.0, 1.0) * CASCADE_RESONANCE_SHARE;
+                SvfCoeffs::for_cutoff(cutoff, shared, sample_rate)
+            }
+        }
+    }
+
+    /// One sample through the cascade with coefficients already made by
+    /// [`Self::coeffs`] (for the same `output` and `slope`). At 12 dB the
+    /// second stage is not run.
+    pub fn tick_with(
+        &mut self,
+        input: f32,
+        coeffs: &SvfCoeffs,
+        output: SvfOutput,
+        slope: SvfSlope,
+    ) -> f32 {
+        let first = output.select(self.stages[0].tick_with(input, coeffs));
+        match slope {
+            SvfSlope::Db12 => first,
+            SvfSlope::Db24 => output.select(self.stages[1].tick_with(first, coeffs)),
+        }
+    }
+
+    /// One sample, making the coefficients for it.
+    pub fn next_sample(
+        &mut self,
+        input: f32,
+        output: SvfOutput,
+        slope: SvfSlope,
+        cutoff_hz: f32,
+        resonance: f32,
+        sample_rate: u32,
+    ) -> f32 {
+        let coeffs = Self::coeffs(output, slope, cutoff_hz, resonance, sample_rate);
+        self.tick_with(input, &coeffs, output, slope)
     }
 }
 
@@ -769,6 +928,72 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// **The gain bound (MOO-123).** No output, slope or resonance of the
+    /// SVF cascade peaks more than [`CASCADE_PEAK_BOUND_DB`] over its input,
+    /// at any probe frequency around the cutoff, at every rate. Until MOO-123
+    /// a 24 dB cascade at full resonance peaked at +40 dB.
+    #[test]
+    fn every_svf_cascade_peak_is_bounded() {
+        for sr in [44_100, 192_000] {
+            let probe = Probe::new(sr).settle(0.5);
+            for output in [SvfOutput::Low, SvfOutput::Band, SvfOutput::High] {
+                for slope in [SvfSlope::Db12, SvfSlope::Db24] {
+                    for resonance in [0.0_f32, 0.5, 0.8, 0.9, 1.0] {
+                        let cutoff = 1_000.0;
+                        let mut loudest = f32::MIN;
+                        for step in -12..=12 {
+                            let freq = cutoff * 2.0_f32.powf(step as f32 / 12.0);
+                            let mut filter = SvfCascade::new();
+                            let gain = probe.gain_db(
+                                |x| filter.next_sample(x, output, slope, cutoff, resonance, sr),
+                                freq,
+                            );
+                            loudest = loudest.max(gain);
+                        }
+                        assert!(
+                            loudest <= CASCADE_PEAK_BOUND_DB,
+                            "{sr} Hz, {output:?} {slope:?} at resonance {resonance}: peaks \
+                             at {loudest:.1} dB"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The peak an SVF cascade may reach over its input: one stage at Q = 10
+    /// is +20 dB, and the 24 dB pair is shared down to about the same.
+    const CASCADE_PEAK_BOUND_DB: f32 = 21.0;
+
+    /// **The taper (MOO-123).** The peak grows evenly across the Resonance
+    /// knob: the last tenth adds about 2.6 dB, as every other tenth above the
+    /// passband does, where the linear taper put 9 dB there.
+    #[test]
+    fn resonance_peak_grows_evenly_across_the_knob() {
+        let peak_db = |resonance: f32| -> f32 {
+            let d = svf_damping(resonance);
+            // The low-pass magnitude's maximum, from its transfer function.
+            if d >= 2.0_f32.sqrt() {
+                0.0
+            } else {
+                crate::testkit::db(1.0 / (d * (1.0 - d * d / 4.0).sqrt()))
+            }
+        };
+        let last_tenth = peak_db(1.0) - peak_db(0.9);
+        assert!(last_tenth < 3.0, "the last tenth of the knob adds {last_tenth:.1} dB");
+        let middle_tenth = peak_db(0.6) - peak_db(0.5);
+        assert!(
+            (last_tenth - middle_tenth).abs() < 0.5,
+            "the last tenth adds {last_tenth:.2} dB, the middle one {middle_tenth:.2}"
+        );
+        assert!((svf_damping(0.0) - SVF_MAX_DAMPING).abs() < 1.0e-6);
+        assert!((svf_damping(1.0) - SVF_MIN_DAMPING).abs() < 1.0e-6);
+        assert!(
+            ((SVF_MIN_DAMPING / SVF_MAX_DAMPING).log2() - SVF_DAMPING_OCTAVES).abs() < 1.0e-5
+        );
+        assert_eq!(svf_damping(f32::NAN), SVF_MAX_DAMPING);
     }
 
     /// The cascade constants are the formulas their doc comments give.

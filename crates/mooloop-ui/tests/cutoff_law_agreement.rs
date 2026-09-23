@@ -95,3 +95,28 @@ fn the_filter_display_draws_at_the_running_sample_rate() {
     assert!(body.contains("AudioFormat.sample-rate"));
 }
 
+/// The filter display draws the SVF's resonance with the engine's taper
+/// (`svf_damping`, exponential since MOO-123), not the linear one it used to
+/// copy.
+#[test]
+fn the_filter_display_uses_the_engines_resonance_taper() {
+    use mooloop_dsp::filter::{svf_damping, SVF_MAX_DAMPING, SVF_MIN_DAMPING};
+    let displays = markup("device-displays.slint");
+    let line = displays
+        .lines()
+        .find(|line| line.trim_start().starts_with("let damping = "))
+        .expect("the display computes no damping");
+    let expression = line.trim().trim_start_matches("let damping = ").trim_end_matches(';');
+    let (max, rest) = expression.split_once(" * pow(").expect("damping is `max * pow(ratio, r)`");
+    let (ratio, argument) = rest.split_once(", ").expect("pow takes two arguments");
+    assert_eq!(argument, "clamp(root.resonance, 0, 1))");
+    let max: f32 = max.parse().expect("max");
+    let ratio: f32 = ratio.parse().expect("ratio");
+    assert_eq!(max, SVF_MAX_DAMPING);
+    assert!((ratio - SVF_MIN_DAMPING / SVF_MAX_DAMPING).abs() < 1.0e-6);
+    for step in 0..=10 {
+        let resonance = step as f32 / 10.0;
+        let markup = max * ratio.powf(resonance);
+        assert!((markup / svf_damping(resonance) - 1.0).abs() < 1.0e-4, "resonance {resonance}");
+    }
+}
