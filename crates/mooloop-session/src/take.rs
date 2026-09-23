@@ -147,6 +147,11 @@ impl TakeRecorder {
     ) -> Result<StructuralCommand, String> {
         std::fs::create_dir_all(&self.dir)
             .map_err(|error| format!("could not create {}: {error}", self.dir.display()))?;
+        // Refused up front, the way a missing input is, rather than found
+        // out a few seconds in as a take cut short (MOO-75).
+        if let Some(why) = short_of_space(free_bytes(&self.dir), sample_rate, &self.dir) {
+            return Err(why);
+        }
         let path = self.dir.join(take_file_name(name, SystemTime::now()));
         let spec = hound::WavSpec {
             channels: 2,
@@ -276,8 +281,9 @@ impl TakeRecorder {
                 // answered 2026-09-21). When that was decided its header had
                 // never been patched, so what was on disk was a WAV nothing
                 // could read. Since checkpoints (`CHECKPOINT_SECONDS`) it reads
-                // up to its last one, so the reason has gone and the decision
-                // stands until it is revisited.
+                // up to its last one, so the reason went -- and Adam revisited
+                // it on 2026-09-22 and kept it: "if you wanted the file, you
+                // shouldn't have quit while recording."
                 let removed = std::fs::remove_file(&take.path).is_ok();
                 failures.push(format!(
                     "{} did not finish writing within {} seconds{}",
@@ -693,6 +699,130 @@ fn drain<W: Write + Seek>(
     Drained::Written { frames: written }
 }
 
+/// Seconds of audio a take must have room for before it is armed (MOO-75).
+///
+/// A minute: long enough that a take is not cut short the moment it starts,
+/// short enough that a nearly full disk with room for a short take still
+/// records one. At 48 kHz that is about 23 MB of 32-bit stereo.
+pub const MIN_FREE_SECONDS: u64 = 60;
+
+/// Bytes one frame of a take takes on disk: two channels of 32-bit float.
+const BYTES_PER_FRAME: u64 = 2 * 4;
+
+/// Bytes free to this user on the file system holding `dir`, or `None` when
+/// the platform cannot say.
+fn free_bytes(dir: &Path) -> Option<u64> {
+    #[cfg(unix)]
+    {
+        let stat = rustix::fs::statvfs(dir).ok()?;
+        Some(stat.f_bavail.saturating_mul(stat.f_frsize))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+        None
+    }
+}
+
+/// Why a take cannot be armed for lack of room, or `None` when there is
+/// enough, or no way to tell. `free` is what the disk has left.
+fn short_of_space(free: Option<u64>, sample_rate: u32, dir: &Path) -> Option<String> {
+    let need = MIN_FREE_SECONDS * u64::from(sample_rate) * BYTES_PER_FRAME;
+    let free = free?;
+    (free < need).then(|| {
+        format!(
+            "the disk holding {} has {} free, and a take needs room for at least a minute ({})",
+            dir.display(),
+            crate::recordings::size_text(free),
+            crate::recordings::size_text(need),
+        )
+    })
+}
+
+/// Every take in `dir` whose WAV header says less than the file holds, put
+/// right from the file's length (MOO-75).
+///
+/// Two things leave one. A crash inside a take's first second, before the
+/// first checkpoint, leaves a header that says zero frames, which nothing can
+/// open; and a crash later leaves the audio after the last checkpoint
+/// uncounted. Takes written before checkpoints (`fe1e9ce`) are all the first
+/// kind. At startup nothing is writing to the folder, so the length on disk
+/// is all there will ever be.
+///
+/// Returns the files repaired, and a line for each that could not be.
+pub fn repair_headers(dir: &Path) -> (Vec<PathBuf>, Vec<String>) {
+    let mut repaired = Vec::new();
+    let mut failures = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return (repaired, failures);
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("wav") {
+            continue;
+        }
+        match repair_header(&path) {
+            Ok(true) => repaired.push(path),
+            Ok(false) => {}
+            Err(error) => failures.push(format!("{}: {error}", path.display())),
+        }
+    }
+    repaired.sort();
+    (repaired, failures)
+}
+
+/// Patch one file's RIFF and `data` sizes to what it holds. `Ok(false)` for
+/// a file that needed nothing, or is not a shape this can safely patch.
+fn repair_header(path: &Path) -> std::io::Result<bool> {
+    use std::io::{Read, SeekFrom};
+    let mut file = std::fs::OpenOptions::new().read(true).write(true).open(path)?;
+    let length = file.metadata()?.len();
+    let mut riff = [0u8; 12];
+    if file.read_exact(&mut riff).is_err() || &riff[0..4] != b"RIFF" || &riff[8..12] != b"WAVE" {
+        return Ok(false);
+    }
+    let mut block_align: u64 = 0;
+    let mut offset: u64 = 12;
+    // Walk the chunks to `data`. hound writes `fmt ` first and `data` last,
+    // but a walk costs nothing and does not depend on it.
+    while offset + 8 <= length {
+        file.seek(SeekFrom::Start(offset))?;
+        let mut header = [0u8; 8];
+        file.read_exact(&mut header)?;
+        let size = u64::from(u32::from_le_bytes(header[4..8].try_into().unwrap()));
+        let body = offset + 8;
+        if &header[0..4] == b"fmt " {
+            let mut fmt = [0u8; 14];
+            file.read_exact(&mut fmt)?;
+            block_align = u64::from(u16::from_le_bytes([fmt[12], fmt[13]]));
+        } else if &header[0..4] == b"data" {
+            if block_align == 0 {
+                return Ok(false);
+            }
+            let held = (length - body) / block_align * block_align;
+            // Only ever grows the count: a header that says *more* than the
+            // file holds is a different fault, and shrinking it could throw
+            // away a chunk that follows.
+            let Ok(held32) = u32::try_from(held) else {
+                return Ok(false);
+            };
+            if held <= size {
+                return Ok(false);
+            }
+            let riff_size = u32::try_from(body - 8 + held).unwrap_or(u32::MAX);
+            file.seek(SeekFrom::Start(offset + 4))?;
+            file.write_all(&held32.to_le_bytes())?;
+            file.seek(SeekFrom::Start(4))?;
+            file.write_all(&riff_size.to_le_bytes())?;
+            file.sync_all()?;
+            return Ok(true);
+        }
+        // Chunks are padded to an even length.
+        offset = body + size + (size & 1);
+    }
+    Ok(false)
+}
+
 /// `<date>-<time>-<channel>.wav`, in UTC, with anything a file system might
 /// object to in the channel's name replaced.
 fn take_file_name(channel: &str, when: SystemTime) -> String {
@@ -751,6 +881,89 @@ mod tests {
 
     /// Stand in for the engine: push `frames` into the take's ring, then end
     /// it or abandon it.
+    /// A finished take, and with `crash` its header put back the way a crash
+    /// leaves it: zero frames, and a RIFF size that counts nothing after it.
+    fn written_take(dir: &Path, name: &str, frames: u32, crash: bool) -> PathBuf {
+        let path = dir.join(name);
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 1_000,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut writer = hound::WavWriter::create(&path, spec).unwrap();
+        for _ in 0..frames * 2 {
+            writer.write_sample(0.25f32).unwrap();
+        }
+        writer.finalize().unwrap();
+        if !crash {
+            return path;
+        }
+        let mut bytes = std::fs::read(&path).unwrap();
+        let data = bytes.windows(4).position(|window| window == b"data").unwrap();
+        bytes[data + 4..data + 8].copy_from_slice(&0u32.to_le_bytes());
+        let riff = u32::try_from(data + 8 - 8).unwrap();
+        bytes[4..8].copy_from_slice(&riff.to_le_bytes());
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    /// **A take a crash left with a zero-length header opens again after
+    /// startup's repair** (MOO-75). Nothing could open one before: the
+    /// header said no frames. A take whose header is already right is left
+    /// alone, and so is a file that is not a WAV at all.
+    #[test]
+    fn startup_repairs_a_header_a_crash_left_at_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let crashed = written_take(dir.path(), "20260923-010000-crashed.wav", 2_500, true);
+        assert_eq!(
+            hound::WavReader::open(&crashed).map(|reader| reader.duration()).unwrap_or(0),
+            0,
+            "the fixture must look like a crash"
+        );
+        let whole = written_take(dir.path(), "20260923-020000-whole.wav", 10, false);
+        let before = std::fs::read(&whole).unwrap();
+        std::fs::write(dir.path().join("notes.wav"), b"not a wav").unwrap();
+
+        let (repaired, failures) = repair_headers(dir.path());
+
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(repaired, std::slice::from_ref(&crashed));
+        assert_eq!(std::fs::read(&whole).unwrap(), before, "a whole take is not touched");
+        let reader = hound::WavReader::open(&crashed).unwrap();
+        assert_eq!(reader.duration(), 2_500);
+        assert_eq!(
+            reader.into_samples::<f32>().map(Result::unwrap).collect::<Vec<_>>().len(),
+            5_000
+        );
+    }
+
+    /// The repair reports what it touched, once, and a missing folder is no
+    /// takes rather than a failure.
+    #[test]
+    fn the_repair_names_each_file_it_mended() {
+        let dir = tempfile::tempdir().unwrap();
+        let crashed = written_take(dir.path(), "20260923-010000-crashed.wav", 100, true);
+        let (repaired, failures) = repair_headers(dir.path());
+        assert_eq!(repaired, [crashed]);
+        assert!(failures.is_empty());
+        assert!(repair_headers(dir.path()).0.is_empty());
+        assert!(repair_headers(&dir.path().join("missing")).0.is_empty());
+    }
+
+    /// **Arming refuses a disk without room for a minute of audio, and says
+    /// how much there is** (MOO-75), the way it refuses a missing input.
+    #[test]
+    fn arming_refuses_a_disk_without_room_for_a_minute() {
+        let dir = Path::new("/takes");
+        let need = MIN_FREE_SECONDS * 48_000 * BYTES_PER_FRAME;
+        let refused = short_of_space(Some(need - 1), 48_000, dir).expect("one byte short");
+        assert!(refused.contains("/takes"), "{refused}");
+        assert!(refused.contains("free"), "{refused}");
+        assert_eq!(short_of_space(Some(need), 48_000, dir), None);
+        assert_eq!(short_of_space(None, 48_000, dir), None, "unknown is not refused");
+    }
+
     fn run(recorder: &mut TakeRecorder, frames: &[TakeFrame], end: bool) -> FinishedTake {
         let command = recorder.arm(ChannelId(3), 0, "Kick 1", None, 48_000, 0).expect("armed");
         let StructuralCommand::StartTake { take, .. } = command else {

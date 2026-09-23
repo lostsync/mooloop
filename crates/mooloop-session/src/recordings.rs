@@ -294,6 +294,73 @@ pub fn size_text(bytes: u64) -> String {
     human_bytes(bytes)
 }
 
+/// Move the shared recordings folder from `old` to `new`, once (MOO-75).
+///
+/// Takes are data, not configuration, and lived under `~/.config` until
+/// 2026-09-23. They move to the data directory, and **the old path is left
+/// as a symbolic link to the new one**, because a song saved with referenced
+/// (not embedded) samples names its takes by absolute path: without the
+/// link, every such song would open with its takes missing.
+///
+/// Returns whether anything moved. Nothing to do -- the same folder, no old
+/// folder, or an old one that is already the link -- is `Ok(false)`. A file
+/// whose name the new folder already has is left where it is, and so is the
+/// old folder then, with no link: both stay readable, and the error says
+/// which file.
+pub fn migrate_folder(old: &Path, new: &Path) -> Result<bool, String> {
+    if old == new {
+        return Ok(false);
+    }
+    let Ok(meta) = std::fs::symlink_metadata(old) else {
+        return Ok(false);
+    };
+    if !meta.is_dir() {
+        // Already the link, or something this does not own.
+        return Ok(false);
+    }
+    let fail = |what: &str, path: &Path, error: std::io::Error| {
+        format!("could not {what} {}: {error}", path.display())
+    };
+    if let Some(parent) = new.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| fail("create", parent, error))?;
+    }
+    // The cheap case: one rename, when the new folder is not there yet and
+    // both are on one file system.
+    let whole = !new.exists() && std::fs::rename(old, new).is_ok();
+    if !whole {
+        std::fs::create_dir_all(new).map_err(|error| fail("create", new, error))?;
+        let entries = std::fs::read_dir(old).map_err(|error| fail("read", old, error))?;
+        let mut kept = Vec::new();
+        for entry in entries.flatten() {
+            let from = entry.path();
+            let to = new.join(entry.file_name());
+            if to.exists() {
+                kept.push(from);
+                continue;
+            }
+            if std::fs::rename(&from, &to).is_err() {
+                // Another file system: copy, and remove the original only
+                // once the copy is whole.
+                std::fs::copy(&from, &to).map_err(|error| fail("copy", &from, error))?;
+                std::fs::remove_file(&from).map_err(|error| fail("remove", &from, error))?;
+            }
+        }
+        if let Some(first) = kept.first() {
+            return Err(format!(
+                "{} file(s) left in {} because {} already has one of that name, the first {}",
+                kept.len(),
+                old.display(),
+                new.display(),
+                first.display()
+            ));
+        }
+        std::fs::remove_dir(old).map_err(|error| fail("remove", old, error))?;
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(new, old).map_err(|error| fail("link", old, error))?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -509,6 +576,55 @@ mod tests {
             date_text(SystemTime::UNIX_EPOCH + Duration::from_secs(1_790_125_920)),
             "2026-09-23 01:12 UTC"
         );
+    }
+
+    /// **The recordings folder moves out of the config directory once, and
+    /// the old path keeps working** (MOO-75): a song saved with referenced
+    /// samples names its takes by absolute path, so the old folder becomes a
+    /// link to the new one.
+    #[cfg(unix)]
+    #[test]
+    fn the_recordings_folder_moves_once_and_leaves_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("config/mooloop/recordings");
+        let new = dir.path().join("data/mooloop/recordings");
+        let take = write_take(&old, "20260920-120000-take.wav");
+
+        assert_eq!(migrate_folder(&old, &new), Ok(true));
+
+        assert!(new.join("20260920-120000-take.wav").is_file());
+        assert!(std::fs::symlink_metadata(&old).unwrap().file_type().is_symlink());
+        assert!(take.is_file(), "a reference to the old path still finds the take");
+        assert_eq!(migrate_folder(&old, &new), Ok(false), "only once");
+        assert_eq!(migrate_folder(&new, &new), Ok(false));
+        assert_eq!(
+            migrate_folder(&dir.path().join("nothing"), &new),
+            Ok(false),
+            "no old folder is nothing to do"
+        );
+    }
+
+    /// Into a new folder that already has takes -- this build ran once with
+    /// a fresh data directory -- each file moves across, and one whose name
+    /// is taken stays where it was, with the old folder and no link.
+    #[cfg(unix)]
+    #[test]
+    fn a_name_the_new_folder_already_has_is_left_where_it_was() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("old");
+        let new = dir.path().join("new");
+        write_take(&old, "a.wav");
+        write_take(&old, "b.wav");
+        std::fs::create_dir_all(&new).unwrap();
+        std::fs::write(new.join("a.wav"), b"a different take").unwrap();
+
+        let error = migrate_folder(&old, &new).unwrap_err();
+
+        assert!(error.contains("a.wav"), "{error}");
+        assert!(new.join("b.wav").is_file());
+        assert_eq!(std::fs::read(new.join("a.wav")).unwrap(), b"a different take");
+        assert!(old.join("a.wav").is_file(), "nothing is overwritten or lost");
+        assert!(!std::fs::symlink_metadata(&old).unwrap().file_type().is_symlink());
     }
 
     #[test]

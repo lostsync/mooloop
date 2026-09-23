@@ -225,7 +225,8 @@ What is on `main` after decisions 5, 6 and 10:
 ## What step 04 actually did
 
 - **The pump collects finished takes** from `UiState::takes` (a
-  `TakeRecorder` over `recordings/` beside the settings file), decodes each on
+  `TakeRecorder` over `recordings/` beside the settings file, moved to the
+  data directory on 2026-09-23 by MOO-75), decodes each on
   a worker through the same `load_sample_at_path` a dragged-in file takes, and
   `apply_take` puts it on the channel **found by `ChannelId`** -- selected or
   not, wherever it moved while the take ran. A take whose channel is gone is
@@ -464,9 +465,11 @@ the first had found. All four are now closed by MOO-55:
   one. `TakeStatus::end` is the one control-side phase write, needed because
   at quit the engine may already be going away and the drain's exit condition
   could otherwise never be met.
-- **A failed drain removes its partial file**, from both the write and the
-  finalize route, through one `failed()` helper that also says so in the
-  message.
+- **A failed drain keeps what it checkpointed** (`fe1e9ce`, 2026-09-22,
+  which replaced "a failed drain removes its partial file"): the header is
+  flushed every second of audio, so a drain that fails after a checkpoint
+  keeps the file as `Partial`, lands it on the channel and says how much
+  survived; one that fails inside its first second leaves nothing.
 - **A take lands only on a channel that is still a sampler**, via
   `Session::take_target` and `TakeMiss`.
 - **REC refuses a source that has gone, and names which kind** (open question
@@ -494,6 +497,23 @@ else the same work twice.
 
 This is step 04's contract rather than step 06's, so it is written here and
 not in `06-unused-takes.md`.
+
+**Takes that survive, the rest (MOO-75, 2026-09-23).** Three more edges,
+from the teams report's R5 and D7:
+
+- **A header a crash left short is repaired at startup**
+  (`take::repair_headers`): a take whose `data` size counts less than the file
+  holds is patched from its length. A crash inside the first second, and every
+  take written before checkpoints, left one saying zero frames.
+- **Arming refuses a disk without room for a minute of audio**
+  (`MIN_FREE_SECONDS`), and says how much is left -- the same shape as open
+  question 10's refusal of a missing input.
+- **Takes are data, so they left `~/.config`** for `$XDG_DATA_HOME/mooloop/
+  recordings` (`settings::recordings_dir`). Startup moves the old folder once
+  (`recordings::migrate_folder`) and leaves a symbolic link in its place,
+  because a song saved with referenced samples names its takes by absolute
+  path. The folder keeps the name `recordings` wherever it lives: that name is
+  how a save tells a take from a sample.
 
 ## What step 06 actually did
 

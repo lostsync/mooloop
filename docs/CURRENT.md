@@ -780,7 +780,9 @@ sampler does (`docs/plans/audio-recording/`, steps 02-05, 2026-09-18):
 - **A finished take becomes the sampler's sample**, on the channel that
   recorded it whichever is selected, as one "Record Take" undo step. Nothing
   is written into a pattern; the take is heard through whatever triggers the
-  sampler. Takes are written to `recordings/` beside the settings file, and a
+  sampler. Takes are written to the shared `recordings/` folder in the data
+  directory (`~/.local/share/mooloop/recordings` on Linux; beside the
+  settings on macOS), and a
   save copies a take into the song's own `recordings/`, under the name it was
   recorded with, whichever asset mode it uses.
 - **A take that has nowhere to land says so and keeps the file.** A take
@@ -794,6 +796,15 @@ sampler does (`docs/plans/audio-recording/`, steps 02-05, 2026-09-18):
   reported the same way, and what it had checkpointed is kept and lands on
   the channel; one that failed inside its first second leaves no partial
   behind.
+- **Takes a crash left unfinished open again** (MOO-75). At startup every
+  take in the recordings folder whose WAV header counts less than the file
+  holds -- a crash inside a take's first second leaves one saying zero frames,
+  which nothing could open -- is patched from the file's length, and the status
+  bar says how many. The same startup moves an old
+  `~/.config/mooloop/recordings/` into the data directory, once, leaving a link
+  behind so songs that name a take by its old path still find it.
+- **REC refuses a disk without room for a minute of audio**, and says how
+  much the disk has left, instead of starting a take that would be cut short.
 - **REC refuses a source that is gone, and says which kind.** A channel or
   track that has since been deleted sends you back to the AUDIO row; no audio
   input device at all -- unplugged, changed, or a microphone permission macOS

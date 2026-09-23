@@ -3269,6 +3269,7 @@ dependencies = [
  "mooloop-engine",
  "mooloop-project",
  "rtrb",
+ "rustix 1.1.4",
  "symphonia",
  "tempfile",
  "trash",

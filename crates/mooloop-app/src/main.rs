@@ -32,7 +32,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.run()?;
     // After the loop and before `engine` drops: a take still recording is not
     // an unsaved *edit*, so nothing on the quit path has dealt with it, and
-    // its WAV header is only written when its drain finishes.
+    // its WAV header counts only up to its last one-second checkpoint until
+    // its drain finishes.
     app.finish_takes();
     Ok(())
 }

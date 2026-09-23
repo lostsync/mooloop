@@ -32,5 +32,10 @@ trash = "5"
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 
+# Free space on the disk a take is armed on (MOO-75): `statvfs`, safely.
+# Already in the tree through `tempfile`.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["fs"] }
+
 [dev-dependencies]
 tempfile = "3"

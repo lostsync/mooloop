@@ -797,10 +797,17 @@ laptop's numbers are its own.
 A take is written, as it records, into a **recordings folder** as a 32-bit
 float stereo WAV named `<UTC date>-<time>-<channel>.wav`
 (`mooloop_session::take::TakeRecorder`). The folder is the recorder's to be
-told; the interface that arms takes (`audio-recording/05`) points it at
-`recordings/` beside the settings file. A take that recorded nothing leaves no
-file. Until step 04, nothing moves a take into a project or deletes an unused
-one (step 06).
+told; the interface points it at `settings::recordings_dir()`, which since
+2026-09-23 is **`$XDG_DATA_HOME/mooloop/recordings`** (`~/.local/share/...`)
+on Linux and beside the settings on macOS and Windows; `$MOOLOOP_DATA_DIR`
+overrides it, and a `$MOOLOOP_CONFIG_DIR` with no data directory keeps it
+inside that config directory (MOO-75). Startup moves an old
+`~/.config/mooloop/recordings/` there once and leaves a symbolic link in its
+place, so a song that names a take by its old absolute path still finds it,
+and patches the WAV header of any take a crash left unfinished. Arming refuses
+a disk without room for a minute of audio. A take that recorded nothing leaves
+no file; a save copies a take into the song's own `recordings/`, and File >
+Clean Up Takes moves unused ones to the trash (`audio-recording/06`).
 
 ## Diagnostic Log
 

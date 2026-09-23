@@ -2360,6 +2360,39 @@ fn show_takes_review(window: &MainWindow, review: &TakesReview) {
     window.set_takes_open(true);
 }
 
+/// Put the recordings folder right before anything records into it or reads
+/// from it (MOO-75): move it out of the config directory, and patch the
+/// header of any take a crash left unfinished.
+///
+/// At startup because nothing is writing takes yet, so a file's length on
+/// disk is all it will ever hold. What was done is logged; what went wrong is
+/// said in the status bar too, because a take stranded in the old folder is
+/// one the clean-up dialog will not see.
+fn prepare_recordings_folder(window: &MainWindow) {
+    let folder = settings::recordings_dir();
+    match recordings::migrate_folder(&settings::legacy_recordings_dir(), &folder) {
+        Ok(true) => log_info!("ui", "moved the recordings folder to {}", folder.display()),
+        Ok(false) => {}
+        Err(error) => {
+            log_error!("ui", "could not move the recordings folder: {error}");
+            window.set_status_message(format!("Recordings folder not moved: {error}").into());
+        }
+    }
+    let (repaired, failures) = mooloop_session::take::repair_headers(&folder);
+    for path in &repaired {
+        log_info!("ui", "repaired the header of {}, left unfinished by a crash", path.display());
+    }
+    for failure in &failures {
+        log_error!("ui", "could not repair a take's header: {failure}");
+    }
+    if !repaired.is_empty() {
+        let noun = if repaired.len() == 1 { "take" } else { "takes" };
+        window.set_status_message(
+            format!("Repaired {} {noun} a crash left unfinished", repaired.len()).into(),
+        );
+    }
+}
+
 pub struct AppUi {
     window: MainWindow,
     _pump: Timer,
@@ -6164,6 +6197,7 @@ impl UiState {
 impl AppUi {
     pub fn new(mut handle: EngineHandle) -> Result<Self, slint::PlatformError> {
         let window = MainWindow::new()?;
+        prepare_recordings_folder(&window);
 
         // A Wayland compositor identifies a window by its xdg app id, and
         // Slint sends none unless it is set: Hyprland reported `class: ""`,

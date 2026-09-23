@@ -1210,9 +1210,45 @@ pub(crate) fn log_path() -> PathBuf {
     config_dir().join("mooloop.log")
 }
 
+/// Directory mooloop keeps its own *data* in, as opposed to its settings:
+/// `$MOOLOOP_DATA_DIR`, or `$XDG_DATA_HOME/mooloop` /
+/// `~/.local/share/mooloop` on Linux (MOO-75).
+///
+/// Only Linux separates the two. macOS and Windows keep application data
+/// beside its settings already, so there it is [`config_dir`]. So does a
+/// config directory given by `$MOOLOOP_CONFIG_DIR` with no data directory
+/// given, because that variable is how tests and a second instance keep to
+/// themselves, and data that escaped it into the real home would not be.
+pub(crate) fn data_dir() -> PathBuf {
+    if let Some(path) = std::env::var_os("MOOLOOP_DATA_DIR") {
+        return PathBuf::from(path);
+    }
+    if std::env::var_os("MOOLOOP_CONFIG_DIR").is_some()
+        || cfg!(any(target_os = "windows", target_os = "macos"))
+    {
+        return config_dir();
+    }
+    if let Some(path) = std::env::var_os("XDG_DATA_HOME") {
+        return PathBuf::from(path).join("mooloop");
+    }
+    PathBuf::from(std::env::var_os("HOME").unwrap_or_else(|| ".".into()))
+        .join(".local/share/mooloop")
+}
+
 /// The shared recordings folder: every take is written here first, and a
 /// save copies it into the song's own `recordings/`.
+///
+/// **Takes are data, not configuration**, so since 2026-09-23 they live under
+/// [`data_dir`] (MOO-75). The folder keeps the name `recordings` wherever it
+/// is: that name is how a save tells a take from a sample
+/// (`mooloop_project::RECORDINGS_DIR`).
 pub(crate) fn recordings_dir() -> PathBuf {
+    data_dir().join("recordings")
+}
+
+/// Where takes were written until 2026-09-23, under the config directory.
+/// Startup moves them to [`recordings_dir`] and leaves a link here.
+pub(crate) fn legacy_recordings_dir() -> PathBuf {
     config_dir().join("recordings")
 }
 
