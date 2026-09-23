@@ -186,7 +186,7 @@ impl Session {
         length_ticks: u32,
     ) -> Option<NoteEdit> {
         let length = self.recorded_pattern_length(pattern);
-        if self.channels.len() <= channel || length == 0 {
+        if self.channels.len() <= channel || length == 0 || !self.make_room(channel, pattern, 1) {
             return None;
         }
         let start_tick = start_tick.min(length.saturating_sub(1));

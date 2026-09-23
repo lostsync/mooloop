@@ -11,7 +11,7 @@ use mooloop_core::{
     MlM1Params,
     MlP8Params, ModRack, MonoSynthParams, NoteEvent, NoteId, PolySynthParams, Project,
     ProjectChannel, SampleCommit, SampleReference, SamplerParams, SliceMap, DrumSynthParams,
-    MASTER_BUS, MAX_CHANNELS,
+    MASTER_BUS, MAX_CHANNELS, MAX_NOTES_PER_CHANNEL_PATTERN,
 };
 use mooloop_dsp::SampleData;
 use std::path::PathBuf;
@@ -214,18 +214,34 @@ impl ChannelState {
         self
     }
 
+    /// Whether `pattern` can take `count` more notes.
+    ///
+    /// The engine stores [`MAX_NOTES_PER_CHANNEL_PATTERN`] notes per channel
+    /// per pattern, preallocated so the callback never grows them
+    /// (`docs/CAPACITY_POLICY.md`), and refuses the rest -- so a note past it
+    /// would be drawn and silent, and the save-time integrity pass would
+    /// refuse the song (MOO-133). Every verb that adds notes asks this first.
+    pub fn has_room_for(&self, pattern: usize, count: usize) -> bool {
+        self.notes[pattern].len().saturating_add(count) <= MAX_NOTES_PER_CHANNEL_PATTERN
+    }
+
+    /// Adds a note, or `None` when the pattern is full
+    /// ([`Self::has_room_for`]).
     pub fn create_note(
         &mut self,
         pattern: usize,
         start_tick: u32,
         duration_ticks: u32,
         note: u8,
-    ) -> NoteEvent {
+    ) -> Option<NoteEvent> {
+        if !self.has_room_for(pattern, 1) {
+            return None;
+        }
         let event = NoteEvent::new(self.next_note_id, start_tick, duration_ticks, note, 100);
         self.next_note_id = self.next_note_id.wrapping_add(1).max(1);
         self.notes[pattern].push(event);
         self.notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
-        event
+        Some(event)
     }
 }
 
@@ -330,8 +346,8 @@ mod tests {
     #[test]
     fn channel_assigns_stable_note_ids() {
         let mut channel = ChannelState::new(0);
-        let first = channel.create_note(0, 0, DEFAULT_NOTE_DURATION_TICKS, 60);
-        let second = channel.create_note(0, TICKS_PER_64TH, DEFAULT_NOTE_DURATION_TICKS, 62);
+        let first = channel.create_note(0, 0, DEFAULT_NOTE_DURATION_TICKS, 60).expect("room");
+        let second = channel.create_note(0, TICKS_PER_64TH, DEFAULT_NOTE_DURATION_TICKS, 62).expect("room");
         assert_ne!(first.id, second.id);
         assert_eq!(channel.notes[0][0].id, first.id);
         assert_eq!(channel.notes[0][1].id, second.id);

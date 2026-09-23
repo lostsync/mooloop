@@ -202,6 +202,11 @@ pub struct Session {
     /// How many times a refusal has been reported, over the whole session.
     /// The log line is the product; this is how a test sees it.
     pub engine_refusals_reported: u32,
+    /// Why the last note edit was refused, for the status bar to say, until
+    /// [`Session::take_note_refusal`] collects it. Set only by a refusal the
+    /// user could not have seen coming -- a full pattern (MOO-133) -- and not
+    /// by the many verbs that decline because there is nothing to do.
+    pub note_refusal: Option<String>,
     /// Snapshot captured when a value gesture opened. Intermediate updates
     /// still reach audio immediately, while one release becomes one undo
     /// entry.
@@ -343,6 +348,7 @@ impl Default for Session {
             sample_request_counter: 0,
             engine_queue_refused: false,
             engine_refusals_reported: 0,
+            note_refusal: None,
             gesture_before: None,
             gesture_changed: false,
             browser_locations: Vec::new(),

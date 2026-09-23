@@ -462,8 +462,8 @@ mod tests {
     #[test]
     fn shortening_a_pattern_drops_the_selection_past_its_end() {
         let mut session = Session::default();
-        let inside = session.channels[0].create_note(0, 0, TICKS_PER_STEP, 60);
-        let outside = session.channels[0].create_note(0, 8 * TICKS_PER_STEP, TICKS_PER_STEP, 62);
+        let inside = session.channels[0].create_note(0, 0, TICKS_PER_STEP, 60).expect("room");
+        let outside = session.channels[0].create_note(0, 8 * TICKS_PER_STEP, TICKS_PER_STEP, 62).expect("room");
         session.selected_note_ids = [inside.id, outside.id].into_iter().collect();
 
         let applied = session.set_pattern_length(4).expect("length changed");
@@ -544,7 +544,7 @@ mod tests {
     #[test]
     fn selecting_a_pattern_clears_the_note_selection() {
         let mut session = Session::default();
-        let note = session.channels[0].create_note(0, 0, TICKS_PER_STEP, 60);
+        let note = session.channels[0].create_note(0, 0, TICKS_PER_STEP, 60).expect("room");
         session.selected_note_ids = [note.id].into_iter().collect();
         session.selected_note_id = Some(note.id);
 

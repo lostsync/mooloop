@@ -7,7 +7,7 @@
 
 use crate::notes::ScaleBase;
 use crate::session::Session;
-use mooloop_core::{EngineCommand, NoteEvent, NoteId, TICKS_PER_STEP};
+use mooloop_core::{EngineCommand, NoteEvent, NoteId, MAX_NOTES_PER_CHANNEL_PATTERN, TICKS_PER_STEP};
 use std::collections::{BTreeMap, HashSet};
 
 /// What a roll edit did.
@@ -48,7 +48,33 @@ struct GroupBounds {
     max_note: i32,
 }
 
+/// What the status bar says when a note edit is refused because the pattern
+/// is full (MOO-133).
+pub fn pattern_full_message() -> String {
+    format!(
+        "Pattern full: a channel holds at most {MAX_NOTES_PER_CHANNEL_PATTERN} notes in one pattern"
+    )
+}
+
 impl Session {
+    /// Why the last note edit was refused, once: a refusal the user has to be
+    /// told about, which today means a full pattern.
+    pub fn take_note_refusal(&mut self) -> Option<String> {
+        self.note_refusal.take()
+    }
+
+    /// Whether `count` more notes fit in `channel`'s `pattern`, recording why
+    /// not when they do not. Every note-adding verb asks this before it
+    /// changes anything, so a refused edit is refused whole rather than
+    /// half-applied.
+    pub(crate) fn make_room(&mut self, channel: usize, pattern: usize, count: usize) -> bool {
+        if self.channels[channel].has_room_for(pattern, count) {
+            return true;
+        }
+        self.note_refusal = Some(pattern_full_message());
+        false
+    }
+
     /// The channel and pattern the roll is showing.
     fn roll(&self) -> (usize, usize) {
         (self.selected, self.current_pattern)
@@ -230,23 +256,24 @@ impl Session {
         Some(edit)
     }
 
-    /// Creates a note, clamped into the pattern, and selects it.
+    /// Creates a note, clamped into the pattern, and selects it. `None` when
+    /// the pattern is full ([`Session::take_note_refusal`] says so).
     pub fn create_roll_note(
         &mut self,
         start_tick: i32,
         midi_note: i32,
         duration_ticks: i32,
-    ) -> (NoteId, NoteEdit) {
-        let note = self.strike_roll_note(start_tick, midi_note, duration_ticks);
+    ) -> Option<(NoteId, NoteEdit)> {
+        let note = self.strike_roll_note(start_tick, midi_note, duration_ticks)?;
         self.select_note(Some(note.id));
-        (
+        Some((
             note.id,
             NoteEdit {
                 commands: vec![self.upsert(note)],
                 cells: Some(vec![(note.start_tick / TICKS_PER_STEP) as usize]),
                 notes: 1,
             },
-        )
+        ))
     }
 
     /// Paint-stroke note creation.
@@ -258,26 +285,29 @@ impl Session {
         start_tick: i32,
         midi_note: i32,
         duration_ticks: i32,
-    ) -> NoteEdit {
-        let note = self.strike_roll_note(start_tick, midi_note, duration_ticks);
+    ) -> Option<NoteEdit> {
+        let note = self.strike_roll_note(start_tick, midi_note, duration_ticks)?;
         self.selected_note_ids.insert(note.id);
         self.selected_note_id = (self.selected_note_ids.len() == 1).then_some(note.id);
-        NoteEdit {
+        Some(NoteEdit {
             commands: vec![self.upsert(note)],
             cells: Some(vec![(note.start_tick / TICKS_PER_STEP) as usize]),
             notes: 1,
-        }
+        })
     }
 
     /// Adds one note, clamped so neither its start nor its tail leaves the
-    /// pattern.
+    /// pattern. `None` when the pattern is full.
     fn strike_roll_note(
         &mut self,
         start_tick: i32,
         midi_note: i32,
         duration_ticks: i32,
-    ) -> NoteEvent {
+    ) -> Option<NoteEvent> {
         let (channel, pattern) = self.roll();
+        if !self.make_room(channel, pattern, 1) {
+            return None;
+        }
         let length_ticks = self.pattern_ticks();
         let start_tick = (start_tick.max(0) as u32).min(length_ticks.saturating_sub(1));
         let mut note = self.channels[channel].create_note(
@@ -285,7 +315,7 @@ impl Session {
             start_tick,
             duration_ticks.max(1) as u32,
             midi_note.clamp(0, 127) as u8,
-        );
+        )?;
         note.duration_ticks = note
             .duration_ticks
             .min(length_ticks.saturating_sub(start_tick).max(1));
@@ -295,7 +325,7 @@ impl Session {
         {
             *stored = note;
         }
-        note
+        Some(note)
     }
 
     /// Applies a click on note `id`. `mode` is which gesture role the held
@@ -334,7 +364,7 @@ impl Session {
             .copied()
             .filter(|note| note.id == anchor_id || self.selected_note_ids.contains(&note.id))
             .collect();
-        if originals.is_empty() {
+        if originals.is_empty() || !self.make_room(channel, pattern, originals.len()) {
             return None;
         }
         let mut copies = Vec::with_capacity(originals.len());
@@ -528,7 +558,10 @@ impl Session {
             .copied()
             .find(|note| note.id == id)?;
         let cut = tick.max(0) as u32;
-        if cut <= original.start_tick || cut >= original.end_tick() {
+        if cut <= original.start_tick
+            || cut >= original.end_tick()
+            || !self.make_room(channel, pattern, 1)
+        {
             return None;
         }
         let tail = NoteEvent {
@@ -794,7 +827,16 @@ impl Session {
             .map(|note| note.end_tick())
             .max()
             .unwrap_or(0);
-        let mut pasted = Vec::with_capacity(phrase.len());
+        let fitting = phrase
+            .iter()
+            .filter(|note| origin.saturating_add(note.start_tick) < length_ticks)
+            .count();
+        // All of it or none of it: a paste that silently kept the first few
+        // hundred notes would be harder to notice than one that is refused.
+        if fitting == 0 || !self.make_room(channel, pattern, fitting) {
+            return None;
+        }
+        let mut pasted = Vec::with_capacity(fitting);
         for note in phrase {
             let start = origin.saturating_add(note.start_tick);
             if start >= length_ticks {
@@ -837,12 +879,79 @@ mod tests {
             .into_iter()
             .map(|pitch| {
                 session.channels[0]
-                    .create_note(0, 0, TICKS_PER_STEP, pitch)
+                    .create_note(0, 0, TICKS_PER_STEP, pitch).expect("room")
                     .id
             })
             .collect::<Vec<_>>();
         session.selected_note_ids = ids.iter().copied().collect();
         (session, ids)
+    }
+
+    /// **A full pattern refuses every note-adding verb, says why, and still
+    /// saves** (MOO-133). The engine stores
+    /// [`MAX_NOTES_PER_CHANNEL_PATTERN`] notes per channel per pattern and
+    /// drops the rest, so before this the next note was drawn and silent, and
+    /// the song could not be saved. The last note that fits is taken, so the
+    /// boundary is the cap and not one short of it.
+    #[test]
+    fn a_full_pattern_refuses_every_new_note_with_a_reason_and_still_saves() {
+        let mut session = Session::default();
+        for index in 0..MAX_NOTES_PER_CHANNEL_PATTERN - 1 {
+            session.channels[0]
+                .create_note(0, 0, TICKS_PER_STEP, (index % 128) as u8)
+                .expect("room below the cap");
+        }
+        let last = session
+            .create_roll_note(0, 60, TICKS_PER_STEP as i32)
+            .expect("the note that reaches the cap fits")
+            .0;
+        assert_eq!(session.channels[0].notes[0].len(), MAX_NOTES_PER_CHANNEL_PATTERN);
+        assert_eq!(session.take_note_refusal(), None, "nothing was refused yet");
+
+        let refused = |session: &mut Session, verb: &str, refused: bool| {
+            assert!(refused, "{verb} added a note past the cap");
+            let message = session
+                .take_note_refusal()
+                .unwrap_or_else(|| panic!("{verb} was refused without saying why"));
+            assert!(
+                message.contains(&MAX_NOTES_PER_CHANNEL_PATTERN.to_string()),
+                "{verb}: {message}"
+            );
+            assert_eq!(
+                session.channels[0].notes[0].len(),
+                MAX_NOTES_PER_CHANNEL_PATTERN,
+                "{verb} changed the pattern it refused"
+            );
+        };
+        let r = session.create_roll_note(0, 62, TICKS_PER_STEP as i32).is_none();
+        refused(&mut session, "create_roll_note", r);
+        let r = session.paint_roll_note(0, 62, TICKS_PER_STEP as i32).is_none();
+        refused(&mut session, "paint_roll_note", r);
+        let r = session.duplicate_selection(last).is_none();
+        refused(&mut session, "duplicate_selection", r);
+        let r = session.slice_note(last, (TICKS_PER_STEP / 2) as i32).is_none();
+        refused(&mut session, "slice_note", r);
+        let phrase = [NoteEvent::new(1, 0, TICKS_PER_STEP, 64, 100)];
+        let r = session.paste_phrase(&phrase).is_none();
+        refused(&mut session, "paste_phrase", r);
+        let r = session.toggle_step(0, 3).is_none();
+        refused(&mut session, "toggle_step", r);
+        let r = session.paint_step(0, 3, true).is_none();
+        refused(&mut session, "paint_step", r);
+        let r = session.set_step_velocity(0, 3, 0.5).is_none();
+        refused(&mut session, "set_step_velocity", r);
+        let r = session.slice_step(0, 3, 4).is_none();
+        refused(&mut session, "slice_step", r);
+        let r = session.record_note(0, 0, 60, 100, TICKS_PER_STEP * 3, TICKS_PER_STEP).is_none();
+        refused(&mut session, "record_note", r);
+
+        let mut project = session.project_snapshot(120, 0);
+        let diagnosis = mooloop_project::integrity::repair_project(&mut project);
+        assert!(
+            diagnosis.is_usable(),
+            "a pattern at the cap has to save: {}",
+            diagnosis.report()
+        );
     }
 
     /// The whole reason the deltas are group-clamped: a chord dragged into the
@@ -900,7 +1009,7 @@ mod tests {
         let mut session = Session::default();
         let last = session.pattern_lengths[0] as u32 - 1;
         let long = session.channels[0]
-            .create_note(0, 0, 4 * TICKS_PER_STEP, 60)
+            .create_note(0, 0, 4 * TICKS_PER_STEP, 60).expect("room")
             .id;
         session.select_note(Some(long));
 
@@ -914,7 +1023,7 @@ mod tests {
 
         let mut session = Session::default();
         let long = session.channels[0]
-            .create_note(0, (last - 1) * TICKS_PER_STEP, 4 * TICKS_PER_STEP, 60)
+            .create_note(0, (last - 1) * TICKS_PER_STEP, 4 * TICKS_PER_STEP, 60).expect("room")
             .id;
         session.selected_note_ids = [long].into_iter().collect();
 
@@ -933,7 +1042,7 @@ mod tests {
     fn dragging_an_unselected_note_leaves_the_selection_alone() {
         let (mut session, ids) = chord_session();
         let loner = session.channels[0]
-            .create_note(0, 4 * TICKS_PER_STEP, TICKS_PER_STEP, 72)
+            .create_note(0, 4 * TICKS_PER_STEP, TICKS_PER_STEP, 72).expect("room")
             .id;
 
         assert_eq!(session.selection_including(loner), HashSet::from([loner]));
@@ -944,7 +1053,7 @@ mod tests {
     #[test]
     fn a_slice_at_either_end_is_refused() {
         let mut session = Session::default();
-        let note = session.channels[0].create_note(0, 0, TICKS_PER_STEP, 60);
+        let note = session.channels[0].create_note(0, 0, TICKS_PER_STEP, 60).expect("room");
 
         assert!(session.slice_note(note.id, 0).is_none());
         assert!(session
@@ -970,7 +1079,7 @@ mod tests {
         let (mut session, _) = chord_session();
         // A second note on the middle pitch, so exactly one row has a run.
         let tail = session.channels[0]
-            .create_note(0, TICKS_PER_STEP, TICKS_PER_STEP, 64)
+            .create_note(0, TICKS_PER_STEP, TICKS_PER_STEP, 64).expect("room")
             .id;
         session.selected_note_ids.insert(tail);
 
@@ -1023,10 +1132,10 @@ mod tests {
     fn a_phrase_pastes_after_the_selection_rather_than_over_it() {
         let mut session = Session::default();
         let first = session.channels[0]
-            .create_note(0, 2 * TICKS_PER_STEP, TICKS_PER_STEP, 60)
+            .create_note(0, 2 * TICKS_PER_STEP, TICKS_PER_STEP, 60).expect("room")
             .id;
         let second = session.channels[0]
-            .create_note(0, 3 * TICKS_PER_STEP, TICKS_PER_STEP, 62)
+            .create_note(0, 3 * TICKS_PER_STEP, TICKS_PER_STEP, 62).expect("room")
             .id;
         session.selected_note_ids = [first, second].into_iter().collect();
 
@@ -1064,7 +1173,7 @@ mod tests {
         let mut session = Session::default();
         let last = session.pattern_lengths[0] as u32 - 1;
         let note = session.channels[0]
-            .create_note(0, last * TICKS_PER_STEP, TICKS_PER_STEP, 60)
+            .create_note(0, last * TICKS_PER_STEP, TICKS_PER_STEP, 60).expect("room")
             .id;
         session.selected_note_ids = [note].into_iter().collect();
 
@@ -1078,7 +1187,7 @@ mod tests {
     #[test]
     fn scaling_applies_to_the_drags_own_starting_geometry() {
         let (mut session, _) = chord_session();
-        session.channels[0].create_note(0, 2 * TICKS_PER_STEP, TICKS_PER_STEP, 60);
+        session.channels[0].create_note(0, 2 * TICKS_PER_STEP, TICKS_PER_STEP, 60).expect("room");
         session.selected_note_ids = session.channels[0].notes[0]
             .iter()
             .map(|note| note.id)
@@ -1104,7 +1213,7 @@ mod tests {
     #[test]
     fn a_scale_needs_something_to_scale() {
         let mut session = Session::default();
-        let note = session.channels[0].create_note(0, 0, TICKS_PER_STEP, 60);
+        let note = session.channels[0].create_note(0, 0, TICKS_PER_STEP, 60).expect("room");
         session.select_note(Some(note.id));
 
         session.begin_scale(true);

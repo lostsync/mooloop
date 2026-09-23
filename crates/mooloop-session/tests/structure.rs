@@ -271,7 +271,7 @@ fn installing_a_shorter_document_leaves_the_selection_somewhere_real() {
     let mut session = Session::default();
     session.add_channel(DeviceKind::Sampler);
     session.add_channel(DeviceKind::Sampler);
-    let note = session.channels[2].create_note(0, 0, TICKS_PER_STEP, 60);
+    let note = session.channels[2].create_note(0, 0, TICKS_PER_STEP, 60).expect("room");
     session.select_note(Some(note.id));
     assert_eq!(session.selected, 2);
 

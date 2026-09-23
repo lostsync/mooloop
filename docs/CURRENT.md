@@ -734,6 +734,13 @@ boundary.
 
 - Probability, microtiming controls, ties, and parameter locks are not yet
   implemented. Note starts and lengths otherwise retain PPQ precision.
+- One channel holds at most 1,024 notes in one pattern (the engine's
+  preallocated store; `docs/CAPACITY_POLICY.md`). As of 2026-09-23 (MOO-133)
+  every way of adding a note -- drawing, painting, a step, a step slice, a
+  roll slice, duplicate, paste and recording -- refuses at the cap and the
+  status bar says why; a paste or duplicate that would cross it is refused
+  whole rather than cut short. Before this the next note was drawn but
+  silent, and the song refused to save.
 - NoteOn, NoteOff, and choke events are sample-accurate and deterministically
   ordered. One-shot loops exit into their remaining sample tail; gated loops
   release through the amplitude envelope.

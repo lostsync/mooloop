@@ -255,6 +255,12 @@ rather than during it.
   signal-slot identities and a per-project prepared render plan, removing the
   fixed mixer-bank model rather than normalizing it as permanent.
 - Pattern IDs likewise use a complete `u8` address space (256 patterns).
+- `MAX_NOTES_PER_CHANNEL_PATTERN` (1,024) is enforced where notes are made,
+  as of 2026-09-23 (MOO-133): `ChannelState::has_room_for` is the one check,
+  every session verb that adds a note asks it before changing anything, and a
+  refusal is said in the status bar (`Session::take_note_refusal`). The
+  save-time integrity check stays as the backstop for a document that
+  arrives over the cap from elsewhere.
 - Containers nest four deep (`MAX_CONTAINER_DEPTH`), and this is a limit on
   the *gesture* rather than on the format. The number bounds a real
   allocation — one dry buffer per open container in the realtime pass — rather

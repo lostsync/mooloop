@@ -373,7 +373,7 @@ mod tests {
     #[test]
     fn changing_the_source_reports_only_a_real_change() {
         let mut session = Session::default();
-        let note = session.channels[0].create_note(0, 0, TICKS_PER_STEP, 60);
+        let note = session.channels[0].create_note(0, 0, TICKS_PER_STEP, 60).expect("room");
         session.select_note(Some(note.id));
 
         assert_eq!(session.change_selected_source(DeviceKind::MonoSynth), Some(0));

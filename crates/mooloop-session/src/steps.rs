@@ -81,8 +81,12 @@ impl Session {
             .collect()
     }
 
-    /// Adds a default note at the cell's start.
-    fn strike(&mut self, cell: &Cell) -> NoteEvent {
+    /// Adds a default note at the cell's start, or `None` when the pattern is
+    /// full.
+    fn strike(&mut self, cell: &Cell) -> Option<NoteEvent> {
+        if !self.make_room(cell.channel, cell.pattern, 1) {
+            return None;
+        }
         self.channels[cell.channel].create_note(
             cell.pattern,
             cell.start,
@@ -104,7 +108,7 @@ impl Session {
         let cell = self.cell(channel, step)?;
         let ids = self.ids_in(&cell);
         let commands = if ids.is_empty() {
-            let note = self.strike(&cell);
+            let note = self.strike(&cell)?;
             if cell.channel == self.selected {
                 self.select_note(Some(note.id));
             }
@@ -138,7 +142,7 @@ impl Session {
             })
             .collect();
         if edited.is_empty() {
-            let mut note = self.strike(&cell);
+            let mut note = self.strike(&cell)?;
             note.velocity = velocity;
             *self.channels[cell.channel].notes[cell.pattern]
                 .iter_mut()
@@ -167,7 +171,7 @@ impl Session {
             return None;
         }
         let commands = if on {
-            let note = self.strike(&cell);
+            let note = self.strike(&cell)?;
             if cell.channel == self.selected {
                 self.select_note(Some(note.id));
             }
@@ -183,6 +187,11 @@ impl Session {
         let cell = self.cell(channel, step)?;
         let divisions = divisions.clamp(2, 4) as u32;
         let ids = self.ids_in(&cell);
+        // Checked before the erase, so a refusal leaves the cell as it was.
+        let added = (divisions as usize).saturating_sub(ids.len());
+        if !self.make_room(cell.channel, cell.pattern, added) {
+            return None;
+        }
         let mut commands = self.erase(&cell, ids);
         let slice_ticks = TICKS_PER_STEP / divisions;
         for k in 0..divisions {
@@ -191,7 +200,8 @@ impl Session {
                 cell.start + k * slice_ticks,
                 slice_ticks,
                 60,
-            );
+            )
+            .expect("room was made before the erase");
             commands.push(Self::upsert_in(&cell, note));
         }
         Some(StepEdit::one(cell.step, commands))

@@ -1432,6 +1432,20 @@ fn selected_device_slot(st: &Rc<RefCell<UiState>>) -> Option<i32> {
         .and_then(|slot| i32::try_from(slot).ok())
 }
 
+/// Says in the status bar why a note edit was refused, when the session
+/// recorded a reason -- a full pattern (MOO-133) -- and reports whether it
+/// did, so a caller with a message of its own for the ordinary no-op can
+/// fall back to it.
+fn report_note_refusal(session: &mut Session, window: &MainWindow) -> bool {
+    match session.take_note_refusal() {
+        Some(message) => {
+            window.set_status_message(message.as_str().into());
+            true
+        }
+        None => false,
+    }
+}
+
 fn record_project_history(
     commands: &Rc<RefCell<CommandState>>,
     before: ProjectSnapshot,
@@ -1554,6 +1568,9 @@ struct ControlDrain {
     controller_moved: bool,
     /// Channels a recorded note was written to.
     written: Vec<usize>,
+    /// Why a recorded note was refused -- a full pattern (MOO-133) -- said
+    /// once for the drain rather than once per key.
+    note_refusal: Option<String>,
 }
 
 /// Apply the control messages and recorded notes the engine forwarded, and
@@ -1670,6 +1687,7 @@ fn drain_control_surface(
                 drain.written.push(channel);
                 wrote = true;
             }
+            drain.note_refusal = st.session.take_note_refusal();
             if wrote {
                 st.session.mark_dirty();
             }
@@ -8065,6 +8083,7 @@ impl AppUi {
                 with_gesture_history(&st, &commands, &window, "Step", || {
                     let mut st = st.borrow_mut();
                     let Some(edit) = st.session.toggle_step(channel, step) else {
+                        report_note_refusal(&mut st.session, &window);
                         return false;
                     };
                     st.apply_step_edit(channel, edit, &weak, &tx);
@@ -8099,6 +8118,7 @@ impl AppUi {
                 with_gesture_history(&st, &commands, &window, "Step velocity", || {
                     let mut st = st.borrow_mut();
                     let Some(edit) = st.session.set_step_velocity(channel, step, value) else {
+                        report_note_refusal(&mut st.session, &window);
                         return false;
                     };
                     st.apply_step_edit(channel, edit, &weak, &tx);
@@ -8119,6 +8139,7 @@ impl AppUi {
                 with_gesture_history(&st, &commands, &window, "Paint steps", || {
                     let mut st = st.borrow_mut();
                     let Some(edit) = st.session.paint_step(channel, step, on) else {
+                        report_note_refusal(&mut st.session, &window);
                         return false;
                     };
                     st.apply_step_edit(channel, edit, &weak, &tx);
@@ -8138,6 +8159,7 @@ impl AppUi {
                 with_gesture_history(&st, &commands, &window, "Slice step", || {
                     let mut st = st.borrow_mut();
                     let Some(edit) = st.session.slice_step(channel, step, divisions) else {
+                        report_note_refusal(&mut st.session, &window);
                         return false;
                     };
                     st.apply_step_edit(channel, edit, &weak, &tx);
@@ -8266,7 +8288,9 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
                 let Some(edit) = st.session.paste_phrase(&clipboard) else {
-                    window.set_status_message("Nothing fits at the paste position".into());
+                    if !report_note_refusal(&mut st.session, &window) {
+                        window.set_status_message("Nothing fits at the paste position".into());
+                    }
                     return;
                 };
                 st.apply_note_edit(&edit, &window);
@@ -8307,9 +8331,14 @@ impl AppUi {
                 };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let (id, edit) = st
+                let Some((id, edit)) = st
                     .session
-                    .create_roll_note(start_tick, midi_note, duration_ticks);
+                    .create_roll_note(start_tick, midi_note, duration_ticks)
+                else {
+                    report_note_refusal(&mut st.session, &window);
+                    // No note has id 0, so the grid's drag finds nothing.
+                    return 0;
+                };
                 st.apply_note_edit(&edit, &window);
                 for command in edit.commands {
                     let _ = tx.send(command);
@@ -8385,6 +8414,7 @@ impl AppUi {
                     .session
                     .duplicate_selection(anchor_id.max(0) as NoteId)
                 else {
+                    report_note_refusal(&mut st.session, &window);
                     return -1;
                 };
                 st.apply_note_edit(&edit, &window);
@@ -8475,6 +8505,7 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
                 let Some(edit) = st.session.slice_note(id as NoteId, tick) else {
+                    report_note_refusal(&mut st.session, &window);
                     return;
                 };
                 st.apply_note_edit(&edit, &window);
@@ -8516,9 +8547,13 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let edit = st
+                let Some(edit) = st
                     .session
-                    .paint_roll_note(start_tick, midi_note, duration_ticks);
+                    .paint_roll_note(start_tick, midi_note, duration_ticks)
+                else {
+                    report_note_refusal(&mut st.session, &window);
+                    return;
+                };
                 st.apply_note_edit(&edit, &window);
                 for command in edit.commands {
                     let _ = tx.send(command);
@@ -15178,6 +15213,9 @@ impl AppUi {
                         .count();
                     if drain.controller_moved {
                         controller_moved_at = Some(std::time::Instant::now());
+                    }
+                    if let Some(message) = &drain.note_refusal {
+                        w.set_status_message(message.as_str().into());
                     }
                     if refused > 0 {
                         log_error!(
