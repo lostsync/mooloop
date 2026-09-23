@@ -2504,6 +2504,11 @@ pub fn effect_kind_index(kind: EffectKind) -> i32 {
         EffectKind::Preamp => 12,
         EffectKind::Chain => 13,
         EffectKind::Layer => 14,
+        // No face in the markup yet, so a plugin row draws its frame and
+        // nothing inside it until step 08 of `docs/plans/plugin-hosting/`
+        // gives it one. Not reachable from the insert menu: that maps back
+        // through `EffectKind::ALL`, which leaves plugins out.
+        EffectKind::Plugin => 15,
     }
 }
 
@@ -2535,6 +2540,8 @@ pub fn effect_kind_units(kind: EffectKind) -> i32 {
         // head -- what differs is how its branches are drawn, which is
         // `containers/09` and may yet want more height rather than more width.
         EffectKind::Chain | EffectKind::Layer => 1,
+        // Step 08 of `docs/plans/plugin-hosting/` sizes the plugin face.
+        EffectKind::Plugin => 2,
     }
 }
 

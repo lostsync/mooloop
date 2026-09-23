@@ -248,6 +248,12 @@ pub struct Session {
     /// Control-surface bindings: document state, because their targets name
     /// this song's channels. See `mooloop_core::control::ControlMap`.
     pub control_map: mooloop_core::ControlMap,
+    /// The song's hosted plugins and the mint their slot ids come from:
+    /// document state, carried through load and [`Self::to_project`]
+    /// unchanged. Nothing in the session edits them yet
+    /// (`docs/plans/plugin-hosting/`, steps 04 and 06).
+    pub plugins: mooloop_core::PluginSlots,
+    pub next_plugin_slot: u32,
     /// The bindings' resolved ports and pickup state. **Not** document state:
     /// where a knob was last seen is the state of one performance, and a
     /// project reopened is a performance that has not started.
@@ -361,6 +367,8 @@ impl Default for Session {
             playlist: Vec::with_capacity(MAX_PLAYLIST_PLACEMENTS),
             loop_range: LoopRange::default(),
             control_map: mooloop_core::ControlMap::default(),
+            plugins: mooloop_core::PluginSlots::new(),
+            next_plugin_slot: 0,
             control_state: mooloop_core::ControlMapState::default(),
             control_learn: None,
             record_armed: false,
@@ -615,6 +623,8 @@ impl Session {
             playlist: self.playlist.clone(),
             loop_range: self.loop_range,
             control_map: self.control_map.clone(),
+            plugins: self.plugins.clone(),
+            next_plugin_slot: self.next_plugin_slot,
         }
     }
 
@@ -1541,6 +1551,8 @@ impl Session {
         self.playlist = project.playlist.clone();
         self.loop_range = project.loop_range;
         self.control_map = project.control_map.clone();
+        self.plugins = project.plugins.clone();
+        self.next_plugin_slot = project.next_plugin_slot;
         // A load may have moved every bound parameter, so every control has
         // to catch its value again rather than snapping it back to wherever
         // the knob was left. The caller re-resolves the ports, which it can
@@ -2069,5 +2081,44 @@ mod gesture_tests {
         session.mark_gesture_changed();
         let recorded = session.finish_gesture().expect("the later drag changed things");
         assert_eq!(mark(&recorded), 3, "the interrupted gesture was recorded anyway");
+    }
+}
+
+#[cfg(test)]
+mod plugin_slot_tests {
+    use mooloop_core::{
+        EffectKind, EffectParams, EffectSlotState, PluginFormat, PluginRef, PluginSlotState,
+        Project,
+    };
+
+    use super::Session;
+
+    /// The session holds a song's plugin slots as document state and hands
+    /// them back unchanged. Nothing edits them yet, which is exactly why a
+    /// round trip is the test: a field the session forgot to carry would be
+    /// dropped from every save, silently (`docs/plans/plugin-hosting/02`).
+    #[test]
+    fn a_songs_plugin_slots_pass_through_the_session_unchanged() {
+        let mut project = Project::default();
+        let id = project.add_plugin_slot(PluginSlotState::new(PluginRef {
+            format: PluginFormat::Clap,
+            id: "org.mooloop.test-gain".to_owned(),
+            name: "Test Gain".to_owned(),
+            vendor: String::new(),
+            version: String::new(),
+        }));
+        let mut device = EffectSlotState::of_kind(EffectKind::Plugin);
+        device.params = EffectParams::Plugin(id);
+        project.channels[0].setup.push_effect(device);
+
+        let mut session = Session::default();
+        session.replace_project(&project, &[]);
+        let back = session.project_snapshot(project.bpm.into(), project.swing_percent.into());
+
+        assert_eq!(back.plugins, project.plugins);
+        assert_eq!(back.next_plugin_slot, 1);
+        let params: Vec<EffectParams> =
+            back.channels[0].setup.effects.iter().map(|slot| slot.params).collect();
+        assert_eq!(params, vec![EffectParams::Plugin(id)]);
     }
 }

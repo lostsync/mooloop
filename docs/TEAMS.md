@@ -135,6 +135,11 @@ Files marked *shared* are split in the table above.
 - `crates/mooloop-plugin-host` (the plugin host, MOO-11; no plugin format's
   types leave it) and `crates/mooloop-test-plugin` (the in-repo CLAP test
   double every plugin-hosting step runs against)
+- The plugin plan's neutral contract: `core/src/plugin.rs` (what a song says
+  about a hosted plugin; its persisted shape is Document & Session's to
+  review, as any saved field is), `core/tests/plugin_formats_stay_out.rs`,
+  and `dsp/src/effects/plugin_placeholder.rs` (a plugin device with no
+  plugin running in it)
 - `dsp/src/`: `node.rs` (*shared*), `event.rs`, `bus.rs` (*shared*), `taps.rs`
   — the `AudioNode` contract and what flows through it
 - `core/src/bridge.rs`

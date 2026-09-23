@@ -1343,6 +1343,10 @@ fn effect_kind_slug(kind: EffectKind) -> &'static str {
         EffectKind::Buffer => "buffer",
         EffectKind::Chain => "chain",
         EffectKind::Layer => "layer",
+        // Where step 07 of `docs/plans/plugin-hosting/` keeps plugin device
+        // presets, under `<vendor>/<id>/`. Nothing creates it yet: the
+        // catalogue scan walks `EffectKind::ALL`, which leaves plugins out.
+        EffectKind::Plugin => "plugin",
     }
 }
 

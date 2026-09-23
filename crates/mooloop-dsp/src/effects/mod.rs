@@ -19,6 +19,7 @@ mod eq;
 mod filter;
 mod modulation;
 mod plate;
+mod plugin_placeholder;
 mod reverb;
 
 pub use bitcrush::BitcrushEffect;
@@ -30,6 +31,7 @@ pub use eq::{eq_response_db, EqEffect};
 pub use filter::FilterEffect;
 pub use modulation::ModulationEffect;
 pub use plate::PlateEffect;
+pub use plugin_placeholder::PluginPlaceholder;
 pub use container::ContainerEffect;
 pub use reverb::ReverbEffect;
 
@@ -263,6 +265,10 @@ pub fn build_effect_at_tempo(
         // host beside the per-slot dry path, not to a node. See
         // `container.rs`.
         EffectParams::Chain(p) | EffectParams::Layer(p) => Box::new(ContainerEffect::new(p)),
+        // A pass-through that names its slot. The session swaps the hosted
+        // plugin's processor in; while the plugin is missing, this is what
+        // plays. See `plugin_placeholder.rs`.
+        EffectParams::Plugin(slot) => Box::new(PluginPlaceholder::new(slot)),
     }
 }
 

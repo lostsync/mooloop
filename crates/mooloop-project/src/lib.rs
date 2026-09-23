@@ -3954,6 +3954,96 @@ id = "default_kick"
         assert_eq!(loaded.document, LoadedDocument::Song(project));
     }
 
+    /// A song with a hosted plugin in it, for the two tests below: one
+    /// plugin device on channel 0 naming a slot whose plugin nobody here has
+    /// installed, with sparse parameter ids and a megabyte of state.
+    fn song_with_a_plugin() -> Project {
+        let mut project = Project::default();
+        let mut slot = mooloop_core::PluginSlotState::new(mooloop_core::PluginRef {
+            format: mooloop_core::PluginFormat::Clap,
+            id: "com.example.not-installed-anywhere".to_owned(),
+            name: "Nowhere".to_owned(),
+            vendor: "Example".to_owned(),
+            version: "1.2.3".to_owned(),
+        });
+        slot.params = [7u32, 1000, 4_000_000_000]
+            .into_iter()
+            .map(|id| mooloop_core::PluginParamInfo {
+                id,
+                name: format!("Param {id}"),
+                module: String::new(),
+                min: 0.0,
+                max: 1.0,
+                default: 0.5,
+                stepped: None,
+                automatable: true,
+                modulatable: true,
+                hidden: false,
+            })
+            .collect();
+        // A megabyte that is not all one byte, so the encoding is exercised
+        // rather than compressed away by anything clever downstream.
+        let data: Vec<u8> = (0..1_048_576u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
+        slot.state = mooloop_core::PluginStateText(mooloop_core::PluginState {
+            chunks: vec![mooloop_core::PluginStateChunk { tag: "clap".to_owned(), data }],
+        });
+        let id = project.add_plugin_slot(slot);
+        let mut device = mooloop_core::EffectSlotState::of_kind(mooloop_core::EffectKind::Plugin);
+        device.params = mooloop_core::EffectParams::Plugin(id);
+        project.channels[0].setup.push_effect(device);
+        project
+    }
+
+    /// `docs/plans/plugin-hosting/02-the-neutral-contract.md`: a song with a
+    /// plugin slot round-trips exactly, a megabyte of state included, and the
+    /// state is written as wrapped base64 rather than one enormous line.
+    #[test]
+    fn a_song_with_a_plugin_slot_round_trips_exactly() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("plugin.mooloop");
+        let project = song_with_a_plugin();
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+
+        let manifest = fs::read_to_string(&bundle).unwrap();
+        assert!(manifest.contains("next_plugin_slot = 1"), "the mint was not saved");
+        let longest = manifest.lines().map(str::len).max().unwrap_or(0);
+        assert!(longest < 200, "a line of {longest} characters: the state was not wrapped");
+
+        let loaded = load_bundle(&bundle).unwrap();
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+        assert_eq!(loaded.document, LoadedDocument::Song(project));
+    }
+
+    /// A plugin nobody has installed does not stop the song opening, and
+    /// nothing about it is lost: its slot, parameters and state survive a
+    /// save, and the second save is byte-identical to the first. The engine
+    /// side of "missing" is `build_effect`'s pass-through placeholder,
+    /// `a_plugin_device_with_no_plugin_passes_the_signal_through`.
+    #[test]
+    fn a_song_whose_plugin_is_missing_loads_and_saves_back_unchanged() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("missing.mooloop");
+        save_song(&bundle, &song_with_a_plugin(), AssetMode::Embedded).unwrap();
+        let first = fs::read(&bundle).unwrap();
+
+        let LoadedDocument::Song(loaded) = load_bundle(&bundle).unwrap().document else {
+            panic!("expected a song");
+        };
+        save_song(&bundle, &loaded, AssetMode::Embedded).unwrap();
+        assert!(fs::read(&bundle).unwrap() == first, "the second save changed the file");
+    }
+
+    /// A song with no plugins says nothing about plugins, so it is
+    /// byte-identical to one written before the table existed.
+    #[test]
+    fn a_song_with_no_plugins_writes_no_plugin_keys() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("plain.mooloop");
+        save_song(&bundle, &Project::default(), AssetMode::Embedded).unwrap();
+        let manifest = fs::read_to_string(&bundle).unwrap();
+        assert!(!manifest.contains("plugin"), "{manifest}");
+    }
+
     #[test]
     fn song_manifest_with_untagged_filter_params_still_loads() {
         // Songs written while `Filter` was the only effect kind stored

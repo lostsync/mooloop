@@ -126,6 +126,10 @@ never stored as a flag.
 
 ## Tests
 
+- **Carried from step 02:** the fake-plugin walk through a route and a
+  lane (insert, reorder, address a parameter, save, load, bypass, remove)
+  waits on this step's address and step 04's rack. Whichever of the two
+  lands second writes it (`00-status.md`, "Step 02, recorded").
 - The fake plugin from step 02, with ids `{7, 1000, 4_000_000_000}`, can be
   modulated, automated and saved. Nothing allocates an array of 4 billion
   entries.

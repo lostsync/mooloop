@@ -13870,6 +13870,31 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         );
     }
 
+    /// A plugin device whose plugin is not running -- not yet swapped in, or
+    /// missing -- holds `build_effect`'s placeholder, and the song plays
+    /// through it unchanged (`docs/plans/plugin-hosting/00-status.md`,
+    /// "Failure"). Parameter events aimed at it are dropped, not applied to
+    /// anything else.
+    #[test]
+    fn a_plugin_device_with_no_plugin_passes_the_signal_through() {
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+        let dry = rendered_energy(&project, |_| {});
+        assert!(dry > 0.0, "reference render was silent");
+        let params = mooloop_core::EffectParams::Plugin(mooloop_core::PluginSlotId(0));
+        assert_eq!(params.kind().latency_frames(), 0);
+        let wet = rendered_energy(&project, |render| {
+            let _ = render.apply_structural(install_effect(
+                EffectTarget::Channel(0),
+                0,
+                build_effect(params, 48_000),
+            ));
+        });
+        assert!(
+            (wet - dry).abs() < dry * 1.0e-5,
+            "a placeholder must be transparent: dry {dry}, wet {wet}"
+        );
+    }
+
     /// Every effect kind must be constructible through the shared builder and
     /// audibly change the signal at a setting that is obviously not neutral.
     /// This is the test a new kind trips if it is added to `EffectKind` but
@@ -13956,6 +13981,9 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                     // node in the slot. `docs/plans/containers/03` gives the
                     // host that dry path, and this arm is where a container
                     // that started processing audio itself would be caught.
+                }
+                mooloop_core::EffectKind::Plugin => {
+                    unreachable!("a plugin is not in EffectKind::ALL; see the test below")
                 }
             }
 

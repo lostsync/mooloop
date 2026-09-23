@@ -47,6 +47,15 @@ pub enum EffectKind {
     /// (`docs/plans/containers/08-the-chain-splits-and-sums.md`). A layer of
     /// one branch is a chain, sample for sample.
     Layer,
+    /// A hosted plugin (`docs/plans/plugin-hosting/`). Its parameters,
+    /// latency and state belong to the instance, not to the kind: the
+    /// device's [`EffectParams::Plugin`] names a slot in
+    /// `Project::plugins`, and that slot says what the plugin reports.
+    ///
+    /// **Not in [`Self::ALL`]**: the add-effect menu does not reach a plugin
+    /// through this kind (step 08 adds its own rows), and the preset
+    /// catalogue must not make a `presets/effects/plugin/` folder for it.
+    Plugin,
 }
 
 /// How a container runs the rows it holds. See [`EffectKind::container_flow`].
@@ -125,6 +134,12 @@ impl EffectKind {
             // `docs/plans/containers/README.md`.
             | Self::Chain
             | Self::Layer => 0,
+            // A plugin's latency is known only after its instance activates,
+            // and can change while it runs. The kind cannot answer; step 04
+            // of `docs/plans/plugin-hosting/` gives the instance a way to.
+            // Zero until then, which is what the pass-through placeholder
+            // really adds.
+            Self::Plugin => 0,
         }
     }
 
@@ -178,7 +193,8 @@ impl EffectKind {
             | Self::Gate
             | Self::Compressor
             | Self::Limiter
-            | Self::Buffer => None,
+            | Self::Buffer
+            | Self::Plugin => None,
         }
     }
 
@@ -219,6 +235,7 @@ impl EffectKind {
             Self::Buffer => "Buffer",
             Self::Chain => "Chain",
             Self::Layer => "Layer",
+            Self::Plugin => "Plugin",
         }
     }
 
@@ -240,6 +257,11 @@ impl EffectKind {
             Self::Limiter => &LIMITER_DESCRIPTORS,
             Self::Buffer => &BUFFER_DESCRIPTORS,
             Self::Chain | Self::Layer => &CONTAINER_DESCRIPTORS,
+            // A plugin's parameters are the instance's, reported at runtime
+            // and saved in its `PluginSlotState`. No static table can hold
+            // them, and nothing may judge a plugin's parameter id against
+            // this empty one (MOO-74, C.6).
+            Self::Plugin => &[],
         }
     }
 
@@ -266,6 +288,8 @@ impl EffectKind {
             Self::Buffer => EffectParams::Buffer(BufferParams::default()),
             Self::Chain => EffectParams::Chain(ContainerParams::default()),
             Self::Layer => EffectParams::Layer(ContainerParams::default()),
+            // Unassigned until the session mints a slot for it.
+            Self::Plugin => EffectParams::Plugin(crate::PluginSlotId::UNASSIGNED),
         }
     }
 }
@@ -3053,6 +3077,17 @@ pub enum EffectParams {
     Buffer(BufferParams),
     Chain(ContainerParams),
     Layer(ContainerParams),
+    /// A hosted plugin: which slot of `Project::plugins` it runs. Its
+    /// parameter values live in the instance and in the slot's saved state,
+    /// not here, so getting or setting one by id through this enum does
+    /// nothing.
+    ///
+    /// Saved as `{ type = "plugin", state = <slot> }`. A reader that
+    /// predates this variant refuses the song rather than reading a plugin
+    /// as something else -- `an_unknown_effect_tag_is_refused_not_read_as_a_filter`
+    /// holds the untagged fallback below to that.
+    #[serde(rename = "plugin")]
+    Plugin(crate::PluginSlotId),
 }
 
 impl EffectParams {
@@ -3073,6 +3108,7 @@ impl EffectParams {
             Self::Buffer(_) => EffectKind::Buffer,
             Self::Chain(_) => EffectKind::Chain,
             Self::Layer(_) => EffectKind::Layer,
+            Self::Plugin(_) => EffectKind::Plugin,
         }
     }
 
@@ -3364,6 +3400,8 @@ impl EffectParams {
                 CONTAINER_PARAM_MIX => Some(p.mix),
                 _ => None,
             },
+            // A plugin's values live in its instance and its saved state.
+            Self::Plugin(_) => None,
         }
     }
 
@@ -3508,6 +3546,9 @@ impl EffectParams {
                 CONTAINER_PARAM_MIX => p.mix = value,
                 _ => return None,
             },
+            // Unreachable today: `descriptor` above found nothing in the
+            // empty table and returned. Spelled for when it is not.
+            Self::Plugin(_) => return None,
         }
         Some(value)
     }
@@ -4160,6 +4201,49 @@ mod tests {
         let mut drive = EffectParams::Drive(DriveParams::default());
         drive.set(DRIVE_PARAM_CURVE, 2.0);
         assert_eq!(drive.drive().unwrap().curve, DriveCurve::Fold);
+    }
+
+    /// A plugin device saves as `{ type = "plugin", state = <slot> }`, and a
+    /// tag this build does not know is refused rather than read as a filter.
+    ///
+    /// The second half is what makes an older reader refuse a song with a
+    /// plugin in it instead of loading half of it
+    /// (`docs/plans/plugin-hosting/02-the-neutral-contract.md`). The
+    /// untagged fallback to `FilterParams` refuses an unknown tag only
+    /// because `FilterParams` requires `cutoff_hz`, `resonance` and `mode`;
+    /// give those defaults and a plugin would silently become a filter in
+    /// every build that predates it. This test fails first.
+    #[test]
+    fn an_unknown_effect_tag_is_refused_not_read_as_a_filter() {
+        let future = "bypassed = false\n\n[params]\ntype = \"from_a_later_build\"\nstate = 3\n";
+        assert!(
+            toml::from_str::<EffectSlotState>(future).is_err(),
+            "an effect this build does not know loaded as something else"
+        );
+
+        let plugin = "bypassed = false\n\n[params]\ntype = \"plugin\"\nstate = 3\n";
+        let slot: EffectSlotState = toml::from_str(plugin).expect("a plugin device loads");
+        assert_eq!(slot.params, EffectParams::Plugin(crate::PluginSlotId(3)));
+        assert_eq!(slot.kind(), EffectKind::Plugin);
+        let written = toml::to_string(&slot).unwrap();
+        assert!(written.contains("type = \"plugin\""), "{written}");
+        assert_eq!(toml::from_str::<EffectSlotState>(&written).unwrap(), slot);
+    }
+
+    /// What `EffectKind::Plugin` answers for the kind, since the instance is
+    /// where a plugin's real answers live.
+    #[test]
+    fn a_plugin_kind_has_no_table_no_latency_and_no_menu_row() {
+        let kind = EffectKind::Plugin;
+        assert!(kind.descriptors().is_empty());
+        assert_eq!(kind.latency_frames(), 0);
+        assert!(!kind.is_container());
+        assert!(!EffectKind::ALL.contains(&kind), "plugins are not in the insert menu");
+        let mut params = kind.default_params();
+        assert_eq!(params, EffectParams::Plugin(crate::PluginSlotId::UNASSIGNED));
+        assert_eq!(params.get(0), None);
+        assert_eq!(params.set(0, 1.0), None, "nothing to write");
+        assert_eq!(params.kind(), kind);
     }
 
     #[test]

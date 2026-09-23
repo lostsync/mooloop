@@ -59,6 +59,9 @@ pub fn patches(kind: EffectKind) -> Vec<EffectFactoryPatch> {
         // it to ship, and a bank of one-knob presets would be noise in the
         // menu rather than a demonstration of range.
         EffectKind::Chain | EffectKind::Layer => Vec::new(),
+        // A plugin's presets are its own (step 07 of
+        // `docs/plans/plugin-hosting/`); mooloop ships none.
+        EffectKind::Plugin => Vec::new(),
     }
 }
 

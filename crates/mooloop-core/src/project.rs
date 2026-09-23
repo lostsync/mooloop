@@ -865,6 +865,30 @@ pub struct Project {
     /// byte-identical to one written before the field existed.
     #[serde(default, skip_serializing_if = "is_empty_control_map")]
     pub control_map: crate::control::ControlMap,
+    /// The song's hosted plugins, by slot: what each one is, its parameters
+    /// as it last reported them, and its saved state
+    /// (`docs/plans/plugin-hosting/02-the-neutral-contract.md`).
+    ///
+    /// A device on a chain names its slot through `EffectParams::Plugin`.
+    /// Keyed per project rather than per chain so that moving a device to
+    /// another channel renumbers nothing.
+    ///
+    /// Defaulted and skipped when empty, so a song with no plugins is
+    /// byte-identical to one written before the field existed. The format
+    /// stays at version 1: an older reader ignores this table, and refuses
+    /// the song at the first `EffectParams` tag it does not know
+    /// (`PROJECT_FORMAT.md`, "Hosted plugins").
+    #[serde(
+        default,
+        skip_serializing_if = "std::collections::BTreeMap::is_empty",
+        with = "crate::plugin::slot_table"
+    )]
+    pub plugins: crate::plugin::PluginSlots,
+    /// The mint [`crate::PluginSlotId`] comes from. Never lowered, so a slot
+    /// id is never reused: an address left holding a removed plugin's slot
+    /// names nothing rather than whatever took its number.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub next_plugin_slot: u32,
 }
 
 /// [`Project::strip_volume_taper`] for a song whose strip volume was
@@ -925,6 +949,28 @@ impl Project {
             + self.pattern_meta.capacity() * std::mem::size_of::<PatternMeta>()
             + self.pattern_meta.iter().map(|meta| meta.name.capacity()).sum::<usize>()
             + self.playlist.capacity() * std::mem::size_of::<PatternPlacement>()
+            + self
+                .plugins
+                .values()
+                .map(|slot| std::mem::size_of::<crate::PluginSlotState>() + slot.heap_bytes())
+                .sum::<usize>()
+    }
+
+    /// Add `slot` to the song under a fresh [`crate::PluginSlotId`] and
+    /// return the id. Ids come from [`Self::next_plugin_slot`] and are never
+    /// reused. The mint skips any id already in the table, so a song whose
+    /// counter was lost or hand-edited below its table cannot hand out a
+    /// slot that is taken.
+    pub fn add_plugin_slot(&mut self, slot: crate::PluginSlotState) -> crate::PluginSlotId {
+        let mut next = self.next_plugin_slot;
+        if let Some(highest) = self.plugins.keys().next_back() {
+            next = next.max(highest.0.saturating_add(1));
+        }
+        let id = crate::PluginSlotId(next);
+        debug_assert!(id.is_assigned(), "the plugin slot mint ran out");
+        self.next_plugin_slot = next.saturating_add(1);
+        self.plugins.insert(id, slot);
+        id
     }
 }
 
@@ -1028,6 +1074,8 @@ impl Default for Project {
             playlist: Vec::new(),
             loop_range: LoopRange::default(),
             control_map: crate::control::ControlMap::default(),
+            plugins: crate::plugin::PluginSlots::new(),
+            next_plugin_slot: 0,
         }
     }
 }

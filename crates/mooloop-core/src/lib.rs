@@ -29,6 +29,7 @@ pub mod mlp8;
 pub mod outlet;
 pub mod pattern;
 pub mod playlist;
+pub mod plugin;
 pub mod project;
 pub mod sampler;
 pub mod strip;
@@ -77,6 +78,10 @@ pub use mlp8::{
     MLP8_ROUTE_PARAM_AMOUNT, MLP8_VOICES,
 };
 pub use effect_factory::EffectFactoryPatch;
+pub use plugin::{
+    PluginFormat, PluginParamInfo, PluginRef, PluginSlotId, PluginSlotState, PluginSlots,
+    PluginState, PluginStateChunk, PluginStateText,
+};
 pub use mlm1_factory::FactoryPatch;
 pub use modulation::{
     step_value_index, strip_descriptor, ModEnvelopeParams, ModLfoParams, ModLfoWaveform,

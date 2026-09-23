@@ -6,7 +6,7 @@ mirror this file step-for-step the way MOO-5/16/30 do. The GitHub issue
 numbers below (`#10`, `#26`-`#30`) predate Adam's move away from GitHub
 issues; MOO-11 is the live tracking issue.
 
-**Written 2026-09-16.** Step 01 (the spike) landed on 2026-09-23, and so did MOO-56's one boxed source slot, which closes blocker 4 below. Adam asked for it directly:
+**Written 2026-09-16.** Steps 01 (the spike) and 02 (the neutral contract) landed on 2026-09-23, and so did MOO-56's one boxed source slot, which closes blocker 4 below. Adam asked for it directly:
 *"let's go ahead and plan out how we'll add CLAP support. Later we'll add
 VST/3 and AU. instrument support as well."* `SCOPE.md` already put CLAP in
 for 0.2.0 (item 9). This plan is outside the `FOCUS.md` sequence for the same
@@ -521,7 +521,7 @@ words. **Do not reopen this as a version-bump question.**
 | Step | What | Closes | Rung | State |
 | --- | --- | --- | --- | --- |
 | 01 | Spike: `clack-host` loads and runs a CLAP; an in-repo test plugin | — (MOO-76) | new crate only | **done 2026-09-23** |
-| 02 | The neutral contract: types, `Project.plugins`, TOML state, a fake plugin end to end | #26 | core, project | not started |
+| 02 | The neutral contract: types, `Project.plugins`, TOML state, a fake plugin end to end | #26 | core, project | **done 2026-09-23** (MOO-77) |
 | 03 | Parameters belong to an instance | #26 | core, session | not started |
 | 04 | `PluginRack`, main-thread requests, latency known at runtime | #26 | engine, session | not started |
 | 05 | The scanner, out of process, with its cache | #27 | plugin-host, app, settings | not started |
@@ -621,6 +621,58 @@ installed or run yet.
 | free-audio `clap-plugins` | reference effects and instruments | yes | Build from source, github.com/free-audio/clap-plugins |
 | Airwindows Consolidated | effects | **no** | `LinuxVSTs.zip` (x86) from airwindows.com/consolidated, which carries the CLAP. The community `stevefolta/airwindows-clap-build` is an alternative |
 | ZAM plugins | effects | yes | `dnf install clap-zam-plugins`. Not on the original list, but packaged in Fedora |
+
+## Step 02, recorded 2026-09-23 (MOO-77)
+
+**What landed.** `crates/mooloop-core/src/plugin.rs` holds the neutral types:
+`PluginFormat`, `PluginRef`, `PluginParamInfo`, `PluginSlotId`,
+`PluginSlotState`, `PluginState`/`PluginStateChunk` and `PluginStateText`.
+`Project` has `plugins` (a `BTreeMap` keyed by slot) and `next_plugin_slot`.
+Both are defaulted and skipped when empty or zero, so a song with no
+plugins is byte-identical to one written before them. `Project::add_plugin_slot`
+is the mint. `Session` carries both through `replace_project` and
+`project_snapshot`, and edits neither. `EffectKind::Plugin` and
+`EffectParams::Plugin(PluginSlotId)` (tag `plugin`) exist. `build_effect`
+builds a `PluginPlaceholder` for a plugin device: a pass-through, which is
+also what a missing plugin plays as. `PROJECT_FORMAT.md` has "Hosted plugins".
+
+**What differs from `02-the-neutral-contract.md`.**
+
+- `PluginState` holds only `chunks`, not a `format` as well. The
+  `PluginRef` beside it in `PluginSlotState` already says the format, and
+  two copies of one fact can disagree.
+- The `plugins` table's keys are written and read as strings on purpose
+  (`plugin::slot_table`). The bundle loader reads through `toml::Value`,
+  which hands a key over as a string, and a bare `u32` key refused it. The
+  first round-trip test found that.
+- The "CLAP stays out" test reads `Cargo.lock`, not each manifest
+  (`crates/mooloop-core/tests/plugin_formats_stay_out.rs`). The lock is what
+  Cargo resolved, so a dependency renamed with `package =` can't hide from it.
+  A manifest's `features = ["clack-host"]` can't cause a false hit either.
+- **`EffectKind::ALL`, checked site by site.** Production: the insert menu's
+  index-to-kind map (`effect_kind_from_index`), the preset listing, the
+  preset-catalogue scan and the factory-bank seed, all in `ui/src/lib.rs`.
+  None of them may see `Plugin`, and none does. Every other use is a test
+  sweep over the native kinds (latency agreement, id freeze, container
+  predicates, factory banks, the mixed-chain round trip, the engine's
+  "every kind alters the signal"). `Plugin` has its own tests beside each
+  one that matters. `effect_kind_index` gives `Plugin` the next free number,
+  15, and no face exists for it until step 08, so a plugin row draws its
+  frame and nothing inside it.
+- **Not here: the fake plugin end to end with a route and a lane.** Step 02
+  asked for a `FakePluginNode` driven through insert, reorder, a route, a
+  lane, save, load, bypass and remove, "using the same functions the UI
+  calls". Two things are missing before that test can exist. The session has
+  no call that inserts a plugin device (that's the `PluginRack`, step 04).
+  And a route or lane on a plugin parameter has no address until step 03's
+  `ParamOwner::PluginParam`. Without that address it would go through the
+  `Effect` arm of the integrity pass and be dropped (MOO-74, C.6). What's
+  here instead: the save/load half (`a_song_with_a_plugin_slot_round_trips_exactly`,
+  `a_song_whose_plugin_is_missing_loads_and_saves_back_unchanged`), the
+  session half (`a_songs_plugin_slots_pass_through_the_session_unchanged`),
+  and the engine half (`a_plugin_device_with_no_plugin_passes_the_signal_through`).
+  Step 03's test (ids `{7, 1000, 4_000_000_000}` modulated, automated and
+  saved) and step 04's rack take the rest. Both step files say so.
 
 ## The test plugins
 

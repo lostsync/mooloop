@@ -574,6 +574,98 @@ a run is not carried — a route's source is a module in the channel's rack, not
 in the container — and `docs/plans/containers/00-status.md` records why that
 is a deferred decision rather than an omission.
 
+## Hosted plugins
+
+A song that uses a third-party plugin (`docs/plans/plugin-hosting/`) says two
+things about it, and both are additive under format version 1.
+
+The device on the chain is an ordinary effect slot whose parameters name a
+**plugin slot**:
+
+```toml
+[[document.channels.setup.effects]]
+id = 2
+bypassed = false
+
+[document.channels.setup.effects.params]
+type = "plugin"
+state = 0
+```
+
+The slot itself lives in the song's `plugins` table, keyed by
+`PluginSlotId`, beside the mint the ids come from:
+
+```toml
+[document]
+next_plugin_slot = 1
+
+[document.plugins.0.plugin]
+format = "clap"
+id = "org.example.gain"
+name = "Gain"
+vendor = "Example"
+version = "1.0.0"
+
+[[document.plugins.0.params]]
+id = 4000000000
+name = "Gain"
+min = 0.0
+max = 2.0
+default = 1.0
+
+[[document.plugins.0.state]]
+tag = "clap"
+data = """
+AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4
+..."""
+```
+
+- **Slot ids are per song, not per chain**, and never reused. A device's
+  `DeviceId` is minted by its chain, so a device moved to another channel
+  would be renumbered. The table is keyed by something that is not.
+- **`plugin` names the plugin, not a file.** `format` is `clap`, `vst3` or
+  `au`. `id` is the plugin's own identifier (for CLAP, its reverse-DNS id).
+  No path is saved, because the song should find the plugin on another
+  machine through that machine's scan.
+- **`params` is the parameter list as the plugin last reported it.** Ids are
+  the plugin's own: sparse, arbitrary `u32`s. Optional keys are left out at
+  their defaults: `module` (empty), `stepped` (none), `automatable` and
+  `modulatable` (true), `hidden` (false). This list is what lets a song whose
+  plugin is missing still show and keep its lanes and routes.
+- **`state` is the plugin's saved state, as base64 inside the TOML.** Each
+  chunk is `{ tag, data }`, and `data` is wrapped at 76 columns. Whitespace
+  inside `data` is ignored on read, so a hand-rewrapped file still loads.
+  CLAP writes one chunk. VST3 will write a component chunk and a controller
+  chunk. The bytes are the plugin's own: mooloop never reads inside them,
+  and the plugin versions them itself, so no plugin ever needs a format
+  migration here.
+
+**Why plugin state may go in the TOML when samples may not** (Adam,
+2026-09-16). A sample is media, often large, and it is shared across songs
+and kits. A plugin's state is small in the common case, and it belongs to its
+device the way a native device's parameters do. The cost is known and
+accepted: a sampler plugin's state can reach megabytes, and the file stays
+valid with it.
+
+**A missing plugin** (not installed, not found by the scan, or refusing to
+load) does not stop the song opening. Its device plays as a pass-through (an
+instrument will play as silence), and its slot, parameters, state, lanes and
+routes are kept and saved back byte for byte. A lane or route naming a plugin
+parameter that no longer exists is kept too, and shown as missing (Adam,
+2026-09-23, MOO-74).
+
+**What an older build does.** An older reader ignores keys it does not know,
+so on its own the `plugins` table would be dropped without complaint. But
+that reader also meets `type = "plugin"` on the device, which it does not
+know either, and an unknown effect tag fails the whole document. So a song
+with a plugin device in it is **refused** by an older build, not half loaded.
+`an_unknown_effect_tag_is_refused_not_read_as_a_filter` holds the untagged
+`FilterParams` fallback to that. A song whose table has slots but no device
+naming them loses only those orphaned slots in an older build.
+
+A song with no plugins writes neither key, so it is byte-identical to one
+written before the table existed.
+
 ## Kit And Channel Documents
 
 A kit document contains `document.channels`, an array of channel setups. It
