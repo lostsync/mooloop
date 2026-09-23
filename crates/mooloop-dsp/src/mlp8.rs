@@ -1858,12 +1858,18 @@ impl MlP8 {
             // Age is a group property: every member of a group is stamped
             // with the same one when it is allocated, so "the oldest age
             // still on the board" names a whole group rather than a slot.
-            let Some(oldest) = self
+            //
+            // A released group goes before a held one, oldest first within
+            // each (MOO-110): a held pad note outlives the release tails
+            // ringing around it. Gate is a group property too -- a Note Off
+            // releases every member of its event -- so the key names a
+            // whole group as well.
+            let Some((_, oldest)) = self
                 .voices
                 .iter()
                 .enumerate()
                 .filter(|(index, voice)| voice.active && reserved & (1 << index) == 0)
-                .map(|(_, voice)| voice.age)
+                .map(|(_, voice)| (voice.gate, voice.age))
                 .min()
             else {
                 break;
@@ -4270,6 +4276,27 @@ mod tests {
         assert_eq!(synth.voices.iter().filter(|v| v.active).count(), MLP8_VOICES);
         // The first note's slot was taken by the ninth.
         assert_eq!(synth.voices[0].event_id, 9);
+    }
+
+    /// With the pool full, a new note takes a released group before a held
+    /// one, even a younger released one (MOO-110). The oldest held note is
+    /// the one a pad player is still leaning on.
+    #[test]
+    fn a_full_pool_steals_a_released_voice_before_a_held_one() {
+        let mut synth = MlP8::new(init_saw(), SR);
+        for index in 0..MLP8_VOICES as u8 {
+            synth.note_on(u64::from(index) + 1, 48 + index * 3, 100);
+        }
+        synth.note_off(5);
+        synth.note_on(9, 80, 100);
+        assert!(
+            synth.voices.iter().any(|v| v.event_id == 1 && v.gate),
+            "the oldest held note was stolen"
+        );
+        assert!(
+            !synth.voices.iter().any(|v| v.event_id == 5),
+            "the released note should have been the one taken"
+        );
     }
 
     // --- Step 05: allocation, character, and the finisher -----------------
