@@ -61,6 +61,41 @@ defaults.
    the free plugins a Linux musician actually has.
 4. **The scanner runs out of process from the first version.**
 
+## Adam's answers, 2026-09-22: one boxed source slot (MOO-56)
+
+MOO-56 is the other half of blocker 4, and step 09 leaves it out on purpose.
+It replaces `ChannelStrip`'s eight concrete generator fields with one boxed
+`SourceNode` slot. Two questions were put to Adam on the issue, and he
+answered both the same day.
+
+1. **Do it, even with `device-registry/` parked.**
+
+   > hi its adam. this needs to be done, i feel like it is pretty important
+   > and the way we're currently switching instruments is pretty much
+   > scaffolding quality - yeah it works and there are hints that someone
+   > understands that a system needs to be built…but that system hasnt been
+   > built. we're not fn ruby on rails over here.
+
+2. **Changing a channel's source may become a queued structural edit.** With
+   one boxed slot, a source change moves ownership. The new node crosses as a
+   `StructuralCommand`, and the displaced one leaves through the reclaim
+   ring. When the ring is full, the executor re-queues the edit, so the
+   change can land a block or more after the click, not in the block the
+   click arrives in. Asked whether that is acceptable, he answered:
+
+   > totally fine. there's no reason to expect that this action should be
+   > instantaneous.
+
+   He also answered *"1. yes"* to the numbered option that accepts it.
+
+**What this changes here.** Step 09 was written before these rulings. It
+adds a ninth `hosted` field beside the eight and says to leave them alone,
+because boxing them was "a separate refactor with its own reasons". Adam
+has now given the reasons, and MOO-56 carries the work (Realtime Engine,
+`docs/TEAMS.md`). Re-read step 09 against whichever lands first. With
+MOO-56 in, a plugin source is one more occupant of the one slot rather than
+a ninth field, and both specify an `InstallSource` structural command.
+
 ## The rule that makes VST3 and AU cheap later
 
 **No format type leaves `crates/mooloop-plugin-host`.** Core, project,
