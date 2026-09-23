@@ -7,7 +7,8 @@
 use crate::channel::ChannelClipboard;
 use crate::history::History;
 use crate::project::ProjectSnapshot;
-use mooloop_core::NoteEvent;
+use mooloop_core::{EffectTarget, NoteEvent};
+use std::time::{Duration, Instant};
 
 /// The command layer's state. Clipboard data and history live here rather
 /// than in a particular widget, so menu, keyboard, and context-menu surfaces
@@ -47,6 +48,77 @@ pub struct CommandState {
     /// when a gesture opens rather than when it closes, so a gesture thrown
     /// away by an install cannot name the next one.
     pub gesture_label: Option<&'static str>,
+    /// The last value gesture recorded, so the next one on the same control
+    /// can join it. See [`CommandState::value_run_token`].
+    pub value_run: Option<ValueRun>,
+}
+
+/// How close together two value gestures on one control have to be to undo
+/// as one step.
+///
+/// Every wheel notch, arrow press and double-click reset on a shared control
+/// is its own `Gesture.begin()`/`end()`, because only the widget knows where
+/// one stops -- so one trackpad sweep of a cutoff was forty whole-project
+/// entries, most of a heavy song's history (MOO-95). Half a second is long
+/// enough that a sweep, or a held arrow key, is one run, and short enough
+/// that coming back to the knob a moment later is a new step.
+pub const VALUE_RUN_GAP: Duration = Duration::from_millis(500);
+
+/// One run of value gestures on one control: the entry they are joining.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ValueRun {
+    /// What the entry is called, which is the parameter's own name.
+    pub label: &'static str,
+    /// Where the control is: the selected channel and the rack on screen.
+    /// Two "Mix" knobs on two channels are two runs.
+    pub scope: (usize, EffectTarget),
+    /// The history token the run's entries share, which is what makes
+    /// `History::record` fold them into one.
+    pub token: u64,
+    /// When the last gesture of the run was recorded. The window slides, so
+    /// a long sweep is one run for as long as it keeps moving.
+    pub at: Instant,
+}
+
+impl CommandState {
+    /// The history token a value gesture recorded `now` should carry.
+    ///
+    /// The run's own token when this gesture continues it -- the same label
+    /// in the same place, within [`VALUE_RUN_GAP`] of the last one -- so
+    /// `History::record` folds it into the entry the run already has, keeping
+    /// the first `before` and this `after`. A fresh token otherwise, which
+    /// starts a new entry. Tokens come from the same counter as a pointer
+    /// drag's, so the two can never collide.
+    ///
+    /// Only for value gestures. A step toggle or a menu pick twice in half a
+    /// second is two things the user did, and stays two steps.
+    pub fn value_run_token(
+        &mut self,
+        label: &'static str,
+        scope: (usize, EffectTarget),
+        now: Instant,
+    ) -> u64 {
+        let token = match self.value_run {
+            Some(run)
+                if run.label == label
+                    && run.scope == scope
+                    && now.saturating_duration_since(run.at) <= VALUE_RUN_GAP =>
+            {
+                run.token
+            }
+            _ => {
+                self.next_gesture = self.next_gesture.wrapping_add(1);
+                self.next_gesture
+            }
+        };
+        self.value_run = Some(ValueRun {
+            label,
+            scope,
+            token,
+            at: now,
+        });
+        token
+    }
 }
 
 /// The work-surface/lower-dock combination a `view.pane-*` shortcut
@@ -86,4 +158,49 @@ pub fn cycle_pane(current: Pane, forward: bool) -> Pane {
         (position + len - 1) % len
     };
     PANE_CYCLE[next]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CommandState, VALUE_RUN_GAP};
+    use mooloop_core::EffectTarget;
+    use std::time::{Duration, Instant};
+
+    const HERE: (usize, EffectTarget) = (0, EffectTarget::Channel(0));
+
+    /// Wheel notches on one knob, each inside the gap of the last, are one
+    /// run however long the sweep goes on -- the window slides.
+    #[test]
+    fn notches_on_one_control_inside_the_gap_share_a_token() {
+        let mut commands = CommandState::default();
+        let start = Instant::now();
+        let step = VALUE_RUN_GAP / 2;
+        let first = commands.value_run_token("Cutoff", HERE, start);
+        for notch in 1..10 {
+            assert_eq!(
+                commands.value_run_token("Cutoff", HERE, start + step * notch),
+                first,
+                "notch {notch} is still the same sweep"
+            );
+        }
+    }
+
+    /// A pause longer than the gap, another parameter, or the same name in
+    /// another place each start a run of their own.
+    #[test]
+    fn a_pause_another_parameter_or_another_place_starts_a_new_run() {
+        let mut commands = CommandState::default();
+        let start = Instant::now();
+        let first = commands.value_run_token("Cutoff", HERE, start);
+        let later = start + VALUE_RUN_GAP + Duration::from_millis(1);
+        let paused = commands.value_run_token("Cutoff", HERE, later);
+        assert_ne!(paused, first);
+        let other = commands.value_run_token("Resonance", HERE, later);
+        assert_ne!(other, paused);
+        let elsewhere = commands.value_run_token("Resonance", (1, EffectTarget::Channel(1)), later);
+        assert_ne!(elsewhere, other);
+        // And a pointer drag's token can never be one of these: both come
+        // from the same counter.
+        assert_eq!(commands.next_gesture, elsewhere);
+    }
 }

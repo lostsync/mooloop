@@ -65,6 +65,34 @@ pub const MAX_RETAINED_BYTES: usize = 128 * 1024 * 1024;
 /// spent -- an undo that reaches sixteen edits back is the floor of useful.
 pub const MIN_ENTRIES: usize = 16;
 
+/// A stream of edits that arrives from outside any control, and so has no
+/// press and release to say where it starts and stops.
+///
+/// The pump applies two kinds of edit nobody brackets: a mapped hardware
+/// control moving a parameter, and a note played into an armed pattern. Each
+/// arrives as a message every few milliseconds, for as long as the knob turns
+/// or the take runs. Recording one entry per message would spend the whole
+/// history on one knob sweep; recording none is worse, because undo installs
+/// a whole-project snapshot and an edit that never reached the history is
+/// *destroyed* by the next Ctrl+Z (MOO-96, MOO-97).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stream {
+    /// Parameter moves from mapped hardware controls. Closes when the
+    /// controls go idle.
+    Controller,
+    /// Notes recorded from a MIDI keyboard over one armed run. Closes when
+    /// the transport stops or recording is disarmed.
+    Recording,
+}
+
+/// An entry whose edits are still arriving: its `before` is fixed, and its
+/// `after` is whatever the document is when something closes it.
+struct Open<T> {
+    before: T,
+    label: &'static str,
+    stream: Stream,
+}
+
 pub struct History<T> {
     entries: Vec<Entry<T>>,
     /// What each entry in `entries` reported costing, measured once when it
@@ -74,6 +102,9 @@ pub struct History<T> {
     /// Number of entries currently applied.  Entries after this cursor are
     /// the redo branch.
     cursor: usize,
+    /// The stream entry still collecting edits, if one is. See [`Stream`] and
+    /// [`History::open`].
+    open: Option<Open<T>>,
 }
 
 impl<T> Default for History<T> {
@@ -82,49 +113,70 @@ impl<T> Default for History<T> {
             entries: Vec::new(),
             sizes: Vec::new(),
             cursor: 0,
+            open: None,
         }
     }
 }
 
-impl<T: Retained> History<T> {
-    /// Every entry still retained, undo branch and redo branch alike.
+impl<T: Retained + Clone> History<T> {
+    /// Start collecting a stream of edits into one entry, from `before`.
     ///
-    /// For asking what the history as a whole still refers to --
-    /// `recordings::referenced_paths` walks these so a take an undo could
-    /// reach is not offered for deletion. Deliberately not cursor-aware: a
-    /// redo reaches its snapshot just as an undo does.
-    pub fn entries(&self) -> &[Entry<T>] {
-        &self.entries
+    /// One snapshot at the start and one at the end, however many messages
+    /// arrive between -- the same bargain the `Gesture` bracket makes for a
+    /// knob drag, for the edits that have no bracket. The entry is recorded
+    /// when [`History::close`] is called, or as soon as anything else reaches
+    /// the history, whichever is first.
+    ///
+    /// **A stream already open is closed at `before`, not dropped.** The
+    /// snapshot that opens this one is the document as the last one left it,
+    /// so it is exactly the `after` that one needs: a take that starts while
+    /// a knob is still settling records the knob, then the take.
+    ///
+    /// Opening one is an edit, so it discards the redo branch now, as
+    /// [`History::record`] would.
+    pub fn open(&mut self, stream: Stream, before: T, label: &'static str) {
+        if let Some(open) = self.open.take() {
+            let after = before.clone();
+            self.push(Entry {
+                before: open.before,
+                after,
+                label: open.label,
+                gesture: None,
+            });
+        }
+        self.entries.truncate(self.cursor);
+        self.sizes.truncate(self.cursor);
+        self.open = Some(Open {
+            before,
+            label,
+            stream,
+        });
     }
 
-    pub fn can_undo(&self) -> bool {
-        self.cursor > 0
+    /// Record the open stream as one entry ending at `after`. Nothing open
+    /// is not an error: a stream something else already closed has nothing
+    /// left to record.
+    pub fn close(&mut self, after: T) {
+        if let Some(open) = self.open.take() {
+            self.push(Entry {
+                before: open.before,
+                after,
+                label: open.label,
+                gesture: None,
+            });
+        }
     }
 
-    pub fn can_redo(&self) -> bool {
-        self.cursor < self.entries.len()
+    /// Which stream is collecting, if any.
+    pub fn open_stream(&self) -> Option<Stream> {
+        self.open.as_ref().map(|open| open.stream)
     }
 
-    pub fn undo_target(&self) -> Option<&Entry<T>> {
-        self.cursor
-            .checked_sub(1)
-            .and_then(|index| self.entries.get(index))
-    }
-
-    pub fn redo_target(&self) -> Option<&Entry<T>> {
-        self.entries.get(self.cursor)
-    }
-
-    /// Call only after `undo_target` was successfully installed.
-    pub fn commit_undo(&mut self) {
-        debug_assert!(self.can_undo());
-        self.cursor = self.cursor.saturating_sub(1);
-    }
-
-    /// Call only after `redo_target` was successfully installed.
-    pub fn commit_redo(&mut self) {
-        debug_assert!(self.can_redo());
-        self.cursor = (self.cursor + 1).min(self.entries.len());
+    /// The document as the open stream found it, for asking what the history
+    /// still refers to: an undo will want it back as surely as any recorded
+    /// entry's `before`.
+    pub fn open_before(&self) -> Option<&T> {
+        self.open.as_ref().map(|open| &open.before)
     }
 
     /// Record an edit that has already been successfully installed.
@@ -132,7 +184,17 @@ impl<T: Retained> History<T> {
     /// Extends the top entry instead of pushing when both carry the same
     /// gesture token. Tokens are compared rather than labels so two separate
     /// drags of the same kind stay two undo steps.
+    ///
+    /// **An open stream is closed first, at this entry's `before`.** That is
+    /// the document as the stream left it and as this edit found it, so the
+    /// two entries meet exactly: undoing this edit leaves the stream's edits
+    /// in place, and undoing again removes them. Every recorder reaches the
+    /// history through here, so no edit can land on top of a stream that is
+    /// still open.
     pub fn record(&mut self, entry: Entry<T>) {
+        if self.open.is_some() {
+            self.close(entry.before.clone());
+        }
         self.entries.truncate(self.cursor);
         self.sizes.truncate(self.cursor);
         if let Some(gesture) = entry.gesture {
@@ -161,11 +223,76 @@ impl<T: Retained> History<T> {
                 }
             }
         }
+        self.push(entry);
+    }
+
+    /// Append `entry` at the cursor, dropping the redo branch, and keep both
+    /// ceilings.
+    fn push(&mut self, entry: Entry<T>) {
+        self.entries.truncate(self.cursor);
+        self.sizes.truncate(self.cursor);
         self.sizes
             .push(entry.before.retained_bytes() + entry.after.retained_bytes());
         self.entries.push(entry);
         self.trim();
         self.cursor = self.entries.len();
+    }
+}
+
+impl<T: Retained> History<T> {
+    /// Every entry still retained, undo branch and redo branch alike.
+    ///
+    /// For asking what the history as a whole still refers to --
+    /// `recordings::referenced_paths` walks these so a take an undo could
+    /// reach is not offered for deletion. Deliberately not cursor-aware: a
+    /// redo reaches its snapshot just as an undo does.
+    pub fn entries(&self) -> &[Entry<T>] {
+        &self.entries
+    }
+
+    /// An open stream counts: it is an edit, and Undo has to be enabled the
+    /// moment a knob on a desk has moved something.
+    pub fn can_undo(&self) -> bool {
+        self.cursor > 0 || self.open.is_some()
+    }
+
+    /// Opening a stream discarded the redo branch, as any edit does.
+    pub fn can_redo(&self) -> bool {
+        self.open.is_none() && self.cursor < self.entries.len()
+    }
+
+    /// What an undo would install. **`None` while a stream is open**: the
+    /// open entry has no `after` yet, and the entry below it is not what an
+    /// undo should reach. The caller closes the stream first, with the
+    /// document as it is now -- `close_edit_stream` in `mooloop-ui` -- and a
+    /// caller that forgot gets a Ctrl+Z that does nothing, which is visible,
+    /// rather than one that skips the stream, which destroys it.
+    pub fn undo_target(&self) -> Option<&Entry<T>> {
+        if self.open.is_some() {
+            return None;
+        }
+        self.cursor
+            .checked_sub(1)
+            .and_then(|index| self.entries.get(index))
+    }
+
+    pub fn redo_target(&self) -> Option<&Entry<T>> {
+        if self.open.is_some() {
+            return None;
+        }
+        self.entries.get(self.cursor)
+    }
+
+    /// Call only after `undo_target` was successfully installed.
+    pub fn commit_undo(&mut self) {
+        debug_assert!(self.can_undo());
+        self.cursor = self.cursor.saturating_sub(1);
+    }
+
+    /// Call only after `redo_target` was successfully installed.
+    pub fn commit_redo(&mut self) {
+        debug_assert!(self.can_redo());
+        self.cursor = (self.cursor + 1).min(self.entries.len());
     }
 
     /// Forget everything.
@@ -180,6 +307,7 @@ impl<T: Retained> History<T> {
         self.entries.clear();
         self.sizes.clear();
         self.cursor = 0;
+        self.open = None;
     }
 
     /// Drop the oldest entries until both ceilings are satisfied.
@@ -470,6 +598,115 @@ mod tests {
         history.commit_undo();
         assert_eq!(history.undo_target().map(|entry| entry.before), Some(0));
         assert_eq!(history.redo_target().map(|entry| entry.after), Some(2));
+    }
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::{Entry, History, Stream};
+
+    fn edit(before: i32, after: i32, label: &'static str) -> Entry<i32> {
+        Entry {
+            before,
+            after,
+            label,
+            gesture: None,
+        }
+    }
+
+    /// A knob sweep from a desk is one entry, from the document the first
+    /// move found to the one the last move left, however many messages came
+    /// between -- and Undo is live the moment the first one lands.
+    #[test]
+    fn a_stream_is_one_entry_from_where_it_opened_to_where_it_closed() {
+        let mut history = History::default();
+        history.open(Stream::Controller, 0, "Cutoff");
+        assert!(history.can_undo(), "a moved knob is something to undo");
+        assert!(!history.can_redo());
+        assert_eq!(history.open_stream(), Some(Stream::Controller));
+        assert!(
+            history.undo_target().is_none(),
+            "an open stream has no after yet, and the entry under it is not the \
+             one an undo should reach"
+        );
+
+        history.close(5);
+        assert_eq!(history.open_stream(), None);
+        let entry = history.undo_target().expect("the stream is an entry now");
+        assert_eq!((entry.before, entry.after, entry.label), (0, 5, "Cutoff"));
+        assert_eq!(history.retained(), 1);
+    }
+
+    /// The failure this exists for, in miniature: an edit lands while a take
+    /// is still collecting notes. Nothing may be lost and the two must meet
+    /// exactly, so undoing the edit leaves the notes and undoing again takes
+    /// them.
+    #[test]
+    fn an_edit_on_top_of_an_open_stream_closes_it_where_the_edit_began() {
+        let mut history = History::default();
+        history.record(edit(0, 1, "Toggle step"));
+        history.open(Stream::Recording, 1, "Record notes");
+        // Notes landed (1 -> 4), then a knob on screen was turned (4 -> 5).
+        history.record(edit(4, 5, "Cutoff"));
+
+        assert_eq!(history.open_stream(), None);
+        assert_eq!(history.retained(), 3);
+        let top = history.undo_target().unwrap();
+        assert_eq!((top.before, top.after, top.label), (4, 5, "Cutoff"));
+        history.commit_undo();
+        let pass = history.undo_target().unwrap();
+        assert_eq!((pass.before, pass.after, pass.label), (1, 4, "Record notes"));
+        history.commit_undo();
+        let first = history.undo_target().unwrap();
+        assert_eq!((first.before, first.label), (0, "Toggle step"));
+    }
+
+    /// Two streams in a row meet at the snapshot the second one opened with.
+    #[test]
+    fn opening_a_stream_closes_the_one_already_open() {
+        let mut history = History::default();
+        history.open(Stream::Controller, 0, "Cutoff");
+        history.open(Stream::Recording, 3, "Record notes");
+        assert_eq!(history.open_stream(), Some(Stream::Recording));
+        history.close(7);
+
+        let pass = history.undo_target().unwrap();
+        assert_eq!((pass.before, pass.after), (3, 7));
+        history.commit_undo();
+        let knob = history.undo_target().unwrap();
+        assert_eq!((knob.before, knob.after, knob.label), (0, 3, "Cutoff"));
+    }
+
+    /// A stream is an edit, so it ends the redo branch when it starts rather
+    /// than when it is recorded -- otherwise Redo would be offered over
+    /// knob moves it would destroy.
+    #[test]
+    fn opening_a_stream_discards_the_redo_branch() {
+        let mut history = History::default();
+        history.record(edit(0, 1, "one"));
+        history.record(edit(1, 2, "two"));
+        history.commit_undo();
+        assert!(history.can_redo());
+
+        history.open(Stream::Controller, 1, "Cutoff");
+        assert!(!history.can_redo());
+        history.close(9);
+        assert!(!history.can_redo());
+        assert_eq!(history.retained(), 2);
+        assert_eq!(history.undo_target().map(|entry| entry.after), Some(9));
+    }
+
+    /// A new document forgets the stream with the rest: its `before` is a
+    /// snapshot of the song that was open.
+    #[test]
+    fn clearing_the_history_drops_an_open_stream() {
+        let mut history = History::default();
+        history.open(Stream::Recording, 0, "Record notes");
+        history.clear();
+        assert_eq!(history.open_stream(), None);
+        assert!(!history.can_undo());
+        history.close(3);
+        assert!(!history.can_undo(), "nothing was open to record");
     }
 }
 

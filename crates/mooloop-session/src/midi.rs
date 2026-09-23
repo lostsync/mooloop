@@ -345,6 +345,34 @@ impl Session {
         effects
     }
 
+    /// Whether [`Self::apply_control_input`] could change the document for
+    /// `message`, asked *before* it is applied.
+    ///
+    /// The undo entry a controller move records needs the song as it was
+    /// before the move, and a whole-project snapshot is not free -- so the
+    /// pump asks this first and takes one only when the answer is yes. A
+    /// transport message, an unmapped knob and a learn press on a control
+    /// that names nothing all say no. It errs towards yes: a mapped knob
+    /// still short of its takeover point writes nothing, and costs a
+    /// snapshot that is then thrown away.
+    pub fn control_input_may_edit(&self, message: &MidiMessage, ports: &[MidiPortInfo]) -> bool {
+        if let Some(learn) = &self.control_learn {
+            return learn.resolve(message, ports).is_some();
+        }
+        if message.kind.is_transport() {
+            return false;
+        }
+        self.control_state
+            .listening(&self.control_map, message)
+            .into_iter()
+            .any(|index| {
+                self.control_map
+                    .bindings
+                    .get(index)
+                    .is_some_and(|binding| matches!(binding.target, ControlTarget::Param(_)))
+            })
+    }
+
     /// Begin a learn gesture: the next control touched binds to `target`.
     pub fn begin_control_learn(&mut self, target: ControlTarget, bind_port: bool) {
         self.control_learn = Some(ControlLearn {
@@ -1091,6 +1119,34 @@ mod tests {
             let read = session.param_normalized(volume).expect("volume exists");
             assert!((read - travel).abs() < 1e-4, "travel {travel} read back as {read}");
         }
+    }
+
+    /// The question the pump asks before it pays for an undo snapshot: yes
+    /// for a mapped knob and for a learn press that will bind, no for an
+    /// unmapped knob and for transport.
+    #[test]
+    fn only_a_message_that_can_write_the_document_may_edit() {
+        let mut session = Session::default();
+        assert!(!session.control_input_may_edit(&cc(7, 64), &ports()), "nothing is mapped");
+
+        session.control_map.bind(ControlBinding::new(
+            ControlSource::Cc {
+                port: MidiPortFilter::Any,
+                channel: MidiChannelFilter::Omni,
+                controller: 7,
+            },
+            ControlTarget::Param(VOLUME),
+        ));
+        session.resolve_control_map(&ports());
+        assert!(session.control_input_may_edit(&cc(7, 64), &ports()));
+        assert!(!session.control_input_may_edit(&cc(8, 64), &ports()), "another knob");
+        assert!(!session.control_input_may_edit(&system(MidiKind::Start), &ports()));
+
+        // Learning, any control that names itself is about to become a
+        // binding, mapped or not.
+        session.begin_control_learn(ControlTarget::Param(VOLUME), false);
+        assert!(session.control_input_may_edit(&cc(8, 64), &ports()));
+        assert!(!session.control_input_may_edit(&system(MidiKind::Start), &ports()));
     }
 
     /// Pickup, end to end: the knob has to reach the fader before the fader

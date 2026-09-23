@@ -102,6 +102,11 @@ pub fn referenced_by(
     for entry in history.entries() {
         paths.extend(referenced_paths([&entry.before.project, &entry.after.project]));
     }
+    // A stream still collecting -- a knob on a desk, a take of notes -- has
+    // a `before` an undo will reach as surely as any recorded entry's.
+    if let Some(before) = history.open_before() {
+        paths.extend(referenced_paths([&before.project]));
+    }
     paths
 }
 
