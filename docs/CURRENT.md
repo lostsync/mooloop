@@ -619,6 +619,12 @@ device or buffer size reopens the stream without rebuilding the engine. The
 engine keeps the sample rate the system output had when it started and asks
 later devices for the same one.
 
+Under JACK the client asks for the name `mooloop`, and a second instance is
+given another (`mooloop-01` by a JACK server, `mooloop-<id>` by
+pipewire-jack). Each instance names its own ports from the name it was given,
+so two instances each connect, move and reconnect only their own outputs and
+MIDI input, and neither offers a mooloop's inputs as an output.
+
 Channels render in a compiled order rather than in index order, so a producer
 runs before any channel subscribed to one of its audio outlets and the samples
 arrive in the same block. A project with no subscriptions compiles to the

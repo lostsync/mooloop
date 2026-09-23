@@ -20,16 +20,23 @@ use crate::driver::{remember_output, AudioConfig, OutputTarget};
 use crate::executor::Executor;
 use crate::Error;
 
+/// The name mooloop asks JACK for. A second instance is given another one --
+/// `mooloop-01` by a JACK server, `mooloop-<id>` by pipewire-jack -- so the
+/// ports are always named from [`Client::name`], never from this.
 const CLIENT_NAME: &str = "mooloop";
-const OUT_L_NAME: &str = "mooloop:out_l";
-const OUT_R_NAME: &str = "mooloop:out_r";
+/// The ports' short names, as registered. Their full names are
+/// [`OwnPorts`]'.
+const OUT_L: &str = "out_l";
+const OUT_R: &str = "out_r";
+const IN_L: &str = "in_l";
+const IN_R: &str = "in_r";
+const MIDI_IN: &str = "midi_in";
 const DEFAULT_OUTPUT_L: &str = "system:playback_1";
 /// JACK's built-in audio port type, as `Client::ports` wants it. Named here
 /// rather than spelled at the call site because a typo in it silently matches
 /// nothing rather than failing.
 const AUDIO_PORT_TYPE: &str = "32 bit float mono audio";
 const DEFAULT_OUTPUT_R: &str = "system:playback_2";
-const MIDI_IN_NAME: &str = "mooloop:midi_in";
 /// What the one JACK input is called in the input picker.
 ///
 /// **JACK gives mooloop one merged MIDI port**, with every hardware source
@@ -47,6 +54,48 @@ use crate::MERGED_MIDI_IN_LABEL as MIDI_IN_LABEL;
 /// [`AUDIO_PORT_TYPE`].
 const MIDI_PORT_TYPE: &str = "8 bit raw midi";
 
+/// This client's own ports by their full names, built from the name the
+/// server actually gave the client.
+///
+/// They were constants spelled `mooloop:out_l` and so on, which name the
+/// *first* instance's ports: a second mooloop, renamed by the server,
+/// connected and disconnected the first one's outputs and wired every
+/// keyboard into the first one's MIDI input (P9 in
+/// `reports/teams-2026-09-22.md`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OwnPorts {
+    client: String,
+    out_l: String,
+    out_r: String,
+    in_l: String,
+    in_r: String,
+    midi_in: String,
+}
+
+impl OwnPorts {
+    fn of(client: &str) -> Self {
+        let port = |short: &str| format!("{client}:{short}");
+        Self {
+            client: client.to_owned(),
+            out_l: port(OUT_L),
+            out_r: port(OUT_R),
+            in_l: port(IN_L),
+            in_r: port(IN_R),
+            midi_in: port(MIDI_IN),
+        }
+    }
+}
+
+/// Whether a client in the graph is a mooloop: this one, or another instance
+/// the server renamed. Its inputs are never an output for the master bus:
+/// this one's would be a feedback loop, and another's are nobody's speakers.
+fn is_mooloop(client: &str, own: &OwnPorts) -> bool {
+    client == own.client
+        || client
+            .strip_prefix(CLIENT_NAME)
+            .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with('-'))
+}
+
 struct Graph {
     executor: Executor,
     in_l: Port<AudioIn>,
@@ -55,8 +104,6 @@ struct Graph {
     out_r: Port<AudioOut>,
     midi_in: Port<MidiIn>,
 }
-
-const IN_L_NAME: &str = "mooloop:in_l";
 
 impl ProcessHandler for Graph {
     fn process(&mut self, _client: &Client, scope: &ProcessScope) -> Control {
@@ -98,6 +145,8 @@ struct Notifications {
     /// here: this is JACK's notification thread, and under pipewire-jack a
     /// graph request made from it cannot wait for its own answer.
     graph_generation: Arc<AtomicU64>,
+    /// This client's MIDI input, by its full name.
+    midi_in: String,
 }
 
 impl jack::NotificationHandler for Notifications {
@@ -122,7 +171,7 @@ impl jack::NotificationHandler for Notifications {
         if let Some(port) = client.port_by_id(port_id) {
             if is_hardware_midi_source(port.flags(), port.port_type().ok().as_deref()) {
                 if let Ok(name) = port.name() {
-                    connect_midi_source(client, &name);
+                    connect_midi_source(client, &name, &self.midi_in);
                 }
             }
         }
@@ -140,12 +189,12 @@ fn is_hardware_midi_source(flags: PortFlags, port_type: Option<&str>) -> bool {
 
 /// Listen to one MIDI source. Called from JACK's notification thread or the
 /// control thread, never the process callback.
-fn connect_midi_source(client: &Client, source: &str) {
-    match client.connect_ports_by_name(source, MIDI_IN_NAME) {
+fn connect_midi_source(client: &Client, source: &str, midi_in: &str) {
+    match client.connect_ports_by_name(source, midi_in) {
         Ok(()) => mooloop_core::log_info!("midi", "listening to the MIDI input {source}"),
         Err(jack::Error::PortAlreadyConnected(_, _)) => {}
         Err(e) => {
-            mooloop_core::log_warn!("midi", "could not connect {source} -> {MIDI_IN_NAME} ({e})")
+            mooloop_core::log_warn!("midi", "could not connect {source} -> {midi_in} ({e})")
         }
     }
 }
@@ -153,14 +202,14 @@ fn connect_midi_source(client: &Client, source: &str) {
 /// Wire the first two physical capture ports into `in_l` and `in_r`, so a
 /// microphone is recordable without a patchbay. Best effort: a machine with
 /// no capture ports simply records silence from the input.
-fn connect_audio_input(client: &Client) {
+fn connect_audio_input(client: &Client, own: &OwnPorts) {
     let sources = client.ports(
         None,
         Some(AUDIO_PORT_TYPE),
         PortFlags::IS_OUTPUT | PortFlags::IS_PHYSICAL,
     );
     let right = sources.get(1).or(sources.first());
-    for (source, destination) in [(sources.first(), IN_L_NAME), (right, "mooloop:in_r")] {
+    for (source, destination) in [(sources.first(), &own.in_l), (right, &own.in_r)] {
         let Some(source) = source else {
             continue;
         };
@@ -177,14 +226,14 @@ fn connect_audio_input(client: &Client) {
 /// Listen to every hardware MIDI source in the graph. Without this a keyboard
 /// plays nothing until it is wired in a patchbay, which is not where anybody
 /// looks when a key makes no sound.
-fn connect_midi_sources(client: &Client) {
+fn connect_midi_sources(client: &Client, midi_in: &str) {
     let sources = client.ports(
         None,
         Some(MIDI_PORT_TYPE),
         PortFlags::IS_OUTPUT | PortFlags::IS_PHYSICAL,
     );
     for source in sources {
-        connect_midi_source(client, &source);
+        connect_midi_source(client, &source, midi_in);
     }
 }
 
@@ -227,25 +276,28 @@ impl Opening {
         }
 
         let out_l = client
-            .register_port("out_l", AudioOut::default())
+            .register_port(OUT_L, AudioOut::default())
             .map_err(|e| Error::PortRegister(e.to_string()))?;
         let out_r = client
-            .register_port("out_r", AudioOut::default())
+            .register_port(OUT_R, AudioOut::default())
             .map_err(|e| Error::PortRegister(e.to_string()))?;
         // One input, which every hardware source is connected to below. The
         // notes play whichever channel the editor has selected.
         let midi_in = client
-            .register_port("midi_in", MidiIn::default())
+            .register_port(MIDI_IN, MidiIn::default())
             .map_err(|e| Error::PortRegister(e.to_string()))?;
         // The hardware input (`audio-recording/01`): one stereo pair, wired to
         // the system capture ports below, and chosen in the JACK graph from
         // then on, as the MIDI input is.
         let in_l = client
-            .register_port("in_l", AudioIn::default())
+            .register_port(IN_L, AudioIn::default())
             .map_err(|e| Error::PortRegister(e.to_string()))?;
         let in_r = client
-            .register_port("in_r", AudioIn::default())
+            .register_port(IN_R, AudioIn::default())
             .map_err(|e| Error::PortRegister(e.to_string()))?;
+        // Named for the client the server opened, which is `mooloop` only for
+        // the first instance.
+        let own = OwnPorts::of(client.name());
         let graph = Graph {
             executor,
             in_l,
@@ -274,6 +326,7 @@ impl Opening {
                 Notifications {
                     xrun_count,
                     graph_generation: graph_generation.clone(),
+                    midi_in: own.midi_in.clone(),
                 },
                 graph,
             )
@@ -292,9 +345,9 @@ impl Opening {
         // that, and the log says so. A wrong output is audible and one click
         // from right in Preferences; no output is a bug report.
         let c = async_client.as_client();
-        connect_midi_sources(c);
-        let candidates = output_candidates(&picks, &audio_destination_ports(c));
-        match connect_first(c, &target, &candidates) {
+        connect_midi_sources(c, &own.midi_in);
+        let candidates = output_candidates(&own, &picks, &audio_destination_ports(c));
+        match connect_first(c, &own, &target, &candidates) {
             Some(landed) => {
                 if landed != target {
                     mooloop_core::log_warn!(
@@ -316,11 +369,12 @@ impl Opening {
             ),
         }
 
-        connect_audio_input(async_client.as_client());
+        connect_audio_input(async_client.as_client(), &own);
 
         let now = Instant::now();
         Ok(JackDriver {
             client: async_client,
+            own,
             output_target,
             auto_reconnect,
             picks: Mutex::new(picks),
@@ -339,6 +393,8 @@ impl Opening {
 /// The running JACK client. Dropping it deactivates audio.
 pub(crate) struct JackDriver {
     client: AsyncClient,
+    /// This client's ports, by the name the server gave it.
+    own: OwnPorts,
     /// The pair the outputs are connected to, or were last.
     output_target: Arc<ArcSwap<(String, String)>>,
     auto_reconnect: Arc<AtomicBool>,
@@ -391,10 +447,10 @@ impl JackDriver {
     pub(crate) fn input_latency_frames(&self) -> u32 {
         let client = self.client.as_client();
         let capture = client
-            .port_by_name(IN_L_NAME)
+            .port_by_name(&self.own.in_l)
             .map_or(0, |port| port.get_latency_range(LatencyType::Capture).1);
         let playback = client
-            .port_by_name(OUT_L_NAME)
+            .port_by_name(&self.own.out_l)
             .map_or(0, |port| port.get_latency_range(LatencyType::Playback).1);
         capture.saturating_add(playback)
     }
@@ -410,7 +466,7 @@ impl JackDriver {
         let previous = self.output_target.load_full();
         let next =
             target.unwrap_or_else(|| (DEFAULT_OUTPUT_L.to_owned(), DEFAULT_OUTPUT_R.to_owned()));
-        retarget(self.client.as_client(), &previous, &next)?;
+        retarget(self.client.as_client(), &self.own, &previous, &next)?;
         remember_output(&mut lock(&self.picks), next.clone());
         self.output_target.store(Arc::new(next));
         Ok(())
@@ -476,7 +532,8 @@ impl JackDriver {
         let client = self.client.as_client();
         let current = self.output_target.load_full();
         let picks = lock(&self.picks).clone();
-        match restore_output(client, &current, &picks, &audio_destination_ports(client)) {
+        let ports = audio_destination_ports(client);
+        match restore_output(client, &self.own, &current, &picks, &ports) {
             Restored::Connected => watch.reported_stranded = false,
             Restored::Moved(landed) => {
                 mooloop_core::log_info!(
@@ -595,10 +652,14 @@ impl Patchbay for jack::Client {
 /// undone so the output is never left split across two destinations.
 fn retarget(
     bay: &impl Patchbay,
+    own: &OwnPorts,
     previous: &(String, String),
     next: &(String, String),
 ) -> Result<(), String> {
-    let halves = [(OUT_L_NAME, next.0.as_str()), (OUT_R_NAME, next.1.as_str())];
+    let halves = [
+        (own.out_l.as_str(), next.0.as_str()),
+        (own.out_r.as_str(), next.1.as_str()),
+    ];
     let mut made = [false; 2];
     for (index, (source, destination)) in halves.iter().enumerate() {
         match bay.connect(source, destination) {
@@ -617,10 +678,10 @@ fn retarget(
     // A half the new target shares with the old one is the connection just
     // confirmed, so it stays.
     if previous.0 != next.0 {
-        bay.disconnect(OUT_L_NAME, &previous.0);
+        bay.disconnect(&own.out_l, &previous.0);
     }
     if previous.1 != next.1 {
-        bay.disconnect(OUT_R_NAME, &previous.1);
+        bay.disconnect(&own.out_r, &previous.1);
     }
     Ok(())
 }
@@ -637,8 +698,13 @@ fn retarget(
 /// HDMI, say -- is a guess about a machine this code cannot see, and being
 /// audible somewhere is the whole of what is wanted then. Preferences owns
 /// the actual choice. Mooloop's own inputs are never offered: routing the
-/// master output back into the program is a feedback loop.
-fn output_candidates(picks: &[(String, String)], ports: &[String]) -> Vec<(String, String)> {
+/// master output back into the program is a feedback loop. Nor are another
+/// instance's ([`is_mooloop`]).
+fn output_candidates(
+    own: &OwnPorts,
+    picks: &[(String, String)],
+    ports: &[String],
+) -> Vec<(String, String)> {
     let present = |port: &String| ports.contains(port);
     let mut candidates: Vec<(String, String)> = picks
         .iter()
@@ -647,7 +713,7 @@ fn output_candidates(picks: &[(String, String)], ports: &[String]) -> Vec<(Strin
         .collect();
     for destination in stereo_destinations(ports) {
         let pair = (destination.port_l, destination.port_r);
-        if destination.client != CLIENT_NAME && !candidates.contains(&pair) {
+        if !is_mooloop(&destination.client, own) && !candidates.contains(&pair) {
             candidates.push(pair);
         }
     }
@@ -659,12 +725,13 @@ fn output_candidates(picks: &[(String, String)], ports: &[String]) -> Vec<(Strin
 /// the connection, so this walks them rather than trying one.
 fn connect_first(
     bay: &impl Patchbay,
+    own: &OwnPorts,
     current: &(String, String),
     candidates: &[(String, String)],
 ) -> Option<(String, String)> {
     candidates
         .iter()
-        .find(|candidate| retarget(bay, current, candidate).is_ok())
+        .find(|candidate| retarget(bay, own, current, candidate).is_ok())
         .cloned()
 }
 
@@ -686,20 +753,21 @@ enum Restored {
 /// connection: a pair patched by hand in qpwgraph is a choice too.
 fn restore_output(
     bay: &impl Patchbay,
+    own: &OwnPorts,
     current: &(String, String),
     picks: &[(String, String)],
     ports: &[String],
 ) -> Restored {
-    if bay.is_connected(OUT_L_NAME) || bay.is_connected(OUT_R_NAME) {
+    if bay.is_connected(&own.out_l) || bay.is_connected(&own.out_r) {
         return Restored::Connected;
     }
-    connect_first(bay, current, &output_candidates(picks, ports))
+    connect_first(bay, own, current, &output_candidates(own, picks, ports))
         .map_or(Restored::Nowhere, Restored::Moved)
 }
 
 #[cfg(test)]
 mod output_candidate_tests {
-    use super::{output_candidates, CLIENT_NAME};
+    use super::{output_candidates, OwnPorts, CLIENT_NAME};
 
     fn ports(clients: &[&str]) -> Vec<String> {
         clients
@@ -713,7 +781,7 @@ mod output_candidate_tests {
     }
 
     fn clients(picks: &[(String, String)], graph: &[String]) -> Vec<String> {
-        output_candidates(picks, graph)
+        output_candidates(&OwnPorts::of(CLIENT_NAME), picks, graph)
             .into_iter()
             .map(|(l, _)| l.split_once(':').unwrap().0.to_owned())
             .collect()
@@ -766,6 +834,20 @@ mod output_candidate_tests {
         assert_eq!(clients(&[], &graph), ["speaker"]);
     }
 
+    /// Nor is another instance's input an output, however the server renamed
+    /// it -- and a second instance does not offer itself either.
+    #[test]
+    fn no_mooloop_instance_is_an_output() {
+        let graph = ports(&[CLIENT_NAME, "mooloop-01", "mooloop-146", "speaker", "mooloopy"]);
+        assert_eq!(clients(&[], &graph), ["speaker", "mooloopy"]);
+        let second = OwnPorts::of("mooloop-146");
+        let offered: Vec<_> = output_candidates(&second, &[], &graph)
+            .into_iter()
+            .map(|(l, _)| l)
+            .collect();
+        assert_eq!(offered, ["speaker:playback_FL", "mooloopy:playback_FL"]);
+    }
+
     /// A machine with nothing to play through gets the warning, not a panic
     /// and not a wrong guess.
     #[test]
@@ -776,9 +858,7 @@ mod output_candidate_tests {
 
 #[cfg(test)]
 mod retarget_tests {
-    use super::{
-        restore_output, retarget, Connection, Patchbay, Restored, OUT_L_NAME, OUT_R_NAME,
-    };
+    use super::{restore_output, retarget, Connection, OwnPorts, Patchbay, Restored, CLIENT_NAME};
     use std::cell::RefCell;
     use std::collections::BTreeSet;
 
@@ -789,16 +869,24 @@ mod retarget_tests {
         gone: Vec<&'static str>,
     }
 
+    /// The first instance's ports, which every test but the two-instance
+    /// ones is about.
+    fn first() -> OwnPorts {
+        OwnPorts::of(CLIENT_NAME)
+    }
+
     impl FakeGraph {
         fn playing(pair: &(String, String), gone: Vec<&'static str>) -> Self {
-            let connected = [
-                (OUT_L_NAME.to_owned(), pair.0.clone()),
-                (OUT_R_NAME.to_owned(), pair.1.clone()),
-            ];
-            Self {
-                connected: RefCell::new(connected.into_iter().collect()),
-                gone,
-            }
+            let graph = Self::silent(gone);
+            graph.plug(&first(), pair);
+            graph
+        }
+
+        /// Connect `own`'s outputs to `pair`, as a running instance has.
+        fn plug(&self, own: &OwnPorts, pair: &(String, String)) {
+            let mut connected = self.connected.borrow_mut();
+            connected.insert((own.out_l.clone(), pair.0.clone()));
+            connected.insert((own.out_r.clone(), pair.1.clone()));
         }
 
         /// Nothing connected: the device that was playing has gone, and
@@ -812,6 +900,16 @@ mod retarget_tests {
 
         fn outputs(&self) -> Vec<String> {
             self.connected.borrow().iter().map(|(_, to)| to.clone()).collect()
+        }
+
+        /// Where one instance's outputs go.
+        fn outputs_of(&self, own: &OwnPorts) -> Vec<String> {
+            self.connected
+                .borrow()
+                .iter()
+                .filter(|(from, _)| *from == own.out_l || *from == own.out_r)
+                .map(|(_, to)| to.clone())
+                .collect()
         }
     }
 
@@ -847,7 +945,7 @@ mod retarget_tests {
     fn a_new_target_replaces_the_old_one() {
         let (speakers, headphones) = (pair("speakers"), pair("headphones"));
         let graph = FakeGraph::playing(&speakers, vec![]);
-        assert!(retarget(&graph, &speakers, &headphones).is_ok());
+        assert!(retarget(&graph, &first(), &speakers, &headphones).is_ok());
         assert_eq!(graph.outputs(), [headphones.0, headphones.1]);
     }
 
@@ -858,7 +956,7 @@ mod retarget_tests {
     fn a_target_that_will_not_connect_leaves_the_output_where_it_was() {
         let (fallback, saved) = (pair("speakers"), pair("headphones"));
         let graph = FakeGraph::playing(&fallback, vec!["headphones:playback_FL"]);
-        assert!(retarget(&graph, &fallback, &saved).is_err());
+        assert!(retarget(&graph, &first(), &fallback, &saved).is_err());
         assert_eq!(graph.outputs(), [fallback.0, fallback.1]);
     }
 
@@ -868,7 +966,7 @@ mod retarget_tests {
     fn a_half_connected_target_is_undone() {
         let (speakers, headphones) = (pair("speakers"), pair("headphones"));
         let graph = FakeGraph::playing(&speakers, vec!["headphones:playback_FR"]);
-        assert!(retarget(&graph, &speakers, &headphones).is_err());
+        assert!(retarget(&graph, &first(), &speakers, &headphones).is_err());
         assert_eq!(graph.outputs(), [speakers.0, speakers.1]);
     }
 
@@ -876,7 +974,7 @@ mod retarget_tests {
     fn retargeting_to_the_same_pair_keeps_it_connected() {
         let speakers = pair("speakers");
         let graph = FakeGraph::playing(&speakers, vec![]);
-        assert!(retarget(&graph, &speakers, &speakers).is_ok());
+        assert!(retarget(&graph, &first(), &speakers, &speakers).is_ok());
         assert_eq!(graph.outputs(), [speakers.0, speakers.1]);
     }
 
@@ -893,7 +991,7 @@ mod retarget_tests {
         let graph_now = FakeGraph::playing(&speakers, vec![]);
         let picks = [usb.clone(), speakers.clone()];
         assert_eq!(
-            restore_output(&graph_now, &speakers, &picks, &graph(&[&speakers, &usb])),
+            restore_output(&graph_now, &first(), &speakers, &picks, &graph(&[&speakers, &usb])),
             Restored::Connected
         );
         assert_eq!(graph_now.outputs(), [speakers.0, speakers.1]);
@@ -909,7 +1007,7 @@ mod retarget_tests {
         let graph_now = FakeGraph::silent(vec![]);
         let picks = [headphones.clone(), speakers.clone()];
         assert_eq!(
-            restore_output(&graph_now, &speakers, &picks, &graph(&[&hdmi, &headphones])),
+            restore_output(&graph_now, &first(), &speakers, &picks, &graph(&[&hdmi, &headphones])),
             Restored::Moved(headphones.clone())
         );
         assert_eq!(graph_now.outputs(), [headphones.0, headphones.1]);
@@ -922,7 +1020,7 @@ mod retarget_tests {
         let (gone, hdmi) = (pair("gone"), pair("hdmi"));
         let graph_now = FakeGraph::silent(vec![]);
         assert_eq!(
-            restore_output(&graph_now, &gone, std::slice::from_ref(&gone), &graph(&[&hdmi])),
+            restore_output(&graph_now, &first(), &gone, std::slice::from_ref(&gone), &graph(&[&hdmi])),
             Restored::Moved(hdmi)
         );
     }
@@ -934,7 +1032,7 @@ mod retarget_tests {
         let graph_now = FakeGraph::silent(vec!["usb:playback_FL"]);
         let picks = [usb.clone(), speakers.clone()];
         assert_eq!(
-            restore_output(&graph_now, &usb, &picks, &graph(&[&usb, &speakers])),
+            restore_output(&graph_now, &first(), &usb, &picks, &graph(&[&usb, &speakers])),
             Restored::Moved(speakers.clone())
         );
         assert_eq!(graph_now.outputs(), [speakers.0, speakers.1]);
@@ -946,19 +1044,48 @@ mod retarget_tests {
     fn one_output_patched_by_hand_counts_as_connected() {
         let (speakers, elsewhere) = (pair("speakers"), pair("elsewhere"));
         let graph_now = FakeGraph::silent(vec![]);
-        assert_eq!(graph_now.connect(OUT_L_NAME, &elsewhere.0), Connection::Made);
+        assert_eq!(graph_now.connect(&first().out_l, &elsewhere.0), Connection::Made);
         assert_eq!(
-            restore_output(&graph_now, &speakers, std::slice::from_ref(&speakers), &graph(&[&speakers])),
+            restore_output(&graph_now, &first(), &speakers, std::slice::from_ref(&speakers), &graph(&[&speakers])),
             Restored::Connected
         );
         assert_eq!(graph_now.outputs(), [elsewhere.0]);
+    }
+
+    /// P9: a second instance, renamed by the server, moving its output. With
+    /// the ports spelled `mooloop:out_l`, this connected and then
+    /// disconnected the *first* instance's outputs.
+    #[test]
+    fn a_second_instance_moves_only_its_own_outputs() {
+        let (speakers, headphones) = (pair("speakers"), pair("headphones"));
+        let second = OwnPorts::of("mooloop-01");
+        let graph = FakeGraph::playing(&speakers, vec![]);
+        graph.plug(&second, &speakers);
+        assert!(retarget(&graph, &second, &speakers, &headphones).is_ok());
+        assert_eq!(graph.outputs_of(&first()), [speakers.0, speakers.1]);
+        assert_eq!(graph.outputs_of(&second), [headphones.0, headphones.1]);
+    }
+
+    /// And the second instance's reconnect looks at its own outputs: the
+    /// first one's playing is not the second one's being connected.
+    #[test]
+    fn a_second_instance_with_nothing_connected_is_not_fooled_by_the_first() {
+        let speakers = pair("speakers");
+        let second = OwnPorts::of("mooloop-01");
+        let bay = FakeGraph::playing(&speakers, vec![]);
+        let picks = std::slice::from_ref(&speakers);
+        assert_eq!(
+            restore_output(&bay, &second, &speakers, picks, &graph(&[&speakers])),
+            Restored::Moved(speakers.clone())
+        );
+        assert_eq!(bay.outputs_of(&second), [speakers.0, speakers.1]);
     }
 
     #[test]
     fn nothing_there_is_nowhere() {
         let gone = pair("gone");
         assert_eq!(
-            restore_output(&FakeGraph::silent(vec![]), &gone, std::slice::from_ref(&gone), &[]),
+            restore_output(&FakeGraph::silent(vec![]), &first(), &gone, std::slice::from_ref(&gone), &[]),
             Restored::Nowhere
         );
     }
