@@ -58,7 +58,7 @@ as the plan intends for a pilot.
 
 - **Generated module line count, before/after**: to measure after build.
   `slint_build::compile("ui/main.slint")` produces it at build time
-  (`docs/OPERATIONS.md`, `docs/plans/egui-view-layer/00-status.md`), so it
+  (`docs/OPERATIONS.md`, `docs/plans/archive/egui-view-layer/00-status.md`), so it
   cannot be counted without a `cargo build -p mooloop-ui`, which this session
   could not run.
 - **`MainWindow` member count, before/after**: to measure after build, for

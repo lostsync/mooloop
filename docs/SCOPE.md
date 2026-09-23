@@ -301,9 +301,12 @@ earlier, not by leaving scope.
   multiple time signatures and tempo maps, stem and bus export, groove
   extraction, the text/algebraic pattern view and the node-based patcher are
   all out.
-- **`egui-view-layer/`, `theming/`, `pattern-bank-floor/`,
-  `device-registry/`** — parked by `FOCUS.md` on 2026-09-12, each with a
-  recorded reason and a recorded unpark condition. Note that `theming/` gets
+- **`theming/`, `pattern-bank-floor/`, `device-registry/`** — parked by
+  `FOCUS.md` on 2026-09-12, each with a recorded reason and a recorded unpark
+  condition. (`egui-view-layer/` was parked with them. It was archived
+  unstarted on 2026-09-22 on Adam's ruling, *"we can archive. i think QT would
+  be better than egui if we do switch toolkits"*, so a toolkit swap is out
+  altogether rather than parked.) Note that `theming/` gets
   *cheaper to defer and more expensive to do*, and that its real argument is
   accessibility: the working type size is 7–11px and is not adjustable. That
   reason does not expire, so it is out for 0.2 and should not stay out

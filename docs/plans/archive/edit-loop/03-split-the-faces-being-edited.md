@@ -1,8 +1,9 @@
 # 03 — Split the device faces actually being edited
 
 Read `00-status.md` first, and
-`docs/plans/egui-view-layer/slint-split-experiment.md`, which is where every
-number below comes from.
+`docs/plans/egui-view-layer/slint-split-experiment.md` on the unmerged
+`spike/slint-split-build` branch, which is where every number below comes
+from.
 
 This is the only step in the plan that touches UI iteration. Steps 01 and 02
 fix Rust sessions and do nothing at all for a session spent on a device face.

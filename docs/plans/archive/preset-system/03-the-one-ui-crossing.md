@@ -57,7 +57,7 @@ This is the step that needs the box.
 Background every one of them and keep working; the harness notifies on exit.
 Do not poll the output file — a run piped through `tail` writes nothing until
 it finishes, so polling reads an empty file and learns only that time has
-passed. This is measured: see `docs/plans/edit-loop/00-status.md`.
+passed. This is measured: see `docs/plans/archive/edit-loop/00-status.md`.
 
 ## Done when
 

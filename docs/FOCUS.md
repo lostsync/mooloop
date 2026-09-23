@@ -144,13 +144,12 @@ work instead of folding it into the current branch.
 - **`pattern-bank-floor/`** (MOO-152) — every project reserves 1.00 GiB
   before it holds anything. The measurements are committed, which is what
   makes parking safe.
-- **`egui-view-layer/`** — `mooloop-ui` rebuilds in four minutes because
-  `build.rs` expands `ui/main.slint` into one 39 MB Rust module, and
-  `edit-loop/04-decide.md` found no Slint arrangement that reaches it. A real
-  cost and still not a musical decision. The post-change `scripts/loop-profile`
-  run came in at 10% blocked, under `edit-loop/`'s own bar, so whether the plan
-  still has a case is Adam's call (MOO-146); if it does, step 01's spike
-  (MOO-147) is next.
+- **A toolkit swap.** `egui-view-layer/` was archived unstarted on
+  2026-09-22, on Adam's ruling (MOO-146): *"we can archive. i think QT would
+  be better than egui if we do switch toolkits."* `main.slint` still costs
+  8.7 minutes to a release binary, and `archive/edit-loop/04-decide.md` found
+  no Slint arrangement that reaches it. That cost is real, and it is not a
+  musical decision.
 - **The modulation rack's move, and whether its modulator is a tracker.** The
   shelf is a relocation; the tracker is a genuine design question `IDEAS.md`
   has held longer than this document has existed. Settle whether they are one

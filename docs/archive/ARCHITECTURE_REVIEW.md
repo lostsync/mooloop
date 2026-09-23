@@ -287,7 +287,7 @@ logic that has no business knowing about a toolkit.
 
 **Recommendation: extract before migrating, and treat the two as separate
 decisions.** `docs/plans/archive/session-layer-extraction/` lifts a toolkit-free session
-crate out of `lib.rs`; `docs/plans/egui-view-layer/` builds a view against it.
+crate out of `lib.rs`; `docs/plans/archive/egui-view-layer/` builds a view against it.
 The first is worth doing whether or not the second ever happens, because it is
 what makes a 13,411-line file testable and what turns "rewrite the app" into
 "write a view layer."
@@ -321,7 +321,7 @@ should be answered deliberately rather than by drift.
 | Compile graph-wide latency compensation into the bus plan | **Next infrastructure step** | `docs/AUDIO_ARCHITECTURE.md` step 5 |
 | Extract a toolkit-free session layer from `mooloop-ui/src/lib.rs` | High, and independent of egui | `docs/plans/archive/session-layer-extraction/` |
 | Derive `position_ticks` from `frames_played` | With the tempo map, not before | This document, decision 4 |
-| Build an egui view layer | Adam's call; only after the extraction | `docs/plans/egui-view-layer/` |
+| Build an egui view layer | Adam's call; only after the extraction | `docs/plans/archive/egui-view-layer/` |
 | Rebuild the engine | **No** | — |
 | Adopt `arc-swap` graph publication | **No** | This document, decision 3 |
 | Replace snapshot undo with a command log | Not now | This document, undo |

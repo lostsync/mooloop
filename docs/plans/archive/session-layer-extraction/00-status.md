@@ -42,7 +42,7 @@ being one 13,411-line file is a second codegen unit that cannot be subdivided
 either. Moving it into its own crate lets it rebuild independently of the
 generated module and of every `.slint` edit — a compile-time win that arrives
 with the extraction and does not depend on any toolkit decision. See
-`docs/plans/egui-view-layer/00-status.md` for the measurements.
+`docs/plans/archive/egui-view-layer/00-status.md` for the measurements.
 
 That third point is the real one. `mooloop_core::structure` exists because
 positional addressing was a live bug: routes and automation lanes named their
@@ -93,7 +93,7 @@ and projection; the tests that become possible.
   explains why the reference's command-log argument does not bite at this scale.
 - **Touching the engine, the DSP crates, or the project format.** They are on
   the correct side of the boundary already.
-- **Anything egui.** That is `docs/plans/egui-view-layer/`, and it must not
+- **Anything egui.** That is `docs/plans/archive/egui-view-layer/`, and it must not
   start until this plan is finished — the whole point is that it inherits a
   session layer rather than reproducing one.
 

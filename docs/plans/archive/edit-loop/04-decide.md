@@ -1,10 +1,30 @@
 # 04 — Decide whether `egui-view-layer/` still has a case
 
+## Decided — 2026-09-22: archive it
+
+Adam, on MOO-146, given three options (archive it, keep it parked and
+measure again, or run its step 01 spike anyway):
+
+> we can archive. i think QT would be better than egui if we do switch
+> toolkits.
+
+That is the first outcome below, the one the 10% measurement pointed to.
+`egui-view-layer/` moved to `docs/plans/archive/egui-view-layer/` the same
+day with the ruling in its `00-status.md`, and its Linear project and its two
+step issues (MOO-147, MOO-148) were canceled. This directory followed it to
+`archive/`, because this step was the last thing left in it. The dev-build
+listening test that step 02 had left open (MOO-168) closed the same day.
+
+The caveat below stands and is not answered by the ruling: `main.slint` is
+still 8.7 minutes to a release binary, and nothing in Slint reaches it. The
+ruling is that this cost does not justify a toolkit swap. If one ever does,
+Adam named Qt.
+
 Read `00-status.md` and steps `01` to `03`, which are all now closed.
 
 ## The question
 
-`docs/plans/egui-view-layer/` proposes replacing Slint. Its case has been
+`docs/plans/archive/egui-view-layer/` proposed replacing Slint. Its case has been
 measured and every part of it holds: the egui spike checks in 0.38 s inside
 0.19 GB, the whole-window sketch on `spike/egui-view-layer` draws eight panes
 at 107 fps with a full rack, the step grid's drag is easier in immediate mode

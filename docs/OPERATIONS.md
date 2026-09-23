@@ -134,7 +134,7 @@ machine, leave it on.)
 For scale on where that single module comes from: `slint_build` expands
 `ui/main.slint` into roughly 39 MB and 395,000 lines of Rust, so `mooloop-ui`
 compiles about 412,000 lines of which 96% are generated. Nothing here can be
-tuned below that; `docs/plans/egui-view-layer/00-status.md` measures what the
+tuned below that; `docs/plans/archive/egui-view-layer/00-status.md` measures what the
 figures look like without it.
 
 ## Claude Code on the web

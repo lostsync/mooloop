@@ -139,7 +139,8 @@ quantized gesture path, all fixed in the same run. What is left of the plan is
 the seventh clause and Adam's judgement, both of which need ears.
 `device-registry/`,
 `theming/`, `pattern-bank-floor/` and `egui-view-layer/` are all parked under
-"deliberately not now", each with its reason and with what would unpark it. One
+"deliberately not now", each with its reason and with what would unpark it
+(`egui-view-layer/` was archived instead on 2026-09-22; see below). One
 piece is exempt: take `device-registry/`'s face host component if a device step
 already has `main.slint` open.
 
@@ -307,8 +308,6 @@ is worth reading before either.
 
 | Plan | State |
 | --- | --- |
-| `edit-loop/` | **Steps 01 and 02 landed, 03 closed unstarted, 04 waiting on Adam's decision (MOO-146)** -- the measurement it waited on came in at 10%, under its own bar. Six of every ten working hours went on `cargo`. `scripts/antibox` now picks incremental compilation for dev builds and sccache for release builds (64% off `cargo test --workspace`), `AGENTS.md` carries a verification ladder, the mockup tool is behind a Cargo feature, and `scripts/mooloop-run` is one command from edit to running application. Splitting device faces was measured and rejected: 79% of face commits also edit `main.slint`. What is left is `main.slint` itself, which no Slint arrangement reaches -- read `04-decide.md` before `egui-view-layer/`. |
-| `egui-view-layer/` | **Written, not decided; argument 4 tested and upheld; `edit-loop/` now points at it.** `edit-loop/04-decide.md` fixed the Rust half of the loop and found the UI half unreachable from inside Slint, which is the argument this plan was waiting for; one post-change `scripts/loop-profile` run closes it. No longer blocked: `session-layer-extraction/` is done, so a view layer would inherit a session rather than reproduce one. Still gated on step 01's spike. `00-status.md` states the case both ways. Compile cost was assumed to be the argument against and measured as an argument for: `build.rs` expands `ui/main.slint` into a single 39 MB Rust module, which is where the four minutes and the 3.4 GB go. What is left to decide is frame time and interaction feel. |
 | `containers/` | **Steps 01-05 landed 2026-09-06/07. Step 06 decided 2026-09-18: Adam wants a layer device, and the work order is steps 07-10, written 2026-09-21 — ordered next by Adam the same day.** 07 is one container predicate (the `EffectParams::Chain(_)` test is written 33 times), latency as a tree rather than a sum, and `EffectKind::Layer` landing silent; 08 is the engine's split and sum, which is the "parallel routing inside a chain" `FOCUS.md` has parked since it was written; 09 is the drawing and is **deliberately blocked on a mock-up from Adam**, because the container's enclosure was drawn three times without one; 10 is the gestures and a preset with branches, and closes the plan. Selectors stay unbuilt, priced. **06 was wrong about one thing and it is the thing that made a layer look unaffordable:** the span representation *can* express parallel branches — a branch is a direct child's run. |
 
 ## Queued, not started
@@ -330,12 +329,29 @@ writing steps would presume the answer.
 reading before reopening the area it covers, because several record *why* a
 tempting change was rejected:
 
+`edit-loop/` and `egui-view-layer/` are the newest, both archived
+2026-09-22 on Adam's ruling on `edit-loop/04` (MOO-146): *"we can archive. i
+think QT would be better than egui if we do switch toolkits."* `edit-loop/`
+found that six of every ten working hours went on `cargo`, and fixed the Rust
+half of that. `scripts/antibox` picks incremental builds for dev and sccache
+for release, `AGENTS.md` carries the verification ladder, and
+`scripts/mooloop-run` turns an edit into a running application in one
+command. Its largest finding came from correcting its own measurement: the
+good sessions did not have faster builds, they had builds nobody was
+watching. Its step 04 bar was met at 10% blocked. The dev-build JACK check left over
+from step 02 (MOO-168) was closed the same day on Adam's instruction to treat
+outstanding listening passes as done with nothing heard, so a dev binary is
+the default way to hear a change. `egui-view-layer/` never started. Read its
+`00-status.md` for what `main.slint` costs (one 39 MB generated module),
+which is still true. If the view layer ever leaves Slint, Adam named Qt,
+not egui.
+
 `midi-control/`, `ui-consistency-pass/` and `mono-synth-v2/` were archived
 2026-09-18 on Adam's word, each having waited only on him: the keyboard
 worked, the app *"looks really good now"*, and the Acid cutoff is *"fine"* --
 though he heard that filter as *"really quiet"*, which is in `LOOSE_ENDS.md`.
 
-`transport-discontinuity/` is the newest, written and closed whole on
+`transport-discontinuity/` was written and closed whole on
 2026-09-20; it is described at the top of this file, and its `00-status.md`
 names the two things it deliberately left open.
 

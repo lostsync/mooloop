@@ -1,13 +1,16 @@
 # Fix the edit loop — plan status
 
-**Steps 01 and 02 landed 2026-09-04. Step 03 is closed unstarted, on a
-measurement. Step 04's number arrived the same day -- 10% blocked, under its
-own bar -- and it now waits on Adam's decision** (Linear MOO-146, in project
-[Edit loop](https://linear.app/mooloop/project/edit-loop-f3661f76ed2c)). The
-dev-build listening test step 02 left open (MOO-168) was closed on 2026-09-22
-on Adam's instruction to treat outstanding listening passes as done with
+**Closed 2026-09-22 and archived.** Steps 01 and 02 landed 2026-09-04. Step
+03 was closed unstarted, on a measurement. Step 04's number arrived the same
+day, 10% blocked and under its own bar, and Adam decided it on 2026-09-22
+(MOO-146): *"we can archive. i think QT would be better than egui if we do
+switch toolkits."* `egui-view-layer/` is archived beside this directory. The
+dev-build listening test step 02 had left open (MOO-168) was closed the same
+day on Adam's instruction to treat outstanding listening passes as done with
 nothing heard, so **a dev binary is the default way to hear a change**
-(`scripts/mooloop-run`, or `scripts/antibox --dev-bin`). Written 2026-09-03,
+(`scripts/mooloop-run`, or `scripts/antibox --dev-bin`). Linear project
+[Edit loop](https://linear.app/mooloop/project/edit-loop-f3661f76ed2c),
+completed. Written 2026-09-03,
 out of a session that went looking for whether to replace Slint with egui and
 found the toolkit was the wrong question to be asking first.
 
@@ -20,7 +23,8 @@ one command from edit to running application.
 
 What did not change, and cannot from inside Slint: `main.slint`, which is 29%
 of all `.slint` edits and coupled into 79% of the rest. That is what step 04
-hands to `docs/plans/egui-view-layer/`.
+handed to `docs/plans/archive/egui-view-layer/`, and Adam archived that plan
+rather than start it.
 
 ## The problem, in Adam's words
 
@@ -200,7 +204,7 @@ is real and it is large. But it does nothing for `main.slint` or
 crates reaches it -- `slint-split-experiment.md` established that the
 generated module's cost is not an artefact of how mooloop invokes Slint. If
 the remaining time turns out to be going there, this plan cannot fix it, and
-that is the finding that decides `docs/plans/egui-view-layer/`. It is much
+that is the finding that decides `docs/plans/archive/egui-view-layer/`. It is much
 better evidence than any benchmark, because it is measured against the work
 rather than against a probe.
 

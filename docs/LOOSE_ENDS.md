@@ -1456,7 +1456,7 @@ Each is a property a new view would have to reproduce instead of query.
 Moving tempo and swing onto `Session` is the one worth doing before any view
 rewrite. Pane layout and appearance preferences are read from the window too,
 which is fine: that is view state. The full list is in
-`docs/plans/egui-view-layer/00-status.md`.
+`docs/plans/archive/egui-view-layer/00-status.md`.
 
 **`mooloop-ui` had never been linted, and two things had ridden in on that.**
 Fixed 2026-09-07, recorded because the *shape* of it will recur: `cargo

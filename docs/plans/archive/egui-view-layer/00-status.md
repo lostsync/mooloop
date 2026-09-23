@@ -1,11 +1,32 @@
 # egui view layer — plan status
 
-Linear: project [egui view layer](https://linear.app/mooloop/project/egui-view-layer-3c7c01875514).
-Whether the plan still has a case is MOO-146 (`edit-loop/04`); step 01 is
-MOO-147, and the sketched 02-04 are MOO-148.
+Linear: project [egui view layer](https://linear.app/mooloop/project/egui-view-layer-3c7c01875514),
+canceled. Whether the plan still had a case was MOO-146 (`edit-loop/04`);
+step 01 was MOO-147, and the sketched 02-04 were MOO-148. Both are canceled.
 
-Not started, and **not yet decided**. Written 2026-09-02, out of
-`docs/archive/ARCHITECTURE_REVIEW.md`.
+**Archived 2026-09-22, unstarted, on Adam's ruling.** Asked on MOO-146 to
+choose between archiving it, keeping it parked, and running step 01's spike
+anyway, he answered:
+
+> we can archive. i think QT would be better than egui if we do switch
+> toolkits.
+
+So the plan is closed rather than parked. The second sentence matters more
+than the first for anyone reopening this. If the view layer ever leaves Slint,
+**Qt is the candidate Adam named, not egui**, and this plan is the evidence
+for that question rather than the plan for it. The measurements below still
+hold: the 39 MB generated module, the 26-41 s check against egui's 1.4 s, and
+the prerequisite list. They describe Slint's cost and what a new view would
+have to take over from the window, and neither depends on which toolkit
+follows. The whole-window sketch stays on the unmerged `spike/egui-view-layer`
+branch, untouched.
+
+What decided it was `edit-loop/`: its step 04 set a bar of 25% of a long
+session blocked on `cargo`, and the first long session after its changes
+came in at 10%. `archive/edit-loop/04-decide.md` has the number and the
+caveat.
+
+Written 2026-09-02, out of `docs/archive/ARCHITECTURE_REVIEW.md`.
 
 This plan exists so the decision can be made against real numbers rather than a
 mood. It is deliberately shorter than
