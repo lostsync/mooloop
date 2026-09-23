@@ -94,13 +94,16 @@ use mooloop_session::dialogs::{
 };
 use mooloop_session::document::{
     chosen_path, export_result_detail, log_asset_warnings, log_repairs, quarantine_song, repair_suffix,
-    resolve_document, warning_suffix, DocumentProblem,
+    resolve_document, spawn_document_worker, warning_suffix, DocumentProblem,
     DocumentResult, LoadTarget, PresetNaming, ResolvedDocument,
 };
 use mooloop_session::engine::{
     discard_document_messages, publish_channel_audio_to, AudioAction, AudioActionSender,
     ChannelAudio, ChannelAudioSender, EngineBacklog, EngineCommandSender, PendingEngineMessage,
     PreviewSender, ProjectEditSender, StructuralCommandSender, TelemetryAction, TelemetryActionSender,
+};
+use mooloop_session::autosave::{
+    self, find_recoverable, Autosave, DocumentState as AutosaveState, Recoverable,
 };
 use mooloop_session::history::{Entry as HistoryEntry, Stream};
 use mooloop_session::recordings;
@@ -2405,6 +2408,9 @@ pub struct AppUi {
     /// Where a song opened from outside the window -- the command line --
     /// reports, exactly as File > Open's chooser does.
     document_tx: std::sync::mpsc::Sender<DocumentResult>,
+    /// Finished by [`Self::run`] once the event loop has stopped (MOO-103).
+    autosave: Rc<RefCell<Option<Autosave>>>,
+    quit_discards: Rc<Cell<bool>>,
 }
 
 /// Push a resolved marker back onto the face. The Slint side moves the marker
@@ -6493,6 +6499,30 @@ impl AppUi {
         // Set by a yes to "this kit drops channels", read by the pump when
         // the waiting result comes back round.
         let kit_confirmed = Rc::new(Cell::new(false));
+        // Autosave and crash recovery (MOO-103). This process's folder is
+        // taken and locked first, so the scan below cannot mistake it for a
+        // dead one; the newest song a dead mooloop left unsaved is offered
+        // by the pump once nothing else is on screen.
+        let autosave_root = settings::autosave_dir();
+        let autosave = match Autosave::start(&autosave_root) {
+            Ok(autosave) => Some(autosave),
+            Err(error) => {
+                log_error!(
+                    "project",
+                    "autosave is off: could not use {}: {error}",
+                    autosave_root.display()
+                );
+                None
+            }
+        };
+        let autosave: Rc<RefCell<Option<Autosave>>> = Rc::new(RefCell::new(autosave));
+        let recovery_offer: Rc<RefCell<Option<Recoverable>>> =
+            Rc::new(RefCell::new(find_recoverable(&autosave_root).into_iter().next()));
+        // The recovery being read, between Recover and its result.
+        let recovering: Rc<RefCell<Option<Recoverable>>> = Rc::new(RefCell::new(None));
+        // Set when a quit has been answered "Don't Save": the autosave goes
+        // with the process rather than being offered next time.
+        let quit_discards = Rc::new(Cell::new(false));
         // The takes dialog, while it is up (MOO-38).
         let takes_review: Rc<RefCell<Option<TakesReview>>> = Rc::new(RefCell::new(None));
         {
@@ -6503,6 +6533,7 @@ impl AppUi {
             let question = question.clone();
             let unsaved_settled = unsaved_settled.clone();
             let takes_review = takes_review.clone();
+            let quit_discards = quit_discards.clone();
             window.on_quit_requested(move || {
                 let Some(window) = weak.upgrade() else {
                     return;
@@ -6529,6 +6560,8 @@ impl AppUi {
                     ask_unsaved(&window, &question, AfterUnsaved::Quit, name.as_deref());
                     return;
                 }
+                // Answered "Don't Save": nothing is left to recover.
+                quit_discards.set(settled);
                 // After the decision to quit, never before it: a cancelled
                 // quit must not have tidied anything away.
                 let unused = unused_session_takes(&st.borrow(), &quit_commands.borrow());
@@ -6571,11 +6604,8 @@ impl AppUi {
                 if !begin_document_operation(&window, "Creating new song...") {
                     return;
                 }
-                let tx = tx.clone();
-                std::thread::spawn(move || {
-                    let _ = tx.send(DocumentResult::NewSong(Project::starter_kit(
-                        fresh_starter_seed(),
-                    )));
+                spawn_document_worker(tx.clone(), "create a new song", move || {
+                    DocumentResult::NewSong(Project::starter_kit(fresh_starter_seed()))
                 });
             });
         }
@@ -6604,16 +6634,12 @@ impl AppUi {
                 if !begin_document_operation(&window, "Opening song...") {
                     return;
                 }
-                let tx = tx.clone();
-                std::thread::spawn(move || {
+                spawn_document_worker(tx.clone(), "open this song", move || {
                     let path = match chosen_path(pick_song_dialog("Open mooloop song"), "open a song") {
                         Ok(path) => path,
-                        Err(result) => {
-                            let _ = tx.send(result);
-                            return;
-                        }
+                        Err(result) => return result,
                     };
-                    let result = resolve_document(&path)
+                    resolve_document(&path)
                         .map(|document| DocumentResult::Loaded {
                             path,
                             target: LoadTarget::Song,
@@ -6622,8 +6648,7 @@ impl AppUi {
                         .unwrap_or_else(|problem| DocumentResult::Failed {
                             action: "open this song",
                             problem,
-                        });
-                    let _ = tx.send(result);
+                        })
                 });
             });
         }
@@ -6654,17 +6679,13 @@ impl AppUi {
                 if !begin_document_operation(&window, "Saving song...") {
                     return;
                 }
-                let tx = tx.clone();
-                std::thread::spawn(move || {
+                spawn_document_worker(tx.clone(), "save this song", move || {
                     let picked = current.map(Picked::Path).unwrap_or_else(|| {
                         pick_save_dialog("Save mooloop song", "Untitled.mooloop")
                     });
                     let path = match chosen_path(picked, "save this song") {
                         Ok(path) => path,
-                        Err(result) => {
-                            let _ = tx.send(result);
-                            return;
-                        }
+                        Err(result) => return result,
                     };
                     log_info!(
                         "project",
@@ -6700,7 +6721,7 @@ impl AppUi {
                             })
                         },
                     );
-                    let result = attempt.unwrap_or_else(|error| {
+                    attempt.unwrap_or_else(|error| {
                         let mut problem = DocumentProblem::from(error);
                         log_error!(
                             "project",
@@ -6728,8 +6749,7 @@ impl AppUi {
                             action: "save this song",
                             problem,
                         }
-                    });
-                    let _ = tx.send(result);
+                    })
                 });
             };
             if save_as {
@@ -6760,19 +6780,15 @@ impl AppUi {
                 if !begin_document_operation(&window, "Saving kit...") {
                     return;
                 }
-                let tx = tx.clone();
-                std::thread::spawn(move || {
+                spawn_document_worker(tx.clone(), "save this kit", move || {
                     let path = match chosen_path(
                         pick_save_dialog("Save mooloop kit", "Untitled.mooloop-kit"),
                         "save this kit",
                     ) {
                         Ok(path) => path,
-                        Err(result) => {
-                            let _ = tx.send(result);
-                            return;
-                        }
+                        Err(result) => return result,
                     };
-                    let result = mooloop_project::save_kit(&path, &kit, mode)
+                    mooloop_project::save_kit(&path, &kit, mode)
                         .map(|report| DocumentResult::SavedOther {
                             label: "Kit saved",
                             report,
@@ -6780,8 +6796,7 @@ impl AppUi {
                         .unwrap_or_else(|error| DocumentResult::Failed {
                             action: "save this kit",
                             problem: error.into(),
-                        });
-                    let _ = tx.send(result);
+                        })
                 });
             });
         }
@@ -6803,19 +6818,15 @@ impl AppUi {
                 if !begin_document_operation(&window, "Saving channel...") {
                     return;
                 }
-                let tx = tx.clone();
-                std::thread::spawn(move || {
+                spawn_document_worker(tx.clone(), "save this channel", move || {
                     let path = match chosen_path(
                         pick_save_dialog("Save mooloop channel", "Untitled.mooloop-channel"),
                         "save this channel",
                     ) {
                         Ok(path) => path,
-                        Err(result) => {
-                            let _ = tx.send(result);
-                            return;
-                        }
+                        Err(result) => return result,
                     };
-                    let result = mooloop_project::save_channel(&path, &channel, mode)
+                    mooloop_project::save_channel(&path, &channel, mode)
                         .map(|report| DocumentResult::SavedOther {
                             label: "Channel saved",
                             report,
@@ -6823,8 +6834,7 @@ impl AppUi {
                         .unwrap_or_else(|error| DocumentResult::Failed {
                             action: "save this channel",
                             problem: error.into(),
-                        });
-                    let _ = tx.send(result);
+                        })
                 });
             });
         }
@@ -6839,21 +6849,17 @@ impl AppUi {
                 if !begin_document_operation(&window, status) {
                     return;
                 }
-                let tx = tx.clone();
-                std::thread::spawn(move || {
+                spawn_document_worker(tx.clone(), "open this file", move || {
                     let path = match chosen_path(pick_bundle_dialog(title), "open this file") {
                         Ok(path) => path,
-                        Err(result) => {
-                            let _ = tx.send(result);
-                            return;
-                        }
+                        Err(result) => return result,
                     };
                     let target = if kit {
                         LoadTarget::Kit
                     } else {
                         LoadTarget::Channel
                     };
-                    let result = resolve_document(&path)
+                    resolve_document(&path)
                         .map(|document| DocumentResult::Loaded {
                             path,
                             target,
@@ -6862,8 +6868,7 @@ impl AppUi {
                         .unwrap_or_else(|problem| DocumentResult::Failed {
                             action: "open this file",
                             problem,
-                        });
-                    let _ = tx.send(result);
+                        })
                 });
             };
             if kit {
@@ -7039,7 +7044,7 @@ impl AppUi {
                     if !begin_document_operation(window, "Saving preset...") {
                         return;
                     }
-                    std::thread::spawn(move || {
+                    spawn_document_worker(tx, "save this preset", move || {
                         let result = match source.target {
                             PresetSaveTarget::Generator => mooloop_project::save_generator_preset(
                                 &path,
@@ -7069,10 +7074,13 @@ impl AppUi {
                                     info,
                                     AssetMode::Embedded,
                                 ),
-                                (None, None) => return,
+                                // Nothing to save. This returned without
+                                // sending, which left the File menu disabled
+                                // (MOO-103): every started operation reports.
+                                (None, None) => return DocumentResult::Cancelled,
                             },
                         };
-                        let result = result
+                        result
                             .map(|report| DocumentResult::SavedPreset {
                                 label,
                                 report,
@@ -7081,8 +7089,7 @@ impl AppUi {
                             .unwrap_or_else(|error| DocumentResult::Failed {
                                 action: "save this preset",
                                 problem: error.into(),
-                            });
-                        let _ = tx.send(result);
+                            })
                     });
                 };
                 if taken {
@@ -7154,17 +7161,13 @@ impl AppUi {
                 *export_progress.borrow_mut() = Some(progress.clone());
                 window.set_export_progress(-1.0);
                 window.set_export_phase(1);
-                let tx = tx.clone();
-                std::thread::spawn(move || {
+                spawn_document_worker(tx.clone(), "export this song", move || {
                     let path = match chosen_path(
                         pick_export_dialog(request.extension()),
                         "export this song",
                     ) {
                         Ok(path) => path,
-                        Err(result) => {
-                            let _ = tx.send(result);
-                            return;
-                        }
+                        Err(result) => return result,
                     };
                     let spec = ExportSpec {
                         path: path.clone(),
@@ -7172,7 +7175,7 @@ impl AppUi {
                         tail_seconds: tail as f32,
                         format: request.format,
                     };
-                    let result = match OfflineRenderer::render_with_progress(
+                    match OfflineRenderer::render_with_progress(
                         &request.project,
                         &request.samples,
                         export_sample_rate,
@@ -7185,8 +7188,7 @@ impl AppUi {
                             action: "export this song",
                             problem: error.to_string().into(),
                         },
-                    };
-                    let _ = tx.send(result);
+                    }
                 });
             });
         }
@@ -7243,6 +7245,7 @@ impl AppUi {
             let kit_confirmed = kit_confirmed.clone();
             let tx = document_tx.clone();
             let reconnect_requested = reconnect_requested.clone();
+            let recovering = recovering.clone();
             window.on_question_answered(move |answer| {
                 let Some(window) = weak.upgrade() else {
                     return;
@@ -7297,6 +7300,29 @@ impl AppUi {
                             status_bar::notify(&window, Severity::Error, NO_AUDIO_STATUS);
                         }
                     }
+                    Question::Recover(recoverable) => {
+                        if answer != 1 {
+                            autosave::discard(&recoverable);
+                            window.set_status_message("Unsaved changes discarded".into());
+                            return;
+                        }
+                        if !begin_document_operation(&window, "Recovering unsaved changes...") {
+                            return;
+                        }
+                        *recovering.borrow_mut() = Some(recoverable.clone());
+                        spawn_document_worker(tx.clone(), "recover the unsaved song", move || {
+                            autosave::recover(&recoverable)
+                                .map(|document| DocumentResult::Loaded {
+                                    path: recoverable.song.clone(),
+                                    target: LoadTarget::Song,
+                                    document,
+                                })
+                                .unwrap_or_else(|problem| DocumentResult::Failed {
+                                    action: "recover the unsaved song",
+                                    problem,
+                                })
+                        });
+                    }
                 }
             });
         }
@@ -7312,7 +7338,11 @@ impl AppUi {
                 };
                 let lists = {
                     let st = st.borrow();
-                    let referenced = recordings::referenced_by(&st.session, &commands.borrow().history);
+                    let mut referenced =
+                        recordings::referenced_by(&st.session, &commands.borrow().history);
+                    // A take an autosave plays -- this run's or a crashed
+                    // one's not yet recovered -- is not unused (MOO-103).
+                    referenced.extend(autosave::referenced_samples(&settings::autosave_dir()));
                     // The song's own `recordings/`, held against the song as
                     // saved on disk as well: a file it plays there is not
                     // unused because an unsaved edit stopped playing it.
@@ -14879,6 +14909,8 @@ impl AppUi {
             question.clone(),
             kit_confirmed.clone(),
         );
+        let (autosave_in, recovery_offer, recovering) =
+            (autosave.clone(), recovery_offer.clone(), recovering.clone());
         let export_progress = export_progress.clone();
         // Diagnostics shared with the autodrive self-test (MOOLOOP_AUTODRIVE=1).
         let stats = Rc::new(Cell::new((0.0f32, false, 0usize)));
@@ -15286,6 +15318,9 @@ impl AppUi {
                             window.set_save_error_report(problem.report.into());
                             window.set_save_error_open(true);
                             window.set_status_message(format!("Could not {action}").into());
+                            // A recovery that could not be read stays on
+                            // disk, and is offered again next launch.
+                            recovering.borrow_mut().take();
                         }
                         DocumentResult::Loaded {
                             path,
@@ -15411,6 +15446,13 @@ impl AppUi {
                                 asset_mode,
                                 before,
                             );
+                            let recovered = recovering
+                                .borrow_mut()
+                                .take_if(|recoverable| recoverable.song == path);
+                            if let Some(recovered) = recovered {
+                                finish_recovery(&st, &window, &autosave_in, &recovered);
+                                continue;
+                            }
                             window.set_status_message(
                                 format!(
                                     "Loaded {}{}{}",
@@ -15429,6 +15471,32 @@ impl AppUi {
                 let idle = weak
                     .upgrade()
                     .is_some_and(|window| !window.get_document_busy());
+                // Autosave (MOO-103): cheap unless a write is due, which is
+                // at most once a minute and only with unsaved changes.
+                if let (Some(autosave), Some(window)) =
+                    (autosave_in.borrow_mut().as_mut(), weak.upgrade())
+                {
+                    let state = st.borrow();
+                    let session = &state.session;
+                    autosave.update(
+                        std::time::Instant::now(),
+                        AutosaveState {
+                            revision: session.revision,
+                            dirty: session.dirty,
+                            gesture_open: session.gesture_open(),
+                            original: session.bundle_path.as_deref(),
+                            embed: window.get_embed_assets(),
+                        },
+                        || project_snapshot(&state, &window).project,
+                    );
+                }
+                // A song a crashed mooloop left unsaved, offered once nothing
+                // else is running or asking.
+                if idle {
+                    if let Some(window) = weak.upgrade() {
+                        offer_recovery(&window, &question, &recovery_offer);
+                    }
+                }
                 if idle && quit_after_document.replace(false) {
                     if let Some(window) = weak.upgrade() {
                         window.invoke_quit_requested();
@@ -16798,6 +16866,8 @@ impl AppUi {
             _pump: pump,
             state,
             document_tx: open_tx,
+            autosave,
+            quit_discards,
         })
     }
 
@@ -16806,7 +16876,22 @@ impl AppUi {
     }
 
     pub fn run(&self) -> Result<(), slint::PlatformError> {
-        self.window.run()
+        let ran = self.window.run();
+        self.finish_autosave();
+        ran
+    }
+
+    /// Stops the autosave writer once the loop is over (MOO-103). What it
+    /// wrote is kept for the next launch to offer only if the song still has
+    /// unsaved changes nobody decided about: a quit answered "Don't Save"
+    /// discards it, and a clean song has nothing to recover. A quit by
+    /// signal (`signals.rs`) saves nothing and asks nothing, so it keeps it.
+    fn finish_autosave(&self) {
+        let Some(autosave) = self.autosave.borrow_mut().take() else {
+            return;
+        };
+        let keep = self.state.borrow().session.dirty && !self.quit_discards.get();
+        autosave.finish(keep);
     }
 
     /// Open the song at `path`, as File > Open would once its chooser
@@ -16819,9 +16904,8 @@ impl AppUi {
         if !begin_document_operation(&self.window, "Opening song...") {
             return;
         }
-        let tx = self.document_tx.clone();
-        std::thread::spawn(move || {
-            let result = resolve_document(&path)
+        spawn_document_worker(self.document_tx.clone(), "open this song", move || {
+            resolve_document(&path)
                 .map(|document| DocumentResult::Loaded {
                     path,
                     target: LoadTarget::Song,
@@ -16830,8 +16914,7 @@ impl AppUi {
                 .unwrap_or_else(|problem| DocumentResult::Failed {
                     action: "open this song",
                     problem,
-                });
-            let _ = tx.send(result);
+                })
         });
     }
 
@@ -17532,6 +17615,29 @@ fn merge_loaded_document(
     }
 }
 
+/// A recovered song, once it is installed (MOO-103): it is the song it was
+/// autosaved from -- Save goes to that file, never into the autosave folder --
+/// and it is unsaved, because nothing has written it back there yet.
+fn finish_recovery(
+    st: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    autosave: &RefCell<Option<Autosave>>,
+    recovered: &Recoverable,
+) {
+    let mut state = st.borrow_mut();
+    state.session.bundle_path = recovered.original.clone();
+    state.session.mark_dirty();
+    window.set_embed_assets(recovered.embed || state.session.has_embedded_samples());
+    state.update_document_title(window);
+    drop(state);
+    // With no autosave of its own to replace it, the recovered one is the
+    // only copy until the user saves, so it stays.
+    if let Some(autosave) = autosave.borrow_mut().as_mut() {
+        autosave.adopt(recovered);
+    }
+    window.set_status_message("Recovered unsaved changes".into());
+}
+
 /// Everything a load does once its project is installed: the dirty flag, the
 /// preset labels, and the history.
 ///
@@ -17869,6 +17975,9 @@ enum Question {
     /// has stopped (MOO-115). Yes reconnects, through the pump, which holds
     /// the engine.
     Reconnect,
+    /// A mooloop that is gone left a song unsaved (MOO-103). Yes opens it
+    /// as the song, unsaved; no deletes it.
+    Recover(Recoverable),
 }
 
 /// What the unsaved-changes question was standing in front of.
@@ -17916,6 +18025,36 @@ fn ask_question(
     window.set_question_primary(primary.into());
     window.set_question_secondary(secondary.into());
     window.set_question_open(true);
+}
+
+/// Asks whether to recover a song a dead mooloop left unsaved (MOO-103), if
+/// one is waiting and no other question is on screen. A question already up
+/// -- no audio (MOO-115), unsaved changes -- is never replaced: the offer
+/// waits for the next pump tick with the slot empty. Returns whether it
+/// asked.
+fn offer_recovery(
+    window: &MainWindow,
+    slot: &RefCell<Option<Question>>,
+    offer: &RefCell<Option<Recoverable>>,
+) -> bool {
+    if slot.borrow().is_some() {
+        return false;
+    }
+    let Some(recoverable) = offer.borrow_mut().take() else {
+        return false;
+    };
+    let title = recoverable.question();
+    let detail = recoverable.detail(std::time::SystemTime::now());
+    ask_question(
+        window,
+        slot,
+        Question::Recover(recoverable),
+        &title,
+        &detail,
+        "Recover",
+        "Discard",
+    );
+    true
 }
 
 /// The status line while nothing is heard: what is wrong, and the way back
@@ -18146,9 +18285,8 @@ fn load_preset_document(
     if !begin_document_operation(window, &format!("Loading {label}...")) {
         return;
     }
-    let tx = tx.clone();
-    std::thread::spawn(move || {
-        let result = resolve_document(&path)
+    spawn_document_worker(tx.clone(), "open this preset", move || {
+        resolve_document(&path)
             .map(|document| DocumentResult::Loaded {
                 path,
                 target,
@@ -18157,8 +18295,7 @@ fn load_preset_document(
             .unwrap_or_else(|problem| DocumentResult::Failed {
                 action: "open this preset",
                 problem,
-            });
-        let _ = tx.send(result);
+            })
     });
 }
 
@@ -19331,6 +19468,51 @@ mod tests {
             window.get_question_title(),
             "Save changes to this song before opening another song?"
         );
+    }
+
+    /// **A recovery offer and the no-audio question queue** (MOO-103): the
+    /// offer waits while another question is up, and nothing replaces it
+    /// once it is asked.
+    #[test]
+    fn recovery_waits_for_another_question_and_is_not_trampled() {
+        use mooloop_engine::AudioState;
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().expect("the testing backend builds a window");
+        let slot = RefCell::new(None);
+        let offer = RefCell::new(Some(Recoverable {
+            dir: PathBuf::from("/nowhere/autosave/x"),
+            song: PathBuf::from("/nowhere/autosave/x/song.mooloop"),
+            original: Some(PathBuf::from("/music/Groove.mooloop")),
+            saved_at: std::time::SystemTime::now(),
+            embed: false,
+            owned: Vec::new(),
+        }));
+
+        // No audio at launch asks first; the recovery waits, still offered.
+        assert!(announce_audio_state(
+            &window,
+            &slot,
+            &AudioState::NoDevice("no JACK server is running".into()),
+        ));
+        assert!(!offer_recovery(&window, &slot, &offer));
+        assert!(offer.borrow().is_some(), "the offer is kept, not dropped");
+        assert!(matches!(*slot.borrow(), Some(Question::Reconnect)));
+
+        // Answered: the next tick asks about the song.
+        slot.borrow_mut().take();
+        assert!(offer_recovery(&window, &slot, &offer));
+        assert_eq!(window.get_question_title(), "Recover unsaved changes to Groove?");
+        assert_eq!(window.get_question_primary(), "Recover");
+        assert_eq!(window.get_question_secondary(), "Discard");
+        assert!(matches!(*slot.borrow(), Some(Question::Recover(_))));
+
+        // And the audio news, arriving now, waits for it in turn.
+        assert!(!announce_audio_state(
+            &window,
+            &slot,
+            &AudioState::Stopped("the audio server shut down".into()),
+        ));
+        assert!(matches!(*slot.borrow(), Some(Question::Recover(_))));
     }
 
     /// **No audio is said, with a way back** (MOO-115): an engine on no

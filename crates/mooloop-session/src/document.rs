@@ -61,6 +61,65 @@ impl DocumentProblem {
     }
 }
 
+/// Runs a document operation off the UI thread and **always** reports back.
+///
+/// The UI marks itself `document-busy` when an operation starts and clears it
+/// only when a [`DocumentResult`] arrives (MOO-92). A worker that panicked --
+/// the open path decodes arbitrary audio -- used to send nothing, and the File
+/// menu stayed disabled for the rest of the session (MOO-103). Here a panic
+/// becomes `Failed { action, .. }`, and so does a thread that cannot be
+/// started, so every operation that began ends with exactly one result.
+///
+/// `action` completes "Could not ...", as in [`DocumentResult::Failed`].
+pub fn spawn_document_worker(
+    tx: std::sync::mpsc::Sender<DocumentResult>,
+    action: &'static str,
+    work: impl FnOnce() -> DocumentResult + Send + 'static,
+) {
+    let fallback = tx.clone();
+    let started = std::thread::Builder::new()
+        .name("document".into())
+        .spawn(move || {
+            let _ = tx.send(run_document_work(action, work));
+        });
+    if let Err(error) = started {
+        log_error!("project", "could not start a worker to {action}: {error}");
+        let _ = fallback.send(DocumentResult::Failed {
+            action,
+            problem: format!("mooloop could not start the work: {error}").into(),
+        });
+    }
+}
+
+/// `work`'s result, or `Failed` if it panicked. The panic itself has already
+/// been through the process's panic hook (log and crash report) by the time
+/// it is caught here, so this only has to tell the user.
+pub fn run_document_work(
+    action: &'static str,
+    work: impl FnOnce() -> DocumentResult,
+) -> DocumentResult {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)) {
+        Ok(result) => result,
+        Err(payload) => {
+            let detail = payload
+                .downcast_ref::<&str>()
+                .map(|text| (*text).to_owned())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "no message".to_owned());
+            log_error!("project", "the worker to {action} panicked: {detail}");
+            DocumentResult::Failed {
+                action,
+                problem: DocumentProblem {
+                    message: "Something inside mooloop went wrong. This is a bug, not \
+                              something you did; the song you have open is unchanged."
+                        .to_owned(),
+                    report: format!("worker panicked: {detail}"),
+                },
+            }
+        }
+    }
+}
+
 /// Parks a song that could not be saved, returning where it went.
 ///
 /// The user has already lost the save they asked for; what they must not also
@@ -516,8 +575,36 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use super::export_result_detail;
+    use super::{export_result_detail, spawn_document_worker, DocumentResult};
     use mooloop_engine::RenderSummary;
+
+    /// **A worker that panics still reports** (MOO-103). The UI clears
+    /// `document-busy` on whatever result arrives, so a panic that sent
+    /// nothing left the File menu disabled until restart.
+    #[test]
+    fn a_document_worker_that_panics_reports_failed() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        spawn_document_worker(tx, "open this song", || panic!("a decoder fell over"));
+        let result = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("a panicking worker still sends a result");
+        match result {
+            DocumentResult::Failed { action, problem } => {
+                assert_eq!(action, "open this song");
+                assert!(problem.report.contains("a decoder fell over"), "{}", problem.report);
+            }
+            _ => panic!("expected Failed"),
+        }
+        assert!(rx.recv().is_err(), "exactly one result, then the sender is gone");
+    }
+
+    #[test]
+    fn a_document_worker_that_finishes_reports_its_result() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        spawn_document_worker(tx, "open this song", || DocumentResult::Cancelled);
+        assert!(matches!(rx.recv().unwrap(), DocumentResult::Cancelled));
+        assert!(rx.recv().is_err());
+    }
 
     fn summary() -> RenderSummary {
         RenderSummary {

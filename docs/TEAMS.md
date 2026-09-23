@@ -229,7 +229,7 @@ Files marked *shared* are split in the table above.
 ### 8. Document & Session
 
 - `project/src/` (all of `mooloop-project`)
-- `session/src/`: `session.rs`, `document.rs`, `history.rs`, `command.rs`,
+- `session/src/`: `session.rs`, `document.rs`, `autosave.rs`, `history.rs`, `command.rs`,
   `project.rs`, `channel.rs`, `rack.rs` (*shared*), `recordings.rs`,
   `take.rs`, `browser.rs`, `edit_cost.rs`, `lib.rs`
 - `core/src/`: `project.rs`, `structure.rs`, `channel.rs`, `color.rs`, `lib.rs`

@@ -10,6 +10,7 @@
 
 pub mod audio_file;
 pub mod automation;
+pub mod autosave;
 pub mod browser;
 pub mod channel;
 pub mod command;

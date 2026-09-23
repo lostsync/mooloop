@@ -1239,6 +1239,19 @@ pub(crate) fn log_path() -> PathBuf {
     state_dir().join("mooloop.log")
 }
 
+/// Where unsaved songs are autosaved for crash recovery
+/// (`mooloop_session::autosave`, MOO-103): `<state dir>/autosave`, so
+/// `~/.local/state/mooloop/autosave` by default on Linux. State in the XDG
+/// sense: it matters only across a restart. On macOS the state directory is
+/// the Logs folder, the wrong place for a song, so it is beside the settings
+/// there.
+pub(crate) fn autosave_dir() -> PathBuf {
+    if cfg!(target_os = "macos") && std::env::var_os("MOOLOOP_STATE_DIR").is_none() {
+        return config_dir().join("autosave");
+    }
+    state_dir().join("autosave")
+}
+
 /// Where a panic leaves its crash report (`mooloop_core::log::install_panic_hook`).
 pub(crate) fn crash_dir() -> PathBuf {
     state_dir().join("crashes")

@@ -1181,8 +1181,22 @@ land on its own when it starts to matter:
   bar. It used to read as Cancel, so on a desktop without zenity those
   commands did nothing and said nothing.
 - Missing samples are recoverable by loading a replacement audio file, but
-  there is no dedicated path-search/relink dialog, autosave, or crash recovery
-  yet.
+  there is no dedicated path-search/relink dialog yet.
+- **Unsaved changes survive a crash** (MOO-103). Once a minute, while the
+  song has unsaved changes and no knob or drag is held, it is autosaved to
+  `~/.local/state/mooloop/autosave/` (`$XDG_STATE_HOME`; beside the settings
+  on a Mac). Samples are referenced where they are, never copied, and File >
+  Clean Up Takes holds back a take an autosave still plays. The next launch
+  after a crash, a kill, a power cut or a quit by signal asks "Recover
+  unsaved changes to <song>?" (Recover or Discard, and how long ago it was
+  written). Recover opens it unsaved, under the song's own file, so Save
+  writes there. Saving, or answering the unsaved-changes question with
+  Don't Save, removes the autosave. Each running mooloop holds a lock on its
+  own autosave folder, so a second window never offers the first one's song.
+- **A file operation that crashes no longer locks the File menu** (MOO-103).
+  A panic in an open, save, load or export worker (a sample decoder, say)
+  is reported in the error dialog as an internal error, and the menu works
+  again. It used to stay greyed out until restart.
 - **Every run leaves a trace.** The diagnostic log is written on every run to
   `~/.local/state/mooloop/mooloop.log` (`$XDG_STATE_HOME`; `~/Library/Logs/mooloop/`
   on a Mac), rolled aside past 4 MB, and Preferences > Developer shows where;
@@ -1190,7 +1204,8 @@ land on its own when it starts to matter:
   backtrace in `crashes/` beside it. SIGTERM, SIGINT and SIGHUP -- a logout,
   `kill`, Ctrl+C -- quit through the quit path without its dialog: the log
   says which signal, a take still recording is finished, and unsaved song
-  changes are not kept (that waits on autosave). `docs/OPERATIONS.md`,
+  changes are not saved but are kept in the autosave for the next launch to
+  offer. `docs/OPERATIONS.md`,
   "Diagnostic Log", has the details.
 - **A song old enough to reference the built-in kick opens with it audible.**
   Projects saved before the sampler stopped auto-loading a kick carry a

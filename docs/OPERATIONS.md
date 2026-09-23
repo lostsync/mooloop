@@ -839,8 +839,21 @@ first sixteen). The newest ten reports are kept.
 
 **SIGTERM, SIGINT and SIGHUP quit the way Quit does**, without its dialog: a
 logout, `kill` or Ctrl+C logs `quitting on SIGTERM` (and whether the song had
-unsaved changes, which are not kept), leaves the event loop, and finishes any
+unsaved changes, which are not saved), leaves the event loop, and finishes any
 take still recording before the process ends. A second signal ends it at once.
+
+**Autosave** (MOO-103). Each running mooloop takes a folder
+`autosave/<UTC stamp>-<pid>-<n>/` beside the log (`$XDG_STATE_HOME/mooloop`; on a
+Mac, beside the settings instead of in Logs) and holds an OS lock on its
+`lock` file for as long as it runs. While the song is unsaved it writes
+`song.mooloop` there once a minute (samples referenced in place) and
+`about.txt` (when, the song's own file, the Embed flag, and which samples the
+song owned). The song going clean empties the folder; a quit answered "Don't
+Save" removes it. A folder whose lock can be taken belongs to a mooloop that
+has ended, and the next launch offers its song back; one with nothing in it
+is removed. Deleting the `autosave/` folder while no mooloop runs is always
+safe. The autosave is written through the same save as File > Save, so a
+song that cannot be saved also cannot be autosaved, and the log says why.
 
 ### The Output Went Missing
 
