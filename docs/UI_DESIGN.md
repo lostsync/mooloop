@@ -898,6 +898,55 @@ Two panels flank the work area, and they are deliberately one mechanism: the
   records what it is for.
 - Two switchers for two panes look the same. Both are `SegmentedControl`.
 
+## The Ranged-Control Contract
+
+Adam, on MOO-143 (2026-09-23): *"if we make a new kind of ranged control,
+these docs would let us know that we *have* to accept text entry in the label
+and the label *has* to use color N from the theme, etc."* This is that list.
+A control that sets a value on a range -- a knob, a fader, a drag value, a
+cell in a matrix -- owes every item. `ParameterKnob` (`controls.slint`) is the
+reference implementation; build a new one on it, or on its interaction, before
+writing another.
+
+| Gesture | Does | Why it is the same everywhere |
+| --- | --- | --- |
+| Drag | Moves the value. A knob drags vertically, a bar along its length; 150 px is full travel | Sensitivity must not change with a control's shape |
+| Shift- or Ctrl-drag, -wheel, -arrow | Fine: about a thirtieth of the ordinary rate for a drag, a fiftieth for an arrow | One modifier for fine, not one per control |
+| Wheel | Moves the value, one notch a small step | |
+| Arrow keys on a focused control | Up and Right raise, Down and Left lower, 1% of travel | |
+| Double-click | Resets to the default | |
+| Right-click, the Menu key, Shift+F10 | Opens the control menu: **Type a Value**, **Reset to Default**, **MIDI Learn**, **Automate** | Learn and automate reach every parameter from where it is drawn |
+| Enter or F2 on a focused control, or a digit typed at it | Opens typed entry | A value is easier typed than dragged when you know it |
+
+- **Typed entry reads what the user would write.** A bare number is in the
+  readout's unit (`250` beside `120 ms` is 250 ms); a unit typed explicitly
+  wins (`1.2 s`, `4.4k`, `4.4 kHz`); a frequency takes a note name (`A4`);
+  a level takes `-inf`. Enter commits, Escape abandons, clicking away
+  abandons. The one parser is `ui/src/typed_value.rs`; a face does not write
+  its own.
+- **One gesture is one undo step.** A drag, a wheel notch, a typed value and a
+  reset each open and close `Gesture` once.
+- **While a modulation source is armed** every value gesture edits that
+  source's route depth, and typed entry and reset are unavailable: both would
+  write the base underneath the route being tuned.
+- **While MIDI Learn is armed** a press names the control and moves nothing.
+- **Tooltip: the value, in its unit, and nothing else.** The control's name
+  and any explanation go to the status bar through `StatusHint` (below).
+- **Colour.** Label `Theme.text-muted`, `Theme.text-faint` when disabled,
+  `Theme.warning` while a modulation source is armed on it. Value readout
+  `Theme.accent` in `Theme.font-family-mono`. The value arc is `Theme.accent`
+  unless the device has a colour of its own.
+- **Identity.** A control that can reach Rust names its parameter through its
+  face's `modulation-edit-started(index)`, the one callback every face
+  forwards with the parameter's identity. Learn, Automate and descriptor-read
+  typing all depend on it, so a face that does not forward it has a control
+  that can be typed into only in its readout's units, and cannot be learned.
+
+Where the contract is not yet met (MOO-143's follow-ups): `MiniKnob`,
+`TrimKnob`, `ParameterFader`, the mixer faders and `TimeDivisionKnob` have
+no control menu or typed entry; the mixer's send bar uses Shift to toggle
+rather than for fine, and the faders disagree on click-to-jump.
+
 ## Interaction And Wording
 
 - A knob's label and value drag the same parameter as its knob face.

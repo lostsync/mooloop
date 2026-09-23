@@ -1,6 +1,7 @@
 import { ScrollView } from "std-widgets.slint";
 import { StatusHint, Theme } from "theme.slint";
 import { GainMath } from "gain.slint";
+import { MenuRow, MenuSeparator } from "menubar.slint";
 
 export enum ValueScale { linear, logarithmic }
 export enum AudioOrientation { horizontal, vertical }
@@ -50,6 +51,67 @@ export global ControlAssign {
 export global Gesture {
     callback begin();
     callback end();
+}
+
+// A number read out of a string, in the units that string was written in.
+export struct ParsedValue {
+    ok: bool,
+    value: float,
+    // Whether the unit was `%`, which a knob holding 0..1 shows as 0..100.
+    percent: bool,
+}
+
+// What Rust made of a typed value, against the parameter a control named.
+export struct ParamAnswer {
+    // Whether any parameter was named. False on a face that does not report
+    // its presses to Rust, or a chain Rust has no address for.
+    named: bool,
+    // Whether the text read as a value for it.
+    ok: bool,
+    // The value in the descriptor's natural units, and as its 0..1 position.
+    natural: float,
+    normalized: float,
+    // The descriptor's range, so the control can tell which of the two
+    // its own `value` holds.
+    minimum: float,
+    maximum: float,
+}
+
+// The right-click menu's requests: type a value, learn MIDI, automate
+// (MOO-143, and the control contract in `docs/UI_DESIGN.md`).
+//
+// Two of the three need to know *which parameter* the control is, and a
+// control does not know that: only its face does, by the index it passes to
+// `modulation-edit-started` -- the one callback every face forwards with the
+// parameter's identity, and the one MIDI learn already rides on
+// (`ControlAssign`). So a request is two calls. The control sets `naming`,
+// fires its own `modulation-edit-started`, and clears it again; Rust's three
+// handlers for that callback see `naming`, note the address instead of
+// starting a gesture, and return. Then the control makes the request, and
+// Rust answers it against the address it noted. Callbacks run synchronously,
+// so the pair cannot be split by another press.
+//
+// **The control clears `naming` in the same function that set it**, whether
+// or not anything answered; Rust only reads it. Left set, it would turn the
+// next real press -- a modulation edit, a learn -- into a silent naming.
+// `tests/knob_typed_entry.rs` holds both halves. The seam's row is in
+// `docs/TEAMS.md`.
+//
+// A face that does not forward the press (a bus chain, a harness) leaves
+// nothing named. Typing a value still works there through `parse`, whenever
+// the control's readout is in the units its own `value` holds.
+export global ControlRequest {
+    in-out property <bool> naming;
+    // `typed` is the text, `shown` the readout the control was showing, whose
+    // unit a bare number is read in.
+    callback typed(string, string) -> ParamAnswer;
+    callback learn();
+    callback automate();
+    // A string read as a number in `shown`'s units: "4.4k" beside "8000 Hz"
+    // is 4400, "250 ms" beside "1.20 s" is 0.25. Pure, and the one parser.
+    pure callback parse(string, string) -> ParsedValue;
+    // A typed value that could not be read, for the status bar.
+    callback refused(string);
 }
 
 // Interaction-only graph handle. Consumers bind its position to their plotted
@@ -849,6 +911,93 @@ export component ParameterKnob inherits Rectangle {
         }
     }
 
+    // Where the right-click landed, so the menu opens under the pointer.
+    private property <length> menu-x;
+    private property <length> menu-y;
+    // The keystroke that opened the typed entry, when a digit did: the field
+    // starts with it rather than with the readout selected.
+    private property <string> entry-seed;
+    // A typed value writes the base, and while a modulation source is armed
+    // the knob's gestures mean route depth instead. `KnobField`'s reason:
+    // a text box quietly writing the base underneath that would be a trap.
+    private property <bool> can-type: root.enabled && !root.modulation-active;
+
+    function reset-to-default() {
+        Gesture.begin();
+        let reset = clamp(root.default-value, root.minimum, root.maximum);
+        if (!root.controlled) { root.value = reset; }
+        root.changed(reset);
+        Gesture.end();
+    }
+
+    // Name this parameter to Rust; see `ControlRequest`.
+    function name-parameter() {
+        ControlRequest.naming = true;
+        root.modulation-edit-started();
+        ControlRequest.naming = false;
+    }
+
+    function open-entry(seed: string) {
+        if (!root.can-type) { return; }
+        root.entry-seed = seed;
+        entry-popup.show();
+    }
+
+    // One typed value, as one undo step, through the same `changed` a drag
+    // reports -- so a face needs nothing new for its knobs to take typing.
+    function set-typed(v: float) {
+        Gesture.begin();
+        let quantized = root.step > 0
+            ? root.minimum + round((v - root.minimum) / root.step) * root.step
+            : v;
+        let next = clamp(quantized, root.minimum, root.maximum);
+        if (next != root.value) {
+            if (!root.controlled) { root.value = next; }
+            root.changed(next);
+        }
+        Gesture.end();
+    }
+
+    // Rust reads the text against the parameter's descriptor when this knob
+    // can be named, which is what makes "440 Hz" land on a knob that holds a
+    // 0..1 position behind a cutoff law. The knob holds either the
+    // descriptor's natural value or its 0..1 position; which is told by the
+    // range. Otherwise the text is read in the readout's own units, which is
+    // right whenever the readout shows the knob's value or a percentage of it.
+    function commit-typed(text: string) {
+        root.name-parameter();
+        let answer = ControlRequest.typed(text, root.value-text);
+        let span = abs(root.maximum - root.minimum);
+        if (answer.named && answer.ok) {
+            let tolerance = max(span, 1) * 0.0001;
+            if (abs(root.minimum - answer.minimum) <= tolerance
+                    && abs(root.maximum - answer.maximum) <= tolerance) {
+                root.set-typed(answer.natural);
+                return;
+            }
+            if (root.minimum == 0 && root.maximum == 1) {
+                root.set-typed(answer.normalized);
+                return;
+            }
+        }
+        let typed = ControlRequest.parse(text, root.value-text);
+        let shown = ControlRequest.parse(root.value-text, root.value-text);
+        if (typed.ok && shown.ok) {
+            // A readout rounds, so "agrees" is within its last digit or two
+            // percent of the travel, whichever is looser.
+            let slack = span >= 20 ? 0.51 : span * 0.02;
+            if (shown.percent && abs(shown.value - root.value * 100) <= span * 2 + 0.51) {
+                root.set-typed(typed.value / 100);
+                return;
+            }
+            if (abs(shown.value - root.value) <= slack + span * 0.02) {
+                root.set-typed(typed.value);
+                return;
+            }
+        }
+        ControlRequest.refused(text);
+    }
+
     VerticalLayout {
         spacing: 3px;
         alignment: center;
@@ -908,6 +1057,17 @@ export component ParameterKnob inherits Rectangle {
             else { StatusHint.clear(root.tooltip); }
         }
         pointer-event(e) => {
+            // The right button opens the control's menu and is no part of a
+            // drag: its release must not close a gesture it never opened.
+            if (e.button == PointerEventButton.right) {
+                if (e.kind == PointerEventKind.down) {
+                    root.menu-x = self.mouse-x;
+                    root.menu-y = self.mouse-y;
+                    keyboard.focus();
+                    context-menu.show();
+                }
+                return;
+            }
             if (e.kind == PointerEventKind.down) {
                 keyboard.focus();
                 root.pressed-normalized = root.normalized;
@@ -951,11 +1111,7 @@ export component ParameterKnob inherits Rectangle {
                 root.set-modulation-depth(0);
                 if (root.modulation-edited) { root.modulation-edit-finished(); }
             } else {
-                Gesture.begin();
-                let reset = clamp(root.default-value, root.minimum, root.maximum);
-                if (!root.controlled) { root.value = reset; }
-                root.changed(reset);
-                Gesture.end();
+                root.reset-to-default();
             }
         }
         scroll-event(e) => {
@@ -997,12 +1153,127 @@ export component ParameterKnob inherits Rectangle {
                     Gesture.end();
                 }
                 accept
+            } else if (e.text == Key.Return || e.text == Key.F2) {
+                // Enter types a value, as it does on a DAW's focused knob;
+                // F2 is the same verb on a platform whose Enter is taken.
+                root.open-entry("");
+                accept
+            } else if (root.can-type && (e.text.is-float() || e.text == "-" || e.text == ".")
+                    && !e.modifiers.control && !e.modifiers.alt && !e.modifiers.meta) {
+                // A digit typed at a focused knob starts the entry with it.
+                root.open-entry(e.text);
+                accept
+            } else if (e.text == Key.Menu || (e.text == Key.F10 && e.modifiers.shift)) {
+                root.menu-x = root.width / 2;
+                root.menu-y = root.height / 2;
+                context-menu.show();
+                accept
             } else { reject }
         }
     }
     // Value only, never the name -- the label is already on screen, and a
     // knob's tooltip exists to confirm the exact value, not restate itself.
     Tooltip { text: @markdown("\{root.value-text}"); }
+
+    // The control's menu (MOO-143). Every ranged control carries the same
+    // four verbs; `docs/UI_DESIGN.md`, "The ranged-control contract".
+    context-menu := PopupWindow {
+        x: root.menu-x;
+        y: root.menu-y;
+        width: 168px;
+        height: menu-frame.preferred-height;
+        close-policy: close-on-click;
+        menu-frame := Rectangle {
+            background: Theme.surface;
+            border-width: Theme.hairline;
+            border-color: Theme.border;
+            border-radius: Theme.radius-md;
+            VerticalLayout {
+                padding: 4px;
+                MenuRow {
+                    text: "Type a Value…";
+                    shortcut: "Enter";
+                    enabled: root.can-type;
+                    selected => { root.open-entry(""); }
+                }
+                MenuRow {
+                    text: "Reset to Default";
+                    enabled: root.enabled && !root.modulation-active;
+                    selected => { root.reset-to-default(); }
+                }
+                MenuSeparator {}
+                MenuRow {
+                    text: "MIDI Learn";
+                    enabled: root.enabled;
+                    selected => {
+                        root.name-parameter();
+                        ControlRequest.learn();
+                    }
+                }
+                MenuRow {
+                    text: "Automate";
+                    enabled: root.enabled;
+                    selected => {
+                        root.name-parameter();
+                        ControlRequest.automate();
+                    }
+                }
+            }
+        }
+    }
+
+    // The typed entry. A popup rather than a child, so a knob narrower than a
+    // number can still show one, and so the field adds nothing to the
+    // knob's own layout -- a positioned child still would.
+    entry-popup := PopupWindow {
+        width: max(root.width, 72px);
+        height: 20px;
+        x: (root.width - self.width) / 2;
+        y: root.show-value-text ? root.height - 18px : (root.height - 20px) / 2;
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Theme.surface-raised;
+            border-width: Theme.hairline;
+            border-color: Theme.accent;
+            border-radius: Theme.radius-md;
+            entry := TextInput {
+                x: 4px;
+                width: parent.width - 8px;
+                height: 100%;
+                text: root.entry-seed != "" ? root.entry-seed : root.value-text;
+                color: Theme.text;
+                font-size: Theme.text-md;
+                font-family: Theme.font-family-mono;
+                single-line: true;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                selection-background-color: Theme.accent;
+                accessible-label: root.tooltip;
+                init => {
+                    self.focus();
+                    if (root.entry-seed == "") {
+                        self.select-all();
+                    } else {
+                        self.set-selection-offsets(self.text.character-count, self.text.character-count);
+                    }
+                }
+                accepted => {
+                    root.commit-typed(self.text);
+                    entry-popup.close();
+                    keyboard.focus();
+                }
+                // Escape leaves without committing; `KnobField`'s rule.
+                key-pressed(event) => {
+                    if (event.text == Key.Escape) {
+                        entry-popup.close();
+                        keyboard.focus();
+                        return EventResult.accept;
+                    }
+                    return EventResult.reject;
+                }
+            }
+        }
+    }
 }
 
 /// One row: a name, a small knob, and a typed field -- `Tune o [      ]`.

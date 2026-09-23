@@ -16,6 +16,7 @@ mod settings;
 mod signals;
 pub mod status_bar;
 mod theme;
+pub mod typed_value;
 
 slint::include_modules!();
 
@@ -1448,6 +1449,33 @@ fn report_note_refusal(session: &mut Session, window: &MainWindow) -> bool {
             true
         }
         None => false,
+    }
+}
+
+/// A typed value read against the parameter at `address` (MOO-143).
+///
+/// `named` is set whenever the session knows the address, so a control
+/// whose parameter has no descriptor here -- a plugin's, until step 07 --
+/// still falls back on its readout rather than refusing outright.
+fn answer_typed_value(session: &Session, address: ParamAddr, typed: &str, shown: &str) -> ParamAnswer {
+    let Some(descriptor) = session.param_descriptor(address) else {
+        return ParamAnswer::default();
+    };
+    let Some(natural) = typed_value::parse_for(descriptor, typed, shown) else {
+        return ParamAnswer {
+            named: true,
+            minimum: descriptor.min,
+            maximum: descriptor.max,
+            ..ParamAnswer::default()
+        };
+    };
+    ParamAnswer {
+        named: true,
+        ok: true,
+        natural,
+        normalized: descriptor.to_normalized(natural),
+        minimum: descriptor.min,
+        maximum: descriptor.max,
     }
 }
 
@@ -3895,6 +3923,10 @@ struct UiState {
     /// binding landing, so a desk can be mapped knob after knob without
     /// reaching for the toolbar between each.
     midi_learn_armed: bool,
+    /// The parameter a control last named through `ControlRequest.naming`,
+    /// for the menu request that follows it (MOO-143). Taken by the request,
+    /// so a stale name cannot answer the next one.
+    named_param: Option<ParamAddr>,
     rows: Rc<VecModel<ChannelRow>>,
     step_models: Vec<Rc<VecModel<StepCell>>>,
     note_model: Rc<VecModel<NoteCell>>,
@@ -4055,6 +4087,7 @@ impl UiState {
             // path for "the ports changed", and the first pump is 16 ms away.
             midi_ports: Vec::new(),
             midi_learn_armed: false,
+            named_param: None,
             session: Session {
                 channels: vec![first],
                 default_waveform,
@@ -5446,6 +5479,18 @@ impl UiState {
             let closed = self.session.begin_gesture(snapshot);
             debug_assert!(closed.is_none(), "nothing was open to close");
         }
+    }
+
+    /// Note `address` for the control menu's next request, when the press
+    /// that reached here was a control naming itself rather than a gesture
+    /// (`ControlRequest` in `controls.slint`). Asked first, before learn and
+    /// before a gesture opens: a naming press is neither.
+    fn name_if_asked(&mut self, window: &MainWindow, address: ParamAddr) -> bool {
+        if !window.global::<ControlRequest>().get_naming() {
+            return false;
+        }
+        self.named_param = Some(address);
+        true
     }
 
     /// Name `target` as the thing the next control touched should move, when
@@ -10809,6 +10854,93 @@ impl AppUi {
             });
         }
 
+        // The control menu's requests (MOO-143): type a value, MIDI learn,
+        // automate. Each follows a naming press that left the parameter's
+        // address in `named_param` (`ControlRequest` in `controls.slint`);
+        // each takes it, so a request is only ever answered for the press
+        // just before it.
+        window.global::<ControlRequest>().on_parse(|typed, shown| {
+            match typed_value::parse_in_shown_units(&typed, &shown) {
+                Some((value, percent)) => ParsedValue { ok: true, value, percent },
+                None => ParsedValue { ok: false, value: 0.0, percent: false },
+            }
+        });
+        {
+            let st = state.clone();
+            window.global::<ControlRequest>().on_typed(move |typed, shown| {
+                let mut state = st.borrow_mut();
+                let Some(address) = state.named_param.take() else {
+                    return ParamAnswer::default();
+                };
+                answer_typed_value(&state.session, address, &typed, &shown)
+            });
+        }
+        {
+            let weak = window.as_weak();
+            window.global::<ControlRequest>().on_refused(move |typed| {
+                let Some(window) = weak.upgrade() else { return };
+                window.set_status_message(format!("\"{typed}\" is not a value for this control").as_str().into());
+            });
+        }
+        {
+            let st = state.clone();
+            let settings = ui_settings.clone();
+            let weak = window.as_weak();
+            window.global::<ControlRequest>().on_learn(move || {
+                let Some(window) = weak.upgrade() else { return };
+                let mut state = st.borrow_mut();
+                let address = state.named_param.take();
+                let key = address.and_then(|address| state.session.param_key(address));
+                let Some(key) = key else {
+                    window.set_status_message("This control cannot be mapped to MIDI yet".into());
+                    return;
+                };
+                let binds_port = settings.borrow().midi.learn_binds_port;
+                state.begin_control_learn(&window, binds_port, ControlTarget::Param(key));
+            });
+        }
+        {
+            let st = state.clone();
+            let commands = command_state.clone();
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            window.global::<ControlRequest>().on_automate(move || {
+                let Some(window) = weak.upgrade() else { return };
+                let address = st.borrow_mut().named_param.take();
+                // Only what the lane picker itself offers: the selected
+                // channel's source, strip and inserts.
+                let destination = address.and_then(|address| {
+                    st.borrow()
+                        .session
+                        .automation_destinations()
+                        .into_iter()
+                        .find(|(target, _, _)| *target == address)
+                        .map(|(target, device, descriptor)| {
+                            (target, format!("{device} · {}", descriptor.name))
+                        })
+                });
+                let Some((target, label)) = destination else {
+                    window.set_status_message("This control cannot be automated yet".into());
+                    return;
+                };
+                let before = project_snapshot(&st.borrow(), &window);
+                let command = st.borrow_mut().session.open_automation_lane_at(target);
+                let Some(command) = command else {
+                    window.set_status_message(
+                        "This pattern already has as many automation lanes as a channel can hold"
+                            .into(),
+                    );
+                    return;
+                };
+                let _ = tx.send(command);
+                st.borrow().refresh_automation(&window);
+                record_project_history(&commands, before, &st, &window, "Automation lane opened");
+                window.set_status_message(
+                    format!("Automating {label}: draw its lane under the piano roll").as_str().into(),
+                );
+            });
+        }
+
         // MIDI Learn: the arm, and the four things the mapping editor can do
         // to a row. Every one of them ends by republishing the page, because
         // removing a binding renumbers the ones after it and a stale index is
@@ -11332,6 +11464,9 @@ impl AppUi {
                     owner: ParamOwner::Source,
                     param,
                 };
+                if state.name_if_asked(&window, address) {
+                    return;
+                }
                 let binds_port = settings.borrow().midi.learn_binds_port;
                 if state.learn_param_if_armed(&window, binds_port, address) {
                     return;
@@ -11395,6 +11530,9 @@ impl AppUi {
                 let mut state = st.borrow_mut();
                 let address =
                     ParamAddr::strip(EffectTarget::Channel(state.session.selected as u8), param);
+                if state.name_if_asked(&window, address) {
+                    return;
+                }
                 let binds_port = settings.borrow().midi.learn_binds_port;
                 if state.learn_param_if_armed(&window, binds_port, address) {
                     return;
@@ -11479,6 +11617,9 @@ impl AppUi {
                     _ => None,
                 };
                 let Some(address) = address else { return };
+                if state.name_if_asked(&window, address) {
+                    return;
+                }
                 let binds_port = settings.borrow().midi.learn_binds_port;
                 if state.learn_param_if_armed(&window, binds_port, address) {
                     return;

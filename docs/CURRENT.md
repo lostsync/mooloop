@@ -570,6 +570,13 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   instrument modules, visible selector banks for short fixed choices, and
   horizontal or vertical parameter faders where aligned values need to use a
   module's area. Knob labels and value readouts share the knob's drag target.
+  Every `ParameterKnob` has a right-click menu -- Type a Value, Reset to
+  Default, MIDI Learn, Automate -- and takes a typed value: from the menu,
+  Enter or F2 on a focused knob, or a digit typed at it. A typed value is read
+  against the parameter's descriptor where the knob can name its parameter
+  (`440`, `4.4k`, `A4` and `250 ms` all read), otherwise in the readout's own
+  units; Escape leaves it alone. The menu and the typed entry are not yet on
+  `MiniKnob`, the faders or the time knobs (MOO-143's follow-ups).
   There is no standing sheet that renders every control at once; to see one,
   place it in the mockup tool below.
 - The active interface contract is `docs/UI_DESIGN.md`. A visual composition

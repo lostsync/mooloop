@@ -81,6 +81,7 @@ ids (C2, P4, …) are the report's.
 | The browser preview voice | Instruments | nobody | It plays files at the wrong pitch (I2) |
 | `interpolate.rs`, `heldnotes.rs`, `synth_voice.rs` | Instruments | Foundations | Only instruments use them |
 | The saturation stages; one voice-filter block and one glide block | Foundations | device-local copies | Five and four copies today (F7) |
+| A control naming its parameter to Rust: `ControlRequest` (`controls.slint`) and `name_if_asked` in the three `*_modulation_edit_started` handlers | Interface, with Control owning what learn and automate do with the address | nobody | MOO-143. A control sets `ControlRequest.naming`, fires its own `modulation-edit-started`, and clears the flag **in the same Slint function**; Rust notes the address in `UiState.named_param` and returns before learn or a gesture; the menu request that follows takes it. Rust never sets or clears `naming`. A face handler that does more than forward the callback must ignore it while `naming` is set |
 
 ## Work that crosses teams
 
