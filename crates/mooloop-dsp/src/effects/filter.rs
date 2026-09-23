@@ -412,6 +412,51 @@ mod tests {
             .collect()
     }
 
+    /// **A NaN block heals (MOO-174).** A block with one NaN in it, then
+    /// finite audio: the effect is producing finite audio again within one
+    /// block, at every mode and slope, where its filter state used to stay
+    /// NaN for good.
+    #[test]
+    fn a_nan_in_the_input_is_gone_within_a_block() {
+        let sr = 48_000u32;
+        const BLOCK: usize = 512;
+        for mode in [FilterMode::LowPass, FilterMode::BandPass, FilterMode::HighPass] {
+            for slope in [FilterSlope::Db12, FilterSlope::Db24] {
+                let params = FilterParams {
+                    cutoff_hz: 1_000.0,
+                    resonance: 0.9,
+                    mode,
+                    slope,
+                    drive: 0.3,
+                };
+                let mut effect = FilterEffect::new(params, sr);
+                let mut phase = 0usize;
+                for block in 0..4 {
+                    let mut bus = StereoBus::with_capacity(BLOCK);
+                    for index in 0..BLOCK {
+                        let s = (phase as f32 * 440.0 / sr as f32 * core::f32::consts::TAU).sin() * 0.25;
+                        bus.l[index] = s;
+                        bus.r[index] = s;
+                        phase += 1;
+                    }
+                    if block == 1 {
+                        bus.l[100] = f32::NAN;
+                        bus.r[100] = f32::NAN;
+                    }
+                    effect.process(&context(BLOCK), &mut bus, &EventList::empty(), None);
+                    if block >= 2 {
+                        assert!(
+                            crate::testkit::all_finite(&bus.l[..BLOCK])
+                                && crate::testkit::all_finite(&bus.r[..BLOCK]),
+                            "{mode:?} {slope:?}: block {block} still carries the NaN"
+                        );
+                        assert!(crate::testkit::peak(&bus.l[..BLOCK]) > 0.0);
+                    }
+                }
+            }
+        }
+    }
+
     /// **The gain bound (MOO-124).** At every mode, slope and resonance, a
     /// reference-level sine anywhere around the cutoff leaves the Filter
     /// effect no more than 21 dB louder, and nothing -- a full-scale sine

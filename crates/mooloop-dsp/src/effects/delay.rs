@@ -163,10 +163,16 @@ const FEEDBACK_CEILING: f32 = 1.0;
 /// [`FEEDBACK_KNEE`], then bending to [`FEEDBACK_CEILING`]. The line then
 /// never holds more than the input plus one, whatever the feedback, the
 /// cross-feed or the input level (MOO-124).
+///
+/// A NaN repeat is silence (MOO-174): the line would otherwise carry it round
+/// the loop for good.
 fn feedback_saturate(x: f32) -> f32 {
     let magnitude = x.abs();
     if magnitude <= FEEDBACK_KNEE {
         return x;
+    }
+    if magnitude.is_nan() {
+        return 0.0;
     }
     let headroom = FEEDBACK_CEILING - FEEDBACK_KNEE;
     x.signum() * (FEEDBACK_KNEE + headroom * ((magnitude - FEEDBACK_KNEE) / headroom).tanh())
@@ -749,6 +755,42 @@ mod tests {
             // Two, plus a little for the read head's interpolation overshoot.
             assert!(loudest <= 2.1, "{mode:?} reached {loudest} on a full-scale input");
         }
+    }
+
+    /// **A NaN does not circulate (MOO-174).** One NaN sample into a delay at
+    /// high feedback reaches the output once, a delay time later, and is not
+    /// fed back round the loop.
+    #[test]
+    fn a_nan_sample_leaves_the_loop_after_one_trip() {
+        let frames = 8_192;
+        let mut effect = DelayEffect::new(
+            DelayParams {
+                time_ms: 20.0,
+                tempo_sync: false,
+                time_division: ModTimeDivision::default(),
+                feedback: 0.9,
+                mode: DelayMode::Digital,
+                cross: 0.0,
+                tone: 0.5,
+                mix: 0.5,
+            },
+            SR,
+        );
+        let mut bus = StereoBus::with_capacity(frames);
+        for i in 0..frames {
+            let s = (i as f32 * 0.05).sin() * 0.25;
+            bus.l[i] = s;
+            bus.r[i] = s;
+        }
+        bus.l[10] = f32::NAN;
+        bus.r[10] = f32::NAN;
+        effect.process(&context(frames), &mut bus, &EventList::empty(), None);
+        // 20 ms is 960 frames; well after one trip the output is clean.
+        let from = 10 + 2 * 960 + 64;
+        assert!(
+            crate::testkit::all_finite(&bus.l[from..frames]),
+            "the NaN is still going round the loop"
+        );
     }
 
     #[test]

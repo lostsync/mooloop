@@ -757,7 +757,12 @@ boundary.
   reduction -- each at all four rates. A NaN or infinite cutoff, resonance,
   drive, Q, gain, frequency or smoothing target lands on the edge of its range
   rather than in a filter's or oscillator's state, where it would have made
-  every later sample NaN.
+  every later sample NaN. A NaN or infinite *sample* -- a NaN frame in a
+  decoded file, a blown-up upstream device -- is lost, but it no longer stays
+  in any SVF, cascade, ladder, biquad or one-pole state, and a delay does not
+  feed it back round its loop: the next finite sample is heard (MOO-174).
+  Other devices' internal state (reverb, plate, chorus) is not yet covered
+  (MOO-176).
 - The ML-M1's Ladder and Acid filters put their corner in the same place at
   every sample rate: their stages are cornered by solving the stage's own
   response rather than by the impulse-invariant pole, so one Cutoff is one

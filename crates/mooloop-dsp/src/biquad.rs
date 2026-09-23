@@ -67,6 +67,12 @@ impl Biquad {
         let out = self.b0 * input + self.z1;
         self.z1 = self.b1 * input - self.a1 * out + self.z2;
         self.z2 = self.b2 * input - self.a2 * out;
+        // A NaN or infinity never stays in the state (MOO-174): the sample it
+        // arrived with is lost, and the next one is heard.
+        if !(self.z1 + self.z2).is_finite() {
+            self.z1 = 0.0;
+            self.z2 = 0.0;
+        }
         out
     }
 

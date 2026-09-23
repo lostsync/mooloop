@@ -1569,6 +1569,61 @@ mod tests {
         Sampler::new(slot(ChannelAudioSnapshot::sample(sample)), params, sr)
     }
 
+    /// **A NaN in a sample heals (MOO-174).** One NaN frame in the middle of a
+    /// playing sample, through a resonant filter, used to leave the voice's
+    /// filter state NaN for the rest of the note; now the output is finite
+    /// again within one block of the frame, and a note struck afterwards
+    /// starts clean.
+    #[test]
+    fn a_nan_frame_does_not_silence_the_rest_of_the_note() {
+        let sr = 48_000;
+        let mut frames = vec![[0.25_f32, 0.25_f32]; sr as usize];
+        for (index, frame) in frames.iter_mut().enumerate() {
+            let value = (index as f32 * 0.05).sin() * 0.25;
+            *frame = [value, value];
+        }
+        frames[1_000] = [f32::NAN, f32::NAN];
+        let sample = Arc::new(SampleData {
+            frames,
+            sample_rate: sr,
+            root_note: 60,
+        });
+        let params = SamplerParams {
+            filter_cutoff: 0.5,
+            filter_resonance: 0.8,
+            ..SamplerParams::default()
+        };
+        let mut sampler = Sampler::new(slot(ChannelAudioSnapshot::sample(sample)), params, sr);
+        sampler.trigger(1, 60, 127);
+        const BLOCK: usize = 512;
+        let mut bus = StereoBus::with_capacity(BLOCK);
+        for block in 0..16 {
+            for index in 0..BLOCK {
+                bus.l[index] = 0.0;
+                bus.r[index] = 0.0;
+            }
+            sampler.render_range(&mut bus, 0, BLOCK);
+            // The NaN frame is in block 1; from block 3 on it must be gone.
+            if block >= 3 {
+                assert!(
+                    crate::testkit::all_finite(&bus.l[..BLOCK])
+                        && crate::testkit::all_finite(&bus.r[..BLOCK]),
+                    "block {block} still carries the NaN"
+                );
+                assert!(crate::testkit::peak(&bus.l[..BLOCK]) > 0.0, "block {block} is silent");
+            }
+        }
+        // A new note starts clean. One block only: it is the same sample, so
+        // by frame 1,000 it reaches the NaN frame again.
+        sampler.trigger(2, 60, 127);
+        for index in 0..BLOCK {
+            bus.l[index] = 0.0;
+            bus.r[index] = 0.0;
+        }
+        sampler.render_range(&mut bus, 0, BLOCK);
+        assert!(crate::testkit::all_finite(&bus.l[..BLOCK]));
+    }
+
     /// A voice struck with a new sample hands the old one, and the snapshot
     /// that carried it, to the retired ring rather than dropping either --
     /// either may be the last reference. Finding 2 of

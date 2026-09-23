@@ -109,6 +109,14 @@ impl Svf {
         let high = input - coeffs.damping * v1 - v2;
         self.band = 2.0 * v1 - self.band;
         self.low = 2.0 * v2 - self.low;
+        // A NaN or infinity that got in -- a NaN sample, a blown-up upstream
+        // device -- would otherwise stay in the state for good and silence
+        // everything after it until the project reloads (MOO-174). One sum
+        // catches either, since `inf - inf` is NaN too; the sample it arrived
+        // with is lost, and the next one is heard.
+        if !(self.low + self.band).is_finite() {
+            self.reset();
+        }
         (v2, v1, high)
     }
 
@@ -377,6 +385,10 @@ impl OnePoleHp {
         let out = input - self.prev_in + self.coeff * self.prev_out;
         self.prev_in = input;
         self.prev_out = out;
+        // See `Svf::tick_with`: a non-finite value never stays in the state.
+        if !out.is_finite() {
+            self.reset();
+        }
         out
     }
 }
@@ -432,8 +444,10 @@ impl OnePoleLp {
     }
 
     pub fn next_sample(&mut self, input: f32) -> f32 {
-        self.state += (input - self.state) * self.coeff;
-        self.state
+        let out = self.state + (input - self.state) * self.coeff;
+        // See `Svf::tick_with`: a non-finite value never stays in the state.
+        self.state = if out.is_finite() { out } else { 0.0 };
+        out
     }
 }
 
@@ -632,7 +646,13 @@ impl Ladder {
         self.stage[2] += g * (self.stage[1] - self.stage[2]);
         self.stage[3] += g * (self.stage[2] - self.stage[3]);
         self.feedback = self.stage[3];
-        self.stage[3]
+        let out = self.stage[3];
+        // A non-finite input reaches every stage in the same sample, so the
+        // last one says whether the state is poisoned (MOO-174).
+        if !out.is_finite() {
+            self.reset();
+        }
+        out
     }
 }
 
@@ -743,7 +763,12 @@ impl Acid {
         self.stage[1] += g * (self.stage[0] - self.stage[1]);
         self.stage[2] += g * (self.stage[1] - self.stage[2]);
         self.feedback = self.stage[2];
-        self.stage[2]
+        let out = self.stage[2];
+        // See `Ladder::next_sample` (MOO-174).
+        if !out.is_finite() {
+            self.reset();
+        }
+        out
     }
 }
 
@@ -1038,23 +1063,43 @@ mod tests {
         }
     }
 
-    /// A NaN that does get into a filter's *audio* path is not something a
-    /// filter can repair -- the state is the signal -- but it must not be put
-    /// to sleep broken: a poisoned stage is never at rest (a NaN fails every
-    /// comparison, which is the honest answer here), and `reset` clears it.
+    /// **A NaN in the audio heals (MOO-174).** A NaN or infinite *sample*
+    /// cannot be filtered -- the sample it arrives with is lost -- but it must
+    /// not stay in a recursive filter's state, where it used to silence
+    /// everything after it until the project reloaded. The very next finite
+    /// sample comes out finite, from every filter here, at every rate.
     #[test]
-    fn a_poisoned_filter_is_never_at_rest_and_reset_clears_it() {
+    fn a_non_finite_sample_never_stays_in_a_filter() {
         for sr in RATES {
-            let mut svf = Svf::new();
-            let mut lp = OnePoleLp::new();
-            lp.set_cutoff(1_000.0, sr);
-            svf.next_sample(f32::NAN, 1_000.0, 0.5, sr);
-            lp.next_sample(f32::NAN);
-            assert!(!svf.is_at_rest() && !lp.is_at_rest());
-            svf.reset();
-            lp.reset();
-            assert!(svf.next_sample(0.5, 1_000.0, 0.5, sr).is_finite());
-            assert!(lp.next_sample(0.5).is_finite());
+            for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                let mut svf = Svf::new();
+                let mut cascade = SvfCascade::new();
+                let (mut ladder, mut acid) = (Ladder::new(), Acid::new());
+                let (mut lp, mut hp) = (OnePoleLp::new(), OnePoleHp::new());
+                lp.set_cutoff(1_000.0, sr);
+                hp.set_cutoff(100.0, sr);
+                let mut step = |x: f32| {
+                    [
+                        svf.next_sample(x, 1_000.0, 0.9, sr),
+                        cascade.next_sample(x, SvfOutput::Low, SvfSlope::Db24, 1_000.0, 0.9, sr),
+                        ladder.next_sample(x, 1_000.0, 0.9, sr),
+                        acid.next_sample(x, 1_000.0, 0.9, sr),
+                        lp.next_sample(x),
+                        hp.next_sample(x),
+                    ]
+                };
+                for index in 0..256 {
+                    step((index as f32 * 0.1).sin() * 0.5);
+                }
+                step(bad);
+                for index in 0..256 {
+                    let out = step((index as f32 * 0.1).sin() * 0.5);
+                    assert!(
+                        all_finite(&out),
+                        "{sr} Hz: a {bad} sample was still in a filter {index} samples later: {out:?}"
+                    );
+                }
+            }
         }
     }
 
