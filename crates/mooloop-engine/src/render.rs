@@ -1079,6 +1079,12 @@ pub struct EffectSlot {
     wet_dry: f32,
     input_trim: f32,
     output_trim: f32,
+    /// The four host controls above, and a container's Mix, as the audio
+    /// hears them. See [`HostRamps`].
+    ramps: HostRamps,
+    /// Frames this slot has spent fading out for a removal, from the first
+    /// time the executor asked to remove it. `None` when nobody has.
+    removal_waited: Option<u32>,
     /// For a container: how many of the rows after this one are inside it,
     /// and the ring that delays its dry copy by that run's declared latency.
     ///
@@ -1128,12 +1134,184 @@ impl EffectSlot {
             wet_dry: 1.0,
             input_trim: 1.0,
             output_trim: 1.0,
+            ramps: HostRamps::new(),
+            removal_waited: None,
             container_children: 0,
             container_align: None,
             branch_align: None,
             silent_frames: 0,
         }
     }
+
+    /// A container's Mix, from the parameters it was last sent. Unity on a
+    /// leaf, where nothing reads it -- and where asking would be wrong:
+    /// `CONTAINER_PARAM_MIX` is id 0, which on a leaf is one of its own knobs.
+    fn container_mix(&self) -> f32 {
+        if !self.kind.is_some_and(mooloop_core::EffectKind::is_container) {
+            return 1.0;
+        }
+        self.base_params
+            .and_then(|params| params.get(mooloop_core::CONTAINER_PARAM_MIX))
+            .unwrap_or(1.0)
+            .clamp(0.0, 1.0)
+    }
+
+    /// Where each ramp is headed: the controls as they stand.
+    fn ramp_targets(&self) -> [f32; 5] {
+        [
+            self.wet_dry,
+            self.input_trim,
+            self.output_trim,
+            if self.bypassed { 0.0 } else { 1.0 },
+            self.container_mix(),
+        ]
+    }
+
+    /// Aim every ramp at its control, at the block's sample rate.
+    fn aim_ramps(&mut self, sample_rate: u32) {
+        let targets = self.ramp_targets();
+        self.ramps.aim(targets, sample_rate);
+    }
+
+    /// Jump every ramp to its control: for a document arriving, and for a
+    /// row with no audio path of its own to ramp along.
+    fn settle_ramps(&mut self) {
+        let targets = self.ramp_targets();
+        self.ramps.settle(targets);
+    }
+
+    /// Jump the leaf controls' ramps -- wet/dry and the trims -- to their
+    /// controls, for a row that does not use them: a container, or a slot
+    /// out of the path, where a move has nothing audible to ramp along and
+    /// a ramp left travelling would keep the chain awake for nothing.
+    fn settle_leaf_ramps(&mut self) {
+        self.ramps.wet.reset_to(self.wet_dry);
+        self.ramps.input.reset_to(self.input_trim);
+        self.ramps.output.reset_to(self.output_trim);
+    }
+
+    /// Whether every ramp has arrived at its control -- judged against the
+    /// controls rather than against where the ramps were last aimed, so a
+    /// move made while the chain slept still counts as one to make.
+    fn ramps_settled(&self) -> bool {
+        self.ramps.settled_at(self.ramp_targets())
+    }
+
+    /// Whether bypass has finished taking this slot out of the path. Until
+    /// it has, the device keeps running under the crossfade.
+    fn out_of_path(&self) -> bool {
+        self.bypassed && self.ramps.active.value() == 0.0
+    }
+
+    /// Whether this slot is coming back from being wholly out of the path,
+    /// which is when its device is told the audio it holds is stale.
+    fn returning(&self) -> bool {
+        !self.bypassed && self.ramps.active.value() == 0.0
+    }
+
+    /// Land a bypass fade that has reached [`BYPASS_FADE_FLOOR`]: the
+    /// one-pole would otherwise spend a hundred milliseconds creeping the
+    /// last sixty decibels, running a device nobody can hear.
+    fn finish_bypass_fade(&mut self) {
+        if self.bypassed && self.ramps.active.value() <= BYPASS_FADE_FLOOR {
+            self.ramps.active.reset_to(0.0);
+        }
+    }
+}
+
+/// How far down a bypass or removal fade has to get before the device is
+/// taken out of the path: -60 dB, about 35 ms into the 5 ms one-pole. A
+/// step of a thousandth of the difference between the wet and dry paths is
+/// a tenth of what the continuity family allows.
+const BYPASS_FADE_FLOOR: f32 = 1.0e-3;
+
+/// The longest a removal waits for its fade before going anyway (MOO-108).
+///
+/// The fade only runs while the chain is processed, and a chain can stop
+/// being processed while it waits -- a muted strip that has settled is
+/// skipped outright. It is inaudible then, so going without the fade costs
+/// nothing; waiting forever would hold every edit queued behind it.
+const REMOVAL_MAX_WAIT_S: f32 = 0.1;
+
+/// A slot's host controls as the audio hears them (MOO-108).
+///
+/// Wet/dry, the two trims, a container's Mix, and whether the device is in
+/// the path at all each follow their control through the mixer's one-pole
+/// over [`STRIP_GAIN_SMOOTH_S`], per sample -- the primitive and the time
+/// MOO-107 put on faders, pans and mutes, so every host move in the engine
+/// ramps the same way. A settled ramp returns its target exactly, which is
+/// what keeps a still chain bit-identical to the flat multiply it replaced.
+#[derive(Clone, Copy)]
+struct HostRamps {
+    wet: Smoothed,
+    input: Smoothed,
+    output: Smoothed,
+    /// One while the device is in the path, zero once bypass has taken it
+    /// out; between the two, the crossfade between the device's output and
+    /// the bypassed path.
+    active: Smoothed,
+    /// A container's Mix. Unused on a leaf.
+    mix: Smoothed,
+    /// The rate the times were last set for. A slot is built before it
+    /// knows one, and learns it from the first block it runs in.
+    sample_rate: u32,
+}
+
+impl HostRamps {
+    /// Where every control of a fresh slot starts.
+    const RATE_UNSET: u32 = 0;
+
+    fn new() -> Self {
+        let at = |value| Smoothed::new(value, STRIP_GAIN_SMOOTH_S, 48_000);
+        Self {
+            wet: at(1.0),
+            input: at(1.0),
+            output: at(1.0),
+            active: at(1.0),
+            mix: at(1.0),
+            sample_rate: Self::RATE_UNSET,
+        }
+    }
+
+    fn all_mut(&mut self) -> [&mut Smoothed; 5] {
+        [
+            &mut self.wet,
+            &mut self.input,
+            &mut self.output,
+            &mut self.active,
+            &mut self.mix,
+        ]
+    }
+
+    fn aim(&mut self, targets: [f32; 5], sample_rate: u32) {
+        let retime = sample_rate != self.sample_rate;
+        self.sample_rate = sample_rate;
+        for (ramp, target) in self.all_mut().into_iter().zip(targets) {
+            if retime {
+                ramp.set_time(STRIP_GAIN_SMOOTH_S, sample_rate);
+            }
+            ramp.set_target(target);
+        }
+    }
+
+    fn settle(&mut self, targets: [f32; 5]) {
+        for (ramp, target) in self.all_mut().into_iter().zip(targets) {
+            ramp.reset_to(target);
+        }
+    }
+
+    fn settled_at(&self, targets: [f32; 5]) -> bool {
+        [self.wet, self.input, self.output, self.active, self.mix]
+            .iter()
+            .zip(targets)
+            .all(|(ramp, target)| ramp.value() == target)
+    }
+}
+
+/// The equal-power pair for a wet/dry or Mix position: `(dry, wet)` gains.
+fn equal_power(wet: f32) -> (f32, f32) {
+    let blend = wet * core::f32::consts::FRAC_PI_2;
+    (blend.cos(), blend.sin())
 }
 
 impl EffectSlot {
@@ -1351,10 +1529,33 @@ impl EffectChain {
         self.slots.get_mut(slot)?.as_deref_mut()
     }
 
-    /// Host controls read on the realtime path, where an empty slot must
-    /// answer with its resting value rather than be absent.
+    /// Whether this slot is out of the path: bypassed, and the bypass fade
+    /// has finished. A slot fading out still runs its device (MOO-108).
     fn bypassed(&self, slot: usize) -> bool {
-        self.slot(slot).is_some_and(|slot| slot.bypassed)
+        self.slot(slot).is_some_and(EffectSlot::out_of_path)
+    }
+
+    /// Jump every slot's host ramps to its controls. See
+    /// [`RenderState::settle_mixer`].
+    fn settle_ramps(&mut self) {
+        for state in self.slots[..self.bound].iter_mut().flatten() {
+            state.settle_ramps();
+        }
+    }
+
+    /// Tell the device in `slot` -- every device in its run, for a
+    /// container -- that what it holds is stale, because the slot is coming
+    /// back from being wholly out of the path. A delay un-bypassed has to
+    /// start empty rather than play the repeats it held when it went out
+    /// (MOO-108); it was not called while it was out, so what it holds is
+    /// audio from then.
+    fn restart_returning(&mut self, slot: usize) {
+        let last = slot + self.container_children(slot);
+        for row in slot..=last.min(self.bound.saturating_sub(1)) {
+            if let Some(node) = self.nodes[row].as_mut() {
+                node.on_discontinuity(Discontinuity::Seek);
+            }
+        }
     }
 
     /// Whether this slot holds a container rather than a leaf device.
@@ -1371,18 +1572,6 @@ impl EffectChain {
     /// zero for an empty container, which is the same thing to this loop.
     fn container_children(&self, slot: usize) -> usize {
         self.slot(slot).map_or(0, |state| state.container_children as usize)
-    }
-
-    fn wet_dry(&self, slot: usize) -> f32 {
-        self.slot(slot).map_or(1.0, |slot| slot.wet_dry)
-    }
-
-    fn input_trim(&self, slot: usize) -> f32 {
-        self.slot(slot).map_or(1.0, |slot| slot.input_trim)
-    }
-
-    fn output_trim(&self, slot: usize) -> f32 {
-        self.slot(slot).map_or(1.0, |slot| slot.output_trim)
     }
 
     /// Remove every node, queuing the boxes for off-thread disposal.
@@ -1433,6 +1622,7 @@ impl EffectChain {
                 state.wet_dry = previous.wet_dry;
                 state.input_trim = previous.input_trim;
                 state.output_trim = previous.output_trim;
+                state.ramps = previous.ramps;
             }
             state.kind = Some(kind);
             state.base_params = Some(kind.default_params());
@@ -1793,6 +1983,8 @@ impl EffectChain {
                 state.output_trim = effect.output_trim.clamp(0.0, MAX_LINEAR_GAIN);
                 state.container_children = children;
                 state.container_align = align;
+                // A document arriving starts at its own controls.
+                state.settle_ramps();
             }
         }
         // Each layer's shorter branches, held back to meet its longest.
@@ -1859,6 +2051,7 @@ impl EffectChain {
             return false;
         };
         silent > 0
+            && self.slot(slot).is_none_or(EffectSlot::ramps_settled)
             && silent >= node.dry_path_latency_frames()
             && (node.is_at_rest() || silent > node.tail_frames())
     }
@@ -1881,6 +2074,11 @@ impl EffectChain {
                 return false;
             }
             if silent < node.dry_path_latency_frames() {
+                return false;
+            }
+            // A host ramp still travelling keeps the chain awake, so a
+            // sleeping strip and a running one leave it in the same place.
+            if !self.slot(slot).is_none_or(EffectSlot::ramps_settled) {
                 return false;
             }
             self.bypassed(slot) || node.is_at_rest() || silent > node.tail_frames()
@@ -1981,6 +2179,16 @@ impl EffectChain {
             if slot < skip_until {
                 continue;
             }
+            // Aim the row's host ramps at its controls. A slot coming back
+            // from wholly out of the path starts its device clean first
+            // (MOO-108): it was not called while it was out.
+            let returning = self.slot(slot).is_some_and(EffectSlot::returning);
+            if let Some(state) = self.slots[slot].as_deref_mut() {
+                state.aim_ramps(context.sample_rate);
+            }
+            if returning {
+                self.restart_returning(slot);
+            }
             if let Some((_, telemetry, target)) = device_display {
                 // A device that publishes its own display spectrum owns the
                 // stage; feeding the generic analyzer as well would burn a
@@ -2017,9 +2225,13 @@ impl EffectChain {
                 }
                 if let Some(state) = self.slots[slot].as_mut() {
                     state.events.clear();
+                    state.settle_leaf_ramps();
                 }
                 let children = self.container_children(slot);
                 if children == 0 {
+                    if let Some(state) = self.slots[slot].as_mut() {
+                        state.settle_ramps();
+                    }
                     // An empty box is a row that does nothing, so what comes
                     // out of it is what went in.
                     if let Some((meters, _, target)) = device_display {
@@ -2064,6 +2276,10 @@ impl EffectChain {
                 // still does nothing, which is the part that needs a decision
                 // -- see `docs/LOOSE_ENDS.md`.
                 if depth >= MAX_CONTAINER_DEPTH {
+                    // Inert: no blend to ramp its Mix or its bypass along.
+                    if let Some(state) = self.slots[slot].as_mut() {
+                        state.settle_ramps();
+                    }
                     // No OUT published. This branch cannot open a run --
                     // `scratch.dry` is `MAX_CONTAINER_DEPTH` long, which is
                     // what the cap is for -- so `close_run` never publishes
@@ -2108,6 +2324,9 @@ impl EffectChain {
                 continue;
             }
             if self.bypassed(slot) {
+                if let Some(state) = self.slots[slot].as_mut() {
+                    state.settle_leaf_ramps();
+                }
                 // A bypassed slot keeps its queued events until re-enabled, so
                 // knob turns made while bypassed are not lost.
                 if let Some(align) = &mut self.dry_align[slot] {
@@ -2179,11 +2398,10 @@ impl EffectChain {
                     // stopped, with no ramp and no reset.
                     continue;
                 }
-                let input_trim = self.input_trim(slot);
-                for frame in 0..context.frames {
-                    bus.l[frame] *= input_trim;
-                    bus.r[frame] *= input_trim;
-                }
+                // The dry copy is taken *before* the input trim: it is also
+                // the bypassed path, which the trim is not on, and the blend
+                // below puts the trim back on it frame by frame. With the
+                // trim still, that is the same product in the same order.
                 self.dry.l[..context.frames].copy_from_slice(&bus.l[..context.frames]);
                 self.dry.r[..context.frames].copy_from_slice(&bus.r[..context.frames]);
                 if let Some(align) = &mut self.dry_align[slot] {
@@ -2192,6 +2410,16 @@ impl EffectChain {
                         &mut self.dry.r[..context.frames],
                     );
                 }
+                let mut ramps = self.slot(slot).map_or_else(HostRamps::new, |state| state.ramps);
+                // Walked twice, identically: once onto the device's input
+                // here, once onto the dry copy in the blend.
+                let mut dry_input = ramps.input;
+                for frame in 0..context.frames {
+                    let input_trim = ramps.input.advance();
+                    bus.l[frame] *= input_trim;
+                    bus.r[frame] *= input_trim;
+                }
+                let input_trim = ramps.input.value();
                 if let Some((meters, _, target)) = device_display {
                     meters.publish_input(target, slot + 1, peak_l * input_trim, peak_r * input_trim);
                 }
@@ -2200,10 +2428,6 @@ impl EffectChain {
                     self.refused_events += state.events.copy_to(&mut self.event_scratch);
                 }
                 self.control_events_for_slot(slot, scope, modulation, automation);
-                // Read the slot's host controls before the node borrow: they
-                // now live behind the same `&self` the node is taken from.
-                let wet = self.wet_dry(slot);
-                let trim = self.output_trim(slot);
                 // `control_events_for_slot` mutates the shared scratch
                 // pools, so take the node borrow only after that work.
                 let node = self.nodes[slot].as_mut().expect("checked above");
@@ -2229,13 +2453,35 @@ impl EffectChain {
                 // linear fade dips ~3 dB at the midpoint; correlated paths
                 // (filters, EQ) now sum slightly hot at 50%. Trade-off noted
                 // in docs/GAIN_STRUCTURE.md.
-                let blend = wet * core::f32::consts::FRAC_PI_2;
-                let (dry_gain, wet_gain) = (blend.cos(), blend.sin());
+                //
+                // Every control in it ramps per sample (MOO-108), and the
+                // whole of it crossfades against the bypassed path -- the
+                // untrimmed dry copy -- while bypass takes the device out or
+                // brings it back. A still slot takes the branches that do
+                // exactly what the flat version did.
+                let wet_moving = !ramps.wet.is_settled();
+                let (mut dry_gain, mut wet_gain) = equal_power(ramps.wet.value());
                 for frame in 0..context.frames {
-                    bus.l[frame] =
-                        (self.dry.l[frame] * dry_gain + bus.l[frame] * wet_gain) * trim;
-                    bus.r[frame] =
-                        (self.dry.r[frame] * dry_gain + bus.r[frame] * wet_gain) * trim;
+                    let input_trim = dry_input.advance();
+                    if wet_moving {
+                        (dry_gain, wet_gain) = equal_power(ramps.wet.advance());
+                    }
+                    let trim = ramps.output.advance();
+                    let active = ramps.active.advance();
+                    let (dry_l, dry_r) = (self.dry.l[frame], self.dry.r[frame]);
+                    let left = (dry_l * input_trim * dry_gain + bus.l[frame] * wet_gain) * trim;
+                    let right = (dry_r * input_trim * dry_gain + bus.r[frame] * wet_gain) * trim;
+                    if active == 1.0 {
+                        bus.l[frame] = left;
+                        bus.r[frame] = right;
+                    } else {
+                        bus.l[frame] = dry_l + (left - dry_l) * active;
+                        bus.r[frame] = dry_r + (right - dry_r) * active;
+                    }
+                }
+                if let Some(state) = self.slots[slot].as_deref_mut() {
+                    state.ramps = ramps;
+                    state.finish_bypass_fade();
                 }
                 if let Some((meters, telemetry, target)) = device_display {
                     let (left, right) = bus.peak(context.frames);
@@ -2261,6 +2507,11 @@ impl EffectChain {
                     if let Some(levels) = node.take_display_spectrum() {
                         telemetry.publish_spectrum(target, slot + 1, &levels);
                     }
+                }
+            }
+            if self.nodes[slot].is_none() {
+                if let Some(state) = self.slots[slot].as_mut() {
+                    state.settle_ramps();
                 }
             }
             if let Some(state) = self.slots[slot].as_mut() {
@@ -2401,12 +2652,6 @@ impl EffectChain {
         bus: &mut StereoBus,
         context: &ProcessContext,
     ) {
-        let mix = self
-            .slot(run.slot)
-            .and_then(|state| state.base_params)
-            .and_then(|params| params.get(mooloop_core::CONTAINER_PARAM_MIX))
-            .unwrap_or(1.0)
-            .clamp(0.0, 1.0);
         // Two disjoint fields at once: the ring lives on the container's slot
         // and the copy it delays lives on the chain.
         let Self {
@@ -2435,15 +2680,29 @@ impl EffectChain {
         // `cos(pi/2)` of the dry -- about 6e-8 -- so *running* it would leak
         // a fraction of the dry into a run the user asked to hear whole, and
         // step 02's bit-exact null is what would break.
-        if mix >= 1.0 {
+        //
+        // The Mix and the box's bypass both ramp (MOO-108): bypassing a box
+        // is its Mix fading to dry while its run keeps playing, and only
+        // once that has arrived does the run stop being called.
+        let Some(state) = slots[run.slot].as_deref_mut() else {
+            return;
+        };
+        let mut ramps = state.ramps;
+        let still = ramps.mix.is_settled() && ramps.active.is_settled();
+        let mix = ramps.mix.value() * ramps.active.value();
+        if still && mix >= 1.0 {
             return;
         }
-        let blend = mix * core::f32::consts::FRAC_PI_2;
-        let (dry_gain, wet_gain) = (blend.cos(), blend.sin());
+        let (mut dry_gain, mut wet_gain) = equal_power(mix);
         for frame in 0..context.frames {
+            if !still {
+                (dry_gain, wet_gain) = equal_power(ramps.mix.advance() * ramps.active.advance());
+            }
             bus.l[frame] = scratch.dry[depth].l[frame] * dry_gain + bus.l[frame] * wet_gain;
             bus.r[frame] = scratch.dry[depth].r[frame] * dry_gain + bus.r[frame] * wet_gain;
         }
+        state.ramps = ramps;
+        state.finish_bypass_fade();
     }
 }
 
@@ -4660,11 +4919,13 @@ impl RenderState {
             let silenced = strip.output.muted || strip.solo_silenced;
             strip.output.aim(silenced);
             strip.output.settle();
+            strip.effects.settle_ramps();
             self.sends
                 .settle(EffectTarget::Channel(index as u8), silenced);
         }
         for (index, strip) in self.buses.iter_mut().enumerate() {
             strip.settle();
+            strip.effects.settle_ramps();
             let silenced = strip.output.muted || strip.solo_silenced;
             self.sends.settle(EffectTarget::Bus(index as u8), silenced);
         }
@@ -5189,6 +5450,43 @@ impl RenderState {
     /// is what keeps the `reclaim` vector within its reservation.
     pub(crate) fn has_displaced_effects(&self) -> bool {
         !self.reclaim.is_empty()
+    }
+
+    /// Whether the effect in `slot` has faded out of the path and can be
+    /// removed without a step (MOO-108).
+    ///
+    /// The first call starts the fade by bypassing the slot -- it is going
+    /// anyway -- and the executor holds the removal, and everything behind
+    /// it, until this says yes: about 35 ms. `frames` is the length of the
+    /// block the executor is about to render, taken as the length of the
+    /// one since it last asked. A slot the chain has stopped processing
+    /// (a settled mute) cannot finish its fade, and is inaudible besides,
+    /// so it goes after [`REMOVAL_MAX_WAIT_S`] regardless; one that never
+    /// rendered at all goes at once.
+    pub(crate) fn effect_removal_ready(
+        &mut self,
+        target: EffectTarget,
+        slot: u8,
+        frames: usize,
+    ) -> bool {
+        let Some(state) = self
+            .chain_mut(target)
+            .and_then(|chain| chain.slot_mut(slot as usize))
+        else {
+            return true;
+        };
+        if state.out_of_path() {
+            return true;
+        }
+        state.bypassed = true;
+        let waited = state
+            .removal_waited
+            .map_or(0, |waited| waited.saturating_add(frames as u32));
+        state.removal_waited = Some(waited);
+        // A slot that has never rendered has a rate of zero here, and goes
+        // at once: nothing has heard it.
+        let limit = (REMOVAL_MAX_WAIT_S * state.ramps.sample_rate as f32) as u32;
+        waited >= limit
     }
 
     /// Apply a structural change (install/remove of a boxed node). Called on
@@ -12932,6 +13230,8 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         );
         assert!(displaced.is_empty());
         chain.slot_mut(0).unwrap().wet_dry = 0.5;
+        // The blend as configured, not the ramp into it (MOO-108).
+        chain.slot_mut(0).unwrap().settle_ramps();
 
         let context = ProcessContext {
             sample_rate: 48_000,
@@ -14859,7 +15159,13 @@ mod footprint {
         // meet its longest (`docs/plans/containers/08`), on the branch head's
         // slot for the same reason: `None` everywhere but a branch that
         // declares less than its siblings.
-        assert_eq!(size_of::<EffectSlot>(), 520);
+        //
+        // And by seventy-two for MOO-108: sixty-four for the host ramps that
+        // make wet/dry, the trims, Mix and bypass move per sample instead of
+        // switching (five `Smoothed` and the rate they were timed for), and
+        // eight for the frames a removal has waited on its fade. Again per
+        // occupied slot only.
+        assert_eq!(size_of::<EffectSlot>(), 592);
         assert_eq!(size_of::<Option<Box<EffectSlot>>>(), 8);
         // Eight of this is the pointer to the per-depth dry buffers a chain
         // needs while it is *inside* containers. One pointer, not four
