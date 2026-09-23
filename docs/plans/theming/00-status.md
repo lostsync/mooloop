@@ -2,8 +2,8 @@
 
 Linear: project [Theming](https://linear.app/mooloop/project/theming-beb2299b6232).
 What is left is MOO-153 (02), MOO-154 (the rest of 04), MOO-155 (05's
-homages), MOO-156 (following the desktop live) and MOO-157 (the padding
-literals).
+homages) and MOO-157 (the padding literals). MOO-156 (following the
+desktop live) is done.
 
 Unparked 2026-09-15 by Adam, with a brief that is wider than the plan this
 directory was written to:
@@ -245,11 +245,14 @@ one step out**:
 - **Relief's remaining adopters**, after Adam has looked at the bevel (MOO-153).
 - **`05-authoring-a-theme.md`'s guide landed as `docs/THEMES.md`**, and its two
   homages as built-ins.
-- **The desktop is asked, not watched.** `system.rs` probes at startup and
-  whenever Preferences opens. Following a desktop that changes its mind while
-  mooloop is running means subscribing to the portal's `SettingChanged`
-  signal, which means a D-Bus client, which is a dependency this crate does
-  not have. Worth doing; not worth guessing at here.
+- ~~**The desktop is asked, not watched.**~~ Done 2026-09-23 (MOO-156), and
+  without a D-Bus client of our own: Slint's winit backend already subscribes
+  to the portal's `SettingChanged` (and winit reports macOS's appearance), so
+  `MainWindow.desktop-color-scheme` mirrors `Palette.color-scheme` and a
+  `changed` handler hands the new side to `system::desktop_reported`. Auto
+  re-sides the saved appearance, or the page's uncommitted edit while
+  Preferences is open. The startup probes in `system.rs` stay for the first
+  answer.
 - **The remaining literals.** The type and stroke sweep is complete. Metrics
   are not: `density` reaches `Theme.control-height` and the padding ramp, and
   the great majority of paddings in the device faces are still literals. That

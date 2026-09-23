@@ -15,27 +15,40 @@
 //! 5. dark, because that is what this program looks like.
 //!
 //! **Nothing here is on a hot path and nothing here blocks the UI for long.**
-//! The answer is cached for the life of the process and re-probed only when
-//! the Appearance page asks, which is the honest limit of this: mooloop
-//! follows the desktop at startup and when you open Preferences, not the
-//! instant the desktop changes. Watching for the change is a portal signal
-//! subscription and a D-Bus dependency, and it is written down in
-//! `docs/plans/theming/00-status.md` rather than guessed at here.
+//! The answer is cached for the life of the process and re-probed when the
+//! Appearance page asks.
+//!
+//! **Watching is Slint's job, not this file's** (MOO-156). Slint's winit
+//! backend already holds a D-Bus connection to the portal and applies its
+//! `SettingChanged` signal to `Palette.color-scheme`; on macOS winit reports
+//! the system appearance the same way. `MainWindow.desktop-color-scheme`
+//! mirrors that and fires a callback when it moves, which lands in
+//! [`desktop_reported`]. So a desktop that changes its mind while mooloop is
+//! running is followed within a frame, with no D-Bus client of our own and no
+//! polling. The probes below remain for the first answer and for a platform
+//! whose backend never reports one.
 
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::cell::Cell;
 
-/// 0 = not probed, 1 = dark, 2 = light.
-static CACHED: AtomicU8 = AtomicU8::new(0);
+thread_local! {
+    /// 0 = not probed, 1 = dark, 2 = light.
+    ///
+    /// Per thread rather than per process: every reader is the UI thread, and
+    /// each test thread gets a cache of its own, so a test that feeds in a
+    /// desktop report cannot race another test's probe. A second thread that
+    /// ever asked would only cost one more probe.
+    static CACHED: Cell<u8> = const { Cell::new(0) };
+}
 
 /// What the desktop is wearing, as far as anything here can tell.
 pub(crate) fn prefers_dark() -> bool {
-    match CACHED.load(Ordering::Relaxed) {
+    match CACHED.get() {
         1 => true,
         2 => false,
         _ => {
             let dark = probe().unwrap_or(true);
-            CACHED.store(if dark { 1 } else { 2 }, Ordering::Relaxed);
+            CACHED.set(if dark { 1 } else { 2 });
             dark
         }
     }
@@ -44,7 +57,28 @@ pub(crate) fn prefers_dark() -> bool {
 /// Throws away the cached answer, so the next [`prefers_dark`] asks again.
 /// The Appearance page calls this when it opens.
 pub(crate) fn forget() {
-    CACHED.store(0, Ordering::Relaxed);
+    CACHED.set(0);
+}
+
+/// The platform said what it is wearing now, as
+/// `MainWindow.desktop-color-scheme` spells it: `1` dark, `2` light. That
+/// replaces the cached answer and returns true. Anything else is the platform
+/// not knowing, which must not overwrite what the probes found, so it changes
+/// nothing and returns false.
+pub(crate) fn desktop_reported(scheme: i32) -> bool {
+    let Some(dark) = reported_dark(scheme) else {
+        return false;
+    };
+    CACHED.set(if dark { 1 } else { 2 });
+    true
+}
+
+fn reported_dark(scheme: i32) -> Option<bool> {
+    match scheme {
+        1 => Some(true),
+        2 => Some(false),
+        _ => None,
+    }
 }
 
 fn probe() -> Option<bool> {
@@ -186,6 +220,22 @@ mod tests {
         assert_eq!(first, prefers_dark());
         forget();
         assert_eq!(first, prefers_dark());
+    }
+
+    /// Only dark and light are answers. Slint's `unknown` (0) is a platform
+    /// that has not said, and taking it as either side would override what
+    /// the probes found.
+    #[test]
+    fn a_report_is_the_answer_and_unknown_is_not() {
+        assert!(desktop_reported(2));
+        assert!(!prefers_dark());
+        assert!(!desktop_reported(0));
+        assert!(!prefers_dark(), "0 left the light answer alone");
+        assert!(desktop_reported(1));
+        assert!(prefers_dark());
+        assert!(!desktop_reported(3));
+        assert!(!desktop_reported(-1));
+        assert!(prefers_dark());
     }
 
     /// Every probe has to survive a binary that is not installed, which is the

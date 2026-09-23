@@ -1,4 +1,4 @@
-import { ComboBox, HorizontalBox, ScrollView, SpinBox, VerticalBox } from "std-widgets.slint";
+import { ComboBox, HorizontalBox, Palette, ScrollView, SpinBox, VerticalBox } from "std-widgets.slint";
 import { Theme, Motion, StatusHint } from "theme.slint";
 import { GainMath } from "gain.slint";
 import { ReorderMath } from "reorder.slint";
@@ -920,6 +920,19 @@ export component MainWindow inherits Window {
     // of them to be passed in the wrong order.
     callback preferences-appearance-preview();
     callback preferences-appearance-mode-changed(int);
+    // The desktop's light/dark preference as the platform reports it, live:
+    // on Linux Slint's winit backend subscribes to the XDG portal's
+    // `org.freedesktop.appearance color-scheme` and its `SettingChanged`
+    // signal, and on macOS winit reports the system appearance. Nothing here
+    // sets `Palette.color-scheme`, so it is the platform's own answer.
+    // 0 while the platform has not said, 1 dark, 2 light. Rust follows it
+    // when the appearance mode is Auto (MOO-156).
+    out property <int> desktop-color-scheme: Palette.color-scheme == ColorScheme.dark ? 1
+        : Palette.color-scheme == ColorScheme.light ? 2 : 0;
+    callback desktop-color-scheme-changed(int);
+    changed desktop-color-scheme => {
+        root.desktop-color-scheme-changed(root.desktop-color-scheme);
+    }
     callback preferences-appearance-select-theme(string);
     callback preferences-appearance-save-theme(string);
     callback preferences-appearance-remove-theme(string);

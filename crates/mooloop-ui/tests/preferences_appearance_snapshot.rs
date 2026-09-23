@@ -211,3 +211,43 @@ fn render_preferences_appearance_snapshot() {
     let page = harness.window().take_snapshot().expect("headless snapshot");
     write_snapshot(&page, "MOOLOOP_APPEARANCE_PAGE_SNAPSHOT");
 }
+
+/// MOO-156: the window hears the desktop switch between light and dark while
+/// it is running. Slint's winit backend writes the portal's (or macOS's)
+/// answer into the context's colour scheme; this writes it the same way and
+/// checks `desktop-color-scheme` follows and the callback Rust listens on
+/// fires with the new side each time. The Rust half, which re-sides an Auto
+/// appearance, is `theme::system::desktop_reported` and its wiring in
+/// `lib.rs`.
+#[test]
+fn the_window_reports_a_desktop_scheme_change() {
+    use slint::private_unstable_api::re_exports::{ColorScheme, WindowInner};
+    use std::cell::RefCell;
+
+    common::install_testing_backend();
+    let ui = MainWindow::new().unwrap();
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    {
+        let heard = heard.clone();
+        ui.on_desktop_color_scheme_changed(move |scheme| heard.borrow_mut().push(scheme));
+    }
+    let context = WindowInner::from_pub(ui.window()).context();
+
+    context.set_color_scheme(ColorScheme::Light);
+    slint::platform::update_timers_and_animations();
+    assert_eq!(ui.get_desktop_color_scheme(), 2);
+
+    context.set_color_scheme(ColorScheme::Dark);
+    slint::platform::update_timers_and_animations();
+    assert_eq!(ui.get_desktop_color_scheme(), 1);
+
+    context.set_color_scheme(ColorScheme::Light);
+    slint::platform::update_timers_and_animations();
+    assert_eq!(ui.get_desktop_color_scheme(), 2);
+
+    let heard = heard.borrow();
+    assert!(
+        heard.ends_with(&[1, 2]),
+        "each switch reaches Rust once, in order: {heard:?}"
+    );
+}

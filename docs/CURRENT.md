@@ -484,7 +484,9 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   `~/.cache/wal/` or `~/.cache/wallust/`, and is that palette. A variant the
   scheme does not publish is derived from the one it does and says so in the
   list. A **Dark / Light / Auto** control picks the side, where Auto follows
-  the desktop's own `org.freedesktop.appearance color-scheme`.
+  the desktop's own `org.freedesktop.appearance color-scheme` (the system
+  appearance on macOS), **live**: switching the desktop between light and dark
+  switches mooloop within a frame, with Preferences open or closed (MOO-156).
   **The channel, track and pattern swatch palette follows the theme**: eleven
   colours taken from the ramp's eight hues plus a midpoint in each of its
   three widest gaps. A song stores the colour it was given rather than a

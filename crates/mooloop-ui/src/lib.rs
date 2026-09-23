@@ -594,6 +594,34 @@ fn apply_appearance(window: &MainWindow, appearance: &AppearanceSettings) {
     // `sync_preferences_properties` (startup, cancel, and Apply) instead.
 }
 
+/// The desktop reported `scheme` (`MainWindow.desktop-color-scheme`: 1 dark,
+/// 2 light, 0 not known) while mooloop was running (MOO-156).
+///
+/// Only Auto follows it: an explicit Dark or Light is the user's choice and a
+/// desktop change must not touch it. `0` is not a side, so Auto keeps what it
+/// already decided rather than flipping to a default. With Preferences open,
+/// the page's uncommitted edit is what is on screen, so that is what is
+/// re-sided, exactly as picking Auto on the page would do; otherwise the saved
+/// appearance is.
+fn follow_desktop_scheme(window: &MainWindow, stored: &AppearanceSettings, scheme: i32) {
+    if !crate::theme::system::desktop_reported(scheme) {
+        return;
+    }
+    if window.get_preferences_open() {
+        let mut candidate = window_appearance(window, stored);
+        if candidate.mode() != crate::theme::Mode::System {
+            return;
+        }
+        candidate.sync_seeds();
+        if let Ok(appearance) = candidate.validated() {
+            push_appearance_colors(window, &appearance);
+            apply_appearance(window, &appearance);
+        }
+    } else if stored.mode() == crate::theme::Mode::System {
+        apply_appearance(window, stored);
+    }
+}
+
 /// Reads back the Appearance page's live, uncommitted state. The dialog holds
 /// the edit in its properties until Apply, so this is what preview, theme
 /// selection, and Save Theme all have to work from.
@@ -8178,6 +8206,20 @@ impl AppUi {
                     }
                     Err(error) => window.set_preferences_error(error.to_string().into()),
                 }
+            });
+        }
+        {
+            // The desktop switched between light and dark while mooloop was
+            // running (MOO-156). Slint watches the portal (or macOS's
+            // appearance) and this is where its answer lands; only Auto
+            // follows it. With Preferences open the page's uncommitted edit is
+            // what is on screen, so that is what gets re-sided, exactly as
+            // picking Auto on the page would; otherwise the saved appearance.
+            let settings = ui_settings.clone();
+            let weak = window.as_weak();
+            window.on_desktop_color_scheme_changed(move |scheme| {
+                let Some(window) = weak.upgrade() else { return };
+                follow_desktop_scheme(&window, &settings.borrow().appearance, scheme);
             });
         }
         {
@@ -20367,5 +20409,48 @@ mod tests {
             assert_eq!(entry.after.project.channels[0].setup.channel.volume, end);
         }
         assert_eq!(label_under_top(&commands), "Rename channel", "three notches, one step");
+    }
+
+    /// MOO-156: a desktop that switches between light and dark re-sides Auto,
+    /// and only Auto. An explicit Dark or Light is the user's choice, and a
+    /// report of "unknown" (no portal, a headless session) is not a side.
+    #[test]
+    fn only_auto_follows_the_desktop_and_unknown_changes_nothing() {
+        use super::{apply_appearance, follow_desktop_scheme, AppearanceSettings, Theme};
+        use slint::ComponentHandle;
+
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().expect("the testing backend builds a window");
+        let with_mode = |mode: &str| AppearanceSettings {
+            mode: mode.to_owned(),
+            ..AppearanceSettings::default()
+        };
+        let background = |window: &MainWindow| window.global::<Theme>().get_background();
+        let dark = with_mode("dark").palette().background.color();
+        let light = with_mode("light").palette().background.color();
+        assert_ne!(dark, light, "the default theme has two different sides");
+
+        // Explicit choices hold whatever the desktop says.
+        for (mode, expected) in [("dark", dark), ("light", light)] {
+            let stored = with_mode(mode);
+            apply_appearance(&window, &stored);
+            for scheme in [1, 2, 0, 2, 1] {
+                follow_desktop_scheme(&window, &stored, scheme);
+                assert_eq!(background(&window), expected, "{mode} after report {scheme}");
+            }
+        }
+
+        // Auto follows each report, and an unknown one keeps the last side.
+        let auto = with_mode("system");
+        follow_desktop_scheme(&window, &auto, 2);
+        assert_eq!(background(&window), light);
+        follow_desktop_scheme(&window, &auto, 0);
+        assert_eq!(background(&window), light, "unknown is not a flip to dark");
+        follow_desktop_scheme(&window, &auto, 1);
+        assert_eq!(background(&window), dark);
+        follow_desktop_scheme(&window, &auto, 0);
+        assert_eq!(background(&window), dark, "unknown is not a flip to light");
+        follow_desktop_scheme(&window, &auto, 2);
+        assert_eq!(background(&window), light);
     }
 }
