@@ -19111,7 +19111,11 @@ mod tests {
         assert_eq!(window.get_question_primary(), "Reconnect");
         assert_eq!(window.get_question_secondary(), "");
         assert!(matches!(*slot.borrow(), Some(Question::Reconnect)));
-        assert_eq!(window.get_status_message(), NO_AUDIO_STATUS);
+        // Held, so it outlives the question being dismissed (MOO-132).
+        assert_eq!(window.get_status_notice(), NO_AUDIO_STATUS);
+        assert_eq!(window.get_status_notice_level(), crate::NoticeLevel::Error);
+        window.set_status_message("Device selected".into());
+        assert_eq!(window.get_status_notice(), NO_AUDIO_STATUS);
 
         // The unsaved-changes question is up: the audio news waits.
         ask_unsaved(&window, &slot, AfterUnsaved::Quit, None);
@@ -19126,6 +19130,7 @@ mod tests {
         assert!(announce_audio_state(&window, &slot, &AudioState::Running));
         assert!(!window.get_question_open());
         assert_eq!(window.get_status_message(), "Audio is running");
+        assert_eq!(window.get_status_notice(), "", "the no-audio notice comes down");
     }
 
     /// **The takes dialog's ticks and total** (MOO-38): this session's takes
