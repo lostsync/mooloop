@@ -57,24 +57,52 @@ fn click_at(ui: &MainWindow, p: (f32, f32)) {
 
 /// How many pixels in a colour count as "drawn in it". Absent is exactly 0,
 /// so this only has to clear a stray antialiased pixel. The figure itself
-/// depends on the font rasteriser: CI's macOS runner draws the error in 34
-/// pixels, which failed the floor of 40 this used to be.
+/// depends on the font rasteriser. Counting exact matches, CI's macOS runner
+/// drew the error in 34 pixels, which failed the floor of 40 this used to be.
 const DRAWN: usize = 12;
 
-/// Pixels in the status bar between `x0` and `x1` within a few levels of
-/// `colour`. Close rather than equal, so antialiased text counts; nothing
-/// else on a near-black bar comes within that distance of red or amber.
+/// The status bar's last row: it ends at y 750, and below it is the window.
+const BAR_BOTTOM: usize = 750;
+
+/// Pixels in the status bar between `x0` and `x1` drawn in `colour`: the
+/// colour itself, or the colour laid over the bar at half coverage or more.
+///
+/// Antialiased text is mostly blends, and how many pixels of a glyph a
+/// rasteriser covers fully is its own business. CI's macOS runner drew the
+/// xrun count's digits without one pixel within 12 levels of exact amber.
+/// A blend is recognised by lying on the line from the bar's background to
+/// `colour`, so muted text, which lies on a different line, does not count,
+/// and neither does another theme colour.
 fn pixels_near(ui: &MainWindow, colour: Color, x0: usize, x1: usize) -> usize {
     let snapshot = ui.window().take_snapshot().unwrap();
     let width = snapshot.width() as usize;
     let bytes = snapshot.as_bytes();
-    let near = |a: u8, b: u8| a.abs_diff(b) <= 12;
-    (BAR_TOP..snapshot.height() as usize)
-        .flat_map(|y| (x0..x1.min(width)).map(move |x| (y * width + x) * 4))
-        .filter(|&at| {
-            near(bytes[at], colour.red())
-                && near(bytes[at + 1], colour.green())
-                && near(bytes[at + 2], colour.blue())
+    let pixel = |x: usize, y: usize| {
+        let at = (y * width + x) * 4;
+        [bytes[at], bytes[at + 1], bytes[at + 2]].map(f32::from)
+    };
+    let rows = BAR_TOP..BAR_BOTTOM.min(snapshot.height() as usize);
+
+    // The bar's background is its commonest colour.
+    let mut counts = std::collections::HashMap::<[u8; 3], usize>::new();
+    for y in rows.clone() {
+        for x in 0..width {
+            *counts.entry(pixel(x, y).map(|c| c as u8)).or_default() += 1;
+        }
+    }
+    let background = counts.into_iter().max_by_key(|&(_, n)| n).unwrap().0.map(f32::from);
+
+    let target = [colour.red(), colour.green(), colour.blue()].map(f32::from);
+    let delta: [f32; 3] = std::array::from_fn(|c| target[c] - background[c]);
+    let key = (0..3).max_by(|&a, &b| delta[a].abs().total_cmp(&delta[b].abs())).unwrap();
+    assert!(delta[key].abs() >= 32.0, "{colour:?} is too close to the bar to be told apart");
+
+    rows.flat_map(|y| (x0..x1.min(width)).map(move |x| (x, y)))
+        .filter(|&(x, y)| {
+            let p = pixel(x, y);
+            let cover = (p[key] - background[key]) / delta[key];
+            (0.5..=1.1).contains(&cover)
+                && (0..3).all(|c| (p[c] - (background[c] + cover * delta[c])).abs() <= 12.0)
         })
         .count()
 }
