@@ -1,8 +1,28 @@
 name: Release
 
 # Builds Linux packages (.deb, .rpm, AppImage) and an unsigned Apple Silicon
-# macOS app (zipped .app) and attaches them to a GitHub Release. Fires on a `v*.*.*` tag push, or manually via workflow_dispatch
-# for a dry run (no tag needed; the publish job still requires a real tag).
+# macOS app (zipped .app) and attaches them to a GitHub Release. Fires on a
+# `v*.*.*` tag push, or manually via workflow_dispatch for a dry run (no tag
+# needed; the publish job still requires a real tag).
+#
+# The shape, and why (MOO-141):
+#
+# - `verify` runs first and everything else needs it: the tag matches the
+#   workspace version, clippy and the tests pass, and `engine-selftest` plays
+#   through a real JACK server (`jackd -d dummy`). A tag whose tests fail
+#   publishes nothing.
+# - `package-linux` compiles `mooloop` **once** and packages that one binary
+#   into the .deb, the .rpm and the AppImage, then checks what each package
+#   holds against it. Three jobs used to compile three binaries.
+# - The binary ships with `--strip-all`; its symbols are published beside it
+#   as `mooloop-<version>-x86_64.debug`, which the binary names in its
+#   `.gnu_debuglink`, so a backtrace from a user's crash report can still be
+#   symbolised.
+# - `publish` adds SHA256SUMS and a changelog (`scripts/release-notes`).
+#
+# Everything is pinned: the toolchain by rust-toolchain.toml (installed by
+# `.github/actions/setup-rust`), dependencies by `--locked`, and linuxdeploy
+# by release tag rather than its moving `continuous`.
 on:
   push:
     tags:
@@ -17,33 +37,32 @@ env:
   RUSTFLAGS: ""
   # Keep package artifacts in the runner workspace, not the maintainer's path.
   CARGO_TARGET_DIR: target
-
-# Build distributable Linux binaries against glibc 2.31 (Ubuntu 20.04), rather
-# than the moving glibc version on ubuntu-latest. This keeps them runnable on
-# Ubuntu 20.04+, Debian 11+, and Fedora 32+ (subject to their shared-library
-# package dependencies).
-defaults:
-  run:
-    shell: sh
+  # A release of linuxdeploy, not its moving `continuous` tag, which made the
+  # same commit package differently from one week to the next.
+  LINUXDEPLOY_TAG: 1-alpha-20251107-1
 
 jobs:
-  package-deb:
-    name: Build .deb
+  verify:
+    name: Verify (version, clippy, tests, engine self-test)
     runs-on: ubuntu-latest
-    container: ubuntu:20.04
     steps:
       - uses: actions/checkout@v4
 
+      - name: The tag matches the workspace version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)
+          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match the workspace version $VERSION (Cargo.toml)." >&2
+            exit 1
+          fi
+
       - name: Install system dependencies
         run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            build-essential \
-            ca-certificates \
-            curl \
-            git \
-            binutils \
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             pkg-config \
+            jackd2 \
             libjack-jackd2-dev \
             libasound2-dev \
             libgl1-mesa-dev \
@@ -57,105 +76,42 @@ jobs:
             libwayland-dev \
             libfontconfig1-dev
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@v2
         with:
-          key: deb
+          key: verify
 
-      - name: Install cargo-deb
-        run: cargo install cargo-deb --locked
+      - name: cargo clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
-      - name: Build release binary
-        run: cargo build --release -p mooloop-app
+      - name: cargo test
+        run: cargo test --locked --workspace
 
-      - name: Strip debug information from distributable binary
-        run: strip --strip-debug target/release/mooloop
-
-      - name: Verify glibc compatibility baseline
+      # The one check that runs the real driver: the engine opens a JACK
+      # client, renders, and a kick reaches its output port. The dummy
+      # backend needs no sound card.
+      - name: engine-selftest on jackd -d dummy
         run: |
-          if readelf -W --version-info target/release/mooloop | \
-            awk '/Name: GLIBC_/ { split($3, version, "_"); split(version[2], parts, "."); if (parts[1] > 2 || (parts[1] == 2 && parts[2] > 31)) exit 1 }'; then
-            echo "Binary requires glibc 2.31 or older."
-          else
-            echo "Binary requires glibc newer than 2.31." >&2
-            exit 1
-          fi
+          cargo build --locked --bin engine-selftest
+          jackd --no-realtime -d dummy -r 48000 -p 256 &
+          JACKD=$!
+          sleep 3
+          status=0
+          timeout 60 target/debug/engine-selftest || status=$?
+          kill "$JACKD" || true
+          exit "$status"
 
-      - name: Package .deb
-        run: cargo deb -p mooloop-app --no-build
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: mooloop-deb
-          path: target/debian/*.deb
-
-  package-rpm:
-    name: Build .rpm
+  package-linux:
+    name: Build once, package .deb, .rpm and AppImage
+    needs: verify
     runs-on: ubuntu-latest
+    # Built against glibc 2.31 (Ubuntu 20.04), rather than the moving glibc
+    # on ubuntu-latest, so the binary runs on Ubuntu 20.04+, Debian 11+ and
+    # Fedora 32+ (given their shared-library packages).
     container: ubuntu:20.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            build-essential \
-            ca-certificates \
-            curl \
-            git \
-            binutils \
-            pkg-config \
-            libjack-jackd2-dev \
-            libasound2-dev \
-            libgl1-mesa-dev \
-            libegl1-mesa-dev \
-            libxkbcommon-dev \
-            libxcb1-dev \
-            libx11-dev \
-            libxcursor-dev \
-            libxrandr-dev \
-            libxi-dev \
-            libwayland-dev \
-            libfontconfig1-dev \
-            rpm
-
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: rpm
-
-      - name: Install cargo-generate-rpm
-        run: cargo install cargo-generate-rpm --locked
-
-      - name: Build release binary
-        run: cargo build --release -p mooloop-app
-
-      - name: Strip debug information from distributable binary
-        run: strip --strip-debug target/release/mooloop
-
-      - name: Verify glibc compatibility baseline
-        run: |
-          if readelf -W --version-info target/release/mooloop | \
-            awk '/Name: GLIBC_/ { split($3, version, "_"); split(version[2], parts, "."); if (parts[1] > 2 || (parts[1] == 2 && parts[2] > 31)) exit 1 }'; then
-            echo "Binary requires glibc 2.31 or older."
-          else
-            echo "Binary requires glibc newer than 2.31." >&2
-            exit 1
-          fi
-
-      - name: Package .rpm
-        run: cargo generate-rpm -p crates/mooloop-app
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: mooloop-rpm
-          path: target/generate-rpm/*.rpm
-
-  package-appimage:
-    name: Build AppImage
-    runs-on: ubuntu-latest
-    container: ubuntu:20.04
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -170,6 +126,8 @@ jobs:
             binutils \
             file \
             pkg-config \
+            rpm \
+            cpio \
             libjack-jackd2-dev \
             libasound2-dev \
             libgl1-mesa-dev \
@@ -183,16 +141,21 @@ jobs:
             libwayland-dev \
             libfontconfig1-dev
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@v2
         with:
-          key: appimage
+          key: package-linux
 
-      - name: Build release binary
-        run: cargo build --release -p mooloop-app
+      - name: Install cargo-deb and cargo-generate-rpm
+        run: cargo install --locked cargo-deb cargo-generate-rpm
 
-      - name: Strip debug information from distributable binary
-        run: strip --strip-debug target/release/mooloop
+      - name: Build the release binary
+        run: |
+          set -euo pipefail
+          cargo build --locked --release -p mooloop-app --bin mooloop
+          VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)
+          test -n "$VERSION"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
       - name: Verify glibc compatibility baseline
         run: |
@@ -204,28 +167,89 @@ jobs:
             exit 1
           fi
 
-      - name: Fetch linuxdeploy
+      # `debug = true` in [profile.release] keeps full symbols for exactly
+      # this: they are split off into their own file, and the shipped binary
+      # is stripped of everything (--strip-debug left the symbol tables in,
+      # about a third of the file).
+      - name: Split off the symbols and strip the binary
         run: |
-          curl -fsSL -o linuxdeploy.AppImage \
-            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          chmod +x linuxdeploy.AppImage
+          set -euo pipefail
+          mkdir -p dist
+          DEBUG="mooloop-${VERSION}-x86_64.debug"
+          objcopy --only-keep-debug target/release/mooloop "dist/$DEBUG"
+          strip --strip-all target/release/mooloop
+          (cd dist && objcopy --add-gnu-debuglink="$DEBUG" ../target/release/mooloop)
+          ls -l target/release/mooloop "dist/$DEBUG"
 
-      - name: Build AppImage
+      # `--no-strip`, and linuxdeploy's NO_STRIP below: the binary is already
+      # stripped, and a packager that stripped it again would make the
+      # packages' binaries differ.
+      - name: Package .deb
+        run: cargo deb -p mooloop-app --no-build --no-strip --output dist/
+
+      - name: Package .rpm
+        run: cargo generate-rpm -p crates/mooloop-app --output dist/
+
+      - name: Package AppImage
+        env:
+          NO_STRIP: "1"
         run: |
-          mkdir -p AppDir/usr/bin
+          set -euo pipefail
+          curl -fsSL -o linuxdeploy.AppImage \
+            "https://github.com/linuxdeploy/linuxdeploy/releases/download/${LINUXDEPLOY_TAG}/linuxdeploy-x86_64.AppImage"
+          chmod +x linuxdeploy.AppImage
+          mkdir -p AppDir/usr/bin AppDir/usr/share/metainfo
           cp target/release/mooloop AppDir/usr/bin/
+          cp packaging/io.github.lostsync.mooloop.metainfo.xml AppDir/usr/share/metainfo/
           ./linuxdeploy.AppImage \
             --appimage-extract-and-run \
             --appdir AppDir \
-            --executable target/release/mooloop \
+            --executable AppDir/usr/bin/mooloop \
             --desktop-file packaging/mooloop.desktop \
             --icon-file packaging/mooloop.png \
             --output appimage
+          mv Mooloop-*.AppImage "dist/Mooloop-${VERSION}-x86_64.AppImage"
+
+      # The point of building once: fail here, not in a user's bug report,
+      # if a package carries a binary other than the one just built. The deb
+      # and the rpm hold it byte for byte. linuxdeploy sets an RPATH on the
+      # AppImage's copy so it finds the libraries bundled beside it, which
+      # rewrites the dynamic section, so there the compiled code and data are
+      # compared instead.
+      - name: Every package carries the binary that was built
+        run: |
+          set -euo pipefail
+          built=target/release/mooloop
+          same_file() {
+            if ! cmp -s "$built" "$2"; then
+              echo "The $1 carries a different mooloop from the one built." >&2
+              exit 1
+            fi
+            echo "$1: identical ($(sha256sum "$2" | cut -d' ' -f1))"
+          }
+          sections() {
+            for section in .text .rodata .data.rel.ro; do
+              objcopy -O binary --only-section="$section" "$1" /dev/stdout
+            done | sha256sum | cut -d' ' -f1
+          }
+          mkdir -p unpack/deb unpack/rpm unpack/appimage
+          dpkg-deb -x dist/*.deb unpack/deb
+          same_file deb unpack/deb/usr/bin/mooloop
+          (cd unpack/rpm && rpm2cpio ../../dist/*.rpm | cpio -idm --quiet)
+          same_file rpm unpack/rpm/usr/bin/mooloop
+          (cd unpack/appimage && "../../dist/Mooloop-${VERSION}-x86_64.AppImage" --appimage-extract >/dev/null)
+          in_appimage=unpack/appimage/squashfs-root/usr/bin/mooloop
+          if [ "$(sections "$built")" != "$(sections "$in_appimage")" ]; then
+            echo "The AppImage carries different code from the binary built." >&2
+            exit 1
+          fi
+          echo "AppImage: same code and data as the binary built"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: mooloop-appimage
-          path: Mooloop-*.AppImage
+          name: mooloop-linux
+          path: dist/*
+          if-no-files-found: error
 
   # An unsigned Apple Silicon .app, zipped. Ad-hoc signed only: signing and
   # notarization are out of scope (SCOPE.md §4), so Gatekeeper asks once on
@@ -233,6 +257,7 @@ jobs:
   # build to x86_64 is untested.
   package-macos:
     name: Build macOS app
+    needs: verify
     runs-on: macos-latest
     defaults:
       run:
@@ -240,13 +265,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@v2
         with:
           key: macos
 
       - name: Build release binary
-        run: cargo build --release -p mooloop-app
+        run: cargo build --locked --release -p mooloop-app --bin mooloop
 
       - name: Assemble Mooloop.app
         run: |
@@ -300,23 +325,47 @@ jobs:
         with:
           name: mooloop-macos
           path: Mooloop-*-macos-arm64.zip
+          if-no-files-found: error
 
   publish:
     name: Publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [package-deb, package-rpm, package-appimage, package-macos]
+    needs: [verify, package-linux, package-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      # The whole history and every tag: the changelog is the commits since
+      # the previous release tag.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+
+      - name: Changelog and checksums
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          scripts/release-notes "$GITHUB_REF_NAME" > "dist/mooloop-${VERSION}-CHANGELOG.md"
+          (cd dist && sha256sum -- * > SHA256SUMS)
+          {
+            cat "dist/mooloop-${VERSION}-CHANGELOG.md"
+            echo
+            echo '## SHA-256'
+            echo
+            echo '```'
+            cat dist/SHA256SUMS
+            echo '```'
+          } > release-notes.md
+          cat dist/SHA256SUMS
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
           fail_on_unmatched_files: true
-          generate_release_notes: true
+          body_path: release-notes.md

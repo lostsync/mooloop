@@ -1,0 +1,33 @@
+name: Set up the pinned Rust toolchain
+description: >-
+  Install rustup when the runner has none, then the toolchain and components
+  rust-toolchain.toml names. Run it after actions/checkout.
+
+# Why not dtolnay/rust-toolchain: it installs the toolchain it is told by name
+# (`@stable`) and makes it the default, and inside this checkout rustup ignores
+# that default because rust-toolchain.toml overrides it. With the file pinned,
+# every job would install today's stable, then fetch the pinned release as
+# well and build with that. Naming the version to the action instead would
+# write it down twice. Asking rustup for the file's own toolchain keeps it in
+# exactly one place.
+runs:
+  using: composite
+  steps:
+    - name: Install rustup and the rust-toolchain.toml toolchain
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! command -v rustup >/dev/null 2>&1; then
+          # The hosted runners ship rustup; the bare ubuntu:20.04 containers
+          # release.yml builds in do not.
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+          cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+          echo "$cargo_bin" >> "$GITHUB_PATH"
+          export PATH="$cargo_bin:$PATH"
+        fi
+        # With no toolchain named, rustup (1.28 or later) installs the one
+        # rust-toolchain.toml names, with the profile and components it lists.
+        rustup toolchain install --no-self-update
+        rustc --version
+        cargo --version

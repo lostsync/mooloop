@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata: what a software centre (GNOME Software, KDE Discover)
+     shows for an installed Mooloop. The .deb, the .rpm and the AppImage all
+     install it at usr/share/metainfo/. Check it with
+     `appstreamcli validate packaging/io.github.lostsync.mooloop.metainfo.xml`. -->
+<component type="desktop-application">
+  <id>io.github.lostsync.mooloop</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <name>Mooloop</name>
+  <summary>Pattern-based groove sequencer and instrument</summary>
+  <developer id="io.github.lostsync">
+    <name>adam</name>
+  </developer>
+
+  <description>
+    <p>
+      Mooloop is a Linux-native, pattern-based groove sequencer and
+      instrument. It has a channel rack, piano roll, playlist, a
+      console-style mixer, automation and modulation, effects, a sampler,
+      and a handful of synths.
+    </p>
+    <p>
+      It is built around patterns rather than recorded audio, for
+      sample-heavy and synthetic music where rhythm does most of the work.
+      It plays through JACK, or PipeWire's JACK layer.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">mooloop.desktop</launchable>
+  <provides>
+    <binary>mooloop</binary>
+  </provides>
+
+  <url type="homepage">https://github.com/lostsync/mooloop</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>The step sequencer, the mixer, a synth into a reverb, and the sample browser</caption>
+      <image>https://raw.githubusercontent.com/lostsync/mooloop/main/mooloop-screenshot.png</image>
+    </screenshot>
+  </screenshots>
+
+  <categories>
+    <category>Audio</category>
+    <category>AudioVideo</category>
+    <category>Music</category>
+  </categories>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+
+  <content_rating type="oars-1.1"/>
+</component>

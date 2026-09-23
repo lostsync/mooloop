@@ -1,2 +1,19 @@
+# The one Rust release every rustup-managed build of this workspace uses: CI,
+# the release workflow, the build box (`scripts/antibox`) and a Mac. Pinned
+# rather than `stable` because CI runs `clippy -- -D warnings`: under a
+# floating channel a new Rust release could turn `main` red, or fail a tag,
+# with no commit to blame, and a release could not be rebuilt from its tag.
+#
+# Move it on purpose, in its own commit: bump the version, fix whatever the new
+# clippy reports, and land the two together. Keep it at the version the build
+# box runs (`ssh antibox 'rustc --version'`); Adam's laptop builds with
+# Fedora's rustc and no rustup, so this file is ignored there, and the two
+# agreeing is what keeps a laptop result meaning the same thing as CI's.
+#
+# The workflows install this toolchain through `.github/actions/setup-rust`,
+# which asks rustup for "the toolchain this file names" rather than repeating
+# the version.
 [toolchain]
-channel = "stable"
+channel = "1.98.0"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

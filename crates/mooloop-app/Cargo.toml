@@ -20,12 +20,19 @@ mooloop-dsp = { workspace = true }
 mooloop-engine = { workspace = true }
 mooloop-ui = { workspace = true }
 
-# Packaged by .github/workflows/release.yml via `cargo deb`. Shared-library
-# dependencies (JACK, GL, X11/Wayland, fontconfig, ...) are auto-detected
-# with $auto rather than hand-listed. zenity is not a library, so nothing
-# detects it: every file dialog and confirmation shells out to it
-# (`mooloop-session/src/dialogs.rs`), and without it Open, Save and Export
-# have no way to ask for a path. It is named here and in the rpm's requires.
+# Packaged by .github/workflows/release.yml via `cargo deb`. $auto finds the
+# shared libraries the binary links (fontconfig, ALSA, ...), and only those.
+# Two kinds of dependency it cannot see are named by hand, here and in the
+# rpm's requires below:
+#
+# - zenity is not a library: every file dialog and confirmation shells out to
+#   it (`mooloop-session/src/dialogs.rs`), and without it Open, Save and
+#   Export have no way to ask for a path.
+# - Libraries loaded with dlopen at run time: libjack (the `jack` crate's
+#   dynamic loading; PipeWire's JACK layer provides one too), EGL and GL for
+#   Slint's renderer, and xkbcommon, Wayland and the X11 client libraries for
+#   winit. Without them the app opens with no audio, or not at all, and
+#   nothing at install time says why (MOO-141).
 [package.metadata.deb]
 maintainer = "adam <lostsync@gmail.com>"
 copyright = "2026, adam"
@@ -37,11 +44,16 @@ small synthesis engines, and talks directly to JACK or PipeWire's JACK \
 compatibility layer."""
 section = "sound"
 priority = "optional"
-depends = "$auto, zenity"
+depends = """$auto, zenity, \
+libjack-jackd2-0 | libjack0 | pipewire-jack, \
+libegl1, libgl1, libxkbcommon0, libxkbcommon-x11-0, \
+libwayland-client0, libwayland-cursor0, libwayland-egl1, \
+libx11-6, libx11-xcb1, libxcursor1, libxi6, libxrandr2"""
 assets = [
     ["target/release/mooloop", "usr/bin/", "755"],
     ["../../packaging/mooloop.desktop", "usr/share/applications/", "644"],
     ["../../packaging/mooloop.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
+    ["../../packaging/io.github.lostsync.mooloop.metainfo.xml", "usr/share/metainfo/", "644"],
 ]
 
 # Packaged by .github/workflows/release.yml via `cargo generate-rpm`.
@@ -50,9 +62,24 @@ assets = [
     { source = "target/release/mooloop", dest = "/usr/bin/mooloop", mode = "755" },
     { source = "../../packaging/mooloop.desktop", dest = "/usr/share/applications/mooloop.desktop", mode = "644" },
     { source = "../../packaging/mooloop.png", dest = "/usr/share/icons/hicolor/256x256/apps/mooloop.png", mode = "644" },
+    { source = "../../packaging/io.github.lostsync.mooloop.metainfo.xml", dest = "/usr/share/metainfo/io.github.lostsync.mooloop.metainfo.xml", mode = "644" },
 ]
 
-# Shared libraries are found by generate-rpm's automatic requires; zenity is
-# not one (see the deb metadata above).
+# Linked libraries are found by generate-rpm's automatic requires; zenity and
+# the dlopen'd libraries are not (see the deb metadata above). Named by
+# soname, so either JACK or PipeWire's JACK layer satisfies libjack.
 [package.metadata.generate-rpm.requires]
 zenity = "*"
+"libjack.so.0()(64bit)" = "*"
+"libEGL.so.1()(64bit)" = "*"
+"libGL.so.1()(64bit)" = "*"
+"libxkbcommon.so.0()(64bit)" = "*"
+"libxkbcommon-x11.so.0()(64bit)" = "*"
+"libwayland-client.so.0()(64bit)" = "*"
+"libwayland-cursor.so.0()(64bit)" = "*"
+"libwayland-egl.so.1()(64bit)" = "*"
+"libX11.so.6()(64bit)" = "*"
+"libX11-xcb.so.1()(64bit)" = "*"
+"libXcursor.so.1()(64bit)" = "*"
+"libXi.so.6()(64bit)" = "*"
+"libXrandr.so.2()(64bit)" = "*"

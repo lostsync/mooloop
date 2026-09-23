@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# Print a release's changelog, as Markdown, from the commits since the
+# previous release tag.
+#
+#   scripts/release-notes            # HEAD against the latest tag: a preview
+#   scripts/release-notes v0.1.5     # what v0.1.5 has that the tag before it lacks
+#
+# The release workflow publishes this as the GitHub Release's text and as a
+# `mooloop-<version>-CHANGELOG.md` asset. GitHub's generated notes list pull
+# requests, and most of this project's commits land on main without one:
+# v0.1.4's listed 7 pull requests for 347 commits.
+#
+# Commits are grouped by their conventional-commit type (`feat(ui): ...`):
+# features, fixes and performance are listed; everything else (docs, reports,
+# refactors, CI, and subjects with no type) is folded under "Other changes".
+# Merge commits are left out, because the commits they bring in are listed
+# themselves. The previous release is the nearest `vX.Y.Z` tag strictly before
+# the one named; with none, every commit is listed.
+set -euo pipefail
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  awk 'NR>1 && !/^#/ { exit } NR>1 { sub(/^# ?/, ""); print }' "$0"
+  exit 0
+fi
+
+ref="${1:-HEAD}"
+if ! git rev-parse --verify --quiet "$ref^{commit}" >/dev/null; then
+  echo "release-notes: no such commit: $ref" >&2
+  exit 2
+fi
+
+previous="$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' "$ref^" 2>/dev/null || true)"
+range="$ref"
+[[ -n "$previous" ]] && range="$previous..$ref"
+
+features=()
+fixes=()
+performance=()
+other=()
+
+# `<` would open an HTML tag in GitHub's Markdown and swallow the rest of the
+# line; nothing else in a commit subject needs escaping to read correctly.
+# (sed rather than `${x//</&lt;}`, because bash 5.2 expands a `&` in the
+# replacement to the matched text.)
+escape() {
+  printf '%s' "$1" | sed 's/</\&lt;/g'
+}
+
+conventional='^([A-Za-z]+)(\(([^)]*)\))?!?: (.*)$'
+while IFS=$'\t' read -r sha subject; do
+  if [[ "$subject" =~ $conventional ]]; then
+    type="$(printf '%s' "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')"
+    scope="${BASH_REMATCH[3]}"
+    text="${BASH_REMATCH[4]}"
+  else
+    type=""
+    scope=""
+    text="$subject"
+  fi
+  line="- "
+  [[ -n "$scope" ]] && line+="**$(escape "$scope"):** "
+  line+="$(escape "$text") ($sha)"
+  case "$type" in
+    feat) features+=("$line") ;;
+    fix) fixes+=("$line") ;;
+    perf) performance+=("$line") ;;
+    *)
+      # An unconventional subject keeps its own wording, type and all.
+      [[ -n "$type" ]] && line="- $(escape "$subject") ($sha)"
+      other+=("$line")
+      ;;
+  esac
+done < <(git log --no-merges --format='%h%x09%s' "$range")
+
+total=$(( ${#features[@]} + ${#fixes[@]} + ${#performance[@]} + ${#other[@]} ))
+if [[ -n "$previous" ]]; then
+  echo "$total commits since $previous."
+else
+  echo "$total commits."
+fi
+
+section() {
+  local title="$1"
+  shift
+  [[ $# -eq 0 ]] && return 0
+  printf '\n## %s\n\n' "$title"
+  printf '%s\n' "$@"
+}
+
+section "Features" "${features[@]+"${features[@]}"}"
+section "Fixes" "${fixes[@]+"${fixes[@]}"}"
+section "Performance" "${performance[@]+"${performance[@]}"}"
+
+if [[ ${#other[@]} -gt 0 ]]; then
+  printf '\n<details>\n<summary>Other changes (%d)</summary>\n\n' "${#other[@]}"
+  printf '%s\n' "${other[@]}"
+  printf '\n</details>\n'
+fi

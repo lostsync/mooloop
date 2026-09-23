@@ -54,7 +54,7 @@ jobs:
             libfontconfig1-dev \
             rpm
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@v2
         with:
           key: rpm
@@ -63,10 +63,11 @@ jobs:
         run: cargo install cargo-generate-rpm --locked
 
       - name: Build release binary
-        run: cargo build --release -p mooloop-app
+        run: cargo build --locked --release -p mooloop-app --bin mooloop
 
-      - name: Strip debug information from distributable binary
-        run: strip --strip-debug target/release/mooloop
+      # Everything, as release.yml does; this build publishes no symbols.
+      - name: Strip the distributable binary
+        run: strip --strip-all target/release/mooloop
 
       - name: Verify glibc compatibility baseline
         run: |

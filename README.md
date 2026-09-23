@@ -103,7 +103,7 @@ Linux with JACK or PipeWire/JACK is the supported platform. macOS runs through C
 
 Packages are available from the [GitHub Releases page](https://github.com/lostsync/mooloop/releases).
 
-Each release includes x86_64 `.deb`, `.rpm`, and AppImage packages, and a zipped Apple Silicon `Mooloop.app`.
+Each release includes x86_64 `.deb`, `.rpm`, and AppImage packages (one binary, the same in all three), a zipped Apple Silicon `Mooloop.app`, a `SHA256SUMS` file, the changelog, and the Linux binary's debug symbols. A release is published only after its tests and an engine self-test on a JACK server have passed.
 
 ```sh
 # Debian / Ubuntu
