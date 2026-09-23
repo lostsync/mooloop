@@ -8,6 +8,8 @@ members = [
     "crates/mooloop-session",
     "crates/mooloop-ui",
     "crates/mooloop-app",
+    "crates/mooloop-plugin-host",
+    "crates/mooloop-test-plugin",
     "spikes/time-stretch",
 ]
 

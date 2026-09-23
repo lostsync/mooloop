@@ -1,0 +1,32 @@
+[package]
+name = "mooloop-plugin-host"
+description = "Loads and runs third-party plugins. No plugin format's types leave this crate."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+# It must not depend on `mooloop-ui` or `mooloop-session`: the session will
+# depend on this crate (`docs/plans/plugin-hosting/04-the-plugin-rack.md`),
+# not the other way round.
+[dependencies]
+mooloop-dsp = { workspace = true }
+clack-host = "0.2"
+clack-extensions = { version = "0.2", features = [
+    "clack-host",
+    "audio-ports",
+    "gui",
+    "latency",
+    "log",
+    "note-ports",
+    "params",
+    "state",
+    "tail",
+    "thread-check",
+] }
+
+[dev-dependencies]
+# Named only so cargo builds the test plugin's cdylib before this crate's
+# tests run; the tests load it by path and never link it. See that crate's
+# `[lib]` table.
+mooloop-test-plugin = { path = "../mooloop-test-plugin" }

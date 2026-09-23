@@ -132,6 +132,9 @@ Files marked *shared* are split in the table above.
   `continuity_tests.rs` (the "control changes are
   continuous" family, MOO-104, whose cases each team adds for its own
   transitions)
+- `crates/mooloop-plugin-host` (the plugin host, MOO-11; no plugin format's
+  types leave it) and `crates/mooloop-test-plugin` (the in-repo CLAP test
+  double every plugin-hosting step runs against)
 - `dsp/src/`: `node.rs` (*shared*), `event.rs`, `bus.rs` (*shared*), `taps.rs`
   — the `AudioNode` contract and what flows through it
 - `core/src/bridge.rs`

@@ -6,7 +6,7 @@ mirror this file step-for-step the way MOO-5/16/30 do. The GitHub issue
 numbers below (`#10`, `#26`-`#30`) predate Adam's move away from GitHub
 issues; MOO-11 is the live tracking issue.
 
-**Written 2026-09-16. Nothing has landed.** Adam asked for it directly:
+**Written 2026-09-16.** Step 01 (the spike) landed on 2026-09-23, and so did MOO-56's one boxed source slot, which closes blocker 4 below. Adam asked for it directly:
 *"let's go ahead and plan out how we'll add CLAP support. Later we'll add
 VST/3 and AU. instrument support as well."* `SCOPE.md` already put CLAP in
 for 0.2.0 (item 9). This plan is outside the `FOCUS.md` sequence for the same
@@ -475,7 +475,7 @@ words. **Do not reopen this as a version-bump question.**
 
 | Step | What | Closes | Rung | State |
 | --- | --- | --- | --- | --- |
-| 01 | Spike: `clack-host` loads and runs a CLAP; an in-repo test plugin | — | new crate only | not started |
+| 01 | Spike: `clack-host` loads and runs a CLAP; an in-repo test plugin | — (MOO-76) | new crate only | **done 2026-09-23** |
 | 02 | The neutral contract: types, `Project.plugins`, TOML state, a fake plugin end to end | #26 | core, project | not started |
 | 03 | Parameters belong to an instance | #26 | core, session | not started |
 | 04 | `PluginRack`, main-thread requests, latency known at runtime | #26 | engine, session | not started |
@@ -509,6 +509,73 @@ answer it here by inventing a clip.
 
 Steps 12 and 13 are outlines on purpose. They are written in detail once
 step 07 has shown which parts of the neutral types held.
+
+## Step 01, recorded 2026-09-23 (MOO-76)
+
+**The decision: `clack-host` 0.2 is enough. Nothing comes from `clap-sys`.**
+The six checks in `crates/mooloop-plugin-host/tests/spike.rs` pass against
+`crates/mooloop-test-plugin`, loaded by path. The only `unsafe` in the host
+is `load_entry`, which is `PluginEntry::load`. Loading a library runs its
+initialisers, and nothing else in the six needed `unsafe`. The test plugin
+is `#![deny(unsafe_code)]`, and its only `unsafe` is inside
+`clack_export_entry!`. The checks:
+
+1. Load, describe, create, and activate at 48 kHz for 1..4096 frames. Blocks
+   of 1, 64 and 4096 frames run through it.
+2. A block of known audio comes out with the gain applied, and a parameter
+   event at offset 100 lands exactly at frame 100.
+3. Save state from one instance, load it into a new one, and the outputs are
+   equal.
+4. Parameter info (sparse ids 10/20/30, names, ranges, the stepped flag),
+   `value_to_text`, `text_to_value` and `get_value`.
+5. A `latency` change while processing makes the plugin call
+   `request_restart`. After deactivate and activate, the plugin calls
+   `latency.changed()` from inside `activate`, `get` reads 512, and an
+   impulse comes out 512 frames late.
+6. The sine: note on, note off, one `note_end` exactly where the release
+   finishes, then `ProcessStatus::Sleep` and silence.
+
+Processing runs on a thread of its own. The test plugin asks the host
+(`thread-check`) about every call and logs `HostMisbehaving` for a call on
+the wrong thread, and every check asserts that the log has none.
+
+**How a test finds the plugin: neither of the two ways this step
+suggested.** `CARGO_CDYLIB_FILE_*` belongs to artifact dependencies, which
+are nightly-only (`-Z bindeps`). `CARGO_TARGET_DIR` is unset when the default
+target is used, and the build box redirects it. What works on the pinned
+stable toolchain: the host crate names the test plugin as a
+**dev-dependency** (the plugin is `crate-type = ["cdylib", "rlib"]`), so cargo
+builds its cdylib into the same `<target>/<profile>/deps/` as the test
+binary, and the test looks next to `current_exe()`. This is confirmed on the
+box, and CI's macOS job runs the same tests on every push.
+
+**What deviates from `01-spike.md`.** The `.gui` variants implement the
+`gui` extension's lifecycle (supported APIs, create, parent, show, hide,
+resize, destroy, refusing calls made out of order), but they open no window.
+A real window needs an X11 or AppKit dependency and a display, and CI has
+neither. Step 11 owns the host side and its own headless tests.
+
+**Build cost, measured on the box** (8 cores): with no sccache and the clack
+crates cleaned, `cargo build -p mooloop-plugin-host -p mooloop-test-plugin
+--tests` takes **27 s** wall. That covers `clap-sys`, `clack-common`,
+`clack-host`, `clack-plugin`, `clack-extensions` and the two new crates. The
+same run also rebuilt `mooloop-core` and `mooloop-dsp` (the rustc wrapper
+changed), so the clack share is less than that. Nothing outside the two new
+crates depends on clack yet.
+
+**The manual test set: free plugins with a Linux CLAP build.** Researched on
+2026-09-23 from the vendors' pages and Fedora's package index. None has been
+installed or run yet.
+
+| Plugin | Kind | GUI | How to get it on Fedora |
+| --- | --- | --- | --- |
+| Surge XT 1.3.4 | instrument and effects | yes | Not in Fedora's repositories. The upstream RPM (Standalone, CLAP, LV2, VST3) is on the GitHub release page linked from surge-synthesizer.github.io/downloads |
+| LSP (Linux Studio Plugins) | effects | yes | `dnf install lsp-plugins-clap` (Fedora 43 and later) |
+| Dexed | instrument (FM) | yes | Not in Fedora's repositories. Linux builds are on github.com/asb2m10/dexed/releases (Arch packages `dexed-clap`) |
+| ChowDSP (Chow Tape Model, BYOD) | effects | yes | Linux CLAP builds from chowdsp.com (products page and nightlies). The Flathub BYOD is the standalone app, not a plugin |
+| free-audio `clap-plugins` | reference effects and instruments | yes | Build from source, github.com/free-audio/clap-plugins |
+| Airwindows Consolidated | effects | **no** | `LinuxVSTs.zip` (x86) from airwindows.com/consolidated, which carries the CLAP. The community `stevefolta/airwindows-clap-build` is an alternative |
+| ZAM plugins | effects | yes | `dnf install clap-zam-plugins`. Not on the original list, but packaged in Fedora |
 
 ## The test plugins
 
