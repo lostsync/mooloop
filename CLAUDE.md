@@ -12,3 +12,7 @@ verification. Nothing below overrides it.
 When delegating an isolated Claude Code subtask, use the Agent tool with
 `isolation: "worktree"`; that satisfies the one-task-one-worktree rule without
 a manual `git worktree add`.
+
+Each of the ten teams in `docs/TEAMS.md` has a subagent, `team-<slug>` in
+`.claude/agents/`, preloaded with the shared `team-brief` skill. To route a
+batch of work across them, run `claude --agent orchestrator`.

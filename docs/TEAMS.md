@@ -273,6 +273,18 @@ them belong to the device teams, and the container drawing in
 - Plugin scanning, plugin paths, and packaging the plugin host
   (`docs/plans/plugin-hosting/` step 05, MOO-80)
 
+## In Claude Code
+
+Each team has a subagent in `.claude/agents/`, named `team-<slug>`:
+`team-engine`, `team-sequencing`, `team-mixer`, `team-instruments`,
+`team-effects`, `team-foundations`, `team-control`, `team-document`,
+`team-interface` and `team-platform`, in the order of [the ten](#the-ten).
+Each definition points back here for what its team owns, and preloads
+`.claude/skills/team-brief/`, the instructions every team agent shares: stay
+inside the team, file what lands elsewhere, and report back in a fixed shape.
+`.claude/agents/orchestrator.md` routes work to them by `Team` label. A team
+that is renamed, added or merged here changes its agent in the same commit.
+
 ## In Linear
 
 The workspace has one Linear team, **Mooloop** (`MOO`), and it stays one. A
