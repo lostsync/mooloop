@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { NoteFormat, ParameterKnob, SelectorBank } from "controls.slint";
+import { CutoffLaw, NoteFormat, ParameterKnob, SelectorBank } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 import { FilterResponseDisplay } from "device-displays.slint";
 
@@ -70,7 +70,7 @@ export component FilterDeviceFace inherits EffectDeviceShell {
                 width: 52px;
                 diameter: 36px;
                 label: "Cutoff";
-                tooltip: "Filter cutoff frequency: " + NoteFormat.name(20 * pow(1000, root.cutoff));
+                tooltip: "Filter cutoff frequency: " + NoteFormat.name(CutoffLaw.hz(root.cutoff));
                 value <=> root.cutoff;
                 // Normalized, because this knob declares no range: the table's
                 // 8 kHz on an exponential 20 Hz..20 kHz. It was 0.9 -- about
@@ -82,7 +82,7 @@ export component FilterDeviceFace inherits EffectDeviceShell {
                 modulation-depth: root.modulation-depths[0];
                 modulation-offset: root.modulation-offsets[0];
                 modulation-route-count: root.modulation-route-counts[0];
-                value-text: round(20 * pow(1000, root.cutoff)) + " Hz";
+                value-text: round(CutoffLaw.hz(root.cutoff)) + " Hz";
                 changed(v) => { root.cutoff-changed(v); }
                 modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
                 modulation-edit-started => { root.modulation-edit-started(0); }

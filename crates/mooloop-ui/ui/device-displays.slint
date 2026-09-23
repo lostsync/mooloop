@@ -1,6 +1,6 @@
 import { DisplayPrefs, Theme } from "theme.slint";
 import { GainMath } from "gain.slint";
-import { DraggablePoint } from "controls.slint";
+import { AudioFormat, CutoffLaw, DraggablePoint } from "controls.slint";
 
 export component SampleTrace inherits Rectangle {
     in property <[float]> minimums;
@@ -98,17 +98,22 @@ export component FilterResponseDisplay inherits Rectangle {
     // -- a three-pole ladder is 0.5.
     in property <float> slope;
     in property <float> env-amount;
+    // The engine's rate, so the curve's bilinear warping is the one running.
+    in property <int> sample-rate: AudioFormat.sample-rate;
     callback point-dragged(float, float);
     callback point-scrolled(float);
     private property <int> sample-count: 160;
     private property <float> modulated-cutoff: clamp(root.cutoff + root.env-amount * 0.602, 0, 1);
 
     pure function response-at(x: float, normalized-cutoff: float) -> float {
-        let frequency = 20 * pow(1000, clamp(x, 0, 1));
-        let cutoff-hz = 20 * pow(1000, clamp(normalized-cutoff, 0, 1));
-        // The production TPT SVF uses g = tan(pi * f / sample-rate).
-        let frequency-angle = frequency / 48000 * 180deg;
-        let cutoff-angle = cutoff-hz / 48000 * 180deg;
+        let frequency = CutoffLaw.hz(x);
+        // The filters clamp their cutoff to 0.45 x the sample rate, and so
+        // does the curve, so it draws what is running at 44.1 kHz too.
+        let cutoff-hz = min(CutoffLaw.hz(normalized-cutoff), root.sample-rate * 0.45);
+        // The production TPT SVF uses g = tan(pi * f / sample-rate), at the
+        // rate the engine is actually running (MOO-119).
+        let frequency-angle = min(frequency, root.sample-rate * 0.49) / root.sample-rate * 180deg;
+        let cutoff-angle = cutoff-hz / root.sample-rate * 180deg;
         let ratio = (sin(frequency-angle) / cos(frequency-angle))
             / max(0.0001, sin(cutoff-angle) / cos(cutoff-angle));
         let damping = clamp(2 - clamp(root.resonance, 0, 1) * 1.9, 0.1, 2);

@@ -6307,6 +6307,10 @@ impl AppUi {
         // empty.
         let audio_sample_rate = handle.sample_rate();
         window.set_audio_sample_rate(audio_sample_rate as i32);
+        // The filter-response curves warp at the rate the engine runs (MOO-119).
+        window
+            .global::<AudioFormat>()
+            .set_sample_rate(audio_sample_rate as i32);
         let default_sample = Some(SampleData::default_kick(audio_sample_rate));
         let state = Rc::new(RefCell::new(UiState::new(
             default_sample.as_deref(),

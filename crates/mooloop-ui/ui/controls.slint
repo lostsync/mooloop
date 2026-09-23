@@ -92,6 +92,24 @@ export component DraggablePoint inherits TouchArea {
     @children
 }
 
+// The cutoff knob's law, the markup copy of
+// `mooloop_dsp::scale::cutoff_hz_from_normalized`: 20 Hz at 0, 20 kHz at 1,
+// the same frequency at every sample rate (MOO-119). Every face that reads a
+// cutoff knob out in Hz, and the filter-response display, goes through here;
+// `tests/cutoff_law_agreement.rs` holds this body to the Rust law and holds
+// the faces to calling it rather than spelling the formula again.
+export global CutoffLaw {
+    public pure function hz(normalized: float) -> float {
+        return 20 * pow(1000, clamp(normalized, 0, 1));
+    }
+}
+
+// The audio engine's sample rate, for markup that draws a response curve.
+// Set from Rust with the window's `audio-sample-rate`.
+export global AudioFormat {
+    in-out property <int> sample-rate: 48000;
+}
+
 // Frequency controls use the same nearest-note convention as the sampler's
 // tuned-root readout: A4 is MIDI 69 at 440 Hz.
 export global NoteFormat {

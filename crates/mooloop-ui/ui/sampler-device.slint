@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { KnobField, MiniKnob, NoteFormat, ParameterKnob, SelectorBank, TimeFormat, ToggleButton, ToolButton, TrimKnob, ValueScale, ZoomScrollBar } from "controls.slint";
+import { CutoffLaw, KnobField, MiniKnob, NoteFormat, ParameterKnob, SelectorBank, TimeFormat, ToggleButton, ToolButton, TrimKnob, ValueScale, ZoomScrollBar } from "controls.slint";
 import { GainMath } from "gain.slint";
 import { DevicePageButton } from "device-rack.slint";
 import { BitcrusherTrace, FilterResponseDisplay } from "device-displays.slint";
@@ -1034,7 +1034,7 @@ export component SamplerDeviceFace inherits Rectangle {
                             modulation-depth: root.modulation-depths[12];
                             modulation-offset: root.modulation-offsets[12];
                             modulation-route-count: root.modulation-route-counts[12];
-                            value-text: NoteFormat.frequency-value(20 * pow(1000, root.filter-cutoff));
+                            value-text: NoteFormat.frequency-value(CutoffLaw.hz(root.filter-cutoff));
                             changed(v) => { root.filter-cutoff-changed(v); }
                             modulation-depth-changed(v) => { root.modulation-depth-changed(12, v); }
                             modulation-edit-started => { root.modulation-edit-started(12); }

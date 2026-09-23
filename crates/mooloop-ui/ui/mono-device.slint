@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { NoteFormat, ParameterKnob, SelectorBank, TimeFormat, ToggleButton, TrimKnob, ValueScale } from "controls.slint";
+import { CutoffLaw, NoteFormat, ParameterKnob, SelectorBank, TimeFormat, ToggleButton, TrimKnob, ValueScale } from "controls.slint";
 import { GainMath } from "gain.slint";
 import { DevicePageButton } from "device-rack.slint";
 import { FilterResponseDisplay } from "device-displays.slint";
@@ -152,7 +152,7 @@ export component MonoDeviceFace inherits Rectangle {
                             modulation-depth: root.modulation-depths[5];
                             modulation-offset: root.modulation-offsets[5];
                             modulation-route-count: root.modulation-route-counts[5];
-                            value-text: NoteFormat.frequency-value(20 * pow(1000, root.filter-cutoff));
+                            value-text: NoteFormat.frequency-value(CutoffLaw.hz(root.filter-cutoff));
                             changed(v) => { root.filter-cutoff-changed(v); }
                             modulation-depth-changed(v) => { root.modulation-depth-changed(5, v); }
                             modulation-edit-started => { root.modulation-edit-started(5); }
