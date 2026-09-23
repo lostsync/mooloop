@@ -839,4 +839,264 @@ mod tests {
             }
         }
     }
+
+    /// **How far each insert can raise its input** (MOO-175), measured at
+    /// the corners most likely to add gain, with a sine at the reference
+    /// level (`shaper::DRIVE_REFERENCE_LINEAR`, -12 dBFS) and at full scale,
+    /// at 60 Hz, 220 Hz, 1 kHz and 5 kHz, as the steady-state peak over the
+    /// last of three seconds.
+    ///
+    /// One table here rather than a test in each module, so that a kind
+    /// nobody thought about fails `every_insert_kind_has_a_gain_bound`
+    /// instead of being skipped. Every bound sits a little above what was
+    /// measured on 2026-09-23 (in the comments), so a change that adds gain
+    /// fails here first.
+    ///
+    /// What these numbers say: the feedback devices are resonant. A steady
+    /// sine that lands on a reverb or plate mode builds up to about +14 dB,
+    /// and the flanger and phaser at full feedback approach `1 / (1 - 0.92)`,
+    /// +22 dB, which is what a comb at that feedback does. The master's
+    /// safety limiter (MOO-93) protects the speakers. The next device and the
+    /// meters see this. The modulation effect's case is MOO-200.
+    fn gain_bounds() -> Vec<(&'static str, EffectParams, f32)> {
+        use mooloop_core::*;
+        let modulation = |mode: i32, feedback: f32| {
+            EffectParams::Modulation(ModulationParams {
+                mode: ModulationMode::from_index(mode),
+                depth: 1.0,
+                feedback,
+                color: 1.0,
+                ..ModulationParams::default()
+            })
+        };
+        let mut bounds = vec![
+            // Measured +13.9 dB (1 kHz).
+            (
+                "reverb, largest and longest",
+                EffectParams::Reverb(ReverbParams {
+                    size: 1.0,
+                    decay_s: 20.0,
+                    damping: 0.0,
+                    diffusion: 1.0,
+                    width: 1.0,
+                    ..ReverbParams::default()
+                }),
+                16.0,
+            ),
+            // Measured +8.6 dB (1 kHz).
+            ("reverb as it arrives", EffectParams::Reverb(ReverbParams::default()), 10.0),
+            // Measured +9.7 dB (1 kHz).
+            (
+                "plate, largest and longest",
+                EffectParams::Plate(PlateParams {
+                    size: 1.0,
+                    decay_s: 10.0,
+                    damping: 0.0,
+                    width: 1.0,
+                    ..PlateParams::default()
+                }),
+                12.0,
+            ),
+            // Measured +16.4, +21.6, +12.8, +21.3, +21.0, +1.8 and +9.4 dB.
+            ("chorus at full feedback", modulation(0, 0.92), 18.0),
+            ("flanger at full feedback", modulation(1, 0.92), 23.0),
+            ("flanger at full negative feedback", modulation(1, -0.92), 15.0),
+            ("phaser at full feedback", modulation(2, 0.92), 23.0),
+            ("phaser at full negative feedback", modulation(2, -0.92), 23.0),
+            ("ensemble at full feedback", modulation(3, 0.92), 4.0),
+            ("ADT at full feedback", modulation(4, 0.92), 11.0),
+            // Silent at the reference level (one bit rounds it to zero) and
+            // unity at full scale.
+            (
+                "bitcrush at one bit",
+                EffectParams::Bitcrush(BitcrushParams {
+                    bits: 1.0,
+                    downsample: 64.0,
+                    mix: 1.0,
+                    ..BitcrushParams::default()
+                }),
+                0.1,
+            ),
+            // Makeup is the user asking for level; with none, it only cuts.
+            (
+                "compressor at its hardest, no makeup",
+                EffectParams::Compressor(CompressorParams {
+                    threshold_db: -60.0,
+                    ratio: 20.0,
+                    attack_ms: 0.05,
+                    release_ms: 5.0,
+                    knee_db: 24.0,
+                    makeup_db: 0.0,
+                    mix: 1.0,
+                }),
+                0.1,
+            ),
+            ("gate", EffectParams::Gate(GateParams::default()), 0.1),
+            // Gain is the user driving it into the ceiling; with none, it
+            // only cuts.
+            (
+                "limiter with no gain",
+                EffectParams::Limiter(LimiterParams {
+                    ceiling_db: 0.0,
+                    release_ms: 1.0,
+                    gain_db: 0.0,
+                }),
+                0.1,
+            ),
+            ("buffer, following", EffectParams::Buffer(BufferParams::default()), 0.1),
+            // A band's gain is the user's to set; flat, it adds nothing.
+            ("EQ as it arrives", EffectParams::Eq(EqParams::default()), 0.1),
+        ];
+        // Level-compensated at the reference level (+1.4 dB at 5 kHz was
+        // the most) and under unity at full scale. The Tone tilt is the
+        // user's: at full treble it lifts 1 kHz by about 15 dB.
+        for curve in 0..4 {
+            bounds.push((
+                "drive at full drive, tone flat",
+                EffectParams::Drive(DriveParams {
+                    drive: 64.0,
+                    curve: DriveCurve::from_index(curve),
+                    tone: 0.0,
+                    mix: 1.0,
+                    output: 1.0,
+                }),
+                2.0,
+            ));
+        }
+        bounds
+    }
+
+    /// The kinds whose bound is pinned somewhere other than [`gain_bounds`],
+    /// and where. Held apart so that "nobody bounded it" and "it is bounded
+    /// elsewhere" are different answers.
+    const GAIN_ELSEWHERE: [(EffectKind, &str); 5] = [
+        (
+            EffectKind::Filter,
+            "effects::filter::tests::no_mode_slope_or_resonance_peaks_past_its_bound (MOO-124)",
+        ),
+        (
+            EffectKind::Delay,
+            "effects::delay::tests::maximum_feedback_on_a_loud_input_stays_bounded (MOO-124)",
+        ),
+        (
+            EffectKind::Preamp,
+            "its drive and output trims are the user asking for level: \
+             the_users_own_gain_is_all_the_preamp_adds",
+        ),
+        (
+            EffectKind::Chain,
+            "a container's node passes its input through, and its run's devices are bounded here",
+        ),
+        (
+            EffectKind::Layer,
+            "a layer sums its branches, two identical ones exactly +6 dB: \
+             container_tests::two_identical_branches_are_exactly_six_db",
+        ),
+    ];
+
+    #[test]
+    fn every_insert_kind_stays_under_its_gain_bound() {
+        let mut past = Vec::new();
+        for (what, params, bound_db) in gain_bounds() {
+            for level in [crate::shaper::DRIVE_REFERENCE_LINEAR, 1.0] {
+                for freq in [60.0f32, 220.0, 1_000.0, 5_000.0] {
+                    let gain = peak_gain_db(params, level, freq);
+                    if gain > bound_db {
+                        past.push(format!(
+                            "{what}: {gain:+.2} dB at {freq} Hz, level {level:.3} (bound {bound_db:+.1})"
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(past.is_empty(), "past their bounds:\n{}", past.join("\n"));
+    }
+
+    /// Every kind is either in [`gain_bounds`] or says where its bound lives.
+    #[test]
+    fn every_insert_kind_has_a_gain_bound() {
+        let bounded: Vec<EffectKind> =
+            gain_bounds().iter().map(|(_, params, _)| params.kind()).collect();
+        for kind in EffectKind::ALL {
+            assert!(
+                bounded.contains(&kind)
+                    || GAIN_ELSEWHERE.iter().any(|(elsewhere, _)| *elsewhere == kind),
+                "{kind:?} has no gain bound and no note saying where it is decided"
+            );
+        }
+    }
+
+    /// The Preamp's gain is its two trims, and what a voicing's measured
+    /// tilt adds on top: at the loudest drive, in every voicing, a sine comes
+    /// out no louder than the drive and output the user dialled plus
+    /// `VOICING_LIFT_DB`.
+    #[test]
+    fn the_users_own_gain_is_all_the_preamp_adds() {
+        // Measured 2026-09-23: Grip at +24 dB of drive peaks 3.0 dB past
+        // its trims (its odd-order profile, driven hard, lines its harmonics
+        // up on the crest); Moo, Punch and Iron stay within a tenth.
+        const VOICING_LIFT_DB: f32 = 3.5;
+        let mut past = Vec::new();
+        use mooloop_core::{PreampParams, PreampVoicing};
+        for voicing in [
+            PreampVoicing::Moo,
+            PreampVoicing::Grip,
+            PreampVoicing::Punch,
+            PreampVoicing::Iron,
+        ] {
+            for (drive_db, output_db) in [(24.0f32, 0.0f32), (24.0, 24.0), (0.0, 24.0)] {
+                let params = EffectParams::Preamp(PreampParams {
+                    drive_db,
+                    output_db,
+                    voicing,
+                    mix: 1.0,
+                    ..PreampParams::default()
+                });
+                for freq in [220.0f32, 1_000.0] {
+                    let gain = peak_gain_db(params, crate::shaper::DRIVE_REFERENCE_LINEAR, freq);
+                    if gain > drive_db + output_db + VOICING_LIFT_DB {
+                        past.push(format!(
+                            "{voicing:?} at +{drive_db}/+{output_db} dB added {gain:+.2} dB at {freq} Hz"
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(past.is_empty(), "past the trims:\n{}", past.join("\n"));
+    }
+
+    /// A sine of `level` at `freq` through `params` for three seconds; the
+    /// output's peak over the last second, either side, in dB over `level`.
+    fn peak_gain_db(params: EffectParams, level: f32, freq: f32) -> f32 {
+        let frames = SAMPLE_RATE as usize * 3;
+        let measure_from = SAMPLE_RATE as usize * 2;
+        let mut node = build_effect(params, SAMPLE_RATE);
+        let context = ProcessContext {
+            sample_rate: SAMPLE_RATE,
+            frames: BLOCK,
+            playing: true,
+            bpm: 120.0,
+            position_ticks: 0.0,
+            position_frames: 0,
+        };
+        let mut bus = StereoBus::with_capacity(BLOCK);
+        let mut peak = 0.0f32;
+        let mut n = 0usize;
+        while n < frames {
+            for i in 0..BLOCK {
+                let t = (n + i) as f32 / SAMPLE_RATE as f32;
+                let s = (t * freq * core::f32::consts::TAU).sin() * level;
+                bus.l[i] = s;
+                bus.r[i] = s;
+            }
+            node.process(&context, &mut bus, &EventList::empty(), None);
+            if n >= measure_from {
+                peak = peak
+                    .max(crate::testkit::peak(&bus.l[..BLOCK]))
+                    .max(crate::testkit::peak(&bus.r[..BLOCK]));
+            }
+            n += BLOCK;
+        }
+        crate::testkit::db(peak / level)
+    }
 }
