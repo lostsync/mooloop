@@ -1128,9 +1128,16 @@ pub struct EffectSlot {
     /// The four host controls above, and a container's Mix, as the audio
     /// hears them. See [`HostRamps`].
     ramps: HostRamps,
-    /// Frames this slot has spent fading out for a removal, from the first
-    /// time the executor asked to remove it. `None` when nobody has.
+    /// Frames this slot has spent fading out for a removal, or for a device
+    /// about to be installed in its place, from the first time the executor
+    /// asked. `None` when nobody has. While it is `Some` the slot is
+    /// [`leaving`](Self::leaving): it fades out as a bypass would, without
+    /// touching `bypassed`, which is the user's and has to survive a swap.
     removal_waited: Option<u32>,
+    /// Whether this slot arrived with its own host controls and base
+    /// parameters ([`EffectSlot::for_effect`]) rather than inheriting the
+    /// occupant's ([`EffectSlot::for_device`]). Read once, by `install`.
+    carries_host: bool,
     /// For a container: how many of the rows after this one are inside it,
     /// and the ring that delays its dry copy by that run's declared latency.
     ///
@@ -1182,6 +1189,7 @@ impl EffectSlot {
             output_trim: 1.0,
             ramps: HostRamps::new(),
             removal_waited: None,
+            carries_host: false,
             container_children: 0,
             container_align: None,
             branch_align: None,
@@ -1208,7 +1216,7 @@ impl EffectSlot {
             self.wet_dry,
             self.input_trim,
             self.output_trim,
-            if self.bypassed { 0.0 } else { 1.0 },
+            if self.leaving() { 0.0 } else { 1.0 },
             self.container_mix(),
         ]
     }
@@ -1243,23 +1251,31 @@ impl EffectSlot {
         self.ramps.settled_at(self.ramp_targets())
     }
 
+    /// Whether this slot is on its way out of the path: bypassed, or being
+    /// removed or replaced (MOO-108, MOO-172).
+    fn leaving(&self) -> bool {
+        self.bypassed || self.removal_waited.is_some()
+    }
+
     /// Whether bypass has finished taking this slot out of the path. Until
     /// it has, the device keeps running under the crossfade.
     fn out_of_path(&self) -> bool {
-        self.bypassed && self.ramps.active.value() == 0.0
+        self.leaving() && self.ramps.active.value() == 0.0
     }
 
     /// Whether this slot is coming back from being wholly out of the path,
-    /// which is when its device is told the audio it holds is stale.
+    /// which is when its device is told the audio it holds is stale. A
+    /// device just installed is here too, and starts clean for the same
+    /// reason: it has heard nothing yet.
     fn returning(&self) -> bool {
-        !self.bypassed && self.ramps.active.value() == 0.0
+        !self.leaving() && self.ramps.active.value() == 0.0
     }
 
     /// Land a bypass fade that has reached [`BYPASS_FADE_FLOOR`]: the
     /// one-pole would otherwise spend a hundred milliseconds creeping the
     /// last sixty decibels, running a device nobody can hear.
     fn finish_bypass_fade(&mut self) {
-        if self.bypassed && self.ramps.active.value() <= BYPASS_FADE_FLOOR {
+        if self.leaving() && self.ramps.active.value() <= BYPASS_FADE_FLOOR {
             self.ramps.active.reset_to(0.0);
         }
     }
@@ -1368,6 +1384,27 @@ impl EffectSlot {
     pub fn for_device(device: mooloop_core::DeviceId) -> Self {
         Self {
             device,
+            ..Self::new()
+        }
+    }
+
+    /// A fresh slot for `effect` as the document holds it: its identity, its
+    /// parameters as the base a modulator moves around, and its own bypass,
+    /// wet/dry and trims.
+    ///
+    /// For an install that replaces what a slot *is*, such as a preset
+    /// loaded into a row (MOO-172), where [`for_device`](Self::for_device)
+    /// would keep the occupant's host controls and seed the kind's defaults
+    /// as the base.
+    pub fn for_effect(effect: &mooloop_core::EffectSlotState) -> Self {
+        Self {
+            device: effect.id,
+            base_params: Some(effect.params),
+            bypassed: effect.bypassed,
+            wet_dry: effect.wet_dry.clamp(0.0, 1.0),
+            input_trim: effect.input_trim.clamp(0.0, MAX_LINEAR_GAIN),
+            output_trim: effect.output_trim.clamp(0.0, MAX_LINEAR_GAIN),
+            carries_host: true,
             ..Self::new()
         }
     }
@@ -1614,6 +1651,27 @@ impl EffectChain {
             .is_some_and(mooloop_core::EffectKind::is_container)
     }
 
+    /// Whether `slot` lies inside the run of a container that is out of the
+    /// path, and so is not heard at all. Control thread and the executor's
+    /// hold only; a scan of the rows before it.
+    fn inside_silent_container(&self, slot: usize) -> bool {
+        (0..slot.min(self.bound)).any(|head| {
+            self.is_container(head)
+                && head + self.container_children(head) >= slot
+                && self.bypassed(head)
+        })
+    }
+
+    /// The container whose run holds `slot` and which is on its way out of
+    /// the path, if there is one. The outermost, if several are.
+    fn enclosing_leaving_container(&self, slot: usize) -> Option<usize> {
+        (0..slot.min(self.bound)).find(|&head| {
+            self.is_container(head)
+                && head + self.container_children(head) >= slot
+                && self.slot(head).is_some_and(EffectSlot::leaving)
+        })
+    }
+
     /// How many rows the container in `slot` encloses. Zero for a leaf, and
     /// zero for an empty container, which is the same thing to this loop.
     fn container_children(&self, slot: usize) -> usize {
@@ -1660,18 +1718,41 @@ impl EffectChain {
         mut state: Box<EffectSlot>,
     ) -> ReclaimedEffect {
         if slot < MAX_EFFECTS_PER_CHANNEL {
-            // Host controls belong to the slot, not to the device in it, so
-            // an effect swapped into an occupied slot keeps the wet/dry and
-            // trims already dialled there.
-            if let Some(previous) = self.slot(slot) {
-                state.bypassed = previous.bypassed;
-                state.wet_dry = previous.wet_dry;
-                state.input_trim = previous.input_trim;
-                state.output_trim = previous.output_trim;
-                state.ramps = previous.ramps;
+            if state.base_params.is_none() {
+                state.base_params = Some(kind.default_params());
             }
             state.kind = Some(kind);
-            state.base_params = Some(kind.default_params());
+            // Host controls belong to the slot, not to the device in it, so
+            // an effect swapped into an occupied slot keeps the wet/dry and
+            // trims already dialled there -- unless it brought its own, as a
+            // preset does. Either way the ramps continue from where the
+            // occupant's were, so a changed wet/dry or trim travels.
+            if let Some(previous) = self.slot(slot) {
+                if !state.carries_host {
+                    state.bypassed = previous.bypassed;
+                    state.wet_dry = previous.wet_dry;
+                    state.input_trim = previous.input_trim;
+                    state.output_trim = previous.output_trim;
+                }
+                state.ramps = previous.ramps;
+            } else {
+                state.settle_ramps();
+            }
+            // **A device arrives faded out and fades in** (MOO-172), along
+            // the bypass crossfade from the bypassed path, rather than
+            // switching the chain's sound in one sample. An occupant it
+            // displaces has already faded out: the executor holds an
+            // install into an occupied slot until it has
+            // (`RenderState::effect_slot_vacated`). A document load settles
+            // every ramp after this, so a song opens at its own controls.
+            //
+            // Not a container: it has no sound of its own, and one arriving
+            // around rows that are already playing (a wrap) must not take
+            // them out of the path while it fades in. Rows arriving inside
+            // it fade in themselves.
+            if !kind.is_container() {
+                state.ramps.active.reset_to(0.0);
+            }
             state.resource_key = resource_key;
             self.bound = self.bound.max(slot + 1);
             ReclaimedEffect {
@@ -5687,32 +5768,47 @@ impl RenderState {
     }
 
     /// Whether the effect in `slot` has faded out of the path and can be
-    /// removed without a step (MOO-108).
+    /// removed, or replaced by an install, without a step (MOO-108,
+    /// MOO-172). A slot with nothing in it is vacated already.
     ///
-    /// The first call starts the fade by bypassing the slot -- it is going
-    /// anyway -- and the executor holds the removal, and everything behind
-    /// it, until this says yes: about 35 ms. `frames` is the length of the
+    /// The first call starts the fade by marking the slot as leaving -- it
+    /// is going anyway -- and the executor holds the removal or install, and
+    /// everything behind it, until this says yes: about 35 ms. `bypassed`
+    /// is left alone, so a device installed in its place inherits the
+    /// user's bypass rather than the fade's. `frames` is the length of the
     /// block the executor is about to render, taken as the length of the
     /// one since it last asked. A slot the chain has stopped processing
     /// (a settled mute) cannot finish its fade, and is inaudible besides,
     /// so it goes after [`REMOVAL_MAX_WAIT_S`] regardless; one that never
     /// rendered at all goes at once.
-    pub(crate) fn effect_removal_ready(
+    pub(crate) fn effect_slot_vacated(
         &mut self,
         target: EffectTarget,
         slot: u8,
         frames: usize,
     ) -> bool {
-        let Some(state) = self
-            .chain_mut(target)
-            .and_then(|chain| chain.slot_mut(slot as usize))
-        else {
+        let Some(chain) = self.chain_mut(target) else {
+            return true;
+        };
+        // A row inside a box that is out of the path is not heard, however
+        // far its own fade has got: that is how a container preset clears
+        // the run it replaces (MOO-172).
+        if chain.inside_silent_container(slot as usize) {
+            return true;
+        }
+        // A row inside a box already on its way out waits for the box
+        // rather than fading on its own: two fades at once, the row's inside
+        // the box's equal-power Mix, swell the level by up to 3 dB on the
+        // way down. The wait is counted on the box, which is leaving anyway.
+        let owner = chain
+            .enclosing_leaving_container(slot as usize)
+            .unwrap_or(slot as usize);
+        let Some(state) = chain.slot_mut(owner) else {
             return true;
         };
         if state.out_of_path() {
             return true;
         }
-        state.bypassed = true;
         let waited = state
             .removal_waited
             .map_or(0, |waited| waited.saturating_add(frames as u32));

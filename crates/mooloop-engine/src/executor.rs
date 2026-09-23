@@ -265,9 +265,12 @@ impl Executor {
                         break;
                     }
                     // A removal waits for its device to fade out of the path
-                    // (MOO-108), and holds what is behind it in order.
-                    if let StructuralCommand::RemoveEffect { target, slot } = &command {
-                        if !self.render.effect_removal_ready(*target, *slot, frames) {
+                    // (MOO-108), and so does an install into an occupied
+                    // slot (MOO-172); each holds what is behind it in order.
+                    if let StructuralCommand::RemoveEffect { target, slot }
+                    | StructuralCommand::InstallEffect { target, slot, .. } = &command
+                    {
+                        if !self.render.effect_slot_vacated(*target, *slot, frames) {
                             self.pending_command = Some(RealtimeCommand::Structural(command));
                             break;
                         }

@@ -200,6 +200,20 @@ returns through a bounded reclaim channel and is destroyed on the control
 thread. If reclaim capacity is unavailable, the executor applies backpressure
 by leaving the structural edit queued; it never drops the object itself.
 
+**An effect edit never switches the sound in one sample** (MOO-108,
+MOO-172; agreed between Effects and Realtime Engine on 2026-09-23). The
+executor holds a `RemoveEffect`, and an `InstallEffect` into an **occupied**
+slot, until `RenderState::effect_slot_vacated` reports that the occupant has
+faded out of the path: about 35 ms along the 5 ms host ramp, or 100 ms at
+most for a chain that is not being processed. A row inside a container
+that is itself out of the path goes at once. Everything queued behind a
+held edit waits with it, in order, and the reclaim-room check still comes
+first. Every installed device then starts faded out and fades in along the
+bypass crossfade, except a container, which has no sound of its own and may
+be arriving around rows that are already playing. `ReplaceEffect` (a
+prepared resource swapped under the same device) and a whole-project
+install are unchanged: a document load settles every ramp at its control.
+
 Every structural edit now honours the second bullet. The three routing
 tables -- MIDI routing, audio-input routing and the buffer MIDI map -- were
 the one exception: `ArcSwap`s the callback `load()`ed, so a control-thread

@@ -360,7 +360,15 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   than playing the repeats it held when it went out. Removing a device fades
   it out of the path first: the executor holds the removal, and the edits
   queued behind it, until the fade has run, or 100 ms at most for a chain
-  that is not being processed. `continuity_tests.rs` holds each of these to
+  that is not being processed. Installing is the same in reverse (MOO-172):
+  an added device fades in along the bypass crossfade, and one installed over
+  another waits for that one to fade out first. Loading an effect preset,
+  or a container preset over a run, works that way too: the old device or
+  run fades out and the loaded one fades in. A preset load used to rebuild
+  the whole channel, cutting its voices and tails, and now it doesn't. The
+  device keeps its identity, so its routes and lanes stay attached. A
+  single-row preset loaded onto a container's own row still goes through a
+  project install. `continuity_tests.rs` holds each of these to
   the family's step bound. Buses meter their effect slots the same way channels do: the
   rack polls whichever chain it shows, and a bus's head face reads its summed
   input and post-chain peak. Sources have a blank input meter because they generate rather

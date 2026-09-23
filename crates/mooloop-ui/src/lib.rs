@@ -4683,6 +4683,106 @@ impl UiState {
         self.publish_container_spans(added.target, stx);
     }
 
+    /// Mirror an effect preset loaded into `slot` onto the engine (MOO-172):
+    /// the loaded device, installed over the one that was there.
+    ///
+    /// The executor holds an install into an occupied slot until the device
+    /// in it has faded out of the path, and the new device fades in, so a
+    /// sounding chain changes over without a step. The slot keeps its
+    /// identity, so every route and lane aimed at it still finds it; the
+    /// preset's own bypass, wet/dry and trims arrive with it.
+    ///
+    /// Returns `false`, having sent nothing, for a container's row, which
+    /// the caller installs as a project edit instead.
+    fn install_loaded_preset(
+        &self,
+        target: EffectTarget,
+        slot: usize,
+        bpm: f64,
+        sample_rate: u32,
+        stx: &StructuralCommandSender,
+    ) -> bool {
+        let Some(effect) = self.session.effect_chain().and_then(|chain| chain.get(slot)) else {
+            return false;
+        };
+        let Ok(slot) = u8::try_from(slot) else {
+            return false;
+        };
+        if effect.kind().is_container() {
+            return false;
+        }
+        let node = build_effect_at_tempo(effect.params, sample_rate, bpm);
+        let align = IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
+        stx.send(StructuralCommand::InstallEffect {
+            target,
+            slot,
+            kind: effect.kind(),
+            resource_key: effect.params.buffer().copied().map(buffer_allocation_key),
+            node,
+            align,
+            analyzer: Box::new(SpectrumAnalyzer::new()),
+            state: Box::new(EffectSlot::for_effect(effect)),
+        });
+        true
+    }
+
+    /// Mirror a container preset that replaced a run onto the engine
+    /// (MOO-172), so the old run fades out and the new one fades in. The
+    /// order, and why, is `EffectRunLoaded::engine_mirror`'s.
+    fn install_loaded_run(
+        &self,
+        loaded: &mooloop_session::effects::EffectRunLoaded,
+        bpm: f64,
+        sample_rate: u32,
+        tx: &EngineCommandSender,
+        stx: &StructuralCommandSender,
+    ) {
+        use mooloop_session::effects::RunMirrorStep;
+        let target = loaded.target;
+        let Some(effects) = self.session.effect_chain() else {
+            return;
+        };
+        let row = |index: usize| u8::try_from(index).ok();
+        for step in loaded.engine_mirror() {
+            match step {
+                RunMirrorStep::Bypass { slot } => {
+                    let Some(slot) = row(slot) else { continue };
+                    let _ = tx.send(EngineCommand::SetEffectBypassed {
+                        target,
+                        slot,
+                        bypassed: true,
+                    });
+                }
+                RunMirrorStep::Remove { slot } => {
+                    let Some(slot) = row(slot) else { continue };
+                    stx.send(StructuralCommand::RemoveEffect { target, slot });
+                }
+                RunMirrorStep::Install { row: at, into } => {
+                    let (Some(effect), Some(into)) = (effects.get(at), row(into)) else {
+                        continue;
+                    };
+                    let node = build_effect_at_tempo(effect.params, sample_rate, bpm);
+                    let align = IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
+                    stx.send(StructuralCommand::InstallEffect {
+                        target,
+                        slot: into,
+                        kind: effect.kind(),
+                        resource_key: effect.params.buffer().copied().map(buffer_allocation_key),
+                        node,
+                        align,
+                        analyzer: Box::new(SpectrumAnalyzer::new()),
+                        state: Box::new(EffectSlot::for_effect(effect)),
+                    });
+                }
+                RunMirrorStep::Move { from, to } => {
+                    let (Some(from), Some(to)) = (row(from), row(to)) else { continue };
+                    let _ = tx.send(EngineCommand::MoveEffect { target, from, to });
+                }
+            }
+        }
+        self.publish_container_spans(target, stx);
+    }
+
     fn sync_effects(&self) {
         // Every structural rack edit calls this, which is what makes it the
         // place to notice that slot numbers may have moved under the engine's
@@ -11698,6 +11798,8 @@ impl AppUi {
         // the edit lands on.
         {
             let tx = project_edit_tx.clone();
+            let ctx = cmd_tx.clone();
+            let stx = structural_tx.clone();
             let st = state.clone();
             let commands = command_state.clone();
             let weak = window.as_weak();
@@ -11748,16 +11850,28 @@ impl AppUi {
                 };
 
                 let before = project_snapshot(&st.borrow(), &window);
-                {
+                let mirrored = {
                     let mut state = st.borrow_mut();
-                    let landed = match &loaded {
+                    let bpm = window.get_bpm() as f64;
+                    let sample_rate = state.audio_sample_rate;
+                    // Mirrored onto the engine as structural edits (MOO-172):
+                    // the displaced devices fade out and the loaded ones fade
+                    // in. Queued as a project install, as this was before,
+                    // the whole channel strip was rebuilt -- every voice and
+                    // tail on it cut, in one sample.
+                    let mirrored = match &loaded {
                         Ok(effect) => state
                             .session
                             .load_effect_preset(slot, effect, &name)
-                            .is_some(),
-                        Err(run) => state.session.load_effect_run(slot, run, &name).is_some(),
+                            .map(|target| {
+                                state.install_loaded_preset(target, slot, bpm, sample_rate, &stx)
+                            }),
+                        Err(run) => state.session.load_effect_run(slot, run, &name).map(|loaded| {
+                            state.install_loaded_run(&loaded, bpm, sample_rate, &ctx, &stx);
+                            true
+                        }),
                     };
-                    if !landed {
+                    let Some(mirrored) = mirrored else {
                         log_warn!(
                             "project",
                             "{name} does not fit slot {slot} on this chain"
@@ -11767,9 +11881,20 @@ impl AppUi {
                             "That preset is for a different kind of device".into(),
                         );
                         return;
-                    }
+                    };
                     state.sync_effects();
+                    state.refresh_automation(&window);
+                    state.refresh_modulation(&window);
+                    mirrored
+                };
+                if mirrored {
+                    record_project_history(&commands, before, &st, &window, "Effect preset loaded");
+                    return;
                 }
+                // A single-row preset onto a container's row: its span is
+                // structure an in-place install would have to carry, and a
+                // box has no sound of its own to step, so it goes through the
+                // project install as it always has.
                 let after = project_snapshot(&st.borrow(), &window);
                 if queue_project_edit(&tx, before, after, "Effect preset loaded") {
                     commands.borrow_mut().project_edit_pending = true;

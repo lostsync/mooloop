@@ -100,6 +100,61 @@ pub struct EffectRunLoaded {
     pub landed: usize,
 }
 
+/// One step of the engine mirror of an [`EffectRunLoaded`], in the order the
+/// steps are sent. Indices are engine chain positions at the moment the
+/// step lands; `Install::row` is the model row whose device goes there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunMirrorStep {
+    /// Bypass the old box, so its run fades out of the path as one.
+    Bypass { slot: usize },
+    /// Remove whatever is at `slot`, in place, leaving a hole.
+    Remove { slot: usize },
+    /// Install model row `row` at engine position `into`.
+    Install { row: usize, into: usize },
+    /// `EngineCommand::MoveEffect`'s remove-then-insert move.
+    Move { from: usize, to: usize },
+}
+
+impl EffectRunLoaded {
+    /// How the engine's flat chain gets from the old run to the new one
+    /// without a step in the sound (MOO-172).
+    ///
+    /// The old box is bypassed and its rows removed **in place, last first**.
+    /// The first removal is held until the box has faded out of the path,
+    /// and a row inside a box that is out of the path goes at once. Removing
+    /// the box first, the way a device removal does, would play its rows
+    /// unboxed for as long as their own fades took. The new run's rows fill
+    /// the holes; any beyond them are installed past the chain's end and
+    /// moved up, and holes left over are moved to the end.
+    pub fn engine_mirror(&self) -> Vec<RunMirrorStep> {
+        let mut steps = vec![RunMirrorStep::Bypass { slot: self.slot }];
+        steps.extend(
+            (0..self.removed)
+                .rev()
+                .map(|offset| RunMirrorStep::Remove { slot: self.slot + offset }),
+        );
+        // Removing in place leaves the chain as long as it was.
+        let end = self.removed_tail + 1;
+        for landed in 0..self.landed {
+            let row = self.slot + landed;
+            if landed < self.removed {
+                steps.push(RunMirrorStep::Install { row, into: row });
+            } else {
+                let into = end + landed - self.removed;
+                steps.push(RunMirrorStep::Install { row, into });
+                steps.push(RunMirrorStep::Move { from: into, to: row });
+            }
+        }
+        for _ in self.landed..self.removed {
+            let from = self.slot + self.landed;
+            if from != self.removed_tail {
+                steps.push(RunMirrorStep::Move { from, to: self.removed_tail });
+            }
+        }
+        steps
+    }
+}
+
 /// A reorder, and how the engine's flat chain gets to the same order.
 pub struct EffectMoved {
     pub target: EffectTarget,
@@ -837,6 +892,56 @@ fn resolved_modulation_rate(
 mod tests {
     use super::*;
     use mooloop_core::gain::linear_to_db;
+
+    /// The engine mirror of a run preset, played against a model of the
+    /// engine's flat chain, lands the chain in the model's order, with no
+    /// hole left inside it and nothing past its end.
+    #[test]
+    fn a_run_preset_mirror_reaches_the_models_order() {
+        // (rows before, old run, rows after, new run)
+        for (before, old, after, new) in
+            [(0, 2, 0, 2), (1, 3, 2, 1), (2, 1, 1, 4), (0, 4, 3, 4), (3, 2, 0, 5)]
+        {
+            let old_ids: Vec<u32> = (0..before + old + after).map(|id| id as u32).collect();
+            let mut engine: Vec<Option<u32>> =
+                old_ids.iter().copied().map(Some).collect();
+            engine.resize(64, None);
+            let mut model: Vec<u32> = old_ids[..before].to_vec();
+            model.extend((0..new).map(|n| 100 + n as u32));
+            model.extend(&old_ids[before + old..]);
+            let loaded = EffectRunLoaded {
+                target: EffectTarget::Channel(0),
+                slot: before,
+                removed: old,
+                removed_tail: old_ids.len() - 1,
+                devices: Vec::new(),
+                landed: new,
+            };
+            for step in loaded.engine_mirror() {
+                match step {
+                    RunMirrorStep::Bypass { slot } => assert_eq!(slot, before),
+                    RunMirrorStep::Remove { slot } => {
+                        assert!(engine[slot].is_some(), "removed a hole at {slot}");
+                        engine[slot] = None;
+                    }
+                    RunMirrorStep::Install { row, into } => {
+                        assert!(engine[into].is_none(), "installed over a device at {into}");
+                        engine[into] = Some(model[row]);
+                    }
+                    RunMirrorStep::Move { from, to } => {
+                        let moved = engine.remove(from);
+                        engine.insert(to, moved);
+                    }
+                }
+            }
+            let landed: Vec<u32> = engine.iter().map_while(|slot| *slot).collect();
+            assert_eq!(landed, model, "{before}+{old}+{after} -> {new}");
+            assert!(
+                engine[landed.len()..].iter().all(Option::is_none),
+                "{before}+{old}+{after} -> {new} left a device past the chain's end"
+            );
+        }
+    }
 
     fn chain(session: &Session) -> Vec<EffectKind> {
         session

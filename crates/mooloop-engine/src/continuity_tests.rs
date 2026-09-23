@@ -605,12 +605,12 @@ fn removing_an_effect_is_continuous() {
         step_across(
             &mut render,
             LEAD,
-            |render| assert!(!render.effect_removal_ready(FX, 0, 0)),
+            |render| assert!(!render.effect_slot_vacated(FX, 0, 0)),
             TAIL,
         ),
     );
     assert!(
-        render.effect_removal_ready(FX, 0, TAIL),
+        render.effect_slot_vacated(FX, 0, TAIL),
         "the fade should have run within {TAIL} frames"
     );
     assert_continuous(
@@ -674,5 +674,206 @@ fn un_bypassing_a_delay_plays_no_repeats_from_before() {
     assert!(
         loudest < 1.0e-4,
         "the delay came back playing repeats from before its bypass, peak {loudest}"
+    );
+}
+
+// --- Effects: MOO-172 --------------------------------------------------------
+
+/// The 150 Hz filter the MOO-108 cases run through, as a structural install
+/// carries it: built off the audio thread, with its own dry ring.
+fn install_filter(slot: u8, device: u32, mode: FilterMode) -> StructuralCommand {
+    let effect = EffectSlotState::new(EffectParams::Filter(FilterParams {
+        cutoff_hz: 150.0,
+        resonance: 0.0,
+        mode,
+        ..FilterParams::default()
+    }))
+    .with_id(mooloop_core::DeviceId(device));
+    let node = mooloop_dsp::build_effect_at_tempo(effect.params, SAMPLE_RATE, 120.0);
+    let align = mooloop_dsp::IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
+    StructuralCommand::InstallEffect {
+        target: FX,
+        slot,
+        kind: EffectKind::Filter,
+        resource_key: None,
+        node,
+        align,
+        analyzer: Box::new(mooloop_dsp::SpectrumAnalyzer::new()),
+        state: Box::new(crate::EffectSlot::for_effect(&effect)),
+    }
+}
+
+/// Adding a device to a chain that is playing brings it in along the bypass
+/// crossfade rather than switching the sound over in one sample.
+#[test]
+fn installing_an_effect_is_continuous() {
+    let mut render = playing(&sine_project());
+    assert_continuous(
+        "installing a filter into a sounding chain",
+        step_across(
+            &mut render,
+            LEAD,
+            |render| {
+                let displaced =
+                    render.apply_structural(install_filter(0, 900, FilterMode::LowPass));
+                assert!(displaced.is_none(), "an install into an empty slot displaces nothing");
+            },
+            TAIL,
+        ),
+    );
+}
+
+/// Replacing what is in a slot -- a preset loaded into a row -- is the
+/// removal's first moment and then the install: the executor holds the
+/// install until the occupant has faded out (`effect_slot_vacated`), and the
+/// new device then fades in. Both are held to the bound.
+#[test]
+fn installing_over_an_effect_is_continuous() {
+    let mut render = filtered_sine(|_| {});
+    assert_continuous(
+        "the fade an install over an occupied slot starts",
+        step_across(
+            &mut render,
+            LEAD,
+            |render| assert!(!render.effect_slot_vacated(FX, 0, 0)),
+            TAIL,
+        ),
+    );
+    assert!(
+        render.effect_slot_vacated(FX, 0, TAIL),
+        "the occupant should have faded out within {TAIL} frames"
+    );
+    assert_continuous(
+        "the install itself, and the new device fading in",
+        step_across(
+            &mut render,
+            1_000,
+            |render| {
+                let displaced =
+                    render.apply_structural(install_filter(0, 901, FilterMode::LowPass));
+                assert!(displaced.is_some(), "the install should have displaced the first low-pass");
+                drop(displaced);
+            },
+            TAIL,
+        ),
+    );
+}
+
+/// A container preset replacing a run, in the order the interface mirrors
+/// it (`install_loaded_run`): the old box is bypassed, its rows go last
+/// first once it is out of the path, and the new box and its row arrive in
+/// the holes they left, the row fading in.
+#[test]
+fn replacing_a_containers_run_is_continuous() {
+    let mut channel = sine_channel();
+    channel
+        .setup
+        .push_effect(EffectSlotState::new(EffectParams::Filter(FilterParams {
+            cutoff_hz: 150.0,
+            resonance: 0.0,
+            mode: FilterMode::LowPass,
+            ..FilterParams::default()
+        })))
+        .expect("room");
+    let setup = &mut channel.setup;
+    mooloop_core::wrap_in_container(
+        &mut setup.effects,
+        &mut setup.next_device_id,
+        0..1,
+        EffectSlotState::of_kind(EffectKind::Chain),
+    )
+    .expect("wrapped");
+    let mut render = render_of(vec![channel]);
+    assert_continuous(
+        "the old box fading out",
+        step_across(
+            &mut render,
+            LEAD,
+            |render| {
+                render.apply_command(EngineCommand::SetEffectBypassed {
+                    target: FX,
+                    slot: 0,
+                    bypassed: true,
+                });
+                assert!(!render.effect_slot_vacated(FX, 1, 0), "the box has not faded yet");
+            },
+            TAIL,
+        ),
+    );
+    assert!(
+        render.effect_slot_vacated(FX, 1, TAIL),
+        "a row inside a box that is out of the path is not heard"
+    );
+    assert_continuous(
+        "the new run arriving",
+        step_across(
+            &mut render,
+            1_000,
+            |render| {
+                drop(render.apply_structural(StructuralCommand::RemoveEffect { target: FX, slot: 1 }));
+                assert!(render.effect_slot_vacated(FX, 0, 0), "the box is out of the path");
+                drop(render.apply_structural(StructuralCommand::RemoveEffect { target: FX, slot: 0 }));
+                let head = EffectSlotState::of_kind(EffectKind::Chain)
+                    .with_id(mooloop_core::DeviceId(910));
+                let node = mooloop_dsp::build_effect_at_tempo(head.params, SAMPLE_RATE, 120.0);
+                assert!(render
+                    .apply_structural(StructuralCommand::InstallEffect {
+                        target: FX,
+                        slot: 0,
+                        kind: EffectKind::Chain,
+                        resource_key: None,
+                        node,
+                        align: None,
+                        analyzer: Box::new(mooloop_dsp::SpectrumAnalyzer::new()),
+                        state: Box::new(crate::EffectSlot::for_effect(&head)),
+                    })
+                    .is_none());
+                assert!(render
+                    .apply_structural(install_filter(1, 911, FilterMode::HighPass))
+                    .is_none());
+                drop(render.apply_structural(StructuralCommand::SetContainerSpan {
+                    target: FX,
+                    slot: 0,
+                    children: 1,
+                    align: None,
+                    scratch: None,
+                }));
+            },
+            TAIL,
+        ),
+    );
+}
+
+/// A device swapped in under a bypassed slot stays bypassed: the fade that
+/// made room for it is not the user's bypass. Bypassed, the chain is the
+/// dry path, so it renders exactly what the bypassed low-pass did.
+#[test]
+fn installing_over_a_bypassed_effect_keeps_it_bypassed() {
+    const LEAD_IN: usize = 4_800;
+    const AFTER: usize = 9_600;
+    let mut render = filtered_sine(|effect| effect.bypassed = true);
+    render_frames(&mut render, LEAD_IN);
+    assert!(
+        render.effect_slot_vacated(FX, 0, 0),
+        "a bypassed slot is already out of the path"
+    );
+    let mut install = install_filter(0, 902, FilterMode::HighPass);
+    if let StructuralCommand::InstallEffect { state, .. } = &mut install {
+        // The occupant's host controls, as an ordinary swap inherits them.
+        **state = crate::EffectSlot::for_device(mooloop_core::DeviceId(902));
+    }
+    drop(render.apply_structural(install));
+    let (swapped, _) = render_frames(&mut render, AFTER);
+
+    let mut reference = filtered_sine(|effect| effect.bypassed = true);
+    render_frames(&mut reference, LEAD_IN);
+    let (bypassed, _) = render_frames(&mut reference, AFTER);
+    let worst = swapped
+        .iter()
+        .zip(&bypassed)
+        .fold(0.0f32, |worst, (a, b)| worst.max((a - b).abs()));
+    assert!(
+        worst < 1.0e-6,
+        "the swapped-in device is in the path: it differs from the bypassed chain by {worst}"
     );
 }
