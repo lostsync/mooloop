@@ -6,14 +6,16 @@
 use crate::bus::{pan_gains, StereoBus};
 use crate::env::Adsr;
 use crate::event::{Event, EventList};
-use crate::filter::{apply_drive, Svf};
+use crate::filter::Svf;
+use crate::shaper::apply_drive;
 use crate::heldnotes::{HeldNote, HeldNotes};
 use crate::lfo::Lfo;
 use crate::node::{AudioNode, ProcessContext, SourceNode};
 use crate::taps::AudioTaps;
 use crate::osc::Osc;
-use crate::scale::hz_from_normalized;
+use crate::voice_filter::{env_octaves, VoiceCutoff};
 use crate::smooth::Smoothed;
+use crate::glide::Glide;
 use crate::synth_voice::{note_to_freq, MIN_GLIDE_S, PARAM_SMOOTH_S, STOP_RELEASE_S};
 use mooloop_core::{
     EnvTrigger, PolySynthParams, MAX_POLY_VOICES, OSC_CENT_RANGE, OSC_SEMITONE_RANGE,
@@ -45,6 +47,9 @@ struct PolyVoice {
     env: Adsr,
     oscs: [Osc; 3],
     current_freq: f32,
+    /// Where the pitch is sliding: `current_freq` is its output, one
+    /// sample at a time, in log frequency (MOO-145).
+    glide: Glide,
     target_freq: f32,
     filter: Svf,
     /// Velocity gain, smoothed so that a stolen retrigger at a different
@@ -66,6 +71,7 @@ impl PolyVoice {
             env: Adsr::new(sample_rate),
             oscs: [Osc::new(), Osc::new(), Osc::new()],
             current_freq: 0.0,
+            glide: Glide::new(0.0),
             target_freq: 0.0,
             filter: Svf::new(),
             velocity_amp: smoothed(0.0),
@@ -260,6 +266,7 @@ impl PolySynth {
 
         if !stolen {
             // Fresh slot: no glide from silence, clean filter and phases.
+            voice.glide.jump_to(voice.target_freq);
             voice.current_freq = voice.target_freq;
             voice.filter.reset();
             for osc in &mut voice.oscs {
@@ -267,6 +274,7 @@ impl PolySynth {
             }
             voice.snap_to(&self.params, velocity_amp);
         } else if self.params.glide <= MIN_GLIDE_S {
+            voice.glide.jump_to(voice.target_freq);
             voice.current_freq = voice.target_freq;
         }
         voice.velocity_amp.set_target(velocity_amp);
@@ -322,6 +330,7 @@ impl PolySynth {
         voice.active = true;
         if !was_sounding {
             // Fresh start: no glide from silence, clean filter and phases.
+            voice.glide.jump_to(voice.target_freq);
             voice.current_freq = voice.target_freq;
             voice.filter.reset();
             for osc in &mut voice.oscs {
@@ -329,6 +338,7 @@ impl PolySynth {
             }
             voice.snap_to(&params, velocity_amp);
         } else if !glide {
+            voice.glide.jump_to(voice.target_freq);
             voice.current_freq = voice.target_freq;
         }
         voice.velocity_amp.set_target(velocity_amp);
@@ -350,6 +360,7 @@ impl PolySynth {
         voice.note = winner.note;
         voice.target_freq = note_to_freq(winner.note);
         if !glide {
+            voice.glide.jump_to(voice.target_freq);
             voice.current_freq = voice.target_freq;
         }
         // While the voice is still sounding the new velocity has to slide in:
@@ -401,7 +412,6 @@ impl PolySynth {
         let params = self.params;
         let sr = self.sample_rate;
         let lfo_params = params.lfo;
-        let max_hz = sr as f32 * 0.45;
         let polyphony = self.voice_limit() as u8;
         let spread = params.spread.clamp(0.0, 1.0);
         let voices = &mut self.voices;
@@ -421,13 +431,12 @@ impl PolySynth {
         let to_filter = lfo_params.to_filter.clamp(-4.0, 4.0);
         let to_pulse_width = lfo_params.to_pulse_width.clamp(-0.45, 0.45);
         let to_amp = lfo_params.to_amp.clamp(0.0, 1.0);
-        let glide_coeff = (-1.0 / (params.glide.max(MIN_GLIDE_S) * sr as f32)).exp();
 
         // Signal-scaling parameters lag their targets; everything else is
         // cheap enough to read straight from the block's parameters.
         let frames = end.saturating_sub(start);
         let mut cutoff = [0.0_f32; MAX_POLY_VOICES as usize];
-        let mut base_hz = [0.0_f32; MAX_POLY_VOICES as usize];
+        let mut voice_cutoff = [VoiceCutoff::from_hz(0.0, sr); MAX_POLY_VOICES as usize];
         for (voice_index, voice) in voices.iter_mut().enumerate() {
             for (smoothed, osc) in voice.osc_level.iter_mut().zip(params.osc.iter()) {
                 smoothed.set_target(osc.level.clamp(0.0, 1.0));
@@ -436,13 +445,13 @@ impl PolySynth {
                 .cutoff
                 .set_target(params.filter_cutoff.clamp(0.0, 1.0));
             voice.drive.set_target(params.drive.clamp(0.0, 1.0));
-            // `hz_from_normalized`'s `powf` depends only on the smoothed
+            // `cutoff_hz_from_normalized`'s `powf` depends only on the smoothed
             // knob position, which has settled to a constant for most of a
             // note's life; resolve it once per voice per range instead of
             // every sample per voice. `advance_by` leaves `voice.cutoff`
             // exactly where `frames` calls to `advance()` would have.
             cutoff[voice_index] = voice.cutoff.advance_by(frames);
-            base_hz[voice_index] = hz_from_normalized(cutoff[voice_index], max_hz);
+            voice_cutoff[voice_index] = VoiceCutoff::from_knob(cutoff[voice_index], sr);
         }
 
         for i in start..end {
@@ -465,8 +474,7 @@ impl PolySynth {
                     continue;
                 }
 
-                voice.current_freq +=
-                    (voice.target_freq - voice.current_freq) * (1.0 - glide_coeff);
+                voice.current_freq = voice.glide.follow(voice.target_freq, params.glide, sr);
                 let velocity = voice.velocity_amp.advance();
 
                 let mut mix = 0.0;
@@ -493,8 +501,9 @@ impl PolySynth {
                 {
                     mix
                 } else {
-                    let octaves = voice.env.level() * env_amount * 6.0 + lfo_value * to_filter;
-                    let cutoff_hz = (base_hz[voice_index] * octaves.exp2()).clamp(20.0, max_hz);
+                    let octaves =
+                        env_octaves(voice.env.level(), env_amount) + lfo_value * to_filter;
+                    let cutoff_hz = voice_cutoff[voice_index].hz(octaves);
                     voice
                         .filter
                         .next_sample_lp_hp(mix, cutoff_hz, resonance, sr)

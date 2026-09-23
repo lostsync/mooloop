@@ -7,7 +7,8 @@ use mooloop_core::{
 
 use crate::bus::StereoBus;
 use crate::event::EventList;
-use crate::filter::{apply_drive, Svf, SvfCoeffs};
+use crate::filter::{Svf, SvfCoeffs};
+use crate::shaper::apply_drive;
 use crate::modulator::CONTROL_RATE_FRAMES;
 use crate::node::{AudioNode, ProcessContext};
 use crate::smooth::Smoothed;

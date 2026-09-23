@@ -59,7 +59,8 @@ use crate::bus::StereoBus;
 use crate::taps::AudioTaps;
 use crate::env::{shape, Ahd, AhdShape, DECAY_TAIL_CONSTANTS};
 use crate::event::{Event, EventList};
-use crate::filter::{apply_drive, soft_ceiling, OnePoleHp, Svf};
+use crate::filter::{OnePoleHp, Svf};
+use crate::shaper::{apply_drive, soft_ceiling};
 use crate::modulator::CONTROL_RATE_FRAMES;
 use crate::node::{AudioNode, ProcessContext, SourceNode};
 use crate::osc::{Noise, Osc};
@@ -117,7 +118,7 @@ fn ahd_shape(env: &Ds01EnvParams) -> AhdShape {
 /// `drive_changes_timbre_more_than_level` the third.
 const VOICE_OUTPUT_REFERENCE: f32 = 0.4444;
 
-/// Input gain at full Drive. Shared with `filter::apply_drive`, which is the
+/// Input gain at full Drive. Shared with `shaper::apply_drive`, which is the
 /// Soft character, so all four characters reach the same distance.
 const DRIVE_GAIN_RANGE: f32 = 15.0;
 

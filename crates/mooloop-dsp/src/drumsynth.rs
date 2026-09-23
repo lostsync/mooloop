@@ -15,7 +15,8 @@
 use crate::bus::StereoBus;
 use crate::env::{ExpDecay, DECAY_TAIL_CONSTANTS};
 use crate::event::{Event, EventList};
-use crate::filter::{apply_drive, OnePoleHp};
+use crate::filter::OnePoleHp;
+use crate::shaper::apply_drive;
 use crate::node::{AudioNode, ProcessContext, SourceNode};
 use crate::taps::AudioTaps;
 use crate::osc::{Noise, Osc};

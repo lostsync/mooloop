@@ -66,6 +66,8 @@ pub mod stretch;
 mod stretch_cost;
 pub mod taps;
 pub mod testkit;
+pub mod glide;
+pub mod voice_filter;
 
 mod synth_voice;
 

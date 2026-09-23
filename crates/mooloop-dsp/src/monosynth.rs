@@ -11,13 +11,15 @@
 use crate::bus::StereoBus;
 use crate::env::Adsr;
 use crate::event::{Event, EventList};
-use crate::filter::{apply_drive, Svf};
+use crate::filter::Svf;
+use crate::shaper::apply_drive;
 use crate::lfo::Lfo;
 use crate::node::{AudioNode, ProcessContext, SourceNode};
 use crate::taps::AudioTaps;
 use crate::osc::Osc;
-use crate::scale::hz_from_normalized;
+use crate::voice_filter::{env_octaves, VoiceCutoff};
 use crate::smooth::Smoothed;
+use crate::glide::Glide;
 use crate::synth_voice::{note_to_freq, MIN_GLIDE_S, PARAM_SMOOTH_S, STOP_RELEASE_S};
 use mooloop_core::MonoSynthParams;
 
@@ -32,6 +34,9 @@ struct MonoVoice {
     env: Adsr,
     oscs: [Osc; 3],
     current_freq: f32,
+    /// Where the pitch is sliding: `current_freq` is its output, one
+    /// sample at a time, in log frequency (MOO-145).
+    glide: Glide,
     target_freq: f32,
     filter: Svf,
     /// Velocity gain, smoothed so that a retrigger at a different velocity
@@ -51,6 +56,7 @@ impl MonoVoice {
             env: Adsr::new(sample_rate),
             oscs: [Osc::new(), Osc::new(), Osc::new()],
             current_freq: 0.0,
+            glide: Glide::new(0.0),
             target_freq: 0.0,
             filter: Svf::new(),
             velocity_amp: smoothed(0.0),
@@ -152,6 +158,7 @@ impl MonoSynth {
         if !was_active {
             // Fresh start: no glide from silence, clean filter and phases,
             // and every smoothed parameter taken up immediately.
+            self.voice.glide.jump_to(self.voice.target_freq);
             self.voice.current_freq = self.voice.target_freq;
             self.voice.filter.reset();
             for osc in &mut self.voice.oscs {
@@ -159,6 +166,7 @@ impl MonoSynth {
             }
             self.voice.snap_to(&self.params, velocity_amp);
         } else if self.params.glide <= MIN_GLIDE_S {
+            self.voice.glide.jump_to(self.voice.target_freq);
             self.voice.current_freq = self.voice.target_freq;
         }
         // While the voice is still sounding the new velocity has to slide in:
@@ -197,9 +205,6 @@ impl MonoSynth {
             return;
         }
 
-        // Glide: one-pole approach to the target frequency.
-        let glide_coeff = (-1.0 / (params.glide.max(MIN_GLIDE_S) * sr as f32)).exp();
-
         // Per-oscillator pitch ratios from semitone/cent offsets.
         let mut ratio = [0.0_f32; 3];
         for (index, osc) in params.osc.iter().enumerate() {
@@ -223,19 +228,18 @@ impl MonoSynth {
         let to_filter = lfo_params.to_filter.clamp(-4.0, 4.0);
         let to_pulse_width = lfo_params.to_pulse_width.clamp(-0.45, 0.45);
         let to_amp = lfo_params.to_amp.clamp(0.0, 1.0);
-        let max_hz = sr as f32 * 0.45;
 
-        // `hz_from_normalized`'s `powf` depends only on the smoothed knob
+        // `cutoff_hz_from_normalized`'s `powf` depends only on the smoothed knob
         // position, which has settled to a constant for most of a note's
         // life; resolve it once per range instead of every sample.
         // `advance_by` leaves `voice.cutoff` exactly where `frames` calls to
         // `advance()` would have, so this is the same value the old
         // per-sample read would have used by the end of this range.
         let cutoff = voice.cutoff.advance_by(end.saturating_sub(start));
-        let base_hz = hz_from_normalized(cutoff, max_hz);
+        let voice_cutoff = VoiceCutoff::from_knob(cutoff, sr);
 
         for i in start..end {
-            voice.current_freq += (voice.target_freq - voice.current_freq) * (1.0 - glide_coeff);
+            voice.current_freq = voice.glide.follow(voice.target_freq, params.glide, sr);
 
             voice.env.advance();
             if voice.env.is_idle() {
@@ -278,8 +282,8 @@ impl MonoSynth {
             {
                 mix
             } else {
-                let octaves = voice.env.level() * env_amount * 6.0 + lfo_value * to_filter;
-                let cutoff_hz = (base_hz * octaves.exp2()).clamp(20.0, max_hz);
+                let octaves = env_octaves(voice.env.level(), env_amount) + lfo_value * to_filter;
+                let cutoff_hz = voice_cutoff.hz(octaves);
                 voice.filter.next_sample(mix, cutoff_hz, resonance, sr)
             };
 
@@ -493,12 +497,18 @@ mod tests {
         let mut bus = StereoBus::with_capacity(sr as usize);
         synth.process(&ctx(1024, sr), &mut bus, &EventList::empty(), None);
         let early = synth.voice.current_freq;
-        // One second is ten glide time constants: fully converged.
-        synth.process(&ctx(sr as usize, sr), &mut bus, &EventList::empty(), None);
-        let late = synth.voice.current_freq;
-
         assert!(early < note_to_freq(72));
-        assert!((late - note_to_freq(72)).abs() < 1.0);
+
+        // The Glide time is the time the slide takes (MOO-145): 100 ms after
+        // the note, not the ~460 ms a one-pole with that time constant took
+        // to come within a percent, the pitch is on the new note.
+        let rest = (sr as usize / 10) - 1024;
+        synth.process(&ctx(rest, sr), &mut bus, &EventList::empty(), None);
+        let arrived = synth.voice.current_freq;
+        assert!(
+            crate::testkit::cents(arrived, note_to_freq(72)).abs() < 0.01,
+            "{arrived} Hz after the 100 ms glide time"
+        );
     }
 
     #[test]

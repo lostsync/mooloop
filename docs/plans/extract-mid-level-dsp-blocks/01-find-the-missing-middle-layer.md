@@ -1,5 +1,9 @@
 # Find the missing middle layer between `DelayLine` and whole devices
 
+> **2026-09-23:** a first middle layer landed on the voice side instead
+> (MOO-144: `VoiceCutoff`, `Glide`, the saturation stages in `shaper.rs`);
+> see `00-status.md`. The delay-layer question below is still open.
+
 ## The gap
 
 The intended shape is a ladder: primitives compose into blocks, blocks

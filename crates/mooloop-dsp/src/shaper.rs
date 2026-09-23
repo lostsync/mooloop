@@ -13,6 +13,8 @@
 
 use mooloop_core::DriveCurve;
 
+use crate::scale::clamp_param;
+
 /// Apply one shaping curve to a single sample. Input is expected pre-gained;
 /// output is roughly bounded to [-1, 1] except for `Fold`, which is exactly
 /// bounded by construction.
@@ -227,6 +229,180 @@ fn blackman_sinc_kernel() -> [f32; FIR_TAPS] {
         *tap /= sum;
     }
     kernel
+}
+
+// ---------------------------------------------------------------------------
+// Saturation stages for voices and filters. Moved here from `filter.rs`
+// (MOO-144) so every saturation stage lives in one module under one
+// anti-aliasing policy: these are smooth `tanh`-family curves run at the base
+// rate, whose harmonics fall away fast enough that a voice's own filter and
+// the 0.45 x sample rate ceiling keep folded content inaudible; the hard and
+// folding curves above, whose harmonics do not fall away, run through
+// [`Oversampler2x`].
+// ---------------------------------------------------------------------------
+
+/// Compensated soft saturation shared by the sampler, drum synth, both
+/// synths, and the filter effect: pre-gain into `tanh`, normalized by the
+/// shaper's own response to a reference-level signal, so raising drive
+/// changes character, not level. A static nonlinearity cannot be level-flat
+/// at every input; anchoring at the operating level
+/// (`mooloop_core::gain::REFERENCE_PEAK_DBFS`) is the compromise, and it
+/// also caps a full-scale peak at the reference rather than at clipping.
+pub fn apply_drive(input: f32, drive: f32) -> f32 {
+    let drive = clamp_param(drive, 0.0, 1.0);
+    if drive <= f32::EPSILON {
+        return input;
+    }
+    apply_drive_compensated(input, drive, voice_drive_compensation(drive))
+}
+
+/// The part of [`apply_drive`]'s response that depends on `drive` alone, not
+/// on the sample it shapes: a `tanh` of the driven reference level.
+///
+/// A caller shaping many samples at one `drive` value -- a whole block, a
+/// whole voice between parameter events -- computes this once and reuses it
+/// through [`apply_drive_compensated`] rather than paying the `tanh` again
+/// for every sample, exactly as `apply_drive` already does internally for a
+/// single call.
+pub fn voice_drive_compensation(drive: f32) -> f32 {
+    let drive = clamp_param(drive, 0.0, 1.0);
+    if drive <= f32::EPSILON {
+        // Unused by `apply_drive_compensated`'s own bypass at this drive, but
+        // a finite, well-defined value rather than one that only happens to
+        // never be read.
+        return 1.0;
+    }
+    let input_gain = 1.0 + drive * 15.0;
+    DRIVE_REFERENCE_LINEAR / (DRIVE_REFERENCE_LINEAR * input_gain).tanh()
+}
+
+/// [`apply_drive`] with [`voice_drive_compensation`] already computed. The per-call
+/// `tanh` of the *sample* still has to happen here -- that one genuinely
+/// varies every call -- so this only removes the one `tanh` that does not.
+pub fn apply_drive_compensated(input: f32, drive: f32, compensation: f32) -> f32 {
+    let drive = clamp_param(drive, 0.0, 1.0);
+    if drive <= f32::EPSILON {
+        return input;
+    }
+    let input_gain = 1.0 + drive * 15.0;
+    (input * input_gain).tanh() * compensation
+}
+
+/// A safety ceiling for a voice's output: exactly transparent below the knee,
+/// asymptotic to [`VOICE_CEILING`] above it.
+///
+/// This is a bound, not a tone stage. [`Ladder`](crate::filter::Ladder) and [`Acid`](crate::filter::Acid) cannot exceed 1
+/// by construction, since their stages only ever integrate a shaper output, so
+/// for them this never engages at all. [`Svf`](crate::filter::Svf) is linear and has no such
+/// guarantee: at full resonance with three oscillators pushed into it, it will
+/// happily hand back four times full scale. The knee sits well above the
+/// nominal voice level (one oscillator at its 0 dB top lands near 0.7), so a
+/// patch that is merely loud passes through untouched.
+pub fn soft_ceiling(input: f32) -> f32 {
+    let magnitude = input.abs();
+    if magnitude <= VOICE_CEILING_KNEE {
+        return input;
+    }
+    let headroom = VOICE_CEILING - VOICE_CEILING_KNEE;
+    let over = (magnitude - VOICE_CEILING_KNEE) / headroom;
+    input.signum() * (VOICE_CEILING_KNEE + headroom * over.tanh())
+}
+
+/// Where the ceiling starts to bend. Above the loudest a sane patch reaches,
+/// below where a resonant linear filter runs away.
+const VOICE_CEILING_KNEE: f32 = 1.5;
+
+/// Asymptote. Chosen against `VOICE_OUTPUT_REFERENCE` so a voice at the bound,
+/// at full envelope and full velocity, still lands under full scale.
+pub(crate) const VOICE_CEILING: f32 = 2.5;
+
+/// Saturation that runs *ahead* of a filter rather than after it.
+///
+/// ```text
+/// PreDrive
+/// in:  audio, drive (0..1)
+/// out: audio
+/// ```
+///
+/// [`apply_drive`] anchors its makeup gain at the fixed operating level, which
+/// is right for a stage at the end of a chain where the level is known. Ahead
+/// of the filter the level is not known: it is the oscillator mix, and three
+/// oscillators at full level sum to roughly three times one. Anchoring at a
+/// constant there would make the Drive knob a volume control that happens to
+/// distort.
+///
+/// So the makeup gain follows a peak estimate of the input instead. Two
+/// consequences, and both are the point:
+///
+/// - Sweeping Drive on a fixed patch changes harmonic content and leaves the
+///   level where it was, whatever that level happens to be.
+/// - Raising an oscillator's level pushes harder into the shaper, so it
+///   changes the timbre and not merely the gain. That is what makes the mixer
+///   a tone control.
+#[derive(Clone, Copy, Debug)]
+pub struct PreDrive {
+    /// Running mean square of the input and of the shaped signal. The ratio of
+    /// their roots is the makeup gain.
+    mean_input: f32,
+    mean_shaped: f32,
+}
+
+/// Pre-gain at full drive. Much gentler than [`apply_drive`]'s, and
+/// deliberately: that stage is anchored at the operating level, roughly a
+/// quarter of full scale, while this one sees a raw oscillator mix at around
+/// unity. At `apply_drive`'s range every patch would be a square wave by a
+/// third of the way up the knob, and level would stop changing the timbre --
+/// which is the one thing this stage exists to make it do.
+const PRE_DRIVE_GAIN_RANGE: f32 = 4.0;
+
+/// Level-follower time constant. Long enough not to follow the waveform
+/// itself, short enough to keep up with an envelope.
+const PRE_DRIVE_FOLLOW_S: f32 = 0.05;
+
+impl PreDrive {
+    pub fn new() -> Self {
+        Self {
+            mean_input: 0.0,
+            mean_shaped: 0.0,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.mean_input = 0.0;
+        self.mean_shaped = 0.0;
+    }
+
+    pub fn next_sample(&mut self, input: f32, drive: f32, sample_rate: u32) -> f32 {
+        let drive = clamp_param(drive, 0.0, 1.0);
+        if drive <= f32::EPSILON {
+            return input;
+        }
+        let gain = 1.0 + drive * PRE_DRIVE_GAIN_RANGE;
+        let shaped = (input * gain).tanh();
+
+        let follow = 1.0 - (-1.0 / (PRE_DRIVE_FOLLOW_S * sample_rate as f32)).exp();
+        self.mean_input += follow * (input * input - self.mean_input);
+        self.mean_shaped += follow * (shaped * shaped - self.mean_shaped);
+
+        // Matching RMS rather than peak is what makes the knob a character
+        // control: a saturated wave carries more energy for the same peak, so
+        // peak-matching would still let Drive raise the loudness. Before the
+        // followers have anything in them the ratio tends to `1 / gain`, which
+        // cancels the pre-gain exactly, so the stage starts as a pass-through
+        // instead of a burst.
+        let compensation = if self.mean_shaped > 1.0e-12 {
+            (self.mean_input / self.mean_shaped).sqrt()
+        } else {
+            1.0 / gain
+        };
+        shaped * compensation
+    }
+}
+
+impl Default for PreDrive {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]

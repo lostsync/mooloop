@@ -30,13 +30,15 @@
 use crate::bus::StereoBus;
 use crate::env::Adsr;
 use crate::event::{Event, EventList};
-use crate::filter::{soft_ceiling, Acid, Ladder, PreDrive, Svf};
+use crate::filter::{Acid, Ladder, Svf};
+use crate::shaper::{soft_ceiling, PreDrive};
 use crate::heldnotes::{HeldNote, HeldNotes};
 use crate::node::{AudioNode, ProcessContext, SourceNode};
 use crate::taps::AudioTaps;
 use crate::osc::Osc;
-use crate::scale::hz_from_normalized;
+use crate::voice_filter::{env_octaves, keytrack_octaves, VoiceCutoff};
 use crate::smooth::Smoothed;
+use crate::glide::Glide;
 use crate::synth_voice::{note_to_freq, MIN_GLIDE_S, PARAM_SMOOTH_S, STOP_RELEASE_S};
 use mooloop_core::{
     EnvTrigger, FilterModel, GlideMode, MlM1Params, OSC_CENT_RANGE, OSC_SEMITONE_RANGE,
@@ -46,10 +48,6 @@ use mooloop_core::{
 /// top (which the default patch runs at) peaks within a dB of
 /// `mooloop_core::gain::REFERENCE_PEAK_DBFS` (-12 dBFS) at the master.
 const VOICE_OUTPUT_REFERENCE: f32 = 0.36;
-
-/// Middle C (MIDI 60). Keytracking is referenced here, so a patch voiced
-/// around the middle of the keyboard keeps its cutoff where it was set.
-const KEYTRACK_REFERENCE_HZ: f32 = 261.625_58;
 
 /// How much a full-accent, full-velocity note multiplies the filter envelope
 /// amount. A third of the knob's six octaves is two more octaves of sweep,
@@ -185,6 +183,9 @@ struct MlM1Voice {
     filter_env: Adsr,
     oscs: [Osc; 3],
     current_freq: f32,
+    /// Where the pitch is sliding: `current_freq` is its output, one
+    /// sample at a time, in log frequency (MOO-145).
+    glide: Glide,
     target_freq: f32,
     /// Saturation runs here, between the mix and the filter. That placement is
     /// the whole difference between a filter with a drive knob and a filter
@@ -209,6 +210,7 @@ impl MlM1Voice {
             filter_env: Adsr::new(sample_rate),
             oscs: [Osc::new(), Osc::new(), Osc::new()],
             current_freq: 0.0,
+            glide: Glide::new(0.0),
             target_freq: 0.0,
             pre_drive: PreDrive::new(),
             filter: VoiceFilter::new(),
@@ -363,6 +365,7 @@ impl MlM1 {
     fn start_voice(&mut self, note: u8, velocity: u8) {
         let velocity_amp = f32::from(velocity) / 127.0;
         self.voice.target_freq = note_to_freq(note);
+        self.voice.glide.jump_to(self.voice.target_freq);
         self.voice.current_freq = self.voice.target_freq;
         self.voice.filter.reset();
         for osc in &mut self.voice.oscs {
@@ -382,6 +385,7 @@ impl MlM1 {
     fn retarget(&mut self, note: u8, velocity: u8, glide: bool) {
         self.voice.target_freq = note_to_freq(note);
         if !glide || self.params.glide <= MIN_GLIDE_S {
+            self.voice.glide.jump_to(self.voice.target_freq);
             self.voice.current_freq = self.voice.target_freq;
         }
         // While the voice is still sounding the new velocity has to slide in:
@@ -436,9 +440,6 @@ impl MlM1 {
             return;
         }
 
-        // Glide: one-pole approach to the target frequency.
-        let glide_coeff = (-1.0 / (params.glide.max(MIN_GLIDE_S) * sr as f32)).exp();
-
         // Per-oscillator pitch ratios from semitone/cent offsets.
         let mut ratio = [0.0_f32; 3];
         for (index, osc) in params.osc.iter().enumerate() {
@@ -462,19 +463,18 @@ impl MlM1 {
         let resonance = params.filter_resonance.clamp(0.0, 1.0);
         let keytrack = params.filter_keytrack.clamp(0.0, 1.0);
         let model = params.filter_model;
-        let max_hz = sr as f32 * 0.45;
 
-        // `hz_from_normalized`'s `powf` depends only on the smoothed knob
+        // `cutoff_hz_from_normalized`'s `powf` depends only on the smoothed knob
         // position, which has settled to a constant for most of a note's
         // life; resolve it once per range instead of every sample.
         // `advance_by` leaves `voice.cutoff` exactly where `frames` calls to
         // `advance()` would have, so this is the same value the old
         // per-sample read would have used by the end of this range.
         let cutoff = voice.cutoff.advance_by(end.saturating_sub(start));
-        let base_hz = hz_from_normalized(cutoff, max_hz);
+        let voice_cutoff = VoiceCutoff::from_knob(cutoff, sr);
 
         for i in start..end {
-            voice.current_freq += (voice.target_freq - voice.current_freq) * (1.0 - glide_coeff);
+            voice.current_freq = voice.glide.follow(voice.target_freq, params.glide, sr);
 
             voice.amp_env.advance();
             voice.filter_env.advance();
@@ -536,7 +536,7 @@ impl MlM1 {
                 let keytrack_oct = if keytrack <= f32::EPSILON {
                     0.0
                 } else {
-                    keytrack * (voice.current_freq / KEYTRACK_REFERENCE_HZ).log2()
+                    keytrack_octaves(voice.current_freq, keytrack)
                 };
                 // Accent scales the knob rather than adding to it, which is
                 // what keeps the bypass test above honest: an effective
@@ -544,8 +544,9 @@ impl MlM1 {
                 // It also preserves a negative amount's direction — accent
                 // deepens whatever the patch already does.
                 let accented_amount = env_amount * (1.0 + accent_depth * ACCENT_ENV_SCALE);
-                let octaves = voice.filter_env.level() * accented_amount * 6.0 + keytrack_oct;
-                let cutoff_hz = (base_hz * octaves.exp2()).clamp(20.0, max_hz);
+                let octaves =
+                    env_octaves(voice.filter_env.level(), accented_amount) + keytrack_oct;
+                let cutoff_hz = voice_cutoff.hz(octaves);
                 voice
                     .filter
                     .next_sample(model, driven, cutoff_hz, resonance, sr)

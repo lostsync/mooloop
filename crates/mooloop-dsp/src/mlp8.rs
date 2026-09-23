@@ -55,11 +55,14 @@ use crate::taps::AudioTaps;
 use crate::effects::ModulationEffect;
 use crate::env::Adsr;
 use crate::event::{Event, EventList};
-use crate::filter::{soft_ceiling, PreDrive, Svf};
+use crate::filter::Svf;
+use crate::shaper::{soft_ceiling, PreDrive};
 use crate::node::{AudioNode, Discontinuity, ProcessContext, SourceNode};
 use crate::osc::{sync_blep, Noise, Osc};
-use crate::scale::hz_from_normalized;
+use crate::scale::{cutoff_hz_from_normalized, CUTOFF_CEILING_HZ};
+use crate::voice_filter::{env_octaves, keytrack_octaves, VoiceCutoff};
 use crate::smooth::Smoothed;
+use crate::glide::Glide;
 use crate::synth_voice::{note_to_freq, MIN_GLIDE_S, PARAM_SMOOTH_S, STOP_RELEASE_S};
 use mooloop_core::modulation::MAX_GENERATOR_OUTLETS;
 use mooloop_core::mlp8::{
@@ -106,12 +109,6 @@ const PHASE_BOUND_CYCLES: f32 = 4.0;
 /// over `f32`'s subnormal range.
 const LEVEL_EPSILON: f32 = 1.0e-6;
 
-/// Middle C (MIDI 60). Keytracking is referenced here, so a patch voiced
-/// around the middle of the keyboard keeps its cutoff where it was set.
-const KEYTRACK_REFERENCE_HZ: f32 = 261.625_58;
-
-/// Octaves the filter envelope sweeps at full depth.
-const FILTER_ENV_OCTAVES: f32 = 6.0;
 
 /// What the voice feedback control reaches at its extremes, as a fraction of
 /// the filter's own output fed back to its input.
@@ -1135,6 +1132,9 @@ struct Voice {
     pre_filter_tap: f32,
     filter_tap: f32,
     current_freq: f32,
+    /// Where the pitch is sliding: `current_freq` is its output, one
+    /// sample at a time, in log frequency (MOO-145).
+    glide: Glide,
     target_freq: f32,
     /// The velocity this voice's note was played at, in `[0, 1]`.
     ///
@@ -1172,7 +1172,7 @@ struct Voice {
     /// `shape` can tell whether it needs recomputing this sample. See
     /// `cached_hz_from_knob`.
     cached_cutoff_input: f32,
-    /// `hz_from_normalized(cutoff, max_hz)` for `cached_cutoff_input`,
+    /// `cutoff_hz_from_normalized(cutoff)` for `cached_cutoff_input`,
     /// reused whenever this sample's `cutoff` is the same value again --
     /// which is most of a note's life, once the smoother has settled and
     /// nothing routes to Cutoff. Deliberately *not* multiplied by
@@ -1222,6 +1222,7 @@ impl Voice {
             noise: ColoredNoise::new(noise_seed(slot)),
             noise_tap: 0.0,
             current_freq: 0.0,
+            glide: Glide::new(0.0),
             target_freq: 0.0,
             velocity: 0.0,
             velocity_amp: smoothed(0.0),
@@ -1239,7 +1240,7 @@ impl Voice {
             // itself) and always computes fresh rather than trusting an
             // arbitrary initial value.
             cached_cutoff_input: f32::NAN,
-            cached_hz_from_knob: sample_rate as f32 * 0.45,
+            cached_hz_from_knob: CUTOFF_CEILING_HZ,
             spread_pan: 0.0,
             spread_gain: pan_gains(0.0),
         }
@@ -1520,7 +1521,9 @@ struct Prepared<'a> {
     filter_velocity: f32,
     keytrack: f32,
     amp_velocity: f32,
-    max_hz: f32,
+    /// The one-pole DC blocker's coefficient for this sample rate: see
+    /// [`DC_BLOCK_HZ`].
+    dc_block_coeff: f32,
     /// Whether the filter can be skipped for the whole range. Only true when
     /// it is wide open, unresonant, and nothing is moving it.
     filter_open: bool,
@@ -1636,7 +1639,7 @@ impl<'a> Prepared<'a> {
             filter_velocity: params.filter_velocity.clamp(-1.0, 1.0),
             keytrack: params.filter_keytrack.clamp(0.0, 2.0),
             amp_velocity: params.amp_velocity.clamp(0.0, 1.0),
-            max_hz: sample_rate as f32 * 0.45,
+            dc_block_coeff: (-core::f32::consts::TAU * DC_BLOCK_HZ / sample_rate as f32).exp(),
             // A band-pass or high-pass at the top of its range is not "no
             // filter", so only the low-pass modes can be skipped. A route
             // aimed at any of these is one more thing that can move the
@@ -1940,12 +1943,14 @@ impl MlP8 {
             if !stolen {
                 // Fresh slot: no glide from silence, and every piece of
                 // network state starts where it started last time.
+                voice.glide.jump_to(voice.target_freq);
                 voice.current_freq = voice.target_freq;
                 voice.restart(drift);
                 voice.snap_to(&self.params, velocity_amp);
             } else {
                 voice.clear_loop();
                 if self.params.glide <= MIN_GLIDE_S {
+                    voice.glide.jump_to(voice.target_freq);
                     voice.current_freq = voice.target_freq;
                 }
             }
@@ -2102,7 +2107,6 @@ impl MlP8 {
         // which is what a feature that is off by default has to cost.
         let publishing = !ports.is_empty();
         let prepared = Prepared::new(&params, sr, routes, demand);
-        let glide_coeff = (-1.0 / (params.glide.max(MIN_GLIDE_S) * sr as f32)).exp();
         let master_volume = params.master_volume.clamp(0.0, 1.0);
         // With the chorus off the voices go straight onto the channel bus and
         // the finisher costs nothing at all — not a copy, not a delay line
@@ -2163,8 +2167,7 @@ impl MlP8 {
                     voice.clear_loop();
                     continue;
                 }
-                voice.current_freq +=
-                    (voice.target_freq - voice.current_freq) * (1.0 - glide_coeff);
+                voice.current_freq = voice.glide.follow(voice.target_freq, params.glide, sr);
                 let velocity = voice.velocity_amp.advance();
                 // In `MlP8ModSource::ALL` order, which is the order a
                 // compiled route's source index means.
@@ -2459,7 +2462,7 @@ impl Voice {
         // the tracked one, so it is a property of the voice and not something
         // that grows as a patch climbs the keyboard.
         //
-        // `hz_from_normalized`'s `powf` is a pure function of `cutoff`
+        // `cutoff_hz_from_normalized`'s `powf` is a pure function of `cutoff`
         // alone, and `cutoff` is bit-for-bit the same sample to sample
         // whenever nothing is moving it: the smoother has settled (which is
         // most of a note's life -- `Smoothed::advance` snaps exactly to
@@ -2474,29 +2477,22 @@ impl Voice {
         let hz_from_knob = if cutoff == self.cached_cutoff_input {
             self.cached_hz_from_knob
         } else {
-            let value = hz_from_normalized(cutoff, prep.max_hz);
+            let value = cutoff_hz_from_normalized(cutoff);
             self.cached_cutoff_input = cutoff;
             self.cached_hz_from_knob = value;
             value
         };
-        let base_hz = hz_from_knob * self.cutoff_scale;
+        let voice_cutoff = VoiceCutoff::from_hz(hz_from_knob * self.cutoff_scale, sample_rate);
         // Keytracking reads the *gliding* frequency, so a slide sweeps the
         // filter with the pitch instead of stepping at the note boundary.
-        let tracked = if prep.keytrack <= 0.0 {
-            base_hz
-        } else {
-            let octaves = (self.current_freq.max(1.0) / KEYTRACK_REFERENCE_HZ).log2();
-            base_hz * (octaves * prep.keytrack).exp2()
-        };
+        let tracked = keytrack_octaves(self.current_freq, prep.keytrack);
         // Velocity adds to the envelope's depth rather than scaling it, so a
         // patch with no envelope amount can still be played into the filter.
         // The routed part is the authored Env Amount only: Filter Velocity is
         // a dedicated playing behaviour, not a route destination.
         let depth = self.dest(routes, slot::ENV_AMOUNT, prep.env_amount)
             + prep.filter_velocity * velocity;
-        let cutoff_hz =
-            (tracked * (self.filter_env.level() * depth * FILTER_ENV_OCTAVES).exp2())
-                .clamp(20.0, prep.max_hz);
+        let cutoff_hz = voice_cutoff.hz(tracked + env_octaves(self.filter_env.level(), depth));
 
         let resonance = self.dest(routes, slot::RESONANCE, prep.resonance);
         let filtered =
@@ -2506,7 +2502,7 @@ impl Voice {
         // A resonant filter driven asymmetrically walks off centre, and in a
         // loop that offset compounds. One-pole DC blocker on the tap only, so
         // the audible path keeps whatever bias the patch actually has.
-        let blocked = filtered - self.dc_x + DC_BLOCK_COEFF * self.dc_y;
+        let blocked = filtered - self.dc_x + prep.dc_block_coeff * self.dc_y;
         self.dc_x = filtered;
         self.dc_y = blocked;
         self.feedback_tap = blocked;
@@ -2517,10 +2513,13 @@ impl Voice {
     }
 }
 
-/// One-pole DC blocker coefficient: a corner around 5 Hz at any supported
-/// sample rate, which is below the lowest note and above where a drifting
-/// offset becomes a problem.
-const DC_BLOCK_COEFF: f32 = 0.999;
+/// The feedback tap's DC blocker corner: below the lowest note and above
+/// where a drifting offset becomes a problem. Specified in Hz and turned into
+/// a coefficient per sample rate (`Prepared::dc_block_coeff`); until
+/// 2026-09-23 it was a fixed `0.999`, documented as "around 5 Hz at any
+/// sample rate" but 7.6 Hz at 48 kHz and 30.6 Hz at 192 kHz (MOO-119). 7.64 Hz
+/// is the corner `0.999` had at 48 kHz, so nothing moves there.
+const DC_BLOCK_HZ: f32 = 7.64;
 
 /// Add one voice's declared taps into the buffers somebody is reading.
 ///

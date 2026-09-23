@@ -15467,7 +15467,13 @@ mod footprint {
         // now keeps a twelve-entry `tilt` table (`f32 * 12`) for the
         // phaser's per-stage spread, rebuilt once when `stages` changes
         // instead of recomputed inline on every stage of every sample.
-        assert_eq!(size_of::<MlP8>(), 5_952);
+        //
+        // Grew by 192 with MOO-145: each of the eight voices carries a
+        // `Glide` (24 bytes: the slide's two ends in octaves, its length and
+        // progress in samples, the pitch now and the exact target), which is
+        // what makes a glide arrive in its Glide time and slide evenly in
+        // pitch rather than approaching in Hz.
+        assert_eq!(size_of::<MlP8>(), 6_144);
         // DS-01 is 6,832, and almost all of it is the eight-voice pool: a
         // voice carries six tone oscillators for its partial bank, an FM
         // modulator, four noise generators' worth of state, a state-variable
@@ -15588,7 +15594,11 @@ mod footprint {
         // count, so a release can name the pattern's voices instead of
         // choking the channel. On the strip, so it travels with the voices
         // through an install.
-        assert_eq!(size_of::<ChannelStrip>(), 44_104);
+        //
+        // MOO-145 added 624, one 24-byte `Glide` per synth voice the strip
+        // holds by value: the ML-P8's eight (192, above), the poly synth's
+        // sixteen (384), and one each for the v1 mono and the ML-M1 (48).
+        assert_eq!(size_of::<ChannelStrip>(), 44_728);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -15636,7 +15646,9 @@ mod footprint {
         // And by 40 with it for MOO-107: the output stage's ramps.
         //
         // And by 1,552 with it for MOO-99: the sequenced-voice table.
-        assert_eq!(per_live, 157_136);
+        //
+        // And by 624 with it for MOO-145: a `Glide` per synth voice.
+        assert_eq!(per_live, 157_760);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
@@ -15720,7 +15732,10 @@ mod footprint {
         //
         // MOO-99's sequenced-voice table: 1,552 bytes a live channel, about
         // 24 KiB across sixteen.
-        assert_eq!((fixed + per_live * 16) / 1024, 2_942);
+        //
+        // MOO-145's per-voice `Glide`: 624 bytes a live channel, about
+        // 10 KiB across sixteen.
+        assert_eq!((fixed + per_live * 16) / 1024, 2_952);
     }
 
 }

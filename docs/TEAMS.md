@@ -204,7 +204,8 @@ Files marked *shared* are split in the table above.
   `smooth.rs`, `scale.rs`, `delayline.rs`, `align.rs`, `shaper.rs`,
   `harmonics.rs`, `dynamics.rs`, `analysis.rs`, `lib.rs`, and `testkit.rs`,
   the measurement kit every DSP test measures through at 44.1, 48, 96 and
-  192 kHz (MOO-117)
+  192 kHz (MOO-117), and the voice blocks `voice_filter.rs` and `glide.rs`
+  (MOO-144)
 - `spikes/time-stretch/`
 
 ### 7. Parameters & Control

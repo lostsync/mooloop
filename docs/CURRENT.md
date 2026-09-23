@@ -765,6 +765,18 @@ boundary.
   nothing moves. `scale::cutoff_hz_from_normalized` is the one cutoff-knob
   law: 20 Hz to 20 kHz whatever the rate, with the filter primitives' own
   `0.45 x sample rate` clamp the only place the rate enters.
+- Every filtered instrument (v1 mono and poly, the sampler, ML-M1, ML-P8)
+  maps Cutoff through that law, so a knob position is one frequency at every
+  rate and matches the face's readout; until 2026-09-23 they mapped it to
+  `0.45 x sample rate`, so knob 0.75 was 3.8 kHz at 48 kHz and 10.7 kHz at
+  192 while every face read 3.56 kHz (MOO-119). They share one voice-cutoff
+  block (`voice_filter::VoiceCutoff`: six octaves of envelope, keytracking
+  from middle C) rather than five copies of it (MOO-144). ML-P8's feedback
+  DC blocker is specified in Hz.
+- Glide slides linearly in pitch and arrives in the Glide time: an octave up
+  and an octave down are mirror images, and a 100 ms glide is on the new note
+  after 100 ms (MOO-145). It was a one-pole in Hz, lopsided in pitch and about
+  4.6 times slower than its label.
 - The v1 mono synth's LFO is one shape (sine, triangle, saw, square, or sample and
   hold) with a depth per destination: pitch, filter cutoff, pulse width, and
   tremolo. It free-runs across notes and silence unless set to retrigger.
