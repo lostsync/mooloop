@@ -74,8 +74,8 @@ use mooloop_dsp::{
     IntegerDelay, SampleData, SpectrumAnalyzer, StretchPool,
 };
 use mooloop_engine::{
-    CommandSink, ContainerScratch, EffectSlot, EngineHandle, ExportSpec, OfflineRenderer,
-    PreviewCommand, StructuralCommand,
+    CommandSink, ContainerScratch, EffectSlot, EngineHandle, ExportError, ExportProgress,
+    ExportSpec, OfflineRenderer, PreviewCommand, StructuralCommand,
 };
 use mooloop_project::{
     AssetMode, AssetWarning, Issue, LoadReport, LoadedDocument, PresetInfo, PresetKind,
@@ -92,7 +92,7 @@ use mooloop_session::dialogs::{
     pick_save_dialog, pick_song_dialog, Picked,
 };
 use mooloop_session::document::{
-    chosen_path, log_asset_warnings, log_repairs, quarantine_song, repair_suffix,
+    chosen_path, export_result_detail, log_asset_warnings, log_repairs, quarantine_song, repair_suffix,
     resolve_document, warning_suffix, DocumentProblem,
     DocumentResult, LoadTarget, PresetNaming, ResolvedDocument,
 };
@@ -6354,6 +6354,11 @@ impl AppUi {
         // pump takes it with the save's result, so a failed or cancelled
         // save drops it and leaves the user where they were.
         let after_save: Rc<Cell<Option<AfterUnsaved>>> = Rc::new(Cell::new(None));
+        // The export in flight, while there is one: its progress for the
+        // dialog, and its cancel flag (MOO-125). The pump takes it with the
+        // export's result.
+        let export_progress: Rc<RefCell<Option<Arc<ExportProgress>>>> =
+            Rc::new(RefCell::new(None));
         // Set by a yes to "this kit drops channels", read by the pump when
         // the waiting result comes back round.
         let kit_confirmed = Rc::new(Cell::new(false));
@@ -6972,7 +6977,24 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_export_audio(move || {
                 if let Some(window) = weak.upgrade() {
+                    // A second export while one renders reopens the one in
+                    // flight, with its progress and its Cancel.
+                    if window.get_export_phase() != 1 {
+                        window.set_export_phase(0);
+                    }
                     window.set_export_open(true);
+                }
+            });
+        }
+        {
+            let progress = export_progress.clone();
+            let weak = window.as_weak();
+            window.on_export_cancel_render(move || {
+                if let Some(progress) = progress.borrow().as_ref() {
+                    progress.cancel();
+                }
+                if let Some(window) = weak.upgrade() {
+                    window.set_status_message("Cancelling the export...".into());
                 }
             });
         }
@@ -6980,6 +7002,7 @@ impl AppUi {
             let st = state.clone();
             let tx = document_tx.clone();
             let weak = window.as_weak();
+            let export_progress = export_progress.clone();
             window.on_export_confirmed(move |format, bitrate, tail| {
                 let Some(window) = weak.upgrade() else {
                     return;
@@ -6993,7 +7016,13 @@ impl AppUi {
                 if !begin_document_operation(&window, "Rendering audio...") {
                     return;
                 }
-                window.set_export_open(false);
+                // The dialog stays up through the render, with its progress
+                // and a Cancel, and then shows what the render found
+                // (MOO-125). The pump drives it from `export_progress`.
+                let progress = Arc::new(ExportProgress::new());
+                *export_progress.borrow_mut() = Some(progress.clone());
+                window.set_export_progress(-1.0);
+                window.set_export_phase(1);
                 let tx = tx.clone();
                 std::thread::spawn(move || {
                     let path = match chosen_path(
@@ -7012,17 +7041,20 @@ impl AppUi {
                         tail_seconds: tail as f32,
                         format: request.format,
                     };
-                    let result = OfflineRenderer::render(
+                    let result = match OfflineRenderer::render_with_progress(
                         &request.project,
                         &request.samples,
                         export_sample_rate,
                         &spec,
-                    )
-                    .map(|_| DocumentResult::Exported { path })
-                    .unwrap_or_else(|error| DocumentResult::Failed {
-                        action: "export this song",
-                        problem: error.to_string().into(),
-                    });
+                        &progress,
+                    ) {
+                        Ok(summary) => DocumentResult::Exported { path, summary },
+                        Err(ExportError::Cancelled) => DocumentResult::Cancelled,
+                        Err(error) => DocumentResult::Failed {
+                            action: "export this song",
+                            problem: error.to_string().into(),
+                        },
+                    };
                     let _ = tx.send(result);
                 });
             });
@@ -14679,6 +14711,7 @@ impl AppUi {
             question.clone(),
             kit_confirmed.clone(),
         );
+        let export_progress = export_progress.clone();
         // Diagnostics shared with the autodrive self-test (MOOLOOP_AUTODRIVE=1).
         let stats = Rc::new(Cell::new((0.0f32, false, 0usize)));
         let stats_in = stats.clone();
@@ -14822,6 +14855,12 @@ impl AppUi {
                         }
                     }
                 }
+                // The export in flight, if any: its dialog's progress bar.
+                if let Some(progress) = export_progress.borrow().as_ref() {
+                    if let Some(window) = weak.upgrade() {
+                        window.set_export_progress(progress.fraction().unwrap_or(-1.0));
+                    }
+                }
                 while let Ok(result) = document_rx.try_recv() {
                     let Some(window) = weak.upgrade() else {
                         return;
@@ -14832,7 +14871,18 @@ impl AppUi {
                     // to it; every other result -- a failure, a cancelled
                     // chooser -- drops it, and the user stays where they are.
                     let continuation = after_save.take();
+                    // An export's dialog is showing its progress. A result
+                    // other than a finished export closes it; a finished one
+                    // turns it to the result below.
+                    let export_in_flight = export_progress.borrow_mut().take().is_some();
+                    if export_in_flight && !matches!(result, DocumentResult::Exported { .. }) {
+                        window.set_export_open(false);
+                        window.set_export_phase(0);
+                    }
                     match result {
+                        DocumentResult::Cancelled if export_in_flight => {
+                            window.set_status_message("Export cancelled".into());
+                        }
                         DocumentResult::Cancelled => {
                             window.set_status_message("".into());
                         }
@@ -15006,10 +15056,20 @@ impl AppUi {
                             window.set_save_preset_open(false);
                             refresh_preset_menus(&st, &window);
                         }
-                        DocumentResult::Exported { path } => {
+                        DocumentResult::Exported { path, summary } => {
                             log_info!("project", "exported {}", path.display());
                             window
                                 .set_status_message(format!("Exported {}", path.display()).into());
+                            let name = path
+                                .file_name()
+                                .map(|name| name.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| path.display().to_string());
+                            window.set_export_result_title(name.into());
+                            window.set_export_result_detail(
+                                export_result_detail(&summary).into(),
+                            );
+                            window.set_export_phase(2);
+                            window.set_export_open(true);
                         }
                         // Every failure gets the dialog, not just saves: a
                         // song that will not open leaves the user with as

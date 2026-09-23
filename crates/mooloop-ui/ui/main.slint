@@ -948,7 +948,14 @@ export component MainWindow inherits Window {
     in-out property <bool> export-open;
     in-out property <int> export-format;
     in-out property <int> export-bitrate: 2;
-    in-out property <int> export-tail-seconds: 2;
+    // A cap: the render stops when every device has fallen silent (MOO-125).
+    in-out property <int> export-tail-seconds: 10;
+    // The dialog's phase -- 0 settings, 1 rendering, 2 result -- and what it
+    // shows in the last two. Written by the export launch and the pump.
+    in-out property <int> export-phase;
+    in-out property <float> export-progress: -1;
+    in-out property <string> export-result-title;
+    in-out property <string> export-result-detail;
     callback open-song();
     callback save-song();
     callback save-song-as();
@@ -958,6 +965,7 @@ export component MainWindow inherits Window {
     callback save-channel();
     callback export-audio();
     callback export-confirmed(int, int, int);
+    callback export-cancel-render();
     callback quit-requested();
 
     // ---- questions the app asks itself (MOO-91) ----
@@ -7483,8 +7491,17 @@ export component MainWindow inherits Window {
         format-index <=> root.export-format;
         bitrate-index <=> root.export-bitrate;
         tail-seconds <=> root.export-tail-seconds;
+        phase <=> root.export-phase;
+        progress: root.export-progress;
+        result-title: root.export-result-title;
+        result-detail: root.export-result-detail;
         accepted(format, bitrate, tail) => { root.export-confirmed(format, bitrate, tail); }
         cancelled => { root.export-open = false; }
+        cancel-render => { root.export-cancel-render(); }
+        dismissed => {
+            root.export-open = false;
+            root.export-phase = 0;
+        }
     }
     AboutDialog {
         width: parent.width;

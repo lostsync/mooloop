@@ -173,7 +173,61 @@ pub enum DocumentResult {
     },
     Exported {
         path: PathBuf,
+        /// What the render found, shown in the export dialog (MOO-125).
+        summary: mooloop_engine::RenderSummary,
     },
+}
+
+/// The export dialog's account of a finished export, one sentence per line:
+/// how long the file is and at what rate, then anything that makes it not
+/// quite the project -- overs the safety limiter held, samples a broken
+/// device produced as NaN, automation that found no room, and any clamp the
+/// 24-bit encoder still made (MOO-125, MOO-94).
+pub fn export_result_detail(summary: &mooloop_engine::RenderSummary) -> String {
+    let rate = f64::from(summary.sample_rate.max(1));
+    let seconds = summary.total_frames as f64 / rate;
+    let tail = summary.tail_frames as f64 / rate;
+    let khz = |hz: u32| f64::from(hz) / 1000.0;
+    let mut lines = vec![if summary.file_sample_rate == summary.sample_rate {
+        format!(
+            "{seconds:.1} s at {} kHz, {tail:.1} s of it tail.",
+            khz(summary.sample_rate)
+        )
+    } else {
+        format!(
+            "{seconds:.1} s, {tail:.1} s of it tail. Rendered at {} kHz, written at {} kHz.",
+            khz(summary.sample_rate),
+            khz(summary.file_sample_rate)
+        )
+    }];
+    if summary.overs > 0 {
+        lines.push(format!(
+            "The mix went over 0 dBFS ({} samples); the safety limiter held it at the ceiling.",
+            summary.overs
+        ));
+    }
+    if summary.non_finite_samples > 0 {
+        lines.push(format!(
+            "A device produced invalid audio (NaN): {} samples were written as silence.",
+            summary.non_finite_samples
+        ));
+    }
+    if summary.refused_events > 0 {
+        lines.push(format!(
+            "{} automation or modulation events found no room and are missing.",
+            summary.refused_events
+        ));
+    }
+    if summary.clipped_samples > 0 {
+        lines.push(format!(
+            "{} samples were clipped at full scale by the 24-bit encoder.",
+            summary.clipped_samples
+        ));
+    }
+    if lines.len() == 1 {
+        lines.push("Nothing was over, clipped or lost.".into());
+    }
+    lines.join("\n")
 }
 
 /// The path a chooser picked, or the result to send instead.
@@ -458,4 +512,49 @@ impl Session {
         })
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::export_result_detail;
+    use mooloop_engine::RenderSummary;
+
+    fn summary() -> RenderSummary {
+        RenderSummary {
+            sample_rate: 48_000,
+            file_sample_rate: 48_000,
+            base_frames: 96_000,
+            tail_frames: 24_000,
+            total_frames: 120_000,
+            refused_events: 0,
+            overs: 0,
+            clipped_samples: 0,
+            non_finite_samples: 0,
+        }
+    }
+
+    #[test]
+    fn a_clean_export_says_so() {
+        assert_eq!(
+            export_result_detail(&summary()),
+            "2.5 s at 48 kHz, 0.5 s of it tail.\nNothing was over, clipped or lost."
+        );
+    }
+
+    #[test]
+    fn every_count_the_render_found_is_shown() {
+        let detail = export_result_detail(&RenderSummary {
+            sample_rate: 96_000,
+            file_sample_rate: 48_000,
+            overs: 12,
+            non_finite_samples: 3,
+            refused_events: 4,
+            clipped_samples: 5,
+            ..summary()
+        });
+        for needle in ["written at 48 kHz", "12 samples", "3 samples", "4 automation", "5 samples"] {
+            assert!(detail.contains(needle), "{needle:?} missing from {detail:?}");
+        }
+        assert!(!detail.contains("Nothing was"));
+    }
 }

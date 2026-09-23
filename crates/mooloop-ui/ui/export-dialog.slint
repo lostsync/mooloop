@@ -1,27 +1,62 @@
-import { CheckBox, ComboBox, SpinBox } from "std-widgets.slint";
+import { ComboBox, SpinBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 
+// One of the dialog's buttons. `primary` is the accent-filled one.
+component DialogButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary;
+    callback clicked;
+    width: 76px;
+    height: 28px;
+    border-radius: Theme.radius-md;
+    background: root.primary
+        ? (touch.pressed ? Theme.accent-active : Theme.accent)
+        : (touch.has-hover ? Theme.surface-active : Theme.surface-raised);
+    Text {
+        text: root.label;
+        color: root.primary ? Theme.background : Theme.text;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    touch := TouchArea { clicked => { root.clicked(); } }
+}
+
+// The export dialog, in three phases on one card: the settings, the render
+// with its progress and a Cancel, and what the render found (MOO-125). The
+// card stays up for all three, so a render is never something that happens
+// behind a closed dialog with only the status bar to say it finished.
 export component ExportDialog inherits Rectangle {
     in-out property <bool> open;
     in-out property <int> format-index;
     in-out property <int> bitrate-index: 2;
-    in-out property <int> tail-seconds: 2;
+    // The most tail there may be. The render stops as soon as every device
+    // has fallen silent, so this is a cap rather than a length.
+    in-out property <int> tail-seconds: 10;
+    // 0: the settings. 1: rendering. 2: the result.
+    in-out property <int> phase;
+    // How far the render is, 0 to 1. Negative while the file picker is still
+    // open and nothing has started.
+    in property <float> progress: -1;
+    in property <string> result-title;
+    in property <string> result-detail;
     callback accepted(int, int, int);
     callback cancelled;
+    callback cancel-render;
+    callback dismissed;
 
     visible: root.open;
     background: #00000099;
     z: 200;
     Rectangle {
         width: 390px;
-        height: 220px;
+        height: root.phase == 2 ? 250px : 230px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Theme.surface;
         border-width: Theme.hairline;
         border-color: Theme.border;
         border-radius: Theme.radius-lg;
-        VerticalLayout {
+        if root.phase == 0: VerticalLayout {
             padding: 18px;
             spacing: 14px;
             Text { text: "Export Audio"; color: Theme.text; font-size: Theme.text-3xl; }
@@ -46,22 +81,82 @@ export component ExportDialog inherits Rectangle {
             }
             HorizontalLayout {
                 spacing: 8px;
-                Text { text: "TAIL (SECONDS)"; color: Theme.text-faint; font-size: Theme.text-md; vertical-alignment: center; }
+                Text { text: "TAIL, AT MOST (S)"; color: Theme.text-faint; font-size: Theme.text-md; vertical-alignment: center; }
                 SpinBox { value <=> root.tail-seconds; minimum: 0; maximum: 30; width: 100px; }
-                Rectangle { horizontal-stretch: 1; }
+                Text {
+                    text: "ends when the sound does";
+                    color: Theme.text-faint;
+                    font-size: Theme.text-sm;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
             }
             HorizontalLayout {
                 spacing: 8px;
                 alignment: end;
-                Rectangle {
-                    width: 76px; height: 28px; border-radius: Theme.radius-md; background: cancel-touch.has-hover ? Theme.surface-active : Theme.surface-raised;
-                    Text { text: "Cancel"; color: Theme.text; horizontal-alignment: center; vertical-alignment: center; }
-                    cancel-touch := TouchArea { clicked => { root.cancelled(); root.open = false; } }
+                DialogButton {
+                    label: "Cancel";
+                    clicked => { root.cancelled(); root.open = false; }
                 }
+                DialogButton {
+                    label: "Export";
+                    primary: true;
+                    clicked => { root.accepted(root.format-index, root.bitrate-index, root.tail-seconds); }
+                }
+            }
+        }
+        if root.phase == 1: VerticalLayout {
+            padding: 18px;
+            spacing: 14px;
+            Text { text: "Exporting"; color: Theme.text; font-size: Theme.text-3xl; }
+            Text {
+                text: root.progress < 0 ? "Choose where to save it" : "Rendering " + round(root.progress * 100) + "%";
+                color: Theme.text-muted;
+                font-size: Theme.text-md;
+            }
+            Rectangle {
+                height: 8px;
+                border-radius: Theme.radius-sm;
+                background: Theme.surface-raised;
                 Rectangle {
-                    width: 76px; height: 28px; border-radius: Theme.radius-md; background: export-touch.pressed ? Theme.accent-active : Theme.accent;
-                    Text { text: "Export"; color: Theme.background; horizontal-alignment: center; vertical-alignment: center; }
-                    export-touch := TouchArea { clicked => { root.accepted(root.format-index, root.bitrate-index, root.tail-seconds); } }
+                    x: 0;
+                    width: parent.width * clamp(root.progress, 0, 1);
+                    border-radius: Theme.radius-sm;
+                    background: Theme.accent;
+                }
+            }
+            Rectangle { vertical-stretch: 1; }
+            HorizontalLayout {
+                alignment: end;
+                DialogButton {
+                    label: "Cancel";
+                    clicked => { root.cancel-render(); }
+                }
+            }
+        }
+        if root.phase == 2: VerticalLayout {
+            padding: 18px;
+            spacing: 10px;
+            Text { text: "Exported"; color: Theme.text; font-size: Theme.text-3xl; }
+            Text {
+                text: root.result-title;
+                color: Theme.text;
+                font-size: Theme.text-lg;
+                overflow: elide;
+            }
+            Text {
+                text: root.result-detail;
+                color: Theme.text-muted;
+                font-size: Theme.text-md;
+                wrap: word-wrap;
+                vertical-stretch: 1;
+            }
+            HorizontalLayout {
+                alignment: end;
+                DialogButton {
+                    label: "OK";
+                    primary: true;
+                    clicked => { root.dismissed(); }
                 }
             }
         }

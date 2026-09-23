@@ -504,9 +504,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   says so, which the next save writes back. Until 2026-09-14 that pair of
   renames made the song permanently unopenable.
 - Offline export of exactly one selected-pattern pass in Pattern mode or one
-  derived playlist pass in Song mode, followed by a configurable 0-30 second
-  release tail. Outputs are 24-bit PCM WAV, 32-bit float WAV, or 192/256/320
-  kbps MP3. It renders in 512-frame blocks, a size live playback runs at,
+  derived playlist pass in Song mode, followed by a release tail that runs
+  until every device has fallen silent (`RenderState::is_at_rest`, so a
+  reverb's decay and a delay's last echo are waited for), capped at a
+  0-30 second limit the dialog sets (10 s by default). Outputs are 24-bit
+  PCM WAV, 32-bit float WAV, or 192/256/320 kbps MP3. It renders in 512-frame blocks, a size live playback runs at,
   rather than the graph's 8192-frame maximum, where one automated parameter
   filled a device's event list and every later one on it was dropped from
   the export. Parameter events that still find no room are counted, and an
@@ -515,7 +517,13 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   0 dBFS; `RenderSummary` counts the mix's overs (which the safety limiter
   held at the ceiling), the non-finite samples written as silence, and any
   sample the 24-bit encoder still had to clamp, and a non-zero count is
-  logged. The dialog does not show them yet.
+  logged. As of 2026-09-23 (MOO-125) the export dialog stays up through the
+  render with a progress bar and a Cancel, which stops the render and leaves
+  any file already at the target untouched, and then shows the file's length
+  and rate and every one of those counts. A finished file replaces the
+  target with one rename. Every format renders at the session's rate: an MP3
+  of a session faster than 48 kHz is rendered at the session's rate and
+  converted by LAME as it encodes (88.2/176.4 kHz to 44.1, the rest to 48).
 - A shared widget library in `crates/mooloop-ui/ui`: knobs with value arcs and a
   bipolar mode (`controls.slint`), LED-segment metering with scales, latching
   clip indicators, gain-reduction and correlation meters (`meters.slint`), and a
@@ -1853,8 +1861,9 @@ land on its own when it starts to matter:
   Buffer insert's rolling ring. Neither writes a channel's own output back
   into a project asset: there is still no capture-to-sample gesture.
 - The render graph is independent of the audio driver and supports finite
-  offline passes. WAV uses the engine's sample rate; MP3 renders at 48 kHz through an
-  in-process LAME encoder. Stem/bus export and realtime-vs-offline null testing
+  offline passes at the engine's sample rate, for WAV and MP3 alike; MP3 goes
+  through an in-process LAME encoder, which converts a render above 48 kHz
+  to a rate MP3 has. Stem/bus export and realtime-vs-offline null testing
   are not implemented.
 - Replaced sample lifetimes need a deliberate deferred-reclamation design so
   the last large sample allocation can never be freed on the realtime thread.

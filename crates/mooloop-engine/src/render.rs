@@ -8131,6 +8131,25 @@ impl RenderState {
         self.refused_events + self.source_curve_refusals + chains.sum::<u64>() + lists.sum::<u64>()
     }
 
+    /// Whether nothing in the project can sound again until something new
+    /// is played: every live channel idle -- its voices at rest, its
+    /// generator's tail and its chain's run out -- every track and the
+    /// master resting, and no browser preview playing.
+    ///
+    /// The same questions idle-skipping asks, strip by strip, so a delay or
+    /// a reverb whose tail is still running keeps the answer at no through
+    /// the silent gaps between its echoes. What an export's tail waits for
+    /// (MOO-125): an Aux In channel never answers yes, since its sound is
+    /// another channel's, so a project with one tails to the cap.
+    pub fn is_at_rest(&self) -> bool {
+        self.preview.is_none()
+            && self.preview_fading.is_none()
+            && self.strips[..self.live_channels()]
+                .iter()
+                .all(|strip| strip.is_idle())
+            && self.buses.iter().all(BusStrip::is_resting)
+    }
+
     /// Samples the output guard found NaN or infinite, and sent as silence
     /// instead, since this state was built. Non-zero means a device blew up;
     /// an export reports it (`RenderSummary::non_finite_samples`).
