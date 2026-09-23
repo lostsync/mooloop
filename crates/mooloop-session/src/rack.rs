@@ -161,7 +161,7 @@ impl Session {
     /// changed. `None` when it is already that kind.
     pub fn change_selected_source(&mut self, source: DeviceKind) -> Option<usize> {
         let channel = self.selected;
-        if self.channels[channel].kind == source {
+        if self.channels[channel].kind() == source {
             return None;
         }
         self.reset_channel_source(channel, source);
@@ -243,7 +243,7 @@ mod tests {
         session.change_selected_source(DeviceKind::Ds01);
 
         assert_eq!(session.channels[0].name, "Kick", "the source change ate the name");
-        assert_eq!(session.channels[0].kind, DeviceKind::Ds01, "the device did not change");
+        assert_eq!(session.channels[0].kind(), DeviceKind::Ds01, "the device did not change");
     }
 
     /// The other half of the same rule: a channel still wearing the *outgoing*
@@ -316,7 +316,7 @@ mod tests {
         assert_eq!(session.channels[index].automation.len(), 3);
         assert_eq!(session.selected, index);
         assert_eq!(session.effect_target, EffectTarget::Channel(index as u8));
-        assert_eq!(session.channels[index].kind, DeviceKind::DrumSynth);
+        assert_eq!(session.channels[index].kind(), DeviceKind::DrumSynth);
     }
 
     /// Both gain stages share the container's headroom; a fader that reports
@@ -377,7 +377,7 @@ mod tests {
         session.select_note(Some(note.id));
 
         assert_eq!(session.change_selected_source(DeviceKind::MonoSynth), Some(0));
-        assert_eq!(session.channels[0].kind, DeviceKind::MonoSynth);
+        assert_eq!(session.channels[0].kind(), DeviceKind::MonoSynth);
         assert_eq!(session.selected_note_id, None);
 
         assert_eq!(session.change_selected_source(DeviceKind::MonoSynth), None);

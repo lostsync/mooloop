@@ -433,7 +433,7 @@ impl crate::session::Session {
             .iter()
             .position(|channel| channel.id == id)
             .ok_or(TakeMiss::ChannelGone)?;
-        if self.channels[seat].kind != mooloop_core::DeviceKind::Sampler {
+        if self.channels[seat].kind() != mooloop_core::DeviceKind::Sampler {
             return Err(TakeMiss::NotASampler);
         }
         Ok(seat)

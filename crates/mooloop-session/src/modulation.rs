@@ -45,7 +45,7 @@ impl Session {
         if let Some(performance) = performance_descriptor(slot) {
             return Some(performance);
         }
-        channel.kind.control_outlet(outlet_of_slot(slot)?)
+        channel.kind().control_outlet(outlet_of_slot(slot)?)
     }
 
     /// Whether `slot` names a source the selected channel actually has: an
@@ -435,7 +435,7 @@ mod tests {
     #[test]
     fn the_mod_wheel_arms_and_authors_a_performance_route() {
         let mut session = Session::default();
-        assert_eq!(session.channels[0].kind, mooloop_core::DeviceKind::Sampler);
+        assert_eq!(session.channels[0].kind(), mooloop_core::DeviceKind::Sampler);
         let wheel = mooloop_core::modulation::performance_slot(
             mooloop_core::modulation::PERFORMANCE_MOD_WHEEL,
         );
@@ -488,7 +488,7 @@ mod tests {
     #[test]
     fn a_generator_that_publishes_nothing_offers_no_outlets() {
         let mut session = Session::default();
-        assert_eq!(session.channels[0].kind, mooloop_core::DeviceKind::Sampler);
+        assert_eq!(session.channels[0].kind(), mooloop_core::DeviceKind::Sampler);
         for outlet in 0..mooloop_core::modulation::MAX_GENERATOR_OUTLETS as u16 {
             let slot = outlet_slot(outlet);
             assert!(!session.control_source_exists(slot));

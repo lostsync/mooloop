@@ -65,7 +65,7 @@ pub fn resolve_slice_frame(channel: &ChannelState, position: f32, snap: bool) ->
     }
     let frame = frame_from_fraction(position.clamp(0.0, 1.0), len);
     let frame = if snap {
-        snap_slice_frame(&channel.params, sample, frame)
+        snap_slice_frame(&channel.sampler_params(), sample, frame)
     } else {
         frame
     };
@@ -91,7 +91,7 @@ pub fn slice_fractions(channel: &ChannelState) -> Vec<f32> {
 /// Whether a committed render no longer matches the parameters it was baked
 /// from, so the editor's stale badge should show.
 pub fn commit_is_stale(channel: &ChannelState, commit: &SampleCommit, bpm: f64) -> bool {
-    let params = channel.params;
+    let params = channel.sampler_params();
     if commit.mode != params.stretch_mode {
         return true;
     }
@@ -109,7 +109,7 @@ pub fn commit_is_stale(channel: &ChannelState, commit: &SampleCommit, bpm: f64) 
         end: commit.source_end,
         loop_start: commit.source_loop_start,
         loop_end: commit.source_loop_end,
-        ..channel.params
+        ..channel.sampler_params()
     };
     let now = mooloop_dsp::Sampler::effective_ratio(
         params,
@@ -292,13 +292,13 @@ impl Session {
         let (_, channel) = self.sliced_channel()?;
         let sample = channel.published_sample().cloned()?;
         let len = sample.frames.len();
-        let start = frame_from_fraction(channel.params.start, len) as u32;
-        let end = frame_from_fraction(channel.params.end, len) as u32;
+        let start = frame_from_fraction(channel.sampler_params().start, len) as u32;
+        let end = frame_from_fraction(channel.sampler_params().end, len) as u32;
         channel
             .slices
             .divide_evenly(count.max(1) as usize, start, end);
         if snap {
-            let params = channel.params;
+            let params = channel.sampler_params();
             let snapped: Vec<SliceMarker> = channel
                 .slices
                 .markers()
@@ -340,20 +340,22 @@ impl Session {
             return Err(true);
         };
         let (params, slices) = match channel.commit.as_ref() {
-            Some(commit) => mooloop_dsp::commit::revert_commit(channel.params, commit),
-            None => (channel.params, channel.slices.clone()),
+            Some(commit) => mooloop_dsp::commit::revert_commit(channel.sampler_params(), commit),
+            None => (channel.sampler_params(), channel.slices.clone()),
         };
         let Some(committed) = mooloop_dsp::commit::commit_stretch(&source, params, &slices, bpm)
         else {
             return Err(false);
         };
         let ratio = committed.commit.ratio;
-        channel.params = committed.params;
+        if let Some(p) = channel.sampler_params_mut() {
+            *p = committed.params;
+        }
         channel.slices = committed.slices;
         channel.commit = Some(Box::new(committed.commit));
         channel.committed_sample = Some(committed.sample);
         refresh_sample_view(channel);
-        let params = channel.params;
+        let params = channel.sampler_params();
         self.mark_dirty();
         Ok(Committed {
             ratio,
@@ -372,8 +374,10 @@ impl Session {
         let selected = self.selected;
         let channel = self.channels.get_mut(selected)?;
         let commit = channel.commit.take()?;
-        let (params, slices) = mooloop_dsp::commit::revert_commit(channel.params, &commit);
-        channel.params = params;
+        let (params, slices) = mooloop_dsp::commit::revert_commit(channel.sampler_params(), &commit);
+        if let Some(p) = channel.sampler_params_mut() {
+            *p = params;
+        }
         channel.slices = slices;
         channel.committed_sample = None;
         refresh_sample_view(channel);
@@ -395,8 +399,8 @@ impl Session {
         let mut resolved = Vec::with_capacity(SampleMarker::ALL.len());
         let (mut moved, mut searched) = (0usize, 0usize);
         for marker in SampleMarker::ALL {
-            let requested = marker.get(&channel.params);
-            let Some((value, result)) = snap_marker(&channel.params, &sample, marker, requested)
+            let requested = marker.get(&channel.sampler_params());
+            let Some((value, result)) = snap_marker(&channel.sampler_params(), &sample, marker, requested)
             else {
                 continue;
             };
@@ -404,10 +408,12 @@ impl Session {
             if result.moved() {
                 moved += 1;
             }
-            marker.set(&mut channel.params, value);
+            if let Some(params) = channel.sampler_params_mut() {
+                marker.set(params, value);
+            }
             resolved.push((marker, value));
         }
-        let params = channel.params;
+        let params = channel.sampler_params();
         Some(SnapAll {
             resolved,
             moved,

@@ -440,7 +440,7 @@ impl Session {
                 EffectTarget::Channel(channel) => self
                     .channels
                     .get(usize::from(channel))
-                    .map(|state| state.kind.label().to_owned())
+                    .map(|state| state.kind().label().to_owned())
                     .unwrap_or_else(|| "?".to_owned()),
                 EffectTarget::Bus(_) => "?".to_owned(),
             },

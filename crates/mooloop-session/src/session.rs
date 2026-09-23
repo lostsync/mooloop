@@ -18,13 +18,12 @@ use mooloop_core::{
     drop_lanes_for_device, strip_descriptor, AutomationLane, BusSetup, Channel, ChannelId,
     STRIP_DESCRIPTORS,
     ChannelSetup, DeviceId,
-    AuxInParams, AuxInState, ChannelSource, DeviceKind, DrumSynthParams, DrumSynthState, Ds01Params, Ds01State,
-    EffectParams, EffectSlotState, EffectTarget, MlM1Params, MlM1State, MlP8Params, MlP8State,
+    AuxInState, ChannelSource, DeviceKind, DrumSynthState, Ds01State, GeneratorParams,
+    EffectParams, EffectSlotState, EffectTarget, MlM1State, MlP8State,
     LoopRange, ModDestinationDescriptor, ModEnvelopeParams, ModPolarity, ModRoute, ModulatorParams,
-    MonoSynthParams, MonoSynthState, NoteId, ParamAddr,
+    MonoSynthState, NoteId, ParamAddr,
     ParamDescriptor, ParamOwner, PatternMeta, PatternPlacement, PlaybackMode, PointId,
-    PolySynthParams,
-    PolySynthState, Project, ProjectChannel, SampleReference, SamplerParams, SamplerState,
+    PolySynthState, Project, ProjectChannel, SampleReference, SamplerState,
     trim_pattern_meta,
     modulation::CONTROL_SOURCE_SLOTS,
     MAX_MODULATORS_PER_CHANNEL, MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_BAR,
@@ -488,25 +487,15 @@ impl Session {
         // The colour is not consulted for the same reason it is not reset
         // below: it was chosen or it was not, and a source change is not a
         // statement about either.
-        let named_by_user = channel.name != channel.kind.default_channel_name(index);
-        channel.kind = kind;
+        let named_by_user = channel.name != channel.kind().default_channel_name(index);
         if !named_by_user {
             channel.name = kind.default_channel_name(index);
         }
-        // Only the new kind's own parameter block is reset. The others keep
-        // whatever they held, so swapping a device out and back returns to
-        // the patch that was there -- which is why this is a match rather
-        // than a wholesale `Channel::default()`.
-        match kind {
-            DeviceKind::Sampler => channel.params = SamplerParams::default(),
-            DeviceKind::DrumSynth => channel.drum_params = DrumSynthParams::default(),
-            DeviceKind::MonoSynth => channel.mono_params = MonoSynthParams::default(),
-            DeviceKind::PolySynth => channel.poly_params = PolySynthParams::default(),
-            DeviceKind::MlM1 => channel.mlm1_params = MlM1Params::default(),
-            DeviceKind::MlP8 => channel.mlp8_params = MlP8Params::default(),
-            DeviceKind::Ds01 => channel.ds01_params = Ds01Params::default(),
-            DeviceKind::AuxIn => channel.aux_in_params = AuxInParams::default(),
-        }
+        // The new device arrives at its defaults. Switching away and back
+        // does too: the old patch is not kept anywhere (MOO-192), and never
+        // was -- this used to reset only the incoming kind's block of eight,
+        // and every install rebuilt all eight from the document.
+        channel.set_generator(kind.default_generator_params());
         // The sample state goes for every kind, the sampler included: a fresh
         // device has loaded nothing, and a synth that kept a waveform would
         // draw one. This was written out once per arm until 2026-09-12 --
@@ -533,8 +522,8 @@ impl Session {
             .channels
             .iter()
             .map(|channel| {
-                let source = match channel.kind {
-                    DeviceKind::Sampler => {
+                let source = match channel.generator_params() {
+                    GeneratorParams::Sampler(params) => {
                         let sample = channel
                             .sample_path
                             .as_ref()
@@ -544,34 +533,26 @@ impl Session {
                             })
                             .unwrap_or_default();
                         ChannelSource::Sampler(SamplerState {
-                            params: channel.params,
+                            params,
                             sample,
                             slices: channel.slices.clone(),
                             commit: channel.commit.clone(),
                             record: channel.record,
                         })
                     }
-                    DeviceKind::DrumSynth => ChannelSource::DrumSynth(DrumSynthState {
-                        params: channel.drum_params,
-                    }),
-                    DeviceKind::MonoSynth => ChannelSource::MonoSynth(MonoSynthState {
-                        params: channel.mono_params,
-                    }),
-                    DeviceKind::PolySynth => ChannelSource::PolySynth(PolySynthState {
-                        params: channel.poly_params,
-                    }),
-                    DeviceKind::MlM1 => ChannelSource::MlM1(MlM1State {
-                        params: channel.mlm1_params,
-                    }),
-                    DeviceKind::MlP8 => ChannelSource::MlP8(MlP8State {
-                        params: channel.mlp8_params,
-                    }),
-                    DeviceKind::Ds01 => ChannelSource::Ds01(Ds01State {
-                        params: channel.ds01_params,
-                    }),
-                    DeviceKind::AuxIn => ChannelSource::AuxIn(AuxInState {
-                        params: channel.aux_in_params,
-                    }),
+                    GeneratorParams::DrumSynth(params) => {
+                        ChannelSource::DrumSynth(DrumSynthState { params })
+                    }
+                    GeneratorParams::MonoSynth(params) => {
+                        ChannelSource::MonoSynth(MonoSynthState { params })
+                    }
+                    GeneratorParams::PolySynth(params) => {
+                        ChannelSource::PolySynth(PolySynthState { params })
+                    }
+                    GeneratorParams::MlM1(params) => ChannelSource::MlM1(MlM1State { params }),
+                    GeneratorParams::MlP8(params) => ChannelSource::MlP8(MlP8State { params }),
+                    GeneratorParams::Ds01(params) => ChannelSource::Ds01(Ds01State { params }),
+                    GeneratorParams::AuxIn(params) => ChannelSource::AuxIn(AuxInState { params }),
                 };
                 ProjectChannel {
                     id: channel.id,
@@ -581,7 +562,7 @@ impl Session {
                             midi_input: channel.midi_input.clone(),
                             audio_input: channel.audio_input,
                             color: channel.color,
-                            kind: channel.kind,
+                            kind: channel.kind(),
                             muted: channel.muted,
                             solo: channel.solo,
                             volume: channel.volume,
@@ -648,7 +629,7 @@ impl Session {
     pub fn keyed_sample_snapshots(&self) -> std::collections::HashMap<ChannelId, Arc<SampleData>> {
         self.channels
             .iter()
-            .filter(|channel| channel.kind == DeviceKind::Sampler)
+            .filter(|channel| channel.kind() == DeviceKind::Sampler)
             .filter_map(|channel| {
                 Some((channel.id, channel.sample_data.clone()?))
             })
@@ -659,7 +640,7 @@ impl Session {
         self.channels
             .iter()
             .map(|channel| {
-                (channel.kind == DeviceKind::Sampler)
+                (channel.kind() == DeviceKind::Sampler)
                     .then(|| channel.sample_data.clone())
                     .flatten()
             })
@@ -1357,13 +1338,7 @@ impl Session {
                 // synth added.
                 let source = &setup.source;
                 let sampler = source.sampler_state();
-                let drum_params = source.drum_synth_state().map(|s| s.params).unwrap_or_default();
-                let mono_params = source.mono_synth_state().map(|s| s.params).unwrap_or_default();
-                let poly_params = source.poly_synth_state().map(|s| s.params).unwrap_or_default();
-                let mlm1_params = source.mlm1_state().map(|s| s.params).unwrap_or_default();
-                let mlp8_params = source.mlp8_state().map(|s| s.params).unwrap_or_default();
-                let ds01_params = source.ds01_state().map(|s| s.params).unwrap_or_default();
-                let aux_in_params = source.aux_in_state().map(|s| s.params).unwrap_or_default();
+                let generator = source_params(source);
                 let sample = sampler
                     .is_some()
                     .then(|| samples.get(index).cloned().flatten())
@@ -1482,19 +1457,11 @@ impl Session {
                     midi_input: setup.channel.midi_input.clone(),
                     audio_input: setup.channel.audio_input,
                     color: setup.channel.color,
-                    kind: setup.channel.kind,
                     muted: setup.channel.muted,
                     solo: setup.channel.solo,
                     volume: setup.channel.volume,
                     pan: setup.channel.pan,
-                    params: sampler.map(|state| state.params).unwrap_or_default(),
-                    drum_params,
-                    mono_params,
-                    poly_params,
-                    mlm1_params,
-                    mlp8_params,
-                    ds01_params,
-                    aux_in_params,
+                    generator,
                     sample_name,
                     sample_description: description,
                     sample_duration: duration,
@@ -1866,6 +1833,20 @@ impl Session {
 /// Free with the `EffectParams` match rather than a trait, because there are
 /// two and the third would want to be visible here rather than opted into
 /// somewhere else.
+/// The patch a saved source carries, as the one block a channel keeps.
+fn source_params(source: &ChannelSource) -> GeneratorParams {
+    match source {
+        ChannelSource::Sampler(state) => GeneratorParams::Sampler(state.params),
+        ChannelSource::DrumSynth(state) => GeneratorParams::DrumSynth(state.params),
+        ChannelSource::MonoSynth(state) => GeneratorParams::MonoSynth(state.params),
+        ChannelSource::PolySynth(state) => GeneratorParams::PolySynth(state.params),
+        ChannelSource::MlM1(state) => GeneratorParams::MlM1(state.params),
+        ChannelSource::MlP8(state) => GeneratorParams::MlP8(state.params),
+        ChannelSource::Ds01(state) => GeneratorParams::Ds01(state.params),
+        ChannelSource::AuxIn(state) => GeneratorParams::AuxIn(state.params),
+    }
+}
+
 fn retune_effect(
     params: &mut EffectParams,
     bpm: f64,

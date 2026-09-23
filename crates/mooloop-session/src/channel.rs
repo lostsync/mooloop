@@ -1,9 +1,8 @@
 //! One channel's live state.
 //!
 //! The project model as the application edits it, rather than as it is
-//! serialized: decoded audio, per-kind generator parameters kept side by side
-//! so switching source never loses the others, and the pattern-indexed note
-//! and automation banks.
+//! serialized: decoded audio, the running generator's parameters, and the
+//! pattern-indexed note and automation banks.
 
 use mooloop_core::{
     AutomationLane, AuxInParams, ChannelId, DeviceKind, Ds01Params, EffectSlotState,
@@ -16,6 +15,43 @@ use mooloop_core::{
 use mooloop_dsp::SampleData;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+/// One typed reader and one typed writer per generator kind, for the device
+/// faces, which each know which kind they draw.
+///
+/// The reader gives the kind's defaults when the channel runs another kind:
+/// a face that is not showing still gets drawn from something, which is what
+/// the eight separate fields used to give it. The writer gives `None`, and
+/// says so in the log: a write aimed at a kind the channel is not running
+/// used to land in a field nothing read, silently, and now it lands nowhere
+/// but not silently (the Buffer lesson in `AGENTS.md`, "Trace the press").
+macro_rules! typed_generator_access {
+    ($($variant:ident, $params:ty, $get:ident, $get_mut:ident;)*) => {
+        $(
+            pub fn $get(&self) -> $params {
+                match self.generator {
+                    GeneratorParams::$variant(params) => params,
+                    _ => <$params>::default(),
+                }
+            }
+
+            pub fn $get_mut(&mut self) -> Option<&mut $params> {
+                let kind = self.kind();
+                match &mut self.generator {
+                    GeneratorParams::$variant(params) => Some(params),
+                    _ => {
+                        mooloop_core::log_warn!(
+                            "session",
+                            "{} write refused: the channel runs {kind:?}",
+                            stringify!($variant)
+                        );
+                        None
+                    }
+                }
+            }
+        )*
+    };
+}
 
 pub struct ChannelState {
     /// This channel's durable identity, carried in both directions so a mint
@@ -36,7 +72,6 @@ pub struct ChannelState {
     /// coloured. Content, like the name: it survives a save and it survives a
     /// change of source device.
     pub color: Option<mooloop_core::ProjectColor>,
-    pub kind: DeviceKind,
     pub muted: bool,
     /// Whether this channel is soloed. What that *silences* is derived by the
     /// pump's `sync_channel_solo` and never stored here, for the reason a
@@ -44,14 +79,17 @@ pub struct ChannelState {
     pub solo: bool,
     pub volume: f32,
     pub pan: f32,
-    pub params: SamplerParams,
-    pub drum_params: DrumSynthParams,
-    pub mono_params: MonoSynthParams,
-    pub mlm1_params: MlM1Params,
-    pub mlp8_params: MlP8Params,
-    pub ds01_params: Ds01Params,
-    pub aux_in_params: AuxInParams,
-    pub poly_params: PolySynthParams,
+    /// The running generator's parameters, and so which generator it is
+    /// ([`Self::kind`]).
+    ///
+    /// One block, not one per kind (MOO-192). Eight fields used to sit here
+    /// "so switching sources does not lose the others", but nothing ever
+    /// read the others: a source change resets the kind it switches to, and
+    /// every install rebuilds the channel from a document that carries only
+    /// the running kind (`tests/source_switch.rs`). Crate-private, and the
+    /// kind is read from it rather than stored beside it, so the two cannot
+    /// disagree.
+    pub(crate) generator: GeneratorParams,
     pub sample_name: String,
     pub sample_description: String,
     pub sample_duration: f32,
@@ -121,44 +159,43 @@ impl ChannelState {
         self.committed_sample.as_ref().or(self.sample_data.as_ref())
     }
 
-    /// This channel's generator parameters in their addressable form. The
-    /// `ChannelState` keeps one struct per kind so switching sources does not
-    /// lose the others; only the active kind is addressable.
+    /// Which generator this channel runs.
+    pub fn kind(&self) -> DeviceKind {
+        self.generator.kind()
+    }
+
+    /// This channel's generator parameters in their addressable form.
     pub fn generator_params(&self) -> GeneratorParams {
-        match self.kind {
-            DeviceKind::Sampler => GeneratorParams::Sampler(self.params),
-            DeviceKind::MonoSynth => GeneratorParams::MonoSynth(self.mono_params),
-            DeviceKind::PolySynth => GeneratorParams::PolySynth(self.poly_params),
-            DeviceKind::MlM1 => GeneratorParams::MlM1(self.mlm1_params),
-            DeviceKind::MlP8 => GeneratorParams::MlP8(self.mlp8_params),
-            DeviceKind::Ds01 => GeneratorParams::Ds01(self.ds01_params),
-            DeviceKind::AuxIn => GeneratorParams::AuxIn(self.aux_in_params),
-            DeviceKind::DrumSynth => GeneratorParams::DrumSynth(self.drum_params),
-        }
+        self.generator
+    }
+
+    /// The generator's parameters, mutably, whatever its kind.
+    pub fn generator_params_mut(&mut self) -> &mut GeneratorParams {
+        &mut self.generator
+    }
+
+    /// Replaces the generator, kind and all. A source change passes the new
+    /// kind's defaults; an install passes what the document carries.
+    pub fn set_generator(&mut self, params: GeneratorParams) {
+        self.generator = params;
     }
 
     /// Write one of the current generator's parameters by descriptor id,
     /// returning the value that was actually stored -- the descriptor's own
     /// clamp, not the one asked for.
-    ///
-    /// `generator_params` hands out a copy, because the eight device kinds are
-    /// separate fields rather than one box, so a caller cannot write through
-    /// it. This puts the copy back on the field the current kind reads from,
-    /// which is the only reason it exists.
     pub fn set_generator_param(&mut self, id: u32, value: f32) -> Option<f32> {
-        let mut params = self.generator_params();
-        let written = params.set(id, value)?;
-        match params {
-            GeneratorParams::Sampler(params) => self.params = params,
-            GeneratorParams::DrumSynth(params) => self.drum_params = params,
-            GeneratorParams::MonoSynth(params) => self.mono_params = params,
-            GeneratorParams::PolySynth(params) => self.poly_params = params,
-            GeneratorParams::MlM1(params) => self.mlm1_params = params,
-            GeneratorParams::MlP8(params) => self.mlp8_params = params,
-            GeneratorParams::Ds01(params) => self.ds01_params = params,
-            GeneratorParams::AuxIn(params) => self.aux_in_params = params,
-        }
-        Some(written)
+        self.generator.set(id, value)
+    }
+
+    typed_generator_access! {
+        Sampler, SamplerParams, sampler_params, sampler_params_mut;
+        DrumSynth, DrumSynthParams, drum_params, drum_params_mut;
+        MonoSynth, MonoSynthParams, mono_params, mono_params_mut;
+        PolySynth, PolySynthParams, poly_params, poly_params_mut;
+        MlM1, MlM1Params, mlm1_params, mlm1_params_mut;
+        MlP8, MlP8Params, mlp8_params, mlp8_params_mut;
+        Ds01, Ds01Params, ds01_params, ds01_params_mut;
+        AuxIn, AuxInParams, aux_in_params, aux_in_params_mut;
     }
 
     /// A brand new sampler channel is silent and empty until a sample is
@@ -170,19 +207,11 @@ impl ChannelState {
             midi_input: mooloop_core::ChannelMidiInput::default(),
             audio_input: mooloop_core::AudioInputSource::Off,
             color: None,
-            kind: DeviceKind::Sampler,
             muted: false,
             solo: false,
             volume: mooloop_core::DEFAULT_CHANNEL_VOLUME,
             pan: 0.0,
-            params: SamplerParams::default(),
-            drum_params: DrumSynthParams::default(),
-            mono_params: MonoSynthParams::default(),
-            mlm1_params: MlM1Params::default(),
-            mlp8_params: MlP8Params::default(),
-            ds01_params: Ds01Params::default(),
-            aux_in_params: AuxInParams::default(),
-            poly_params: PolySynthParams::default(),
+            generator: DeviceKind::Sampler.default_generator_params(),
             sample_name: String::new(),
             sample_description: String::new(),
             sample_duration: 0.0,

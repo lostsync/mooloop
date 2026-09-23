@@ -847,7 +847,7 @@ impl Session {
         let mut published: [&'static [OutletDescriptor]; MAX_CHANNELS] = [&[]; MAX_CHANNELS];
         for (index, channel) in self.channels.iter().take(count).enumerate() {
             subscriptions[index] = channel.generator_params().audio_subscription();
-            published[index] = channel.kind.outlets();
+            published[index] = channel.kind().outlets();
         }
         compile_audio_graph(&subscriptions[..count], &published[..count])
     }
@@ -1479,7 +1479,8 @@ mod tests {
 
         // The consumer's own parameters are the only thing that changes.
         session.channels[1]
-            .aux_in_params
+            .aux_in_params_mut()
+            .expect("channel 1 runs Aux In")
             .set_subscription(Some(AudioSubscription::new(
                 0,
                 mooloop_core::mlp8::OUTLET_OSC3,

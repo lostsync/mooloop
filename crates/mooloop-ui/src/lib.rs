@@ -3687,7 +3687,7 @@ fn aux_in_sources(session: &Session, consumer: usize) -> Vec<(u8, String)> {
         .iter()
         .enumerate()
         .filter(|(index, channel)| {
-            *index != consumer && channel.kind.outlets().iter().any(|o| !o.is_control())
+            *index != consumer && channel.kind().outlets().iter().any(|o| !o.is_control())
         })
         .map(|(index, channel)| (index as u8, channel.name.clone()))
         .collect()
@@ -3702,7 +3702,7 @@ fn aux_in_outlets(session: &Session, channel: u8) -> Vec<&'static OutletDescript
         .get(channel as usize)
         .map(|channel| {
             channel
-                .kind
+                .kind()
                 .outlets()
                 .iter()
                 .filter(|outlet| !outlet.is_control())
@@ -5211,7 +5211,7 @@ impl UiState {
             selected: selected == Some(slot),
         };
         let outlets: Vec<ModulationOutletRow> = channel
-            .kind
+            .kind()
             .control_outlets()
             .iter()
             .map(|outlet| outlet_row(outlet_slot(outlet.id), outlet))
@@ -5804,7 +5804,7 @@ impl UiState {
         let Some(channel) = self.session.channels.get(consumer) else {
             return;
         };
-        let params = channel.aux_in_params;
+        let params = channel.aux_in_params();
 
         let sources = aux_in_sources(&self.session, consumer);
         let mut source_names: Vec<SharedString> = vec!["None".into()];
@@ -5978,9 +5978,9 @@ impl UiState {
         let Some(ch) = self.session.channels.get(self.session.selected) else {
             return;
         };
-        let p = &ch.params;
-        let drum = ch.drum_params;
-        let mono = ch.mono_params;
+        let p = &ch.sampler_params();
+        let drum = ch.drum_params();
+        let mono = ch.mono_params();
         window.set_selected_channel_name(ch.name.as_str().into());
         // Three properties for one optional colour, because Slint has no
         // `Option`: whether there is one, what it is to draw, and what it is
@@ -5995,7 +5995,7 @@ impl UiState {
         self.publish_midi_input(window, ch);
         self.publish_audio_input(window, ch);
         window.set_selected_channel_volume_db(linear_to_db(ch.volume));
-        window.set_source_kind(device_kind_to_int(ch.kind));
+        window.set_source_kind(device_kind_to_int(ch.kind()));
         // Derived rather than remembered per channel: the selection names one
         // chain, so switching chains unselects without anything being cleared.
         window.set_source_selected(self.session.source_is_selected());
@@ -6064,7 +6064,7 @@ impl UiState {
         window.set_mono_lfo_filter(mono.lfo.to_filter);
         window.set_mono_lfo_pulse_width(mono.lfo.to_pulse_width);
         window.set_mono_lfo_amp(mono.lfo.to_amp);
-        let mlp8 = ch.mlp8_params;
+        let mlp8 = ch.mlp8_params();
         window.set_mlp8_osc1_wave(osc_wave_to_int(mlp8.osc[0].wave));
         window.set_mlp8_osc1_semitones(mlp8.osc[0].semitones);
         window.set_mlp8_osc1_cents(mlp8.osc[0].cents);
@@ -6140,13 +6140,13 @@ impl UiState {
         // and this runs on every editor refresh — a pattern switch, an undo, a
         // channel select. Doing it for a sampler channel is the per-
         // interaction work the preview's own debounce exists to avoid.
-        if ch.kind == DeviceKind::Ds01 {
-            refresh_ds01(window, &ch.ds01_params);
+        if ch.kind() == DeviceKind::Ds01 {
+            refresh_ds01(window, &ch.ds01_params());
         }
-        if ch.kind == DeviceKind::AuxIn {
+        if ch.kind() == DeviceKind::AuxIn {
             self.refresh_aux_in(window);
         }
-        let mlm1 = ch.mlm1_params;
+        let mlm1 = ch.mlm1_params();
         window.set_mlm1_osc1_wave(osc_wave_to_int(mlm1.osc[0].wave));
         window.set_mlm1_osc1_semitones(mlm1.osc[0].semitones);
         window.set_mlm1_osc1_cents(mlm1.osc[0].cents);
@@ -6181,7 +6181,7 @@ impl UiState {
         window.set_mlm1_env_trigger(mlm1.env_trigger.to_index());
         window.set_mlm1_priority(mlm1.priority.to_index());
         window.set_mlm1_filter_model(mlm1.filter_model.to_index());
-        let poly = ch.poly_params;
+        let poly = ch.poly_params();
         window.set_poly_osc1_wave(osc_wave_to_int(poly.osc[0].wave));
         window.set_poly_osc1_semitones(poly.osc[0].semitones);
         window.set_poly_osc1_cents(poly.osc[0].cents);
@@ -12328,11 +12328,13 @@ impl AppUi {
                             return false;
                         };
                         let value = envelope_seconds(v);
-                        if channel.params.$field == value {
+                        if channel.sampler_params().$field == value {
                             return false;
                         }
-                        channel.params.$field = value;
-                        let p = channel.params;
+                        if let Some(p) = channel.sampler_params_mut() {
+                            p.$field = value;
+                        }
+                        let p = channel.sampler_params();
                         let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                             channel: ch as u8,
                             params: p,
@@ -12356,11 +12358,13 @@ impl AppUi {
                         let Some(channel) = st.session.channels.get_mut(ch) else {
                             return false;
                         };
-                        if channel.params.$field == v {
+                        if channel.sampler_params().$field == v {
                             return false;
                         }
-                        channel.params.$field = v;
-                        let p = channel.params;
+                        if let Some(p) = channel.sampler_params_mut() {
+                            p.$field = v;
+                        }
+                        let p = channel.sampler_params();
                         let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                             channel: ch as u8,
                             params: p,
@@ -12404,7 +12408,7 @@ impl AppUi {
                         if window.get_snap_to_zero() {
                             if let Some(sample) = channel.published_sample().cloned() {
                                 if let Some((snapped, result)) =
-                                    snap_marker(&channel.params, &sample, marker, v)
+                                    snap_marker(&channel.sampler_params(), &sample, marker, v)
                                 {
                                     value = snapped;
                                     status = Some(snap_status(marker, result));
@@ -12412,8 +12416,10 @@ impl AppUi {
                             }
                         }
                         *resolved.borrow_mut() = (value, status);
-                        marker.set(&mut channel.params, value);
-                        let p = channel.params;
+                        if let Some(params) = channel.sampler_params_mut() {
+                            marker.set(params, value);
+                        }
+                        let p = channel.sampler_params();
                         let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                             channel: ch as u8,
                             params: p,
@@ -12523,11 +12529,13 @@ impl AppUi {
                         };
                         #[allow(clippy::redundant_closure_call)]
                         let value = ($map)(v);
-                        if channel.params.filter_env_mut().$field == value {
+                        if channel.sampler_params().filter_env_mut().$field == value {
                             return false;
                         }
-                        channel.params.filter_env_mut().$field = value;
-                        let p = channel.params;
+                        if let Some(p) = channel.sampler_params_mut() {
+                            p.filter_env_mut().$field = value;
+                        }
+                        let p = channel.sampler_params();
                         let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                             channel: ch as u8,
                             params: p,
@@ -12584,10 +12592,12 @@ impl AppUi {
                     let Some(channel) = st.session.channels.get_mut(ch) else {
                         return false;
                     };
-                    channel.params.reverse = reverse;
+                    if let Some(p) = channel.sampler_params_mut() {
+                        p.reverse = reverse;
+                    }
                     let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                         channel: ch as u8,
-                        params: channel.params,
+                        params: channel.sampler_params(),
                     });
                     true
                 });
@@ -12607,13 +12617,15 @@ impl AppUi {
                     let Some(channel) = st.session.channels.get_mut(ch) else {
                         return false;
                     };
-                    channel.params.root_note = note.clamp(0, 127) as u8;
+                    if let Some(p) = channel.sampler_params_mut() {
+                        p.root_note = note.clamp(0, 127) as u8;
+                    }
                     if let Some(window) = weak.upgrade() {
-                        window.set_tune_label(tune_label(channel.params).into());
+                        window.set_tune_label(tune_label(channel.sampler_params()).into());
                     }
                     let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                         channel: ch as u8,
-                        params: channel.params,
+                        params: channel.sampler_params(),
                     });
                     true
                 });
@@ -12633,13 +12645,15 @@ impl AppUi {
                     let Some(channel) = st.session.channels.get_mut(ch) else {
                         return false;
                     };
-                    channel.params.tune_semitones = v;
+                    if let Some(p) = channel.sampler_params_mut() {
+                        p.tune_semitones = v;
+                    }
                     if let Some(window) = weak.upgrade() {
-                        window.set_tune_label(tune_label(channel.params).into());
+                        window.set_tune_label(tune_label(channel.sampler_params()).into());
                     }
                     let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                         channel: ch as u8,
-                        params: channel.params,
+                        params: channel.sampler_params(),
                     });
                     true
                 });
@@ -12659,13 +12673,15 @@ impl AppUi {
                     let Some(channel) = st.session.channels.get_mut(ch) else {
                         return false;
                     };
-                    channel.params.tune_cents = v;
+                    if let Some(p) = channel.sampler_params_mut() {
+                        p.tune_cents = v;
+                    }
                     if let Some(window) = weak.upgrade() {
-                        window.set_tune_label(tune_label(channel.params).into());
+                        window.set_tune_label(tune_label(channel.sampler_params()).into());
                     }
                     let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                         channel: ch as u8,
-                        params: channel.params,
+                        params: channel.sampler_params(),
                     });
                     true
                 });
@@ -12685,10 +12701,12 @@ impl AppUi {
                     let Some(channel) = st.session.channels.get_mut(ch) else {
                         return false;
                     };
-                    channel.params.retune_live = on;
+                    if let Some(p) = channel.sampler_params_mut() {
+                        p.retune_live = on;
+                    }
                     let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                         channel: ch as u8,
-                        params: channel.params,
+                        params: channel.sampler_params(),
                     });
                     true
                 });
@@ -12708,10 +12726,12 @@ impl AppUi {
                     let Some(channel) = st.session.channels.get_mut(ch) else {
                         return false;
                     };
-                    channel.params.filter_env_amount = v.clamp(0.0, 1.0) * 2.0 - 1.0;
+                    if let Some(p) = channel.sampler_params_mut() {
+                        p.filter_env_amount = v.clamp(0.0, 1.0) * 2.0 - 1.0;
+                    }
                     let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                         channel: ch as u8,
-                        params: channel.params,
+                        params: channel.sampler_params(),
                     });
                     true
                 });
@@ -12731,8 +12751,10 @@ impl AppUi {
                     let Some(channel) = st.session.channels.get_mut(ch) else {
                         return false;
                     };
-                    channel.params.loop_mode = loop_mode_from_int(i);
-                    let p = channel.params;
+                    if let Some(p) = channel.sampler_params_mut() {
+                        p.loop_mode = loop_mode_from_int(i);
+                    }
+                    let p = channel.sampler_params();
                     let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                         channel: ch as u8,
                         params: p,
@@ -12775,8 +12797,10 @@ impl AppUi {
                     let Some(channel) = st.session.channels.get_mut(ch) else {
                         return false;
                     };
-                    channel.params.play_mode = PlayMode::from_index(value);
-                    let p = channel.params;
+                    if let Some(p) = channel.sampler_params_mut() {
+                        p.play_mode = PlayMode::from_index(value);
+                    }
+                    let p = channel.sampler_params();
                     let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                         channel: ch as u8,
                         params: p,
@@ -12798,8 +12822,10 @@ impl AppUi {
                     let Some(channel) = st.session.channels.get_mut(ch) else {
                         return false;
                     };
-                    channel.params.slice_base_note = note.clamp(0, 127) as u8;
-                    let p = channel.params;
+                    if let Some(p) = channel.sampler_params_mut() {
+                        p.slice_base_note = note.clamp(0, 127) as u8;
+                    }
+                    let p = channel.sampler_params();
                     let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                         channel: ch as u8,
                         params: p,
@@ -12932,7 +12958,7 @@ impl AppUi {
                 // slice as it will actually play -- envelopes, filter, drive
                 // and all. The browser's preview voice bypasses the strip
                 // entirely and could not do this.
-                let note = i32::from(channel.params.slice_base_note) + index.max(0);
+                let note = i32::from(channel.sampler_params().slice_base_note) + index.max(0);
                 if note > 127 {
                     return;
                 }
@@ -13066,10 +13092,12 @@ impl AppUi {
                     let mut st = st.borrow_mut();
                     let channel_index = st.session.selected;
                     let channel = &mut st.session.channels[channel_index];
-                    channel.params.voice_mode = voice_mode_from_int(value);
+                    if let Some(p) = channel.sampler_params_mut() {
+                        p.voice_mode = voice_mode_from_int(value);
+                    }
                     let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                         channel: channel_index as u8,
-                        params: channel.params,
+                        params: channel.sampler_params(),
                     });
                     true
                 });
@@ -13087,10 +13115,12 @@ impl AppUi {
                     let mut st = st.borrow_mut();
                     let channel_index = st.session.selected;
                     let channel = &mut st.session.channels[channel_index];
-                    channel.params.polyphony = value.clamp(1, 16) as u8;
+                    if let Some(p) = channel.sampler_params_mut() {
+                        p.polyphony = value.clamp(1, 16) as u8;
+                    }
                     let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                         channel: channel_index as u8,
-                        params: channel.params,
+                        params: channel.sampler_params(),
                     });
                     true
                 });
@@ -13108,10 +13138,12 @@ impl AppUi {
                     let mut st = st.borrow_mut();
                     let channel_index = st.session.selected;
                     let channel = &mut st.session.channels[channel_index];
-                    channel.params.retrigger_mode = retrigger_mode_from_int(value);
+                    if let Some(p) = channel.sampler_params_mut() {
+                        p.retrigger_mode = retrigger_mode_from_int(value);
+                    }
                     let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                         channel: channel_index as u8,
-                        params: channel.params,
+                        params: channel.sampler_params(),
                     });
                     true
                 });
@@ -13129,10 +13161,12 @@ impl AppUi {
                     let mut st = st.borrow_mut();
                     let channel_index = st.session.selected;
                     let channel = &mut st.session.channels[channel_index];
-                    channel.params.choke_group = value.clamp(0, 16) as u8;
+                    if let Some(p) = channel.sampler_params_mut() {
+                        p.choke_group = value.clamp(0, 16) as u8;
+                    }
                     let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                         channel: channel_index as u8,
-                        params: channel.params,
+                        params: channel.sampler_params(),
                     });
                     true
                 });
@@ -13156,7 +13190,9 @@ impl AppUi {
                     let mut st = st.borrow_mut();
                     let channel_index = st.session.selected;
                     let channel = &mut st.session.channels[channel_index];
-                    channel.params.stretch_enabled = on;
+                    if let Some(p) = channel.sampler_params_mut() {
+                        p.stretch_enabled = on;
+                    }
                     // Guess the loop length on the way in. A loop is nearly
                     // always some power of two of bars and nearly always
                     // recorded a little off it, so seeding this is the
@@ -13172,11 +13208,15 @@ impl AppUi {
                                 (sample.frames.len(), sample.sample_rate)
                             });
                         let bpm = weak.upgrade().map_or(120.0, |w| w.get_bpm() as f64);
-                        let measured = measured_loop_bars(channel.params, frames, rate, bpm);
-                        channel.params.stretch_bars = snap_bars_to_power_of_two(measured);
-                        channel.params.stretch_sync = true;
+                        let measured = measured_loop_bars(channel.sampler_params(), frames, rate, bpm);
+                        if let Some(p) = channel.sampler_params_mut() {
+                            p.stretch_bars = snap_bars_to_power_of_two(measured);
+                        }
+                        if let Some(p) = channel.sampler_params_mut() {
+                            p.stretch_sync = true;
+                        }
                     }
-                    let params = channel.params;
+                    let params = channel.sampler_params();
                     let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                         channel: channel_index as u8,
                         params,
@@ -13207,10 +13247,12 @@ impl AppUi {
                     let mut st = st.borrow_mut();
                     let channel_index = st.session.selected;
                     let channel = &mut st.session.channels[channel_index];
-                    channel.params.stretch_sync = on;
+                    if let Some(p) = channel.sampler_params_mut() {
+                        p.stretch_sync = on;
+                    }
                     let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                         channel: channel_index as u8,
-                        params: channel.params,
+                        params: channel.sampler_params(),
                     });
                     true
                 });
@@ -13229,10 +13271,12 @@ impl AppUi {
                     let channel_index = st.session.selected;
                     let channel = &mut st.session.channels[channel_index];
                     let bars = stretch_bars_from_norm(norm);
-                    channel.params.stretch_bars = bars;
+                    if let Some(p) = channel.sampler_params_mut() {
+                        p.stretch_bars = bars;
+                    }
                     let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                         channel: channel_index as u8,
-                        params: channel.params,
+                        params: channel.sampler_params(),
                     });
                     if let Some(window) = weak.upgrade() {
                         window.set_stretch_bars_label(format_bars(bars).into());
@@ -13263,15 +13307,18 @@ impl AppUi {
                         let mut st = st.borrow_mut();
                         let channel_index = st.session.selected;
                         let channel = &mut st.session.channels[channel_index];
-                        let was = channel.params;
+                        let was = channel.sampler_params();
                         #[allow(clippy::redundant_closure_call)]
-                        ($apply)(&mut channel.params, typed);
-                        if channel.params == was {
+                        let Some(params) = channel.sampler_params_mut() else {
+                            return false;
+                        };
+                        ($apply)(params, typed);
+                        if channel.sampler_params() == was {
                             return false;
                         }
                         let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                             channel: channel_index as u8,
-                            params: channel.params,
+                            params: channel.sampler_params(),
                         });
                         true
                     });
@@ -13307,14 +13354,17 @@ impl AppUi {
                     let mut st = st.borrow_mut();
                     let channel_index = st.session.selected;
                     let channel = &mut st.session.channels[channel_index];
-                    channel.params.stretch_mode = match value {
+                    let Some(params) = channel.sampler_params_mut() else {
+                        return false;
+                    };
+                    params.stretch_mode = match value {
                         1 => StretchMode::Drums,
                         2 => StretchMode::Grain,
                         _ => StretchMode::Music,
                     };
                     let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                         channel: channel_index as u8,
-                        params: channel.params,
+                        params: channel.sampler_params(),
                     });
                     true
                 });
@@ -13333,10 +13383,12 @@ impl AppUi {
                     let channel_index = st.session.selected;
                     let channel = &mut st.session.channels[channel_index];
                     let ratio = stretch_ratio_from_norm(norm);
-                    channel.params.stretch_ratio = ratio;
+                    if let Some(p) = channel.sampler_params_mut() {
+                        p.stretch_ratio = ratio;
+                    }
                     let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                         channel: channel_index as u8,
-                        params: channel.params,
+                        params: channel.sampler_params(),
                     });
                     if let Some(window) = weak.upgrade() {
                         window.set_stretch_ratio_label(format!("{ratio:.2}x").into());
@@ -13359,10 +13411,12 @@ impl AppUi {
                     let channel_index = st.session.selected;
                     let channel = &mut st.session.channels[channel_index];
                     let frames = stretch_grain_from_norm(norm);
-                    channel.params.stretch_grain = frames;
+                    if let Some(p) = channel.sampler_params_mut() {
+                        p.stretch_grain = frames;
+                    }
                     let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                         channel: channel_index as u8,
-                        params: channel.params,
+                        params: channel.sampler_params(),
                     });
                     if let Some(window) = weak.upgrade() {
                         window.set_stretch_grain_label(
@@ -13392,14 +13446,16 @@ impl AppUi {
                         let channel_index = st.session.selected;
                         let channel = &mut st.session.channels[channel_index];
                         let next = value;
-                        if channel.drum_params.$field == next {
+                        if channel.drum_params().$field == next {
                             return false;
                         }
-                        channel.drum_params.$field = next;
-                        params.set(Some(channel.drum_params));
+                        if let Some(p) = channel.drum_params_mut() {
+                            p.$field = next;
+                        }
+                        params.set(Some(channel.drum_params()));
                         let _ = tx.send(EngineCommand::SetChannelDrumSynthParams {
                             channel: channel_index as u8,
-                            params: channel.drum_params,
+                            params: channel.drum_params(),
                         });
                         true
                     });
@@ -13441,14 +13497,16 @@ impl AppUi {
                         let channel_index = st.session.selected;
                         let channel = &mut st.session.channels[channel_index];
                         let next = $map(value);
-                        if channel.drum_params.$field == next {
+                        if channel.drum_params().$field == next {
                             return false;
                         }
-                        channel.drum_params.$field = next;
-                        params.set(Some(channel.drum_params));
+                        if let Some(p) = channel.drum_params_mut() {
+                            p.$field = next;
+                        }
+                        params.set(Some(channel.drum_params()));
                         let _ = tx.send(EngineCommand::SetChannelDrumSynthParams {
                             channel: channel_index as u8,
-                            params: channel.drum_params,
+                            params: channel.drum_params(),
                         });
                         true
                     });
@@ -13486,8 +13544,10 @@ impl AppUi {
                     let mut st = st.borrow_mut();
                     let channel_index = st.session.selected;
                     let channel = &mut st.session.channels[channel_index];
-                    channel.drum_params.mode = DrumMode::from_index(value);
-                    let params = channel.drum_params;
+                    if let Some(p) = channel.drum_params_mut() {
+                        p.mode = DrumMode::from_index(value);
+                    }
+                    let params = channel.drum_params();
                     let _ = tx.send(EngineCommand::SetChannelDrumSynthParams {
                         channel: channel_index as u8,
                         params,
@@ -13511,10 +13571,12 @@ impl AppUi {
                     let mut st = st.borrow_mut();
                     let channel_index = st.session.selected;
                     let channel = &mut st.session.channels[channel_index];
-                    channel.drum_params.choke_group = value.clamp(0, 16) as u8;
+                    if let Some(p) = channel.drum_params_mut() {
+                        p.choke_group = value.clamp(0, 16) as u8;
+                    }
                     let _ = tx.send(EngineCommand::SetChannelDrumSynthParams {
                         channel: channel_index as u8,
-                        params: channel.drum_params,
+                        params: channel.drum_params(),
                     });
                     true
                 });
@@ -13522,7 +13584,7 @@ impl AppUi {
         }
 
         macro_rules! wire_source_param {
-            ($params:ident, $command:ident, $callback:ident, $($field:ident).+) => {{
+            ($params:ident, $params_mut:ident, $command:ident, $callback:ident, $($field:ident).+) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
                 let commands = command_state.clone();
@@ -13533,13 +13595,15 @@ impl AppUi {
                         let mut st = st.borrow_mut();
                         let channel_index = st.session.selected;
                         let channel = &mut st.session.channels[channel_index];
-                        if channel.$params.$($field).+ == value {
+                        if channel.$params().$($field).+ == value {
                             return false;
                         }
-                        channel.$params.$($field).+ = value;
+                        if let Some(p) = channel.$params_mut() {
+                            p.$($field).+ = value;
+                        }
                         let _ = tx.send(EngineCommand::$command {
                             channel: channel_index as u8,
-                            params: channel.$params,
+                            params: channel.$params(),
                         });
                         true
                     });
@@ -13547,16 +13611,16 @@ impl AppUi {
             }};
         }
         macro_rules! wire_mono_param {
-            ($callback:ident, $($field:ident).+) => { wire_source_param!(mono_params, SetChannelMonoSynthParams, $callback, $($field).+) };
+            ($callback:ident, $($field:ident).+) => { wire_source_param!(mono_params, mono_params_mut, SetChannelMonoSynthParams, $callback, $($field).+) };
         }
         macro_rules! wire_mlm1_param {
-            ($callback:ident, $($field:ident).+) => { wire_source_param!(mlm1_params, SetChannelMlM1Params, $callback, $($field).+) };
+            ($callback:ident, $($field:ident).+) => { wire_source_param!(mlm1_params, mlm1_params_mut, SetChannelMlM1Params, $callback, $($field).+) };
         }
         macro_rules! wire_poly_param {
-            ($callback:ident, $($field:ident).+) => { wire_source_param!(poly_params, SetChannelPolySynthParams, $callback, $($field).+) };
+            ($callback:ident, $($field:ident).+) => { wire_source_param!(poly_params, poly_params_mut, SetChannelPolySynthParams, $callback, $($field).+) };
         }
         macro_rules! wire_source_osc_float {
-            ($params:ident, $command:ident, $callback:ident, $index:expr, $field:ident) => {{
+            ($params:ident, $params_mut:ident, $command:ident, $callback:ident, $index:expr, $field:ident) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
                 let commands = command_state.clone();
@@ -13567,13 +13631,15 @@ impl AppUi {
                         let mut st = st.borrow_mut();
                         let channel_index = st.session.selected;
                         let channel = &mut st.session.channels[channel_index];
-                        if channel.$params.osc[$index].$field == value {
+                        if channel.$params().osc[$index].$field == value {
                             return false;
                         }
-                        channel.$params.osc[$index].$field = value;
+                        if let Some(p) = channel.$params_mut() {
+                            p.osc[$index].$field = value;
+                        }
                         let _ = tx.send(EngineCommand::$command {
                             channel: channel_index as u8,
-                            params: channel.$params,
+                            params: channel.$params(),
                         });
                         true
                     });
@@ -13581,16 +13647,16 @@ impl AppUi {
             }};
         }
         macro_rules! wire_mono_osc_float {
-            ($callback:ident, $index:expr, $field:ident) => { wire_source_osc_float!(mono_params, SetChannelMonoSynthParams, $callback, $index, $field) };
+            ($callback:ident, $index:expr, $field:ident) => { wire_source_osc_float!(mono_params, mono_params_mut, SetChannelMonoSynthParams, $callback, $index, $field) };
         }
         macro_rules! wire_mlm1_osc_float {
-            ($callback:ident, $index:expr, $field:ident) => { wire_source_osc_float!(mlm1_params, SetChannelMlM1Params, $callback, $index, $field) };
+            ($callback:ident, $index:expr, $field:ident) => { wire_source_osc_float!(mlm1_params, mlm1_params_mut, SetChannelMlM1Params, $callback, $index, $field) };
         }
         macro_rules! wire_poly_osc_float {
-            ($callback:ident, $index:expr, $field:ident) => { wire_source_osc_float!(poly_params, SetChannelPolySynthParams, $callback, $index, $field) };
+            ($callback:ident, $index:expr, $field:ident) => { wire_source_osc_float!(poly_params, poly_params_mut, SetChannelPolySynthParams, $callback, $index, $field) };
         }
         macro_rules! wire_source_osc_wave {
-            ($params:ident, $command:ident, $callback:ident, $index:expr) => {{
+            ($params:ident, $params_mut:ident, $command:ident, $callback:ident, $index:expr) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
                 let commands = command_state.clone();
@@ -13602,13 +13668,15 @@ impl AppUi {
                         let channel_index = st.session.selected;
                         let channel = &mut st.session.channels[channel_index];
                         let wave = osc_wave_from_int(value);
-                        if channel.$params.osc[$index].wave == wave {
+                        if channel.$params().osc[$index].wave == wave {
                             return false;
                         }
-                        channel.$params.osc[$index].wave = wave;
+                        if let Some(p) = channel.$params_mut() {
+                            p.osc[$index].wave = wave;
+                        }
                         let _ = tx.send(EngineCommand::$command {
                             channel: channel_index as u8,
-                            params: channel.$params,
+                            params: channel.$params(),
                         });
                         true
                     });
@@ -13616,13 +13684,13 @@ impl AppUi {
             }};
         }
         macro_rules! wire_mono_osc_wave {
-            ($callback:ident, $index:expr) => { wire_source_osc_wave!(mono_params, SetChannelMonoSynthParams, $callback, $index) };
+            ($callback:ident, $index:expr) => { wire_source_osc_wave!(mono_params, mono_params_mut, SetChannelMonoSynthParams, $callback, $index) };
         }
         macro_rules! wire_mlm1_osc_wave {
-            ($callback:ident, $index:expr) => { wire_source_osc_wave!(mlm1_params, SetChannelMlM1Params, $callback, $index) };
+            ($callback:ident, $index:expr) => { wire_source_osc_wave!(mlm1_params, mlm1_params_mut, SetChannelMlM1Params, $callback, $index) };
         }
         macro_rules! wire_poly_osc_wave {
-            ($callback:ident, $index:expr) => { wire_source_osc_wave!(poly_params, SetChannelPolySynthParams, $callback, $index) };
+            ($callback:ident, $index:expr) => { wire_source_osc_wave!(poly_params, poly_params_mut, SetChannelPolySynthParams, $callback, $index) };
         }
 
         wire_mono_param!(on_mono_glide_changed, glide);
@@ -13652,10 +13720,12 @@ impl AppUi {
                     let mut st = st.borrow_mut();
                     let channel_index = st.session.selected;
                     let channel = &mut st.session.channels[channel_index];
-                    channel.mono_params.lfo.wave = lfo_wave_from_int(value);
+                    if let Some(p) = channel.mono_params_mut() {
+                        p.lfo.wave = lfo_wave_from_int(value);
+                    }
                     let _ = tx.send(EngineCommand::SetChannelMonoSynthParams {
                         channel: channel_index as u8,
-                        params: channel.mono_params,
+                        params: channel.mono_params(),
                     });
                     true
                 });
@@ -13668,10 +13738,12 @@ impl AppUi {
                 let mut st = st.borrow_mut();
                 let channel_index = st.session.selected;
                 let channel = &mut st.session.channels[channel_index];
-                channel.mono_params.lfo.retrigger = value;
+                if let Some(p) = channel.mono_params_mut() {
+                    p.lfo.retrigger = value;
+                }
                 let _ = tx.send(EngineCommand::SetChannelMonoSynthParams {
                     channel: channel_index as u8,
-                    params: channel.mono_params,
+                    params: channel.mono_params(),
                 });
             });
         }
@@ -13708,13 +13780,15 @@ impl AppUi {
                         let channel_index = st.session.selected;
                         let channel = &mut st.session.channels[channel_index];
                         let next = $from_index(value);
-                        if channel.mlm1_params.$field == next {
+                        if channel.mlm1_params().$field == next {
                             return false;
                         }
-                        channel.mlm1_params.$field = next;
+                        if let Some(p) = channel.mlm1_params_mut() {
+                            p.$field = next;
+                        }
                         let _ = tx.send(EngineCommand::SetChannelMlM1Params {
                             channel: channel_index as u8,
-                            params: channel.mlm1_params,
+                            params: channel.mlm1_params(),
                         });
                         true
                     });
@@ -13776,12 +13850,14 @@ impl AppUi {
                         let mut st = st.borrow_mut();
                         let channel_index = st.session.selected;
                         let channel = &mut st.session.channels[channel_index];
-                        let mut params = GeneratorParams::MlP8(channel.mlp8_params);
+                        let mut params = GeneratorParams::MlP8(channel.mlp8_params());
                         let Some(value) = params.set(id, value) else {
                             return false;
                         };
                         if let GeneratorParams::MlP8(updated) = params {
-                            channel.mlp8_params = updated;
+                            if let Some(p) = channel.mlp8_params_mut() {
+                                *p = updated;
+                            }
                         }
                         let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
                             channel: channel_index as u8,
@@ -13814,7 +13890,7 @@ impl AppUi {
                         };
                         let params = {
                             let st = st.borrow();
-                            st.session.channels[st.session.selected].ds01_params
+                            st.session.channels[st.session.selected].ds01_params()
                         };
                         sync_ds01_preview(&window, &params);
                         sync_ds01_burst_ticks(&window, &params);
@@ -13845,19 +13921,21 @@ impl AppUi {
                     let mut st = st.borrow_mut();
                     let channel_index = st.session.selected;
                     let channel = &mut st.session.channels[channel_index];
-                    let mut params = GeneratorParams::Ds01(channel.ds01_params);
+                    let mut params = GeneratorParams::Ds01(channel.ds01_params());
                     let Some(value) = params.set(id, descriptor.from_normalized(normalized)) else {
                         return false;
                     };
                     if let GeneratorParams::Ds01(updated) = params {
-                        channel.ds01_params = updated;
+                        if let Some(p) = channel.ds01_params_mut() {
+                            *p = updated;
+                        }
                     }
                     let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
                         channel: channel_index as u8,
                         id,
                         value,
                     });
-                    touch_ds01_param(&window, &channel.ds01_params, id);
+                    touch_ds01_param(&window, &channel.ds01_params(), id);
                     true
                 });
                 redraw();
@@ -13906,17 +13984,23 @@ impl AppUi {
                         let Some(channel) = st.session.channels.get_mut(consumer) else {
                             return false;
                         };
-                        channel.aux_in_params.source_channel = picked.map_or(-1, i16::from);
-                        channel.aux_in_params.source_id = source_id;
+                        if let Some(p) = channel.aux_in_params_mut() {
+                            p.source_channel = picked.map_or(-1, i16::from);
+                        }
+                        if let Some(p) = channel.aux_in_params_mut() {
+                            p.source_id = source_id;
+                        }
                         // A fresh pick lands on something rather than on a
                         // refusal: if the outlet it was reading is not published
                         // by the new source, take that source's first.
                         if !outlets.is_empty()
-                            && !outlets.contains(&channel.aux_in_params.source_outlet)
+                            && !outlets.contains(&channel.aux_in_params().source_outlet)
                         {
-                            channel.aux_in_params.source_outlet = outlets[0];
+                            if let Some(p) = channel.aux_in_params_mut() {
+                                p.source_outlet = outlets[0];
+                            }
                         }
-                        (consumer, channel.aux_in_params)
+                        (consumer, channel.aux_in_params())
                     };
                     send_aux_in_subscription(&tx, consumer, params);
                     if let Some(window) = weak.upgrade() {
@@ -13941,7 +14025,7 @@ impl AppUi {
                             .session
                             .channels
                             .get(consumer)
-                            .and_then(|channel| channel.aux_in_params.subscription())
+                            .and_then(|channel| channel.aux_in_params().subscription())
                             .map(|subscription| subscription.channel)
                         else {
                             return false;
@@ -13953,8 +14037,10 @@ impl AppUi {
                         let Some(channel) = st.session.channels.get_mut(consumer) else {
                             return false;
                         };
-                        channel.aux_in_params.source_outlet = outlet;
-                        (consumer, channel.aux_in_params)
+                        if let Some(p) = channel.aux_in_params_mut() {
+                            p.source_outlet = outlet;
+                        }
+                        (consumer, channel.aux_in_params())
                     };
                     send_aux_in_subscription(&tx, consumer, params);
                     if let Some(window) = weak.upgrade() {
@@ -13991,13 +14077,15 @@ impl AppUi {
                     let Some(channel) = st.session.channels.get_mut(consumer) else {
                         return false;
                     };
-                    let mut params = GeneratorParams::AuxIn(channel.aux_in_params);
+                    let mut params = GeneratorParams::AuxIn(channel.aux_in_params());
                     let Some(value) = params.set(id, descriptor.from_normalized(normalized))
                     else {
                         return false;
                     };
                     if let GeneratorParams::AuxIn(updated) = params {
-                        channel.aux_in_params = updated;
+                        if let Some(p) = channel.aux_in_params_mut() {
+                            *p = updated;
+                        }
                     }
                     let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
                         channel: consumer as u8,
@@ -14036,7 +14124,7 @@ impl AppUi {
                     if let Some(window) = weak.upgrade() {
                         let params = {
                             let st = st.borrow();
-                            st.session.channels[st.session.selected].ds01_params
+                            st.session.channels[st.session.selected].ds01_params()
                         };
                         touch_ds01_param(&window, &params, id);
                     }
@@ -14046,7 +14134,7 @@ impl AppUi {
                 // themselves and a bare number means the unit on the face.
                 let current = {
                     let st = st.borrow();
-                    let params = st.session.channels[st.session.selected].ds01_params;
+                    let params = st.session.channels[st.session.selected].ds01_params();
                     ds01::get(&params, id).unwrap_or(descriptor.default)
                 };
                 let Some(typed) = ds01_typed_value(descriptor, text.as_str(), current) else {
@@ -14060,13 +14148,15 @@ impl AppUi {
                     let mut st = st.borrow_mut();
                     let channel_index = st.session.selected;
                     let channel = &mut st.session.channels[channel_index];
-                    let mut params = GeneratorParams::Ds01(channel.ds01_params);
+                    let mut params = GeneratorParams::Ds01(channel.ds01_params());
                     let Some(value) = params.set(id, typed.clamp(descriptor.min, descriptor.max))
                     else {
                         return false;
                     };
                     if let GeneratorParams::Ds01(updated) = params {
-                        channel.ds01_params = updated;
+                        if let Some(p) = channel.ds01_params_mut() {
+                            *p = updated;
+                        }
                     }
                     let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
                         channel: channel_index as u8,
@@ -14175,12 +14265,14 @@ impl AppUi {
                     let mut st = st.borrow_mut();
                     let channel_index = st.session.selected;
                     let channel = &mut st.session.channels[channel_index];
-                    let mut params = GeneratorParams::MlP8(channel.mlp8_params);
+                    let mut params = GeneratorParams::MlP8(channel.mlp8_params());
                     let Some(value) = params.set(p8::PARAM_LFO_SYNC, f32::from(u8::from(on))) else {
                         return false;
                     };
                     if let GeneratorParams::MlP8(updated) = params {
-                        channel.mlp8_params = updated;
+                        if let Some(p) = channel.mlp8_params_mut() {
+                            *p = updated;
+                        }
                     }
                     let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
                         channel: channel_index as u8,
@@ -14216,7 +14308,7 @@ impl AppUi {
                     with_gesture_history(&st, &commands, &window, "ML-P8 route", || {
                         let mut st = st.borrow_mut();
                         let index = st.session.selected;
-                        if st.session.channels[index].kind != DeviceKind::MlP8 {
+                        if st.session.channels[index].kind() != DeviceKind::MlP8 {
                             return false;
                         }
                         // A closure so an edit can bail with `?` on an id that
@@ -14225,14 +14317,14 @@ impl AppUi {
                         let edit = |$routes: &mut mooloop_core::MlP8Routes,
                                     $channel: u8|
                          -> Option<EngineCommand> { $body };
-                        let Some(command) = edit(
-                            &mut st.session.channels[index].mlp8_params.routes,
-                            index as u8,
-                        ) else {
+                        let Some(params) = st.session.channels[index].mlp8_params_mut() else {
+                            return false;
+                        };
+                        let Some(command) = edit(&mut params.routes, index as u8) else {
                             return false;
                         };
                         let _ = tx.send(command);
-                        let routes = st.session.channels[index].mlp8_params.routes;
+                        let routes = st.session.channels[index].mlp8_params().routes;
                         refresh_mlp8_routes(&window, &routes);
                         st.session.dirty = true;
                         st.session.revision = st.session.revision.wrapping_add(1);
@@ -14309,14 +14401,13 @@ impl AppUi {
                     };
                     let mut st = st.borrow_mut();
                     let channel_index = st.session.selected;
-                    if st.session.channels[channel_index].kind != DeviceKind::MlP8 {
+                    if st.session.channels[channel_index].kind() != DeviceKind::MlP8 {
                         return false;
                     }
-                    if !st.session.channels[channel_index]
-                        .mlp8_params
-                        .routes
-                        .set_amount(id, amount)
-                    {
+                    let Some(params) = st.session.channels[channel_index].mlp8_params_mut() else {
+                        return false;
+                    };
+                    if !params.routes.set_amount(id, amount) {
                         return false;
                     }
                     let _ = tx.send(EngineCommand::SetSourceRouteAmount {
@@ -14327,7 +14418,7 @@ impl AppUi {
                     // The stored value, not the one that arrived: `set_amount`
                     // clamps, and the row has to show what the patch holds.
                     let stored = st.session.channels[channel_index]
-                        .mlp8_params
+                        .mlp8_params()
                         .routes
                         .get(id)
                         .map_or(amount, |route| route.amount);
@@ -14364,7 +14455,7 @@ impl AppUi {
                     .map(|descriptor| {
                         let current = {
                             let st = st.borrow();
-                            let params = st.session.channels[st.session.selected].mlp8_params;
+                            let params = st.session.channels[st.session.selected].mlp8_params();
                             mooloop_core::mlp8::get(&params, id).unwrap_or(descriptor.default)
                         };
                         display_unit(descriptor, current).0
@@ -14388,14 +14479,16 @@ impl AppUi {
                     let mut st = st.borrow_mut();
                     let channel_index = st.session.selected;
                     let channel = &mut st.session.channels[channel_index];
-                    let mut params = GeneratorParams::MlP8(channel.mlp8_params);
+                    let mut params = GeneratorParams::MlP8(channel.mlp8_params());
                     let Some(clamped) = params.set(id, value) else {
                         return false;
                     };
                     let GeneratorParams::MlP8(updated) = params else {
                         return false;
                     };
-                    channel.mlp8_params = updated;
+                    if let Some(p) = channel.mlp8_params_mut() {
+                        *p = updated;
+                    }
                     let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
                         channel: channel_index as u8,
                         id,
@@ -14452,10 +14545,12 @@ impl AppUi {
                     let mut st = st.borrow_mut();
                     let channel_index = st.session.selected;
                     let channel = &mut st.session.channels[channel_index];
-                    channel.poly_params.lfo.wave = lfo_wave_from_int(value);
+                    if let Some(p) = channel.poly_params_mut() {
+                        p.lfo.wave = lfo_wave_from_int(value);
+                    }
                     let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
                         channel: channel_index as u8,
-                        params: channel.poly_params,
+                        params: channel.poly_params(),
                     });
                     true
                 });
@@ -14468,10 +14563,12 @@ impl AppUi {
                 let mut st = st.borrow_mut();
                 let channel_index = st.session.selected;
                 let channel = &mut st.session.channels[channel_index];
-                channel.poly_params.lfo.retrigger = value;
+                if let Some(p) = channel.poly_params_mut() {
+                    p.lfo.retrigger = value;
+                }
                 let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
                     channel: channel_index as u8,
-                    params: channel.poly_params,
+                    params: channel.poly_params(),
                 });
             });
         }
@@ -14486,10 +14583,12 @@ impl AppUi {
                     let mut st = st.borrow_mut();
                     let channel_index = st.session.selected;
                     let channel = &mut st.session.channels[channel_index];
-                    channel.poly_params.mono_mode = value;
+                    if let Some(p) = channel.poly_params_mut() {
+                        p.mono_mode = value;
+                    }
                     let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
                         channel: channel_index as u8,
-                        params: channel.poly_params,
+                        params: channel.poly_params(),
                     });
                     true
                 });
@@ -14506,10 +14605,12 @@ impl AppUi {
                     let mut st = st.borrow_mut();
                     let channel_index = st.session.selected;
                     let channel = &mut st.session.channels[channel_index];
-                    channel.poly_params.env_trigger = EnvTrigger::from_index(value);
+                    if let Some(p) = channel.poly_params_mut() {
+                        p.env_trigger = EnvTrigger::from_index(value);
+                    }
                     let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
                         channel: channel_index as u8,
-                        params: channel.poly_params,
+                        params: channel.poly_params(),
                     });
                     true
                 });
@@ -14522,10 +14623,12 @@ impl AppUi {
                 let mut st = st.borrow_mut();
                 let channel_index = st.session.selected;
                 let channel = &mut st.session.channels[channel_index];
-                channel.poly_params.note_priority = NotePriority::from_index(value);
+                if let Some(p) = channel.poly_params_mut() {
+                    p.note_priority = NotePriority::from_index(value);
+                }
                 let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
                     channel: channel_index as u8,
-                    params: channel.poly_params,
+                    params: channel.poly_params(),
                 });
             });
         }
@@ -14540,10 +14643,12 @@ impl AppUi {
                     let mut st = st.borrow_mut();
                     let channel_index = st.session.selected;
                     let channel = &mut st.session.channels[channel_index];
-                    channel.poly_params.polyphony = value.clamp(1, MAX_POLY_VOICES as i32) as u8;
+                    if let Some(p) = channel.poly_params_mut() {
+                        p.polyphony = value.clamp(1, MAX_POLY_VOICES as i32) as u8;
+                    }
                     let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
                         channel: channel_index as u8,
-                        params: channel.poly_params,
+                        params: channel.poly_params(),
                     });
                     true
                 });
@@ -14692,7 +14797,7 @@ impl AppUi {
                     PresetSlot::Generator(kind) => {
                         let channel_kind = {
                             let st = st.borrow();
-                            st.session.channels.get(st.session.selected).map(|c| c.kind)
+                            st.session.channels.get(st.session.selected).map(|c| c.kind())
                         };
                         if channel_kind != Some(kind) {
                             window.set_status_message(
@@ -15572,7 +15677,7 @@ impl AppUi {
                                         load.request,
                                     ) =>
                                 {
-                                    if channel.kind == DeviceKind::Sampler {
+                                    if channel.kind() == DeviceKind::Sampler {
                                         Arrival::Current
                                     } else {
                                         Arrival::Refused(format!(
@@ -16603,7 +16708,7 @@ impl AppUi {
                     let is_sampler = state
                         .session.channels
                         .get(selected_channel)
-                        .is_some_and(|channel| channel.kind == DeviceKind::Sampler);
+                        .is_some_and(|channel| channel.kind() == DeviceKind::Sampler);
                     if showing_device_rack && !editing_bus && is_sampler {
                         let positions = handle.playhead_positions(selected_channel);
                         let has_positions = !positions.is_empty();
@@ -17117,7 +17222,7 @@ fn install_project_in_ui(
     {
         let st = state.borrow();
         for (index, channel) in st.session.channels.iter().enumerate() {
-            if channel.kind == DeviceKind::Sampler && channel.commit.is_some() {
+            if channel.kind() == DeviceKind::Sampler && channel.commit.is_some() {
                 publish_channel_audio(handle, index, channel);
             }
         }
@@ -17230,7 +17335,7 @@ fn refresh_preset_menus(state: &Rc<RefCell<UiState>>, window: &MainWindow) {
         let st = state.borrow();
         st.session.channels
             .get(st.session.selected)
-            .map(|channel| channel.kind)
+            .map(|channel| channel.kind())
             .unwrap_or(DeviceKind::Sampler)
     };
     let generator_presets = mooloop_project::list_presets(&settings::generator_presets_dir(kind));
@@ -18494,7 +18599,7 @@ fn copied_message(rows: usize) -> String {
 /// One row model serves both tabs, so this is also what switches them.
 fn refresh_browser(st: &UiState) {
     if st.browser_tab == BrowserTab::Presets {
-        let channel_kind = st.session.channels.get(st.session.selected).map(|c| c.kind);
+        let channel_kind = st.session.channels.get(st.session.selected).map(|c| c.kind());
         st.browser_rows.set_vec(build_preset_rows(
             &st.preset_catalog,
             &st.session.browser_expanded,
@@ -19899,7 +20004,7 @@ mod tests {
         {
             let mut st = state.borrow_mut();
             let channel = &mut st.session.channels[0];
-            assert_eq!(channel.kind, DeviceKind::Sampler);
+            assert_eq!(channel.kind(), DeviceKind::Sampler);
             channel.sample_data = Some(old.clone());
             channel.sample_path = Some(PathBuf::from("/tmp/old.wav"));
             channel.slices.add(100);
