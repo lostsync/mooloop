@@ -102,6 +102,9 @@ impl Filter {
 enum Request<'a> {
     Open {
         title: &'a str,
+        // The Mac's panels show every file and never read a filter (see its
+        // `backend`); every other platform's chooser does.
+        #[cfg_attr(target_os = "macos", allow(dead_code))]
         filter: Option<&'a Filter>,
     },
     Directory {
@@ -110,6 +113,7 @@ enum Request<'a> {
     Save {
         title: &'a str,
         suggested: &'a str,
+        #[cfg_attr(target_os = "macos", allow(dead_code))]
         filter: Option<&'a Filter>,
     },
 }
@@ -148,6 +152,9 @@ fn first_answer<'a>(attempts: impl IntoIterator<Item = Box<dyn FnOnce() -> Attem
 /// exits any other way: both use other codes for "could not run at all" --
 /// no display, a bad argument -- and reading those as a cancel is the defect
 /// this module exists to stop.
+// zenity and kdialog are not on a Mac, which has its own `run` in its
+// `backend`; there only the tests below call this.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 fn run_program(mut command: Command) -> Attempt {
     let program = command.get_program().to_string_lossy().into_owned();
     let output = match command.output() {
