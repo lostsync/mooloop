@@ -290,6 +290,16 @@ addition:
   work in the project. Its biggest items are the mapping
   workspace (MOO-40) and SFZ import (MOO-41), and both wait on key zones
   (item 14). The stretching-polyphony cap it left behind is MOO-7.
+- **Rendering joins, 2026-09-23.** Adam: *"0.2.0"* -- all of it, when asked
+  whether to split it. Until then §"Out, explicitly" listed stem and bus
+  export as out. It is the Linear project **Rendering** (MOO-180 to MOO-191,
+  MOO-193 and MOO-194): a render writes several files named from a folder and a template, with stems
+  from mixer tracks (*"like recording the direct out from a console
+  channel"*) and from channels directly, one file per pattern, a song, loop or
+  typed range, a wrap tail, 16-bit and dither, mono, the file's sample rate,
+  normalizing, auto-bumped names, remembered settings and presets. MOO-180 is
+  the one the rest stand on. The pattern render is also the groundwork for
+  render-in-place once clips exist, which stays after 0.2.0.
 
 Plus, from §3: the keyboard pass, the plan filing, and the Buffer tempo bug.
 
@@ -301,9 +311,9 @@ earlier, not by leaving scope.
 
 - **Everything in `archive/ROADMAP.md`'s "Later, Not Scheduled"** that item 2 does not
   pull in: MIDI output is now *in* (item 2), but controller mapping beyond it,
-  multiple time signatures and tempo maps, stem and bus export, groove
-  extraction, the text/algebraic pattern view and the node-based patcher are
-  all out.
+  multiple time signatures and tempo maps, groove extraction, the
+  text/algebraic pattern view and the node-based patcher are all out. (Stem
+  and bus export was on this list until 2026-09-23; see *Rendering joins*.)
 - **`theming/`, `pattern-bank-floor/`, `device-registry/`** — parked by
   `FOCUS.md` on 2026-09-12, each with a recorded reason and a recorded unpark
   condition. (`egui-view-layer/` was parked with them. It was archived
