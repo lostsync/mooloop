@@ -126,6 +126,10 @@ pub struct DrumSynth {
     /// block: a hit played while stopped -- a MIDI pad, an audition -- has to
     /// ring out.
     was_playing: bool,
+    /// The keyboard's bend as a frequency ratio, `1.0` at rest (MOO-128).
+    /// Applied while a hit rings rather than latched when it starts, so a
+    /// wheel moved over a ringing tom slides it.
+    bend: f32,
 }
 
 impl DrumSynth {
@@ -138,6 +142,7 @@ impl DrumSynth {
             voices,
             next_age: 1,
             was_playing: false,
+            bend: 1.0,
         }
     }
 
@@ -202,7 +207,7 @@ impl DrumSynth {
         let mut maximums = vec![f32::NEG_INFINITY; bins];
 
         for frame in 0..frame_count {
-            let sample = Self::render_sample(params, PREVIEW_SAMPLE_RATE, voice);
+            let sample = Self::render_sample(params, PREVIEW_SAMPLE_RATE, 1.0, voice);
             let bin = (frame * bins / frame_count).min(bins - 1);
             minimums[bin] = minimums[bin].min(sample);
             maximums[bin] = maximums[bin].max(sample);
@@ -295,7 +300,13 @@ impl DrumSynth {
 
     /// Render one sample of one voice. Mono by design; the channel pan/gain
     /// stage places it in the stereo field.
-    fn render_sample(params: DrumSynthParams, sample_rate: u32, voice: &mut DrumVoice) -> f32 {
+    fn render_sample(
+        params: DrumSynthParams,
+        sample_rate: u32,
+        bend: f32,
+        voice: &mut DrumVoice,
+    ) -> f32 {
+        let pitch_factor = voice.pitch_factor * bend;
         voice.amp_env.advance();
         voice.noise_env.advance();
         let amp = voice.velocity_amp;
@@ -313,7 +324,7 @@ impl DrumSynth {
                 };
                 let end_hz = (params.kick_end_hz * pitch_scale).max(1.0);
                 let ratio = ((params.kick_start_hz * pitch_scale).max(1.0) / end_hz).max(1.0);
-                let freq = end_hz * ratio.powf(sweep) * voice.pitch_factor;
+                let freq = end_hz * ratio.powf(sweep) * pitch_factor;
                 let body = voice
                     .body_osc
                     .next_sample(freq, OscWave::Sine, 0.5, sample_rate);
@@ -336,13 +347,13 @@ impl DrumSynth {
                         SnareCharacter::Clap => (0.6, 1.8, 1.25, 1.45, 1.05),
                         SnareCharacter::Rim => (1.75, 2.35, 0.42, 0.45, 1.55),
                     };
-                let freq = params.snare_tone_hz * body_scale * voice.pitch_factor;
+                let freq = params.snare_tone_hz * body_scale * pitch_factor;
                 let body1 = voice
                     .body_osc
                     .next_sample(freq, OscWave::Sine, 0.5, sample_rate)
                     * voice.amp_env.level();
                 let body2 = voice.metal_osc_a.next_sample(
-                    params.snare_tone2_hz * tone2_scale * voice.pitch_factor,
+                    params.snare_tone2_hz * tone2_scale * pitch_factor,
                     OscWave::Triangle,
                     0.5,
                     sample_rate,
@@ -366,12 +377,12 @@ impl DrumSynth {
                     HatCharacter::Trash => (1.65, 0.82, 1.25),
                 };
                 let metal = (voice.metal_osc_a.next_sample(
-                    HAT_METAL_A_HZ * voice.pitch_factor,
+                    HAT_METAL_A_HZ * pitch_factor,
                     OscWave::Pulse,
                     0.5,
                     sample_rate,
                 ) + voice.metal_osc_b.next_sample(
-                    HAT_METAL_B_HZ * voice.pitch_factor,
+                    HAT_METAL_B_HZ * pitch_factor,
                     OscWave::Pulse,
                     0.5,
                     sample_rate,
@@ -390,12 +401,13 @@ impl DrumSynth {
     fn render_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         let params = self.params;
         let sample_rate = self.sample_rate;
+        let bend = self.bend;
         for voice in &mut self.voices {
             if !voice.active {
                 continue;
             }
             for i in start..end {
-                let sample = Self::render_sample(params, sample_rate, voice);
+                let sample = Self::render_sample(params, sample_rate, bend, voice);
                 bus.l[i] += sample;
                 bus.r[i] += sample;
                 if voice.amp_env.is_idle() && voice.noise_env.is_idle() {
@@ -444,6 +456,9 @@ impl AudioNode for DrumSynth {
                 Event::NoteOff { .. } => {}
                 Event::Choke => self.choke(),
                 Event::ParamValue { id, value } => self.apply_param(id, value),
+                Event::PitchBend { semitones } => {
+                    self.bend = crate::synth_voice::bend_ratio(semitones);
+                }
                 Event::SourceRouteAmount { .. }
                 | Event::Buffer(_)
                 | Event::BufferRelease

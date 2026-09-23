@@ -16,7 +16,7 @@ use crate::osc::Osc;
 use crate::voice_filter::{env_octaves, VoiceCutoff};
 use crate::smooth::Smoothed;
 use crate::glide::Glide;
-use crate::synth_voice::{note_to_freq, MIN_GLIDE_S, PARAM_SMOOTH_S, STOP_RELEASE_S};
+use crate::synth_voice::{bend_ratio, note_to_freq, MIN_GLIDE_S, PARAM_SMOOTH_S, STOP_RELEASE_S};
 use mooloop_core::{
     EnvTrigger, PolySynthParams, MAX_POLY_VOICES, OSC_CENT_RANGE, OSC_SEMITONE_RANGE,
 };
@@ -107,6 +107,10 @@ pub struct PolySynth {
     /// block: a note played while stopped -- a MIDI keyboard, an audition --
     /// has to last until its own note-off.
     was_playing: bool,
+    /// The keyboard's bend as a frequency ratio, `1.0` at rest, applied at
+    /// the oscillators so a bend moves a gliding note without restarting
+    /// the glide (MOO-128).
+    bend: f32,
     /// What is under the player's fingers, in mono mode.
     ///
     /// Empty and untouched while `mono_mode` is off, and the module it comes
@@ -131,6 +135,7 @@ impl PolySynth {
             next_age: 1,
             lfo: Lfo::new(),
             was_playing: false,
+            bend: 1.0,
             held: HeldNotes::new(),
         };
         synth.apply_params_to_voices(synth.voice_limit() as u8);
@@ -412,6 +417,7 @@ impl PolySynth {
         let params = self.params;
         let sr = self.sample_rate;
         let lfo_params = params.lfo;
+        let bend = self.bend;
         let polyphony = self.voice_limit() as u8;
         let spread = params.spread.clamp(0.0, 1.0);
         let voices = &mut self.voices;
@@ -422,7 +428,7 @@ impl PolySynth {
         for (index, osc) in params.osc.iter().enumerate() {
             let semis = osc.semitones.clamp(OSC_SEMITONE_RANGE.0, OSC_SEMITONE_RANGE.1)
                 + osc.cents.clamp(OSC_CENT_RANGE.0, OSC_CENT_RANGE.1) / 100.0;
-            ratio[index] = 2.0_f32.powf(semis / 12.0);
+            ratio[index] = 2.0_f32.powf(semis / 12.0) * bend;
         }
 
         let env_amount = params.filter_env_amount.clamp(-1.0, 1.0);
@@ -572,6 +578,7 @@ impl AudioNode for PolySynth {
                 Event::NoteOff { id, .. } => self.note_off(id),
                 Event::Choke => self.release_all(),
                 Event::ParamValue { id, value } => self.apply_param(id, value),
+                Event::PitchBend { semitones } => self.bend = bend_ratio(semitones),
                 Event::SourceRouteAmount { .. }
                 | Event::Buffer(_)
                 | Event::BufferRelease

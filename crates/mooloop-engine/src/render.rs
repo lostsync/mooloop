@@ -3696,6 +3696,48 @@ const MAX_OUTGOING_EVENTS_PER_BLOCK: usize = 128;
 /// The sustain pedal's controller number (MOO-128).
 const SUSTAIN_PEDAL_CC: u8 = 64;
 
+/// How far the bend wheel reaches either way, in semitones (MOO-128). One
+/// range for every source, and the General MIDI default. Not a setting yet,
+/// so it is neither persisted nor per channel.
+const PITCH_BEND_RANGE_SEMITONES: f32 = 2.0;
+
+/// A 14-bit bend, centred on zero, as semitones. The two halves are scaled
+/// separately because the wire range is lopsided (`-8192..=8191`): the wheel
+/// fully up is the whole range, not a hair short of it.
+fn bend_semitones(value: i16) -> f32 {
+    let travel = if value >= 0 { 8191.0 } else { 8192.0 };
+    (f32::from(value) / travel).clamp(-1.0, 1.0) * PITCH_BEND_RANGE_SEMITONES
+}
+
+/// One channel's keyboard expression: what the wheels last said, and what
+/// its source has still to hear (MOO-128).
+///
+/// Held here rather than queued as auditions, because a bend is a state and
+/// not a gesture. Only the latest value matters, so a wheel swept through a
+/// block costs one event rather than one per message, and a value that finds
+/// the channel's event list full stays owed until a later block has room --
+/// the wheel's return to centre is the message that must never be lost.
+#[derive(Clone, Copy)]
+struct ChannelExpression {
+    /// Semitones, `0.0` at rest.
+    bend: f32,
+    /// The frame the latest bend is still owed at, or `None` once the
+    /// source has it.
+    bend_due: Option<u32>,
+}
+
+impl ChannelExpression {
+    const REST: Self = Self {
+        bend: 0.0,
+        bend_due: None,
+    };
+
+    fn bend(&mut self, offset: u32, semitones: f32) {
+        self.bend = semitones;
+        self.bend_due = Some(offset);
+    }
+}
+
 /// Words of the held-key bitset: one bit per channel, so a note held on
 /// several listening channels releases on all of them.
 const HELD_KEY_WORDS: usize = MAX_CHANNELS / 64;
@@ -4152,6 +4194,10 @@ pub(crate) struct RenderState {
     /// send its note-off to a channel that never started it and leave the
     /// first one sounding.
     held_keys: HeldKeys,
+    /// Each channel's bend wheel (MOO-128). Delivered to the channels a key
+    /// from the same input would play, so a bend reaches the notes it is
+    /// meant for.
+    expression: [ChannelExpression; MAX_CHANNELS],
     /// Whether recording is armed. Capture also needs the transport running,
     /// which is checked at the note rather than here, so arming while stopped
     /// is the ordinary thing it looks like.
@@ -4398,6 +4444,7 @@ impl RenderState {
             input_dirty: false,
             monitor: [false; MAX_CHANNELS],
             held_keys: HeldKeys::new(),
+            expression: [ChannelExpression::REST; MAX_CHANNELS],
             record_armed: false,
             recording: [None; 128],
             outgoing: [None; MAX_OUTGOING_EVENTS_PER_BLOCK],
@@ -4900,6 +4947,14 @@ impl RenderState {
         self.transport.adopt_running_state(outgoing.transport());
         self.held_keys = outgoing.held_keys;
         self.recording = outgoing.recording;
+        // A wheel held across an install is still held. Re-sent rather than
+        // assumed: a strip the install rebuilt starts at rest.
+        self.expression = outgoing.expression;
+        for expression in &mut self.expression {
+            if expression.bend != 0.0 {
+                expression.bend_due = Some(0);
+            }
+        }
         // The limiter's envelope, so an install in the middle of an over does
         // not jump the output back to unity for the release it still owed.
         self.output_guard.adopt(&outgoing.output_guard);
@@ -6477,6 +6532,13 @@ impl RenderState {
                     strip.sequenced.forget_all();
                 }
                 self.held_keys = HeldKeys::new();
+                // Nor may a panic leave a note played afterwards bent by a
+                // wheel nobody is holding any more.
+                for expression in &mut self.expression {
+                    if expression.bend != 0.0 {
+                        expression.bend(0, 0.0);
+                    }
+                }
             }
             EngineCommand::ReleaseChannelNote { channel, note } => {
                 self.queue_audition(
@@ -6950,8 +7012,13 @@ impl RenderState {
                         }
                     }
                 }
-                MidiKind::PitchBend { .. } => {
+                MidiKind::PitchBend { value } => {
+                    // Forwarded as well, so a bend can still be learned.
                     self.emit(mooloop_core::EngineEvent::ControlInput(*message));
+                    let semitones = bend_semitones(value);
+                    self.express(message, |expression| {
+                        expression.bend(message.offset, semitones)
+                    });
                 }
                 // Handled above, before any channel or mapping saw it.
                 MidiKind::Start
@@ -7053,6 +7120,63 @@ impl RenderState {
         }
         for note in 0..128u8 {
             self.stop_sustained_note(offset, note);
+        }
+    }
+
+    /// Apply one expression message to the channels a key from the same
+    /// input would sound on: every channel whose input claims it, or, if
+    /// none does, the selected one -- [`Self::play_note`]'s rule, so a
+    /// wheel bends the notes the keyboard is playing (MOO-128).
+    ///
+    /// The selected channel keeps what it was last sent when the selection
+    /// moves on. A held bend stays on the channel it was bent on until the
+    /// wheel moves again with that channel selected, or a panic.
+    fn express(
+        &mut self,
+        message: &mooloop_core::MidiMessage,
+        mut apply: impl FnMut(&mut ChannelExpression),
+    ) {
+        let mut claimed = false;
+        for channel in 0..self.channel_count() {
+            if self.midi_routing.route(channel).claims(message) {
+                claimed = true;
+                apply(&mut self.expression[channel]);
+            }
+        }
+        if claimed {
+            return;
+        }
+        let channel = self.keyboard_channel.load(Ordering::Relaxed);
+        if channel != NO_KEYBOARD_CHANNEL
+            && usize::from(channel) < self.channel_count()
+            && self
+                .midi_routing
+                .route(usize::from(channel))
+                .follows_selection(message)
+        {
+            apply(&mut self.expression[usize::from(channel)]);
+        }
+    }
+
+    /// Hand each channel's source the bend it is still owed. One that finds
+    /// its event list full stays owed and is tried again next block.
+    fn dispatch_expression(&mut self, last_frame: u32) {
+        for (channel, expression) in self.expression.iter_mut().enumerate() {
+            let Some(offset) = expression.bend_due else {
+                continue;
+            };
+            let Some(events) = self.events.get_mut(channel) else {
+                continue;
+            };
+            let delivered = events.push_ordered(TimedEvent {
+                offset: offset.min(last_frame),
+                event: Event::PitchBend {
+                    semitones: expression.bend,
+                },
+            });
+            if delivered {
+                expression.bend_due = None;
+            }
         }
     }
 
@@ -7172,6 +7296,7 @@ impl RenderState {
         // Releases a lifted pedal could not fit into an earlier block.
         self.release_lifted_sustain(0);
         let last_frame = frames.saturating_sub(1) as u32;
+        self.dispatch_expression(last_frame);
         for slot in self.auditions.iter_mut() {
             let Some(audition) = slot.take() else {
                 continue;
@@ -8527,6 +8652,157 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         render.release_lifted_sustain(0);
         assert_eq!(first + releases(&mut render).len(), 100);
         assert!((0..100).all(|note| !render.held_keys.is_sustained(note, 0)));
+    }
+
+    /// A keyboard message on the first input, first MIDI channel.
+    fn keyboard_message(offset: u32, kind: mooloop_core::MidiKind) -> mooloop_core::MidiMessage {
+        mooloop_core::MidiMessage {
+            offset,
+            port: mooloop_core::MidiPortId::FIRST,
+            channel: 0,
+            kind,
+        }
+    }
+
+    /// The bends waiting in `channel`'s event list, in order.
+    fn bends_in(render: &RenderState, channel: usize) -> Vec<(u32, f32)> {
+        render.events[channel]
+            .iter()
+            .filter_map(|event| match event.event {
+                Event::PitchBend { semitones } => Some((event.offset, semitones)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The bend wheel, through `apply_midi` (MOO-128): it reaches the
+    /// selected channel as semitones at the shared ±2 range, a wheel swept
+    /// through one block costs one event carrying where it ended, a value
+    /// that finds the event list full is sent next block rather than lost,
+    /// and a panic returns a held wheel to centre.
+    #[test]
+    fn the_bend_wheel_reaches_the_channel_the_keyboard_plays() {
+        use mooloop_core::MidiKind;
+
+        let mut render = RenderState::new(48_000, empty_channel_audio_bank());
+        render.load_project(&Project::default());
+        render.attach_keyboard_channel(Arc::new(AtomicU8::new(0)));
+
+        // Full up is the whole range, not a hair short; full down likewise.
+        assert_eq!(bend_semitones(8191), PITCH_BEND_RANGE_SEMITONES);
+        assert_eq!(bend_semitones(-8192), -PITCH_BEND_RANGE_SEMITONES);
+        assert_eq!(bend_semitones(0), 0.0);
+
+        render.apply_midi(&[
+            keyboard_message(3, MidiKind::PitchBend { value: 4096 }),
+            keyboard_message(9, MidiKind::PitchBend { value: 8191 }),
+        ]);
+        render.process_block(64);
+        assert_eq!(bends_in(&render, 0), [(9, 2.0)], "one event, at the last value");
+        assert!(
+            render.outgoing.iter().flatten().any(|event| matches!(
+                event,
+                mooloop_core::EngineEvent::ControlInput(message)
+                    if matches!(message.kind, MidiKind::PitchBend { .. })
+            )),
+            "a bend is still forwarded, so it can be learned"
+        );
+
+        // Nothing moved, nothing sent: a bend is a state, not a stream.
+        render.process_block(64);
+        assert!(bends_in(&render, 0).is_empty());
+
+        // A full list does not lose the wheel's return to centre.
+        render.apply_midi(&[keyboard_message(0, MidiKind::PitchBend { value: 0 })]);
+        render.events[0].clear();
+        while render.events[0].remaining() > 0 {
+            render.events[0].push(TimedEvent {
+                offset: 0,
+                event: Event::ParamValue { id: 0, value: 0.0 },
+            });
+        }
+        render.dispatch_expression(63);
+        assert!(bends_in(&render, 0).is_empty());
+        render.process_block(64);
+        assert_eq!(bends_in(&render, 0), [(0, 0.0)], "the owed bend went next block");
+
+        // A panic lets go of a held wheel.
+        render.apply_midi(&[keyboard_message(0, MidiKind::PitchBend { value: -8192 })]);
+        render.process_block(64);
+        assert_eq!(bends_in(&render, 0), [(0, -2.0)]);
+        render.apply_command(EngineCommand::Panic);
+        render.process_block(64);
+        assert_eq!(bends_in(&render, 0), [(0, 0.0)]);
+    }
+
+    /// Every pitched source bends (MOO-128). A note played with the wheel
+    /// fully up, through `apply_midi`, sounds where the key a whole tone
+    /// higher sounds with the wheel at rest -- measured, on the master, for
+    /// each of the seven sources that have a pitch. Aux In has none.
+    #[test]
+    fn every_pitched_source_plays_a_bent_note_a_whole_tone_up() {
+        use mooloop_core::{DeviceKind, MidiKind};
+        use mooloop_dsp::testkit::{cents, dominant_hz};
+
+        let kinds = [
+            DeviceKind::Sampler,
+            DeviceKind::DrumSynth,
+            DeviceKind::MonoSynth,
+            DeviceKind::PolySynth,
+            DeviceKind::MlM1,
+            DeviceKind::MlP8,
+            DeviceKind::Ds01,
+        ];
+        let played = |kind: DeviceKind, note: u8, bend: i16| -> f32 {
+            let mut project = Project::default();
+            project.channels.clear();
+            project.channels.push(match kind {
+                DeviceKind::Sampler => ProjectChannel::sampler(0, 1),
+                DeviceKind::DrumSynth => ProjectChannel::drum_synth(0, 1),
+                DeviceKind::MonoSynth => ProjectChannel::mono_synth(0, 1),
+                DeviceKind::PolySynth => ProjectChannel::poly_synth(0, 1),
+                DeviceKind::MlM1 => ProjectChannel::mlm1(0, 1),
+                DeviceKind::MlP8 => ProjectChannel::mlp8(0, 1),
+                DeviceKind::Ds01 => ProjectChannel::ds01(0, 1),
+                DeviceKind::AuxIn => ProjectChannel::aux_in(0, 1),
+            });
+            // The sampler needs something to play: a second of a pure tone,
+            // so the pitch it is played at is the one measured.
+            let tone = Arc::new(SampleData {
+                frames: (0..48_000)
+                    .map(|frame| {
+                        let s = (frame as f32 * 440.0 * std::f32::consts::TAU / 48_000.0).sin();
+                        [s * 0.5, s * 0.5]
+                    })
+                    .collect(),
+                sample_rate: 48_000,
+                root_note: 69,
+            });
+            let mut render = RenderState::from_project(48_000, &project, &[Some(tone)]);
+            render.attach_keyboard_channel(Arc::new(AtomicU8::new(0)));
+            render.apply_midi(&[
+                keyboard_message(0, MidiKind::PitchBend { value: bend }),
+                keyboard_message(0, MidiKind::NoteOn { note, velocity: 110 }),
+            ]);
+            let (left, _) = crate::render_test_support::render_frames(&mut render, 12_000);
+            dominant_hz(&left, 48_000, 40.0)
+        };
+        for kind in kinds {
+            // High enough that a drum's body is well clear of the lowest
+            // bins, where a whole tone is a bin or two.
+            let note = 72;
+            let at_rest = played(kind, note, 0);
+            let bent = played(kind, note, 8191);
+            let a_tone_up = played(kind, note + 2, 0);
+            assert!(
+                cents(bent, a_tone_up).abs() < 20.0,
+                "{kind:?}: bent to {bent} Hz, a whole tone up is {a_tone_up} Hz"
+            );
+            assert!(
+                cents(bent, at_rest) > 180.0,
+                "{kind:?}: bent to {bent} Hz from {at_rest} Hz"
+            );
+        }
     }
 
     /// A MIDI keyboard plays the selected channel with the transport stopped,
@@ -15596,7 +15872,10 @@ mod footprint {
         // progress in samples, the pitch now and the exact target), which is
         // what makes a glide arrive in its Glide time and slide evenly in
         // pitch rather than approaching in Hz.
-        assert_eq!(size_of::<MlP8>(), 6_144);
+        //
+        // Grew by 8 with MOO-128: the device's bend ratio (an `f32`, padded),
+        // which it multiplies into every oscillator's pitch.
+        assert_eq!(size_of::<MlP8>(), 6_152);
         // DS-01 is 6,832, and almost all of it is the eight-voice pool: a
         // voice carries six tone oscillators for its partial bank, an FM
         // modulator, four noise generators' worth of state, a state-variable

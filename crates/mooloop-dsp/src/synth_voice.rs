@@ -18,9 +18,31 @@ pub(crate) fn note_to_freq(note: u8) -> f32 {
     440.0 * 2.0_f32.powf((f32::from(note.min(127)) - 69.0) / 12.0)
 }
 
+/// The frequency ratio a [`crate::event::Event::PitchBend`] asks for.
+///
+/// Every pitched source, not only these three, multiplies this into the
+/// ratio it already applies to a note, so one bend means one interval on all
+/// seven (MOO-128). A non-finite bend is heard as none rather than
+/// silencing the source.
+pub(crate) fn bend_ratio(semitones: f32) -> f32 {
+    if semitones.is_finite() {
+        (semitones.clamp(-48.0, 48.0) / 12.0).exp2()
+    } else {
+        1.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::note_to_freq;
+    use super::{bend_ratio, note_to_freq};
+
+    #[test]
+    fn a_bend_is_an_interval_and_a_bad_one_is_none() {
+        assert_eq!(bend_ratio(0.0), 1.0);
+        assert!((bend_ratio(12.0) - 2.0).abs() < 1.0e-6);
+        assert!((bend_ratio(-2.0) - 2.0_f32.powf(-2.0 / 12.0)).abs() < 1.0e-6);
+        assert_eq!(bend_ratio(f32::NAN), 1.0);
+    }
 
     #[test]
     fn midi_note_frequency_is_anchored_at_a4_and_clamped() {

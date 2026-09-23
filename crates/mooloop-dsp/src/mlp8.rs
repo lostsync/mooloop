@@ -63,7 +63,7 @@ use crate::scale::{cutoff_hz_from_normalized, CUTOFF_CEILING_HZ};
 use crate::voice_filter::{env_octaves, keytrack_octaves, VoiceCutoff};
 use crate::smooth::Smoothed;
 use crate::glide::Glide;
-use crate::synth_voice::{note_to_freq, MIN_GLIDE_S, PARAM_SMOOTH_S, STOP_RELEASE_S};
+use crate::synth_voice::{bend_ratio, note_to_freq, MIN_GLIDE_S, PARAM_SMOOTH_S, STOP_RELEASE_S};
 use mooloop_core::modulation::MAX_GENERATOR_OUTLETS;
 use mooloop_core::mlp8::{
     MlP8ControlOutlets, MlP8Routes, MLP8_CONTROL_OUTLETS, MLP8_MAX_ROUTES, MLP8_MOD_DESTS,
@@ -1501,6 +1501,10 @@ struct Prepared<'a> {
     /// Whether the filter can be skipped for the whole range. Only true when
     /// it is wide open, unresonant, and nothing is moving it.
     filter_open: bool,
+    /// The keyboard's bend as a frequency ratio, `1.0` at rest (MOO-128).
+    /// Folded into every oscillator's ratio, so the sub, which divides one
+    /// of them, bends with it.
+    bend: f32,
 }
 
 impl<'a> Prepared<'a> {
@@ -1631,6 +1635,7 @@ impl<'a> Prepared<'a> {
                 && !routed(slot::ENV_AMOUNT)
                 && !routed(slot::DRIVE)
                 && !routed(slot::VOICE_FEEDBACK),
+            bend: 1.0,
         }
     }
 }
@@ -1675,6 +1680,8 @@ pub struct MlP8 {
     /// block: a note played while stopped -- a MIDI keyboard, an audition --
     /// has to last until its own note-off.
     was_playing: bool,
+    /// The keyboard's bend as a frequency ratio, `1.0` at rest (MOO-128).
+    bend: f32,
 }
 
 impl MlP8 {
@@ -1692,6 +1699,7 @@ impl MlP8 {
             wet: StereoBus::with_capacity(CHORUS_CHUNK),
             chorus: Chorus::new(params.chorus, sample_rate),
             was_playing: false,
+            bend: 1.0,
         };
         synth.routes.compile(&synth.params.routes);
         synth.apply_params_to_voices();
@@ -2071,6 +2079,7 @@ impl MlP8 {
             scratch,
             wet,
             chorus,
+            bend,
             ..
         } = self;
         let params = *params;
@@ -2080,7 +2089,8 @@ impl MlP8 {
         // subscribed the whole publication path is a single untaken branch,
         // which is what a feature that is off by default has to cost.
         let publishing = !ports.is_empty();
-        let prepared = Prepared::new(&params, sr, routes, demand);
+        let mut prepared = Prepared::new(&params, sr, routes, demand);
+        prepared.bend = *bend;
         let master_volume = params.master_volume.clamp(0.0, 1.0);
         // With the chorus off the voices go straight onto the channel bus and
         // the finisher costs nothing at all — not a copy, not a delay line
@@ -2279,7 +2289,7 @@ impl Voice {
             } else {
                 prep.ratio[n]
             };
-            authored * self.pitch_scale[n]
+            authored * self.pitch_scale[n] * prep.bend
         });
 
         let mut value = [0.0_f32; 3];
@@ -2551,6 +2561,7 @@ impl MlP8 {
                 Event::SourceRouteAmount { route, amount } => {
                     self.set_route_amount(route, amount)
                 }
+                Event::PitchBend { semitones } => self.bend = bend_ratio(semitones),
                 Event::Buffer(_) | Event::BufferRelease | Event::BufferScrub { .. } => {}
             }
             pos = off;

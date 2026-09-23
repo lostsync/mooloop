@@ -1312,6 +1312,10 @@ pub struct Ds01 {
     /// block: a hit played while stopped -- a MIDI pad, an audition -- has to
     /// ring out.
     was_playing: bool,
+    /// The keyboard's bend as a frequency ratio, `1.0` at rest (MOO-128).
+    /// Applied to the tone and the body each control tick rather than
+    /// latched with the hit, so a wheel moved over a ringing hit bends it.
+    bend: f32,
 }
 
 impl Ds01 {
@@ -1331,6 +1335,7 @@ impl Ds01 {
             focus: 0,
             triggered: false,
             was_playing: false,
+            bend: 1.0,
         }
     }
 
@@ -1608,6 +1613,8 @@ impl Ds01 {
             } else {
                 continuous
             };
+            self.voice_continuous[index].tone_pitch *= self.bend;
+            self.voice_continuous[index].body_pitch *= self.bend;
             voice.aim_levels(&self.voice_continuous[index], false);
         }
 
@@ -1811,6 +1818,9 @@ impl Ds01 {
                 // arrives as a `ParamValue` like any other knob and this
                 // reaches nothing here.
                 Event::SourceRouteAmount { .. } => {}
+                Event::PitchBend { semitones } => {
+                    self.bend = crate::synth_voice::bend_ratio(semitones);
+                }
                 Event::Buffer(_) | Event::BufferRelease | Event::BufferScrub { .. } => {}
             }
             pos = offset;

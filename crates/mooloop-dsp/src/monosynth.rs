@@ -20,7 +20,7 @@ use crate::osc::Osc;
 use crate::voice_filter::{env_octaves, VoiceCutoff};
 use crate::smooth::Smoothed;
 use crate::glide::Glide;
-use crate::synth_voice::{note_to_freq, MIN_GLIDE_S, PARAM_SMOOTH_S, STOP_RELEASE_S};
+use crate::synth_voice::{bend_ratio, note_to_freq, MIN_GLIDE_S, PARAM_SMOOTH_S, STOP_RELEASE_S};
 use mooloop_core::MonoSynthParams;
 
 /// The voice's absolute output reference, set so one oscillator at its 0 dB
@@ -91,6 +91,10 @@ pub struct MonoSynth {
     /// block: a note played while stopped -- a MIDI keyboard, an audition --
     /// has to last until its own note-off.
     was_playing: bool,
+    /// The keyboard's bend as a frequency ratio, `1.0` at rest. Applied at
+    /// the oscillators rather than to the glide target, so a bend moves a
+    /// note mid-slide without restarting the slide (MOO-128).
+    bend: f32,
 }
 
 impl MonoSynth {
@@ -106,6 +110,7 @@ impl MonoSynth {
             voice,
             lfo: Lfo::new(),
             was_playing: false,
+            bend: 1.0,
         }
     }
 
@@ -195,6 +200,7 @@ impl MonoSynth {
         let params = self.params;
         let sr = self.sample_rate;
         let lfo_params = params.lfo;
+        let bend = self.bend;
         let voice = &mut self.voice;
         let lfo = &mut self.lfo;
 
@@ -209,7 +215,7 @@ impl MonoSynth {
         let mut ratio = [0.0_f32; 3];
         for (index, osc) in params.osc.iter().enumerate() {
             let semis = osc.semitones.clamp(-48.0, 48.0) + osc.cents.clamp(-100.0, 100.0) / 100.0;
-            ratio[index] = 2.0_f32.powf(semis / 12.0);
+            ratio[index] = 2.0_f32.powf(semis / 12.0) * bend;
         }
 
         // Signal-scaling parameters lag their targets; everything else is
@@ -346,6 +352,7 @@ impl AudioNode for MonoSynth {
                 Event::NoteOff { id, .. } => self.note_off(id),
                 Event::Choke => self.release_all(),
                 Event::ParamValue { id, value } => self.apply_param(id, value),
+                Event::PitchBend { semitones } => self.bend = bend_ratio(semitones),
                 Event::SourceRouteAmount { .. }
                 | Event::Buffer(_)
                 | Event::BufferRelease

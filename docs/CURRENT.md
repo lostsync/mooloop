@@ -595,8 +595,15 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   holds released keys** on every source, since it defers the release
   rather than asking the device (MOO-128). One pedal serves every input, and
   lifting it releases each held note on the channels that played it. A
-  recorded note still ends when its key comes up. Pitch bend, the mod wheel,
-  aftertouch and program change do nothing on a channel yet. A `BufferMidiMap` — note and CC
+  recorded note still ends when its key comes up. **The bend wheel bends**
+  every pitched source (all but Aux In) by up to ±2 semitones, a fixed
+  range that is not yet a setting (MOO-128). It reaches the channels a key
+  from the same input would play, moves notes that are already sounding, and
+  holds until the wheel moves again, so a note started with the wheel up
+  starts bent. A channel keeps its bend when the selection moves away from
+  it; Panic returns every channel's bend to centre. Bends are live only: they
+  are not recorded into patterns and an export does not hear them. The mod
+  wheel, aftertouch and program change do nothing on a channel yet. A `BufferMidiMap` — note and CC
   mappings onto one Buffer insert's gestures — takes the notes it maps ahead
   of the keyboard, but nothing installs one:
   `EngineHandle::set_buffer_midi_map` has no caller outside its own tests.

@@ -413,6 +413,8 @@ struct VoiceContext {
     /// `shape_frame`, this only removes the `tanh` that does not vary with
     /// it (`reports/fable-2026-09-22.md` finding 2, Plan C step 3).
     drive_compensation: f32,
+    /// The keyboard's bend as a rate ratio, `1.0` at rest (MOO-128).
+    bend: f64,
 }
 
 /// A sample handle a sampler let go of on the audio thread, on its way to be
@@ -532,6 +534,10 @@ pub struct Sampler {
     /// are cheap, share a start value, and step identically, so the voices
     /// stay in agreement without the frame loop having to own them all.
     output_gain: Smoothed,
+    /// The keyboard's bend as a rate ratio, `1.0` at rest (MOO-128). A
+    /// multiplier on each voice's head rather than a retrigger, so a bend
+    /// moves a sounding note.
+    bend: f64,
 }
 
 impl Sampler {
@@ -585,6 +591,7 @@ impl Sampler {
             stretch: None,
             bpm: 120.0,
             was_playing: false,
+            bend: 1.0,
             output_gain: Smoothed::new(
                 clamp_output_gain(params.output_gain),
                 OUTPUT_GAIN_SMOOTHING_S,
@@ -1218,6 +1225,7 @@ impl Sampler {
             bpm,
             bit_scale,
             drive_compensation,
+            bend,
         } = cx;
         let (start, end) = (range.start, range.end);
         if !voice.active {
@@ -1253,6 +1261,10 @@ impl Sampler {
         if params.retune_live {
             voice.playback_rate = voice.key_pitch_ratio * tuning_ratio(params);
         }
+        // The bend is heard the way a retune is: a faster head, and under
+        // fit-to-tempo a stretch that keeps the region's length, because
+        // the ratio below is derived from the rate it will read at.
+        let rate = voice.playback_rate * bend;
 
         // Resolved once for the segment, like the bounds above: parameters do
         // not move inside a segment, because the block is already split at
@@ -1260,7 +1272,7 @@ impl Sampler {
         let mut stretch = stretch.filter(|_| Self::stretch_is_active(params));
         if let Some(reader) = stretch.as_mut() {
             let ratio =
-                Self::effective_ratio(params, len, sample_rate, bpm, voice.playback_rate);
+                Self::effective_ratio(params, len, sample_rate, bpm, rate);
             let stretcher = reader.stretcher_mut();
             stretcher.set_mode(params.stretch_mode);
             stretcher.set_grain_frames(u32::from(params.stretch_grain));
@@ -1315,8 +1327,8 @@ impl Sampler {
                 }
             };
             let raw = match stretch.as_mut() {
-                Some(reader) => reader.read(&sample.frames, region, voice.playback_rate),
-                None => table.read(&sample.frames, pos, voice.playback_rate, region),
+                Some(reader) => reader.read(&sample.frames, region, rate),
+                None => table.read(&sample.frames, pos, rate, region),
             };
             let frame = Self::shape_frame(
                 params,
@@ -1344,7 +1356,7 @@ impl Sampler {
             let read_at = voice.play_pos;
             match stretch.as_ref() {
                 Some(reader) => voice.play_pos = reader.source_pos(),
-                None => voice.play_pos += voice.direction * voice.playback_rate,
+                None => voice.play_pos += voice.direction * rate,
             }
 
             match loop_mode {
@@ -1413,6 +1425,7 @@ impl Sampler {
             bpm: self.bpm,
             bit_scale,
             drive_compensation: voice_drive_compensation(drive),
+            bend: self.bend,
         };
         self.output_gain
             .set_target(clamp_output_gain(params.output_gain));
@@ -1510,6 +1523,9 @@ impl AudioNode for Sampler {
                 Event::NoteOff { id, .. } => self.release_note(id),
                 Event::Choke => self.choke(),
                 Event::ParamValue { id, value } => self.apply_param(id, value),
+                Event::PitchBend { semitones } => {
+                    self.bend = f64::from(crate::synth_voice::bend_ratio(semitones));
+                }
                 Event::SourceRouteAmount { .. }
                 | Event::Buffer(_)
                 | Event::BufferRelease

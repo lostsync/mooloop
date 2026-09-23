@@ -59,6 +59,16 @@ pub enum Event {
     BufferScrub {
         delta_frames: f32,
     },
+    /// The keyboard's bend wheel, already scaled by the shared bend range:
+    /// every note this source sounds, and every note it starts until the
+    /// next one, plays this many semitones off its key (MOO-128).
+    ///
+    /// A state rather than a gesture. The value holds until the next bend,
+    /// so a note started with the wheel held down starts bent, and `0.0` is
+    /// the wheel at rest. A source with no pitch ignores it.
+    PitchBend {
+        semitones: f32,
+    },
 }
 
 /// One event and its position inside the current block.
@@ -173,7 +183,8 @@ fn event_sort_key(event: &TimedEvent) -> (u32, u8) {
         | Event::SourceRouteAmount { .. }
         | Event::Buffer(_)
         | Event::BufferRelease
-        | Event::BufferScrub { .. } => 1,
+        | Event::BufferScrub { .. }
+        | Event::PitchBend { .. } => 1,
         Event::NoteOn { .. } => 2,
     };
     (event.offset, priority)
