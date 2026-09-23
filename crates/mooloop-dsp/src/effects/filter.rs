@@ -233,9 +233,7 @@ mod tests {
         let events = EventList::empty();
         effect.process(&context(frames), &mut bus, &events, None);
         // Skip the filter's startup transient.
-        let settle = frames / 2;
-        let energy: f32 = bus.l[settle..frames].iter().map(|s| s * s).sum();
-        (energy / (frames - settle) as f32).sqrt()
+        crate::testkit::rms(&bus.l[frames / 2..frames])
     }
 
     #[test]
@@ -376,9 +374,7 @@ mod tests {
             },
         }));
         effect.process(&context(frames), &mut bus, &events, None);
-        let max_step = (1..frames)
-            .map(|i| (bus.l[i] - bus.l[i - 1]).abs())
-            .fold(0.0f32, f32::max);
+        let max_step = crate::testkit::max_step(&bus.l[..frames]);
         assert!(
             max_step < 0.1,
             "cutoff change left a discontinuity of {max_step}"
@@ -526,14 +522,8 @@ mod tests {
         }
         effect.process(&context(frames), &mut bus, &events, None);
 
-        let max_step = (1..frames)
-            .flat_map(|i| {
-                [
-                    (bus.l[i] - bus.l[i - 1]).abs(),
-                    (bus.r[i] - bus.r[i - 1]).abs(),
-                ]
-            })
-            .fold(0.0f32, f32::max);
+        let max_step = crate::testkit::max_step(&bus.l[..frames])
+            .max(crate::testkit::max_step(&bus.r[..frames]));
         // Well above the ordinary per-sample slope of a 220 Hz tone through
         // this filter (well under 0.1 with no automation at all -- see
         // `cutoff_change_mid_block_does_not_click`'s bound), and well below

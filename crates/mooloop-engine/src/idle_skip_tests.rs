@@ -17,6 +17,7 @@ use mooloop_core::{
     mlp8, AudioSubscription, AuxInParams, EffectKind, EffectSlotState, LfoWave, NoteEvent,
     Project, ProjectChannel, ReverbParams, MASTER_BUS,
 };
+use mooloop_dsp::testkit::peak;
 use mooloop_dsp::SILENCE_PEAK;
 
 use crate::render::RenderState;
@@ -124,10 +125,6 @@ fn worst_difference_at(a: &[f32], b: &[f32]) -> (f32, usize) {
         }
     }
     (worst, at)
-}
-
-fn peak(samples: &[f32]) -> f32 {
-    samples.iter().fold(0.0f32, |peak, s| peak.max(s.abs()))
 }
 
 /// The test that matters most: the same project, rendered twice, once with

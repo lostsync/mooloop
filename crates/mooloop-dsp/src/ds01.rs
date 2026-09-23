@@ -1870,6 +1870,7 @@ impl SourceNode for Ds01 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::{peak, rms};
     use crate::event::TimedEvent;
     use mooloop_core::gain::{db_to_linear, GENERATOR_OUTPUT_REFERENCE_DBFS};
     use mooloop_core::{Ds01EnvParams, Ds01PitchEnvParams};
@@ -1919,16 +1920,6 @@ mod tests {
         render(&mut node, frames, &events)
     }
 
-    fn peak(samples: &[f32]) -> f32 {
-        samples.iter().fold(0.0_f32, |peak, s| peak.max(s.abs()))
-    }
-
-    fn rms(samples: &[f32]) -> f32 {
-        if samples.is_empty() {
-            return 0.0;
-        }
-        (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
-    }
 
     fn upward_crossings(samples: &[f32]) -> usize {
         samples

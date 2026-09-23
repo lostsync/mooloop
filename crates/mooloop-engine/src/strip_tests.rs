@@ -10,6 +10,7 @@
 //! would pass every test in the DSP module.
 
 use crate::render::RenderState;
+use mooloop_dsp::testkit::rms as rms_of;
 use crate::render_test_support::{peak_of, render_master, worst_difference, SAMPLE_RATE};
 use mooloop_core::mixer::{StripPin, STRIP_PIN};
 use mooloop_core::strip::{StripParams, STRIP_COMP_IN, STRIP_EQ_IN, STRIP_PRE_IN};
@@ -43,10 +44,6 @@ fn one_track_project() -> Project {
     };
     project.ensure_tracks(2);
     project
-}
-
-fn rms_of(samples: &[f32]) -> f32 {
-    (samples.iter().map(|s| s * s).sum::<f32>() / samples.len().max(1) as f32).sqrt()
 }
 
 /// **Acceptance case 1.** A project whose tracks all carry a default strip

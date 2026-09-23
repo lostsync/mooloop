@@ -634,6 +634,7 @@ impl SourceNode for MlM1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::{max_step, rms};
     use crate::event::TimedEvent;
     use mooloop_core::{NotePriority, OscParams, OscWave};
 
@@ -725,9 +726,6 @@ mod tests {
         rms(&diff) / level
     }
 
-    fn rms(samples: &[f32]) -> f32 {
-        (samples.iter().map(|s| s * s).sum::<f32>() / samples.len().max(1) as f32).sqrt()
-    }
 
     #[test]
     fn idle_is_silent() {
@@ -1309,12 +1307,6 @@ mod tests {
         );
     }
 
-    /// Largest sample-to-sample jump, the same measure the smoothing tests use.
-    fn max_step(samples: &[f32]) -> f32 {
-        samples
-            .windows(2)
-            .fold(0.0_f32, |worst, pair| worst.max((pair[1] - pair[0]).abs()))
-    }
 
     /// Switching model on a sounding voice must not click. Each model keeps
     /// its own state, so the incoming one starts from wherever it last left

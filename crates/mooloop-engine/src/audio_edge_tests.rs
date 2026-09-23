@@ -11,6 +11,7 @@
 //! from.
 
 use crate::render::RenderState;
+use mooloop_dsp::testkit::peak;
 use crate::render_test_support::{render_blocks, SAMPLE_RATE};
 use mooloop_core::{
     aux_in, ds01, mlp8, AudioSubscription, AutomationLane, AutomationPoint, AuxInParams,
@@ -51,28 +52,11 @@ fn aux_in_channel(index: usize, source: Option<AudioSubscription>) -> ProjectCha
     channel
 }
 
-fn peak(samples: &[f32]) -> f32 {
-    samples.iter().fold(0.0_f32, |peak, s| peak.max(s.abs()))
-}
-
-/// Energy in a narrow band around `hz`, from a naive DFT. A band rather than
-/// one bin because these renders are neither an integer number of periods nor
-/// of constant amplitude.
+/// The amplitude at `hz`, by the DSP kit's windowed measure: these renders
+/// are neither an integer number of periods nor of constant amplitude, so an
+/// unwindowed bin would scallop.
 fn magnitude_at(signal: &[f32], hz: f32) -> f32 {
-    let n = signal.len();
-    let centre = (hz * n as f32 / SAMPLE_RATE as f32).round() as usize;
-    (centre.saturating_sub(2)..=centre + 2)
-        .map(|bin| {
-            let step = -std::f64::consts::TAU * bin as f64 / n as f64;
-            let (mut re, mut im) = (0.0_f64, 0.0_f64);
-            for (index, sample) in signal.iter().enumerate() {
-                let angle = step * index as f64;
-                re += *sample as f64 * angle.cos();
-                im += *sample as f64 * angle.sin();
-            }
-            ((re * re + im * im).sqrt() / n as f64) as f32
-        })
-        .sum()
+    mooloop_dsp::testkit::tone_amplitude(signal, SAMPLE_RATE, hz)
 }
 
 /// Middle C, and the fifth `Osc 3` is tuned to.

@@ -20,6 +20,7 @@
 
 use mooloop_core::DriveCurve;
 
+use crate::scale::clamp_param;
 use crate::shaper::DRIVE_REFERENCE_LINEAR;
 
 /// A topology-preserving state-variable low-pass filter (Chamberlin/Zavalishin
@@ -144,9 +145,9 @@ impl SvfCoeffs {
     /// samples calls this once instead of paying the `tan()` per sample.
     pub fn for_cutoff(cutoff_hz: f32, resonance: f32, sample_rate: u32) -> Self {
         let sr = sample_rate as f32;
-        let cutoff = cutoff_hz.clamp(20.0, sr * 0.45);
+        let cutoff = clamp_param(cutoff_hz, 20.0, sr * 0.45);
         let g = (core::f32::consts::PI * cutoff / sr).tan();
-        let damping = (2.0 - resonance.clamp(0.0, 1.0) * 1.9).clamp(0.1, 2.0);
+        let damping = (2.0 - clamp_param(resonance, 0.0, 1.0) * 1.9).clamp(0.1, 2.0);
         let a1 = 1.0 / (1.0 + g * (g + damping));
         let a2 = g * a1;
         let a3 = g * a2;
@@ -205,7 +206,7 @@ impl OnePoleHp {
     }
 
     pub fn set_cutoff(&mut self, cutoff_hz: f32, sample_rate: u32) {
-        let cutoff = cutoff_hz.clamp(10.0, sample_rate as f32 * 0.45);
+        let cutoff = clamp_param(cutoff_hz, 10.0, sample_rate as f32 * 0.45);
         self.coeff = (-core::f32::consts::TAU * cutoff / sample_rate as f32).exp();
     }
 
@@ -248,7 +249,7 @@ impl OnePoleLp {
     }
 
     pub fn set_cutoff(&mut self, cutoff_hz: f32, sample_rate: u32) {
-        let cutoff = cutoff_hz.clamp(10.0, sample_rate as f32 * 0.45);
+        let cutoff = clamp_param(cutoff_hz, 10.0, sample_rate as f32 * 0.45);
         self.coeff = 1.0 - (-core::f32::consts::TAU * cutoff / sample_rate as f32).exp();
     }
 
@@ -260,7 +261,7 @@ impl OnePoleLp {
     /// can't destabilize the filter the way interpolating a biquad's
     /// coefficients can).
     pub fn set_coeff(&mut self, coeff: f32) {
-        self.coeff = coeff.clamp(0.0, 1.0);
+        self.coeff = clamp_param(coeff, 0.0, 1.0);
     }
 
     pub fn reset(&mut self) {
@@ -318,7 +319,7 @@ impl AllPass {
 /// (`mooloop_core::gain::REFERENCE_PEAK_DBFS`) is the compromise, and it
 /// also caps a full-scale peak at the reference rather than at clipping.
 pub fn apply_drive(input: f32, drive: f32) -> f32 {
-    let drive = drive.clamp(0.0, 1.0);
+    let drive = clamp_param(drive, 0.0, 1.0);
     if drive <= f32::EPSILON {
         return input;
     }
@@ -334,7 +335,7 @@ pub fn apply_drive(input: f32, drive: f32) -> f32 {
 /// for every sample, exactly as `apply_drive` already does internally for a
 /// single call.
 pub fn drive_compensation(drive: f32) -> f32 {
-    let drive = drive.clamp(0.0, 1.0);
+    let drive = clamp_param(drive, 0.0, 1.0);
     if drive <= f32::EPSILON {
         // Unused by `apply_drive_compensated`'s own bypass at this drive, but
         // a finite, well-defined value rather than one that only happens to
@@ -349,7 +350,7 @@ pub fn drive_compensation(drive: f32) -> f32 {
 /// `tanh` of the *sample* still has to happen here -- that one genuinely
 /// varies every call -- so this only removes the one `tanh` that does not.
 pub fn apply_drive_compensated(input: f32, drive: f32, compensation: f32) -> f32 {
-    let drive = drive.clamp(0.0, 1.0);
+    let drive = clamp_param(drive, 0.0, 1.0);
     if drive <= f32::EPSILON {
         return input;
     }
@@ -454,9 +455,9 @@ impl Ladder {
     /// re-derive it from [`LADDER_MAX_FEEDBACK`] and get it wrong later.
     pub fn feedback_at(cutoff_hz: f32, resonance: f32, sample_rate: u32) -> f32 {
         let sr = sample_rate as f32;
-        let cutoff = (cutoff_hz * LADDER_POLE_COMPENSATION).clamp(20.0, sr * 0.45);
+        let cutoff = clamp_param(cutoff_hz * LADDER_POLE_COMPENSATION, 20.0, sr * 0.45);
         let g = 1.0 - (-core::f32::consts::TAU * cutoff / sr).exp();
-        resonance.clamp(0.0, 1.0) * LADDER_MAX_FEEDBACK * (1.0 + LADDER_FEEDBACK_TRACKING * g)
+        clamp_param(resonance, 0.0, 1.0) * LADDER_MAX_FEEDBACK * (1.0 + LADDER_FEEDBACK_TRACKING * g)
     }
 
     /// Process one sample. Safe to call with `cutoff_hz` moving every sample,
@@ -469,9 +470,9 @@ impl Ladder {
         sample_rate: u32,
     ) -> f32 {
         let sr = sample_rate as f32;
-        let cutoff = (cutoff_hz * LADDER_POLE_COMPENSATION).clamp(20.0, sr * 0.45);
+        let cutoff = clamp_param(cutoff_hz * LADDER_POLE_COMPENSATION, 20.0, sr * 0.45);
         let g = 1.0 - (-core::f32::consts::TAU * cutoff / sr).exp();
-        let k = resonance.clamp(0.0, 1.0)
+        let k = clamp_param(resonance, 0.0, 1.0)
             * LADDER_MAX_FEEDBACK
             * (1.0 + LADDER_FEEDBACK_TRACKING * g);
 
@@ -572,9 +573,9 @@ impl Acid {
     /// See [`Ladder::feedback_at`].
     pub fn feedback_at(cutoff_hz: f32, resonance: f32, sample_rate: u32) -> f32 {
         let sr = sample_rate as f32;
-        let cutoff = (cutoff_hz * ACID_POLE_COMPENSATION).clamp(20.0, sr * 0.45);
+        let cutoff = clamp_param(cutoff_hz * ACID_POLE_COMPENSATION, 20.0, sr * 0.45);
         let g = 1.0 - (-core::f32::consts::TAU * cutoff / sr).exp();
-        resonance.clamp(0.0, 1.0) * ACID_MAX_FEEDBACK * (1.0 + ACID_FEEDBACK_TRACKING * g)
+        clamp_param(resonance, 0.0, 1.0) * ACID_MAX_FEEDBACK * (1.0 + ACID_FEEDBACK_TRACKING * g)
     }
 
     pub fn next_sample(
@@ -585,9 +586,9 @@ impl Acid {
         sample_rate: u32,
     ) -> f32 {
         let sr = sample_rate as f32;
-        let cutoff = (cutoff_hz * ACID_POLE_COMPENSATION).clamp(20.0, sr * 0.45);
+        let cutoff = clamp_param(cutoff_hz * ACID_POLE_COMPENSATION, 20.0, sr * 0.45);
         let g = 1.0 - (-core::f32::consts::TAU * cutoff / sr).exp();
-        let k = resonance.clamp(0.0, 1.0) * ACID_MAX_FEEDBACK * (1.0 + ACID_FEEDBACK_TRACKING * g);
+        let k = clamp_param(resonance, 0.0, 1.0) * ACID_MAX_FEEDBACK * (1.0 + ACID_FEEDBACK_TRACKING * g);
 
         let driven = input * (1.0 + k * ACID_BASS_COMPENSATION) - k * self.feedback;
         let shaped = crate::shaper::shape(DriveCurve::Tape, driven);
@@ -663,7 +664,7 @@ impl PreDrive {
     }
 
     pub fn next_sample(&mut self, input: f32, drive: f32, sample_rate: u32) -> f32 {
-        let drive = drive.clamp(0.0, 1.0);
+        let drive = clamp_param(drive, 0.0, 1.0);
         if drive <= f32::EPSILON {
             return input;
         }
@@ -698,57 +699,134 @@ impl Default for PreDrive {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::{all_finite, db, rms, sine, Probe, RATES};
 
     const SR: u32 = 48_000;
 
-    /// Steady-state output peak for a sine of `amplitude` at `freq_hz`, in
-    /// dBFS. Absolute, not normalized: the callers that want a transfer
-    /// function take differences, and the one that wants a level reads it
-    /// directly.
-    fn response_db(filter: &mut dyn FnMut(f32) -> f32, freq_hz: f32, amplitude: f32) -> f32 {
-        let mut peak = 0.0_f32;
-        let total = SR as usize / 2;
-        for i in 0..total {
-            let t = i as f32 / SR as f32;
-            let out = filter((t * freq_hz * core::f32::consts::TAU).sin() * amplitude);
-            // Skip the transient and any follower's settling time.
-            if i > total / 2 {
-                peak = peak.max(out.abs());
-            }
-        }
-        20.0 * peak.max(1.0e-9).log10()
-    }
-
-    /// Slope and corner frequency are small-signal properties. Measuring them
-    /// at full scale would measure the `tanh` in the feedback path instead --
-    /// which is real character, but not what "24 dB/oct" describes.
-    const SMALL_SIGNAL: f32 = 0.02;
-
+    /// Steady-state output peak over the input, in dB, through the kit's
+    /// small-signal probe. Peak rather than the tone at the probe frequency,
+    /// because a ladder near self-oscillation rings at its own frequency and
+    /// the peak is what that sounds like. Small-signal because slope and
+    /// corner are small-signal properties: at full scale this would measure
+    /// the `tanh` in the feedback path instead -- which is real character,
+    /// but not what "24 dB/oct" describes.
     fn ladder_response_db(cutoff: f32, resonance: f32, freq: f32) -> f32 {
         let mut ladder = Ladder::new();
-        response_db(
-            &mut |x| ladder.next_sample(x, cutoff, resonance, SR),
-            freq,
-            SMALL_SIGNAL,
-        )
+        Probe::new(SR).peak_gain_db(|x| ladder.next_sample(x, cutoff, resonance, SR), freq)
     }
 
     fn acid_response_db(cutoff: f32, resonance: f32, freq: f32) -> f32 {
         let mut acid = Acid::new();
-        response_db(
-            &mut |x| acid.next_sample(x, cutoff, resonance, SR),
-            freq,
-            SMALL_SIGNAL,
-        )
+        Probe::new(SR).peak_gain_db(|x| acid.next_sample(x, cutoff, resonance, SR), freq)
     }
 
     fn svf_response_db(cutoff: f32, resonance: f32, freq: f32) -> f32 {
         let mut svf = Svf::new();
-        response_db(
-            &mut |x| svf.next_sample(x, cutoff, resonance, SR),
-            freq,
-            SMALL_SIGNAL,
-        )
+        Probe::new(SR).peak_gain_db(|x| svf.next_sample(x, cutoff, resonance, SR), freq)
+    }
+
+    /// **The SVF against its own math, at every rate.** The TPT state-variable
+    /// filter is the bilinear transform of the analog prototype
+    /// `1 / (s^2 + d s + 1)`, prewarped so the corner lands on the cutoff: at a
+    /// probe frequency `f` the prototype sees `w = tan(pi f / sr) / g`, with
+    /// `g` and `d` the coefficient set's own. So the low-, band- and high-pass
+    /// magnitudes are `1`, `w` and `w^2` over `sqrt((1 - w^2)^2 + (d w)^2)`, and
+    /// a sine through the filter has to measure exactly that -- at every
+    /// cutoff, every resonance, and every rate. Until 2026-09-22 nothing
+    /// checked the SVF's absolute response at all (MOO-117).
+    #[test]
+    fn the_svf_is_its_transfer_function_at_every_rate() {
+        for sr in RATES {
+            let probe = Probe::new(sr);
+            for cutoff in [100.0_f32, 1_000.0, 5_000.0, 15_000.0] {
+                for resonance in [0.0_f32, 0.5, 0.9, 1.0] {
+                    let coeffs = SvfCoeffs::for_cutoff(cutoff, resonance, sr);
+                    for ratio in [0.25_f32, 0.5, 0.9, 1.0, 1.1, 2.0, 4.0] {
+                        let freq = cutoff * ratio;
+                        if freq > sr as f32 * 0.45 {
+                            continue;
+                        }
+                        let w = ((core::f64::consts::PI * freq as f64 / sr as f64).tan()
+                            / coeffs.g as f64) as f32;
+                        let denominator =
+                            ((1.0 - w * w).powi(2) + (coeffs.damping * w).powi(2)).sqrt();
+                        let math = [1.0 / denominator, w / denominator, w * w / denominator];
+                        for (output, expected) in math.iter().enumerate() {
+                            let expected = db(*expected);
+                            if expected < -60.0 {
+                                continue;
+                            }
+                            let mut svf = Svf::new();
+                            let measured = probe.gain_db(
+                                |x| {
+                                    let (low, band, high) =
+                                        svf.next_sample_lp_bp_hp(x, cutoff, resonance, sr);
+                                    [low, band, high][output]
+                                },
+                                freq,
+                            );
+                            assert!(
+                                (measured - expected).abs() < 0.05,
+                                "{sr} Hz, cutoff {cutoff}, resonance {resonance}, output \
+                                 {output} at {freq} Hz: measured {measured:.3} dB, math \
+                                 {expected:.3} dB"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// **NaN hygiene (MOO-117; `reports/teams-2026-09-22.md` F5).** A NaN or
+    /// infinite cutoff, resonance or drive -- from a broken automation lane, a
+    /// bad modulation sum -- must not reach a filter's coefficients:
+    /// `f32::clamp` passes NaN through, and one NaN in a filter's state makes
+    /// every later sample NaN. Every filter here is held to finite output on
+    /// finite input with its parameters non-finite, at every rate.
+    #[test]
+    fn a_non_finite_parameter_never_poisons_a_filter() {
+        for sr in RATES {
+            let input = sine(440.0, 0.5, sr, 2_048);
+            for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                let mut out = Vec::new();
+                let (mut svf, mut ladder, mut acid) = (Svf::new(), Ladder::new(), Acid::new());
+                let (mut lp, mut hp, mut pre) = (OnePoleLp::new(), OnePoleHp::new(), PreDrive::new());
+                lp.set_cutoff(value, sr);
+                hp.set_cutoff(value, sr);
+                for &x in &input {
+                    out.push(svf.next_sample(x, value, 0.5, sr));
+                    out.push(svf.next_sample(x, 1_000.0, value, sr));
+                    out.push(ladder.next_sample(x, value, value, sr));
+                    out.push(acid.next_sample(x, value, value, sr));
+                    out.push(lp.next_sample(x));
+                    out.push(hp.next_sample(x));
+                    out.push(apply_drive(x, value));
+                    out.push(pre.next_sample(x, value, sr));
+                }
+                assert!(all_finite(&out), "{sr} Hz: a parameter of {value} poisoned a filter");
+            }
+        }
+    }
+
+    /// A NaN that does get into a filter's *audio* path is not something a
+    /// filter can repair -- the state is the signal -- but it must not be put
+    /// to sleep broken: a poisoned stage is never at rest (a NaN fails every
+    /// comparison, which is the honest answer here), and `reset` clears it.
+    #[test]
+    fn a_poisoned_filter_is_never_at_rest_and_reset_clears_it() {
+        for sr in RATES {
+            let mut svf = Svf::new();
+            let mut lp = OnePoleLp::new();
+            lp.set_cutoff(1_000.0, sr);
+            svf.next_sample(f32::NAN, 1_000.0, 0.5, sr);
+            lp.next_sample(f32::NAN);
+            assert!(!svf.is_at_rest() && !lp.is_at_rest());
+            svf.reset();
+            lp.reset();
+            assert!(svf.next_sample(0.5, 1_000.0, 0.5, sr).is_finite());
+            assert!(lp.next_sample(0.5).is_finite());
+        }
     }
 
     /// The whole reason the ladder exists: it is a four-pole where `Svf` is a
@@ -916,22 +994,6 @@ mod tests {
         assert!(peak <= 1.0, "ladder peaked at {peak}");
     }
 
-    /// Steady-state output RMS for a sine of `amplitude` at `freq_hz`.
-    fn response_rms(filter: &mut dyn FnMut(f32) -> f32, freq_hz: f32, amplitude: f32) -> f32 {
-        let total = SR as usize / 2;
-        let mut sum = 0.0_f32;
-        let mut counted = 0usize;
-        for i in 0..total {
-            let t = i as f32 / SR as f32;
-            let out = filter((t * freq_hz * core::f32::consts::TAU).sin() * amplitude);
-            if i > total / 2 {
-                sum += out * out;
-                counted += 1;
-            }
-        }
-        (sum / counted.max(1) as f32).sqrt()
-    }
-
     /// The pre-drive's contract, and the reason it does not reuse
     /// `apply_drive`'s fixed anchor: the knob is a character control at
     /// whatever level the oscillator mix happens to sit at. Measured as RMS,
@@ -943,7 +1005,8 @@ mod tests {
                 .iter()
                 .map(|drive| {
                     let mut stage = PreDrive::new();
-                    response_rms(&mut |x| stage.next_sample(x, *drive, SR), 220.0, level)
+                    let probe = Probe::new(SR).amplitude(level);
+                    rms(&probe.run(|x| stage.next_sample(x, *drive, SR), 220.0))
                 })
                 .collect();
             let quietest = levels.iter().cloned().fold(f32::MAX, f32::min);
@@ -1105,52 +1168,28 @@ mod tests {
     /// content grows. A drive control changes character, not level.
     #[test]
     fn drive_changes_character_not_level_at_the_reference() {
-        const SR: f32 = 48_000.0;
         const FREQ: f32 = 100.0;
-        const FRAMES: usize = 4_800;
         const REFERENCE: f32 = DRIVE_REFERENCE_LINEAR;
 
-        let input: Vec<f32> = (0..FRAMES)
-            .map(|i| (core::f32::consts::TAU * FREQ * i as f32 / SR).sin() * REFERENCE)
-            .collect();
+        for sr in RATES {
+            let input = sine(FREQ, REFERENCE, sr, sr as usize / 10);
+            let mut previous_thd = 0.0f32;
+            for drive in [0.2f32, 0.5, 0.9] {
+                let out: Vec<f32> = input.iter().map(|&x| apply_drive(x, drive)).collect();
 
-        let mut previous_harmonic_share = 0.0f32;
-        for drive in [0.2f32, 0.5, 0.9] {
-            let out: Vec<f32> = input.iter().map(|&x| apply_drive(x, drive)).collect();
-
-            let peak = out.iter().fold(0.0f32, |p, s| p.max(s.abs()));
-            assert!(
-                (peak - REFERENCE).abs() < REFERENCE * 0.02,
-                "drive {drive} moved the peak to {peak}"
-            );
-
-            // DFT bins report A/2 for a sine of amplitude A; true RMS is
-            // amplitude/√2. Put both in amplitude terms before comparing.
-            let total_rms = (out.iter().map(|s| s * s).sum::<f32>() / FRAMES as f32).sqrt();
-            let fundamental = 2.0 * tone_energy(&out, SR, FREQ);
-            let total_amplitude = core::f32::consts::SQRT_2 * total_rms;
-            let harmonic = (total_amplitude * total_amplitude - fundamental * fundamental)
-                .max(0.0)
-                .sqrt();
-            let harmonic_share = harmonic / fundamental;
-            assert!(
-                harmonic_share > previous_harmonic_share,
-                "harmonic content did not grow with drive: {drive} -> {harmonic_share}"
-            );
-            previous_harmonic_share = harmonic_share;
+                let peak = crate::testkit::peak(&out);
+                assert!(
+                    (peak - REFERENCE).abs() < REFERENCE * 0.02,
+                    "{sr} Hz: drive {drive} moved the peak to {peak}"
+                );
+                let thd = crate::testkit::thd(&out, sr, FREQ);
+                assert!(
+                    thd > previous_thd,
+                    "{sr} Hz: harmonic content did not grow with drive: {drive} -> {thd}"
+                );
+                previous_thd = thd;
+            }
         }
-    }
-
-    /// Single-bin DFT magnitude, normalized by length.
-    fn tone_energy(samples: &[f32], sample_rate: f32, freq: f32) -> f32 {
-        use core::f32::consts::TAU;
-        let (mut re, mut im) = (0.0f32, 0.0f32);
-        for (index, sample) in samples.iter().enumerate() {
-            let phase = TAU * freq * index as f32 / sample_rate;
-            re += sample * phase.cos();
-            im -= sample * phase.sin();
-        }
-        (re * re + im * im).sqrt() / samples.len() as f32
     }
 
     #[test]

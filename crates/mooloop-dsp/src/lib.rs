@@ -20,6 +20,8 @@
 //! - [`env`], [`osc`], [`lfo`], [`filter`], [`biquad`], [`scale`],
 //!   [`shaper`], [`smooth`]: building blocks shared by the synths and
 //!   effects.
+//! - [`testkit`]: the measurement kit every DSP test measures through, at
+//!   the four sample rates in [`testkit::RATES`].
 //!
 //! Every node here implements `AudioNode`. A generator writes the bus; an
 //! effect reads and modifies it in place, after the generator.
@@ -63,6 +65,7 @@ pub mod stretch;
 #[cfg(test)]
 mod stretch_cost;
 pub mod taps;
+pub mod testkit;
 
 mod synth_voice;
 

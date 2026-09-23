@@ -394,6 +394,7 @@ impl DcBlocker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::{coherent_amplitude, db};
 
     const SAMPLE_RATE: f32 = 48_000.0;
     /// 4800 samples at 100 Hz is exactly ten cycles, so every harmonic lands
@@ -407,15 +408,7 @@ mod tests {
     /// exact frequency. Five bins are wanted, so a whole FFT would be more
     /// code and less obviously correct.
     fn harmonic_amplitude(samples: &[f32], n: usize) -> f32 {
-        let step = std::f32::consts::TAU * FUNDAMENTAL_HZ * n as f32 / SAMPLE_RATE;
-        let (mut sin_sum, mut cos_sum) = (0.0f64, 0.0f64);
-        for (index, sample) in samples.iter().enumerate() {
-            let phase = step * index as f32;
-            sin_sum += (*sample * phase.sin()) as f64;
-            cos_sum += (*sample * phase.cos()) as f64;
-        }
-        let scale = 2.0 / samples.len() as f64;
-        (((sin_sum * scale).powi(2) + (cos_sum * scale).powi(2)).sqrt()) as f32
+        coherent_amplitude(samples, SAMPLE_RATE as u32, FUNDAMENTAL_HZ * n as f32)
     }
 
     fn shaped_sine(profile: HarmonicProfile, amplitude: f32) -> Vec<f32> {
@@ -426,9 +419,6 @@ mod tests {
             .collect()
     }
 
-    fn db(ratio: f32) -> f32 {
-        20.0 * ratio.max(1e-12).log10()
-    }
 
     /// **The claim, as a test.** Every voicing's stated harmonic profile is
     /// what a sine *at the operating level* actually measures coming out of

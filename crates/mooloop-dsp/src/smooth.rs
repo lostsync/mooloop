@@ -46,15 +46,24 @@ impl Smoothed {
         self.coeff = 1.0 - (-1.0 / samples).exp();
     }
 
+    /// Move toward `target`. A non-finite target is ignored and the lag keeps
+    /// the one it had: a NaN taken in here would make every later value NaN,
+    /// and whatever reads the smoother -- a gain, a cutoff -- would pass it on
+    /// for good (MOO-117).
     pub fn set_target(&mut self, target: f32) {
-        self.target = target;
+        if target.is_finite() {
+            self.target = target;
+        }
     }
 
     /// Jump straight to a value, skipping the lag. Use when there is nothing
-    /// to click — a voice starting from silence, or a reset.
+    /// to click — a voice starting from silence, or a reset. A non-finite
+    /// value is ignored, as in [`Self::set_target`].
     pub fn reset_to(&mut self, value: f32) {
-        self.current = value;
-        self.target = value;
+        if value.is_finite() {
+            self.current = value;
+            self.target = value;
+        }
     }
 
     /// Advance one sample and return the smoothed value.
@@ -135,6 +144,7 @@ impl Smoothed {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::{frames_for, max_step, RATES};
 
     #[test]
     fn approaches_target_without_jumping() {
@@ -190,7 +200,12 @@ mod tests {
     /// the stall is widest, and targets far from 1.0 in both directions.
     #[test]
     fn every_lag_reaches_its_target_and_stops() {
-        let sr = 48_000;
+        for sr in RATES {
+            every_lag_reaches_its_target_and_stops_at(sr);
+        }
+    }
+
+    fn every_lag_reaches_its_target_and_stops_at(sr: u32) {
         for (from, to, time_s) in [
             (0.2_f32, 0.7_f32, 0.010_f32),
             (0.7, 0.2, 0.010),
@@ -249,5 +264,55 @@ mod tests {
         let mut smoothed = Smoothed::new(0.0, 0.005, 48_000);
         smoothed.reset_to(0.5);
         assert_eq!(smoothed.advance(), 0.5);
+    }
+
+    /// **The lag against its math, at every rate.** A one-pole with time
+    /// constant `tau` has covered `1 - e^-1` of a step after `tau` seconds and
+    /// `1 - e^-5` after five, whatever the sample rate -- which is the claim
+    /// `new` makes -- and it never moves by more than on its first sample,
+    /// which is what makes it a declicker (the kit's `max_step`).
+    #[test]
+    fn a_lag_is_its_time_constant_at_every_rate() {
+        for sr in RATES {
+            for time_s in [0.002_f32, 0.010, 0.120] {
+                let mut smoothed = Smoothed::new(0.0, time_s, sr);
+                smoothed.set_target(1.0);
+                let walk: Vec<f32> = (0..frames_for(5.0 * time_s, sr))
+                    .map(|_| smoothed.advance())
+                    .collect();
+                let one = walk[frames_for(time_s, sr) - 1];
+                assert!(
+                    (one - (1.0 - (-1.0_f32).exp())).abs() < 0.005,
+                    "{sr} Hz, {time_s} s: {one} after one time constant"
+                );
+                let five = *walk.last().unwrap();
+                assert!(
+                    (five - (1.0 - (-5.0_f32).exp())).abs() < 0.001,
+                    "{sr} Hz, {time_s} s: {five} after five"
+                );
+                let mut stepped = vec![0.0];
+                stepped.extend_from_slice(&walk);
+                assert_eq!(max_step(&stepped), walk[0], "{sr} Hz: a later step was the largest");
+            }
+        }
+    }
+
+    /// A NaN or infinite target or time is ignored rather than taken in: the
+    /// lag carries on toward the last good target (MOO-117).
+    #[test]
+    fn a_non_finite_target_is_ignored() {
+        for sr in RATES {
+            let mut smoothed = Smoothed::new(0.25, 0.005, sr);
+            smoothed.set_target(0.75);
+            for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                smoothed.set_target(bad);
+                smoothed.reset_to(bad);
+                smoothed.set_time(bad, sr);
+            }
+            for _ in 0..frames_for(0.5, sr) {
+                assert!(smoothed.advance().is_finite());
+            }
+            assert_eq!(smoothed.value(), 0.75);
+        }
     }
 }

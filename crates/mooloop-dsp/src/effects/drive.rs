@@ -207,6 +207,7 @@ impl AudioNode for DriveEffect {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::rms;
     use crate::event::{Event, TimedEvent};
 
     fn context(frames: usize) -> ProcessContext {
@@ -228,10 +229,6 @@ mod tests {
             bus.r[i] = s;
         }
         bus
-    }
-
-    fn rms(samples: &[f32]) -> f32 {
-        (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
     }
 
     #[test]

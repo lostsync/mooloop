@@ -747,6 +747,17 @@ boundary.
   harmonic grid. V1 mono tests also
   bound the largest sample-to-sample step across note retriggers and parameter
   changes, which is what the declicking work is defended by.
+- DSP tests measure through one shared kit, `mooloop_dsp::testkit`: frequency
+  response, alias level, THD, band level and the largest sample-to-sample step,
+  with the sample rates every primitive is checked at (44.1, 48, 96 and
+  192 kHz). The SVF is held to its bilinear-transform transfer function, the
+  biquad's `magnitude_db` to a measured sine, the oscillators to their pitch,
+  a per-wave alias bound and the table sine's THD, `Smoothed` to its time
+  constant and to settling, and the oversampler to its passband and alias
+  reduction -- each at all four rates. A NaN or infinite cutoff, resonance,
+  drive, Q, gain, frequency or smoothing target lands on the edge of its range
+  rather than in a filter's or oscillator's state, where it would have made
+  every later sample NaN.
 - The v1 mono synth's LFO is one shape (sine, triangle, saw, square, or sample and
   hold) with a depth per destination: pitch, filter cutoff, pulse width, and
   tremolo. It free-runs across notes and silence unless set to retrigger.

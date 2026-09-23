@@ -566,9 +566,7 @@ mod tests {
             },
         }));
         effect.process(&context(frames), &mut bus, &events, None);
-        let max_step = (1..frames)
-            .map(|i| (bus.l[i] - bus.l[i - 1]).abs())
-            .fold(0.0f32, f32::max);
+        let max_step = crate::testkit::max_step(&bus.l[..frames]);
         assert!(
             max_step < 0.2,
             "depth change left a discontinuity of {max_step}"

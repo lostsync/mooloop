@@ -373,6 +373,7 @@ impl SourceNode for MonoSynth {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::max_step;
     use crate::event::TimedEvent;
 
     fn make_synth(sr: u32, params: MonoSynthParams) -> MonoSynth {
@@ -579,13 +580,6 @@ mod tests {
         }
     }
 
-    /// Largest sample-to-sample step in a rendered buffer.
-    fn max_step(samples: &[f32]) -> f32 {
-        samples
-            .windows(2)
-            .map(|w| (w[1] - w[0]).abs())
-            .fold(0.0, f32::max)
-    }
 
     #[test]
     fn retriggering_a_sounding_voice_does_not_step_the_output() {

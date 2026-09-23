@@ -1076,10 +1076,7 @@ mod tests {
         let mut bus = StereoBus::with_capacity(4096);
         synth.process(&ctx(4096, sr), &mut bus, &EventList::empty(), None);
 
-        let max_step = bus.l[..4096]
-            .windows(2)
-            .map(|w| (w[1] - w[0]).abs())
-            .fold(0.0, f32::max);
+        let max_step = crate::testkit::max_step(&bus.l[..4096]);
         assert!(max_step < 0.05, "{max_step}");
         let end_peak = bus.l[3500..4096]
             .iter()

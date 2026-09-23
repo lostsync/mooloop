@@ -12,6 +12,7 @@
 //! sample at two very different block sizes, they agree.
 
 use crate::render_test_support::{render_blocks, SAMPLE_RATE};
+use mooloop_dsp::testkit::{peak, rms};
 use mooloop_core::{
     ds01, AutomationLane, AutomationPoint, Ds01Params, EffectTarget, ModLfoParams,
     ModLfoWaveform, ModPolarity, ModRoute, ModulatorParams, NoteEvent, ParamAddr, ParamOwner,
@@ -34,16 +35,6 @@ fn ds01_project(params: Ds01Params) -> Project {
     }
 }
 
-fn peak(samples: &[f32]) -> f32 {
-    samples.iter().fold(0.0_f32, |peak, s| peak.max(s.abs()))
-}
-
-fn rms(samples: &[f32]) -> f32 {
-    if samples.is_empty() {
-        return 0.0;
-    }
-    (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
-}
 
 /// It plays from a pattern, through the whole program rather than through its
 /// own `process`.

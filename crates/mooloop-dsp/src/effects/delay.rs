@@ -315,6 +315,7 @@ impl AudioNode for DelayEffect {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::{max_step, rms};
     use crate::event::{Event, TimedEvent};
     use mooloop_core::ModTimeDivision;
 
@@ -337,10 +338,6 @@ mod tests {
         bus.l[0] = 1.0;
         bus.r[0] = 1.0;
         bus
-    }
-
-    fn rms(samples: &[f32]) -> f32 {
-        (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
     }
 
     #[test]
@@ -599,9 +596,7 @@ mod tests {
 
         // A hard jump between two uncorrelated points in a 330 Hz sine would
         // leave a step far larger than the waveform's own frame-to-frame slope.
-        let max_step = (1..frames)
-            .map(|i| (bus.l[i] - bus.l[i - 1]).abs())
-            .fold(0.0f32, f32::max);
+        let max_step = max_step(&bus.l[..frames]);
         assert!(
             max_step < 0.2,
             "time change left a discontinuity of {max_step}"
@@ -636,9 +631,7 @@ mod tests {
             },
         }));
         effect.process(&context(frames), &mut bus, &events, None);
-        let max_step = (1..frames)
-            .map(|i| (bus.l[i] - bus.l[i - 1]).abs())
-            .fold(0.0f32, f32::max);
+        let max_step = max_step(&bus.l[..frames]);
         assert!(
             max_step < 0.2,
             "feedback change left a discontinuity of {max_step}"

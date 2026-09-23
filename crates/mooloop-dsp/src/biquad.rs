@@ -14,6 +14,7 @@
 use mooloop_core::{eq_effective_q, EqBandKind, EqQProfile};
 
 use crate::node::REST_EPSILON;
+use crate::scale::clamp_param;
 
 /// One RBJ-cookbook biquad section in Direct Form I, normalized so `a0` is
 /// always 1.
@@ -111,10 +112,10 @@ impl Biquad {
 
     /// RBJ peaking EQ: boost or cut a band around `frequency` by `gain_db`.
     pub fn peak(&mut self, frequency: f32, q: f32, gain_db: f32, sample_rate: u32) {
-        let w = core::f32::consts::TAU * frequency.clamp(20.0, sample_rate as f32 * 0.45)
+        let w = core::f32::consts::TAU * clamp_param(frequency, 20.0, sample_rate as f32 * 0.45)
             / sample_rate as f32;
-        let alpha = w.sin() / (2.0 * q.clamp(0.15, 30.0));
-        let a = 10.0_f32.powf(gain_db.clamp(-24.0, 24.0) / 40.0);
+        let alpha = w.sin() / (2.0 * clamp_param(q, 0.15, 30.0));
+        let a = 10.0_f32.powf(clamp_param(gain_db, -24.0, 24.0) / 40.0);
         self.set_normalized(
             1.0 + alpha * a,
             -2.0 * w.cos(),
@@ -128,9 +129,9 @@ impl Biquad {
     /// RBJ low- or high-shelf, boosting or cutting everything above/below
     /// `frequency` by `gain_db`.
     pub fn shelf(&mut self, frequency: f32, gain_db: f32, low: bool, sample_rate: u32) {
-        let w = core::f32::consts::TAU * frequency.clamp(20.0, sample_rate as f32 * 0.45)
+        let w = core::f32::consts::TAU * clamp_param(frequency, 20.0, sample_rate as f32 * 0.45)
             / sample_rate as f32;
-        let a = 10.0_f32.powf(gain_db.clamp(-24.0, 24.0) / 40.0);
+        let a = 10.0_f32.powf(clamp_param(gain_db, -24.0, 24.0) / 40.0);
         let alpha = w.sin() * 0.5 * (a + a.recip()).sqrt();
         self.set_shelf(a, 2.0 * a.sqrt() * alpha, w.cos(), low);
     }
@@ -188,13 +189,13 @@ impl Biquad {
         low: bool,
         sample_rate: u32,
     ) {
-        let w = core::f32::consts::TAU * frequency.clamp(20.0, sample_rate as f32 * 0.45)
+        let w = core::f32::consts::TAU * clamp_param(frequency, 20.0, sample_rate as f32 * 0.45)
             / sample_rate as f32;
-        let a = 10.0_f32.powf(gain_db.clamp(-24.0, 24.0) / 40.0);
+        let a = 10.0_f32.powf(clamp_param(gain_db, -24.0, 24.0) / 40.0);
         // Clamped low as well as high: the cookbook's radicand goes negative
         // for large S at high gain, which would produce NaN coefficients and
         // silence the stage rather than steepen it.
-        let s = s.clamp(0.1, 2.0);
+        let s = clamp_param(s, 0.1, 2.0);
         let radicand = (a + a.recip()) * (s.recip() - 1.0) + 2.0;
         let alpha = w.sin() * 0.5 * radicand.max(0.0).sqrt();
         self.set_shelf(a, 2.0 * a.sqrt() * alpha, w.cos(), low);
@@ -240,9 +241,9 @@ impl Biquad {
 
     /// RBJ high- or low-pass, one Butterworth-Q stage.
     pub fn pass(&mut self, frequency: f32, q: f32, high: bool, sample_rate: u32) {
-        let w = core::f32::consts::TAU * frequency.clamp(20.0, sample_rate as f32 * 0.45)
+        let w = core::f32::consts::TAU * clamp_param(frequency, 20.0, sample_rate as f32 * 0.45)
             / sample_rate as f32;
-        let alpha = w.sin() / (2.0 * q.clamp(0.15, 30.0));
+        let alpha = w.sin() / (2.0 * clamp_param(q, 0.15, 30.0));
         let c = w.cos();
         if high {
             self.set_normalized(
@@ -269,61 +270,80 @@ impl Biquad {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::{Probe, RATES};
 
-    fn rms(samples: &[f32]) -> f32 {
-        (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
-    }
-
-    fn respond(mut filter: Biquad, freq_hz: f32, sample_rate: u32) -> f32 {
-        let frames = sample_rate as usize;
-        let mut samples = Vec::with_capacity(frames);
-        for i in 0..frames {
-            let t = i as f32 / sample_rate as f32;
-            let input = (t * freq_hz * core::f32::consts::TAU).sin();
-            let out = filter.process(input);
-            if i > frames / 2 {
-                samples.push(out);
-            }
-        }
-        rms(&samples)
-    }
-
-    /// The gain a sine actually came out at, in dB. A unit sine has an RMS of
-    /// `1/sqrt(2)`, so this is the measured amplitude referred to the input's.
-    fn measured_db(filter: Biquad, freq_hz: f32, sample_rate: u32) -> f32 {
-        20.0 * (respond(filter, freq_hz, sample_rate) * core::f32::consts::SQRT_2).log10()
+    /// The linear gain a unit sine comes out at, through the kit's probe, from
+    /// a fresh copy of `filter` -- `Biquad` is `Copy`, so each call starts
+    /// from the stage's current state and leaves the caller's alone.
+    fn respond(filter: Biquad, freq_hz: f32, sample_rate: u32) -> f32 {
+        let mut filter = filter;
+        Probe::new(sample_rate)
+            .amplitude(1.0)
+            .gain(|x| filter.process(x), freq_hz)
     }
 
     /// **`magnitude_db` is held to a sine going through the filter**, not to a
     /// second derivation of the same formula -- which is the only way to check
     /// a claim of the form "this is what the stage does". Every shape the
     /// cookbook gives us, across the audible decades, at the tenth of a
-    /// decibel a plot could show.
+    /// decibel a plot could show, and at every rate in the kit: a biquad's
+    /// coefficients are designed against a sample rate, so a design that is
+    /// right at 48 kHz is only right at 48 kHz until this says otherwise.
     #[test]
     fn the_computed_magnitude_is_what_a_sine_measures() {
-        let sr = 48_000;
-        let mut cases: Vec<(&str, Biquad)> = Vec::new();
-        for (name, build) in [
-            ("bell +12", &(|f: &mut Biquad, sr| f.peak(1_000.0, 1.0, 12.0, sr)) as &dyn Fn(&mut Biquad, u32)),
-            ("bell -9 narrow", &|f: &mut Biquad, sr| f.peak(2_500.0, 6.0, -9.0, sr)),
-            ("low shelf +6", &|f: &mut Biquad, sr| f.shelf_slope(200.0, 6.0, 0.8, true, sr)),
-            ("high shelf -6 steep", &|f: &mut Biquad, sr| f.shelf_slope(6_000.0, -6.0, 1.6, false, sr)),
-            ("high pass", &|f: &mut Biquad, sr| f.pass(300.0, 0.707, true, sr)),
-            ("low pass resonant", &|f: &mut Biquad, sr| f.pass(4_000.0, 4.0, false, sr)),
-        ] {
-            let mut filter = Biquad::identity();
-            build(&mut filter, sr);
-            cases.push((name, filter));
-        }
+        for sr in RATES {
+            let mut cases: Vec<(&str, Biquad)> = Vec::new();
+            for (name, build) in [
+                ("bell +12", &(|f: &mut Biquad, sr| f.peak(1_000.0, 1.0, 12.0, sr)) as &dyn Fn(&mut Biquad, u32)),
+                ("bell -9 narrow", &|f: &mut Biquad, sr| f.peak(2_500.0, 6.0, -9.0, sr)),
+                ("low shelf +6", &|f: &mut Biquad, sr| f.shelf_slope(200.0, 6.0, 0.8, true, sr)),
+                ("high shelf -6 steep", &|f: &mut Biquad, sr| f.shelf_slope(6_000.0, -6.0, 1.6, false, sr)),
+                ("high pass", &|f: &mut Biquad, sr| f.pass(300.0, 0.707, true, sr)),
+                ("low pass resonant", &|f: &mut Biquad, sr| f.pass(4_000.0, 4.0, false, sr)),
+            ] {
+                let mut filter = Biquad::identity();
+                build(&mut filter, sr);
+                cases.push((name, filter));
+            }
 
-        for (name, filter) in cases {
-            for freq in [50.0, 120.0, 400.0, 1_000.0, 2_500.0, 6_000.0, 12_000.0] {
-                let computed = filter.magnitude_db(freq, sr);
-                let measured = measured_db(filter, freq, sr);
-                assert!(
-                    (computed - measured).abs() < 0.1,
-                    "{name} at {freq} Hz: computed {computed} dB, measured {measured} dB"
-                );
+            for (name, filter) in cases {
+                for freq in [50.0, 120.0, 400.0, 1_000.0, 2_500.0, 6_000.0, 12_000.0, 19_000.0] {
+                    if freq > sr as f32 * 0.45 {
+                        continue;
+                    }
+                    let computed = filter.magnitude_db(freq, sr);
+                    let mut stage = filter;
+                    let measured = Probe::new(sr)
+                        .amplitude(1.0)
+                        .gain_db(|x| stage.process(x), freq);
+                    assert!(
+                        (computed - measured).abs() < 0.1,
+                        "{sr} Hz: {name} at {freq} Hz: computed {computed} dB, measured {measured} dB"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A non-finite frequency, Q, gain or slope lands on the edge of its range
+    /// rather than in the coefficients, where it would make every later
+    /// sample NaN (MOO-117).
+    #[test]
+    fn a_non_finite_design_parameter_never_poisons_the_stage() {
+        for sr in RATES {
+            for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                let mut stages = [Biquad::identity(); 5];
+                stages[0].peak(bad, bad, bad, sr);
+                stages[1].shelf(bad, bad, true, sr);
+                stages[2].shelf_slope(bad, bad, bad, false, sr);
+                stages[3].pass(bad, bad, true, sr);
+                stages[4].eq_band(EqBandKind::Bell, bad, bad, bad, EqQProfile::Proportional, sr);
+                for stage in &mut stages {
+                    for index in 0..512 {
+                        let out = stage.process((index as f32 * 0.05).sin() * 0.5);
+                        assert!(out.is_finite(), "{sr} Hz: a design parameter of {bad} poisoned a stage");
+                    }
+                }
             }
         }
     }
@@ -633,8 +653,8 @@ mod tests {
             let mut stage = Biquad::identity();
             stage.eq_band(EqBandKind::HighShelf, 4_000.0, 0.0, slope, EqQProfile::Constant, sr);
             for probe in [100.0, 1_000.0, 8_000.0] {
-                // Against the identity's own answer, because `respond` is an
-                // RMS and a unit sine's is 0.707 rather than 1.
+                // Against the identity's own answer rather than a literal 1,
+                // so the probe's own error cancels out of the comparison.
                 let gain = respond(stage, probe, sr);
                 let flat = respond(Biquad::identity(), probe, sr);
                 assert!(

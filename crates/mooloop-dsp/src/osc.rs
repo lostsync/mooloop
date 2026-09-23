@@ -11,6 +11,8 @@ use std::sync::OnceLock;
 
 use mooloop_core::OscWave;
 
+use crate::scale::clamp_param;
+
 /// Entries per cycle in [`sine_table`]. Large enough that linear
 /// interpolation between neighbouring entries holds a 440 Hz table sine
 /// under -90 dB THD (`sine_table_thd_is_below_90_db`), small enough that the
@@ -249,7 +251,7 @@ impl Osc {
 /// oscillators are correct over.
 fn increment(freq_hz: f32, sample_rate: u32) -> f32 {
     let sr = sample_rate as f32;
-    freq_hz.clamp(0.01, sr * 0.45) / sr
+    clamp_param(freq_hz, 0.01, sr * 0.45) / sr
 }
 
 /// The waveform at an absolute phase.
@@ -265,7 +267,7 @@ fn wave_value(phase: f32, wave: OscWave, pulse_width: f32, dt: f32, boundary_dt:
         OscWave::Triangle => 4.0 * (phase - 0.5).abs() - 1.0,
         OscWave::Saw => 2.0 * phase - 1.0 - polyblep(phase, boundary_dt),
         OscWave::Pulse => {
-            let width = pulse_width.clamp(0.05, 0.95);
+            let width = clamp_param(pulse_width, 0.05, 0.95);
             let mut value = if phase < width { 1.0 } else { -1.0 };
             value += polyblep(phase, boundary_dt);
             value -= polyblep((phase - width).rem_euclid(1.0), dt);
@@ -338,6 +340,7 @@ impl Noise {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::{alias_db, cents, coherent_amplitude, db, dominant_hz, frames_for, RATES};
 
     #[test]
     fn all_waves_stay_bounded() {
@@ -521,52 +524,121 @@ mod tests {
     /// (`reports/fable-2026-09-22.md` finding 2, Plan C step 4), gated on
     /// this bound rather than trusted from the table size alone.
     ///
-    /// 440 Hz at 48 kHz over exactly 1,200 samples is exactly 11 whole
-    /// cycles (`1200 * 440 / 48000 == 11`), so a single-period DFT is exact
-    /// and there is no spectral leakage to separate from real distortion —
-    /// the same trick `sync_blep_gets_the_harmonics_closer_than_a_naive_reset`
-    /// uses above. THD is every harmonic of the fundamental up to Nyquist
-    /// against the fundamental itself.
+    /// Exactly 11 whole cycles in 1,200 samples at every rate -- 440 Hz at
+    /// 48 kHz, and the frequency that keeps the count whole elsewhere -- so
+    /// the kit's unwindowed [`coherent_amplitude`] is exact and there is no
+    /// spectral leakage to separate from real distortion, the same trick
+    /// `sync_blep_gets_the_harmonics_closer_than_a_naive_reset` uses above.
+    /// THD is every harmonic of the fundamental up to Nyquist against the
+    /// fundamental itself.
     #[test]
     fn sine_table_thd_is_below_90_db() {
-        let sr = 48_000u32;
-        let freq = 440.0f32;
         let n = 1_200usize;
-        assert_eq!(n as u32 * freq as u32, sr * 11, "the exact-cycle premise moved");
+        for sr in RATES {
+            let freq = sr as f32 * 11.0 / n as f32;
+            let mut osc = Osc::new();
+            let samples: Vec<f32> =
+                (0..n).map(|_| osc.next_sample(freq, OscWave::Sine, 0.5, sr)).collect();
 
-        let mut osc = Osc::new();
-        let samples: Vec<f32> = (0..n).map(|_| osc.next_sample(freq, OscWave::Sine, 0.5, sr)).collect();
-
-        // Magnitude of the DFT at `bin`, scaled the same way for every bin so
-        // only the ratio between them is used below.
-        let magnitude_at = |bin: usize| -> f64 {
-            let step = -core::f64::consts::TAU * bin as f64 / n as f64;
-            let (mut re, mut im) = (0.0_f64, 0.0_f64);
-            for (index, sample) in samples.iter().enumerate() {
-                let angle = step * index as f64;
-                re += *sample as f64 * angle.cos();
-                im += *sample as f64 * angle.sin();
+            let fundamental = coherent_amplitude(&samples, sr, freq);
+            assert!(fundamental > 0.9, "the fundamental measured {fundamental}");
+            let mut harmonic_power = 0.0_f64;
+            let mut harmonic = 2.0_f32;
+            while harmonic * freq < sr as f32 * 0.5 {
+                let amplitude = coherent_amplitude(&samples, sr, harmonic * freq) as f64;
+                harmonic_power += amplitude * amplitude;
+                harmonic += 1.0;
             }
-            (re * re + im * im).sqrt()
-        };
-
-        let fundamental_bin = 11usize;
-        let fundamental = magnitude_at(fundamental_bin);
-        assert!(fundamental > 0.0, "the fundamental itself measured zero");
-
-        let nyquist_bin = n / 2;
-        let mut harmonic_power = 0.0_f64;
-        let mut harmonic = 2usize;
-        while fundamental_bin * harmonic < nyquist_bin {
-            let magnitude = magnitude_at(fundamental_bin * harmonic);
-            harmonic_power += magnitude * magnitude;
-            harmonic += 1;
+            let thd_db = db((harmonic_power.sqrt() / fundamental as f64) as f32);
+            assert!(thd_db < -90.0, "{sr} Hz: THD was only {thd_db:.2} dB");
         }
+    }
 
-        let thd_ratio = harmonic_power.sqrt() / fundamental;
-        let thd_db = 20.0 * thd_ratio.log10();
-        println!("table sine THD at 440 Hz / 48 kHz: {thd_db:.2} dB");
-        assert!(thd_db < -90.0, "THD was only {thd_db:.2} dB");
+    /// Every wave is on pitch at every rate: the spectrum's strongest peak is
+    /// the note, to within a cent.
+    #[test]
+    fn every_wave_is_on_pitch_at_every_rate() {
+        for sr in RATES {
+            for wave in OscWave::all() {
+                for freq in [55.0_f32, 440.0, 3_520.0] {
+                    let mut osc = Osc::new();
+                    let samples: Vec<f32> = (0..frames_for(0.5, sr))
+                        .map(|_| osc.next_sample(freq, wave, 0.5, sr))
+                        .collect();
+                    let found = dominant_hz(&samples, sr, 20.0);
+                    assert!(
+                        cents(found, freq).abs() < 1.0,
+                        "{sr} Hz: {wave:?} at {freq} Hz measured {found} Hz"
+                    );
+                }
+            }
+        }
+    }
+
+    /// **The alias test the oscillators never had (MOO-117).** PolyBLEP is a
+    /// two-sample correction, not a band limit: it pushes the folded-back
+    /// harmonics down rather than removing them, and by less the higher the
+    /// note sits against the rate. So the bound is per wave and stated at the
+    /// top of the keyboard's useful range, and the same note at a higher rate
+    /// has to alias no worse -- there is more room above it before anything
+    /// folds. The triangle is naive (its corners are a slope step, which
+    /// aliases at -12 dB/oct rather than the saw's -6), so it gets its own
+    /// bound rather than a correction.
+    #[test]
+    fn band_limited_waves_keep_their_aliases_down_at_every_rate() {
+        let band = (20.0, 20_000.0);
+        for (wave, bound_db) in [
+            (OscWave::Saw, ALIAS_BOUND_SAW_DB),
+            (OscWave::Pulse, ALIAS_BOUND_PULSE_DB),
+            (OscWave::Triangle, ALIAS_BOUND_TRIANGLE_DB),
+        ] {
+            for freq in [440.0_f32, 1_234.5, 3_000.0] {
+                let mut previous = f32::MAX;
+                for sr in RATES {
+                    let mut osc = Osc::new();
+                    let samples: Vec<f32> = (0..frames_for(0.5, sr))
+                        .map(|_| osc.next_sample(freq, wave, 0.5, sr))
+                        .collect();
+                    let alias = alias_db(&samples, sr, freq, band);
+                    println!("{wave:?} {freq} Hz at {sr} Hz: loudest alias {alias:.1} dB");
+                    assert!(
+                        alias < bound_db,
+                        "{sr} Hz: {wave:?} at {freq} Hz aliases at {alias:.1} dB, over {bound_db}"
+                    );
+                    assert!(
+                        alias <= previous + 1.0,
+                        "{wave:?} at {freq} Hz aliases worse at {sr} Hz ({alias:.1} dB) than \
+                         at the rate below ({previous:.1} dB)"
+                    );
+                    previous = alias;
+                }
+            }
+        }
+    }
+
+    /// Worst non-harmonic component a PolyBLEP saw may have in 20 Hz-20 kHz
+    /// at 440 Hz-3 kHz, relative to its fundamental.
+    const ALIAS_BOUND_SAW_DB: f32 = -20.0;
+    const ALIAS_BOUND_PULSE_DB: f32 = -20.0;
+    const ALIAS_BOUND_TRIANGLE_DB: f32 = -20.0;
+
+    /// A NaN or infinite frequency or pulse width must not reach the phase
+    /// accumulator, where it would silence the oscillator for good (MOO-117).
+    #[test]
+    fn a_non_finite_parameter_never_poisons_an_oscillator() {
+        for sr in RATES {
+            for wave in OscWave::all() {
+                for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                    let mut osc = Osc::new();
+                    for _ in 0..64 {
+                        assert!(osc.next_sample(bad, wave, bad, sr).is_finite());
+                    }
+                    for _ in 0..64 {
+                        assert!(osc.next_sample(440.0, wave, 0.5, sr).is_finite());
+                    }
+                }
+            }
+        }
     }
 
     #[test]

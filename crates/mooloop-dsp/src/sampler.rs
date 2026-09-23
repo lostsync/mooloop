@@ -2984,9 +2984,7 @@ mod tests {
         // The sample under the voice is a rising ramp, so consecutive frames
         // differ a little on their own; a stepped gain would differ by the
         // whole jump at once.
-        let largest_step = bus.l[..frames]
-            .windows(2)
-            .fold(0.0f32, |worst, pair| worst.max((pair[1] - pair[0]).abs()));
+        let largest_step = crate::testkit::max_step(&bus.l[..frames]);
         assert!(
             largest_step < 0.05,
             "the trim stepped by {largest_step} in one sample"
@@ -3184,8 +3182,7 @@ mod tests {
     }
 
     fn window_rms(bus: &StereoBus, from: usize, to: usize) -> f32 {
-        let sum: f32 = bus.l[from..to].iter().map(|s| s * s).sum();
-        (sum / (to - from) as f32).sqrt()
+        crate::testkit::rms(&bus.l[from..to])
     }
 
     /// The shape the split exists for: amplitude held flat while the filter

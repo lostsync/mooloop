@@ -202,7 +202,9 @@ Files marked *shared* are split in the table above.
 
 - `dsp/src/`: `filter.rs`, `biquad.rs`, `osc.rs`, `env.rs`, `lfo.rs`,
   `smooth.rs`, `scale.rs`, `delayline.rs`, `align.rs`, `shaper.rs`,
-  `harmonics.rs`, `dynamics.rs`, `analysis.rs`, `lib.rs`
+  `harmonics.rs`, `dynamics.rs`, `analysis.rs`, `lib.rs`, and `testkit.rs`,
+  the measurement kit every DSP test measures through at 44.1, 48, 96 and
+  192 kHz (MOO-117)
 - `spikes/time-stretch/`
 
 ### 7. Parameters & Control

@@ -2663,6 +2663,7 @@ impl SourceNode for MlP8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::rms;
 
     /// `MlP8Lfo::skip` exists to be cheaper than the loop it replaces, and it
     /// is only allowed to be cheaper -- never different. Every wave, with the
@@ -2914,32 +2915,12 @@ mod tests {
         bus.l[..frames].to_vec()
     }
 
-    fn rms(signal: &[f32]) -> f32 {
-        let sum: f64 = signal.iter().map(|s| (*s as f64) * (*s as f64)).sum();
-        (sum / signal.len() as f64).sqrt() as f32
-    }
-
-    /// Energy in a narrow band around `hz`, from a naive DFT.
-    ///
-    /// A band rather than one bin: these renders are neither an integer number
-    /// of periods nor of constant amplitude — an envelope is running — so a
-    /// single bin scallops badly and would measure the window rather than the
-    /// signal.
+    /// The amplitude at `hz`, by the kit's windowed measure: these renders are
+    /// neither an integer number of periods nor of constant amplitude -- an
+    /// envelope is running -- so an unwindowed bin would scallop and measure
+    /// the window rather than the signal.
     fn magnitude_at(signal: &[f32], hz: f32) -> f32 {
-        let n = signal.len();
-        let centre = (hz * n as f32 / SR as f32).round() as usize;
-        (centre.saturating_sub(2)..=centre + 2)
-            .map(|bin| {
-                let step = -core::f64::consts::TAU * bin as f64 / n as f64;
-                let (mut re, mut im) = (0.0_f64, 0.0_f64);
-                for (index, sample) in signal.iter().enumerate() {
-                    let angle = step * index as f64;
-                    re += *sample as f64 * angle.cos();
-                    im += *sample as f64 * angle.sin();
-                }
-                ((re * re + im * im).sqrt() / n as f64) as f32
-            })
-            .sum()
+        crate::testkit::tone_amplitude(signal, SR, hz)
     }
 
     /// One saw, everything else off. The instrument's starting point.
@@ -3848,7 +3829,7 @@ mod tests {
             params.noise_color = tilt;
             let out = render(params, 60, 16384);
             levels.push(rms(&out));
-            lows.push(magnitude_at(&out, 120.0) + magnitude_at(&out, 200.0));
+            lows.push(crate::testkit::band_rms(&out, SR, (100.0, 220.0)));
         }
         assert!(
             lows[0] > lows[1] && lows[1] > lows[2],

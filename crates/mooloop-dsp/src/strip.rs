@@ -841,6 +841,7 @@ impl Strip {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::rms;
     use mooloop_core::strip::{
         strip_band_param, STRIP_BAND_FREQ, STRIP_BAND_GAIN, STRIP_BAND_KIND,
         STRIP_BAND_POSITIONS, STRIP_BAND_Q, STRIP_COMP_KNEE_DB, STRIP_EQ_BANDS,
@@ -869,10 +870,6 @@ mod tests {
             bus.r[index] = amplitude * phase.sin();
         }
         bus
-    }
-
-    fn rms(samples: &[f32]) -> f32 {
-        (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
     }
 
     /// A default strip with `edit` applied.

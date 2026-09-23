@@ -98,12 +98,15 @@ pub(crate) fn worst_difference(a: &[f32], b: &[f32]) -> f32 {
 /// "control changes are continuous" family (MOO-104) reads, and each case
 /// compares it against the same measurement taken on the material alone.
 pub(crate) fn largest_step(left: &[f32], right: &[f32]) -> f32 {
-    let side = |samples: &[f32]| {
-        samples
-            .windows(2)
-            .fold(0.0f32, |worst, pair| worst.max((pair[1] - pair[0]).abs()))
-    };
-    side(left).max(side(right))
+    let (left, right) = (
+        mooloop_dsp::testkit::max_step(left),
+        mooloop_dsp::testkit::max_step(right),
+    );
+    // NaN-aware, like the kit's measure: a poisoned side is never "no step".
+    if left.is_nan() || right.is_nan() {
+        return f32::NAN;
+    }
+    left.max(right)
 }
 
 /// What [`step_across`] measured on one side of a control change and across it.

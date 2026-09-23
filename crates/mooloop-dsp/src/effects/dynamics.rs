@@ -530,6 +530,7 @@ impl AudioNode for LimiterEffect {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::peak;
     use crate::event::{Event, TimedEvent};
 
     const SR: u32 = 48_000;
@@ -555,9 +556,6 @@ mod tests {
         bus
     }
 
-    fn peak(samples: &[f32]) -> f32 {
-        samples.iter().fold(0.0f32, |a, s| a.max(s.abs()))
-    }
 
     #[test]
     fn the_gate_passes_signal_above_its_threshold() {
@@ -839,9 +837,7 @@ mod tests {
             },
         }));
         effect.process(&context(frames), &mut bus, &events, None);
-        let max_step = (1..frames)
-            .map(|i| (bus.l[i] - bus.l[i - 1]).abs())
-            .fold(0.0f32, f32::max);
+        let max_step = crate::testkit::max_step(&bus.l[..frames]);
         assert!(
             max_step < 0.1,
             "makeup change left a discontinuity of {max_step}"
@@ -869,9 +865,7 @@ mod tests {
             },
         }));
         effect.process(&context(frames), &mut bus, &events, None);
-        let max_step = (1..frames)
-            .map(|i| (bus.l[i] - bus.l[i - 1]).abs())
-            .fold(0.0f32, f32::max);
+        let max_step = crate::testkit::max_step(&bus.l[..frames]);
         assert!(
             max_step < 0.1,
             "gain change left a discontinuity of {max_step}"

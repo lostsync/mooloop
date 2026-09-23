@@ -1,10 +1,8 @@
 //! Normalized-knob-to-frequency mapping shared by every filter-cutoff-style
 //! control: `20 * (max_hz / 20) ^ normalized` puts 0 at 20 Hz, 1 at
 //! `max_hz`, and spaces perceptually even steps in between (each unit of
-//! `normalized` covers the same number of octaves). Used identically by
-//! `MonoSynth`, `PolySynth`, `Sampler`, and `SpectrumAnalyzer`'s bin
-//! spacing — pull any new frequency knob's mapping from here rather than
-//! re-deriving it.
+//! `normalized` covers the same number of octaves). Pull any new frequency
+//! knob's mapping from here rather than re-deriving it.
 
 /// Map a normalized `0..=1` knob position to a frequency in Hz.
 pub fn hz_from_normalized(normalized: f32, max_hz: f32) -> f32 {
@@ -16,6 +14,18 @@ pub fn hz_from_normalized(normalized: f32, max_hz: f32) -> f32 {
 /// the same normalized control.
 pub fn normalized_from_hz(hz: f32, max_hz: f32) -> f32 {
     (hz.max(20.0) / 20.0).ln() / (max_hz / 20.0).ln()
+}
+
+/// Clamp a parameter into `low..=high`, sending NaN to `low`.
+///
+/// `f32::clamp` passes NaN straight through, and a NaN cutoff or resonance
+/// that reaches a filter's coefficients poisons its state for good -- every
+/// later sample is NaN, whatever the input (`reports/teams-2026-09-22.md`,
+/// F5). `max` and `min` each drop a NaN operand, so this lands a NaN on the
+/// bottom of the range and infinities on the nearer end. Same cost as a
+/// `clamp`: two compares.
+pub fn clamp_param(value: f32, low: f32, high: f32) -> f32 {
+    value.max(low).min(high)
 }
 
 #[cfg(test)]
@@ -40,5 +50,13 @@ mod tests {
                 "{normalized} -> {hz} Hz -> {recovered}"
             );
         }
+    }
+
+    #[test]
+    fn a_nan_parameter_lands_on_the_bottom_of_its_range() {
+        assert_eq!(clamp_param(f32::NAN, 20.0, 100.0), 20.0);
+        assert_eq!(clamp_param(f32::INFINITY, 20.0, 100.0), 100.0);
+        assert_eq!(clamp_param(f32::NEG_INFINITY, 20.0, 100.0), 20.0);
+        assert_eq!(clamp_param(50.0, 20.0, 100.0), 50.0);
     }
 }

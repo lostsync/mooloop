@@ -939,12 +939,9 @@ mod tests {
         bus
     }
 
+    /// Both channels' energy over `range`, by the kit's measure.
     fn energy(bus: &StereoBus, range: std::ops::Range<usize>) -> f32 {
-        bus.l[range.clone()]
-            .iter()
-            .chain(bus.r[range].iter())
-            .map(|sample| sample * sample)
-            .sum()
+        crate::testkit::energy(&bus.l[range.clone()]) + crate::testkit::energy(&bus.r[range])
     }
 
     #[test]

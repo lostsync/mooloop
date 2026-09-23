@@ -232,6 +232,7 @@ fn blackman_sinc_kernel() -> [f32; FIR_TAPS] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::{alias_db, frames_for, sine, Probe, RATES};
 
     /// The literal is a copy of a value `mooloop-core` owns; this is what
     /// reads the original.
@@ -295,57 +296,56 @@ mod tests {
     }
 
     /// The oversampler must be near-transparent when the nonlinearity is the
-    /// identity, apart from its filter delay.
+    /// identity, apart from its filter delay -- in the audible band, at every
+    /// rate: its filters are fixed in proportion to the rate, so the band they
+    /// have to pass is a smaller share of it the higher the rate runs.
     #[test]
     fn identity_shaping_preserves_a_sine() {
-        let sr = 48_000.0f32;
-        let freq = 1_000.0f32;
-        let frames = 4_096;
-        let mut os = Oversampler2x::new();
-        let mut out = vec![0.0f32; frames];
-        for (i, slot) in out.iter_mut().enumerate() {
-            let x = (i as f32 / sr * freq * core::f32::consts::TAU).sin();
-            *slot = os.process(x, |v| v);
+        for sr in RATES {
+            for freq in [100.0_f32, 1_000.0, 10_000.0] {
+                let mut os = Oversampler2x::new();
+                let gain = Probe::new(sr).gain_db(|x| os.process(x, |v| v), freq);
+                assert!(
+                    gain.abs() < IDENTITY_PASSBAND_DB,
+                    "{sr} Hz: identity oversampling moved {freq} Hz by {gain:.3} dB"
+                );
+            }
         }
-        // Skip the filter's group delay and startup transient.
-        let settled = &out[512..];
-        let rms = (settled.iter().map(|s| s * s).sum::<f32>() / settled.len() as f32).sqrt();
-        let expected = (0.5f32).sqrt();
-        assert!(
-            (rms / expected - 1.0).abs() < 0.05,
-            "identity oversampling changed level: {rms} vs {expected}"
-        );
     }
+
+    /// How far the identity path may move a tone in the audible band.
+    const IDENTITY_PASSBAND_DB: f32 = 0.5;
 
     /// The point of the whole module: hard-clipping a high sine at base rate
     /// folds harmonics down into the audible band. At 2x they are filtered
-    /// before they can. Compare energy well below the fundamental, where
-    /// only aliases can land.
+    /// before they can. The kit's alias measure finds the loudest component
+    /// that is not a harmonic of the note, at every rate.
     #[test]
     fn oversampling_reduces_aliasing_below_the_fundamental() {
-        let sr = 48_000.0f32;
-        let freq = 9_000.0f32;
-        let frames = 8_192;
-
-        let mut naive = Vec::with_capacity(frames);
-        let mut over = Vec::with_capacity(frames);
-        let mut os = Oversampler2x::new();
-        for i in 0..frames {
-            let x = (i as f32 / sr * freq * core::f32::consts::TAU).sin() * 4.0;
-            naive.push(shape(DriveCurve::Hard, x));
-            over.push(os.process(x, |v| shape(DriveCurve::Hard, v)));
+        let freq = 9_000.0_f32;
+        for sr in RATES {
+            let input = sine(freq, 4.0, sr, frames_for(0.5, sr));
+            let mut os = Oversampler2x::new();
+            let naive: Vec<f32> = input.iter().map(|&x| shape(DriveCurve::Hard, x)).collect();
+            let over: Vec<f32> = input
+                .iter()
+                .map(|&x| os.process(x, |v| shape(DriveCurve::Hard, v)))
+                .collect();
+            let band = (20.0, 20_000.0);
+            let naive_alias = alias_db(&naive, sr, freq, band);
+            let over_alias = alias_db(&over, sr, freq, band);
+            println!("{sr} Hz: hard clip aliases at {naive_alias:.1} dB, oversampled {over_alias:.1} dB");
+            assert!(
+                over_alias < naive_alias - OVERSAMPLED_ALIAS_MARGIN_DB,
+                "{sr} Hz: oversampled alias {over_alias:.1} dB should be well under naive \
+                 {naive_alias:.1} dB"
+            );
         }
-
-        // Goertzel energy at 3 kHz — not a harmonic of 9 kHz, so anything
-        // there is an alias.
-        let probe = 3_000.0;
-        let naive_alias = tone_energy(&naive[1_024..], sr, probe);
-        let over_alias = tone_energy(&over[1_024..], sr, probe);
-        assert!(
-            over_alias < naive_alias * 0.5,
-            "oversampled alias energy {over_alias} should be well under naive {naive_alias}"
-        );
     }
+
+    /// How much the 2x path has to take off the loudest alias of a
+    /// hard-clipped 9 kHz sine.
+    const OVERSAMPLED_ALIAS_MARGIN_DB: f32 = 6.0;
 
     #[test]
     fn identity_path_has_the_declared_latency() {
@@ -361,17 +361,5 @@ mod tests {
             .map(|(index, _)| index)
             .unwrap();
         assert_eq!(peak, OVERSAMPLER_LATENCY_FRAMES);
-    }
-
-    /// Single-bin DFT magnitude, normalized by length.
-    fn tone_energy(samples: &[f32], sample_rate: f32, freq: f32) -> f32 {
-        use core::f32::consts::TAU;
-        let (mut re, mut im) = (0.0f32, 0.0f32);
-        for (i, s) in samples.iter().enumerate() {
-            let phase = TAU * freq * i as f32 / sample_rate;
-            re += s * phase.cos();
-            im -= s * phase.sin();
-        }
-        (re * re + im * im).sqrt() / samples.len() as f32
     }
 }

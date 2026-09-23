@@ -319,6 +319,7 @@ impl Preamp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::{coherent_amplitude, db};
 
     const SAMPLE_RATE: u32 = 48_000;
 
@@ -327,19 +328,7 @@ mod tests {
     /// five bins are wanted and a whole FFT would be more code and less
     /// obviously correct.
     fn harmonic_amplitude(samples: &[f32], fundamental: f32, n: usize) -> f32 {
-        let step = std::f32::consts::TAU * fundamental * n as f32 / SAMPLE_RATE as f32;
-        let (mut sin_sum, mut cos_sum) = (0.0f64, 0.0f64);
-        for (index, sample) in samples.iter().enumerate() {
-            let phase = step * index as f32;
-            sin_sum += (*sample * phase.sin()) as f64;
-            cos_sum += (*sample * phase.cos()) as f64;
-        }
-        let scale = 2.0 / samples.len() as f64;
-        (((sin_sum * scale).powi(2) + (cos_sum * scale).powi(2)).sqrt()) as f32
-    }
-
-    fn db(ratio: f32) -> f32 {
-        20.0 * ratio.max(1e-12).log10()
+        coherent_amplitude(samples, SAMPLE_RATE, fundamental * n as f32)
     }
 
     /// Render a sine of `hz` at `amplitude`, discarding the first tenth so
