@@ -6183,10 +6183,21 @@ impl AppUi {
         sync_command_availability(&window, &command_state.borrow());
         let export_sample_rate = handle.sample_rate();
 
+        // Set when Quit or the window's close button arrives during a save,
+        // and read by the pump once the operation has reported (MOO-92).
+        let quit_after_document = Rc::new(Cell::new(false));
         {
             let st = state.clone();
             let quit_commands = command_state.clone();
+            let weak = window.as_weak();
+            let quit_after_document = quit_after_document.clone();
             window.on_quit_requested(move || {
+                if weak
+                    .upgrade()
+                    .is_some_and(|window| defer_quit_while_busy(&window, &quit_after_document))
+                {
+                    return;
+                }
                 // Same guard as Open Song: unsaved work must be confirmed
                 // away, and the dialog round-trip must not block the UI.
                 //
@@ -6226,9 +6237,11 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_new_song(move || {
                 let dirty = st.borrow().session.dirty;
-                if let Some(window) = weak.upgrade() {
-                    window.set_document_busy(true);
-                    window.set_status_message("Creating new song...".into());
+                let Some(window) = weak.upgrade() else {
+                    return;
+                };
+                if !begin_document_operation(&window, "Creating new song...") {
+                    return;
                 }
                 let tx = tx.clone();
                 std::thread::spawn(move || {
@@ -6249,9 +6262,11 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_open_song(move || {
                 let dirty = st.borrow().session.dirty;
-                if let Some(window) = weak.upgrade() {
-                    window.set_document_busy(true);
-                    window.set_status_message("Opening song...".into());
+                let Some(window) = weak.upgrade() else {
+                    return;
+                };
+                if !begin_document_operation(&window, "Opening song...") {
+                    return;
                 }
                 let tx = tx.clone();
                 std::thread::spawn(move || {
@@ -6300,8 +6315,10 @@ impl AppUi {
                 let current = (!save_as)
                     .then(|| st.borrow().session.bundle_path.clone())
                     .flatten();
-                window.set_document_busy(true);
-                window.set_status_message("Saving song...".into());
+                let generation = st.borrow().session.document_generation;
+                if !begin_document_operation(&window, "Saving song...") {
+                    return;
+                }
                 let tx = tx.clone();
                 std::thread::spawn(move || {
                     let path = current
@@ -6328,6 +6345,7 @@ impl AppUi {
                                 path,
                                 mode,
                                 revision,
+                                generation,
                                 report,
                                 sample_references: saved
                                     .channels
@@ -6400,8 +6418,9 @@ impl AppUi {
                         .collect(),
                 };
                 let mode = asset_mode_from_window(&window);
-                window.set_document_busy(true);
-                window.set_status_message("Saving kit...".into());
+                if !begin_document_operation(&window, "Saving kit...") {
+                    return;
+                }
                 let tx = tx.clone();
                 std::thread::spawn(move || {
                     let Some(path) =
@@ -6438,8 +6457,9 @@ impl AppUi {
                     .setup
                     .clone();
                 let mode = asset_mode_from_window(&window);
-                window.set_document_busy(true);
-                window.set_status_message("Saving channel...".into());
+                if !begin_document_operation(&window, "Saving channel...") {
+                    return;
+                }
                 let tx = tx.clone();
                 std::thread::spawn(move || {
                     let Some(path) =
@@ -6465,13 +6485,12 @@ impl AppUi {
             let tx = document_tx.clone();
             let weak = window.as_weak();
             let callback = move || {
-                if let Some(window) = weak.upgrade() {
-                    window.set_document_busy(true);
-                    window.set_status_message(if kit {
-                        "Loading kit...".into()
-                    } else {
-                        "Loading channel...".into()
-                    });
+                let Some(window) = weak.upgrade() else {
+                    return;
+                };
+                let status = if kit { "Loading kit..." } else { "Loading channel..." };
+                if !begin_document_operation(&window, status) {
+                    return;
                 }
                 let tx = tx.clone();
                 std::thread::spawn(move || {
@@ -6665,8 +6684,9 @@ impl AppUi {
                 {
                     return;
                 }
-                window.set_document_busy(true);
-                window.set_status_message("Saving preset...".into());
+                if !begin_document_operation(&window, "Saving preset...") {
+                    return;
+                }
                 let tx = tx.clone();
                 std::thread::spawn(move || {
                     let result = match source.target {
@@ -6738,9 +6758,10 @@ impl AppUi {
                     format,
                     bitrate,
                 );
+                if !begin_document_operation(&window, "Rendering audio...") {
+                    return;
+                }
                 window.set_export_open(false);
-                window.set_document_busy(true);
-                window.set_status_message("Rendering audio...".into());
                 let tx = tx.clone();
                 std::thread::spawn(move || {
                     let Some(path) = pick_export_dialog(request.extension()) else {
@@ -6772,7 +6793,16 @@ impl AppUi {
         {
             let st = state.clone();
             let close_commands = command_state.clone();
+            let weak = window.as_weak();
+            let quit_after_document = quit_after_document.clone();
             window.window().on_close_requested(move || {
+                // A save in flight finishes first; the pump quits after it.
+                if weak
+                    .upgrade()
+                    .is_some_and(|window| defer_quit_while_busy(&window, &quit_after_document))
+                {
+                    return CloseRequestResponse::KeepWindowShown;
+                }
                 // Closing the window is the other way out, and it asks the
                 // same two questions as the Quit menu row in the same order.
                 // A take in flight first: it is not `dirty`, so this path used
@@ -14399,6 +14429,8 @@ impl AppUi {
                             state.session.bundle_path = None;
                             state.session.dirty = false;
                             state.session.revision = state.session.revision.wrapping_add(1);
+                            state.session.document_generation =
+                                state.session.document_generation.wrapping_add(1);
                             state.update_document_title(&window);
                             drop(state);
                             // An entry is a snapshot of the document it was
@@ -14417,16 +14449,29 @@ impl AppUi {
                             path,
                             mode,
                             revision,
+                            generation,
                             report,
                             sample_references,
                         } => {
                             let mut state = st.borrow_mut();
-                            state.session.bundle_path = Some(path.clone());
-                            if state.session.revision == revision {
-                                state.session.dirty = false;
-                                apply_sample_references(&mut state.session.channels, sample_references);
+                            if !apply_saved_song(
+                                &mut state,
+                                &window,
+                                generation,
+                                revision,
+                                &path,
+                                sample_references,
+                            ) {
+                                log_info!(
+                                    "project",
+                                    "song saved to {} after another was opened; the open song keeps its own path",
+                                    path.display()
+                                );
+                                window.set_status_message(
+                                    format!("Saved the previous song to {}", path.display()).into(),
+                                );
+                                continue;
                             }
-                            state.update_document_title(&window);
                             // What the save *delivered*, not what it was
                             // asked for. A sample the bundle already owns is
                             // kept there whatever the mode says, so a box
@@ -14640,6 +14685,17 @@ impl AppUi {
                                 .into(),
                             );
                         }
+                    }
+                }
+                // A quit that arrived during a save asks again now that the
+                // save has reported, so its "unsaved changes?" question is
+                // asked about the document as the save left it (MOO-92).
+                let idle = weak
+                    .upgrade()
+                    .is_some_and(|window| !window.get_document_busy());
+                if idle && quit_after_document.replace(false) {
+                    if let Some(window) = weak.upgrade() {
+                        window.invoke_quit_requested();
                     }
                 }
                 // Resets are applied before loads, never after: a reset
@@ -16498,6 +16554,7 @@ fn finish_document_load(
     if load_opens_document(target) {
         state.session.bundle_path = Some(path.to_path_buf());
         state.session.dirty = false;
+        state.session.document_generation = state.session.document_generation.wrapping_add(1);
         // The per-sample flags, not the document's mode: a bundle saved
         // `referenced` can still hold every sample, because un-embedding is
         // refused rather than performed.
@@ -16789,6 +16846,67 @@ fn build_preset_rows(
     rows
 }
 
+/// Starts a document operation -- a save, an open, a load, an export -- or
+/// refuses it because one is already running, and says so.
+///
+/// **The one gate every document command goes through** (MOO-92). The File
+/// menu has long greyed itself out on `document-busy`, but shortcuts and the
+/// browser reach the callbacks directly, so Ctrl+S on a slow song followed by
+/// Ctrl+N started the new song while the save was still writing the old one,
+/// and the save's late result then gave the new song the old one's path. Two
+/// saves at once raced for the same files. Checking and setting the flag here,
+/// on the UI thread, makes "one at a time" true of every entry point at once.
+fn begin_document_operation(window: &MainWindow, status: &str) -> bool {
+    if window.get_document_busy() {
+        window.set_status_message(
+            "Busy: wait for the file operation in progress to finish".into(),
+        );
+        return false;
+    }
+    window.set_document_busy(true);
+    window.set_status_message(status.into());
+    true
+}
+
+/// Whether a quit has to wait for a document operation in flight, and if so
+/// remember it: the pump asks again once the operation has reported
+/// (MOO-92). Quitting underneath a save killed the save thread mid-write.
+fn defer_quit_while_busy(window: &MainWindow, pending: &Cell<bool>) -> bool {
+    if !window.get_document_busy() {
+        return false;
+    }
+    pending.set(true);
+    window.set_status_message("Quitting when the file operation in progress finishes...".into());
+    true
+}
+
+/// What a finished song save changes about the open document, if it is still
+/// the document the save was started from. Returns whether it was.
+///
+/// The path is the part that must not cross (MOO-92): a result that arrives
+/// after New or Open has replaced the song would otherwise make the next
+/// Ctrl+S write the new song over the old one's file. `dirty` was already
+/// guarded by the revision, which a new song also bumps.
+fn apply_saved_song(
+    state: &mut UiState,
+    window: &MainWindow,
+    generation: u64,
+    revision: u64,
+    path: &Path,
+    sample_references: Vec<Option<SampleReference>>,
+) -> bool {
+    if state.session.document_generation != generation {
+        return false;
+    }
+    state.session.bundle_path = Some(path.to_path_buf());
+    if state.session.revision == revision {
+        state.session.dirty = false;
+        apply_sample_references(&mut state.session.channels, sample_references);
+    }
+    state.update_document_title(window);
+    true
+}
+
 /// Opens a generator or channel preset off the UI thread.
 ///
 /// Shared by the device rail's preset menus and the browser panel, which
@@ -16802,8 +16920,9 @@ fn load_preset_document(
     target: LoadTarget,
     label: &str,
 ) {
-    window.set_document_busy(true);
-    window.set_status_message(format!("Loading {label}...").into());
+    if !begin_document_operation(window, &format!("Loading {label}...")) {
+        return;
+    }
     let tx = tx.clone();
     std::thread::spawn(move || {
         let result = resolve_document(&path)
@@ -17880,6 +17999,104 @@ mod tests {
             index,
             "and the channel it added is the one left selected"
         );
+    }
+
+    /// **Every document command is refused while one is running** (MOO-92).
+    /// Ctrl+S, Ctrl+O and Ctrl+N reach `invoke_save_song`, `invoke_open_song`
+    /// and `invoke_new_song` straight from the shortcut table, past the File
+    /// menu's `enabled`, so the gate is the first thing each callback does.
+    #[test]
+    fn a_document_command_is_refused_while_another_is_running() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().expect("the testing backend builds a window");
+
+        assert!(begin_document_operation(&window, "Saving song..."));
+        assert!(window.get_document_busy());
+        assert_eq!(window.get_status_message(), "Saving song...");
+
+        for next in ["Creating new song...", "Opening song...", "Saving song..."] {
+            assert!(!begin_document_operation(&window, next), "{next} started under a save");
+            assert!(window.get_document_busy());
+            assert!(window.get_status_message().starts_with("Busy"));
+        }
+
+        window.set_document_busy(false);
+        assert!(begin_document_operation(&window, "Creating new song..."));
+    }
+
+    /// **Quit waits for a save in flight** (MOO-92): it is remembered rather
+    /// than acted on, and acted on only once nothing is busy.
+    #[test]
+    fn a_quit_during_a_save_waits_for_it() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().expect("the testing backend builds a window");
+        let pending = Cell::new(false);
+
+        assert!(!defer_quit_while_busy(&window, &pending), "nothing running: quit now");
+        assert!(!pending.get());
+
+        window.set_document_busy(true);
+        assert!(defer_quit_while_busy(&window, &pending));
+        assert!(pending.get());
+    }
+
+    /// **Ctrl+S then Ctrl+N: the late result does not change the new song's
+    /// path or title** (MOO-92). The save started in one document and
+    /// finished in the next; before, it set `bundle_path` unconditionally,
+    /// and the next Ctrl+S wrote the starter song over the saved one.
+    #[test]
+    fn a_save_that_finishes_after_new_song_leaves_the_new_song_alone() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().expect("the testing backend builds a window");
+        let state = Rc::new(RefCell::new(UiState::new(None, 48_000, &window)));
+        let (generation, revision) = {
+            let state = state.borrow();
+            (state.session.document_generation, state.session.revision)
+        };
+
+        // New Song, as the pump installs it.
+        {
+            let mut state = state.borrow_mut();
+            state.session.revision = state.session.revision.wrapping_add(1);
+            state.session.document_generation = state.session.document_generation.wrapping_add(1);
+            state.session.dirty = true;
+            state.update_document_title(&window);
+        }
+        let title = window.get_document_title();
+
+        let applied = apply_saved_song(
+            &mut state.borrow_mut(),
+            &window,
+            generation,
+            revision,
+            Path::new("/tmp/slow.mooloop"),
+            Vec::new(),
+        );
+
+        assert!(!applied);
+        assert_eq!(state.borrow().session.bundle_path, None);
+        assert!(state.borrow().session.dirty, "the new song's edits are still unsaved");
+        assert_eq!(window.get_document_title(), title);
+
+        // The same result in the document it was started from does land.
+        let (generation, revision) = {
+            let state = state.borrow();
+            (state.session.document_generation, state.session.revision)
+        };
+        assert!(apply_saved_song(
+            &mut state.borrow_mut(),
+            &window,
+            generation,
+            revision,
+            Path::new("/tmp/slow.mooloop"),
+            Vec::new(),
+        ));
+        assert_eq!(
+            state.borrow().session.bundle_path.as_deref(),
+            Some(Path::new("/tmp/slow.mooloop"))
+        );
+        assert!(!state.borrow().session.dirty);
+        assert_eq!(window.get_document_title(), "slow - mooloop");
     }
 
     /// A window, a one-channel song and an empty history: what every undo

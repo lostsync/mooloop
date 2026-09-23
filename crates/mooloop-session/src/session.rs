@@ -279,6 +279,12 @@ pub struct Session {
     pub bundle_path: Option<PathBuf>,
     pub dirty: bool,
     pub revision: u64,
+    /// Which document is open: bumped each time a song is installed in place
+    /// of another (New, Open). A save carries the generation it started in,
+    /// and its result is applied to `bundle_path` and `dirty` only while that
+    /// document is still the open one (MOO-92): a late result from the song
+    /// before must not give the new one its path.
+    pub document_generation: u64,
     pub source_revision: u64,
     pub generator_presets: Vec<PresetSummary>,
     pub channel_presets: Vec<PresetSummary>,
@@ -364,6 +370,7 @@ impl Default for Session {
             bundle_path: None,
             dirty: false,
             revision: 0,
+            document_generation: 0,
             source_revision: 0,
             generator_presets: Vec::new(),
             channel_presets: Vec::new(),

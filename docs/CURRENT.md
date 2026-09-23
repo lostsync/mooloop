@@ -904,7 +904,13 @@ land on its own when it starts to matter:
   UI, realtime engine installation, persistence, and offline renderer. The
   live UI still owns incremental edits and produces snapshots for these paths.
 - Songs, kits, and channel presets use the v1 bundle contract documented in
-  `PROJECT_FORMAT.md`. Saves stage and replace bundles atomically; embedded and
+  `PROJECT_FORMAT.md`. Saves are durable: the staged file is synced, read
+  back and parsed before one atomic rename puts it in place, and the version
+  it replaced is kept as `<name>.bak`. One document operation (save, open,
+  new, load, export) runs at a time: a second one, from the menu, a shortcut
+  or the browser, is refused with a status message, and Quit or closing the
+  window during a save waits for it to finish. A save that finishes after
+  another song has been opened does not give that song its path. Embedded and
   referenced asset policies are available per save. **Embedding is one-way**:
   a sample the bundle already owns stays there whatever the box says, because
   the bundle holds the only copy of it and writing a reference would delete

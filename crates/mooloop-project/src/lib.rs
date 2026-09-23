@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -642,8 +643,16 @@ fn save_song_file(path: &Path, project: &Project, mode: AssetMode) -> Result<Sav
             contains: Vec::new(),
             document,
         };
-        fs::write(&staging_file, toml::to_string_pretty(&envelope)?)?;
-        replace_song_file(path, &staging_file)?;
+        write_synced(&staging_file, toml::to_string_pretty(&envelope)?.as_bytes())?;
+        // Read back from the disk and parsed before anything is renamed: a
+        // save may only put in place a file the loader will open (MOO-92).
+        parse_manifest(&fs::read_to_string(&staging_file)?)?;
+        // What this save copied into the sidecar is on the disk too, and so
+        // are the names it copied them under, before the song names them.
+        for directory in added.iter().filter_map(|file| file.parent()) {
+            sync_dir(directory)?;
+        }
+        replace_song_file(path, &staging_file, nonce)?;
         Ok(report)
     })();
 
@@ -828,7 +837,9 @@ fn copy_new_file(source: &Path, destination: &Path) -> Result<(), Error> {
         .and_then(|name| name.to_str())
         .unwrap_or("asset");
     let partial = directory.join(format!(".{leaf}.part-{}", std::process::id()));
-    let result = fs::copy(source, &partial).and_then(|_| fs::rename(&partial, destination));
+    let result = fs::copy(source, &partial)
+        .and_then(|_| fs::File::open(&partial)?.sync_all())
+        .and_then(|_| fs::rename(&partial, destination));
     if result.is_err() {
         let _ = fs::remove_file(&partial);
     }
@@ -863,36 +874,119 @@ fn remove_path(path: &Path) -> Result<(), std::io::Error> {
     }
 }
 
-/// Put the staged song file at `target`, keeping the old one aside until the
-/// new one is in place so a failed rename can put it back.
+/// Put the staged song file at `target`, and keep what was there as
+/// `<name>.bak`.
+///
+/// **One rename, and the song is never missing** (MOO-92). A plain file is
+/// replaced by `rename(staging, target)`, which POSIX makes atomic: a reader,
+/// a crash or a power cut sees the old song or the new one, never neither.
+/// Until 2026-09-23 the old file was moved aside first and the staged one
+/// renamed onto the now-empty path, so there was a window with no song at
+/// all, and nothing had been flushed to the disk, so the "new" file a crash
+/// left could be empty. The staged file is `sync_all`ed by the caller and the
+/// folder is synced here, after the rename, so the rename itself survives.
+///
+/// The previous version is kept as a hard link, made before the rename under
+/// a name this save alone uses and then renamed onto `<name>.bak`, so two
+/// saves never share a backup path and a `.bak` is always a whole file.
 ///
 /// The song file only. Its sidecar is written to in place and never swapped
 /// out (see [`save_song_file`]). `target` may be a legacy directory-style
-/// song, which is replaced by the file here; its samples have already been
-/// copied into the sidecar by then.
-fn replace_song_file(target: &Path, staging_file: &Path) -> Result<(), Error> {
+/// song, which a file cannot be renamed over; that one is moved to
+/// `<name>.bak` first, and its samples have already been copied into the
+/// sidecar by then.
+fn replace_song_file(target: &Path, staging_file: &Path, nonce: u128) -> Result<(), Error> {
     let parent = target.parent().expect("validated song parent");
     let name = target
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("mooloop");
-    let backup = parent.join(format!(".{name}.backup-{}", std::process::id()));
-    if backup.exists() {
-        remove_path(&backup)?;
+    let kept = parent.join(format!("{name}.bak"));
+
+    if target.is_dir() {
+        if kept.exists() {
+            remove_path(&kept)?;
+        }
+        fs::rename(target, &kept)?;
+        let placed =
+            injected_fault().and_then(|()| fs::rename(staging_file, target).map_err(Error::Io));
+        if let Err(error) = placed {
+            let _ = fs::rename(&kept, target);
+            return Err(error);
+        }
+        sync_dir(parent)?;
+        return Ok(());
     }
 
-    let had_target = target.exists();
-    if had_target {
-        fs::rename(target, &backup)?;
-    }
-    if let Err(error) = fs::rename(staging_file, target) {
-        if had_target {
-            let _ = fs::rename(&backup, target);
+    if target.exists() {
+        let link = parent.join(format!(".{name}.bak-{}-{nonce}", std::process::id()));
+        // A hard link costs nothing and leaves the old inode where the old
+        // bytes are; a filesystem without them gets a copy.
+        let linked = fs::hard_link(target, &link).or_else(|_| {
+            fs::copy(target, &link)?;
+            fs::File::open(&link)?.sync_all()
+        });
+        match linked.and_then(|()| fs::rename(&link, &kept)) {
+            Ok(()) => {}
+            Err(error) => {
+                let _ = fs::remove_file(&link);
+                return Err(Error::Io(error));
+            }
         }
-        return Err(Error::Io(error));
     }
-    if had_target {
-        remove_path(&backup)?;
+    injected_fault()?;
+    fs::rename(staging_file, target)?;
+    sync_dir(parent)?;
+    Ok(())
+}
+
+/// Write `bytes` to a new file at `path`, and have them on the disk rather
+/// than in the page cache before returning.
+fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut file = fs::File::create(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
+/// Flush a directory's entries, so a rename or a new file inside it survives
+/// a crash. Unix only: elsewhere a directory cannot be opened to sync.
+fn sync_dir(directory: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        fs::File::open(directory)?.sync_all()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = directory;
+        Ok(())
+    }
+}
+
+/// Every file under `directory`, synced, then every folder under it.
+fn sync_tree(directory: &Path) -> std::io::Result<()> {
+    for entry in fs::read_dir(directory)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            sync_tree(&path)?;
+        } else {
+            fs::File::open(&path)?.sync_all()?;
+        }
+    }
+    sync_dir(directory)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Fails the next save between staging and the rename that would put it
+    /// in place: the one point where a failure has to leave the previous
+    /// version exactly as it was.
+    static FAIL_BEFORE_RENAME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn injected_fault() -> Result<(), Error> {
+    #[cfg(test)]
+    if FAIL_BEFORE_RENAME.with(|fail| fail.replace(false)) {
+        return Err(Error::Io(std::io::Error::other("injected fault")));
     }
     Ok(())
 }
@@ -955,8 +1049,10 @@ where
             document,
         };
         let manifest = toml::to_string_pretty(&envelope)?;
-        fs::write(staging.join(MANIFEST_FILE), manifest)?;
-        replace_bundle(path, &staging)?;
+        write_synced(&staging.join(MANIFEST_FILE), manifest.as_bytes())?;
+        parse_manifest(&fs::read_to_string(staging.join(MANIFEST_FILE))?)?;
+        sync_tree(&staging)?;
+        replace_bundle(path, &staging, nonce)?;
         Ok(report)
     })();
 
@@ -1051,37 +1147,44 @@ pub fn sanitize_preset_name(name: &str) -> String {
         .collect()
 }
 
-fn replace_bundle(target: &Path, staging: &Path) -> Result<(), Error> {
+/// Put a staged kit or preset bundle at `target`.
+///
+/// A directory cannot be renamed over a directory that has files in it, so
+/// the old bundle is moved aside first -- under a name this save alone uses
+/// (MOO-92: two saves once shared `.name.backup-PID` and deleted each other's
+/// backup) -- and removed once the new one is in place and synced.
+fn replace_bundle(target: &Path, staging: &Path, nonce: u128) -> Result<(), Error> {
+    let parent = target.parent().expect("validated bundle parent");
     if !target.exists() {
+        injected_fault()?;
         fs::rename(staging, target)?;
+        sync_dir(parent)?;
         return Ok(());
     }
 
-    let parent = target.parent().expect("validated bundle parent");
     let name = target
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("mooloop");
-    let backup = parent.join(format!(".{name}.backup-{}", std::process::id()));
-    if backup.exists() {
-        fs::remove_dir_all(&backup)?;
-    }
+    let backup = parent.join(format!(".{name}.backup-{}-{nonce}", std::process::id()));
     fs::rename(target, &backup)?;
-    if let Err(error) = fs::rename(staging, target) {
+    let placed = injected_fault().and_then(|()| fs::rename(staging, target).map_err(Error::Io));
+    if let Err(error) = placed {
         let _ = fs::rename(&backup, target);
-        return Err(Error::Io(error));
+        return Err(error);
     }
+    sync_dir(parent)?;
     fs::remove_dir_all(backup)?;
     Ok(())
 }
 
-pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
-    let manifest_path = if path.is_dir() {
-        path.join(MANIFEST_FILE)
-    } else {
-        path.to_path_buf()
-    };
-    let manifest = fs::read_to_string(&manifest_path)?;
+/// A manifest's text, parsed and checked as far as it can be without the
+/// files it names: the header, the format version and the typed document.
+///
+/// Shared by [`load_bundle`] and by the save path, which reads a staged
+/// manifest back through it before anything is renamed (MOO-92), so a save
+/// can only put in place a file the loader will open.
+fn parse_manifest(manifest: &str) -> Result<(LoadedDocument, AssetMode), Error> {
     // Parsed once, not twice. The header has to be read before the document
     // type is known and therefore before `T` is, and this used to mean
     // running the whole file through the TOML parser for the two fields and
@@ -1095,7 +1198,7 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
         return Err(Error::UnsupportedVersion(header.format_version));
     }
 
-    let (mut document, asset_mode) = match header.document_type.as_str() {
+    let parsed = match header.document_type.as_str() {
         "song" => {
             let envelope: Envelope<Project> = table.try_into()?;
             validate_envelope(&envelope, "song")?;
@@ -1146,6 +1249,17 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
         }
         other => return Err(Error::UnsupportedDocument(other.into())),
     };
+    Ok(parsed)
+}
+
+pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
+    let manifest_path = if path.is_dir() {
+        path.join(MANIFEST_FILE)
+    } else {
+        path.to_path_buf()
+    };
+    let manifest = fs::read_to_string(&manifest_path)?;
+    let (mut document, asset_mode) = parse_manifest(&manifest)?;
 
     // Repair runs after the padding steps below rather than before them,
     // because a bank that is merely short is the legitimate on-disk shape of
@@ -2296,6 +2410,86 @@ mod tests {
         let after_undo = save_and_reload(&bundle, &undo_to);
         assert_eq!(fs::read(sample_of(&after_undo)).unwrap(), b"first take");
         assert_eq!(sample_of(&after_undo), sample_of(&undo_to));
+    }
+
+    fn song_at(bpm: u16) -> Project {
+        Project {
+            bpm,
+            ..Project::default()
+        }
+    }
+
+    fn bpm_of(path: &Path) -> u16 {
+        let LoadedDocument::Song(song) = load_bundle(path).unwrap().document else {
+            panic!("a song loads as a song");
+        };
+        song.bpm
+    }
+
+    /// Hidden files a save leaves beside the song: staging, links, backups.
+    fn leftovers(dir: &Path) -> Vec<String> {
+        fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with('.'))
+            .collect()
+    }
+
+    /// **A save that fails after staging leaves the previous version
+    /// readable** (MOO-92). The fault lands between the staged file being
+    /// written, synced and read back and the rename that would put it in
+    /// place: the old song is still the song, and nothing is left behind.
+    #[test]
+    fn a_save_that_fails_after_staging_leaves_the_previous_version() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("song.mooloop");
+        save_song(&bundle, &song_at(97), AssetMode::Embedded).unwrap();
+
+        FAIL_BEFORE_RENAME.with(|fail| fail.set(true));
+        assert!(save_song(&bundle, &song_at(141), AssetMode::Embedded).is_err());
+
+        assert_eq!(bpm_of(&bundle), 97);
+        assert_eq!(leftovers(temp.path()), Vec::<String>::new());
+    }
+
+    /// **The previous version is kept as `<name>.bak`, and a save leaves no
+    /// hidden file behind** (MOO-92): the backup is made under a name that
+    /// one save alone uses and renamed into place, so two saves never share
+    /// one and a `.bak` is always a whole song.
+    #[test]
+    fn a_save_keeps_the_version_it_replaced_as_bak() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("song.mooloop");
+        save_song(&bundle, &song_at(97), AssetMode::Embedded).unwrap();
+        assert!(!temp.path().join("song.mooloop.bak").exists(), "a first save replaces nothing");
+
+        save_song(&bundle, &song_at(120), AssetMode::Embedded).unwrap();
+        save_song(&bundle, &song_at(141), AssetMode::Embedded).unwrap();
+
+        assert_eq!(bpm_of(&bundle), 141);
+        assert_eq!(bpm_of(&temp.path().join("song.mooloop.bak")), 120);
+        assert_eq!(leftovers(temp.path()), Vec::<String>::new());
+    }
+
+    /// The same fault on a kit, whose bundle is a directory and so cannot be
+    /// replaced by one rename: the old kit is put back.
+    #[test]
+    fn a_kit_save_that_fails_after_staging_leaves_the_previous_kit() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("drums.mooloop-kit");
+        let kit = |names: &[&str]| Kit {
+            channels: names.iter().map(|name| ChannelSetup::drum_synth(*name)).collect(),
+        };
+        save_kit(&path, &kit(&["A"]), AssetMode::Embedded).unwrap();
+
+        FAIL_BEFORE_RENAME.with(|fail| fail.set(true));
+        assert!(save_kit(&path, &kit(&["A", "B"]), AssetMode::Embedded).is_err());
+
+        let LoadedDocument::Kit(loaded) = load_bundle(&path).unwrap().document else {
+            panic!("a kit loads as a kit");
+        };
+        assert_eq!(loaded.channels.len(), 1);
+        assert_eq!(leftovers(temp.path()), Vec::<String>::new());
     }
 
     /// **A file already in the sidecar is not copied again.** The bytes in

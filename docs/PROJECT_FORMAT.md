@@ -47,9 +47,23 @@ drums.mooloop-kit/
     `-- 01-snare.wav
 ```
 
-Saving replaces the song file through a sibling staging path, with the old
-file moved to a temporary backup until the new one is in place, so a failed
-save can restore the previous document.
+**A save is durable, and the song is never missing** (since 2026-09-23,
+MOO-92). The new song file is written to a hidden sibling, flushed to the disk
+(`sync_all`), read back and parsed, and only then renamed onto the song's
+name. On POSIX that one rename is atomic, so a crash, a power cut or a reader
+sees the old song or the new one and never neither; the folder is synced after
+it so the rename survives too. What the save copied into the asset directory
+is synced before the song names it. The version it replaced is kept beside it
+as `<name>.bak` (a hard link made under a name that one save alone uses, then
+renamed into place), and a save that fails anywhere before the rename leaves
+the previous song exactly as it was. A legacy directory-style song, which a
+file cannot be renamed over, is moved to `<name>.bak` first and put back if
+the rename fails.
+
+Kits and presets are directories, and a directory cannot be renamed over one
+that has files in it, so the old bundle is moved aside under a name only that
+save uses, the synced and read-back staging directory renamed into place, and
+the old one removed.
 
 **The asset directory is added to, never rebuilt** (since 2026-09-22). A file
 already in it stays where it is, under the name it has, and is not copied

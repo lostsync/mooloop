@@ -145,6 +145,8 @@ pub enum DocumentResult {
         path: PathBuf,
         mode: AssetMode,
         revision: u64,
+        /// The `Session::document_generation` the save was started in.
+        generation: u64,
         report: SaveReport,
         sample_references: Vec<Option<SampleReference>>,
     },
