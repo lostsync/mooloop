@@ -253,16 +253,9 @@ to silence:
   wanting that gets it by not implementing the method, which is the default.
 - **Read the kind.** A seek invalidates audio in flight; a program change does
   not, and flushing a reverb because the player looked at another pattern is a
-  worse artefact than the one this fixes. **Not honoured today** (found
-  2026-09-21): a Pattern-mode `SetCurrentPattern` under a running transport
-  sets `RenderState::seeked` (`render.rs:4731`) so its stranded note-off is
-  emitted, then says `ProgramChange` (`:4739`) -- and the same block reaches
-  `if seeked || jumped` (`:5708`) and says `Seek` as well. Every delay, reverb
-  and plate in the project flushes on a pattern switch, which is the artefact
-  this bullet forbids. The word is right and the *flag* still means two
-  things, two lines under a comment saying it does not. The devices are
-  correct: each declines `ProgramChange` and has no way to know the `Seek`
-  behind it is the same event. Recorded in `LOOSE_ENDS.md`.
+  worse artefact than the one this fixes. Honoured since 2026-09-22
+  (MOO-59): until then a pattern switch set the seek flag too, and the block
+  after it said `Seek` behind its own `ProgramChange`.
 - A node that cannot honour it declines in writing. Aux In and the
   retained-audio buffer both do; the buffer's ring is a performance somebody
   is playing, not audio from the old position.
@@ -303,13 +296,25 @@ keeping its own list. `a_loop_fold_is_inaudible_in_every_effect_kind_and_a_seek_
 (`effects/mod.rs`) pins it for every effect kind, and
 `a_delay_tail_crosses_the_loop_point` (`render.rs`) hears it end to end.
 
-**A pattern switch is a program change and nothing else.** The engine records
-*why* the note schedule broke, not only *that* it did: a seek sets `seeked`, a
-Pattern-mode switch under a running transport sets `program_changed`. Both
-owe the next block a release of every sounding voice; only the seek owes it a
-`Seek`. Until 2026-09-22 the switch set `seeked` too, so every tail device
-was told `Seek` straight after declining the `ProgramChange` (MOO-59).
-Whether a tail should ring out past **Stop** is open: MOO-171.
+**A pattern switch is a program change and nothing else.** A seek sets
+`seeked`, and owes the next block a `Seek` and a choke of every voice. A
+Pattern-mode switch under a running transport owes neither: it releases the
+voices its pattern started and says `ProgramChange`. Until 2026-09-22 the
+switch set `seeked` too, so every tail device was told `Seek` straight after
+declining the `ProgramChange` (MOO-59). Whether a tail should ring out past
+**Stop** is open: MOO-171.
+
+**The engine knows which voices the sequencer started** (MOO-99,
+`mooloop-engine/src/voices.rs`). Each channel strip keeps a fixed table of
+them, filled by reading what the sequencer scheduled into the block before
+the keyboard and the auditions join the same list. So a release can be a
+`NoteOff` for exactly the pattern's voices instead of a `Choke` for the whole
+channel. A loop fold, a pattern or mode switch, a placement removed, a
+pattern-length change, a mute and an edit to a sounding note all release that
+way, and a key the player is holding survives them. A seek and Panic still
+choke everything, because an audition or a held key belongs to the moment
+they end. A muted channel that has faded out is still called for a block that
+carries a release, so its generator is not left frozen mid-note.
 
 **Not yet covered:** the console channel strip (`mooloop-dsp/src/strip.rs`) is
 not an `AudioNode` and is not reached by the fan-out, so its EQ and compressor

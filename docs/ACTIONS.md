@@ -67,7 +67,7 @@ Device (the clipboard's four on Ctrl+Shift+C/X/V/D, plus bypass, remove,
 wrap in a container, save a preset, and stepping the selection along the
 chain), Browser (focus it on Ctrl+B, then Enter and Ctrl+Enter), Pattern
 (including lengthening and shortening the pattern by a beat, on
-Ctrl+Shift+= and Ctrl+Shift+-), and MIDI (arming controller mapping). Six
+Ctrl+Shift+= and Ctrl+Shift+-), and MIDI (arming controller mapping). Seven
 entries are registered with no default chord and are listed so they can be
 bound. `pattern.clear` has none because every nearby Pattern action already
 claims a Ctrl+modifier combination. `channel.solo` has none for the same
@@ -80,7 +80,9 @@ them from the same predicate (`Session::can_move_track`) that decides whether
 the chord fires. `transport.record-arm-toggle` and `midi.learn-toggle` have none
 because both were toolbar-only until 2026-09-19 — added to the registry so
 they can be bound and appear on the Shortcuts page, not because either ships
-with a default binding.
+with a default binding. `transport.panic` (all notes off, MOO-99) has none
+for the same reason: it is registered so a stuck note has a way out that can
+be bound, and every chord near the transport's is already taken.
 
 ## Scope: where a chord applies
 

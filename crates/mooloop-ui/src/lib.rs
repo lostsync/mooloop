@@ -6967,6 +6967,7 @@ impl AppUi {
             let commands = command_state.clone();
             let st = state.clone();
             let settings = ui_settings.clone();
+            let panic_tx = cmd_tx.clone();
             let weak = window.as_weak();
             window.on_shortcut_key(move |key, ctrl, shift, alt, meta| {
                 let Some(window) = weak.upgrade() else {
@@ -6999,6 +7000,11 @@ impl AppUi {
                         !window.get_playlist_loop_enabled(),
                     ),
                     "transport.record-arm-toggle" => window.invoke_record_armed_toggled(),
+                    // Performance state, not an edit: nothing to record.
+                    "transport.panic" => {
+                        let _ = panic_tx.send(EngineCommand::Panic);
+                        window.set_status_message("All notes off".into());
+                    }
                     "midi.learn-toggle" => window.invoke_midi_learn_toggled(),
                     "file.new" => window.invoke_new_song(),
                     "file.open" => window.invoke_open_song(),

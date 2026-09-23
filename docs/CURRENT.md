@@ -734,6 +734,19 @@ boundary.
 
 - Probability, microtiming controls, ties, and parameter locks are not yet
   implemented. Note starts and lengths otherwise retain PPQ precision.
+- **A note the sequencer started is always ended**, as of 2026-09-23
+  (MOO-99). Each channel keeps a table of the voices its pattern started, and
+  every edit that takes a note-off out of the playhead's reach releases the
+  voice: deleting, shortening, moving or re-pitching a sounding note, a
+  pattern-length change, a placement removed, a playback-mode or pattern
+  switch, and a mute or solo. Lengthening a sounding note or changing its
+  velocity leaves it ringing. A note that ends while its channel is muted is
+  still ended, so unmuting no longer brings back a frozen voice. A Song-mode
+  loop fold releases the pattern's voices with a note-off rather than choking
+  every channel, so a chord the player is holding rings across the loop point
+  and a pad's release tail rings over it. **Panic (All Notes Off)** is a
+  bindable action with no default chord: it ends every voice and every held
+  key, pedal included, without stopping the song.
 - One channel holds at most 1,024 notes in one pattern (the engine's
   preallocated store; `docs/CAPACITY_POLICY.md`). As of 2026-09-23 (MOO-133)
   every way of adding a note -- drawing, painting, a step, a step slice, a

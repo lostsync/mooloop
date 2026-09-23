@@ -21,6 +21,7 @@ use mooloop_core::mixer::{StripPin, STRIP_PIN};
 use mooloop_core::strip::StripParams;
 use mooloop_core::modulation::{CONTROL_SOURCE_SLOTS, MAX_GENERATOR_OUTLETS};
 use mooloop_dsp::console;
+use crate::voices::SequencedVoices;
 #[cfg(test)]
 use mooloop_dsp::build_effect;
 use mooloop_dsp::{
@@ -2969,6 +2970,10 @@ pub struct ChannelStrip {
     /// so that an install carrying the strip carries the take with it; see
     /// `take.rs`.
     take: Option<Box<crate::take::Take>>,
+    /// The voices the sequencer started on this channel and has not ended
+    /// (MOO-99). On the strip so an install that carries the strip -- and
+    /// with it the voices -- carries the record of them too.
+    sequenced: SequencedVoices,
 }
 
 impl ChannelStrip {
@@ -2994,6 +2999,7 @@ impl ChannelStrip {
             source_silent_frames: 0,
             sleeping: false,
             take: None,
+            sequenced: SequencedVoices::new(),
         }
     }
 
@@ -3880,18 +3886,14 @@ pub(crate) struct RenderState {
     /// and none of the rest, and until 2026-09-22 it set this flag too -- so
     /// the block after it told every node `Seek`, straight after the switch
     /// had told them `ProgramChange`, and every delay, reverb and plate in
-    /// the project flushed on a pattern switch (MOO-59). The switch has its
-    /// own flag now, [`Self::program_changed`]: the engine records *why* the
-    /// schedule broke, not only *that* it did.
+    /// the project flushed on a pattern switch (MOO-59). The switch releases
+    /// the voices it stranded through each strip's table of sequenced voices
+    /// instead (MOO-99), which also leaves a held key alone.
     seeked: bool,
-    /// Whether the note source changed under a running transport since the
-    /// last block -- a Pattern-mode pattern switch -- stranding the note-offs
-    /// of whatever was sounding.
-    ///
-    /// Consumed by the next block exactly as [`Self::seeked`] is, and owes
-    /// the same release. It owes no `Seek`: time is continuous, and the nodes
-    /// were already told `ProgramChange` when the switch was applied.
-    program_changed: bool,
+    /// Whether [`EngineCommand::Panic`] arrived since the last block, which
+    /// owes every voice on every channel the release a seek owes and none of
+    /// the rest: the transport has not moved (MOO-99).
+    panicked: bool,
     /// Commands waiting for a musical edge, one slot per kind.
     ///
     /// `docs/plans/transport-discontinuity/02-deferred-commands.md`.
@@ -4071,7 +4073,7 @@ impl RenderState {
             auditions: [None; MAX_AUDITIONS_PER_BLOCK],
             loop_range: LoopRange::default(),
             seeked: false,
-            program_changed: false,
+            panicked: false,
             deferred: [None; MAX_DEFERRED],
             preview: None,
             preview_fading: None,
@@ -4414,6 +4416,15 @@ impl RenderState {
             ) {
                 std::mem::swap(live_rack, fresh_rack);
             }
+            // The voices came across with the strip, and so did the table
+            // naming them. One whose note the incoming song no longer has,
+            // or has at another pitch, will never see its note-off (MOO-99).
+            let sequencer = &self.sequencer;
+            fresh.sequenced.release_where(|voice| {
+                sequencer
+                    .note(usize::from(voice.origin.pattern), to, voice.note_id())
+                    .is_none_or(|note| note.note != voice.note)
+            });
         }
         // A track's live strip, for a track whose id and setup survived: its
         // chain, its channel strip's filter and envelope state, its fader's
@@ -5616,6 +5627,32 @@ impl RenderState {
             .min_by(f64::total_cmp)
     }
 
+    /// Owe every voice the sequencer is sounding, on every channel, a
+    /// release at the start of the next block (MOO-99).
+    fn release_all_sequenced(&mut self) {
+        for strip in &mut self.strips {
+            strip.sequenced.release_all();
+        }
+    }
+
+    /// Owe the sequenced voices `owed` picks out a release, on every
+    /// channel.
+    fn release_sequenced_where(&mut self, owed: impl Fn(&crate::voices::SequencedVoice) -> bool) {
+        for strip in &mut self.strips {
+            strip.sequenced.release_where(&owed);
+        }
+    }
+
+    /// Owe a release to the voices playing note `id` of `pattern` on
+    /// `channel`, whose stored note an edit has just removed or changed.
+    fn release_edited_note(&mut self, pattern: u8, channel: u8, id: mooloop_core::NoteId) {
+        if let Some(strip) = self.strips.get_mut(usize::from(channel)) {
+            strip
+                .sequenced
+                .release_where(|voice| voice.note_id() == id && voice.origin.pattern == pattern);
+        }
+    }
+
     pub fn apply_command(&mut self, cmd: EngineCommand) {
         match cmd {
             EngineCommand::Play => self.transport.play(),
@@ -5625,10 +5662,15 @@ impl RenderState {
             EngineCommand::Pause => {
                 self.transport.pause();
                 self.cancel_deferred();
+                // Through the table as well as each device's own watch on
+                // the playing edge, which a muted, skipped generator never
+                // sees (MOO-99).
+                self.release_all_sequenced();
             }
             EngineCommand::Stop => {
                 self.transport.stop();
                 self.cancel_deferred();
+                self.release_all_sequenced();
                 // Stop returns the playhead to the start, so it is a seek as
                 // well as a stop -- and what a node is holding must not come
                 // back on the next play.
@@ -5682,9 +5724,11 @@ impl RenderState {
                     // key, which belongs to the player rather than to the
                     // pattern being left.
                     if self.transport.playing {
-                        // Its own flag, not `seeked`: the block owes the
-                        // release a seek owes and must not say `Seek`.
-                        self.program_changed = true;
+                        // Not `seeked`: the block owes the pattern's voices a
+                        // release and must not say `Seek`. Only the
+                        // pattern's voices, through the table on each strip,
+                        // so a key the player is holding rings on (MOO-99).
+                        self.release_all_sequenced();
                         // Named for what it is, and distinct from a seek.
                         // Time is still continuous -- what changed is which
                         // notes are being scheduled -- so a node that flushes
@@ -5712,6 +5756,11 @@ impl RenderState {
             }
             EngineCommand::SetPlaybackMode(mode) => {
                 let from = self.automation_position();
+                // Every note-off still to come belongs to the mode being
+                // left (MOO-99).
+                if self.sequencer.playback_mode() != mode {
+                    self.release_all_sequenced();
+                }
                 self.sequencer.set_playback_mode(mode);
                 // A pattern end resolved in Pattern mode is not an edge Song
                 // mode ever crosses, and the reverse changes what the target
@@ -5724,6 +5773,11 @@ impl RenderState {
                 let from = self.automation_position();
                 self.transport.seek(tick);
                 self.seeked = true;
+                // The block chokes every channel for a seek, so the table
+                // has nothing left to name.
+                for strip in &mut self.strips {
+                    strip.sequenced.forget_all();
+                }
                 // The target was resolved against a position the transport is
                 // no longer travelling from. Left alone it would either fire
                 // instantly -- the seek having landed past it -- or wait a
@@ -5735,24 +5789,50 @@ impl RenderState {
             EngineCommand::SetPatternLength {
                 pattern,
                 length_steps,
-            } => self
-                .sequencer
-                .set_pattern_length(pattern as usize, length_steps as usize),
+            } => {
+                // A new length moves where every lap of the pattern falls,
+                // so a note-off scheduled against the old one may never come
+                // (MOO-99).
+                if self.sequencer.pattern_length_ticks(pattern as usize)
+                    != Some(length_steps as u32 * mooloop_core::TICKS_PER_STEP)
+                {
+                    self.release_sequenced_where(|voice| voice.origin.pattern == pattern);
+                }
+                self.sequencer
+                    .set_pattern_length(pattern as usize, length_steps as usize);
+            }
             EngineCommand::SetPlaylistPlacement {
                 pattern,
                 start_tick,
                 on,
             } => {
-                self.sequencer
+                let changed = self
+                    .sequencer
                     .set_playlist_placement(pattern as usize, start_tick, on);
+                // A placement taken away takes its note-offs with it.
+                if changed && !on {
+                    self.release_sequenced_where(|voice| {
+                        voice.origin.pattern == pattern && voice.origin.placement == Some(start_tick)
+                    });
+                }
             }
             EngineCommand::SetChannelMuted { channel, muted } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
+                    // A mute ends what the pattern is sounding here: its
+                    // note-offs would reach a generator the mute is about to
+                    // stop calling, and on unmute the voice would resume
+                    // mid-envelope (MOO-99).
+                    if muted && !strip.output.muted {
+                        strip.sequenced.release_all();
+                    }
                     strip.output.muted = muted;
                 }
             }
             EngineCommand::SetChannelSoloSilenced { channel, silenced } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
+                    if silenced && !strip.solo_silenced {
+                        strip.sequenced.release_all();
+                    }
                     strip.solo_silenced = silenced;
                 }
             }
@@ -5823,6 +5903,19 @@ impl RenderState {
                 channel,
                 note,
             } => {
+                // A sounding note whose edit moves its note-off somewhere the
+                // playhead will not reach -- shortened, moved, or re-pitched,
+                // since a note-off names its pitch -- is released now. One
+                // that only grows, or changes velocity, keeps its voice: its
+                // note-off is still ahead (MOO-99).
+                if let Some(old) = self.sequencer.note(pattern as usize, channel as usize, note.id) {
+                    if old.note != note.note
+                        || old.start_tick != note.start_tick
+                        || note.duration_ticks < old.duration_ticks
+                    {
+                        self.release_edited_note(pattern, channel, note.id);
+                    }
+                }
                 self.sequencer
                     .upsert_note(pattern as usize, channel as usize, note);
             }
@@ -5831,6 +5924,7 @@ impl RenderState {
                 channel,
                 id,
             } => {
+                self.release_edited_note(pattern, channel, id);
                 self.sequencer
                     .remove_note(pattern as usize, channel as usize, id);
             }
@@ -5906,6 +6000,17 @@ impl RenderState {
                         velocity,
                     },
                 );
+            }
+            EngineCommand::Panic => {
+                self.panicked = true;
+                // Every voice is choked, so the tables have nothing left to
+                // name; and every key is let go, pedal and all, so no
+                // note-off still owed to one can land on a voice started
+                // after this.
+                for strip in &mut self.strips {
+                    strip.sequenced.forget_all();
+                }
+                self.held_keys = HeldKeys::new();
             }
             EngineCommand::ReleaseChannelNote { channel, note } => {
                 self.queue_audition(
@@ -6651,10 +6756,18 @@ impl RenderState {
         let start_tick = spans[0].start_tick;
         let end_tick = spans[span_count - 1].end_tick;
         let seeked = std::mem::take(&mut self.seeked);
-        let program_changed = std::mem::take(&mut self.program_changed);
+        let panicked = std::mem::take(&mut self.panicked);
 
         for events in &mut self.events {
             events.clear();
+        }
+        // The releases an edit, a mute, a pattern switch or a stop owed the
+        // sequencer's voices since the last block (MOO-99). First, so a note
+        // the block is about to start again at the same offset starts after
+        // the old one has been let go.
+        let live = self.live_channels();
+        for (strip, events) in self.strips.iter_mut().zip(self.events.iter_mut()).take(live) {
+            strip.sequenced.deliver(0, events);
         }
         if self.transport.playing {
             // A deferred command lands between spans, so the stretch after it
@@ -6706,20 +6819,25 @@ impl RenderState {
                 &mut self.events,
             );
         }
-        // Everything sounding at a discontinuity has to be let go of. The
-        // note-off that would have ended it sits at a position the transport
-        // is no longer travelling towards -- past the loop end, or before the
-        // tick that was seeked to -- so without this a pad held across a loop
-        // point would be joined by another one every pass, forever. A choke
-        // rather than a hard mute: this is a release, and it should sound
-        // like the end of a note rather than like the audio stopping.
+        // Everything the sequencer started that is sounding at a fold has to
+        // be let go of. The note-off that would have ended it sits past the
+        // loop end, which the transport is no longer travelling towards, so
+        // without this a pad held across a loop point would be joined by
+        // another one every pass, forever.
         //
-        // Outside the `playing` arm because a seek while stopped still owes
-        // the release, for auditioned notes if nothing else.
+        // **Only the sequencer's voices** (MOO-99). This used to choke every
+        // voice on every channel, and so cut every key the player was
+        // holding at each lap; the table on each strip knows which voices
+        // the pattern started, and a `NoteOff` for each of those is also a
+        // release rather than a cut, so a pad's own release tail rings over
+        // the loop point.
         let mut jumped = false;
+        let mut folds = [0u32; crate::transport::MAX_BLOCK_SPANS];
+        let mut fold_count = 0;
         for span in spans[..span_count].iter().filter(|span| span.jumped) {
             jumped = true;
-            release_all_voices(span.frame as u32, self.live_channels(), &mut self.events);
+            folds[fold_count] = span.frame as u32;
+            fold_count += 1;
             // A fold is a discontinuity like a seek, and invalidates a
             // pending edge for the same reason -- with one failure mode a
             // seek does not have. A target resolved past the loop end is
@@ -6729,7 +6847,25 @@ impl RenderState {
             // deferred command from being silently immortal.
             self.cancel_deferred();
         }
-        if seeked || program_changed {
+        // Read what the sequencer just scheduled into each channel's table,
+        // ending at each fold whatever was sounding there. Before the
+        // auditions and the keyboard join the lists, which is what keeps
+        // the table to the sequencer's own voices.
+        {
+            let sequencer = &self.sequencer;
+            for (strip, events) in self.strips.iter_mut().zip(self.events.iter_mut()).take(live) {
+                strip.sequenced.observe(events, &folds[..fold_count], |id| {
+                    sequencer.voice_origin(id)
+                });
+            }
+        }
+        // A seek owes every voice a release -- the note-offs sit before the
+        // tick that was seeked to -- and chokes rather than naming them,
+        // because an audition or a held key is also somewhere the transport
+        // has left. Outside the `playing` arm because a seek while stopped
+        // still owes it, for auditioned notes if nothing else. The tables
+        // were emptied when the seek was applied.
+        if seeked || panicked {
             release_all_voices(0, self.live_channels(), &mut self.events);
         }
         // Before the block's events, as the contract promises, and once for
@@ -6921,7 +7057,17 @@ impl RenderState {
             // output-stage decision about what reaches the bus, and a
             // pre-level tap is exactly the signal a source muted in its own
             // mix still has.
-            if faded && !self.audio.produces(index) {
+            // A release still has to reach a generator the mute has stopped
+            // calling, or its voice is frozen mid-note and resumes where it
+            // stopped on unmute -- and ML-M1 keeps the key in its held-note
+            // stack, so its next release drones (MOO-99). Such a block is
+            // rendered, silently, and idle-skip puts the channel back to
+            // sleep once the generator is at rest.
+            let owes_a_release = self.events[index]
+                .iter()
+                .any(|event| matches!(event.event, Event::NoteOff { .. } | Event::Choke))
+                && !self.strips[index].source_node().is_at_rest();
+            if faded && !self.audio.produces(index) && !owes_a_release {
                 // A muted channel renders nothing, so its compensation ring
                 // would still be holding the audio from before the mute and
                 // would emit it on unmute. Emptying it is fifteen writes, and
@@ -14306,6 +14452,361 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
              {sounding} before"
         );
     }
+
+    /// Removing or shortening a note while it sounds releases it (MOO-99).
+    /// Before this the `UpsertNote` and `RemoveNote` arms released nothing,
+    /// and the note-off that would have ended the voice was gone with the
+    /// note, so it held at full sustain until Stop.
+    #[test]
+    fn removing_or_shortening_a_sounding_note_releases_it() {
+        use crate::render_test_support::SAMPLE_RATE;
+
+        let edits = [
+            EngineCommand::RemoveNote {
+                pattern: 0,
+                channel: 0,
+                id: 1,
+            },
+            EngineCommand::UpsertNote {
+                pattern: 0,
+                channel: 0,
+                note: NoteEvent::new(1, 0, 24, 60, 127),
+            },
+            // Moved: the voice playing the old start has no note-off coming.
+            EngineCommand::UpsertNote {
+                pattern: 0,
+                channel: 0,
+                note: NoteEvent::new(1, 96, 4608, 60, 127),
+            },
+        ];
+        for edit in edits {
+            let project = held_note_project();
+            let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+            render.play();
+            let sounding = peak_after(&mut render, 4);
+            assert!(sounding > 0.01, "nothing was sounding, got {sounding}");
+
+            render.apply_command(edit);
+            let after = peak_after(&mut render, 8);
+            assert!(
+                after < sounding * 0.01,
+                "{edit:?} left the voice sounding: {after} against {sounding}"
+            );
+        }
+    }
+
+    /// Lengthening a sounding note, or changing only its velocity, leaves the
+    /// voice alone: its note-off is still ahead of the playhead.
+    #[test]
+    fn lengthening_a_sounding_note_keeps_its_voice() {
+        use crate::render_test_support::SAMPLE_RATE;
+
+        let project = held_note_project();
+        let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        render.play();
+        let sounding = peak_after(&mut render, 4);
+        render.apply_command(EngineCommand::UpsertNote {
+            pattern: 0,
+            channel: 0,
+            note: NoteEvent::new(1, 0, 9216, 60, 100),
+        });
+        let after = peak_after(&mut render, 8);
+        assert!(
+            after > sounding * 0.5,
+            "lengthening the note released it: {after} against {sounding}"
+        );
+    }
+
+    /// **A note that ends while its channel is muted is ended** (MOO-99). A
+    /// muted channel that has faded out is not called, so the note-off used
+    /// to be dropped and the voice sat frozen mid-note; unmuting resumed it,
+    /// at full sustain, long after the note it belonged to had finished.
+    #[test]
+    fn a_note_that_ends_while_muted_is_silent_on_unmute() {
+        use crate::render_test_support::{peak_of, SAMPLE_RATE};
+
+        const BLOCK: usize = 512;
+        let mut project = held_note_project();
+        // A beat long, in a one-bar pattern: over by half a second, and the
+        // next lap two seconds in.
+        project.channels[0].notes[0][0] = NoteEvent::new(1, 0, 96, 60, 127);
+        let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        render.play();
+        let blocks = |seconds: f32| (seconds * SAMPLE_RATE as f32) as usize / BLOCK;
+
+        let mut sounding = 0.0f32;
+        for _ in 0..blocks(0.1) {
+            render.process_block(BLOCK);
+            sounding = sounding.max(peak_of(&render.master().l[..BLOCK]));
+        }
+        assert!(sounding > 0.01, "nothing was sounding, got {sounding}");
+
+        render.apply_command(EngineCommand::SetChannelMuted {
+            channel: 0,
+            muted: true,
+        });
+        for _ in 0..blocks(0.9) {
+            render.process_block(BLOCK);
+        }
+        render.apply_command(EngineCommand::SetChannelMuted {
+            channel: 0,
+            muted: false,
+        });
+        // Leave the unmute ramp a moment, then listen until just before the
+        // next lap.
+        for _ in 0..blocks(0.1) {
+            render.process_block(BLOCK);
+        }
+        let mut after = 0.0f32;
+        for _ in 0..blocks(0.7) {
+            render.process_block(BLOCK);
+            after = after.max(peak_of(&render.master().l[..BLOCK]));
+        }
+        assert!(
+            after < 1.0e-3,
+            "a note that ended while its channel was muted sounded again on \
+             unmute: {after} against {sounding}"
+        );
+    }
+
+    /// **A chord the player holds across a Song-mode loop fold keeps
+    /// sounding** (MOO-99). The fold used to choke every voice on every
+    /// channel, so each lap cut the keys still down. It ends the sequencer's
+    /// own voices now, and nothing else.
+    #[test]
+    fn a_held_chord_survives_a_song_mode_loop_fold() {
+        use crate::render_test_support::{peak_of, SAMPLE_RATE};
+
+        const BLOCK: usize = 512;
+        let mut project = held_note_project();
+        project.channels[0].notes[0].clear();
+        project.playback_mode = PlaybackMode::Song;
+        project.playlist = vec![mooloop_core::PatternPlacement {
+            pattern: 0,
+            start_tick: 0,
+        }];
+        project.loop_range = mooloop_core::LoopRange {
+            start_tick: 0,
+            end_tick: mooloop_core::TICKS_PER_BAR,
+            enabled: true,
+        };
+        let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        for note in [60, 64, 67] {
+            render.apply_command(EngineCommand::TriggerChannelNote {
+                channel: 0,
+                note,
+                velocity: 127,
+            });
+        }
+        render.play();
+
+        let mut before = 0.0f32;
+        let mut folded = false;
+        for _ in 0..(4 * SAMPLE_RATE as usize / BLOCK) {
+            let position = render.transport.position_ticks;
+            render.process_block(BLOCK);
+            if render.transport.position_ticks < position {
+                folded = true;
+                break;
+            }
+            before = peak_of(&render.master().l[..BLOCK]);
+        }
+        assert!(folded, "the transport never reached the loop end");
+        assert!(before > 0.01, "the chord was not sounding, got {before}");
+
+        // Past the first few blocks, which a choke would still be fading
+        // through.
+        let mut after = 0.0f32;
+        for block in 0..10 {
+            render.process_block(BLOCK);
+            if block >= 3 {
+                after = after.max(peak_of(&render.master().l[..BLOCK]));
+            }
+        }
+        assert!(
+            after > before * 0.5,
+            "the fold cut a chord the player was holding: {after} against {before}"
+        );
+    }
+
+    /// **Panic ends everything and keeps the song playing** (MOO-99): the
+    /// pattern's voice, a held audition, and a key held down, all at once.
+    #[test]
+    fn panic_ends_every_voice_without_stopping_the_transport() {
+        use crate::render_test_support::SAMPLE_RATE;
+
+        let project = held_note_project();
+        let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        render.play();
+        render.apply_command(EngineCommand::TriggerChannelNote {
+            channel: 0,
+            note: 72,
+            velocity: 127,
+        });
+        let sounding = peak_after(&mut render, 4);
+        assert!(sounding > 0.01, "nothing was sounding, got {sounding}");
+
+        render.apply_command(EngineCommand::Panic);
+        let after = peak_after(&mut render, 8);
+        assert!(
+            after < sounding * 0.01,
+            "Panic left a voice sounding: {after} against {sounding}"
+        );
+        assert!(render.transport.playing, "Panic stopped the song");
+    }
+
+    /// **Every note the sequencer starts, it ends** -- under the edits a
+    /// player makes while the song runs (MOO-99; `reports/teams-2026-09-22.md`
+    /// §4.2 item 6). Random note, placement, pattern-length, mode, pattern
+    /// and mute edits, a few a second, and after each block every `NoteOn`
+    /// the channels have been sent must have been answered by a `NoteOff` for
+    /// its id, or a `Choke`, within the longest a note here can legitimately
+    /// last. What fails it is a drone: a voice whose note-off an edit put
+    /// somewhere the playhead will not go.
+    #[test]
+    fn every_sequenced_note_is_ended_under_random_edits_while_playing() {
+        use crate::render_test_support::SAMPLE_RATE;
+        use std::collections::HashMap;
+
+        const BLOCK: usize = 256;
+        let params = mooloop_core::MlP8Params {
+            attack: 0.0,
+            decay: 0.0,
+            sustain: 1.0,
+            release: 0.0,
+            ..mooloop_core::MlP8Params::default()
+        };
+        let mut project = Project {
+            channels: vec![
+                ProjectChannel::mlp8_with_params(0, 2, params),
+                ProjectChannel::mlp8_with_params(1, 2, params),
+            ],
+            pattern_lengths: vec![DEFAULT_STEPS, DEFAULT_STEPS],
+            playlist: vec![
+                mooloop_core::PatternPlacement {
+                    pattern: 0,
+                    start_tick: 0,
+                },
+                mooloop_core::PatternPlacement {
+                    pattern: 1,
+                    start_tick: mooloop_core::TICKS_PER_BAR,
+                },
+            ],
+            loop_range: mooloop_core::LoopRange {
+                start_tick: 0,
+                end_tick: 2 * mooloop_core::TICKS_PER_BAR,
+                enabled: true,
+            },
+            ..Project::default()
+        };
+        for channel in &mut project.channels {
+            for (pattern, notes) in channel.notes.iter_mut().enumerate() {
+                for id in 1..=4u32 {
+                    notes.push(NoteEvent::new(
+                        id,
+                        (id - 1) * 96,
+                        96 + pattern as u32 * 200,
+                        48 + id as u8,
+                        100,
+                    ));
+                }
+            }
+        }
+        let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        render.play();
+
+        // The longest a voice may honestly sound: the longest note here is
+        // two bars, and a lap of the longest pattern is two more. At 120 bpm
+        // a bar is two seconds.
+        let longest = 5 * SAMPLE_RATE as usize / BLOCK;
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let mut random = move |below: u32| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % u64::from(below)) as u32
+        };
+        let mut sounding: HashMap<(usize, u64), usize> = HashMap::new();
+        let mut muted = [false; 2];
+        let mut song = false;
+        let blocks = 60 * SAMPLE_RATE as usize / BLOCK;
+        for block in 0..blocks {
+            if random(16) == 0 {
+                let pattern = random(2) as u8;
+                let channel = random(2) as u8;
+                let edit = match random(7) {
+                    0 | 1 => EngineCommand::UpsertNote {
+                        pattern,
+                        channel,
+                        note: NoteEvent::new(
+                            1 + random(6),
+                            random(4 * 96),
+                            24 + random(768),
+                            48 + random(24) as u8,
+                            100,
+                        ),
+                    },
+                    2 => EngineCommand::RemoveNote {
+                        pattern,
+                        channel,
+                        id: 1 + random(6),
+                    },
+                    3 => EngineCommand::SetPatternLength {
+                        pattern,
+                        length_steps: [8, 16, 32][random(3) as usize],
+                    },
+                    4 => {
+                        song = !song;
+                        EngineCommand::SetPlaybackMode(if song {
+                            PlaybackMode::Song
+                        } else {
+                            PlaybackMode::Pattern
+                        })
+                    }
+                    5 => EngineCommand::SetPlaylistPlacement {
+                        pattern,
+                        start_tick: random(2) * mooloop_core::TICKS_PER_BAR,
+                        on: random(2) == 0,
+                    },
+                    _ if random(2) == 0 => EngineCommand::SetCurrentPattern(pattern),
+                    _ => {
+                        let index = usize::from(channel);
+                        muted[index] = !muted[index];
+                        EngineCommand::SetChannelMuted {
+                            channel,
+                            muted: muted[index],
+                        }
+                    }
+                };
+                render.apply_command(edit);
+            }
+            render.process_block(BLOCK);
+            for channel in 0..2 {
+                for event in render.events[channel].iter() {
+                    match event.event {
+                        Event::NoteOn { id, .. } => {
+                            sounding.insert((channel, id), block);
+                        }
+                        Event::NoteOff { id, .. } => {
+                            sounding.remove(&(channel, id));
+                        }
+                        Event::Choke => sounding.retain(|(owner, _), _| *owner != channel),
+                        _ => {}
+                    }
+                }
+            }
+            if let Some(((channel, id), started)) = sounding
+                .iter()
+                .find(|(_, started)| block - **started > longest)
+            {
+                panic!(
+                    "channel {channel}'s voice {id:#x} has sounded since block \
+                     {started} and is still sounding at block {block}: an edit \
+                     stranded its note-off"
+                );
+            }
+        }
+    }
 }
 
 
@@ -14563,7 +15064,13 @@ mod footprint {
         // a function pointer (8), and the gain actually reaching each side,
         // two `Smoothed` of twelve bytes each, so a fader, a pan and a mute
         // ramp instead of stepping. The rest is alignment.
-        assert_eq!(size_of::<ChannelStrip>(), 42_552);
+        //
+        // MOO-99 added 1,552: the table of voices the sequencer started
+        // (`crate::voices`), sixty-four entries of twenty-four bytes and a
+        // count, so a release can name the pattern's voices instead of
+        // choking the channel. On the strip, so it travels with the voices
+        // through an install.
+        assert_eq!(size_of::<ChannelStrip>(), 44_104);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -14609,7 +15116,9 @@ mod footprint {
         // finding): the phaser's tilt table again, once per live channel.
         //
         // And by 40 with it for MOO-107: the output stage's ramps.
-        assert_eq!(per_live, 155_584);
+        //
+        // And by 1,552 with it for MOO-99: the sequenced-voice table.
+        assert_eq!(per_live, 157_136);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
@@ -14690,7 +15199,10 @@ mod footprint {
         //
         // And one more with MOO-107's output-stage ramps: 40 bytes a live
         // channel, 640 across sixteen.
-        assert_eq!((fixed + per_live * 16) / 1024, 2_918);
+        //
+        // MOO-99's sequenced-voice table: 1,552 bytes a live channel, about
+        // 24 KiB across sixteen.
+        assert_eq!((fixed + per_live * 16) / 1024, 2_942);
     }
 
 }

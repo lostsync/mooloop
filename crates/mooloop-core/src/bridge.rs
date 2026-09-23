@@ -251,6 +251,11 @@ pub enum EngineCommand {
     TriggerChannelNote { channel: u8, note: u8, velocity: u8 },
     /// Release a note started by [`EngineCommand::TriggerChannelNote`].
     ReleaseChannelNote { channel: u8, note: u8 },
+    /// All notes off: end every voice on every channel -- the sequencer's,
+    /// the keyboard's and the auditions' -- and let go of every held key and
+    /// the sustain pedal's hold (MOO-99). The way out of a stuck note that
+    /// does not also stop the song.
+    Panic,
     /// Replace a channel's sampler parameter set.
     SetChannelSamplerParams { channel: u8, params: SamplerParams },
     /// Replace a channel's sound source while retaining its mixer strip.
@@ -492,6 +497,7 @@ impl EngineCommand {
             Self::Play
                 | Self::Pause
                 | Self::Stop
+                | Self::Panic
                 | Self::Seek { .. }
                 | Self::SetRecordArmed(_)
                 | Self::SetInputMonitor { .. }

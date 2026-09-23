@@ -358,6 +358,42 @@ impl Sequencer {
             .is_some_and(|channel| channel.upsert_note(note))
     }
 
+    /// The note `id` as `pattern` stores it on `channel`, if it does.
+    pub fn note(&self, pattern: usize, channel: usize, id: NoteId) -> Option<NoteEvent> {
+        (pattern < self.active_patterns)
+            .then(|| &self.patterns[pattern])
+            .and_then(|pattern| pattern.channel(channel))
+            .and_then(|channel| channel.note(id))
+            .copied()
+    }
+
+    /// Which pattern, and in Song mode which placement, scheduled the voice
+    /// `id` -- asked as the voice starts, so Pattern mode's answer is the
+    /// pattern being scheduled now (MOO-99, `crate::voices`).
+    ///
+    /// Song mode decodes it from the id's instance half, which
+    /// [`Self::schedule_song`] builds as `lap * stride + pattern *
+    /// MAX_PLAYLIST_TICKS + placement start`. That half is 32 bits wide, so
+    /// after about 680 laps of a song the lap count wraps into the placement
+    /// and this answer is wrong; what a wrong answer costs is one targeted
+    /// release that misses, which a fold, a stop or a seek still catches.
+    pub fn voice_origin(&self, id: u64) -> crate::voices::VoiceOrigin {
+        match self.playback_mode {
+            PlaybackMode::Pattern => crate::voices::VoiceOrigin {
+                pattern: self.current as u8,
+                placement: None,
+            },
+            PlaybackMode::Song => {
+                let stride = u64::from(MAX_PLAYLIST_TICKS) * self.patterns.len().max(1) as u64;
+                let offset = (id >> 32) % stride;
+                crate::voices::VoiceOrigin {
+                    pattern: (offset / u64::from(MAX_PLAYLIST_TICKS)) as u8,
+                    placement: Some((offset % u64::from(MAX_PLAYLIST_TICKS)) as u32),
+                }
+            }
+        }
+    }
+
     pub fn remove_note(&mut self, pattern: usize, channel: usize, id: NoteId) -> bool {
         (pattern < self.active_patterns)
             .then(|| &mut self.patterns[pattern])

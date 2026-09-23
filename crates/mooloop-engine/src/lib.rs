@@ -150,6 +150,7 @@ mod render;
 mod sequencer;
 mod take;
 mod transport;
+mod voices;
 
 #[cfg(test)]
 mod render_test_support;

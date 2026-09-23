@@ -207,6 +207,10 @@ pub(crate) static ACTIONS: &[ActionSpec] = &[
     // Shortcuts page. No default chord, like `pattern.clear` below -- it is
     // registered so it *can* be bound, not because it ships bound.
     action!("transport.record-arm-toggle", "Toggle Record Arm", "Transport"),
+    // All notes off, with the song still running (MOO-99). No default
+    // chord: it is the way out of a stuck note, registered so it can be
+    // bound, and every chord near the transport's is taken.
+    action!("transport.panic", "Panic (All Notes Off)", "Transport"),
     // Same gap as record-arm, same fix: the LEARN toolbar button had no
     // action id either. Its own category rather than Transport's, since it
     // arms controller mapping rather than anything about playback -- it

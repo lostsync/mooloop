@@ -66,7 +66,7 @@ ids (C2, P4, …) are the report's.
 
 | Seam | Owner | Before | Why |
 | --- | --- | --- | --- |
-| The note lifecycle: which voices are sounding, all-notes-off, panic | Sequencing | `release_all_voices` plus seven per-device play→stop checks | Only the scheduler knows what it started (S1) |
+| The note lifecycle: which voices are sounding, all-notes-off, panic | Sequencing | `release_all_voices` plus seven per-device play→stop checks | Only the scheduler knows what it started (S1). `engine/src/voices.rs` holds that record since MOO-99; the per-device play→stop checks remain beside it |
 | `RenderState::apply_midi`, which decides whether a message is played or mapped | Control | nobody | Pads are broken there (C2) |
 | Automation lookup and lane editing in the sequencer | Control | Sequencing | It addresses the parameter system |
 | Descriptor range and curve stability, not only ids | Control | each device team | Lanes are saved normalized, so widening a range silently changes playback (C11) |
@@ -142,6 +142,8 @@ Files marked *shared* are split in the table above.
 ### 2. Sequencing & Time
 
 - `engine/src/transport.rs`, `engine/src/sequencer.rs` (*shared*)
+- `engine/src/voices.rs`: the table of voices the sequencer started, per
+  channel strip, and every release rule that reads it (MOO-99)
 - `core/src/`: `pattern.rs`, `playlist.rs`, `time.rs`
 - `session/src/`: `roll.rs`, `steps.rs`, `transport.rs`, `notes.rs`
 - `ui/ui/`: `piano-grid.slint`, `channel-rack.slint`
