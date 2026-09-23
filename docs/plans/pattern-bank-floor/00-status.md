@@ -55,7 +55,7 @@ four-minute part, two thousand notes -- fits neither `MAX_PATTERN_STEPS` nor
 channel's whole pattern at once (`crates/mooloop-core/src/playlist.rs:40`), so
 there is no per-channel clip for it to live in either. **Adam settled it the
 same day in favour of the groovebox: patterns stay, and there are no per-track
-clips**, the same ruling `docs/plans/audio-recording/00-status.md` records for
+clips**, the same ruling `docs/plans/archive/audio-recording/00-status.md` records for
 audio that day. `docs/CAPACITY_POLICY.md` carries the decision and the
 constants it rests on.
 

@@ -6,7 +6,7 @@ plan (same `SCOPE.md` item, filed before the migration) and is kept open as
 the earlier tracking issue for the input side; MOO-16 is where the plan's
 current shape lives.
 
-**Written 2026-09-17. Steps 02-05 landed 2026-09-18, 01's JACK half 2026-09-19 and its Core Audio half 2026-09-20; step 06's quit prompt 2026-09-20 and the rest of it 2026-09-23.** This is `SCOPE.md` §2 item 3
+**Finished 2026-09-23 and archived** (MOO-16 closed; the last two issues were MOO-38, step 06's dialog, and MOO-75, the rest of "takes that survive"). **Written 2026-09-17. Steps 02-05 landed 2026-09-18, 01's JACK half 2026-09-19 and its Core Audio half 2026-09-20; step 06's quit prompt 2026-09-20 and the rest of it 2026-09-23.** This is `SCOPE.md` §2 item 3
 (audio input) together with the audio half of item 5 (recording), in the shape
 Adam settled on 2026-09-17, and since 2026-09-18 item 6 (resampling) as well,
 which turned out to be the same feature with the source inside the app.

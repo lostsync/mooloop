@@ -764,7 +764,7 @@ boundary.
 ### Recording Into The Sampler
 
 Clip recording, the way Ableton's or Bitwig's clip mode records and Maschine's
-sampler does (`docs/plans/audio-recording/`, steps 02-05, 2026-09-18):
+sampler does (`docs/plans/archive/audio-recording/`, steps 02-05, 2026-09-18):
 
 - **Every channel has an AUDIO row** in the channel sidebar, beside MIDI IN
   and independent of it: Off, the master, any track, any channel -- itself

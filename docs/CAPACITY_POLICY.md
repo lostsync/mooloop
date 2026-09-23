@@ -218,7 +218,7 @@ at `sequencer.rs:117`). There is no per-channel clip for a long part to live
 in, and nothing short of inventing one would give it a place.
 
 **Adam settled this the same day, in favour of the groovebox.** Patterns stay
-and there are no per-track clips. `docs/plans/audio-recording/00-status.md`
+and there are no per-track clips. `docs/plans/archive/audio-recording/00-status.md`
 records the same ruling from the audio side that day -- audio records into the
 sampler, "there are no per-track audio clips, and this plan must not add any"
 -- so this was one decision made once about notes and audio together, not two

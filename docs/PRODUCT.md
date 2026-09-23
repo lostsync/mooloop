@@ -222,7 +222,7 @@ These are firm enough to build against:
   question in `IDEAS.md`, not a separate feature.
 - **Audio is recorded into the channel's sampler**, on the selected channel
   and pattern, and the channel's one input menu decides whether record-arm
-  captures audio or notes. (Adam, 2026-09-17; `plans/audio-recording/`.)
+  captures audio or notes. (Adam, 2026-09-17; `plans/archive/audio-recording/`.)
 - **Rack semantics, graph-capable model.** Mooloop normally presents a channel
   as an ordered source-and-insert rack. Its modulation sources, typed
   destinations, and explicit routes are nevertheless represented clearly

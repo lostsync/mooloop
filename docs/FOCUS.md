@@ -73,15 +73,10 @@ Three things to carry into it:
   pass was closed on Adam's instruction to treat outstanding listening passes
   as done with nothing heard, so the case is still worth playing.
 
-### 2. Close `audio-recording/`
+### 2. ~~Close `audio-recording/`~~ Done 2026-09-23
 
-One step short of the archive: 06's clean-up dialog for takes nothing refers
-to (MOO-38). The quit prompt landed 2026-09-20; the dialog did not. Half a
-day, and it takes a plan out of the active directory.
-
-Not ahead of the layer device, because it adds nothing anybody can hear. Take
-it when the layer device is between steps, or when 09 is waiting on the
-mock-up.
+Step 06's clean-up dialog (MOO-38) and the rest of "takes that survive"
+(MOO-75) landed, and the plan is in `archive/`.
 
 ## Waiting on Adam, not on work
 

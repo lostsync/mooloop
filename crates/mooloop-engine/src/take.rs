@@ -1,6 +1,6 @@
 //! A take: one channel recording its audio input into a ring.
 //!
-//! `docs/plans/audio-recording/03-capture.md`. Recording is clip recording,
+//! `docs/plans/archive/audio-recording/03-capture.md`. Recording is clip recording,
 //! started from the sampler's face (decision 7): a press arms a take, the
 //! take waits for the next bar line -- the pre-roll (decision 9) -- then
 //! copies its channel's audio input into a ring, sample-exact, until it is

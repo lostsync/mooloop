@@ -1,6 +1,6 @@
 //! A channel's audio input: where it records from.
 //!
-//! `docs/plans/audio-recording/`. Every channel has one, beside its MIDI
+//! `docs/plans/archive/audio-recording/`. Every channel has one, beside its MIDI
 //! input and independent of it (decision 10): the sidebar's AUDIO row picks
 //! it, and it stays set. A channel is a dumb slot (decision 5) -- any channel
 //! holds an audio input, and a device that has no use for one ignores it --

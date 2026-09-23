@@ -1,5 +1,5 @@
 //! Takes on the control side: arming one, draining its ring to a file, and
-//! handing back what finished (`docs/plans/audio-recording/03-capture.md`).
+//! handing back what finished (`docs/plans/archive/audio-recording/03-capture.md`).
 //!
 //! The engine copies a channel's audio input into a ring and nothing else. A
 //! **drain thread per take** is the only place a take touches the disk: it

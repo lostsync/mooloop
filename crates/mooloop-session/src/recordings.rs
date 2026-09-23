@@ -220,7 +220,7 @@ pub struct CleanUp {
 ///
 /// Two things leave a take there: a crash, and a quit while only the undo
 /// history still reached it (MOO-38 question 2, decided conservatively --
-/// see `docs/plans/audio-recording/00-status.md`). Either way it may be the
+/// see `docs/plans/archive/audio-recording/00-status.md`). Either way it may be the
 /// only copy of a take from a song that was never saved.
 pub const EARLIER_SESSIONS_NOTE: &str = "Older than this session. A crash, or a quit while \
      only the undo history still used a take, leaves one here, and it may be the only copy \

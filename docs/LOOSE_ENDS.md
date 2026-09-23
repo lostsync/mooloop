@@ -1544,7 +1544,7 @@ fixed a second time, independently, before the branch landed.
   them, points at two different places to go and fix it.
 
 **Adam settled the last two on 2026-09-21** as open questions 9 and 10
-(`plans/audio-recording/00-status.md` -- *open questions*, not the decisions
+(`plans/archive/audio-recording/00-status.md` -- *open questions*, not the decisions
 list, which separately has a 9 and a 10 meaning other things). Both are built.
 Quit **finishes the take with no prompt** -- what is outstanding is a fraction
 of a second rather than something worth a dialog -- on a bounded wait that

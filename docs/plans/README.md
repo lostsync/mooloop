@@ -45,17 +45,16 @@ renderer being rebuilt, which `incremental-structure/` then closed. His *"im
 not convinced we're going to make it perfect by chasing this thread"* meant
 not chasing it *past* that plan.
 
-`audio-recording/` was added the same day and is **all but finished**: steps
-02-05 landed 2026-09-18, step 01's JACK half on the 19th and its Core Audio
-half on the 20th, and step 06's quit prompt on the 20th. What is left of the
-whole plan is 06's clean-up dialog (MOO-38), and then it archives. *(This
-paragraph said "not started" until 2026-09-21, three days after the first
-steps landed — a plan index is only worth reading if landing a step includes
-striking it here.)* It is `SCOPE.md` items 3 and the audio half of 5, in
-Adam's shape: a take goes into the channel's sampler, and one input menu
-chooses between audio and MIDI. Its five open questions were all answered by
-Adam on 2026-09-17, the day the plan was written; they are kept in its
-`00-status.md` as a record beside the step each one settles.
+`audio-recording/` **finished 2026-09-23 and is in `archive/`.** It was
+added the same day: steps 02-05 landed 2026-09-18, step 01's JACK half on the
+19th and its Core Audio half on the 20th, step 06's quit prompt on the 20th
+and its clean-up dialog on the 23rd (MOO-38), with the rest of "takes that
+survive" (MOO-75) the same day. The listening pass it owed (MOO-165) was
+closed on 2026-09-22 on Adam's instruction to treat outstanding listening
+passes as done with nothing heard. It is `SCOPE.md` items 3 and the audio
+half of 5, in Adam's shape: a take goes into the channel's sampler. Its open
+questions were all answered by Adam, and are kept in its `00-status.md` as a
+record beside the step each one settles.
 
 Its step 03 was **ordered after `channel-identity/05`**, which has now landed.
 A capture ring is per-channel renderer state, and until a strip survived an
