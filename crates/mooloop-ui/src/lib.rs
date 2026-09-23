@@ -50,7 +50,7 @@ use mooloop_core::{
     ControlRate, ControlTarget, ModulatorKind, ModulatorParams, OutletDescriptor,
     PublishesOutlets, RecordFace, SendTap, Takeover, TransportControl,
     SignalShape,
-    modulation::outlet_slot,
+    modulation::{outlet_slot, performance_slot, PERFORMANCE_DESCRIPTORS},
     aux_in, AuxInParams, EdgeRefusal,
     ds01, Ds01Params,
     NoteEvent,
@@ -5093,20 +5093,27 @@ impl UiState {
         // the same terms as a module. Only the control run: an audio outlet
         // is not a control signal that happens to be fast, and offering one
         // here is exactly the confusion `OutletDomain` exists to prevent.
+        //
+        // The keyboard's mod wheel and aftertouch follow them on every channel
+        // (MOO-128): offered on the same terms, because they are sources with
+        // no controls of their own, which is what this band is for.
+        let outlet_row = |slot: u8, outlet: &mooloop_core::OutletDescriptor| ModulationOutletRow {
+            slot: i32::from(slot),
+            name: outlet.name.into(),
+            bipolar: matches!(outlet.signal, SignalShape::Bipolar),
+            output: outputs.get(slot as usize).copied().unwrap_or(0.0),
+            selected: selected == Some(slot),
+        };
         let outlets: Vec<ModulationOutletRow> = channel
             .kind
             .control_outlets()
             .iter()
-            .map(|outlet| {
-                let slot = outlet_slot(outlet.id);
-                ModulationOutletRow {
-                    slot: i32::from(slot),
-                    name: outlet.name.into(),
-                    bipolar: matches!(outlet.signal, SignalShape::Bipolar),
-                    output: outputs.get(slot as usize).copied().unwrap_or(0.0),
-                    selected: selected == Some(slot),
-                }
-            })
+            .map(|outlet| outlet_row(outlet_slot(outlet.id), outlet))
+            .chain(
+                PERFORMANCE_DESCRIPTORS
+                    .iter()
+                    .map(|source| outlet_row(performance_slot(source.id), source)),
+            )
             .collect();
         let selected_outlet = selected.and_then(|slot| self.session.selected_channel_outlet(slot));
         self.modulation_source_model.set_vec(sources);
@@ -5115,7 +5122,18 @@ impl UiState {
         // The publishing device, named the way a route's destination names
         // it -- the channel's own name -- so "ML-P8 1 publishes this" and
         // "ML-P8 1 · Cutoff" are visibly the same device.
-        window.set_modulation_outlet_device(channel.name.as_str().into());
+        //
+        // A performance source is the keyboard's, so the shelf says so
+        // rather than crediting the channel's device with it.
+        let publisher = if selected
+            .and_then(mooloop_core::modulation::performance_of_slot)
+            .is_some()
+        {
+            "The keyboard"
+        } else {
+            channel.name.as_str()
+        };
+        window.set_modulation_outlet_device(publisher.into());
         window.set_modulation_armed_name(
             armed
                 .and_then(|slot| self.session.control_source_name(slot))

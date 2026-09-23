@@ -19,7 +19,10 @@ use mooloop_core::{
 };
 use mooloop_core::mixer::{StripPin, STRIP_PIN};
 use mooloop_core::strip::StripParams;
-use mooloop_core::modulation::{CONTROL_SOURCE_SLOTS, MAX_GENERATOR_OUTLETS};
+use mooloop_core::modulation::{
+    CONTROL_SOURCE_SLOTS, MAX_GENERATOR_OUTLETS, PERFORMANCE_AFTERTOUCH, PERFORMANCE_MOD_WHEEL,
+    PERFORMANCE_SOURCES,
+};
 use mooloop_dsp::console;
 use crate::voices::SequencedVoices;
 #[cfg(test)]
@@ -949,6 +952,9 @@ struct ModulationBlock<'a> {
     /// block, constant for the whole of this one. Held here rather than in
     /// `outputs` because it is per block, not per tick.
     outlets: &'a [f32; MAX_GENERATOR_OUTLETS],
+    /// The keyboard's mod wheel and aftertouch on this channel, constant
+    /// for the block: they change between blocks, in `apply_midi`.
+    performance: &'a [f32; PERFORMANCE_SOURCES],
     ticks: usize,
 }
 
@@ -958,6 +964,7 @@ impl ModulationBlock<'_> {
         mooloop_core::modulation::ControlSources {
             modulators: &self.outputs[tick],
             outlets: self.outlets,
+            performance: self.performance,
         }
     }
 }
@@ -3696,6 +3703,9 @@ const MAX_OUTGOING_EVENTS_PER_BLOCK: usize = 128;
 /// The sustain pedal's controller number (MOO-128).
 const SUSTAIN_PEDAL_CC: u8 = 64;
 
+/// The mod wheel's controller number (MOO-128).
+const MOD_WHEEL_CC: u8 = 1;
+
 /// How far the bend wheel reaches either way, in semitones (MOO-128). One
 /// range for every source, and the General MIDI default. Not a setting yet,
 /// so it is neither persisted nor per channel.
@@ -3724,13 +3734,29 @@ struct ChannelExpression {
     /// The frame the latest bend is still owed at, or `None` once the
     /// source has it.
     bend_due: Option<u32>,
+    /// The mod wheel and aftertouch as this channel's routes read them,
+    /// `0..1`. Not events: a route reads them at the top of each block.
+    performance: [f32; PERFORMANCE_SOURCES],
+    /// The two things aftertouch is made of, kept apart so a keyboard that
+    /// sends both is read as the harder of the two rather than as whichever
+    /// spoke last.
+    channel_pressure: f32,
+    key_pressure: f32,
 }
 
 impl ChannelExpression {
     const REST: Self = Self {
         bend: 0.0,
         bend_due: None,
+        performance: [0.0; PERFORMANCE_SOURCES],
+        channel_pressure: 0.0,
+        key_pressure: 0.0,
     };
+
+    fn aftertouch(&mut self) {
+        self.performance[usize::from(PERFORMANCE_AFTERTOUCH)] =
+            self.channel_pressure.max(self.key_pressure);
+    }
 
     fn bend(&mut self, offset: u32, semitones: f32) {
         self.bend = semitones;
@@ -4198,6 +4224,10 @@ pub(crate) struct RenderState {
     /// from the same input would play, so a bend reaches the notes it is
     /// meant for.
     expression: [ChannelExpression; MAX_CHANNELS],
+    /// Each key's own pressure, from a keyboard that sends it per key. The
+    /// aftertouch a channel's routes read is the hardest-pressed key's: a
+    /// channel has one aftertouch source, not one per voice.
+    key_pressure: [u8; 128],
     /// Whether recording is armed. Capture also needs the transport running,
     /// which is checked at the note rather than here, so arming while stopped
     /// is the ordinary thing it looks like.
@@ -4445,6 +4475,7 @@ impl RenderState {
             monitor: [false; MAX_CHANNELS],
             held_keys: HeldKeys::new(),
             expression: [ChannelExpression::REST; MAX_CHANNELS],
+            key_pressure: [0; 128],
             record_armed: false,
             recording: [None; 128],
             outgoing: [None; MAX_OUTGOING_EVENTS_PER_BLOCK],
@@ -4950,6 +4981,7 @@ impl RenderState {
         // A wheel held across an install is still held. Re-sent rather than
         // assumed: a strip the install rebuilt starts at rest.
         self.expression = outgoing.expression;
+        self.key_pressure = outgoing.key_pressure;
         for expression in &mut self.expression {
             if expression.bend != 0.0 {
                 expression.bend_due = Some(0);
@@ -6538,7 +6570,14 @@ impl RenderState {
                     if expression.bend != 0.0 {
                         expression.bend(0, 0.0);
                     }
+                    // The wheel and the pressure go back to rest with it.
+                    let bend_due = expression.bend_due;
+                    *expression = ChannelExpression {
+                        bend_due,
+                        ..ChannelExpression::REST
+                    };
                 }
+                self.key_pressure = [0; 128];
             }
             EngineCommand::ReleaseChannelNote { channel, note } => {
                 self.queue_audition(
@@ -6977,6 +7016,12 @@ impl RenderState {
                     if controller == SUSTAIN_PEDAL_CC {
                         self.set_sustain_pedal(message.offset, value >= 64);
                     }
+                    if controller == MOD_WHEEL_CC {
+                        let wheel = f32::from(value) / 127.0;
+                        self.express(message, |expression| {
+                            expression.performance[usize::from(PERFORMANCE_MOD_WHEEL)] = wheel;
+                        });
+                    }
                     let Some(map) = map.filter(|map| map.accepts(message)) else {
                         continue;
                     };
@@ -7018,6 +7063,25 @@ impl RenderState {
                     let semitones = bend_semitones(value);
                     self.express(message, |expression| {
                         expression.bend(message.offset, semitones)
+                    });
+                }
+                // Aftertouch is a modulation source and nothing else: it is
+                // not learnable, so it is not forwarded either, which keeps a
+                // pressure stream out of the control ring (MOO-128).
+                MidiKind::ChannelPressure { value } => {
+                    let pressure = f32::from(value) / 127.0;
+                    self.express(message, |expression| {
+                        expression.channel_pressure = pressure;
+                        expression.aftertouch();
+                    });
+                }
+                MidiKind::PolyPressure { note, value } => {
+                    self.key_pressure[usize::from(note & 0x7f)] = value;
+                    let hardest = self.key_pressure.iter().copied().max().unwrap_or(0);
+                    let pressure = f32::from(hardest) / 127.0;
+                    self.express(message, |expression| {
+                        expression.key_pressure = pressure;
+                        expression.aftertouch();
                     });
                 }
                 // Handled above, before any channel or mapping saw it.
@@ -7625,9 +7689,11 @@ impl RenderState {
             let outlets = self.strips[index].published_outlets;
             if ticks > 0 {
                 let mut row = [0.0; CONTROL_SOURCE_SLOTS];
-                row[..MAX_MODULATORS_PER_CHANNEL]
-                    .copy_from_slice(&self.control_outputs[index][ticks - 1]);
-                row[MAX_MODULATORS_PER_CHANNEL..].copy_from_slice(&outlets);
+                let (modulators, rest) = row.split_at_mut(MAX_MODULATORS_PER_CHANNEL);
+                let (published, performance) = rest.split_at_mut(MAX_GENERATOR_OUTLETS);
+                modulators.copy_from_slice(&self.control_outputs[index][ticks - 1]);
+                published.copy_from_slice(&outlets);
+                performance.copy_from_slice(&self.expression[index].performance);
                 // The whole row, so the view can resolve a knob driven by an
                 // outlet as well as one driven by a module. One snapshot a
                 // block, unlike the per-tick table this is taken from.
@@ -7681,10 +7747,12 @@ impl RenderState {
                 self.strips[index].source_silent_frames = 0;
                 continue;
             }
+            let performance = self.expression[index].performance;
             let modulation = ModulationBlock {
                 rack: &self.modulation[index],
                 outputs: &self.control_outputs[index],
                 outlets: &outlets,
+                performance: &performance,
                 ticks,
             };
             // The generator's driven parameters go into their own curve
@@ -8735,6 +8803,116 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         assert_eq!(bends_in(&render, 0), [(0, 0.0)]);
     }
 
+    /// A song of one channel running `kind`.
+    fn one_source_project(kind: mooloop_core::DeviceKind) -> Project {
+        use mooloop_core::DeviceKind;
+        let mut project = Project::default();
+        project.channels.clear();
+        project.channels.push(match kind {
+            DeviceKind::Sampler => ProjectChannel::sampler(0, 1),
+            DeviceKind::DrumSynth => ProjectChannel::drum_synth(0, 1),
+            DeviceKind::MonoSynth => ProjectChannel::mono_synth(0, 1),
+            DeviceKind::PolySynth => ProjectChannel::poly_synth(0, 1),
+            DeviceKind::MlM1 => ProjectChannel::mlm1(0, 1),
+            DeviceKind::MlP8 => ProjectChannel::mlp8(0, 1),
+            DeviceKind::Ds01 => ProjectChannel::ds01(0, 1),
+            DeviceKind::AuxIn => ProjectChannel::aux_in(0, 1),
+        });
+        project
+    }
+
+    /// The mod wheel and both kinds of aftertouch, through `apply_midi`, are
+    /// modulation sources on every source (MOO-128). A route from each to
+    /// one of the device's own parameters moves what the device is handed
+    /// when the keyboard moves, the modulator meters show the band, and a
+    /// panic puts it back to rest.
+    #[test]
+    fn the_mod_wheel_and_aftertouch_modulate_every_source() {
+        use mooloop_core::modulation::performance_slot;
+        use mooloop_core::{DeviceKind, MidiKind, ModPolarity, ModRoute, ParamOwner};
+
+        let kinds = [
+            DeviceKind::Sampler,
+            DeviceKind::DrumSynth,
+            DeviceKind::MonoSynth,
+            DeviceKind::PolySynth,
+            DeviceKind::MlM1,
+            DeviceKind::MlP8,
+            DeviceKind::Ds01,
+            DeviceKind::AuxIn,
+        ];
+        let gestures = [
+            (PERFORMANCE_MOD_WHEEL, MidiKind::ControlChange { controller: 1, value: 127 }),
+            (PERFORMANCE_AFTERTOUCH, MidiKind::ChannelPressure { value: 127 }),
+            (PERFORMANCE_AFTERTOUCH, MidiKind::PolyPressure { note: 60, value: 127 }),
+        ];
+        // What the source is handed for `id` this block, last tick.
+        let driven = |render: &RenderState, id: u32| -> Option<f32> {
+            let mut buf: [ControlCurve<'_>; MAX_SOURCE_CURVE_DESTINATIONS] =
+                std::array::from_fn(|_| ControlCurve::default());
+            let count = render.source_curves[0].fill(&mut buf);
+            buf[..count]
+                .iter()
+                .find(|curve| curve.id == id)
+                .and_then(|curve| curve.values.last().copied())
+        };
+        for kind in kinds {
+            let project = one_source_project(kind);
+            let descriptor = kind
+                .descriptors()
+                .iter()
+                .find(|descriptor| ModDestinationDescriptor::for_param(descriptor).allowed)
+                .unwrap_or_else(|| panic!("{kind:?} has no modulatable parameter"));
+            for (source, gesture) in gestures {
+                let mut render = RenderState::from_project(48_000, &project, &[]);
+                render.attach_keyboard_channel(Arc::new(AtomicU8::new(0)));
+                let knob = render.strips[0]
+                    .source_base
+                    .get(descriptor.id)
+                    .map(|value| descriptor.to_normalized(value))
+                    .expect("the device has the parameter");
+                // Towards the far end of the knob, so the offset is not
+                // clamped away.
+                let depth = if knob > 0.5 { -0.5 } else { 0.5 };
+                render.apply_command(EngineCommand::SetModRoute {
+                    channel: 0,
+                    route: ModRoute::from_performance(
+                        source,
+                        ParamAddr {
+                            scope: EffectTarget::Channel(0),
+                            owner: ParamOwner::Source,
+                            param: descriptor.id,
+                        },
+                        depth,
+                        ModPolarity::Bipolar,
+                    ),
+                });
+                render.process_block(128);
+                let at_rest = driven(&render, descriptor.id).expect("a routed parameter is driven");
+
+                render.apply_midi(&[keyboard_message(0, gesture)]);
+                render.process_block(128);
+                let moved = driven(&render, descriptor.id).expect("a routed parameter is driven");
+                assert!(
+                    (descriptor.to_normalized(moved) - descriptor.to_normalized(at_rest)).abs() > 0.4,
+                    "{kind:?} {gesture:?}: {} stayed at {at_rest} (moved to {moved})",
+                    descriptor.name
+                );
+                assert_eq!(
+                    render.modulator_meters.read(0)[usize::from(performance_slot(source))],
+                    1.0,
+                    "the shelf's meter shows the band"
+                );
+
+                render.apply_command(EngineCommand::Panic);
+                render.process_block(128);
+                assert_eq!(render.expression[0].performance, [0.0; PERFORMANCE_SOURCES]);
+                let rested = driven(&render, descriptor.id).expect("a routed parameter is driven");
+                assert!((rested - at_rest).abs() < 1e-6, "{kind:?}: a panic left the band up");
+            }
+        }
+    }
+
     /// Every pitched source bends (MOO-128). A note played with the wheel
     /// fully up, through `apply_midi`, sounds where the key a whole tone
     /// higher sounds with the wheel at rest -- measured, on the master, for
@@ -8754,18 +8932,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             DeviceKind::Ds01,
         ];
         let played = |kind: DeviceKind, note: u8, bend: i16| -> f32 {
-            let mut project = Project::default();
-            project.channels.clear();
-            project.channels.push(match kind {
-                DeviceKind::Sampler => ProjectChannel::sampler(0, 1),
-                DeviceKind::DrumSynth => ProjectChannel::drum_synth(0, 1),
-                DeviceKind::MonoSynth => ProjectChannel::mono_synth(0, 1),
-                DeviceKind::PolySynth => ProjectChannel::poly_synth(0, 1),
-                DeviceKind::MlM1 => ProjectChannel::mlm1(0, 1),
-                DeviceKind::MlP8 => ProjectChannel::mlp8(0, 1),
-                DeviceKind::Ds01 => ProjectChannel::ds01(0, 1),
-                DeviceKind::AuxIn => ProjectChannel::aux_in(0, 1),
-            });
+            let project = one_source_project(kind);
             // The sampler needs something to play: a second of a pure tone,
             // so the pitch it is played at is the one measured.
             let tone = Arc::new(SampleData {
@@ -10745,6 +10912,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             rack: &rack,
             outputs: &outputs,
             outlets: &[0.0; MAX_GENERATOR_OUTLETS],
+            performance: &[0.0; PERFORMANCE_SOURCES],
             ticks: 2,
         };
 
@@ -10774,6 +10942,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             rack: &ModRack::default(),
             outputs: &outputs,
             outlets: &[0.0; MAX_GENERATOR_OUTLETS],
+            performance: &[0.0; PERFORMANCE_SOURCES],
             ticks: 2,
         };
         assert!(

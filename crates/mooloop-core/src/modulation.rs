@@ -1445,6 +1445,23 @@ impl ModRoute {
             polarity,
         }
     }
+
+    /// A route driven by the keyboard's mod wheel or aftertouch. Complete as
+    /// authored, like an outlet route: the source id is durable.
+    pub const fn from_performance(
+        source: u16,
+        destination: ParamAddr,
+        depth: f32,
+        polarity: ModPolarity,
+    ) -> Self {
+        Self {
+            source: ModSourceRef::Performance(source),
+            source_slot: performance_slot(source),
+            destination,
+            depth,
+            polarity,
+        }
+    }
 }
 
 /// Fixed rack size. Eight slots per channel: four stopped being enough the
@@ -1470,14 +1487,67 @@ pub const MAX_MOD_ROUTES_PER_CHANNEL: usize = 16;
 /// footprint test.
 pub const MAX_GENERATOR_OUTLETS: usize = 8;
 
+/// How many performance sources a channel offers: the keyboard's mod wheel
+/// and its aftertouch (MOO-128).
+///
+/// Neither belongs to the rack or to the generator. They are what the player
+/// is doing to the keyboard that feeds this channel, which is why they are a
+/// band of their own rather than modules somebody has to add first.
+pub const PERFORMANCE_SOURCES: usize = 2;
+
+/// The mod wheel, CC 1, as `0..1`.
+pub const PERFORMANCE_MOD_WHEEL: u16 = 0;
+/// Aftertouch as `0..1`: channel pressure, or the hardest-pressed key's own
+/// pressure on a keyboard that sends it per key.
+pub const PERFORMANCE_AFTERTOUCH: u16 = 1;
+
+/// The performance band's declarations, in the order the shelf lists them.
+/// A saved route names a source by its `id`, so neither is ever renumbered.
+pub const PERFORMANCE_DESCRIPTORS: [crate::OutletDescriptor; PERFORMANCE_SOURCES] = [
+    crate::OutletDescriptor::control(
+        PERFORMANCE_MOD_WHEEL,
+        "Mod Wheel",
+        crate::mod_metadata::SignalShape::Unipolar,
+    ),
+    crate::OutletDescriptor::control(
+        PERFORMANCE_AFTERTOUCH,
+        "Aftertouch",
+        crate::mod_metadata::SignalShape::Unipolar,
+    ),
+];
+
 /// The channel's whole control-source address space: its modulator slots
-/// first, then its generator's published outlets.
+/// first, then its generator's published outlets, then the performance band.
 ///
 /// One flat array rather than two, because a route's runtime locator is an
 /// index into it and `offset_for` should not care which kind of source it
 /// found. That is also what makes an outlet route cost the realtime path
 /// nothing it was not already paying.
-pub const CONTROL_SOURCE_SLOTS: usize = MAX_MODULATORS_PER_CHANNEL + MAX_GENERATOR_OUTLETS;
+///
+/// **Append only.** `ModSourceRef::LocalSlot` names a slot number directly,
+/// so the performance band went *after* the outlets (slots 16 and 17) and
+/// nothing before it moved.
+pub const CONTROL_SOURCE_SLOTS: usize =
+    MAX_MODULATORS_PER_CHANNEL + MAX_GENERATOR_OUTLETS + PERFORMANCE_SOURCES;
+
+/// The runtime slot a performance source occupies.
+pub const fn performance_slot(source: u16) -> u8 {
+    (MAX_MODULATORS_PER_CHANNEL + MAX_GENERATOR_OUTLETS + source as usize) as u8
+}
+
+/// The performance source a runtime slot names, or `None` for a module's or
+/// an outlet's slot. The inverse of [`performance_slot`].
+pub const fn performance_of_slot(slot: u8) -> Option<u16> {
+    match (slot as usize).checked_sub(MAX_MODULATORS_PER_CHANNEL + MAX_GENERATOR_OUTLETS) {
+        Some(source) if source < PERFORMANCE_SOURCES => Some(source as u16),
+        _ => None,
+    }
+}
+
+/// The declaration of the performance source a runtime slot names.
+pub fn performance_descriptor(slot: u8) -> Option<&'static crate::OutletDescriptor> {
+    PERFORMANCE_DESCRIPTORS.get(usize::from(performance_of_slot(slot)?))
+}
 
 /// The runtime slot a generator outlet occupies in that space.
 pub const fn outlet_slot(outlet: u16) -> u8 {
@@ -1513,6 +1583,8 @@ pub const fn outlet_of_slot(slot: u8) -> Option<u16> {
 pub struct ControlSources<'a> {
     pub modulators: &'a [f32; MAX_MODULATORS_PER_CHANNEL],
     pub outlets: &'a [f32; MAX_GENERATOR_OUTLETS],
+    /// The mod wheel and aftertouch, as the keyboard last set them.
+    pub performance: &'a [f32; PERFORMANCE_SOURCES],
 }
 
 impl ControlSources<'_> {
@@ -1524,7 +1596,8 @@ impl ControlSources<'_> {
         let slot = slot as usize;
         match slot.checked_sub(MAX_MODULATORS_PER_CHANNEL) {
             None => self.modulators.get(slot).copied(),
-            Some(outlet) => self.outlets.get(outlet).copied(),
+            Some(outlet) if outlet < MAX_GENERATOR_OUTLETS => self.outlets.get(outlet).copied(),
+            Some(band) => self.performance.get(band - MAX_GENERATOR_OUTLETS).copied(),
         }
     }
 }
@@ -1590,6 +1663,9 @@ struct SavedModRoute {
     /// `source`: an outlet is not a rack module and has no `ModSourceId`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     outlet: Option<u16>,
+    /// A performance source's id (MOO-128). Exclusive with the two above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    performance: Option<u16>,
     destination: ParamAddr,
     depth: f32,
     polarity: ModPolarity,
@@ -1623,18 +1699,20 @@ impl serde::Serialize for ModRack {
                 // A rack module persists its durable identity and derives its
                 // slot on load; an outlet persists its outlet id and derives
                 // nothing, because the id already is the durable form.
-                let (source, outlet) = match route.source {
-                    ModSourceRef::Id(id) => (Some(id.0), None),
-                    ModSourceRef::GeneratorOutlet(outlet) => (None, Some(outlet)),
+                let (source, outlet, performance) = match route.source {
+                    ModSourceRef::Id(id) => (Some(id.0), None, None),
+                    ModSourceRef::GeneratorOutlet(outlet) => (None, Some(outlet), None),
+                    ModSourceRef::Performance(source) => (None, None, Some(source)),
                     // Only an unstamped route is still a bare slot, and
                     // `add_route` is the only way in. Saving one would write
                     // a reference that means something different next load.
-                    ModSourceRef::LocalSlot(_) => (None, None),
+                    ModSourceRef::LocalSlot(_) => (None, None, None),
                 };
                 SavedModRoute {
                     source,
                     source_slot: None,
                     outlet,
+                    performance,
                     destination: route.destination,
                     depth: route.depth,
                     polarity: route.polarity,
@@ -1674,6 +1752,9 @@ impl<'de> serde::Deserialize<'de> for ModRack {
                 saved_route.source,
                 saved_route.source_slot,
             ) {
+                _ if saved_route.performance.is_some() => {
+                    ModSourceRef::Performance(saved_route.performance.unwrap_or_default())
+                }
                 (Some(outlet), _, _) => ModSourceRef::GeneratorOutlet(outlet),
                 (None, Some(id), _) => ModSourceRef::Id(ModSourceId(id)),
                 (None, None, Some(slot)) => ModSourceRef::LocalSlot(slot),
@@ -1686,6 +1767,7 @@ impl<'de> serde::Deserialize<'de> for ModRack {
             // outlet route is already durable and needs no lookup.
             let source = match reference {
                 ModSourceRef::GeneratorOutlet(outlet) => ModSourceRef::GeneratorOutlet(outlet),
+                ModSourceRef::Performance(source) => ModSourceRef::Performance(source),
                 _ => match rack.source_id(source_slot as usize) {
                     Some(id) => ModSourceRef::Id(id),
                     None => continue,
@@ -1756,6 +1838,9 @@ impl ModRack {
             ModSourceRef::LocalSlot(slot) => Some(slot),
             ModSourceRef::GeneratorOutlet(outlet) => {
                 (usize::from(outlet) < MAX_GENERATOR_OUTLETS).then(|| outlet_slot(outlet))
+            }
+            ModSourceRef::Performance(source) => {
+                (usize::from(source) < PERFORMANCE_SOURCES).then(|| performance_slot(source))
             }
         }
     }
@@ -1994,7 +2079,7 @@ impl ModRack {
     pub fn add_route(&mut self, route: ModRoute) -> Option<usize> {
         // An outlet route arrives already durable: there is no slot to read
         // an identity out of, and stamping one would be inventing a module.
-        if let ModSourceRef::GeneratorOutlet(_) = route.source {
+        if let ModSourceRef::GeneratorOutlet(_) | ModSourceRef::Performance(_) = route.source {
             return self.apply_route(route);
         }
         let source = ModSourceRef::Id(self.source_id(route.source_slot as usize)?);
@@ -2360,10 +2445,12 @@ mod tests {
     /// Tests still author one array because the *address space* is flat; only
     /// the runtime storage is split.
     fn sources(row: &[f32; CONTROL_SOURCE_SLOTS]) -> ControlSources<'_> {
-        let (modulators, outlets) = row.split_at(MAX_MODULATORS_PER_CHANNEL);
+        let (modulators, rest) = row.split_at(MAX_MODULATORS_PER_CHANNEL);
+        let (outlets, performance) = rest.split_at(MAX_GENERATOR_OUTLETS);
         ControlSources {
             modulators: modulators.try_into().unwrap(),
             outlets: outlets.try_into().unwrap(),
+            performance: performance.try_into().unwrap(),
         }
     }
 
@@ -2836,6 +2923,86 @@ retrigger = true
         // Resolved into the outlet band rather than onto a module slot,
         // which is the arithmetic that replaces the identity lookup.
         assert_eq!(route.source_slot, outlet_slot(1));
+    }
+
+    /// The performance band was appended, not inserted (MOO-128): every slot
+    /// a route saved before it could name -- the eight modules and the eight
+    /// outlets -- resolves where it did, and the band sits at 16 and 17.
+    #[test]
+    fn a_route_saved_before_the_performance_band_keeps_its_slot() {
+        assert_eq!(MAX_MODULATORS_PER_CHANNEL + MAX_GENERATOR_OUTLETS, 16);
+        assert_eq!(performance_slot(PERFORMANCE_MOD_WHEEL), 16);
+        assert_eq!(performance_slot(PERFORMANCE_AFTERTOUCH), 17);
+        assert_eq!(CONTROL_SOURCE_SLOTS, 18);
+        for slot in 0..16u8 {
+            assert_eq!(performance_of_slot(slot), None, "slot {slot} is not the band's");
+        }
+        for outlet in 0..MAX_GENERATOR_OUTLETS as u16 {
+            assert_eq!(outlet_slot(outlet), 8 + outlet as u8);
+            assert_eq!(outlet_of_slot(8 + outlet as u8), Some(outlet));
+        }
+        assert_eq!(outlet_of_slot(16), None, "the band is not an outlet");
+
+        // A legacy bare-slot route and an outlet route, written as a song
+        // saved yesterday wrote them, decode onto the same slots as before.
+        let legacy = r#"
+[[slots]]
+slot = 3
+
+[slots.params]
+kind = "lfo"
+rate_hz = 3.0
+
+[[routes]]
+source_slot = 3
+depth = 0.4
+polarity = "bipolar"
+
+[routes.destination]
+scope = { channel = 0 }
+owner = { effect = { slot = 0 } }
+param = 7
+
+[[routes]]
+outlet = 2
+depth = 0.5
+polarity = "bipolar"
+
+[routes.destination]
+scope = { channel = 0 }
+owner = { effect = { slot = 0 } }
+param = 8
+"#;
+        let rack = toml::from_str::<ModRack>(legacy).unwrap();
+        let slots: Vec<u8> = rack.routes.iter().flatten().map(|route| route.source_slot).collect();
+        assert_eq!(slots, [3, outlet_slot(2)]);
+    }
+
+    /// A mod-wheel route round-trips as a performance id, drives its
+    /// destination through the one summing path, and reads nothing from the
+    /// outlet or module halves.
+    #[test]
+    fn a_performance_route_round_trips_and_reads_the_band() {
+        let mut rack = ModRack::default();
+        rack.add_route(ModRoute::from_performance(
+            PERFORMANCE_MOD_WHEEL,
+            addr(3),
+            0.5,
+            ModPolarity::Bipolar,
+        ))
+        .expect("a performance route needs no module");
+        let text = toml::to_string(&rack).unwrap();
+        assert!(text.contains("performance = 0"), "{text}");
+        let decoded: ModRack = toml::from_str(&text).unwrap();
+        assert_eq!(decoded, rack);
+        let route = decoded.routes[0].unwrap();
+        assert_eq!(route.source, ModSourceRef::Performance(PERFORMANCE_MOD_WHEEL));
+        assert_eq!(route.source_slot, performance_slot(PERFORMANCE_MOD_WHEEL));
+
+        let mut row = [0.0; CONTROL_SOURCE_SLOTS];
+        assert_eq!(decoded.offset_for(addr(3), sources(&row), &open(3)), 0.0);
+        row[usize::from(performance_slot(PERFORMANCE_MOD_WHEEL))] = 1.0;
+        assert!((decoded.offset_for(addr(3), sources(&row), &open(3)) - 0.5).abs() < 1e-6);
     }
 
     /// An outlet drives a destination through exactly the same summing path

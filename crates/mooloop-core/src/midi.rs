@@ -79,6 +79,17 @@ pub enum MidiKind {
     PitchBend {
         value: i16,
     },
+    /// `0xD0`: how hard the whole keyboard is being pressed, `0..=127`
+    /// (MOO-128).
+    ChannelPressure {
+        value: u8,
+    },
+    /// `0xA0`: how hard one key is being pressed, on a keyboard that senses
+    /// each key on its own (MOO-128).
+    PolyPressure {
+        note: u8,
+        value: u8,
+    },
     /// `0xFA`. Start playing from the beginning.
     Start,
     /// `0xFB`. Resume from where the transport stands.
@@ -510,6 +521,13 @@ impl MidiMessage {
                     value: ((high << 7) | low) - 8192,
                 }
             }
+            0xA0 => MidiKind::PolyPressure {
+                note: *bytes.get(1)? & 0x7F,
+                value: *bytes.get(2)? & 0x7F,
+            },
+            0xD0 => MidiKind::ChannelPressure {
+                value: *bytes.get(1)? & 0x7F,
+            },
             _ => return None,
         };
         Some(Self {
@@ -572,12 +590,27 @@ mod tests {
                 value: 64
             }
         );
-        // Program change, aftertouch, clock, and truncated packets.
+        // Program change, clock, and truncated packets.
         assert!(decode(0, &[0xC0, 1]).is_none());
         assert!(decode(0, &[0xF8]).is_none());
         assert!(decode(0, &[0x90, 60]).is_none());
         assert!(decode(0, &[]).is_none());
         assert!(decode(0, &[60, 100]).is_none());
+    }
+
+    /// Both kinds of aftertouch decode, on their own channel (MOO-128); a
+    /// packet cut short is still refused.
+    #[test]
+    fn aftertouch_decodes_per_channel_and_per_key() {
+        let channel = decode(0, &[0xD3, 100]).unwrap();
+        assert_eq!(channel.kind, MidiKind::ChannelPressure { value: 100 });
+        assert_eq!(channel.channel, 3);
+        assert_eq!(
+            decode(0, &[0xA0, 60, 90]).unwrap().kind,
+            MidiKind::PolyPressure { note: 60, value: 90 }
+        );
+        assert!(decode(0, &[0xD0]).is_none());
+        assert!(decode(0, &[0xA0, 60]).is_none());
     }
 
     #[test]

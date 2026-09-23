@@ -602,8 +602,18 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   holds until the wheel moves again, so a note started with the wheel up
   starts bent. A channel keeps its bend when the selection moves away from
   it; Panic returns every channel's bend to centre. Bends are live only: they
-  are not recorded into patterns and an export does not hear them. The mod
-  wheel, aftertouch and program change do nothing on a channel yet. A `BufferMidiMap` — note and CC
+  are not recorded into patterns and an export does not hear them. **The mod
+  wheel (CC 1) and aftertouch are modulation sources** on every channel,
+  whatever its instrument: the shelf's outlet band lists *Mod Wheel* and
+  *Aftertouch* after the generator's own outlets, and they arm and route to
+  any knob the way an outlet does (runtime slots 16 and 17, saved as
+  `performance = 0` or `1` on the route). Aftertouch is channel pressure or,
+  from a keyboard that sends it per key, the hardest-pressed key's pressure.
+  Both reach the same channels a bend does, stay where the keyboard left
+  them when the selection moves, return to rest on Panic, and are live
+  only, like bends. Aftertouch is not learnable and is not forwarded to the
+  control layer; CC 1 still is. Program change still does nothing on a
+  channel. A `BufferMidiMap` — note and CC
   mappings onto one Buffer insert's gestures — takes the notes it maps ahead
   of the keyboard, but nothing installs one:
   `EngineHandle::set_buffer_midi_map` has no caller outside its own tests.

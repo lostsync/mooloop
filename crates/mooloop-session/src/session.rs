@@ -1694,6 +1694,11 @@ impl Session {
         // An outlet route is authored complete: its id is already durable, so
         // there is no slot to stamp an identity out of.
         let authored = match outlet {
+            // The mod wheel and aftertouch are declared as outlets but are
+            // the keyboard's, not the generator's (MOO-128).
+            Some(performance) if mooloop_core::modulation::performance_of_slot(source_slot).is_some() => {
+                ModRoute::from_performance(performance.id, destination, depth, default_polarity)
+            }
             Some(outlet) => {
                 ModRoute::from_outlet(outlet.id, destination, depth, default_polarity)
             }
@@ -1764,10 +1769,13 @@ impl Session {
         // halves, because they are captured at different rates. Split once
         // here rather than per descriptor.
         let outputs = self.modulation_outputs.get();
-        let (modulators, outlets) = outputs.split_at(MAX_MODULATORS_PER_CHANNEL);
+        let (modulators, rest) = outputs.split_at(MAX_MODULATORS_PER_CHANNEL);
+        let (outlets, performance) =
+            rest.split_at(mooloop_core::modulation::MAX_GENERATOR_OUTLETS);
         let sources = mooloop_core::modulation::ControlSources {
             modulators: modulators.try_into().expect("the rack's half"),
             outlets: outlets.try_into().expect("the outlet band"),
+            performance: performance.try_into().expect("the performance band"),
         };
         for descriptor in descriptors {
             let policy = ModDestinationDescriptor::for_param(descriptor);

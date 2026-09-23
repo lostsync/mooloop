@@ -309,6 +309,12 @@ pub enum ModSourceRef {
     /// authored and unresolved rather than silently re-aimed, which is the
     /// same fate a route naming a departed module gets.
     GeneratorOutlet(u16),
+    /// The keyboard's mod wheel or aftertouch, by its performance id
+    /// (`modulation::PERFORMANCE_MOD_WHEEL`, `PERFORMANCE_AFTERTOUCH`).
+    ///
+    /// Durable like an outlet: fixed ids at a fixed place in the address
+    /// space, owned by neither the rack nor the generator (MOO-128).
+    Performance(u16),
 }
 
 impl ModSourceRef {
@@ -332,6 +338,9 @@ impl ModSourceRef {
             Self::GeneratorOutlet(outlet) => (usize::from(outlet)
                 < crate::modulation::MAX_GENERATOR_OUTLETS)
                 .then(|| crate::modulation::outlet_slot(outlet)),
+            Self::Performance(source) => (usize::from(source)
+                < crate::modulation::PERFORMANCE_SOURCES)
+                .then(|| crate::modulation::performance_slot(source)),
         }
     }
 }

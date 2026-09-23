@@ -15,7 +15,7 @@
 //! looking in the rack.
 
 use crate::session::Session;
-use mooloop_core::modulation::outlet_of_slot;
+use mooloop_core::modulation::{outlet_of_slot, performance_descriptor, performance_of_slot};
 use mooloop_core::{
     EngineCommand, ModPolarity, ModSourceId, ModulatorKind, ModulatorParams, OutletDescriptor,
     PublishesOutlets,
@@ -35,8 +35,16 @@ impl Session {
     /// leaves empty, and for the unresolved slot -- so an ML-P8 route that
     /// survives the channel becoming a sampler reads as naming nothing,
     /// which is the same fate a route to a departed module gets.
+    ///
+    /// The performance band -- the keyboard's mod wheel and aftertouch
+    /// (MOO-128) -- answers here too, with its own declarations: it is a
+    /// source that is neither a module nor editable, which is exactly what
+    /// the outlet half of the shelf already knows how to show and arm.
     pub fn selected_channel_outlet(&self, slot: u8) -> Option<&'static OutletDescriptor> {
         let channel = self.channels.get(self.selected)?;
+        if let Some(performance) = performance_descriptor(slot) {
+            return Some(performance);
+        }
         channel.kind.control_outlet(outlet_of_slot(slot)?)
     }
 
@@ -142,7 +150,9 @@ impl Session {
         // pointed at, which is the same silent retargeting the id lookup
         // exists to prevent.
         let follow = |rack: &mooloop_core::ModRack, was: Option<u8>, id: Option<ModSourceId>| match was {
-            Some(slot) if outlet_of_slot(slot).is_some() => Some(slot),
+            Some(slot) if outlet_of_slot(slot).is_some() || performance_of_slot(slot).is_some() => {
+                Some(slot)
+            }
             _ => id.and_then(|id| rack.slot_of(id)),
         };
         let next_selected = follow(rack, selected_slot, selected_id);
@@ -417,6 +427,34 @@ mod tests {
             .iter()
             .all(Option::is_none));
         assert!(session.remove_modulation_source(0).is_none());
+    }
+
+    /// The keyboard's mod wheel is a source on every channel, whatever its
+    /// generator (MOO-128): selectable, armable, named for what it is, and
+    /// authored as a durable performance route rather than as an outlet.
+    #[test]
+    fn the_mod_wheel_arms_and_authors_a_performance_route() {
+        let mut session = Session::default();
+        assert_eq!(session.channels[0].kind, mooloop_core::DeviceKind::Sampler);
+        let wheel = mooloop_core::modulation::performance_slot(
+            mooloop_core::modulation::PERFORMANCE_MOD_WHEEL,
+        );
+        assert!(session.select_modulation_source(wheel.into()));
+        assert_eq!(
+            session.toggle_modulation_assignment().as_deref(),
+            Some("Mod Wheel")
+        );
+        let destination = ParamAddr::strip(EffectTarget::Channel(0), STRIP_PARAM_VOLUME);
+        let crate::session::ArmedRoute::Added(route) =
+            session.arm_modulation_route(destination, 0.5)
+        else {
+            panic!("the armed wheel did not author a route");
+        };
+        assert_eq!(
+            route.source,
+            mooloop_core::ModSourceRef::Performance(mooloop_core::modulation::PERFORMANCE_MOD_WHEEL)
+        );
+        assert_eq!(route.source_slot, wheel);
     }
 
     /// An ML-P8 channel, selected, with its outlet band available.
