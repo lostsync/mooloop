@@ -167,8 +167,11 @@ impl PolySynth {
                 self.params.sustain,
                 self.params.release,
             );
-            if index >= polyphony as usize {
-                voice.active = false;
+            // A slot that Mono or a lowered Voices count no longer covers
+            // fades out rather than stopping mid-waveform (MOO-110). It keeps
+            // rendering until it has: `render_range` walks every slot.
+            if index >= polyphony as usize && voice.active && !voice.env.is_releasing() {
+                voice.env.release_with(STOP_RELEASE_S);
             }
         }
     }
@@ -225,10 +228,13 @@ impl PolySynth {
         if let Some(index) = voices.iter().position(|voice| !voice.active) {
             return index;
         }
+        // Every slot is busy: take one already releasing before one still
+        // held, and the oldest of either (MOO-110). A held pad note outlives
+        // the release tails around it.
         voices
             .iter()
             .enumerate()
-            .min_by_key(|(_, voice)| voice.age)
+            .min_by_key(|(_, voice)| (!voice.env.is_releasing(), voice.age))
             .map(|(index, _)| index)
             .unwrap_or(0)
     }
@@ -939,6 +945,60 @@ mod tests {
         assert_eq!(synth.voices.iter().filter(|v| v.active).count(), 2);
         assert!(synth.voices.iter().any(|v| v.event_id == 2));
         assert!(synth.voices.iter().any(|v| v.event_id == 3));
+    }
+
+    /// With every voice busy, a new note takes one that is releasing before
+    /// one still held, even a younger one (MOO-110).
+    #[test]
+    fn a_full_pool_steals_a_releasing_voice_before_a_held_one() {
+        let mut synth = make_synth(
+            48_000,
+            PolySynthParams {
+                polyphony: 2,
+                release: 1.0,
+                ..Default::default()
+            },
+        );
+        synth.note_on(1, 60, 100);
+        synth.note_on(2, 64, 100);
+        synth.note_off(2);
+        synth.note_on(3, 67, 100);
+        assert!(
+            synth.voices.iter().any(|v| v.active && v.event_id == 1),
+            "the held note was stolen"
+        );
+        assert!(synth.voices.iter().any(|v| v.event_id == 3));
+    }
+
+    /// Lowering Voices, or switching Mono on, fades the voices it retires
+    /// rather than cutting them (MOO-110).
+    #[test]
+    fn retired_voices_fade_rather_than_stop() {
+        let sr = 48_000;
+        let mut synth = make_synth(
+            sr,
+            PolySynthParams {
+                polyphony: 4,
+                attack: 0.0001,
+                sustain: 1.0,
+                ..Default::default()
+            },
+        );
+        let mut bus = StereoBus::with_capacity(512);
+        let mut events = EventList::empty();
+        for (index, note) in [60u8, 64, 67].into_iter().enumerate() {
+            events.push(note_on(0, index as u64 + 1, note));
+        }
+        synth.process(&ctx(512, sr), &mut bus, &events, None);
+        let mut params = synth.params;
+        params.mono_mode = true;
+        synth.set_params(params);
+        assert!(synth.voices[1..3]
+            .iter()
+            .all(|v| v.active && v.env.is_releasing()));
+        let mut bus = StereoBus::with_capacity(1_024);
+        synth.process(&ctx(1_024, sr), &mut bus, &EventList::empty(), None);
+        assert!(synth.voices[1..].iter().all(|v| !v.active), "the fade never ended");
     }
 
     #[test]

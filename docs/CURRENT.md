@@ -739,7 +739,18 @@ boundary.
   release through the amplitude envelope.
 - Sampler voice allocation is fixed-capacity and deterministic: restart reuses
   the oldest matching pitch, layer mode overlaps notes, and overflow steals
-  the oldest voice.
+  a releasing voice before a held one, the oldest of either. The sampler, the
+  Poly Synth and the ML-P8 all steal in that order (MOO-110, 2026-09-23).
+- **Nothing a voice does ends mid-waveform** (MOO-110, 2026-09-23). A voice
+  the sampler steals -- which on the default patch, one voice in Restart, is
+  every new note -- moves to one of the sixteen slots above the Voices count
+  and fades there over the choke's 5 ms while the new note starts fresh in
+  its place. A non-looping region or slice fades over its last 2 ms (at most
+  a quarter of a short slice) instead of stopping on whatever sample it
+  held. Lowering Voices on the sampler or the Poly Synth, or switching the
+  Poly Synth to Mono, fades the voices it retires. `continuity_tests.rs`
+  holds a default-patch retrigger and a region end on a sine to the family's
+  largest-step bound; before, each stepped by up to the whole signal.
 
 ### Recording Into The Sampler
 

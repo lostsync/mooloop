@@ -19,10 +19,13 @@
 //! device tests. The cases are grouped by the team whose code the transition
 //! runs through.
 
+use std::sync::Arc;
+
 use mooloop_core::{
     EngineCommand, MonoSynthParams, NoteEvent, OscParams, OscWave, Project, ProjectChannel,
     DEFAULT_STEPS,
 };
+use mooloop_dsp::SampleData;
 
 use crate::render::RenderState;
 use crate::render_test_support::{step_across, Transition, SAMPLE_RATE};
@@ -344,5 +347,72 @@ fn muting_the_master_is_continuous() {
                 muted: false,
             },
         ),
+    );
+}
+
+// --- Instruments: MOO-110 ----------------------------------------------------
+
+/// A sine sample at 221 Hz rather than the 220 the synth plays, so that
+/// the frames these cases change things at -- 12 000, a quarter of a second
+/// -- fall on a crest: fifty-five and a quarter cycles. A switch at a zero
+/// crossing has nothing to step, and passes whether or not it is fixed.
+const SAMPLE_HZ: f32 = 221.0;
+
+/// `frames` of a sine starting at phase zero, at the engine's rate, so
+/// that the root note plays it at unity.
+fn sine_sample(frames: usize) -> Arc<SampleData> {
+    let step = std::f32::consts::TAU * SAMPLE_HZ / SAMPLE_RATE as f32;
+    Arc::new(SampleData {
+        frames: (0..frames)
+            .map(|frame| {
+                let value = 0.5 * (step * frame as f32).sin();
+                [value, value]
+            })
+            .collect(),
+        sample_rate: SAMPLE_RATE,
+        root_note: 60,
+    })
+}
+
+/// The default sampler patch -- one voice, `Restart`, one-shot -- playing
+/// `sample` at its root for each `(start, length)` in ticks.
+fn sampler_render(sample: Arc<SampleData>, notes: &[(u32, u32)]) -> RenderState {
+    let mut channel = ProjectChannel::sampler(0, 1);
+    channel.setup.channel.volume = 1.0;
+    for (index, &(start, length)) in notes.iter().enumerate() {
+        channel.notes[0].push(NoteEvent::new(index as u32 + 1, start, length, 60, 127));
+    }
+    let project = Project {
+        channels: vec![channel],
+        pattern_lengths: vec![DEFAULT_STEPS],
+        ..Project::default()
+    };
+    let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[Some(sample)]);
+    render.play();
+    render
+}
+
+/// A second note on the default patch, a quarter of a second into a sample
+/// a second long. The patch has one voice and restarts it, so the first
+/// note is stolen mid-waveform -- and used to stop in the sample the second
+/// began, which was the loudest click in the default song.
+#[test]
+fn a_retrigger_on_the_default_sampler_is_continuous() {
+    // Tick 48 is half a beat: 12 000 frames at 120 bpm.
+    let mut render = sampler_render(sine_sample(48_000), &[(0, 96), (48, 96)]);
+    assert_continuous(
+        "a retrigger on the default sampler",
+        step_across(&mut render, 12_000, |_| {}, TAIL),
+    );
+}
+
+/// A one-shot running off the end of its sample, which here ends on a
+/// crest. The voice used to stop wherever the waveform was.
+#[test]
+fn a_sample_ending_mid_waveform_is_continuous() {
+    let mut render = sampler_render(sine_sample(12_000), &[(0, 384)]);
+    assert_continuous(
+        "a sample running out on a crest",
+        step_across(&mut render, 11_000, |_| {}, 3_000),
     );
 }

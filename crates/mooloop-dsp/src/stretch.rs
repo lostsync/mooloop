@@ -790,6 +790,14 @@ impl StretchPool {
         self.readers.iter_mut()
     }
 
+    /// Exchange two voices' readers, for a sampler moving a voice between
+    /// slots. A swap in place: realtime-safe. Out of range is a no-op.
+    pub fn swap_readers(&mut self, a: usize, b: usize) {
+        if a < self.readers.len() && b < self.readers.len() {
+            self.readers.swap(a, b);
+        }
+    }
+
     /// Total heap held, so the memory cost of enabling stretch on a sampler
     /// is a number someone can look up rather than estimate.
     pub fn state_bytes(&self) -> usize {
