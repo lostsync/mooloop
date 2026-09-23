@@ -1,0 +1,450 @@
+format_version = 1
+document_type = "song"
+asset_mode = "referenced"
+
+[document]
+bpm = 131
+swing_percent = 58
+ppq = 96
+beats_per_bar = 4
+playback_mode = "pattern"
+current_pattern = 0
+selected_channel = 0
+next_channel_id = 4
+next_track_id = 4
+pattern_lengths = [16]
+playlist = []
+
+[[document.channels]]
+id = 0
+notes = [[]]
+automation = [[]]
+next_note_id = 1
+
+[document.channels.setup]
+effects = []
+next_device_id = 0
+
+[document.channels.setup.channel]
+name = "corpus 0"
+kind = "drum_synth"
+muted = false
+volume = 1.0
+pan = 0.0
+bus = 1
+
+[document.channels.setup.source]
+type = "drum_synth"
+
+[document.channels.setup.source.state.params]
+mode = "kick"
+kick_character = "punch"
+snare_character = "pop"
+hat_character = "tight"
+choke_group = 0
+decay = 0.23457617
+tune_semitones = 0.0
+drive = 0.076154366
+punch = 0.45419705
+kick_start_hz = 181.03043
+kick_end_hz = 51.326885
+kick_sweep = 0.048573256
+kick_click = 0.41235787
+snare_tone_hz = 180.0
+snare_tone2_hz = 330.0
+snare_tone2_mix = 0.2
+snare_noise_mix = 0.6
+snare_noise_decay = 0.11
+snare_noise_color = 0.65
+hat_hp_hz = 7500.0
+hat_metallic = 0.5
+
+[document.channels.setup.modulation]
+
+[[document.channels]]
+id = 1
+notes = [[]]
+automation = [[]]
+next_note_id = 1
+
+[document.channels.setup]
+effects = []
+next_device_id = 0
+
+[document.channels.setup.channel]
+name = "corpus 1"
+kind = "drum_synth"
+muted = false
+volume = 1.0
+pan = 0.0
+bus = 1
+
+[document.channels.setup.source]
+type = "drum_synth"
+
+[document.channels.setup.source.state.params]
+mode = "snare"
+kick_character = "kit"
+snare_character = "snap"
+hat_character = "tight"
+choke_group = 0
+decay = 0.12624614
+tune_semitones = 0.0
+drive = 0.054828744
+punch = 0.48624974
+kick_start_hz = 160.0
+kick_end_hz = 48.0
+kick_sweep = 0.045
+kick_click = 0.5
+snare_tone_hz = 178.91989
+snare_tone2_hz = 304.85437
+snare_tone2_mix = 0.3319748
+snare_noise_mix = 0.7403247
+snare_noise_decay = 0.13099323
+snare_noise_color = 0.78192216
+hat_hp_hz = 7500.0
+hat_metallic = 0.5
+
+[document.channels.setup.modulation]
+
+[[document.channels]]
+id = 2
+notes = [[]]
+automation = [[]]
+next_note_id = 1
+
+[document.channels.setup]
+effects = []
+next_device_id = 0
+
+[document.channels.setup.channel]
+name = "corpus 2"
+kind = "drum_synth"
+muted = false
+volume = 1.0
+pan = 0.0
+bus = 1
+
+[document.channels.setup.source]
+type = "drum_synth"
+
+[document.channels.setup.source.state.params]
+mode = "hat"
+kick_character = "kit"
+snare_character = "pop"
+hat_character = "tight"
+choke_group = 1
+decay = 0.06458262
+tune_semitones = 0.0
+drive = 0.0
+punch = 0.15
+kick_start_hz = 160.0
+kick_end_hz = 48.0
+kick_sweep = 0.045
+kick_click = 0.5
+snare_tone_hz = 180.0
+snare_tone2_hz = 330.0
+snare_tone2_mix = 0.2
+snare_noise_mix = 0.6
+snare_noise_decay = 0.11
+snare_noise_color = 0.65
+hat_hp_hz = 7805.4453
+hat_metallic = 0.56669223
+
+[document.channels.setup.modulation]
+
+[[document.channels]]
+id = 3
+notes = [[]]
+automation = [[]]
+next_note_id = 1
+
+[document.channels.setup]
+effects = []
+next_device_id = 0
+
+[document.channels.setup.channel]
+name = "corpus 3"
+kind = "drum_synth"
+muted = false
+volume = 1.0
+pan = 0.0
+bus = 1
+
+[document.channels.setup.source]
+type = "drum_synth"
+
+[document.channels.setup.source.state.params]
+mode = "hat"
+kick_character = "kit"
+snare_character = "pop"
+hat_character = "tight"
+choke_group = 1
+decay = 0.45447692
+tune_semitones = 0.0
+drive = 0.0
+punch = 0.15
+kick_start_hz = 160.0
+kick_end_hz = 48.0
+kick_sweep = 0.045
+kick_click = 0.5
+snare_tone_hz = 180.0
+snare_tone2_hz = 330.0
+snare_tone2_mix = 0.2
+snare_noise_mix = 0.6
+snare_noise_decay = 0.11
+snare_noise_color = 0.65
+hat_hp_hz = 8360.983
+hat_metallic = 0.34054384
+
+[document.channels.setup.modulation]
+
+[[document.buses]]
+id = 0
+effects = []
+next_device_id = 0
+sends = []
+
+[document.buses.bus]
+name = "Master"
+muted = false
+volume = 1.0
+pan = 0.0
+output = 0
+console = false
+polarity = false
+solo = false
+
+[document.buses.bus.strip]
+voicing = "moo"
+pre_in = false
+drive_db = 0.0
+eq_in = false
+comp_in = false
+threshold_db = -18.0
+ratio = 3.0
+attack_ms = 10.0
+release_ms = 120.0
+knee_db = 6.0
+mix = 1.0
+makeup_db = 0.0
+
+[[document.buses.bus.strip.bands]]
+kind = "high_shelf"
+position = 2
+gain_db = 0.0
+q = 0.707
+
+[[document.buses.bus.strip.bands]]
+kind = "bell"
+position = 3
+gain_db = 0.0
+q = 0.9
+
+[[document.buses.bus.strip.bands]]
+kind = "bell"
+position = 3
+gain_db = 0.0
+q = 0.9
+
+[[document.buses.bus.strip.bands]]
+kind = "low_shelf"
+position = 2
+gain_db = 0.0
+q = 0.707
+
+[[document.buses]]
+id = 1
+effects = []
+next_device_id = 0
+
+[document.buses.bus]
+name = "Drums"
+muted = false
+volume = 1.0
+pan = 0.0
+output = 0
+console = false
+polarity = false
+solo = false
+
+[document.buses.bus.strip]
+voicing = "moo"
+pre_in = false
+drive_db = 0.0
+eq_in = false
+comp_in = false
+threshold_db = -18.0
+ratio = 3.0
+attack_ms = 10.0
+release_ms = 120.0
+knee_db = 6.0
+mix = 1.0
+makeup_db = 0.0
+
+[[document.buses.bus.strip.bands]]
+kind = "high_shelf"
+position = 2
+gain_db = 0.0
+q = 0.707
+
+[[document.buses.bus.strip.bands]]
+kind = "bell"
+position = 3
+gain_db = 0.0
+q = 0.9
+
+[[document.buses.bus.strip.bands]]
+kind = "bell"
+position = 3
+gain_db = 0.0
+q = 0.9
+
+[[document.buses.bus.strip.bands]]
+kind = "low_shelf"
+position = 2
+gain_db = 0.0
+q = 0.707
+
+[[document.buses.sends]]
+target = 3
+level = 1.0
+tap = "post_fader"
+enabled = true
+
+[[document.buses]]
+id = 2
+effects = []
+next_device_id = 0
+
+[document.buses.bus]
+name = "Bass"
+muted = false
+volume = 1.0
+pan = 0.0
+output = 0
+console = false
+polarity = false
+solo = false
+
+[document.buses.bus.strip]
+voicing = "moo"
+pre_in = false
+drive_db = 0.0
+eq_in = false
+comp_in = false
+threshold_db = -18.0
+ratio = 3.0
+attack_ms = 10.0
+release_ms = 120.0
+knee_db = 6.0
+mix = 1.0
+makeup_db = 0.0
+
+[[document.buses.bus.strip.bands]]
+kind = "high_shelf"
+position = 2
+gain_db = 0.0
+q = 0.707
+
+[[document.buses.bus.strip.bands]]
+kind = "bell"
+position = 3
+gain_db = 0.0
+q = 0.9
+
+[[document.buses.bus.strip.bands]]
+kind = "bell"
+position = 3
+gain_db = 0.0
+q = 0.9
+
+[[document.buses.bus.strip.bands]]
+kind = "low_shelf"
+position = 2
+gain_db = 0.0
+q = 0.707
+
+[[document.buses.sends]]
+target = 3
+level = 1.0
+tap = "post_fader"
+enabled = true
+
+[[document.buses]]
+id = 3
+next_device_id = 1
+sends = []
+
+[document.buses.bus]
+name = "Reverb"
+muted = false
+volume = 1.0
+pan = 0.0
+output = 0
+console = false
+polarity = false
+solo = false
+
+[document.buses.bus.strip]
+voicing = "moo"
+pre_in = false
+drive_db = 0.0
+eq_in = false
+comp_in = false
+threshold_db = -18.0
+ratio = 3.0
+attack_ms = 10.0
+release_ms = 120.0
+knee_db = 6.0
+mix = 1.0
+makeup_db = 0.0
+
+[[document.buses.bus.strip.bands]]
+kind = "high_shelf"
+position = 2
+gain_db = 0.0
+q = 0.707
+
+[[document.buses.bus.strip.bands]]
+kind = "bell"
+position = 3
+gain_db = 0.0
+q = 0.9
+
+[[document.buses.bus.strip.bands]]
+kind = "bell"
+position = 3
+gain_db = 0.0
+q = 0.9
+
+[[document.buses.bus.strip.bands]]
+kind = "low_shelf"
+position = 2
+gain_db = 0.0
+q = 0.707
+
+[[document.buses.effects]]
+id = 0
+bypassed = false
+wet_dry = 1.0
+input_trim = 1.0
+output_trim = 1.0
+
+[document.buses.effects.params]
+type = "reverb"
+
+[document.buses.effects.params.state]
+size = 0.5
+decay_s = 2.4
+damping = 0.38
+predelay_ms = 12.0
+diffusion = 0.72
+width = 1.0
+modulation = 0.3
+low_cut_hz = 42.0
+
+[document.loop_range]
+start_tick = 0
+end_tick = 768
+enabled = false

@@ -67,7 +67,11 @@ the old one removed.
 
 **The asset directory is added to, never rebuilt** (since 2026-09-22). A file
 already in it stays where it is, under the name it has, and is not copied
-again; a file new to the song is copied in once, through a hidden `.part`
+again -- however the song's path is spelled: "already in it" is decided on
+resolved paths, so a song opened through a relative path, a `..` or a
+symlinked parent and saved through another is still recognised as owning its
+samples (MOO-179, 2026-09-23; a name that grew before then keeps its length
+and stops growing); a file new to the song is copied in once, through a hidden `.part`
 sibling renamed into place, under a name nothing in the folder has. A file the
 song stops using stays in the folder -- an undo can bring it back -- until the
 clean-up dialog (`recording.clean-up`, `ACTIONS.md`) moves it to the trash. A

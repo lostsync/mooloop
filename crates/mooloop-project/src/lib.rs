@@ -933,8 +933,8 @@ fn replace_song_file(target: &Path, staging_file: &Path, nonce: u128) -> Result<
             remove_path(&kept)?;
         }
         fs::rename(target, &kept)?;
-        let placed =
-            injected_fault().and_then(|()| fs::rename(staging_file, target).map_err(Error::Io));
+        let placed = injected_fault(Step::Place)
+            .and_then(|()| fs::rename(staging_file, target).map_err(Error::Io));
         if let Err(error) = placed {
             let _ = fs::rename(&kept, target);
             return Err(error);
@@ -947,20 +947,26 @@ fn replace_song_file(target: &Path, staging_file: &Path, nonce: u128) -> Result<
         let link = parent.join(format!(".{name}.bak-{}-{nonce}", std::process::id()));
         // A hard link costs nothing and leaves the old inode where the old
         // bytes are; a filesystem without them gets a copy.
-        let linked = fs::hard_link(target, &link).or_else(|_| {
-            fs::copy(target, &link)?;
-            fs::File::open(&link)?.sync_all()
+        let linked = injected_fault(Step::KeepOld).and_then(|()| {
+            fs::hard_link(target, &link)
+                .or_else(|_| {
+                    fs::copy(target, &link)?;
+                    fs::File::open(&link)?.sync_all()
+                })
+                .map_err(Error::Io)
         });
-        match linked.and_then(|()| fs::rename(&link, &kept)) {
-            Ok(()) => {}
-            Err(error) => {
-                let _ = fs::remove_file(&link);
-                return Err(Error::Io(error));
-            }
+        let named = linked.and_then(|()| {
+            injected_fault(Step::NameBackup)?;
+            fs::rename(&link, &kept).map_err(Error::Io)
+        });
+        if let Err(error) = named {
+            let _ = fs::remove_file(&link);
+            return Err(error);
         }
     }
-    injected_fault()?;
+    injected_fault(Step::Place)?;
     fs::rename(staging_file, target)?;
+    injected_fault(Step::SyncDirectory)?;
     sync_dir(parent)?;
     Ok(())
 }
@@ -1000,19 +1006,35 @@ fn sync_tree(directory: &Path) -> std::io::Result<()> {
     sync_dir(directory)
 }
 
-#[cfg(test)]
-thread_local! {
-    /// Fails the next save between staging and the rename that would put it
-    /// in place: the one point where a failure has to leave the previous
-    /// version exactly as it was.
-    static FAIL_BEFORE_RENAME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+/// The steps of putting a staged file in place, each of which a test can
+/// make fail (MOO-121). `Place` is the rename that makes the new version the
+/// song; the steps before it must leave the previous version as the song,
+/// and the one after it must leave the previous version as `.bak`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Step {
+    /// Linking (or copying) the version being replaced to a private name.
+    KeepOld,
+    /// Renaming that copy to `<name>.bak`.
+    NameBackup,
+    /// The rename that puts the new version in place.
+    Place,
+    /// Syncing the directory so the rename survives a power cut.
+    SyncDirectory,
 }
 
-fn injected_fault() -> Result<(), Error> {
+#[cfg(test)]
+thread_local! {
+    /// Fails the next save at this step.
+    static FAIL_AT: std::cell::Cell<Option<Step>> = const { std::cell::Cell::new(None) };
+}
+
+fn injected_fault(step: Step) -> Result<(), Error> {
     #[cfg(test)]
-    if FAIL_BEFORE_RENAME.with(|fail| fail.replace(false)) {
-        return Err(Error::Io(std::io::Error::other("injected fault")));
+    if FAIL_AT.with(|fail| fail.get() == Some(step)) {
+        FAIL_AT.with(|fail| fail.set(None));
+        return Err(Error::Io(std::io::Error::other(format!("injected fault at {step:?}"))));
     }
+    let _ = step;
     Ok(())
 }
 
@@ -1181,7 +1203,7 @@ pub fn sanitize_preset_name(name: &str) -> String {
 fn replace_bundle(target: &Path, staging: &Path, nonce: u128) -> Result<(), Error> {
     let parent = target.parent().expect("validated bundle parent");
     if !target.exists() {
-        injected_fault()?;
+        injected_fault(Step::Place)?;
         fs::rename(staging, target)?;
         sync_dir(parent)?;
         return Ok(());
@@ -1193,7 +1215,8 @@ fn replace_bundle(target: &Path, staging: &Path, nonce: u128) -> Result<(), Erro
         .unwrap_or("mooloop");
     let backup = parent.join(format!(".{name}.backup-{}-{nonce}", std::process::id()));
     fs::rename(target, &backup)?;
-    let placed = injected_fault().and_then(|()| fs::rename(staging, target).map_err(Error::Io));
+    let placed =
+        injected_fault(Step::Place).and_then(|()| fs::rename(staging, target).map_err(Error::Io));
     if let Err(error) = placed {
         let _ = fs::rename(&backup, target);
         return Err(error);
@@ -2555,11 +2578,40 @@ mod tests {
         let bundle = temp.path().join("song.mooloop");
         save_song(&bundle, &song_at(97), AssetMode::Embedded).unwrap();
 
-        FAIL_BEFORE_RENAME.with(|fail| fail.set(true));
+        FAIL_AT.with(|fail| fail.set(Some(Step::Place)));
         assert!(save_song(&bundle, &song_at(141), AssetMode::Embedded).is_err());
 
         assert_eq!(bpm_of(&bundle), 97);
         assert_eq!(leftovers(temp.path()), Vec::<String>::new());
+    }
+
+    /// **Every step of putting a song in place can fail, and none of them
+    /// loses the previous version** (MOO-121). Before the rename that places
+    /// the new song, the old one is still the song; after it, the old one is
+    /// the `.bak`. No step leaves a hidden file behind.
+    #[test]
+    fn a_fault_at_any_step_of_the_replace_keeps_the_previous_version() {
+        for step in [Step::KeepOld, Step::NameBackup, Step::Place, Step::SyncDirectory] {
+            let temp = tempdir().unwrap();
+            let bundle = temp.path().join("song.mooloop");
+            save_song(&bundle, &song_at(97), AssetMode::Embedded).unwrap();
+
+            FAIL_AT.with(|fail| fail.set(Some(step)));
+            let result = save_song(&bundle, &song_at(141), AssetMode::Embedded);
+            assert!(result.is_err(), "{step:?}: the save reported success");
+
+            let now = bpm_of(&bundle);
+            let kept = temp.path().join("song.mooloop.bak");
+            if step == Step::SyncDirectory {
+                // Renamed but not synced: the new song is in place, and the
+                // old one is whole beside it.
+                assert_eq!(now, 141, "{step:?}");
+                assert_eq!(bpm_of(&kept), 97, "{step:?}");
+            } else {
+                assert_eq!(now, 97, "{step:?}: the previous version is no longer the song");
+            }
+            assert_eq!(leftovers(temp.path()), Vec::<String>::new(), "{step:?}");
+        }
     }
 
     /// **The previous version is kept as `<name>.bak`, and a save leaves no
@@ -2592,7 +2644,7 @@ mod tests {
         };
         save_kit(&path, &kit(&["A"]), AssetMode::Embedded).unwrap();
 
-        FAIL_BEFORE_RENAME.with(|fail| fail.set(true));
+        FAIL_AT.with(|fail| fail.set(Some(Step::Place)));
         assert!(save_kit(&path, &kit(&["A", "B"]), AssetMode::Embedded).is_err());
 
         let LoadedDocument::Kit(loaded) = load_bundle(&path).unwrap().document else {

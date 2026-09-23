@@ -233,7 +233,8 @@ Files marked *shared* are split in the table above.
   `project.rs`, `channel.rs`, `rack.rs` (*shared*), `recordings.rs`,
   `take.rs`, `browser.rs`, `edit_cost.rs`, `lib.rs`
 - `core/src/`: `project.rs`, `structure.rs`, `channel.rs`, `color.rs`, `lib.rs`
-- `session/tests/`: `gesture_undo.rs`, `structure.rs`
+- `session/tests/`: `gesture_undo.rs`, `structure.rs`, `source_switch.rs`,
+  `document_fixtures.rs`
 - `ui/ui/save-preset-dialog.slint`
 
 ### 9. Interface

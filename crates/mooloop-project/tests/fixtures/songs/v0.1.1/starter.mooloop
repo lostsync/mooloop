@@ -1,0 +1,360 @@
+format_version = 1
+document_type = "song"
+asset_mode = "referenced"
+
+[document]
+bpm = 131
+swing_percent = 58
+ppq = 96
+beats_per_bar = 4
+playback_mode = "pattern"
+current_pattern = 0
+selected_channel = 0
+pattern_lengths = [16]
+playlist = []
+
+[[document.channels]]
+notes = [[]]
+automation = [[]]
+next_note_id = 1
+
+[document.channels.setup]
+effects = []
+
+[document.channels.setup.channel]
+name = "corpus 0"
+kind = "drum_synth"
+muted = false
+volume = 0.8
+pan = 0.0
+bus = 0
+
+[document.channels.setup.source]
+type = "drum_synth"
+
+[document.channels.setup.source.state.params]
+mode = "kick"
+kick_character = "punch"
+snare_character = "pop"
+hat_character = "tight"
+choke_group = 0
+decay = 0.23457617
+tune_semitones = 0.0
+drive = 0.076154366
+punch = 0.45419705
+kick_start_hz = 181.03043
+kick_end_hz = 51.326885
+kick_sweep = 0.048573256
+kick_click = 0.41235787
+snare_tone_hz = 180.0
+snare_tone2_hz = 330.0
+snare_tone2_mix = 0.2
+snare_noise_mix = 0.6
+snare_noise_decay = 0.11
+snare_noise_color = 0.65
+hat_hp_hz = 7500.0
+hat_metallic = 0.5
+
+[document.channels.setup.modulation]
+
+[[document.channels]]
+notes = [[]]
+automation = [[]]
+next_note_id = 1
+
+[document.channels.setup]
+effects = []
+
+[document.channels.setup.channel]
+name = "corpus 1"
+kind = "drum_synth"
+muted = false
+volume = 0.8
+pan = 0.0
+bus = 0
+
+[document.channels.setup.source]
+type = "drum_synth"
+
+[document.channels.setup.source.state.params]
+mode = "snare"
+kick_character = "kit"
+snare_character = "snap"
+hat_character = "tight"
+choke_group = 0
+decay = 0.12624614
+tune_semitones = 0.0
+drive = 0.054828744
+punch = 0.48624974
+kick_start_hz = 160.0
+kick_end_hz = 48.0
+kick_sweep = 0.045
+kick_click = 0.5
+snare_tone_hz = 178.91989
+snare_tone2_hz = 304.85437
+snare_tone2_mix = 0.3319748
+snare_noise_mix = 0.7403247
+snare_noise_decay = 0.13099323
+snare_noise_color = 0.78192216
+hat_hp_hz = 7500.0
+hat_metallic = 0.5
+
+[document.channels.setup.modulation]
+
+[[document.channels]]
+notes = [[]]
+automation = [[]]
+next_note_id = 1
+
+[document.channels.setup]
+effects = []
+
+[document.channels.setup.channel]
+name = "corpus 2"
+kind = "drum_synth"
+muted = false
+volume = 0.8
+pan = 0.0
+bus = 0
+
+[document.channels.setup.source]
+type = "drum_synth"
+
+[document.channels.setup.source.state.params]
+mode = "hat"
+kick_character = "kit"
+snare_character = "pop"
+hat_character = "tight"
+choke_group = 1
+decay = 0.06458262
+tune_semitones = 0.0
+drive = 0.0
+punch = 0.15
+kick_start_hz = 160.0
+kick_end_hz = 48.0
+kick_sweep = 0.045
+kick_click = 0.5
+snare_tone_hz = 180.0
+snare_tone2_hz = 330.0
+snare_tone2_mix = 0.2
+snare_noise_mix = 0.6
+snare_noise_decay = 0.11
+snare_noise_color = 0.65
+hat_hp_hz = 7805.4453
+hat_metallic = 0.56669223
+
+[document.channels.setup.modulation]
+
+[[document.channels]]
+notes = [[]]
+automation = [[]]
+next_note_id = 1
+
+[document.channels.setup]
+effects = []
+
+[document.channels.setup.channel]
+name = "corpus 3"
+kind = "drum_synth"
+muted = false
+volume = 0.8
+pan = 0.0
+bus = 0
+
+[document.channels.setup.source]
+type = "drum_synth"
+
+[document.channels.setup.source.state.params]
+mode = "hat"
+kick_character = "kit"
+snare_character = "pop"
+hat_character = "tight"
+choke_group = 1
+decay = 0.45447692
+tune_semitones = 0.0
+drive = 0.0
+punch = 0.15
+kick_start_hz = 160.0
+kick_end_hz = 48.0
+kick_sweep = 0.045
+kick_click = 0.5
+snare_tone_hz = 180.0
+snare_tone2_hz = 330.0
+snare_tone2_mix = 0.2
+snare_noise_mix = 0.6
+snare_noise_decay = 0.11
+snare_noise_color = 0.65
+hat_hp_hz = 8360.983
+hat_metallic = 0.34054384
+
+[document.channels.setup.modulation]
+
+[[document.buses]]
+effects = []
+
+[document.buses.bus]
+name = "Master"
+muted = false
+volume = 1.0
+pan = 0.0
+output = 0
+
+[[document.buses]]
+effects = []
+
+[document.buses.bus]
+name = "Bus 1"
+muted = false
+volume = 1.0
+pan = 0.0
+output = 0
+
+[[document.buses]]
+effects = []
+
+[document.buses.bus]
+name = "Bus 2"
+muted = false
+volume = 1.0
+pan = 0.0
+output = 0
+
+[[document.buses]]
+effects = []
+
+[document.buses.bus]
+name = "Bus 3"
+muted = false
+volume = 1.0
+pan = 0.0
+output = 0
+
+[[document.buses]]
+effects = []
+
+[document.buses.bus]
+name = "Bus 4"
+muted = false
+volume = 1.0
+pan = 0.0
+output = 0
+
+[[document.buses]]
+effects = []
+
+[document.buses.bus]
+name = "Bus 5"
+muted = false
+volume = 1.0
+pan = 0.0
+output = 0
+
+[[document.buses]]
+effects = []
+
+[document.buses.bus]
+name = "Bus 6"
+muted = false
+volume = 1.0
+pan = 0.0
+output = 0
+
+[[document.buses]]
+effects = []
+
+[document.buses.bus]
+name = "Bus 7"
+muted = false
+volume = 1.0
+pan = 0.0
+output = 0
+
+[[document.buses]]
+effects = []
+
+[document.buses.bus]
+name = "Bus 8"
+muted = false
+volume = 1.0
+pan = 0.0
+output = 0
+
+[[document.buses]]
+effects = []
+
+[document.buses.bus]
+name = "Bus 9"
+muted = false
+volume = 1.0
+pan = 0.0
+output = 0
+
+[[document.buses]]
+effects = []
+
+[document.buses.bus]
+name = "Bus 10"
+muted = false
+volume = 1.0
+pan = 0.0
+output = 0
+
+[[document.buses]]
+effects = []
+
+[document.buses.bus]
+name = "Bus 11"
+muted = false
+volume = 1.0
+pan = 0.0
+output = 0
+
+[[document.buses]]
+effects = []
+
+[document.buses.bus]
+name = "Bus 12"
+muted = false
+volume = 1.0
+pan = 0.0
+output = 0
+
+[[document.buses]]
+effects = []
+
+[document.buses.bus]
+name = "Bus 13"
+muted = false
+volume = 1.0
+pan = 0.0
+output = 0
+
+[[document.buses]]
+effects = []
+
+[document.buses.bus]
+name = "Bus 14"
+muted = false
+volume = 1.0
+pan = 0.0
+output = 0
+
+[[document.buses]]
+effects = []
+
+[document.buses.bus]
+name = "Bus 15"
+muted = false
+volume = 1.0
+pan = 0.0
+output = 0
+
+[[document.buses]]
+effects = []
+
+[document.buses.bus]
+name = "Bus 16"
+muted = false
+volume = 1.0
+pan = 0.0
+output = 0
