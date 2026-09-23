@@ -131,9 +131,8 @@ mod tests {
     /// or held.
     #[test]
     fn dropping_everything_drops_the_state_once() {
-        struct Counted(Arc<()>);
         let witness = Arc::new(());
-        let parked = Arc::new(Parked::new(Box::new(Counted(witness.clone()))));
+        let parked = Arc::new(Parked::new(Box::new(witness.clone())));
         let mut held = Held::new(parked.clone());
         assert!(held.get().is_some());
         assert_eq!(Arc::strong_count(&witness), 2);
