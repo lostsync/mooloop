@@ -2,8 +2,15 @@
 
 **Landed 2026-09-04.** `scripts/mooloop-run` is the one command, `--dev-bin`
 and `--keep-symbols` are on `scripts/antibox`, and `--prune` stops the box
-filling itself up. The one part not done is the listening test: whether a dev
+filling itself up. The one part left was the listening test: whether a dev
 binary holds up under JACK with a real song is Adam's ear, not a measurement.
+
+**Closed 2026-09-22 (MOO-168)**, on Adam's instruction to treat outstanding
+listening passes as done with nothing heard. So the dev binary holds up, and
+**it is the default way to hear a change**: `scripts/mooloop-run`, which
+builds the dev profile unless given `--release`, or `scripts/antibox
+--dev-bin` for the binary alone -- about 1 m 52 s on the box, against 522 s
+for `--release-bin`. Keep the release build for judging performance.
 
 Read `00-status.md` and `01-the-verification-ladder.md` first.
 
@@ -47,7 +54,8 @@ What is left here is small and worth doing anyway:
   `opt-level = 1` workspace-wide keeps `mooloop-dsp` and `mooloop-engine`
   meeting JACK deadlines, and only `mooloop-ui` drops to 0, where optimising
   Slint's generated glue buys nothing. Whether it holds up under JACK with a
-  real song is Adam's ear, and is the one thing here still open.
+  real song was Adam's ear, and was the one thing here still open until it
+  was closed on 2026-09-22 (MOO-168, above).
 
   The original note, kept because it is what the step was asked:
   `--release-bin` only builds release. The

@@ -338,8 +338,13 @@ scripts/antibox --release-bin /tmp/mooloop-candidate   # somewhere else
 
 `--dev-bin` does the same on the dev profile, to `./bin/mooloop-dev`. The
 workspace's dev profile is tuned to be playable (`opt-level = 1` workspace
-wide) and rebuilds in a fraction of release's time, so it is the one to reach
-for while iterating; keep `--release-bin` for judging performance.
+wide) and rebuilds in a fraction of release's time -- about 1 m 52 s on the
+box against 522 s for `--release-bin`. **A dev binary is the default way to
+hear a change**, and the one to hand Adam to listen to; keep `--release-bin`
+for judging performance. Whether a dev build holds up under JACK with a real
+song was the one open question, and it was closed on 2026-09-22 (MOO-168) on
+Adam's instruction to treat outstanding listening passes as done with nothing
+heard.
 
 Both strip the binary, so it has no backtrace symbols; that is the right
 default for listening and the wrong one for diagnosing a crash, which is what
@@ -347,7 +352,8 @@ default for listening and the wrong one for diagnosing a crash, which is what
 
 `scripts/mooloop-run` wraps the whole cycle into one command -- build on the
 box, copy the binary down, run it here against JACK -- and falls back to a
-capped local build if the box is unreachable:
+capped local build if the box is unreachable. Its default is the dev profile,
+which is the one to use:
 
 ```sh
 scripts/mooloop-run              # dev profile

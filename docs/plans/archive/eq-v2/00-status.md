@@ -29,6 +29,12 @@ a Q away from 0.707, an octave either side of the corner. Step 02's is a look
 rather than a listen — the plot claims something new about the pass filters and
 wants a patch moving under it.
 
+**Closed 2026-09-22 (MOO-167).** Both moved from `LOOSE_ENDS.md` to Linear as
+MOO-167, and were closed on Adam's instruction to treat outstanding listening
+passes as done with nothing heard; the look at the plot counted as the same
+owed check as the listen. The brief below is unchanged and is still the one
+to use if either is ever wanted.
+
 
 ## The listening brief for step 03, measured 2026-09-15
 

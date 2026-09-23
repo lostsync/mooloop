@@ -677,7 +677,9 @@ drawing does not follow.
 
 ### Heard, 2026-09-11
 
-On headphones, not yet in the studio. Adam: *"it sounds good as hell... on my
+On headphones, not yet in the studio. (The studio pass, MOO-166, was closed
+on 2026-09-22 on Adam's instruction to treat outstanding listening passes as
+done with nothing heard.) Adam: *"it sounds good as hell... on my
 cans it doesnt leave a lot to be desired. it is three distinct and musical
 characters."* That is the claim the voicings were built to make -- three
 coloured ones that differ from each other rather than three amounts of the

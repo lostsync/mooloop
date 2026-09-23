@@ -369,8 +369,9 @@ rather than unbuilt** -- band-dependent saturation, the measured character from
 five reference EQs -- and the step file is kept whole with its VEQ4 data,
 because it is the work order if that sound is ever wanted. The reason is its
 own: 01 to 03 correct things the device claimed and did not do, and 04 adds a
-claim. Two listening passes are still owed and are recorded in
-`LOOSE_ENDS.md`.
+claim. The two checks it left owed -- a listen to the shelf-Q change and a
+look at the response plot -- were closed on 2026-09-22 on Adam's instruction
+to treat outstanding listening passes as done with nothing heard (MOO-167).
 
 `control-plane-seams/` (all five, closed 2026-09-15): five
 confirmed control-plane defects from an outside architectural review that read
@@ -431,7 +432,7 @@ shipped bound to a key nothing forwarded. Step 01's finding that there was no
 "selected rack row" for a preset to land on, and step 03's that a pattern's
 name had never been persisted, are both in there too.
 
-`console/` (all six, closed 2026-09-11 and **played the same day** -- *"three distinct and musical characters"* on headphones, with the studio still to come) is the widest: four
+`console/` (all six, closed 2026-09-11 and **played the same day** -- *"three distinct and musical characters"* on headphones; the studio pass was closed on 2026-09-22 on Adam's instruction to treat outstanding listening passes as done with nothing heard, MOO-166) is the widest: four
 items from one morning's list -- reorder channels, group them, make the mixer
 work like a console, proper sends -- which turned out to be one design with a
 character layer on top. Read its `00-status.md` before touching the mixer,

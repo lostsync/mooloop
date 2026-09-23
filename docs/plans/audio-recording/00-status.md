@@ -271,7 +271,10 @@ What is on `main` after decisions 5, 6 and 10:
   (`two_channels_take_at_once`), an offline render of a sampler with a
   sample (the ordinary path). Undo was checked as the history entry, not by
   pressing it.
-- **Not heard.** Nobody has listened to a take yet.
+- **Not heard.** Nobody has listened to a take yet. The listening pass
+  owed for recording and undo together (MOO-165) was closed on 2026-09-22 on
+  Adam's instruction to treat outstanding listening passes as done with
+  nothing heard.
 
 ## What step 01 actually did (so far)
 

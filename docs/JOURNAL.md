@@ -1749,6 +1749,12 @@ filter envelope to the ML-P8's route rows. Labels come from
 `EffectKind::descriptors()` where a parameter has a descriptor, and from its
 family where it does not — never from a literal per callback.
 
+## Sep 22 (the closing push) — passes closed on instruction, not on ears
+
+A push to close the open Linear issues, run as parallel teams, came with an instruction from Adam that settled four issues outright: *"If an issue is blocked because of a listening pass, assume the pass has happened and there were no issues heard."* So recording and undo (MOO-165), the console's studio pass (MOO-166), the EQ's shelf-Q listen and response-plot look (MOO-167), and whether a dev build holds up under JACK with a real song (MOO-168) were all closed as done with nothing heard. The last of those changes a habit: a dev binary, about two minutes on the box against nine for release, is now the default way to hear a change (`OPERATIONS.md`).
+
+The wording in every document that tracked them says *treated as done on his instruction*, never *heard*, because the difference matters later. `FOCUS.md`'s list of passes on record as actually heard still ends at `incremental-structure/` on Sep 18. If something in recording, undo, the strip or the EQ sounds wrong next month, that list is where to look for what was ever listened to, and these four are not on it.
+
 ## Open threads
 
 Refreshed 2026-09-02, with the September documentation audit's threads merged in on 2026-09-04 and Adam's 2026-09-05 list merged in after that. Four of the six threads listed here in August are closed: modulation drives things now, the buffer device exists, undo and clipboard are real, and the convolution reverb that needed an IR loader was replaced outright by an FDN hall — so `StereoIr` is no longer the boundary anything is waiting on.

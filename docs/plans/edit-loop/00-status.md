@@ -3,8 +3,11 @@
 **Steps 01 and 02 landed 2026-09-04. Step 03 is closed unstarted, on a
 measurement. Step 04's number arrived the same day -- 10% blocked, under its
 own bar -- and it now waits on Adam's decision** (Linear MOO-146, in project
-[Edit loop](https://linear.app/mooloop/project/edit-loop-f3661f76ed2c); the
-dev-build listening test step 02 left open is MOO-168). Written 2026-09-03,
+[Edit loop](https://linear.app/mooloop/project/edit-loop-f3661f76ed2c)). The
+dev-build listening test step 02 left open (MOO-168) was closed on 2026-09-22
+on Adam's instruction to treat outstanding listening passes as done with
+nothing heard, so **a dev binary is the default way to hear a change**
+(`scripts/mooloop-run`, or `scripts/antibox --dev-bin`). Written 2026-09-03,
 out of a session that went looking for whether to replace Slint with egui and
 found the toolkit was the wrong question to be asking first.
 

@@ -89,12 +89,12 @@ this sequence.
 
 - **The layer device's drawing** (`containers/09`, MOO-71) — a mock-up. See
   above.
-- **The console's studio listening pass** (MOO-166) — the one outstanding item
-  that could still change something that shipped. Headphones were 2026-09-11.
-- **Recording and undo have not been played** (MOO-165). Both landed in the
-  last four days, both are large, and neither has had a pass.
-  `audio-recording/01`'s acceptance was measured on the Mac from the file
-  rather than trusted, which is not the same thing as living with it.
+
+Two listening passes were listed here until 2026-09-22: the console's studio
+pass (MOO-166), and recording and undo, neither of which had been played
+(MOO-165). Both were closed that day on Adam's instruction to treat
+outstanding listening passes as done with nothing heard — see "Listening is a
+step" below.
 
 `midi-control/` and `mono-synth-v2/` were listed here until 2026-09-22; Adam
 had answered both on 2026-09-18 -- the keyboard worked, and the Acid cutoff is
@@ -225,5 +225,11 @@ worktrees, commits, and verification.
 and its kit (2026-09-04), ML-P8 and its bank (2026-09-05), the ML-M1 with its
 patches, the channel strip's three voicings on headphones (2026-09-11), and
 `incremental-structure/` (2026-09-18, *"sounds good. i think you can close
-it"*). Nothing since. Two large features have landed in the four days since
-and neither has been played — see "Waiting on Adam".
+it"*). The passes still outstanding on 2026-09-22 — recording and undo
+(MOO-165), the console's studio pass (MOO-166), the EQ's shelf-Q listen and
+response-plot look (MOO-167), and a dev build under JACK with a real song
+(MOO-168) — were closed that day on Adam's instruction: *"If an issue is
+blocked because of a listening pass, assume the pass has happened and there
+were no issues heard."* They count as done with nothing heard. The list above
+is still the last passes on record as actually heard, and the rule stands for
+whatever lands next.
