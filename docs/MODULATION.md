@@ -409,7 +409,12 @@ policy.
 An LFO may store either a free rate in hertz or a transport-relative cycle
 duration. Musical divisions are durable values from `4/1` through `1/64T`, so
 tempo changes bend the running oscillator without replacing its authored
-setting or resetting phase. Fade-in uses the same free/synced timing
+setting or resetting phase. While the transport runs, a synced LFO that does
+not retrigger on notes takes its phase from the song position -- beats over
+its division, plus its phase offset, every control tick -- so Play, Seek and
+an export all land it where the position implies, and its random steps are a
+hash of the cycle number rather than a running generator (MOO-127,
+2026-09-23). Stopped, it free-runs from where it was. Fade-in uses the same free/synced timing
 vocabulary, begins when the source is installed, and restarts with a declared
 note trigger. Output smoothing is a bounded one-pole slew at control rate;
 square pulse width moves the high-to-low transition without changing the

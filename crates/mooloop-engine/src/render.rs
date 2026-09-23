@@ -40,7 +40,7 @@ use mooloop_dsp::strip::Strip;
 
 use crate::meters::{BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters};
 use crate::sequencer::Sequencer;
-use crate::transport::Transport;
+use crate::transport::{BlockSpan, Transport};
 use crate::{PreviewCommand, StructuralCommand, StructuralReclaim};
 
 /// How many finished preview samples either side of the reclaim path will
@@ -773,6 +773,45 @@ const MAX_PENDING_EFFECT_PARAMS: usize = 8;
 /// duplication section means; importing it is what makes that impossible
 /// rather than merely unlikely.
 const _: () = assert!(MAX_CONTROL_TICKS_PER_BLOCK == MAX_BLOCK_SIZE / CONTROL_RATE_FRAMES);
+
+/// The song position, in quarter-note beats, at the start of each control
+/// tick of a block, or `None` everywhere while the transport is stopped.
+type SongBeats = [Option<f64>; MAX_CONTROL_TICKS_PER_BLOCK];
+
+/// Where each control tick of this block starts in the song, read off the
+/// transport's spans -- so a loop wrap or a seek inside the block is where
+/// the ticks after it say they are (MOO-127).
+fn song_beats_for(
+    playing: bool,
+    spans: &[BlockSpan],
+    frames: usize,
+    ticks_per_beat: f64,
+) -> SongBeats {
+    let mut beats = [None; MAX_CONTROL_TICKS_PER_BLOCK];
+    if !playing || spans.is_empty() {
+        return beats;
+    }
+    for (tick, slot) in beats
+        .iter_mut()
+        .enumerate()
+        .take(frames.div_ceil(CONTROL_RATE_FRAMES))
+    {
+        let frame = tick * CONTROL_RATE_FRAMES;
+        let span = spans
+            .iter()
+            .rev()
+            .find(|span| span.frame <= frame)
+            .unwrap_or(&spans[0]);
+        let along = if span.frames == 0 {
+            0.0
+        } else {
+            (frame - span.frame).min(span.frames) as f64 / span.frames as f64
+        };
+        let position = span.start_tick + (span.end_tick - span.start_tick) * along;
+        *slot = Some(position / ticks_per_beat.max(1.0));
+    }
+    beats
+}
 
 /// The most destinations any single [`mooloop_core::EffectKind`]'s parameter
 /// table can drive on one effect slot at once -- `EqParams`'s fifty,
@@ -5412,6 +5451,7 @@ impl RenderState {
     /// Takes the two tables it advances rather than `&mut self`, because the
     /// gate table it reads is now a field too and only field-level borrows
     /// can see that the three are disjoint.
+    #[allow(clippy::too_many_arguments)]
     fn tick_channel_modulators(
         modulators: &mut [ModulatorRack],
         control_outputs: &mut [Box<ControlOutputs>],
@@ -5420,6 +5460,7 @@ impl RenderState {
         channel: usize,
         frames: usize,
         gate_ticks: &GateTable,
+        song_beats: &SongBeats,
     ) -> usize {
         let Some(runtime) = modulators.get_mut(channel) else {
             return 0;
@@ -5431,7 +5472,14 @@ impl RenderState {
         let mut tick = 0;
         for offset in (0..frames).step_by(CONTROL_RATE_FRAMES) {
             let span = (frames - offset).min(CONTROL_RATE_FRAMES);
-            runtime.tick_with_note_gates(sample_rate, span, bpm, channel, &gate_ticks[tick]);
+            runtime.tick_with_note_gates(
+                sample_rate,
+                span,
+                bpm,
+                song_beats[tick],
+                channel,
+                &gate_ticks[tick],
+            );
             outputs[tick] = *runtime.outputs();
             tick += 1;
         }
@@ -5452,6 +5500,7 @@ impl RenderState {
             channel,
             frames,
             &self.gate_ticks,
+            &[None; MAX_CONTROL_TICKS_PER_BLOCK],
         )
     }
 
@@ -7255,6 +7304,15 @@ impl RenderState {
                 }
             }
         }
+        // Where in the song each control tick starts, in beats, for the
+        // tempo-synced LFOs that take their phase from it (MOO-127). None
+        // while stopped: they free-run then.
+        let song_beats = song_beats_for(
+            self.transport.playing,
+            &spans[..span_count],
+            frames,
+            f64::from(self.transport.ppq.ticks_per_beat()),
+        );
         // Field-by-field rather than through `self`, so the gate table stays
         // borrowable while the racks it feeds are advanced.
         for (index, ticks) in modulator_ticks.iter_mut().enumerate().take(active_channels) {
@@ -7266,6 +7324,7 @@ impl RenderState {
                 index,
                 frames,
                 &self.gate_ticks,
+                &song_beats,
             );
         }
         // Lanes resolve whether or not the transport is running: stopped, the
@@ -10647,6 +10706,71 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         render.gate_ticks[0][0].note_ons = 1;
         render.tick_modulators_from_gate_table(0, 32);
         assert_eq!(render.control_outputs[0][0][0], -1.0);
+    }
+
+    /// **A synced LFO follows the song position** (MOO-127): the downbeat
+    /// reads the same after a stop and a wait, the same as a fresh render --
+    /// which is what an export builds -- and a seek lands it where playing
+    /// through would have.
+    ///
+    /// Shaped against the unfixed tree, where the rack ran on elapsed frames:
+    /// the second downbeat read wherever the free run had got to.
+    #[test]
+    fn a_synced_lfo_follows_the_song_position_through_stop_and_seek() {
+        const BLOCK: usize = 480;
+        let mut channel = ProjectChannel::sampler(0, 1);
+        channel.setup.modulation.install(0, mooloop_core::ModulatorParams::Lfo(
+            mooloop_core::ModLfoParams {
+                tempo_sync: true,
+                // Three beats: a cycle the bar does not divide, so no
+                // position lands on the same phase by accident.
+                rate_division: mooloop_core::ModTimeDivision::DottedHalf,
+                waveform: mooloop_core::ModLfoWaveform::Saw,
+                ..mooloop_core::ModLfoParams::default()
+            },
+        ));
+        let project = synth_project(channel);
+        let first_tick = |render: &RenderState| render.control_outputs[0][0][0];
+
+        // What an export hears on the downbeat: a fresh state, played.
+        let mut fresh = RenderState::from_project(48_000, &project, &[]);
+        fresh.play();
+        fresh.process_block(BLOCK);
+        let downbeat = first_tick(&fresh);
+
+        // A live state whose rack has been running free, stopped, first.
+        let mut live = RenderState::from_project(48_000, &project, &[]);
+        for _ in 0..137 {
+            live.process_block(BLOCK);
+        }
+        live.play();
+        live.process_block(BLOCK);
+        assert_eq!(first_tick(&live), downbeat, "play from the top");
+
+        // Played through to beat 2 (one second at 120 BPM)...
+        for _ in 1..100 {
+            live.process_block(BLOCK);
+        }
+        live.process_block(BLOCK);
+        let played_through = first_tick(&live);
+
+        // ...stopped, left, and played from the top again...
+        live.apply_command(EngineCommand::Stop);
+        for _ in 0..61 {
+            live.process_block(BLOCK);
+        }
+        live.play();
+        live.process_block(BLOCK);
+        assert_eq!(first_tick(&live), downbeat, "play from the top after a stop");
+
+        // ...and a seek to beat 2 lands where playing through did.
+        live.apply_command(EngineCommand::Seek { tick: 192.0 });
+        live.process_block(BLOCK);
+        assert!(
+            (first_tick(&live) - played_through).abs() < 1e-4,
+            "seek read {}, playing through read {played_through}",
+            first_tick(&live)
+        );
     }
 
     #[test]

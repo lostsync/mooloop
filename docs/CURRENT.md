@@ -962,8 +962,15 @@ land on its own when it starts to matter:
 - **A seek no longer rings the old position over the new one.** Delay,
   modulation, reverb and plate tails are cleared when the transport is seeked
   or stopped, because what they hold is audio from a part of the song that is
-  no longer playing. Free-running modulation keeps its phase across a seek,
-  so a bounce still matches the take it was rendered against.
+  no longer playing. An unsynced LFO free-runs through a seek. A
+  **tempo-synced LFO follows the song position** as of 2026-09-23
+  (MOO-127): while the transport runs its phase is re-derived from the
+  position in beats every control tick, so Play, Stop-and-play and Seek land
+  it where the position implies, and an export -- which builds fresh
+  modulators at the top -- hears the phase playback did. Stopped, it
+  free-runs; one set to retrigger on notes follows the notes instead. Until
+  then this paragraph claimed free-running modulation kept a bounce in step,
+  which it did not.
 - **Tails survive a loop fold and a pattern switch**, as of 2026-09-22
   (MOO-59). A delay repeat or a reverb tail from the end of a song loop wraps
   into its start, the way a groove box plays a loop; before this every lap

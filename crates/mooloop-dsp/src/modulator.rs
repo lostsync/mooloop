@@ -15,12 +15,25 @@ use mooloop_core::{
 /// 20 Hz LFO smooth at 48 kHz while costing one evaluation per 32 frames.
 pub const CONTROL_RATE_FRAMES: usize = 32;
 
-/// A free-running LFO. Phase is kept in `0..1` so a waveform change mid-cycle
-/// keeps its position rather than jumping.
+/// An LFO. Phase is kept in `0..1` so a waveform change mid-cycle keeps its
+/// position rather than jumping.
+///
+/// **A tempo-synced LFO follows the song position** while the transport runs
+/// (MOO-127): its phase is the position in beats over its division, plus its
+/// phase offset, re-derived every control tick, so Play and Seek land it
+/// where the position implies and an export, which starts fresh modulators
+/// at the top, hears the same phase playback did. Stopped, it free-runs from
+/// wherever it was. One that retriggers on notes follows the notes instead,
+/// and an unsynced one always free-runs.
 #[derive(Debug, Clone, Copy)]
 struct Lfo {
     params: ModLfoParams,
     phase: f32,
+    /// The song-position cycle `held` was drawn for, while following the
+    /// song: the random waveform redraws when this changes, from the cycle
+    /// number rather than the running generator, so its steps are a
+    /// function of the position too.
+    song_cycle: Option<i64>,
     fade_elapsed_seconds: f32,
     smoothed: f32,
     output_initialized: bool,
@@ -31,11 +44,24 @@ struct Lfo {
     rng: u32,
 }
 
+/// The random waveform's value for song-position cycle `cycle`: a hash of the
+/// cycle number (splitmix64), so an LFO following the song steps through the
+/// same values wherever playback or an export starts.
+fn cycle_random(cycle: i64) -> f32 {
+    let mut z = (cycle as u64).wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    const SCALE: f32 = (1u32 << 24) as f32;
+    ((z >> 40) as f32 / SCALE) * 2.0 - 1.0
+}
+
 impl Lfo {
     fn new(params: ModLfoParams) -> Self {
         let mut lfo = Self {
             params,
             phase: params.phase.fract(),
+            song_cycle: None,
             fade_elapsed_seconds: 0.0,
             smoothed: 0.0,
             output_initialized: false,
@@ -57,6 +83,24 @@ impl Lfo {
         // Top 24 bits to `0..1`, then to the signed `-1..1` every source uses.
         const SCALE: f32 = (1u32 << 24) as f32;
         ((self.rng >> 8) as f32 / SCALE) * 2.0 - 1.0
+    }
+
+    /// Whether this LFO's phase is the song position's. See the type.
+    fn follows_song(&self) -> bool {
+        self.params.tempo_sync && !self.params.retrigger
+    }
+
+    /// Put the phase where `beats` into the song implies.
+    fn follow_song(&mut self, beats: f64) {
+        let division = f64::from(self.params.rate_division.beats()).max(f64::from(f32::EPSILON));
+        let cycles = beats / division + f64::from(self.params.phase.fract());
+        let cycle = cycles.floor();
+        self.phase = ((cycles - cycle) as f32).clamp(0.0, 1.0 - f32::EPSILON);
+        let cycle = cycle as i64;
+        if self.song_cycle != Some(cycle) {
+            self.song_cycle = Some(cycle);
+            self.held = cycle_random(cycle);
+        }
     }
 
     fn rate_hz(&self, bpm: f64) -> f32 {
@@ -112,6 +156,15 @@ impl Lfo {
     fn advance(&mut self, sample_rate: u32, frames: usize, bpm: f64) {
         let elapsed = frames as f32 / sample_rate.max(1) as f32;
         self.fade_elapsed_seconds += elapsed;
+        if self.song_cycle.take().is_some() {
+            // Following the song: the next tick's position sets the phase
+            // again, and the random step is the cycle's own. If the transport
+            // has stopped, the LFO free-runs on from here, drawing afresh at
+            // its next wrap.
+            let increment = self.rate_hz(bpm).max(0.0) * elapsed;
+            self.phase = (self.phase + increment).fract();
+            return;
+        }
         let increment = self.rate_hz(bpm).max(0.0) * elapsed;
         let advanced = self.phase + increment;
         self.phase = advanced.fract();
@@ -701,10 +754,20 @@ impl ModulatorRack {
     /// bounded without any cycle machinery: `outputs` simply still holds last
     /// tick's value everywhere this pass has not reached yet.
     pub fn tick(&mut self, sample_rate: u32, frames: usize, bpm: f64) {
+        self.tick_at(sample_rate, frames, bpm, None);
+    }
+
+    /// [`Self::tick`] at `song_beats` into the song -- quarter-note beats at
+    /// the start of this control tick, `None` while the transport is
+    /// stopped -- which a tempo-synced LFO takes its phase from (MOO-127).
+    pub fn tick_at(&mut self, sample_rate: u32, frames: usize, bpm: f64, song_beats: Option<f64>) {
         for (slot, source) in self.slots.iter_mut().enumerate() {
             let Some(source) = source else { continue };
             match source {
                 Source::Lfo(lfo) => {
+                    if let Some(beats) = song_beats.filter(|_| lfo.follows_song()) {
+                        lfo.follow_song(beats);
+                    }
                     self.outputs[slot] = lfo.value(sample_rate, frames, bpm);
                     lfo.advance(sample_rate, frames, bpm);
                 }
@@ -740,6 +803,7 @@ impl ModulatorRack {
         sample_rate: u32,
         frames: usize,
         bpm: f64,
+        song_beats: Option<f64>,
         owning_channel: usize,
         gates: &[NoteGateEvents; MAX_CHANNELS],
     ) {
@@ -775,7 +839,7 @@ impl ModulatorRack {
                 Source::Math(_) => {}
             }
         }
-        self.tick(sample_rate, frames, bpm);
+        self.tick_at(sample_rate, frames, bpm, song_beats);
     }
 
     /// Move every slot that follows notes: an LFO restarts its phase, a step
@@ -980,6 +1044,81 @@ mod tests {
         assert!((rack.outputs()[0] - 1.0).abs() < 1e-3);
     }
 
+    fn synced(waveform: ModLfoWaveform) -> ModLfoParams {
+        ModLfoParams {
+            tempo_sync: true,
+            rate_division: mooloop_core::ModTimeDivision::Whole,
+            waveform,
+            ..ModLfoParams::default()
+        }
+    }
+
+    /// **A synced LFO's phase is the song position's** (MOO-127).
+    ///
+    /// Shaped against the unfixed rack, which advanced by elapsed frames
+    /// only: after running free, the downbeat read wherever the free run had
+    /// left the phase, not zero.
+    #[test]
+    fn a_synced_lfo_lands_on_the_phase_the_song_position_implies() {
+        for waveform in [ModLfoWaveform::Sine, ModLfoWaveform::Saw, ModLfoWaveform::Random] {
+            let mut rack = lfo(synced(waveform));
+            rack.tick_at(48_000, 32, 120.0, Some(0.0));
+            let downbeat = rack.outputs()[0];
+            // Stopped for a while: it free-runs somewhere else.
+            for _ in 0..777 {
+                rack.tick_at(48_000, 32, 120.0, None);
+            }
+            // Play from the top again: the same value on the downbeat.
+            rack.tick_at(48_000, 32, 120.0, Some(0.0));
+            assert_eq!(rack.outputs()[0], downbeat, "{waveform:?}");
+
+            // A seek to bar 3 reads what continuous playback from bar 1 read
+            // there, and so does a fresh rack, which is what an export builds.
+            let mut continuous = lfo(synced(waveform));
+            let mut beats = 0.0;
+            while beats < 8.0 {
+                continuous.tick_at(48_000, 32, 120.0, Some(beats));
+                beats += 32.0 / 24_000.0;
+            }
+            continuous.tick_at(48_000, 32, 120.0, Some(8.0));
+            rack.tick_at(48_000, 32, 120.0, Some(8.0));
+            let mut fresh = lfo(synced(waveform));
+            fresh.tick_at(48_000, 32, 120.0, Some(8.0));
+            assert_eq!(rack.outputs()[0], continuous.outputs()[0], "{waveform:?}");
+            assert_eq!(fresh.outputs()[0], continuous.outputs()[0], "{waveform:?}");
+        }
+    }
+
+    /// A quarter of the way through a whole-note cycle is the sine's peak,
+    /// wherever the free run had got to.
+    #[test]
+    fn a_synced_sine_follows_the_beat_it_is_told() {
+        let mut rack = lfo(synced(ModLfoWaveform::Sine));
+        rack.tick_at(48_000, 5_000, 90.0, None);
+        rack.tick_at(48_000, 32, 90.0, Some(1.0));
+        assert!((rack.outputs()[0] - 1.0).abs() < 1e-5, "{}", rack.outputs()[0]);
+    }
+
+    /// Unsynced, or retriggered by notes, it runs as it always did.
+    #[test]
+    fn an_unsynced_or_retriggered_lfo_ignores_the_song_position() {
+        for params in [
+            ModLfoParams::default(),
+            ModLfoParams {
+                retrigger: true,
+                ..synced(ModLfoWaveform::Sine)
+            },
+        ] {
+            let mut told = lfo(params);
+            let mut free = lfo(params);
+            for step in 0..100 {
+                told.tick_at(48_000, 32, 120.0, Some(f64::from(step) * 3.7));
+                free.tick(48_000, 32, 120.0);
+                assert_eq!(told.outputs()[0], free.outputs()[0]);
+            }
+        }
+    }
+
     #[test]
     fn fade_in_scales_output_and_restarts_with_a_note_trigger() {
         let mut rack = lfo(ModLfoParams {
@@ -1062,12 +1201,13 @@ mod tests {
         );
         let mut gates = [NoteGateEvents::default(); MAX_CHANNELS];
         gates[2].note_ons = 1;
-        rack.tick_with_note_gates(48_000, 4_800, 120.0, 0, &gates);
+        rack.tick_with_note_gates(48_000, 4_800, 120.0, None, 0, &gates);
         assert_eq!(rack.outputs()[0], -1.0, "attack starts at the floor");
         rack.tick_with_note_gates(
             48_000,
             0,
             120.0,
+            None,
             0,
             &[NoteGateEvents::default(); MAX_CHANNELS],
         );
@@ -1075,12 +1215,13 @@ mod tests {
 
         gates = [NoteGateEvents::default(); MAX_CHANNELS];
         gates[2].note_offs = 1;
-        rack.tick_with_note_gates(48_000, 4_800, 120.0, 0, &gates);
+        rack.tick_with_note_gates(48_000, 4_800, 120.0, None, 0, &gates);
         assert_eq!(rack.outputs()[0], 1.0, "release begins from the held level");
         rack.tick_with_note_gates(
             48_000,
             0,
             120.0,
+            None,
             0,
             &[NoteGateEvents::default(); MAX_CHANNELS],
         );
@@ -1100,7 +1241,7 @@ mod tests {
         );
         let mut gates = [NoteGateEvents::default(); MAX_CHANNELS];
         gates[1].note_ons = 1;
-        rack.tick_with_note_gates(48_000, 32, 120.0, 0, &gates);
+        rack.tick_with_note_gates(48_000, 32, 120.0, None, 0, &gates);
         rack.tick(48_000, 0, 120.0);
         assert_eq!(rack.outputs()[0], -1.0);
     }
@@ -1209,7 +1350,7 @@ mod tests {
         }
         let mut gates = [NoteGateEvents::default(); MAX_CHANNELS];
         gates[1].note_ons = 1;
-        rack.tick_with_note_gates(48_000, 0, 120.0, 1, &gates);
+        rack.tick_with_note_gates(48_000, 0, 120.0, None, 1, &gates);
         assert_eq!(rack.outputs()[0], -1.0);
     }
 
