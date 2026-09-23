@@ -55,6 +55,12 @@ fn click_at(ui: &MainWindow, p: (f32, f32)) {
     });
 }
 
+/// How many pixels in a colour count as "drawn in it". Absent is exactly 0,
+/// so this only has to clear a stray antialiased pixel. The figure itself
+/// depends on the font rasteriser: CI's macOS runner draws the error in 34
+/// pixels, which failed the floor of 40 this used to be.
+const DRAWN: usize = 12;
+
 /// Pixels in the status bar between `x0` and `x1` within a few levels of
 /// `colour`. Close rather than equal, so antialiased text counts; nothing
 /// else on a near-black bar comes within that distance of red or amber.
@@ -131,19 +137,19 @@ fn an_error_draws_in_the_destructive_colour_until_it_is_clicked_away() {
 
     notify(&ui, Severity::Error, ERROR);
     let red = pixels_near(&ui, destructive, 0, left_half);
-    assert!(red >= 40, "an error should draw its dot and text in red, found {red} pixels");
+    assert!(red >= DRAWN, "an error should draw its dot and text in red, found {red} pixels");
     assert_eq!(pixels_near(&ui, warning, 0, left_half), 0);
 
     // An info message beside it does not take the colour away.
     notify(&ui, Severity::Info, "Device selected");
-    assert!(pixels_near(&ui, destructive, 0, left_half) >= 40);
+    assert!(pixels_near(&ui, destructive, 0, left_half) >= DRAWN);
 
     click_at(&ui, NOTICE_DOT);
     assert_eq!(ui.get_status_notice(), "", "clicking the notice dismisses it");
     assert_eq!(pixels_near(&ui, destructive, 0, left_half), 0);
 
     notify(&ui, Severity::Warning, "Busy — could not start the preview");
-    assert!(pixels_near(&ui, warning, 0, left_half) >= 40, "a warning draws in amber");
+    assert!(pixels_near(&ui, warning, 0, left_half) >= DRAWN, "a warning draws in amber");
     assert_eq!(pixels_near(&ui, destructive, 0, left_half), 0);
 }
 
