@@ -291,10 +291,11 @@ static SAMPLER_DESCRIPTORS: [ParamDescriptor; 36] = [
     ParamDescriptor {
         id: SAMPLER_PARAM_OUTPUT_GAIN,
         name: "Output",
-        // Linear rather than the knob's dB scale, for the reason
-        // `STRIP_PARAM_VOLUME` gives: modulation depth is a fraction of the
-        // normalized range, and the dB taper belongs to the control surface
-        // rather than to the destination's numeric truth. The default is the
+        // Linear rather than the knob's dB scale: modulation depth is a
+        // fraction of the normalized range. `STRIP_PARAM_VOLUME` gave the
+        // same reason until MOO-131 moved it onto the fader taper, because a
+        // mapped hardware fader has to agree with the mouse one; this knob
+        // has no such twin, so it has not moved. The default is the
         // literal gain a fresh sampler starts at, so a lane written against
         // the descriptor and a knob left alone agree; the test below pins it
         // to `GENERATOR_OUTPUT_REFERENCE_DBFS`.

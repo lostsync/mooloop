@@ -179,6 +179,35 @@ pub fn fader_db_to_position(db: f32) -> f32 {
     1.0
 }
 
+/// The gain at the top of the fader's throw, `FADER_BREAKPOINTS[0]`'s +6 dB as
+/// a linear gain. A literal because a descriptor is a `static` and cannot call
+/// [`db_to_linear`]; `the_fader_ceiling_is_the_top_breakpoint` holds the two
+/// together.
+///
+/// This is the channel volume's ceiling for everything that moves it through
+/// its descriptor -- a mapped hardware fader, a lane, a route -- so that none
+/// of them can put a channel somewhere the mouse fader cannot reach (MOO-131).
+/// The engine's own clamp stays [`MAX_LINEAR_GAIN`]: a song saved while a
+/// controller could still push a channel to +12 dB loads at the gain it was
+/// saved at.
+pub const FADER_MAX_GAIN: f32 = 1.995_262_3;
+
+/// Fader travel (0..1) to linear gain, through [`fader_position_to_db`].
+/// Travel 0, and the floor below the -60 dB breakpoint, are silence.
+pub fn fader_position_to_gain(position: f32) -> f32 {
+    db_to_linear(fader_position_to_db(position))
+}
+
+/// Linear gain to fader travel, the inverse of [`fader_position_to_gain`].
+/// Silence is travel 0, and anything at or above [`FADER_MAX_GAIN`] is full
+/// throw.
+pub fn fader_gain_to_position(gain: f32) -> f32 {
+    if !gain.is_finite() || gain <= 0.0 {
+        return 0.0;
+    }
+    fader_db_to_position(linear_to_db(gain))
+}
+
 /// The one dB readout format, matching `TrimKnob`'s strings: `-inf`,
 /// `±0.0 dB`, `+3.0 dB`, `-12.4 dB`. Slint mirrors this in `GainMath`.
 pub fn format_db(db: f32) -> String {
@@ -286,5 +315,35 @@ mod tests {
         assert_eq!(format_db(0.04), "±0.0 dB");
         assert_eq!(format_db(3.0), "+3.0 dB");
         assert_eq!(format_db(-12.44), "-12.4 dB");
+    }
+
+    #[test]
+    fn the_fader_ceiling_is_the_top_breakpoint() {
+        assert!((FADER_MAX_GAIN - db_to_linear(FADER_BREAKPOINTS[0].1)).abs() < 1e-6);
+        const { assert!(FADER_MAX_GAIN <= MAX_LINEAR_GAIN) };
+        assert!((fader_position_to_gain(1.0) - FADER_MAX_GAIN).abs() < 1e-6);
+        assert!((fader_gain_to_position(FADER_MAX_GAIN) - 1.0).abs() < 1e-4);
+        assert_eq!(fader_gain_to_position(MAX_LINEAR_GAIN), 1.0);
+    }
+
+    #[test]
+    fn fader_gain_round_trips_and_puts_unity_at_three_quarters() {
+        assert!((fader_position_to_gain(0.75) - 1.0).abs() < 1e-5);
+        assert!((fader_gain_to_position(1.0) - 0.75).abs() < 1e-5);
+        assert_eq!(fader_position_to_gain(0.0), 0.0);
+        assert_eq!(fader_gain_to_position(0.0), 0.0);
+        let mut position = 0.05;
+        while position <= 1.0 {
+            let round = fader_gain_to_position(fader_position_to_gain(position));
+            // The bottom breakpoint is -60 dB, which the control pair reads as
+            // silence, so it comes back as travel 0.
+            if position > 0.051 {
+                assert!(
+                    (round - position).abs() < 1e-3,
+                    "travel {position} round-tripped to {round}"
+                );
+            }
+            position += 0.005;
+        }
     }
 }

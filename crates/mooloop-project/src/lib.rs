@@ -1173,6 +1173,10 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
             // of. Before the repair pass, because that pass judges a lane
             // against the descriptor table, where id 0 no longer exists.
             project.migrate_retired_buffer_offset();
+            // Before the repair pass for the same reason: until this has run,
+            // a song written under the Linear strip-volume curve reads every
+            // volume lane, route and binding 6 dB and more off (MOO-131).
+            project.migrate_linear_strip_volume();
             for (index, channel) in project.channels.iter_mut().enumerate() {
                 resolve_setup_asset(path, index, &mut channel.setup.source, &mut warnings)?;
                 channel.normalize_automation();
@@ -1731,6 +1735,41 @@ mod tests {
             panic!("expected a channel");
         };
         assert!(setup.channel.audio_input.is_off());
+    }
+
+    /// A song written before the strip volume took the fader taper has no
+    /// `strip_volume_taper` key, and loads with its volume lane converted:
+    /// a point at a quarter of the old 0..+12 dB range was unity, and unity
+    /// is now three-quarter travel (MOO-131). Asserted against the file with
+    /// the key physically absent, because that is what an older song is.
+    #[test]
+    fn a_song_from_before_the_fader_taper_loads_at_the_same_volume() {
+        use mooloop_core::{AutomationLane, AutomationPoint, EffectTarget, ParamAddr};
+
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("linear.mooloop");
+        let mut project = Project::default();
+        project.channels[0].normalize_automation();
+        let mut lane = AutomationLane::new(ParamAddr::strip(
+            EffectTarget::Channel(0),
+            mooloop_core::STRIP_PARAM_VOLUME,
+        ));
+        lane.reserve_points();
+        lane.reset_points([AutomationPoint::new(1, 0, 0.25)]);
+        project.channels[0].automation[0].push(lane);
+        save_song_file(&bundle, &project, AssetMode::Embedded).unwrap();
+
+        let manifest = fs::read_to_string(&bundle).unwrap();
+        let key = format!("strip_volume_taper = {}\n", mooloop_core::STRIP_VOLUME_TAPER);
+        assert!(manifest.contains(&key), "a new song records its taper:\n{manifest}");
+        fs::write(&bundle, manifest.replace(&key, "")).unwrap();
+
+        let LoadedDocument::Song(loaded) = load_bundle(&bundle).unwrap().document else {
+            panic!("expected a song");
+        };
+        assert_eq!(loaded.strip_volume_taper, mooloop_core::STRIP_VOLUME_TAPER);
+        let value = loaded.channels[0].automation[0][0].points()[0].value;
+        assert!((value - 0.75).abs() < 1e-4, "unity converted to {value}");
     }
 
     #[test]

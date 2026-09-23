@@ -788,6 +788,15 @@ pub struct Project {
     pub beats_per_bar: u8,
     pub playback_mode: PlaybackMode,
     pub current_pattern: u16,
+    /// Which curve this song's saved strip-volume values -- lane points,
+    /// binding ranges, route depths, all normalized -- were written against.
+    /// [`STRIP_VOLUME_TAPER_LINEAR`] is what a song written before the field
+    /// existed decodes to, and [`Self::migrate_linear_strip_volume`] converts
+    /// one to [`STRIP_VOLUME_TAPER`] on load. The descriptor id did not move,
+    /// so without this marker a converted song and an old one are the same
+    /// bytes, and the pass could not be idempotent (MOO-131).
+    #[serde(default)]
+    pub strip_volume_taper: u8,
     /// The channel the interface is editing, as an identity rather than a
     /// seat.
     ///
@@ -856,6 +865,22 @@ pub struct Project {
     /// byte-identical to one written before the field existed.
     #[serde(default, skip_serializing_if = "is_empty_control_map")]
     pub control_map: crate::control::ControlMap,
+}
+
+/// [`Project::strip_volume_taper`] for a song whose strip volume was
+/// `ParamCurve::Linear` over `0..MAX_LINEAR_GAIN`: every song written before
+/// 2026-09-23.
+pub const STRIP_VOLUME_TAPER_LINEAR: u8 = 0;
+
+/// [`Project::strip_volume_taper`] for the strip volume's present curve,
+/// `ParamCurve::Fader` over `0..FADER_MAX_GAIN`.
+pub const STRIP_VOLUME_TAPER: u8 = 1;
+
+/// A normalized strip-volume value written under the Linear curve, as fader
+/// travel. Anything above the fader's +6 dB ceiling lands at full throw,
+/// which is the most the descriptor can now reach.
+fn linear_volume_as_fader(value: f32) -> f32 {
+    crate::gain::fader_gain_to_position(value.clamp(0.0, 1.0) * crate::gain::MAX_LINEAR_GAIN)
 }
 
 fn is_empty_control_map(map: &crate::control::ControlMap) -> bool {
@@ -987,6 +1012,7 @@ impl Default for Project {
             beats_per_bar: crate::time::BEATS_PER_BAR as u8,
             playback_mode: PlaybackMode::Pattern,
             current_pattern: 0,
+            strip_volume_taper: STRIP_VOLUME_TAPER,
             selected_channel: ChannelId(0),
             channels: vec![ProjectChannel::sampler(0, 1).with_id(ChannelId(0))],
             next_channel_id: 1,
@@ -1298,6 +1324,96 @@ impl Project {
     /// An address as a control binding would store it.
     pub fn param_key(&self, address: crate::ParamAddr) -> Option<crate::ParamKey> {
         crate::ParamKey::of(address, |scope| self.chain_key(scope))
+    }
+
+    /// Convert a song written under the strip volume's old Linear curve to
+    /// the fader taper, so it plays at the gains it was saved at (MOO-131).
+    ///
+    /// The channel and track volumes themselves are linear gain and need
+    /// nothing. What moves is everything *normalized* against the volume
+    /// descriptor: a lane point `v` meant `v * MAX_LINEAR_GAIN` and becomes
+    /// that gain's fader travel; a binding's `min` and `max` convert the same
+    /// way, so a learned 0..1 range stays 0..1 and now puts unity at CC 96. A
+    /// route's `depth` was a signed fraction of the linear range; it becomes
+    /// the travel between the destination's own fader position and the gain
+    /// the old depth reached from there, which keeps a route's peak
+    /// excursion. Values above +6 dB are clamped to it -- the fader cannot go
+    /// higher, which is the point.
+    ///
+    /// Idempotent through [`Self::strip_volume_taper`], which it sets.
+    pub fn migrate_linear_strip_volume(&mut self) {
+        if self.strip_volume_taper != STRIP_VOLUME_TAPER_LINEAR {
+            return;
+        }
+        self.strip_volume_taper = STRIP_VOLUME_TAPER;
+        let is_volume = |owner: crate::ParamOwner, param: u32| {
+            owner == crate::ParamOwner::Strip && param == crate::STRIP_PARAM_VOLUME
+        };
+
+        for channel in &mut self.channels {
+            for lanes in &mut channel.automation {
+                for lane in lanes.iter_mut() {
+                    if !is_volume(lane.target.owner, lane.target.param) {
+                        continue;
+                    }
+                    let points: Vec<crate::AutomationPoint> = lane
+                        .points()
+                        .iter()
+                        .map(|point| crate::AutomationPoint {
+                            value: linear_volume_as_fader(point.value),
+                            ..*point
+                        })
+                        .collect();
+                    lane.reset_points(points);
+                }
+            }
+        }
+
+        let volume_at = |project: &Self, scope: crate::EffectTarget| -> Option<f32> {
+            match scope {
+                crate::EffectTarget::Channel(channel) => project
+                    .channels
+                    .get(usize::from(channel))
+                    .map(|channel| channel.setup.channel.volume),
+                crate::EffectTarget::Bus(bus) => {
+                    project.buses.get(usize::from(bus)).map(|bus| bus.bus.volume)
+                }
+            }
+        };
+        let mut depths: Vec<(usize, usize, f32)> = Vec::new();
+        for (channel_index, channel) in self.channels.iter().enumerate() {
+            for (route_index, route) in channel.setup.modulation.routes.iter().enumerate() {
+                let Some(route) = route else { continue };
+                if !is_volume(route.destination.owner, route.destination.param) {
+                    continue;
+                }
+                let base = volume_at(self, route.destination.scope)
+                    .unwrap_or(crate::DEFAULT_CHANNEL_VOLUME)
+                    .clamp(0.0, crate::gain::MAX_LINEAR_GAIN);
+                let reached = (base + route.depth * crate::gain::MAX_LINEAR_GAIN)
+                    .clamp(0.0, crate::gain::MAX_LINEAR_GAIN);
+                let depth = crate::gain::fader_gain_to_position(reached)
+                    - crate::gain::fader_gain_to_position(base);
+                depths.push((channel_index, route_index, depth.clamp(-1.0, 1.0)));
+            }
+        }
+        for (channel_index, route_index, depth) in depths {
+            if let Some(route) = &mut self.channels[channel_index].setup.modulation.routes[route_index]
+            {
+                route.depth = depth;
+            }
+        }
+
+        for binding in &mut self.control_map.bindings {
+            let crate::ControlTarget::Param(key) = binding.target else {
+                continue;
+            };
+            if !is_volume(key.owner, key.param) {
+                continue;
+            }
+            binding.min = linear_volume_as_fader(binding.min);
+            binding.max = linear_volume_as_fader(binding.max);
+        }
     }
 
     /// Point every lane and route that still names the Buffer's retired
@@ -2205,6 +2321,85 @@ mod tests {
         // Idempotent: id 0 is spent, so a second pass finds nothing.
         let before = project.clone();
         project.migrate_retired_buffer_offset();
+        assert_eq!(project, before, "running it twice must change nothing");
+    }
+
+    /// A song written under the strip volume's old Linear curve plays at the
+    /// gains it was saved at (MOO-131). A lane point at a quarter of the old
+    /// 0..+12 dB range was unity and is now three-quarter travel; a learned
+    /// 0..1 binding stays 0..1; a route keeps its peak excursion. And a song
+    /// already on the fader taper is left alone.
+    #[test]
+    fn a_linear_volume_song_migrates_to_the_fader_taper() {
+        use crate::modulation::{ModPolarity, ModRoute};
+        use crate::{
+            AutomationLane, AutomationPoint, ControlBinding, ControlSource, ControlTarget,
+            EffectTarget, MidiChannelFilter, MidiPortFilter, ParamAddr, ParamKey,
+        };
+
+        let mut project = Project::default();
+        project.assign_channel_ids();
+        project.strip_volume_taper = STRIP_VOLUME_TAPER_LINEAR;
+        project.channels[0].setup.channel.volume = 1.0;
+        let address = ParamAddr::strip(EffectTarget::Channel(0), crate::STRIP_PARAM_VOLUME);
+
+        project.channels[0].normalize_automation();
+        let mut lane = AutomationLane::new(address);
+        lane.reserve_points();
+        // Silence, unity, +6 dB, and +12 dB under the old curve.
+        lane.reset_points([
+            AutomationPoint::new(1, 0, 0.0),
+            AutomationPoint::new(2, 24, 0.25),
+            AutomationPoint::new(3, 48, 0.5),
+            AutomationPoint::new(4, 72, 1.0),
+        ]);
+        project.channels[0].automation[0].push(lane);
+        project.channels[0].setup.modulation.routes[0] =
+            Some(ModRoute::to_slot(0, address, 0.25, ModPolarity::Bipolar));
+        project.control_map.bind(ControlBinding::new(
+            ControlSource::Cc {
+                port: MidiPortFilter::Any,
+                channel: MidiChannelFilter::Omni,
+                controller: 7,
+            },
+            ControlTarget::Param(ParamKey::strip(
+                crate::ChainKey::Channel(project.channels[0].id),
+                crate::STRIP_PARAM_VOLUME,
+            )),
+        ));
+
+        project.migrate_linear_strip_volume();
+        assert_eq!(project.strip_volume_taper, STRIP_VOLUME_TAPER);
+
+        let volume = crate::strip_descriptor(crate::STRIP_PARAM_VOLUME).unwrap();
+        let gains: Vec<f32> = project.channels[0].automation[0][0]
+            .points()
+            .iter()
+            .map(|point| volume.from_normalized(point.value))
+            .collect();
+        assert_eq!(gains[0], 0.0);
+        assert!((gains[1] - 1.0).abs() < 1e-3, "unity became {}", gains[1]);
+        assert!(
+            (gains[2] - crate::gain::FADER_MAX_GAIN).abs() < 1e-3,
+            "+6 dB became {}",
+            gains[2]
+        );
+        assert!(
+            (gains[3] - crate::gain::FADER_MAX_GAIN).abs() < 1e-3,
+            "+12 dB clamps to the fader's top, not {}",
+            gains[3]
+        );
+
+        // The route reached unity + 1.0 (a quarter of 4.0), about +6 dB,
+        // which is the whole quarter of travel above unity.
+        let route = project.channels[0].setup.modulation.routes[0].unwrap();
+        assert!((route.depth - 0.25).abs() < 1e-3, "depth became {}", route.depth);
+
+        let binding = &project.control_map.bindings[0];
+        assert_eq!((binding.min, binding.max), (0.0, 1.0));
+
+        let before = project.clone();
+        project.migrate_linear_strip_volume();
         assert_eq!(project, before, "running it twice must change nothing");
     }
 

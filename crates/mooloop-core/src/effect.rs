@@ -221,6 +221,13 @@ pub enum ParamCurve {
     /// default integer, and the first selector that needed more than 255
     /// positions is the one that says so.
     Stepped(u16),
+    /// The mixer fader's taper: normalized is fader travel, read through
+    /// [`crate::gain::FADER_BREAKPOINTS`], and natural is linear gain. Unity
+    /// sits at three-quarter travel, as it does under the mouse. Requires
+    /// `min == 0` and `max == crate::gain::FADER_MAX_GAIN`, the top of the
+    /// throw, so a controller, a lane and the mouse fader share one range
+    /// (MOO-131).
+    Fader,
 }
 
 /// One parameter's identity, range, and mapping. The single source of truth:
@@ -267,6 +274,10 @@ impl ParamDescriptor {
                     (clamped - self.min) / span
                 }
             }
+            // The ceiling is snapped rather than taken through the log, which
+            // lands a ulp short of it: full throw has to read back as 1.0.
+            ParamCurve::Fader if clamped >= self.max => 1.0,
+            ParamCurve::Fader => crate::gain::fader_gain_to_position(clamped),
         }
     }
 
@@ -292,6 +303,7 @@ impl ParamDescriptor {
                     self.min + (self.max - self.min) * (index / last)
                 }
             }
+            ParamCurve::Fader => crate::gain::fader_position_to_gain(t).clamp(self.min, self.max),
         }
     }
 

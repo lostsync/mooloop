@@ -598,6 +598,8 @@ impl Session {
                 PlaybackMode::Pattern
             },
             current_pattern: self.current_pattern as u16,
+            // The session only ever holds a song the loader has converted.
+            strip_volume_taper: mooloop_core::STRIP_VOLUME_TAPER,
             // The session keeps a seat; the document keeps the channel in
             // it. A snapshot that wrote the seat would put the selection back
             // on a different channel after any edit that renumbered the bank.

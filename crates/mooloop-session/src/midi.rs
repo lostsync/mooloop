@@ -1050,6 +1050,49 @@ mod tests {
         assert_eq!(session.channels[0].volume, 0.0);
     }
 
+    /// A mapped hardware fader puts unity where the mouse fader does, at
+    /// three-quarter travel, and its top is the mouse fader's +6 dB rather
+    /// than +12 dB (MOO-131). Under the old Linear curve unity sat at CC 32,
+    /// and the first mouse touch after a controller move to the top dropped
+    /// the level 6 dB.
+    #[test]
+    fn three_quarter_travel_from_a_controller_lands_at_unity() {
+        let mut session = Session::default();
+        let mut binding = ControlBinding::new(
+            ControlSource::Cc {
+                port: MidiPortFilter::Any,
+                channel: MidiChannelFilter::Omni,
+                controller: 7,
+            },
+            ControlTarget::Param(VOLUME),
+        );
+        binding.mode = ControlMode::Absolute {
+            takeover: Takeover::Jump,
+        };
+        session.control_map.bind(binding);
+        session.resolve_control_map(&ports());
+
+        // CC 96 of 127 is 0.756 of the throw: a hair over unity.
+        session.apply_control_input(&cc(7, 96), &ports(), false);
+        let db = mooloop_core::linear_to_db(session.channels[0].volume);
+        assert!(db.abs() < 0.2, "CC 96 put the channel at {db} dB");
+
+        // The top is the mouse fader's top.
+        session.apply_control_input(&cc(7, 127), &ports(), false);
+        let top = session.channels[0].volume;
+        assert!((top - mooloop_core::gain::FADER_MAX_GAIN).abs() < 1e-6, "top {top}");
+        assert_eq!(session.param_normalized(seat_of(&session, VOLUME)), Some(1.0));
+
+        // Travel means the same thing both ways: where the mouse fader puts
+        // a gain is where a controller reads it, so neither jumps the other.
+        let volume = seat_of(&session, VOLUME);
+        for travel in [0.1_f32, 0.3, 0.5, 0.75, 0.9] {
+            session.channels[0].volume = mooloop_core::gain::fader_position_to_gain(travel);
+            let read = session.param_normalized(volume).expect("volume exists");
+            assert!((read - travel).abs() < 1e-4, "travel {travel} read back as {read}");
+        }
+    }
+
     /// Pickup, end to end: the knob has to reach the fader before the fader
     /// moves. Without it, touching a mapped knob after loading a song jumps
     /// every bound parameter to wherever the desk was left.
@@ -1452,7 +1495,9 @@ mod tests {
         // The mouse moves the same parameter somewhere else.
         let volume = seat_of(&session, VOLUME);
         session.set_param_normalized(volume, 0.1);
-        assert_eq!(session.param_normalized(seat_of(&session, VOLUME)), Some(0.1));
+        // Through the fader taper's log, so near rather than exact.
+        let placed = session.param_normalized(seat_of(&session, VOLUME)).expect("volume exists");
+        assert!((placed - 0.1).abs() < 1e-4, "placed at {placed}");
 
         // The fader's next message must not snatch it back.
         let effects = session.apply_control_input(&cc(7, 101), &ports(), false);
@@ -1460,7 +1505,7 @@ mod tests {
             effects.moved.is_empty(),
             "a released control has to catch the value again"
         );
-        assert_eq!(session.param_normalized(seat_of(&session, VOLUME)), Some(0.1));
+        assert_eq!(session.param_normalized(seat_of(&session, VOLUME)), Some(placed));
 
         // And it catches again on the way past.
         session.apply_control_input(&cc(7, 0), &ports(), false);

@@ -219,7 +219,8 @@ pub use project::{
     MonoSynthState,
     MlM1State, MlP8State, PatternMeta, PolySynthState, Project, ProjectChannel, SampleReference,
     SamplerState, trim_pattern_meta, track_move_allowed,
-    DEFAULT_SWING_PERCENT, MAX_SWING_PERCENT, MIN_SWING_PERCENT,
+    DEFAULT_SWING_PERCENT, MAX_SWING_PERCENT, MIN_SWING_PERCENT, STRIP_VOLUME_TAPER,
+    STRIP_VOLUME_TAPER_LINEAR,
 };
 pub use sampler::{
     clamp01, frames_per_bar, snap_bars_to_power_of_two, EnvTimes, LoopMode, PlayMode,

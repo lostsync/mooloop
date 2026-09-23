@@ -9271,11 +9271,13 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 .expect("a routed fader resolves");
         assert_eq!(segments.count, 2);
 
-        // 0.8 of the 0..MAX_LINEAR_GAIN range is 0.2 normalized. +0.25 lands
-        // at 0.45; -0.25 would land at -0.05 and clamps to silence.
+        // Depth is a fraction of fader travel. A gain of 0.8 sits about 0.71
+        // of the throw; +0.25 lands near the top and -0.25 about 0.46.
         let volume = mooloop_core::strip_descriptor(mooloop_core::STRIP_PARAM_VOLUME).unwrap();
-        assert!((segments.values[0].0 - volume.from_normalized(0.45)).abs() < 1e-6);
-        assert_eq!(segments.values[1].0, 0.0);
+        let knob = volume.to_normalized(0.8);
+        assert!((segments.values[0].0 - volume.from_normalized(knob + 0.25)).abs() < 1e-6);
+        assert!((segments.values[1].0 - volume.from_normalized(knob - 0.25)).abs() < 1e-6);
+        assert!(segments.values[0].0 > 0.8 && segments.values[1].0 < 0.8);
         assert_eq!(segments.values[0].1, 0.0);
         assert_eq!(segments.values[1].1, 0.0);
     }

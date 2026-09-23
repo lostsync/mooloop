@@ -189,6 +189,15 @@ Three consequences worth stating, because each one is a decision:
 - Stored gains are linear: channel and bus volume clamp to
   `MAX_LINEAR_GAIN` (+12 dB). The dB is presentation; wire and project
   formats stay linear.
+- Every control that moves a channel or track volume stops at the mixer
+  fader's +6 dB (`FADER_MAX_GAIN`): the fader, the rack-row and rail knobs,
+  and the strip's Volume descriptor, which lanes, routes and mapped hardware
+  go through. The descriptor uses the fader's own taper (`ParamCurve::Fader`),
+  so unity is three-quarter travel everywhere and a controller and the mouse
+  never disagree about where a gain sits (MOO-131). The +12 dB clamp remains
+  so a song saved hotter still loads at the gain it was saved at. Songs
+  written under the old Linear volume curve are converted on load
+  (`Project::migrate_linear_strip_volume`, marked by `strip_volume_taper`).
 - Trim/gain knobs: -60 dB to +12 dB, unity default, `-inf` at the floor.
   The sampler's Output is the exception that proves the range rather than
   the default: same `TrimKnob`, same travel, same double-click-to-0 dB, but

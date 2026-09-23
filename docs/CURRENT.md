@@ -581,7 +581,14 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   transport gesture). Every other key still plays. A mapped control takes over on **pickup** by
   default, so a fader left at zero does not slam a filter shut the first time
   it is touched, and a control that has taken over gives the parameter back
-  the moment anything else moves it. The map is reviewed and edited on
+  the moment anything else moves it. A mapped fader on a channel or track
+  volume follows the mixer fader's own taper, so unity sits at
+  three-quarter travel and the top is +6 dB, as it is under the mouse; a
+  volume lane and a volume modulation route use the same taper, and no
+  volume control (rack-row knob and rail trim included) goes past +6 dB.
+  Songs saved before 2026-09-23 are converted on load and play at the gains
+  they were saved at, except that volume lane points above +6 dB clamp to it.
+  The map is reviewed and edited on
   Preferences > MIDI, and it is saved with the project.
 
   **MIDI output does not exist**, so the sidebar's OUT row is still inert

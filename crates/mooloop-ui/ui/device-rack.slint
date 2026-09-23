@@ -208,6 +208,7 @@ export component DeviceOutputRail inherits Rectangle {
     in property <int> container-children: 0;
     in property <bool> output-trim-enabled: false;
     in-out property <float> output-trim: 0;
+    in property <float> output-trim-maximum-db: 12;
     in property <float> output-left-db: GainMath.min-db;
     in property <float> output-right-db: GainMath.min-db;
     // A container's chrome is one colour, and it is not the colour of the
@@ -260,6 +261,7 @@ export component DeviceOutputRail inherits Rectangle {
             height: 22px;
             diameter: 22px;
             label: "Output trim";
+            maximum: root.output-trim-maximum-db;
             value <=> root.output-trim;
             changed(v) => { root.output-trim-changed(v); }
         }
@@ -294,6 +296,9 @@ export component DeviceFrame inherits Rectangle {
     // a convincing but inert one.
     in property <bool> output-trim-enabled: false;
     in-out property <float> output-trim: 0;
+    // An effect's trim reaches +12 dB; a generator's rail is the channel
+    // volume, which stops where the mixer fader does (MOO-131).
+    in property <float> output-trim-maximum-db: 12;
     callback output-trim-changed(float);
     in property <bool> wet-dry-enabled: false;
     in-out property <float> wet-dry: 1.0;
@@ -457,6 +462,7 @@ export component DeviceFrame inherits Rectangle {
         container-children: root.container-children;
         output-trim-enabled: root.output-trim-enabled;
         output-trim <=> root.output-trim;
+        output-trim-maximum-db: root.output-trim-maximum-db;
         output-left-db: root.output-left-db;
         output-right-db: root.output-right-db;
         remove-requested => { root.remove-requested(); }

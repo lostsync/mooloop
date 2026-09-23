@@ -11,7 +11,6 @@
 //!   effect needs any change to support modulation.
 
 use crate::effect::{ParamCurve, ParamDescriptor};
-use crate::gain::MAX_LINEAR_GAIN;
 use crate::effect::DeviceId;
 use crate::mod_metadata::{ModDestinationDescriptor, ModSourceId, ModSourceRef};
 use crate::{ChainKey, EffectTarget};
@@ -193,13 +192,21 @@ pub static STRIP_DESCRIPTORS: [ParamDescriptor; 2] = [
     ParamDescriptor {
         id: STRIP_PARAM_VOLUME,
         name: "Volume",
-        // Linear rather than the fader's display taper: modulation depth is a
-        // fraction of the normalized range, and the taper belongs to the
-        // control surface, not to the destination's numeric truth.
+        // The fader's own taper, so normalized *is* fader travel: a mapped
+        // hardware fader, a lane and the mouse fader put unity at the same
+        // three-quarter point, and none of them can reach a gain the others
+        // cannot (MOO-131). Until then this was Linear up to
+        // `MAX_LINEAR_GAIN`, which put unity at CC 32 and made the first
+        // mouse touch after a controller move drop 6 dB. Modulation depth is
+        // now a fraction of fader travel -- roughly even in dB above -24 dB,
+        // which is what a tremolo on a fader wants anyway.
+        //
+        // A song saved under the Linear curve is converted on load
+        // (`Project::migrate_linear_strip_volume`); the id did not move.
         unit: "x",
         min: 0.0,
-        max: MAX_LINEAR_GAIN,
-        curve: ParamCurve::Linear,
+        max: crate::gain::FADER_MAX_GAIN,
+        curve: ParamCurve::Fader,
         default: crate::DEFAULT_CHANNEL_VOLUME,
     },
     ParamDescriptor {
@@ -2661,7 +2668,7 @@ retrigger = true
         assert!(ModDestinationDescriptor::for_param(volume).allowed);
         assert!(ModDestinationDescriptor::for_param(pan).allowed);
         assert_eq!(volume.from_normalized(0.0), 0.0);
-        assert_eq!(volume.from_normalized(1.0), MAX_LINEAR_GAIN);
+        assert_eq!(volume.from_normalized(1.0), crate::gain::FADER_MAX_GAIN);
         // Centre pan sits at the middle of the normalized range, so a bipolar
         // route swings evenly to both sides of it.
         assert_eq!(pan.to_normalized(0.0), 0.5);

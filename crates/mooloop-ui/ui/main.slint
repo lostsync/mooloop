@@ -3626,6 +3626,10 @@ export component MainWindow inherits Window {
                                         TrimKnob {
                                             label: "Volume";
                                             value: row.volume-db;
+                                            // The mixer fader's ceiling, which is the volume
+                                            // descriptor's: no control reaches a gain another
+                                            // cannot (MOO-131).
+                                            maximum: GainMath.fader-db[0];
                                             changed(v) => { root.channel-volume-changed(ch, GainMath.db-to-linear(v)); }
                                         }
 
@@ -4069,6 +4073,7 @@ export component MainWindow inherits Window {
                                             output-right-db: root.editing-bus ? root.editing-bus-right-db : root.source-output-right-db;
                                             output-trim-enabled: !root.editing-bus;
                                             output-trim: root.selected-channel-volume-db;
+                                            output-trim-maximum-db: GainMath.fader-db[0];
                                             output-trim-changed(v) => {
                                                 root.channel-volume-changed(root.selected-channel, GainMath.db-to-linear(v));
                                             }
