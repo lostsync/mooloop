@@ -1009,7 +1009,7 @@ else: `MlP8::reset` rebuilt its chorus delay line, and the UI's
 **What is still open is the locks half**, which is measured by nothing. The
 allocator can only answer the allocation question; a lock taken on the
 callback would pass every test in the tree. Nobody has proposed an instrument
-for it.
+for it (open: MOO-173).
 
 ---
 

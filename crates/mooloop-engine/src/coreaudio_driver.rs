@@ -11,11 +11,14 @@
 //! to the system default until the device comes back.
 //!
 //! Reopening a stream -- another device, another buffer size -- replaces the
-//! thread the callback runs on but not the executor, which lives behind a
-//! mutex the callback only ever `try_lock`s. The two streams never run at
-//! once: the old one is dropped before the new one plays, so the lock is
-//! uncontended in every block except, at most, the one a reopen interrupts,
-//! and that block plays silence rather than waiting.
+//! thread the callback runs on but not the executor. The callback owns the
+//! executor outright, with no lock (MOO-22): when a stream is dropped its
+//! callback parks what it owned, and the next stream's callback takes it on
+//! its first block (`crate::handoff`). The two streams never run at once --
+//! the old one is dropped before the new one plays -- so the hand-off costs
+//! nothing a reopen did not already cost. What the control thread used to
+//! change under a lock (the input ring, the start of a new run) it now sends
+//! down a ring the callback reads at the top of each block.
 //!
 //! MIDI input comes from Core MIDI, through `midir`. There is no patchbay to
 //! connect a keyboard to mooloop in, so mooloop listens to every source there
@@ -44,6 +47,7 @@ use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::driver::{AudioConfig, OutputTarget};
 use crate::executor::Executor;
+use crate::handoff::{Held, Parked};
 use crate::Error;
 
 /// The device half of a target that means "the system output".
@@ -245,17 +249,82 @@ impl InputTap {
     }
 }
 
-/// What the audio callback owns while it runs, under one lock.
+/// What the audio callback owns. Never shared: it moves from one stream's
+/// callback to the next through [`Shared::parked`].
 struct Realtime {
     executor: Executor,
     midi_rx: Consumer<MidiBytes>,
     /// `None` until an input stream is open, and while one is being replaced.
     input: Option<InputTap>,
+    /// What the control thread asks of the callback, read at the top of
+    /// every block.
+    control_rx: Consumer<ToCallback>,
+    /// Input rings the callback has let go of, back to the control thread to
+    /// free: dropping one here would free its buffer on the audio thread.
+    retired_tx: Producer<InputTap>,
+}
+
+/// The control thread's side of what used to be done under the lock.
+enum ToCallback {
+    /// A stream was replaced: the next block is the first of a new run, and
+    /// the gap before it is not a late wake-up.
+    BeginRun,
+    /// Read this input ring from now on, or none.
+    Input(Option<InputTap>),
+}
+
+impl Realtime {
+    /// Apply what the control thread has sent since the last block.
+    fn apply_control(&mut self) {
+        while let Ok(message) = self.control_rx.pop() {
+            match message {
+                ToCallback::BeginRun => self.executor.begin_run(),
+                ToCallback::Input(tap) => {
+                    if let Some(old) = std::mem::replace(&mut self.input, tap) {
+                        if let Err(rtrb::PushError::Full(old)) = self.retired_tx.push(old) {
+                            // Only if the control thread has stopped
+                            // collecting: leaked rather than freed here.
+                            std::mem::forget(old);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Room for what the control thread sends between two blocks: an input
+/// replaced and a run begun, several times over.
+const CONTROL_QUEUE_CAPACITY: usize = 16;
+
+/// The control thread's ends of the callback's rings.
+struct Control {
+    tx: Producer<ToCallback>,
+    retired_rx: Consumer<InputTap>,
+}
+
+impl Control {
+    fn send(&mut self, message: ToCallback) {
+        // Free what the callback has handed back first, so the rings never
+        // fill with nobody collecting.
+        while self.retired_rx.pop().is_ok() {}
+        if self.tx.push(message).is_err() {
+            mooloop_core::log_error!(
+                "audio",
+                "the audio callback has not run for {CONTROL_QUEUE_CAPACITY} changes; \
+                 one was dropped"
+            );
+        }
+    }
 }
 
 /// What the realtime callbacks share with the control thread.
 struct Shared {
-    realtime: Mutex<Realtime>,
+    /// The callback's state between two streams. Taken by a stream's
+    /// callback on its first block, and parked again when the stream goes.
+    parked: Arc<Parked<Realtime>>,
+    /// Only the control thread locks this.
+    control: Mutex<Control>,
     xrun_count: Arc<AtomicU64>,
     /// Set from cpal's error callback when the stream's device has gone. The
     /// callback may run on the realtime thread, so it sets a flag and nothing
@@ -471,14 +540,22 @@ impl Opening {
             None => default.clone(),
         };
         let (midi_tx, midi_rx) = RingBuffer::new(MIDI_QUEUE_CAPACITY);
+        let (control_tx, control_rx) = RingBuffer::new(CONTROL_QUEUE_CAPACITY);
+        let (retired_tx, retired_rx) = RingBuffer::new(CONTROL_QUEUE_CAPACITY);
         let driver = CoreAudioDriver {
             host: self.host,
             sample_rate: self.sample_rate,
             shared: Arc::new(Shared {
-                realtime: Mutex::new(Realtime {
+                parked: Arc::new(Parked::new(Box::new(Realtime {
                     executor,
                     midi_rx,
                     input: None,
+                    control_rx,
+                    retired_tx,
+                }))),
+                control: Mutex::new(Control {
+                    tx: control_tx,
+                    retired_rx,
                 }),
                 xrun_count,
                 lost: AtomicBool::new(false),
@@ -807,7 +884,7 @@ impl CoreAudioDriver {
         // callback reading a ring whose producer has gone.
         state.input_stream = None;
         state.input_name = None;
-        lock(&self.shared.realtime).input = None;
+        lock(&self.shared.control).send(ToCallback::Input(None));
         let stream = device
             .build_input_stream::<f32, _, _>(
                 config,
@@ -829,11 +906,11 @@ impl CoreAudioDriver {
         stream
             .play()
             .map_err(|e| format!("could not start {name:?}: {e}"))?;
-        lock(&self.shared.realtime).input = Some(InputTap {
+        lock(&self.shared.control).send(ToCallback::Input(Some(InputTap {
             rx,
             prefill: buffer as usize * INPUT_PREFILL_BUFFERS,
             priming: true,
-        });
+        })));
         state.input_stream = Some(stream);
         state.input_name = Some(name);
         state.input_buffer = buffer;
@@ -852,7 +929,7 @@ impl CoreAudioDriver {
             );
             state.input_stream = None;
             state.input_name = None;
-            lock(&self.shared.realtime).input = None;
+            lock(&self.shared.control).send(ToCallback::Input(None));
         }
         if !lost
             && state
@@ -940,7 +1017,7 @@ impl CoreAudioDriver {
         // Stop the old stream before the new one plays; then the next block
         // arrives on a new thread, after a gap that is not a late wake-up.
         state.stream = None;
-        lock(&self.shared.realtime).executor.begin_run();
+        lock(&self.shared.control).send(ToCallback::BeginRun);
         if let Err(e) = stream.play() {
             // Nothing is playing now. Say so to `service`, which will find
             // something that does.
@@ -971,19 +1048,28 @@ fn render_callback(
     let mut scratch_in_l = vec![0.0f32; MAX_BLOCK_SIZE];
     let mut scratch_in_r = vec![0.0f32; MAX_BLOCK_SIZE];
     let mut midi = [MidiBytes::default(); MAX_MIDI_PER_CALLBACK];
+    // Empty until the first block takes the state the previous stream's
+    // callback parked; dropped with this stream, which parks it again.
+    let mut held = Held::new(shared.parked.clone());
     move |data, _info| {
         data.fill(0.0);
-        // `try_lock`, never `lock`: the only other holder is a reopen on the
-        // control thread, and a block of silence is the right answer to one.
-        // MIDI stays in the ring through a missed callback, so no key is lost.
-        let Ok(mut realtime) = shared.realtime.try_lock() else {
+        // No lock (MOO-22). `None` only while the previous stream's callback
+        // has not yet let go. A reopen drops the old stream first, but cpal's
+        // disconnect and default-output threads can hold it alive for a
+        // moment longer (they upgrade a `Weak` to it), and until its audio
+        // unit is disposed its callback keeps the state. Blocks of silence
+        // are the answer meanwhile, never two callbacks at once. MIDI stays in
+        // the ring through them, so no key is lost.
+        let Some(realtime) = held.get() else {
             return;
         };
+        realtime.apply_control();
         let Realtime {
             executor,
             midi_rx,
             input,
-        } = &mut *realtime;
+            ..
+        } = realtime;
         let mut arrived = 0;
         while arrived < midi.len() {
             let Ok(message) = midi_rx.pop() else {

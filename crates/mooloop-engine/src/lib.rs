@@ -143,6 +143,10 @@ pub const AUDIO_IN_LABEL: &str = "Audio In";
 mod coreaudio_driver;
 mod driver;
 mod executor;
+// The Core Audio driver's lock-free hand-off; compiled and tested everywhere
+// so its unsafe code is exercised on the platforms CI tests on most.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod handoff;
 #[cfg(not(target_os = "macos"))]
 mod jack_driver;
 pub mod load;
