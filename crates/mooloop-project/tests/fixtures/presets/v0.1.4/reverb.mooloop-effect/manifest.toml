@@ -1,0 +1,28 @@
+format_version = 1
+document_type = "effect"
+asset_mode = "embedded"
+contains = ["effect_params"]
+
+[preset]
+name = "corpus Reverb"
+category = ""
+tags = []
+
+[document]
+bypassed = false
+wet_dry = 0.63
+input_trim = 1.0
+output_trim = 1.0
+
+[document.params]
+type = "reverb"
+
+[document.params.state]
+size = 0.37
+decay_s = 7.5259995
+damping = 0.37
+predelay_ms = 74.63
+diffusion = 0.37
+width = 0.37
+modulation = 0.37
+low_cut_hz = 197.6

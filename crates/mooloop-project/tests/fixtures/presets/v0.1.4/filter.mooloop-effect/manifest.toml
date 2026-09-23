@@ -1,0 +1,25 @@
+format_version = 1
+document_type = "effect"
+asset_mode = "embedded"
+contains = ["effect_params"]
+
+[preset]
+name = "corpus Filter"
+category = ""
+tags = []
+
+[document]
+bypassed = false
+wet_dry = 0.63
+input_trim = 1.0
+output_trim = 1.0
+
+[document.params]
+type = "filter"
+
+[document.params.state]
+cutoff_hz = 7412.6
+resonance = 0.37
+mode = "band_pass"
+slope = "db12"
+drive = 0.37

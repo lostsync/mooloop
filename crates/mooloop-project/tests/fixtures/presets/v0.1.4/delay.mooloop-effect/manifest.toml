@@ -1,0 +1,28 @@
+format_version = 1
+document_type = "effect"
+asset_mode = "embedded"
+contains = ["effect_params"]
+
+[preset]
+name = "corpus Delay"
+category = ""
+tags = []
+
+[document]
+bypassed = false
+wet_dry = 0.63
+input_trim = 1.0
+output_trim = 1.0
+
+[document.params]
+type = "delay"
+
+[document.params.state]
+time_ms = 740.63
+tempo_sync = false
+time_division = "quarter"
+feedback = 0.3626
+mode = "tape"
+cross = 0.37
+tone = 0.37
+mix = 0.37

@@ -322,7 +322,18 @@ before any of them existed still loads:
 
 - `channels[].setup.effects` is the ordered insert chain: one
   `EffectSlotState` per slot, each a tagged `EffectParams` enum. The
-  pre-tag untagged filter shape still decodes. Each row also carries a
+  pre-tag untagged filter shape still decodes. **Every kind's `state`
+  table fills a missing field from its default** (a struct-level
+  `#[serde(default)]` on every params struct, MOO-197), so a song or
+  preset written before a parameter existed loads, with that parameter at
+  its default -- where a field names a default of its own for an older
+  song's sake (the Modulation's `rate_division`), that one wins. A table that
+  still cannot be read, because a value has the wrong type or the kind is
+  unknown, fails with an error naming the kind ("the `reverb` effect's
+  parameters could not be read"). `a_saved_effect_missing_any_one_field_still_loads`
+  removes each field of each kind in turn, and
+  `mooloop-project/tests/preset_corpus.rs` keeps one preset per kind, as
+  0.1.4 saved it, that must keep opening as the device it was. Each row also carries a
   durable `id`, and `channels[].setup.next_device_id` is the mint it comes
   from; buses carry the same pair. Both default, and a chain decoded without
   ids takes its **positions** as its ids — which is exactly what the routes
@@ -660,7 +671,8 @@ that reader also meets `type = "plugin"` on the device, which it does not
 know either, and an unknown effect tag fails the whole document. So a song
 with a plugin device in it is **refused** by an older build, not half loaded.
 `an_unknown_effect_tag_is_refused_not_read_as_a_filter` holds the untagged
-`FilterParams` fallback to that. A song whose table has slots but no device
+pre-tag filter fallback (`LegacyFilterParams`, whose three original fields
+stay required) to that. A song whose table has slots but no device
 naming them loses only those orphaned slots in an older build.
 
 A song with no plugins writes neither key, so it is byte-identical to one

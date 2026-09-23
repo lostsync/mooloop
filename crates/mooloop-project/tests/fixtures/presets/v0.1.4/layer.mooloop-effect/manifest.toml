@@ -1,0 +1,22 @@
+format_version = 1
+document_type = "effect"
+asset_mode = "embedded"
+contains = ["effect_params"]
+
+[preset]
+name = "corpus Layer"
+category = ""
+tags = []
+
+[document]
+bypassed = false
+wet_dry = 0.63
+input_trim = 1.0
+output_trim = 1.0
+
+[document.params]
+type = "layer"
+
+[document.params.state]
+children = 0
+mix = 0.37

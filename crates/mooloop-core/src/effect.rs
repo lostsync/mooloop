@@ -944,6 +944,8 @@ impl EqPassFilter {
 /// returns to the band the user was shaping, without treating it as a seventh
 /// automation destination.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+// Every field falls back to `Default` when a saved table lacks it (MOO-197).
+#[serde(default)]
 pub struct EqParams {
     pub bands: [EqBand; EQ_MAX_BANDS],
     pub high_pass: EqPassFilter,
@@ -1261,6 +1263,8 @@ impl FilterSlope {
 
 /// Parameters for the filter effect (`FilterEffect` in `mooloop-dsp`).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+// Every field falls back to `Default` when a saved table lacks it (MOO-197).
+#[serde(default)]
 pub struct FilterParams {
     /// Cutoff frequency in Hz, clamped by the DSP to [20, sample_rate * 0.45].
     pub cutoff_hz: f32,
@@ -1387,6 +1391,8 @@ impl DriveCurve {
 
 /// Parameters for the drive/saturation effect (`DriveEffect` in `mooloop-dsp`).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+// Every field falls back to `Default` when a saved table lacks it (MOO-197).
+#[serde(default)]
 pub struct DriveParams {
     /// Linear input gain into the shaper.
     pub drive: f32,
@@ -1648,6 +1654,8 @@ impl BitcrushStyle {
 
 /// Parameters for the bitcrush effect (`BitcrushEffect` in `mooloop-dsp`).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+// Every field falls back to `Default` when a saved table lacks it (MOO-197).
+#[serde(default)]
 pub struct BitcrushParams {
     /// Quantization depth in bits. Fractional values are meaningful — the
     /// step size is continuous, so this can be swept without zippering.
@@ -1789,6 +1797,8 @@ impl DelayMode {
 
 /// Parameters for the delay effect (`DelayEffect` in `mooloop-dsp`).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+// Every field falls back to `Default` when a saved table lacks it (MOO-197).
+#[serde(default)]
 pub struct DelayParams {
     pub time_ms: f32,
     /// Whether `time_ms` is derived from [`Self::time_division`] and the
@@ -1959,6 +1969,8 @@ impl ModulationMode {
 /// one stable wire identity while each algorithm names it musically on the
 /// face (delay, sweep centre, or tape age).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+// Every field falls back to `Default` when a saved table lacks it (MOO-197).
+#[serde(default)]
 pub struct ModulationParams {
     pub mode: ModulationMode,
     pub rate_hz: f32,
@@ -2122,6 +2134,8 @@ static REVERB_DESCRIPTORS: [ParamDescriptor; 8] = [
 /// the high end relative to that, as a room does, so a heavily damped tail
 /// measures shorter than `decay_s` on purpose.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+// Every field falls back to `Default` when a saved table lacks it (MOO-197).
+#[serde(default)]
 pub struct ReverbParams {
     #[serde(default = "default_reverb_size")]
     pub size: f32,
@@ -2252,6 +2266,8 @@ static PLATE_DESCRIPTORS: [ParamDescriptor; 5] = [
 /// both are fixed-cost per sample, but the plate's parallel combs give it a
 /// tighter, more resonant character than the FDN hall's diffuse one.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+// Every field falls back to `Default` when a saved table lacks it (MOO-197).
+#[serde(default)]
 pub struct PlateParams {
     pub size: f32,
     pub decay_s: f32,
@@ -2341,6 +2357,8 @@ static GATE_DESCRIPTORS: [ParamDescriptor; 5] = [
 
 /// Parameters for the gate effect (`GateEffect` in `mooloop-dsp`).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+// Every field falls back to `Default` when a saved table lacks it (MOO-197).
+#[serde(default)]
 pub struct GateParams {
     pub threshold_db: f32,
     pub attack_ms: f32,
@@ -2445,6 +2463,8 @@ static COMPRESSOR_DESCRIPTORS: [ParamDescriptor; 7] = [
 
 /// Parameters for the compressor effect (`CompressorEffect` in `mooloop-dsp`).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+// Every field falls back to `Default` when a saved table lacks it (MOO-197).
+#[serde(default)]
 pub struct CompressorParams {
     pub threshold_db: f32,
     pub ratio: f32,
@@ -2514,6 +2534,8 @@ static LIMITER_DESCRIPTORS: [ParamDescriptor; 3] = [
 
 /// Parameters for the limiter effect (`LimiterEffect` in `mooloop-dsp`).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+// Every field falls back to `Default` when a saved table lacks it (MOO-197).
+#[serde(default)]
 pub struct LimiterParams {
     pub ceiling_db: f32,
     pub release_ms: f32,
@@ -2983,6 +3005,8 @@ pub const MOD_TIME_DIVISION_TOP: f32 = crate::ModTimeDivision::ALL.len() as f32 
 /// `docs/plans/containers/02-the-container-is-a-device.md` states the two
 /// invariants the representation has to hold.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+// Every field falls back to `Default` when a saved table lacks it (MOO-197).
+#[serde(default)]
 pub struct ContainerParams {
     /// How many of the rows following this one are inside it.
     #[serde(default)]
@@ -3556,11 +3580,51 @@ impl EffectParams {
 
 /// Songs written before `EffectParams` was tagged stored a bare `FilterParams`
 /// table, because `Filter` was the only kind. Accept both shapes on load.
+///
+/// **And say which effect it was when neither fits** (MOO-197). An untagged
+/// enum that matches nothing reports only that it matched nothing, which
+/// told a user and a bug report nothing about which of a song's devices was
+/// unreadable. `Unreadable` catches a tagged table whose state would not
+/// read -- a value of the wrong type, or a kind this build does not know --
+/// by its `type` alone, so the error can name it. A *missing* field is no
+/// longer a failure at all: every params struct fills one from its
+/// `Default`.
 #[derive(serde::Deserialize)]
 #[serde(untagged)]
 enum EffectParamsCompat {
     Tagged(EffectParams),
-    LegacyFilter(FilterParams),
+    LegacyFilter(LegacyFilterParams),
+    Unreadable {
+        #[serde(rename = "type")]
+        kind: String,
+    },
+}
+
+/// The pre-tag filter table, with the three fields every such song wrote
+/// required. `FilterParams` itself now fills any missing field, so it would
+/// match *any* table -- a tagged one that failed included -- and quietly
+/// turn an unreadable device into a default filter.
+#[derive(serde::Deserialize)]
+struct LegacyFilterParams {
+    cutoff_hz: f32,
+    resonance: f32,
+    mode: FilterMode,
+    #[serde(default)]
+    slope: FilterSlope,
+    #[serde(default)]
+    drive: f32,
+}
+
+impl From<LegacyFilterParams> for FilterParams {
+    fn from(legacy: LegacyFilterParams) -> Self {
+        Self {
+            cutoff_hz: legacy.cutoff_hz,
+            resonance: legacy.resonance,
+            mode: legacy.mode,
+            slope: legacy.slope,
+            drive: legacy.drive,
+        }
+    }
 }
 
 fn deserialize_effect_params<'de, D>(deserializer: D) -> Result<EffectParams, D::Error>
@@ -3568,10 +3632,14 @@ where
     D: serde::Deserializer<'de>,
 {
     use serde::Deserialize as _;
-    Ok(match EffectParamsCompat::deserialize(deserializer)? {
-        EffectParamsCompat::Tagged(params) => params,
-        EffectParamsCompat::LegacyFilter(params) => EffectParams::Filter(params),
-    })
+    match EffectParamsCompat::deserialize(deserializer)? {
+        EffectParamsCompat::Tagged(params) => Ok(params),
+        EffectParamsCompat::LegacyFilter(params) => Ok(EffectParams::Filter(params.into())),
+        EffectParamsCompat::Unreadable { kind } => Err(serde::de::Error::custom(format!(
+            "the `{kind}` effect's parameters could not be read: a value has the wrong \
+             type, or this build does not know a `{kind}` effect"
+        ))),
+    }
 }
 
 /// A rack device's identity, stable within one chain.
@@ -4209,10 +4277,12 @@ mod tests {
     /// The second half is what makes an older reader refuse a song with a
     /// plugin in it instead of loading half of it
     /// (`docs/plans/plugin-hosting/02-the-neutral-contract.md`). The
-    /// untagged fallback to `FilterParams` refuses an unknown tag only
-    /// because `FilterParams` requires `cutoff_hz`, `resonance` and `mode`;
-    /// give those defaults and a plugin would silently become a filter in
-    /// every build that predates it. This test fails first.
+    /// untagged fallback to a pre-tag filter table refuses an unknown tag
+    /// only because `LegacyFilterParams` requires `cutoff_hz`, `resonance`
+    /// and `mode`; give those defaults and a plugin would silently become a
+    /// filter in every build that predates it. This test fails first.
+    /// (`FilterParams` itself fills missing fields since MOO-197, which is
+    /// why the legacy shape has a struct of its own.)
     #[test]
     fn an_unknown_effect_tag_is_refused_not_read_as_a_filter() {
         let future = "bypassed = false\n\n[params]\ntype = \"from_a_later_build\"\nstate = 3\n";
@@ -4244,6 +4314,101 @@ mod tests {
         assert_eq!(params.get(0), None);
         assert_eq!(params.set(0, 1.0), None, "nothing to write");
         assert_eq!(params.kind(), kind);
+    }
+
+    /// Every kind with every parameter moved off its default, as a song
+    /// saves it.
+    fn moved_off_its_defaults(kind: EffectKind) -> EffectSlotState {
+        let mut slot = EffectSlotState::of_kind(kind);
+        for descriptor in kind.descriptors() {
+            let value = descriptor.min + 0.37 * (descriptor.max - descriptor.min);
+            slot.params.set(descriptor.id, value);
+        }
+        slot
+    }
+
+    /// The `type` a kind saves under.
+    fn state_tag(kind: EffectKind) -> String {
+        let written: toml::Table =
+            toml::from_str(&toml::to_string(&EffectSlotState::of_kind(kind)).unwrap()).unwrap();
+        written["params"]["type"].as_str().unwrap().to_string()
+    }
+
+    fn state_table(slot: &EffectSlotState) -> toml::Table {
+        let written: toml::Table = toml::from_str(&toml::to_string(slot).unwrap()).unwrap();
+        written["params"]["state"]
+            .as_table()
+            .expect("an insert's state is a table")
+            .clone()
+    }
+
+    /// **A saved effect missing any one field still loads** (MOO-197), with
+    /// that field at its default and every other field as it was saved.
+    ///
+    /// "Its default" is what the field loads as when the whole table is
+    /// empty, which is the struct's `Default` except where a field names a
+    /// default of its own for an older song's sake -- the Modulation's
+    /// `rate_division` loads as a quarter note where a fresh device starts
+    /// on a whole one, because that is what a song from before the field
+    /// meant.
+    ///
+    /// This is what a song written before a parameter existed looks like to
+    /// the build that added it. Only the Preamp's params had a struct-level
+    /// default before this, so a new field anywhere else would have made
+    /// every song holding that kind unloadable, with an error that named
+    /// neither the kind nor the field.
+    #[test]
+    fn a_saved_effect_missing_any_one_field_still_loads() {
+        for kind in EffectKind::ALL {
+            let saved = moved_off_its_defaults(kind);
+            let saved_state = state_table(&saved);
+            let empty = format!(
+                "bypassed = false\n\n[params]\ntype = \"{}\"\n\n[params.state]\n",
+                state_tag(kind)
+            );
+            let default_state = state_table(
+                &toml::from_str::<EffectSlotState>(&empty)
+                    .unwrap_or_else(|error| panic!("{kind:?} with an empty table: {error}")),
+            );
+            for missing in saved_state.keys() {
+                let mut written: toml::Table =
+                    toml::from_str(&toml::to_string(&saved).unwrap()).unwrap();
+                written
+                    .get_mut("params")
+                    .and_then(|params| params.get_mut("state"))
+                    .and_then(|state| state.as_table_mut())
+                    .expect("an insert's state is a table")
+                    .remove(missing);
+                let loaded: EffectSlotState = toml::from_str(&toml::to_string(&written).unwrap())
+                    .unwrap_or_else(|error| {
+                        panic!("{kind:?} without `{missing}` no longer loads: {error}")
+                    });
+                assert_eq!(loaded.kind(), kind);
+                let loaded_state = state_table(&loaded);
+                for (field, value) in &loaded_state {
+                    let expected = if field == missing {
+                        &default_state[field]
+                    } else {
+                        &saved_state[field]
+                    };
+                    assert_eq!(
+                        value, expected,
+                        "{kind:?} without `{missing}`: `{field}` came back wrong"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A saved effect that cannot be read says which effect it was
+    /// (MOO-197), instead of that an untagged enum matched nothing.
+    #[test]
+    fn an_unreadable_effect_names_its_kind() {
+        let broken = "bypassed = false\n\n[params]\ntype = \"reverb\"\n\n[params.state]\ndecay_s = \"long\"\n";
+        let error = toml::from_str::<EffectSlotState>(broken)
+            .expect_err("a reverb with a word for a decay loaded")
+            .to_string();
+        assert!(error.contains("`reverb`"), "the error does not name the kind: {error}");
     }
 
     #[test]

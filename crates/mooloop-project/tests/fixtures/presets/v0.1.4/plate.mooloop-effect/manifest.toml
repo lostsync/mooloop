@@ -1,0 +1,25 @@
+format_version = 1
+document_type = "effect"
+asset_mode = "embedded"
+contains = ["effect_params"]
+
+[preset]
+name = "corpus Plate"
+category = ""
+tags = []
+
+[document]
+bypassed = false
+wet_dry = 0.63
+input_trim = 1.0
+output_trim = 1.0
+
+[document.params]
+type = "plate"
+
+[document.params.state]
+size = 0.37
+decay_s = 3.8260002
+damping = 0.37
+width = 0.37
+predelay_ms = 74.0

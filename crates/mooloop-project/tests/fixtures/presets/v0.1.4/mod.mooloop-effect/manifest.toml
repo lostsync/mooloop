@@ -1,0 +1,30 @@
+format_version = 1
+document_type = "effect"
+asset_mode = "embedded"
+contains = ["effect_params"]
+
+[preset]
+name = "corpus Mod"
+category = ""
+tags = []
+
+[document]
+bypassed = false
+wet_dry = 0.63
+input_trim = 1.0
+output_trim = 1.0
+
+[document.params]
+type = "modulation"
+
+[document.params.state]
+mode = "flange"
+rate_hz = 4.4526
+tempo_sync = false
+rate_division = "whole"
+depth = 0.37
+color = 0.37
+feedback = -0.2392
+spread = 0.37
+tone = 0.37
+stages = 6

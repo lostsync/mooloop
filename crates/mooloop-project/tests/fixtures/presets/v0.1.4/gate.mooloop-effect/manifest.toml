@@ -1,0 +1,25 @@
+format_version = 1
+document_type = "effect"
+asset_mode = "embedded"
+contains = ["effect_params"]
+
+[preset]
+name = "corpus Gate"
+category = ""
+tags = []
+
+[document]
+bypassed = false
+wet_dry = 0.63
+input_trim = 1.0
+output_trim = 1.0
+
+[document.params]
+type = "gate"
+
+[document.params.state]
+threshold_db = -50.4
+attack_ms = 37.031498
+hold_ms = 185.0
+release_ms = 740.63
+range_db = -50.4

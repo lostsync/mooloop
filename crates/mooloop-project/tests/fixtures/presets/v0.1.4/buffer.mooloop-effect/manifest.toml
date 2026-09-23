@@ -1,0 +1,32 @@
+format_version = 1
+document_type = "effect"
+asset_mode = "embedded"
+contains = ["effect_params"]
+
+[preset]
+name = "corpus Buffer"
+category = ""
+tags = []
+
+[document]
+bypassed = false
+wet_dry = 0.63
+input_trim = 1.0
+output_trim = 1.0
+
+[document.params]
+type = "buffer"
+
+[document.params.state]
+bars = 2
+freeze = 0.0
+jump = 0.0
+jump_back = 7.0
+reverse = 0.0
+stutter = 0.0
+stutter_length = 7.0
+position = 0.37
+position_span = 8.0
+quantize = 0.0
+quant_start = 7.0
+crossfade_ms = 18.815

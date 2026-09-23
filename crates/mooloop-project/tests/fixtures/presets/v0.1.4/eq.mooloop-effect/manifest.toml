@@ -1,0 +1,90 @@
+format_version = 1
+document_type = "effect"
+asset_mode = "embedded"
+contains = ["effect_params"]
+
+[preset]
+name = "corpus EQ"
+category = ""
+tags = []
+
+[document]
+bypassed = false
+wet_dry = 0.63
+input_trim = 1.0
+output_trim = 1.0
+
+[document.params]
+type = "eq"
+
+[document.params.state]
+selected_target = 1
+analyzer_enabled = false
+
+[[document.params.state.bands]]
+enabled = false
+kind = "low_shelf"
+frequency_hz = 7412.6
+gain_db = -4.6800003
+q = 6.7545004
+q_profile = "constant"
+
+[[document.params.state.bands]]
+enabled = false
+kind = "low_shelf"
+frequency_hz = 7412.6
+gain_db = -4.6800003
+q = 6.7545004
+q_profile = "constant"
+
+[[document.params.state.bands]]
+enabled = false
+kind = "low_shelf"
+frequency_hz = 7412.6
+gain_db = -4.6800003
+q = 6.7545004
+q_profile = "constant"
+
+[[document.params.state.bands]]
+enabled = false
+kind = "low_shelf"
+frequency_hz = 7412.6
+gain_db = -4.6800003
+q = 6.7545004
+q_profile = "constant"
+
+[[document.params.state.bands]]
+enabled = false
+kind = "low_shelf"
+frequency_hz = 7412.6
+gain_db = -4.6800003
+q = 6.7545004
+q_profile = "constant"
+
+[[document.params.state.bands]]
+enabled = false
+kind = "low_shelf"
+frequency_hz = 7412.6
+gain_db = -4.6800003
+q = 6.7545004
+q_profile = "constant"
+
+[[document.params.state.bands]]
+enabled = false
+kind = "low_shelf"
+frequency_hz = 7412.6
+gain_db = -4.6800003
+q = 6.7545004
+q_profile = "constant"
+
+[document.params.state.high_pass]
+enabled = false
+frequency_hz = 7412.6
+q = 6.7545004
+slope = "db12"
+
+[document.params.state.low_pass]
+enabled = false
+frequency_hz = 7412.6
+q = 6.7545004
+slope = "db12"

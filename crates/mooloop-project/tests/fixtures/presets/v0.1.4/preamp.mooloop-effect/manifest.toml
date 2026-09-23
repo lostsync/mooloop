@@ -1,0 +1,25 @@
+format_version = 1
+document_type = "effect"
+asset_mode = "embedded"
+contains = ["effect_params"]
+
+[preset]
+name = "corpus Preamp"
+category = ""
+tags = []
+
+[document]
+bypassed = false
+wet_dry = 0.63
+input_trim = 1.0
+output_trim = 1.0
+
+[document.params]
+type = "preamp"
+
+[document.params.state]
+drive_db = -6.24
+voicing = "grip"
+mix = 0.37
+output_db = -6.24
+display_enabled = false
