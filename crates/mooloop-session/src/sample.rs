@@ -82,10 +82,16 @@ pub fn adjacent_sample(path: &Path, direction: isize) -> Result<Option<PathBuf>,
         .flatten())
 }
 
+/// Decode the file at `path` for a sampler.
+///
+/// The error names the file, because it is shown to the user
+/// (`status_bar::notify` in `mooloop-ui`), and a decode failure that arrives
+/// after a click on a different file has to say which one it was.
 pub fn load_sample_at_path(path: &Path) -> Result<LoadedSample, String> {
-    let files = sample_files_in_directory(path)?;
+    let named = |error: String| format!("{}: {error}", browser_display_name(path));
+    let files = sample_files_in_directory(path).map_err(named)?;
     let index = sample_index(path, &files);
-    let sample = audio_file::decode(path)?.sample;
+    let sample = audio_file::decode(path).map_err(named)?.sample;
     Ok(LoadedSample {
         path: path.to_path_buf(),
         sample,

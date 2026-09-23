@@ -926,6 +926,14 @@ Two panels flank the work area, and they are deliberately one mechanism: the
   Do not thread a `hover-hint` property up through a device face. That was
   tried, exactly one face grew it, and every other sentence in the program
   stayed in a tooltip.
+- **A failure is held, not written over.** Something the user has to know
+  went wrong -- a file that would not load, audio that could not keep up --
+  goes through `status_bar::notify` (`ui/src/status_bar.rs`) as a warning or
+  an error, and takes its own coloured segment at the bar's left until it is
+  clicked away. `status-message` stays for confirmations the next event may
+  replace. The notice is a segment beside the hint line rather than a rung in
+  its priority chain: below the hints it would be hidden whenever the pointer
+  moves, and above them it would hide every hint until dismissed (MOO-132).
 - **A mode or a preset that goes for a familiar sound is named for the sound,
   not for the hardware.** Adam's instruction, 2026-09-09, naming the channel
   strip's four voicings: *"dont reference these by name, can use a 'character

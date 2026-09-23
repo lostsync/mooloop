@@ -235,7 +235,7 @@ Files marked *shared* are split in the table above.
 ### 9. Interface
 
 - `ui/src/`: `lib.rs` (*shared*), `actions.rs`, `gestures.rs`, `settings.rs`
-  (*shared*), `channel_colors.rs`, `mockup.rs`, `theme/`
+  (*shared*), `status_bar.rs`, `channel_colors.rs`, `mockup.rs`, `theme/`
 - `ui/build.rs`, `ui/examples/`, `ui/tests/common/`
 - `ui/ui/`: `main.slint` (*shared*), `controls.slint`, `toolbar.slint`,
   `menubar.slint`, `channel-sidebar.slint`, `appearance-dialog.slint`,
@@ -248,7 +248,8 @@ Files marked *shared* are split in the table above.
 - `ui/tests/`: `menubar.rs`, `question_dialog.rs`, `panes.rs`, `pane_drag.rs`, `first_click.rs`,
   `name_field.rs`, `picker_chip.rs`, `color_picker.rs`, `sidebar.rs`,
   `browser.rs`, `gesture_bracket.rs`, `rack_keyboard.rs`,
-  `save_error_snapshot.rs`, `preferences_appearance_snapshot.rs`,
+  `save_error_snapshot.rs`, `status_notice.rs`,
+  `preferences_appearance_snapshot.rs`,
   `preferences_shortcuts_snapshot.rs`, `preferences_developer_snapshot.rs`
 
 `device-rack.slint` and `device-displays.slint` are the shell and the display

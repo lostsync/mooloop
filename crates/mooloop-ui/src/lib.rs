@@ -14,6 +14,7 @@ mod meter;
 mod mockup;
 mod settings;
 mod signals;
+pub mod status_bar;
 mod theme;
 
 slint::include_modules!();
@@ -128,6 +129,7 @@ pub use mockup::{load_mockup_layout, wire_mockup};
 #[cfg(feature = "mockup")]
 pub use mockup_ui::MockupCanvas;
 use settings::{AppearanceSettings, LayoutSettings, ThemePalette, UiSettings};
+use status_bar::Severity;
 use slint::{
     CloseRequestResponse, ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode,
     VecModel,
@@ -7169,9 +7171,12 @@ impl AppUi {
                     Question::Reconnect => {
                         if answer == 1 {
                             reconnect_requested.set(true);
-                            window.set_status_message("Reconnecting audio...".into());
+                            status_bar::notify(&window, Severity::Info, "Reconnecting audio...");
                         } else {
-                            window.set_status_message(NO_AUDIO_STATUS.into());
+                            // Declined: the held notice is the way back
+                            // once the dialog is gone, so it is put up again
+                            // in case it was clicked away meanwhile.
+                            status_bar::notify(&window, Severity::Error, NO_AUDIO_STATUS);
                         }
                     }
                 }
@@ -14884,14 +14889,18 @@ impl AppUi {
                                 // A refused preview is silence where the user
                                 // asked to hear something, and nothing else
                                 // will ever mention it.
-                                window.set_status_message(
-                                    "Busy — could not start the preview".into(),
+                                status_bar::notify(
+                                    &window,
+                                    Severity::Warning,
+                                    "Busy — could not start the preview",
                                 );
                             }
                         }
                         Err((path, error)) => {
-                            window.set_status_message(
-                                format!("Could not preview {path}: {error}").into(),
+                            status_bar::notify(
+                                &window,
+                                Severity::Error,
+                                &format!("Could not preview {path}: {error}"),
                             );
                         }
                     }
@@ -15306,43 +15315,84 @@ impl AppUi {
                 // silently kept the last -- one sample gone and one channel
                 // created where two were asked for.
                 let mut deferred_new_channel_loads = Vec::new();
+                // What became of a finished decode. A superseded one is
+                // dropped silently: it is not an error, and saying so would
+                // be noise. A refused one used to be dropped just as
+                // silently, and that is a click that did nothing -- "Load in
+                // Selected Channel" onto a synth decoded the file and threw
+                // it away without a word (MOO-132).
+                enum Arrival {
+                    Current,
+                    Superseded,
+                    Refused(String),
+                }
                 while let Ok(load) = load_rx.try_recv() {
-                    let still_current = {
+                    let arrival = {
                         let st = st.borrow();
-                        load.source_revision == st.session.source_revision
-                            && (load.new_channel && st.session.channels.len() < MAX_CHANNELS
-                                || !load.new_channel
-                                    && st
-                                        .session.channels
-                                        .get(load.channel)
-                                        .is_some_and(|channel| channel.kind == DeviceKind::Sampler)
-                                    // And it must be the load this channel is
-                                    // still waiting for. `source_revision` is
-                                    // a property of the project, so two
-                                    // in-flight decodes for one channel both
-                                    // pass it and the last to *finish* wins --
-                                    // which is decode time, so a long file
-                                    // chosen first can overwrite the short one
-                                    // chosen after it. A superseded completion
-                                    // is dropped silently: it is not an error,
-                                    // and saying so would be noise.
-                                    && st.session.sample_request_is_current(
+                        if load.source_revision != st.session.source_revision {
+                            Arrival::Superseded
+                        } else if load.new_channel {
+                            if st.session.channels.len() < MAX_CHANNELS {
+                                Arrival::Current
+                            } else {
+                                Arrival::Refused("no room for another channel".into())
+                            }
+                        } else {
+                            match st.session.channels.get(load.channel) {
+                                // It must be the load this channel is still
+                                // waiting for. `source_revision` is a
+                                // property of the project, so two in-flight
+                                // decodes for one channel both pass it and
+                                // the last to *finish* wins -- which is
+                                // decode time, so a long file chosen first
+                                // can overwrite the short one chosen after
+                                // it.
+                                Some(channel)
+                                    if st.session.sample_request_is_current(
                                         load.channel,
                                         load.request,
-                                    ))
-                    };
-                    if !still_current {
-                        continue;
-                    }
-                    let Some(loaded) = (match load.result {
-                        Some(Ok(loaded)) => Some(loaded),
-                        Some(Err(e)) => {
-                            log_error!("ui", "failed to load sample: {e}");
-                            None
+                                    ) =>
+                                {
+                                    if channel.kind == DeviceKind::Sampler {
+                                        Arrival::Current
+                                    } else {
+                                        Arrival::Refused(format!(
+                                            "{} is not a sampler",
+                                            channel.name
+                                        ))
+                                    }
+                                }
+                                _ => Arrival::Superseded,
+                            }
                         }
-                        None => None, // dialog cancelled
-                    }) else {
-                        continue;
+                    };
+                    let loaded = match (arrival, load.result) {
+                        // The dialog was cancelled.
+                        (_, None) | (Arrival::Superseded, _) => continue,
+                        (_, Some(Err(error))) => {
+                            log_error!("ui", "failed to load sample: {error}");
+                            if let Some(window) = weak.upgrade() {
+                                status_bar::notify(
+                                    &window,
+                                    Severity::Error,
+                                    &format!("Sample not loaded: {error}"),
+                                );
+                            }
+                            continue;
+                        }
+                        (Arrival::Refused(reason), Some(Ok(loaded))) => {
+                            let file = browser_display_name(&loaded.path);
+                            log_warn!("ui", "{file} was not loaded: {reason}");
+                            if let Some(window) = weak.upgrade() {
+                                status_bar::notify(
+                                    &window,
+                                    Severity::Error,
+                                    &format!("{file} not loaded: {reason}"),
+                                );
+                            }
+                            continue;
+                        }
+                        (Arrival::Current, Some(Ok(loaded))) => loaded,
                     };
                     if load.new_channel {
                         // The channel does not exist yet. Creating it is
@@ -15399,6 +15449,13 @@ impl AppUi {
                     let (finished, failures) = st.borrow_mut().takes.collect();
                     for failure in failures {
                         log_error!("ui", "a take could not be written: {failure}");
+                        if let Some(window) = weak.upgrade() {
+                            status_bar::notify(
+                                &window,
+                                Severity::Error,
+                                &format!("The take could not be written: {failure}"),
+                            );
+                        }
                     }
                     for take in finished {
                         let tx = take_tx.clone();
@@ -15875,6 +15932,16 @@ impl AppUi {
                     // and sleeps between blocks, and nobody hears either.
                     let audio = handle.audio_state();
                     let heard = audio == mooloop_engine::AudioState::Running;
+                    // The same window, on screen: the log below is where the
+                    // detail goes, and nobody reads it while playing. With no
+                    // audio heard the readout goes blank rather than showing
+                    // the null driver's timing as though it were the song's.
+                    if heard {
+                        status_bar::show_audio_load(&w, &load, xruns_this_window);
+                    } else {
+                        w.set_audio_load(-1.0);
+                        w.set_audio_time_shared(false);
+                    }
                     // Once, not once a second: this cannot change without a
                     // new callback thread, and a warning that repeats forever
                     // is one that gets scrolled past.
@@ -15920,8 +15987,10 @@ impl AppUi {
                             load.faults
                         );
                         if let Some(window) = weak.upgrade() {
-                            window.set_status_message(
-                                "A device failed and was silenced; the log says which".into(),
+                            status_bar::notify(
+                                &window,
+                                Severity::Error,
+                                "A device failed and was silenced; the log says which",
                             );
                         }
                     }
@@ -16085,9 +16154,12 @@ impl AppUi {
                             "a device produced NaN or infinite samples ({output_faults} so far); \
                              the master's output guard is sending silence in their place"
                         );
-                        w.set_status_message(
-                            "A device produced invalid audio (NaN); it is being silenced at the output"
-                                .into(),
+                        // Held, not a hint: the next click would erase
+                        // the only on-screen sign that a device is broken.
+                        status_bar::notify(
+                            &w,
+                            Severity::Error,
+                            "A device produced invalid audio (NaN); it is being silenced at the output",
                         );
                     }
                     output_faults_seen = output_faults;
@@ -17031,7 +17103,11 @@ fn apply_take(
         Ok(loaded) => loaded,
         Err(error) => {
             log_error!("ui", "a take could not be loaded: {error}");
-            window.set_status_message(format!("The take could not be loaded: {error}").into());
+            status_bar::notify(
+                &window,
+                Severity::Error,
+                &format!("The take could not be loaded: {error}"),
+            );
             return;
         }
     };
@@ -17047,7 +17123,10 @@ fn apply_take(
     let channel = match st.borrow().session.take_target(load.take.channel) {
         Ok(seat) => seat,
         Err(miss) => {
-            window.set_status_message(miss.message().into());
+            // Held, because the take is in the recordings folder and nowhere
+            // else, and the next click would otherwise erase the only
+            // sentence that says so.
+            status_bar::notify(&window, Severity::Warning, miss.message());
             return;
         }
     };
@@ -17058,12 +17137,13 @@ fn apply_take(
     }
     record_project_history(commands, before, st, &window, "Record Take");
     if load.take.is_damaged() {
-        window.set_status_message(
-            format!(
+        status_bar::notify(
+            &window,
+            Severity::Warning,
+            &format!(
                 "The take has a gap: {} frames did not reach the file",
                 load.take.dropped
-            )
-            .into(),
+            ),
         );
     }
 }
@@ -17614,14 +17694,17 @@ fn announce_audio_state(
     let (title, why) = match audio {
         AudioState::Running => {
             log_info!("audio", "audio is running");
-            window.set_status_message("Audio is running".into());
+            status_bar::withdraw(window, NO_AUDIO_STATUS);
+            status_bar::notify(window, Severity::Info, "Audio is running");
             return true;
         }
         AudioState::NoDevice(why) => ("mooloop is running with no audio", why),
         AudioState::Stopped(why) => ("The audio stopped", why),
     };
     log_warn!("audio", "{title}: {why}");
-    window.set_status_message(NO_AUDIO_STATUS.into());
+    // Held, not a hint: the question below can be dismissed, and this is
+    // what still says nothing is heard after it is (MOO-132).
+    status_bar::notify(window, Severity::Error, NO_AUDIO_STATUS);
     if window.get_question_open() {
         return false;
     }
@@ -17677,6 +17760,14 @@ fn reconnect_audio(
     window.global::<AudioFormat>().set_sample_rate(rate as i32);
     if !install_project_in_ui(handle, default_sample, state, window, &project, &samples, false) {
         log_error!("audio", "the new engine refused the song");
+    }
+    // The caller marks a Running result as already announced, so the
+    // once-a-second report stays quiet about it: the notice that said the
+    // audio was gone comes down here. Anything else is announced by that
+    // report, and replaces the notice itself.
+    if audio == mooloop_engine::AudioState::Running {
+        status_bar::withdraw(window, NO_AUDIO_STATUS);
+        status_bar::notify(window, Severity::Info, "Audio reconnected");
     }
     sync_audio_status(handle, window);
 }

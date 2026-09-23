@@ -90,6 +90,10 @@ export { AppearanceSchemeRow }
 export { MidiBindingRow, MidiTransportRow }
 export { AudioFormat, ControlAssign, CutoffLaw, Gesture } from "controls.slint";
 
+// How much a held status-bar notice weighs. Info is not here: it is
+// `status-message`, which the next event is allowed to overwrite.
+export enum NoticeLevel { warning, error }
+
 // One step cell used in the step-grid models.
 struct StepCell {
     active: bool,
@@ -940,6 +944,23 @@ export component MainWindow inherits Window {
     // large always-under-the-pointer area (the piano roll, in particular).
     // Takes priority over status-message while non-empty.
     in-out property <string> hover-hint;
+    // The held notice: a warning or an error that stays in the status bar
+    // until it is clicked away or a notice of at least its weight replaces
+    // it. `status-message` is the other half, and anything the next "Device
+    // selected" may overwrite goes there instead. Written from Rust only
+    // through `status_bar::notify`, which owns the replacement rule; empty
+    // means there is none.
+    in-out property <string> status-notice;
+    in-out property <NoticeLevel> status-notice-level;
+    // The audio callback, as the pump read it over the last second. `load`
+    // and `peak` are shares of the block budget, 1.0 being all of it, and
+    // negative until a window has rendered anything. `dropouts` counts up
+    // until the readout is clicked; `time-shared` is the callback running on
+    // an ordinary thread rather than a realtime one.
+    in-out property <float> audio-load: -1;
+    in-out property <float> audio-load-peak;
+    in-out property <int> audio-dropouts;
+    in-out property <bool> audio-time-shared;
     in-out property <bool> save-error-open;
     in-out property <string> save-error-title;
     in-out property <string> save-error-detail;
@@ -7282,10 +7303,29 @@ export component MainWindow inherits Window {
             // up through the device face it sits in. The window's own wins,
             // because a gesture over the playlist is more specific than the
             // button the pointer passed on the way there.
+            //
+            // Left to right: the held notice, the hint line, the audio
+            // readout, the layout chips. The notice is a segment of its own
+            // rather than one more rung in the hint line's priority chain,
+            // because that line changes every time the pointer crosses a
+            // control -- an error ranked below the hints would be hidden
+            // exactly while the user is working, and one ranked above them
+            // would hide every hint until it was dismissed.
             Rectangle {
                 height: 24px;
                 vertical-stretch: 0;
                 background: Theme.surface-raised;
+
+                // Where the layout chips begin, counted off the list for the
+                // reason the chips' own `x` is.
+                property <length> chips-left: self.width - root.layout-chips.length * 26px;
+                property <string> readout-hint: root.audio-load < 0
+                    ? "Audio has not rendered a block in the last second"
+                    : "Audio load over the last second: \{Math.round(root.audio-load * 100)}% on average, \{Math.round(root.audio-load-peak * 100)}% in the worst block"
+                        + (root.audio-dropouts > 0 ? ". Click to reset the dropout count" : "")
+                        + (root.audio-time-shared
+                            ? ". The audio thread is not realtime, so it drops out whenever the machine is busy"
+                            : "");
 
                 Rectangle {
                     y: 0;
@@ -7294,10 +7334,56 @@ export component MainWindow inherits Window {
                     background: Theme.border;
                 }
 
+                // Coloured by weight, and clicked away. `status_bar::notify`
+                // decides what may replace it; clicking is the one way it
+                // ends that Rust does not decide.
+                notice := Rectangle {
+                    property <color> tone: root.status-notice-level == NoticeLevel.error
+                        ? Theme.destructive : Theme.warning;
+                    visible: root.status-notice != "";
+                    x: 8px;
+                    y: 3px;
+                    height: parent.height - 5px;
+                    width: self.visible
+                        ? min(notice-text.preferred-width + 22px, (parent.chips-left - 8px) * 0.6)
+                        : 0px;
+                    border-radius: Theme.radius-sm;
+                    border-width: Theme.hairline;
+                    border-color: notice-touch.has-hover ? self.tone : transparent;
+                    Rectangle {
+                        x: 5px;
+                        y: (parent.height - self.height) / 2;
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 4px;
+                        background: parent.tone;
+                    }
+                    notice-text := Text {
+                        x: 18px;
+                        width: parent.width - 22px;
+                        height: parent.height;
+                        text: root.status-notice;
+                        color: parent.tone;
+                        font-size: Theme.text-lg;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    notice-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.status-notice = "";
+                        }
+                    }
+                }
+
                 Text {
                     y: 0;
                     height: parent.height;
-                    text: root.hover-hint != "" ? root.hover-hint
+                    // The status bar's own two segments first: the pointer is
+                    // on the bar, so no control elsewhere is being hovered.
+                    text: notice-touch.has-hover ? "Click to dismiss"
+                        : readout-touch.has-hover ? parent.readout-hint
+                        : root.hover-hint != "" ? root.hover-hint
                         : StatusHint.text != "" ? StatusHint.text
                         // Below the two hint channels, because a live gesture
                         // is more urgent than a mode; above the last status
@@ -7308,10 +7394,46 @@ export component MainWindow inherits Window {
                         : root.status-message;
                     color: Theme.text-muted;
                     font-size: Theme.text-lg;
-                    x: 8px;
-                    width: parent.width - 16px - 72px;
+                    x: notice.visible ? notice.x + notice.width + 12px : 8px;
+                    width: max(0px, readout.x - 12px - self.x);
                     vertical-alignment: center;
                     overflow: elide;
+                }
+
+                // Numbers only; what they mean is the hint line's, on hover.
+                readout := HorizontalLayout {
+                    x: parent.chips-left - self.width - 12px;
+                    width: self.preferred-width;
+                    height: parent.height;
+                    spacing: 10px;
+                    if root.audio-time-shared: Text {
+                        text: "not realtime";
+                        color: Theme.warning;
+                        font-size: Theme.text-lg;
+                        vertical-alignment: center;
+                    }
+                    if root.audio-dropouts > 0: Text {
+                        text: root.audio-dropouts == 1 ? "1 dropout" : "\{root.audio-dropouts} dropouts";
+                        color: Theme.warning;
+                        font-size: Theme.text-lg;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.audio-load < 0 ? "DSP –" : "DSP \{Math.round(root.audio-load * 100)}%";
+                        color: root.audio-load < 0 ? Theme.text-faint
+                            : root.audio-load-peak >= 0.8 ? Theme.warning
+                            : Theme.text-muted;
+                        font-size: Theme.text-lg;
+                        vertical-alignment: center;
+                    }
+                }
+                readout-touch := TouchArea {
+                    x: readout.x;
+                    width: readout.width;
+                    height: parent.height;
+                    clicked => {
+                        root.audio-dropouts = 0;
+                    }
                 }
 
                 // Layout toggles. The pinned ToolButton style exposes no
