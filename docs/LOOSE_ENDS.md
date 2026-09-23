@@ -572,43 +572,30 @@ says the same thing the other way round -- the storage has to be settled
 before that writer exists, not after.
 
 **Three callback costs that grow with the song rather than the block**, from
-`reports/fable-2026-09-21.md` finding 5, none of them a hazard and none of
-them measured. The third is closed; the first two are open as MOO-73, and the
-second is not really a cost at all -- it is a silent wrong answer, reachable
-at a 512-frame block:
+`reports/fable-2026-09-21.md` finding 5. **All three closed** (MOO-73); what
+is left is a measurement, filed separately.
 
-- Song-mode automation lookup is playlist by channels by destinations per
-  block once any lane exists under the playhead (`automation_lane_at`,
-  `sequencer.rs:526`). A per-block cache of covering placements would make
-  it O(destinations).
-- `EventList::push_ordered` (`dsp/src/event.rs:122`) is an insertion sort
-  into `MAX_EVENTS = 256`, and the control pass emits one event per control
-  tick per driven destination. **The 8192-frame block this used to be written
-  against is the far end of it, and the near end is 512 frames.** Export ran
-  at the far end every time until 2026-09-22 and now renders in 512-frame
-  blocks (`offline.rs`, `OFFLINE_BLOCK_FRAMES`), and the control pass's
-  refusals -- source and effect parameters, route amounts, auditions -- are
-  counted in `RenderState::refused_events`, which an export returns and
-  logs. Plan D (`docs/plans/automation-curves/`) then moved a driven
-  parameter out of the list into a per-destination curve row, which takes a
-  device with a native curve path off the cap -- only the EQ so far. Every
-  other device still gets its curves back as events through
-  `AudioNode::apply_curves`'s default fallback, whose refusals are counted in
-  the same total, and route amounts are still one event per tick. So for
-  those, the near end is still open: the same loop serves modulation as well as
-  automation, so a channel has up to `MAX_MOD_ROUTES_PER_CHANNEL = 16` plus
-  `MAX_AUTOMATION_LANES_PER_CHANNEL = 8` driven destinations, and
-  24 x 512/`CONTROL_RATE_FRAMES` = 384 is already past 256. Sixteen of those
-  twenty-four need no lane drawn at all, so a modulation rack alone reaches
-  it at an ordinary buffer size. Notes are scheduled before the control pass,
-  so what is lost is automation and modulation rather than notes, and because
-  the refusal is on capacity rather than on order the failure is not a wrong
-  value everywhere but one destination freezing mid-block and every later one
-  in descriptor order getting nothing. No allocation and no noise either way.
-  MOO-73, which also names three more sites that drop a `push_ordered`
-  refusal, two of them without even a `let _`. The note and choke pushes --
-  the sequencer's note scheduling, choke injection and `release_all_voices`
-  -- are still uncounted.
+- Song-mode automation lookup walked the whole playlist per destination per
+  block. **Closed** by Plan A (`abfd7995`): `automation_lane_at` searches
+  `playlist_by_start` with two `partition_point`s, bounded to the placements
+  that can cover the position, so it is logarithmic in the playlist.
+- The control pass used to emit one event per control tick per driven
+  destination into a 256-event list, so at 512 frames sixteen routes and
+  eight lanes on one channel (384 events) filled it: one destination froze
+  mid-block and every later one got nothing. Plan D
+  (`docs/plans/automation-curves/`) moved a driven parameter into a
+  per-destination curve row, and the EQ reads those natively. **Closed
+  2026-09-23 for everything else**: `AudioNode::apply_curves`'s default
+  fallback, which every other device still uses, thins every curve evenly
+  when they would not fit (`fallback_stride` in `dsp/src/node.rs`). Every
+  destination keeps moving and ends the block on its curve's last value. It
+  moves in coarser steps only in a block that asks for more than the list
+  holds. Pinned by
+  `the_default_fallback_thins_rather_than_starving_later_destinations` and
+  `a_full_modulation_rack_on_a_generator_refuses_nothing_at_1024_frames`.
+  Every `EventList` now counts its own refusals (`EventList::refused`), so the
+  sequencer's note and choke pushes are in `RenderState::refused_events` too.
+  Only export reads that total. Showing it live belongs with MOO-130.
 - `Sequencer::set_playlist_placement` did `push` then `sort_unstable` on the
   callback per placement toggle. **Closed 2026-09-22**: it inserts at
   `partition_point`, which answers the duplicate check in the same binary
@@ -621,10 +608,10 @@ at a 512-frame block:
   `playlist_stays_sorted_and_deduplicated_however_it_is_painted`, which was
   validated by moving the insert index and watching it fail.
 
-Also on the thread: `defer_command`'s `debug_assert!(false, "... {command:?}")`
-(`render.rs:4591`) formats an `EngineCommand` and panics from the callback in
-a dev build when all eight slots are held, and drops the command with no
-counter in release. No caller yet.
+`defer_command`'s `debug_assert!(false, "... {command:?}")` formatted an
+`EngineCommand` and panicked from the callback. **Closed 2026-09-23**: a
+refused deferred command is counted in `RenderState::refused_events`
+instead.
 
 **Two preset producers mutate the live session before queueing, so a refused
 install leaves the document and the engine disagreeing.**

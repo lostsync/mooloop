@@ -3586,8 +3586,10 @@ pub(crate) struct RenderState {
     /// compared were not simply the same render twice: a skip mechanism that
     /// never fires would pass every one of them.
     slept_strip_blocks: u64,
-    /// Events the per-channel lists had no room for, since this state was
-    /// built. See [`Self::refused_events`].
+    /// Deferred commands refused for want of a slot, since this state was
+    /// built. The per-channel lists count their own refusals
+    /// (`EventList::refused`), which is what reaches the sequencer's note
+    /// and choke pushes too (MOO-73). See [`Self::refused_events`].
     refused_events: u64,
     /// Where each track's channel strip runs in its block.
     ///
@@ -5191,7 +5193,11 @@ impl RenderState {
         // is still the release behaviour: a refused deferred command is a
         // gesture that does not happen, which is survivable, and applying it
         // early here would be a discontinuity at the worst possible moment.
-        debug_assert!(false, "no free deferred slot for {command:?}");
+        //
+        // Counted rather than asserted (MOO-73): a `debug_assert!` here
+        // formatted an `EngineCommand` and panicked on the audio thread,
+        // which is a worse outcome than the drop it was reporting.
+        self.refused_events = self.refused_events.saturating_add(1);
     }
 
     /// The absolute tick a [`MusicalEdge`] names, or `None` when the edge
@@ -6212,12 +6218,11 @@ impl RenderState {
                 continue;
             };
             if let Some(events) = self.events.get_mut(audition.channel as usize) {
-                if !events.push_ordered(TimedEvent {
+                // A refusal is counted by the list itself.
+                let _ = events.push_ordered(TimedEvent {
                     offset: audition.offset.min(last_frame),
                     event: audition.event,
-                }) {
-                    self.refused_events += 1;
-                }
+                });
             }
         }
     }
@@ -6685,15 +6690,14 @@ impl RenderState {
                             let amount = descriptor.from_normalized(
                                 (base_normalized + offset_normalized).clamp(0.0, 1.0),
                             );
-                            if !self.events[index].push_ordered(TimedEvent {
+                            // A refusal is counted by the list itself.
+                            let _ = self.events[index].push_ordered(TimedEvent {
                                 offset: (tick * CONTROL_RATE_FRAMES) as u32,
                                 event: Event::SourceRouteAmount {
                                     route: route.id,
                                     amount,
                                 },
-                            }) {
-                                self.refused_events += 1;
-                            }
+                            });
                         }
                     }
                 }
@@ -6770,7 +6774,8 @@ impl RenderState {
                 let curve_count = self.source_curves[index].fill(&mut curve_buf);
                 let strip = &mut self.strips[index];
                 strip.bus.clear(frames);
-                self.refused_events += strip.process(
+                // The list counts what the fallback could not fit.
+                let _ = strip.process(
                     &context,
                     &mut self.events[index],
                     &curve_buf[..curve_count],
@@ -7197,7 +7202,13 @@ impl RenderState {
     /// A driven parameter reaches its device as a curve row now rather than
     /// as events, so this also counts the destinations a curve pool had no
     /// row for (`source_curve_refusals`, each chain's `curve_refusals`), and
-    /// the events `AudioNode::apply_curves`'s default fallback could not fit.
+    /// the events `AudioNode::apply_curves`'s default fallback could not fit
+    /// -- which it now avoids by thinning, so a count there is a block that
+    /// asked for more destinations than a list has events.
+    ///
+    /// Since MOO-73 every channel list counts its own refusals, so a note or
+    /// choke the sequencer could not place is in here too, and so is a
+    /// deferred command with no free slot.
     pub fn refused_events(&self) -> u64 {
         let chains = self
             .strips
@@ -7205,7 +7216,8 @@ impl RenderState {
             .map(|strip| &strip.effects)
             .chain(self.buses.iter().map(|bus| &bus.effects))
             .map(|chain| chain.refused_events + chain.curve_refusals);
-        self.refused_events + self.source_curve_refusals + chains.sum::<u64>()
+        let lists = self.events.iter().map(|list| list.refused());
+        self.refused_events + self.source_curve_refusals + chains.sum::<u64>() + lists.sum::<u64>()
     }
 
     pub fn play(&mut self) {
@@ -9510,6 +9522,69 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             report.peak_l.max(report.peak_r) > 0.0,
             "the channel's own note should still have reached the render \
              alongside its two modulated parameters"
+        );
+        // And nothing was dropped on the way in. No generator reads curves
+        // natively yet, so both rows went through `apply_curves`'s default
+        // fallback into the channel's 256-event list: 2 x 256 ticks, which
+        // refused the whole second destination until MOO-73 thinned it.
+        assert_eq!(render.refused_events(), 0);
+    }
+
+    /// MOO-73, the threshold the issue was filed on: sixteen routes, a full
+    /// modulation rack, on one generator at 1024 frames is 16 x 32 = 512
+    /// control events into a list of 256 that also holds the channel's
+    /// notes. Every one of them has to arrive, thinned, rather than the
+    /// first eight filling the list and the rest freezing.
+    #[test]
+    fn a_full_modulation_rack_on_a_generator_refuses_nothing_at_1024_frames() {
+        let mut channel = ProjectChannel::sampler(0, 1);
+        let mut rack = ModRack::default();
+        rack.install(
+            0,
+            mooloop_core::ModulatorParams::Lfo(mooloop_core::ModLfoParams {
+                rate_hz: 4.0,
+                ..mooloop_core::ModLfoParams::default()
+            }),
+        );
+        let targets: Vec<u32> = channel
+            .setup
+            .source
+            .kind()
+            .descriptors()
+            .iter()
+            .filter(|descriptor| {
+                mooloop_core::ModDestinationDescriptor::for_param(descriptor).allowed
+            })
+            .map(|descriptor| descriptor.id)
+            .take(mooloop_core::MAX_MOD_ROUTES_PER_CHANNEL)
+            .collect();
+        assert_eq!(targets.len(), mooloop_core::MAX_MOD_ROUTES_PER_CHANNEL);
+        for param in targets {
+            rack.add_route(mooloop_core::ModRoute::to_slot(
+                0,
+                ParamAddr {
+                    scope: EffectTarget::Channel(0),
+                    owner: ParamOwner::Source,
+                    param,
+                },
+                0.3,
+                mooloop_core::ModPolarity::Bipolar,
+            ))
+            .expect("sixteen routes fit the matrix");
+        }
+        channel.setup.modulation = rack;
+
+        let project = synth_project(channel);
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.play();
+        for _ in 0..4 {
+            render.process_block(1024);
+        }
+        assert_eq!(render.source_curve_refusals, 0);
+        assert_eq!(
+            render.refused_events(),
+            0,
+            "a full rack's control events did not fit the channel's list"
         );
     }
 

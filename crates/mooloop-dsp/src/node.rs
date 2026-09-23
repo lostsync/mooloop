@@ -461,9 +461,16 @@ pub trait AudioNode {
         tick_frames: usize,
         fallback: &mut EventList,
     ) -> u64 {
+        let stride = fallback_stride(curves, fallback.remaining());
         let mut refused = 0;
         for curve in curves {
+            let last = curve.values.len().saturating_sub(1);
             for (tick, &value) in curve.values.iter().enumerate() {
+                // Counted back from the last tick, so a thinned curve still
+                // ends the block exactly where the lane or route put it.
+                if (last - tick) % stride != 0 {
+                    continue;
+                }
                 let offset = (tick * tick_frames) as u32;
                 if !fallback.push_ordered(TimedEvent {
                     offset,
@@ -476,6 +483,42 @@ pub trait AudioNode {
         refused
     }
 }
+
+/// Every how many ticks [`AudioNode::apply_curves`]'s default emits an event,
+/// so that every curve fits in the `room` its fallback list has left.
+///
+/// One, which is every tick, whenever that fits -- the ordinary case, and the
+/// only one before MOO-73. When it does not, a list that gave each destination
+/// in turn every tick it asked for filled up part-way through one of them:
+/// that destination froze mid-block and every one after it got nothing, which
+/// at 512 frames took sixteen routes and eight lanes on one generator (the
+/// fallback shares the channel's list with its notes). Thinning every curve
+/// evenly instead keeps them all moving, at a coarser step, for the rare
+/// block that asks for more than a list holds. A stride of one tick is 32
+/// frames; the coarsest possible is one value per destination per block.
+///
+/// Leaves [`FALLBACK_HEADROOM`] free for whatever the engine pushes after the
+/// control pass.
+fn fallback_stride(curves: &[ControlCurve<'_>], room: usize) -> usize {
+    let room = room.saturating_sub(FALLBACK_HEADROOM);
+    let events_at = |stride: usize| -> usize {
+        curves
+            .iter()
+            .map(|curve| curve.values.len().div_ceil(stride))
+            .sum()
+    };
+    let longest = curves.iter().map(|curve| curve.values.len()).max().unwrap_or(0);
+    let mut stride = 1;
+    while stride < longest && events_at(stride) > room {
+        stride += 1;
+    }
+    stride.max(1)
+}
+
+/// Events the default [`AudioNode::apply_curves`] leaves free in a list it
+/// has to thin: a note-off or choke the engine adds after the control pass
+/// still finds room.
+const FALLBACK_HEADROOM: usize = 8;
 
 /// A device that can be the source of a channel — the one call a channel
 /// strip makes into whatever generator it is running.
@@ -828,6 +871,69 @@ mod tests {
                     ev.event,
                     Event::ParamValue { id: 7, value: values[index] },
                     "{name}: tick {index}'s value"
+                );
+            }
+        }
+    }
+
+    /// MOO-73: sixteen routes and eight lanes on one generator at 512
+    /// frames ask the default fallback for 24 x 16 = 384 events, into a list
+    /// that holds 256 and already carries the channel's notes. Every
+    /// destination has to keep moving and end the block where its curve
+    /// does. Before the fix the list filled part-way through the sixteenth
+    /// destination, which froze there, and the eight after it got nothing.
+    #[test]
+    fn the_default_fallback_thins_rather_than_starving_later_destinations() {
+        const DESTINATIONS: usize = 24;
+        const TICKS: usize = 512 / 32;
+        let rows: Vec<Vec<f32>> = (0..DESTINATIONS)
+            .map(|d| (0..TICKS).map(|t| (d * 100 + t) as f32).collect())
+            .collect();
+        let curves: Vec<ControlCurve<'_>> = rows
+            .iter()
+            .enumerate()
+            .map(|(d, values)| ControlCurve {
+                id: d as u32,
+                values,
+            })
+            .collect();
+
+        for (name, mut node) in generators() {
+            let mut fallback = EventList::empty();
+            // A handful of notes already scheduled, as the engine has them.
+            for note in 0..10u8 {
+                assert!(fallback.push_ordered(TimedEvent {
+                    offset: u32::from(note) * 40,
+                    event: Event::NoteOn { id: u64::from(note), note: 60 + note, velocity: 100 },
+                }));
+            }
+            let refused = node.apply_curves(&curves, 32, &mut fallback);
+            assert_eq!(refused, 0, "{name}: the fallback refused events");
+            assert_eq!(fallback.refused(), 0, "{name}");
+            assert!(fallback.remaining() >= FALLBACK_HEADROOM, "{name}: no headroom left");
+            assert_eq!(
+                fallback
+                    .iter()
+                    .filter(|event| matches!(event.event, Event::NoteOn { .. }))
+                    .count(),
+                10,
+                "{name}: a note lost its place"
+            );
+
+            for (d, values) in rows.iter().enumerate() {
+                let mine: Vec<&TimedEvent> = fallback
+                    .iter()
+                    .filter(|event| {
+                        matches!(event.event, Event::ParamValue { id, .. } if id == d as u32)
+                    })
+                    .collect();
+                assert!(mine.len() >= 2, "{name}: destination {d} got {} events", mine.len());
+                let last = mine.last().expect("checked above");
+                assert_eq!(last.offset, ((TICKS - 1) * 32) as u32, "{name}: destination {d}");
+                assert_eq!(
+                    last.event,
+                    Event::ParamValue { id: d as u32, value: values[TICKS - 1] },
+                    "{name}: destination {d} did not end where its curve does"
                 );
             }
         }

@@ -76,7 +76,14 @@ const MAX_EVENTS: usize = 256;
 /// A fixed-capacity, allocation-free list of sample-timed events.
 pub struct EventList {
     buf: [TimedEvent; MAX_EVENTS],
-    len: usize,
+    /// A `u32` rather than a `usize` so `refused` fits beside it without
+    /// growing the list: every live channel pays for one (MOO-73).
+    len: u32,
+    /// Events this list has turned away for want of room since it was made.
+    /// Not reset by [`Self::clear`], so an engine can read one total for
+    /// every push site that writes here -- the sequencer's notes and chokes
+    /// included, which do not look at `push`'s answer (MOO-73).
+    refused: u32,
 }
 
 impl EventList {
@@ -88,6 +95,7 @@ impl EventList {
         Self {
             buf: [DUMMY; MAX_EVENTS],
             len: 0,
+            refused: 0,
         }
     }
 
@@ -98,10 +106,11 @@ impl EventList {
     /// Append an event. Callers must append in time order. Returns `false`
     /// (dropping the event) if the list is full.
     pub fn push(&mut self, event: TimedEvent) -> bool {
-        if self.len == MAX_EVENTS {
+        if self.len() == MAX_EVENTS {
+            self.refused = self.refused.saturating_add(1);
             return false;
         }
-        self.buf[self.len] = event;
+        self.buf[self.len()] = event;
         self.len += 1;
         true
     }
@@ -120,20 +129,32 @@ impl EventList {
     /// which is why `parameter_changes_precede_note_ons_at_one_offset`
     /// pins it here rather than leaving it to whichever device noticed.
     pub fn push_ordered(&mut self, event: TimedEvent) -> bool {
-        if self.len == MAX_EVENTS {
+        if self.len() == MAX_EVENTS {
+            self.refused = self.refused.saturating_add(1);
             return false;
         }
+        let len = self.len();
         let key = event_sort_key(&event);
-        let index =
-            self.buf[..self.len].partition_point(|existing| event_sort_key(existing) <= key);
-        self.buf.copy_within(index..self.len, index + 1);
+        let index = self.buf[..len].partition_point(|existing| event_sort_key(existing) <= key);
+        self.buf.copy_within(index..len, index + 1);
         self.buf[index] = event;
         self.len += 1;
         true
     }
 
     pub fn len(&self) -> usize {
-        self.len
+        self.len as usize
+    }
+
+    /// How many more events fit before a push is refused.
+    pub fn remaining(&self) -> usize {
+        MAX_EVENTS - self.len()
+    }
+
+    /// Events refused for want of room since this list was made. See the
+    /// field.
+    pub fn refused(&self) -> u64 {
+        u64::from(self.refused)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -141,7 +162,7 @@ impl EventList {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &TimedEvent> {
-        self.buf[..self.len].iter()
+        self.buf[..self.len()].iter()
     }
 }
 
@@ -195,7 +216,17 @@ mod tests {
             offset: 0,
             event: Event::NoteOff { id: 0, note: 0 },
         }));
+        assert!(!list.push_ordered(TimedEvent {
+            offset: 0,
+            event: Event::Choke,
+        }));
         assert_eq!(list.len(), MAX_EVENTS);
+        assert_eq!(list.remaining(), 0);
+        // Counted, and the count outlives the block that refused them.
+        assert_eq!(list.refused(), 2);
+        list.clear();
+        assert_eq!(list.refused(), 2);
+        assert_eq!(list.remaining(), MAX_EVENTS);
     }
 
     #[test]
