@@ -9,7 +9,7 @@ Linear: project [Containers and the layer device](https://linear.app/mooloop/pro
 | Step | What | Issue | State |
 | --- | --- | --- | --- |
 | [07](07-a-branch-is-a-run.md) | One container predicate, latency as a tree, `EffectKind::Layer` landing silent | [MOO-69](https://linear.app/mooloop/issue/MOO-69) | **landed 2026-09-22** — see below |
-| [08](08-the-chain-splits-and-sums.md) | Branch buffers, alignment, the sum — the engine | [MOO-70](https://linear.app/mooloop/issue/MOO-70) | not started |
+| [08](08-the-chain-splits-and-sums.md) | Branch buffers, alignment, the sum — the engine | [MOO-70](https://linear.app/mooloop/issue/MOO-70) | **landed 2026-09-23** — see below |
 | [09](09-the-rack-draws-branches.md) | The drawing. **Blocked on a mock-up from Adam**, deliberately | [MOO-71](https://linear.app/mooloop/issue/MOO-71) | not started |
 | [10](10-the-gestures-and-the-preset.md) | Wrap-as-layer, add/remove a branch, a preset with branches | [MOO-72](https://linear.app/mooloop/issue/MOO-72) | not started |
 
@@ -20,6 +20,96 @@ selection. No second representation, no new field on `EffectSlotState`. What
 does change, and 02 recorded the opposite in good faith, is that
 **`chain_latency` stops being a sum** — the time a signal spends inside a
 layer is its longest branch, not the total of all of them.
+
+## Step 08 — the chain splits and sums
+
+Landed 2026-09-23 in one commit. **A layer now runs its direct children as
+parallel branches**: each starts from the layer's input, the shorter ones are
+held back to meet the longest, they sum at unity, and the layer's Mix blends
+the sum against its dry copy exactly as a chain's does.
+
+**The listening pass** (a drum loop into a clean branch and a Drive →
+Bitcrush branch, mix swept) was closed 2026-09-23 on Adam's instruction to
+treat outstanding listening passes as done with nothing heard. Nobody has
+listened to it. It is still the case to play first.
+
+### Where it went
+
+- **The loop.** `OpenRun` learned `parallel`, the branch now running and
+  where it ends. At a layer's row the input is copied to `branch_in[depth]`
+  and `branch_sum[depth]` is cleared; the first branch runs on the bus as it
+  stands. At the top of every row, after closing the runs that end there, the
+  run on top is asked whether its *branch* ends there too -- a branch is a
+  whole run, so that is only ever true once everything inside it has closed.
+  `finish_branch` delays the bus by the branch's alignment and adds it to the
+  sum; `start_branch` restores the input. `close_run` finishes the last
+  branch, puts the sum on the bus, and then blends exactly as before.
+- **The buffers** hang off `ContainerScratch` as `branches:
+  Option<Box<BranchScratch>>`, so a chain of plain boxes still pays 256 KiB
+  and a chain that has ever held a layer pays **512 KiB more**, not 2 MiB (the
+  work order's figures were four times too high; see the note in 08).
+  `ContainerScratch::for_chain` is the one rule for which a chain gets, read
+  by the loader and by `publish_container_spans`, and a chain holding the
+  smaller one trades up when a layer arrives and hands the old one back to be
+  dropped. **The depth cap stays at 4**: 512 KiB per layered chain did not
+  need the lever.
+- **Alignment** is `EffectSlot::branch_align`, on the branch head beside
+  `container_align`, sized by `mooloop_core::branch_alignment` and sent on a
+  new `StructuralCommand::SetBranchAlign` for every direct child of every
+  layer, after every structural edit. The longest branch gets `None`, so a
+  layer whose branches declare nothing allocates no ring at all.
+  `EffectSlot` grew from 512 to 520 bytes, paid per occupied slot.
+- **The latency walk's `max` arm.** `latency_of_runs` takes the flow, and
+  `run_latency` of a layer is its longest branch -- which is both what its
+  dry copy waits for and what `chain_latency` declares to the mixer. It
+  landed with the render, as 07 said it had to.
+
+### What the doing found
+
+- **The bypass order needed nothing new.** The container bypass arm already
+  runs before the generic one (03's fix), and a bypassed layer is not pushed
+  on the open-run stack, so no branch boundary is ever asked of it.
+  `a_bypassed_layer_is_its_input` is the test that would fail on the unfixed
+  order: a layer of a Drive and a pass-through would come out near twice its
+  input.
+- **A stale branch ring is harmless by construction.** A row that stops being
+  a branch keeps whatever `branch_align` it last had, and nothing reads it:
+  the loop only asks for it at a layer's branch boundary, and every edit that
+  makes a row a branch republishes it. So the publisher sends every branch of
+  every layer, `None` included, and nothing tries to clear the others.
+- **A layer past the depth cap runs in series.** It cannot open a run, so
+  its rows play in the enclosing context one after another -- the same inert
+  box `docs/LOOSE_ENDS.md` already records for a chain past the cap, and only
+  reachable from a hand-edited file, because every gesture refuses it.
+- **Branch rings do not advance while their layer is bypassed**, so the first
+  block after un-bypassing a layer with a Drive in one branch replays up to 15
+  frames of the other branches from before the bypass. A container's inner
+  rings have always behaved this way (a bypassed box skips its run); noted
+  rather than fixed.
+
+### Acceptance
+
+In `crates/mooloop-engine/src/container_tests.rs`:
+
+- `a_layer_of_one_branch_is_a_chain` -- a lone Drive, and a whole
+  Filter → Drive → Delay chain, as the one branch of a layer and as a chain,
+  at mix 1.0 and 0.6, at 64, 128 and 512 frames, sample for sample. It
+  replaces 07's `a_layer_running_in_series_is_a_chain`.
+- `two_identical_branches_are_exactly_six_db` -- two Filters are one Filter
+  doubled, every sample exactly.
+- `a_branch_that_declares_latency_does_not_comb_against_one_that_does_not`
+  -- a Drive beside a pass-through equals the Drive plus the input delayed 15
+  frames, and is shown to be far from the unaligned sum.
+- `a_bypassed_layer_is_its_input` -- the input, delayed by the layer's
+  declared latency, and the chain's latency unchanged.
+- `a_layer_inside_a_chain_inside_a_layer` -- four open runs, the cap, and the
+  answer is the Drive plus the input twice.
+- `a_layer_allocates_nothing_on_the_callback` -- `CountingAllocator`, 20
+  blocks of the nested layers and a `SetBranchAlign` applied between them,
+  zero allocations and zero frees.
+
+And `a_layer_declares_its_longest_branch` in `mooloop-core`'s `mixer.rs`
+pins the walk and `branch_alignment`.
 
 ## Step 07 — a branch is a run, and a layer is a device
 

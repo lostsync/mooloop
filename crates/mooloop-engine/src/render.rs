@@ -1089,6 +1089,22 @@ pub struct EffectSlot {
     /// that is only allocated for occupied slots anyway.
     container_children: u8,
     container_align: Option<Box<IntegerDelay>>,
+    /// For the head of a layer's branch: the ring that holds this branch
+    /// back until the layer's longest branch has caught up, sized by
+    /// [`mooloop_core::branch_alignment`]. `None` on every other row, and on
+    /// the longest branch itself -- so a layer whose branches declare no
+    /// latency, which is nearly all of them, carries none.
+    ///
+    /// Distinct from `container_align`, which a branch head that is itself a
+    /// container also has: that one delays the box's *dry* copy by its own
+    /// run; this one delays the whole branch's *output* to meet its siblings.
+    /// Arrives on [`StructuralCommand::SetBranchAlign`], for the reason the
+    /// span does.
+    ///
+    /// A row that stops being a branch keeps whatever it last held, and
+    /// nothing reads it: the loop only asks for this at a layer's branch
+    /// boundary, and every edit that makes a row a branch republishes it.
+    branch_align: Option<Box<IntegerDelay>>,
     /// Consecutive frames of silent input this slot has seen.
     ///
     /// Here rather than in a `[u32; MAX_EFFECTS_PER_CHANNEL]` beside the
@@ -1113,6 +1129,7 @@ impl EffectSlot {
             output_trim: 1.0,
             container_children: 0,
             container_align: None,
+            branch_align: None,
             silent_frames: 0,
         }
     }
@@ -1211,13 +1228,60 @@ struct EffectChain {
 /// chain state that owns heap.
 pub struct ContainerScratch {
     dry: [StereoBus; MAX_CONTAINER_DEPTH],
+    /// What a *layer* needs besides its dry copy, per open depth. Absent
+    /// until the chain holds a layer, so a chain of plain boxes pays for
+    /// none of it.
+    branches: Option<Box<BranchScratch>>,
+}
+
+/// A layer's two working buffers at each nesting depth: the input every
+/// branch starts from, and the sum the finished branches accumulate into.
+///
+/// Per depth rather than per layer for `ContainerScratch`'s reason -- ten
+/// sibling layers are open one at a time. The layer's own mix blends against
+/// `ContainerScratch::dry`, so there is no third buffer. Two buses of
+/// `MAX_BLOCK_SIZE` stereo `f32` at each of `MAX_CONTAINER_DEPTH` depths is
+/// 512 KiB, allocated once per chain that has ever held a layer.
+struct BranchScratch {
+    input: [StereoBus; MAX_CONTAINER_DEPTH],
+    sum: [StereoBus; MAX_CONTAINER_DEPTH],
 }
 
 impl ContainerScratch {
+    /// Dry copies only: enough for any number of chains, and no layer.
     pub fn new() -> Self {
         Self {
             dry: std::array::from_fn(|_| StereoBus::with_capacity(MAX_BLOCK_SIZE)),
+            branches: None,
         }
+    }
+
+    /// Dry copies and a layer's branch buffers.
+    pub fn with_layers() -> Self {
+        Self {
+            branches: Some(Box::new(BranchScratch {
+                input: std::array::from_fn(|_| StereoBus::with_capacity(MAX_BLOCK_SIZE)),
+                sum: std::array::from_fn(|_| StereoBus::with_capacity(MAX_BLOCK_SIZE)),
+            })),
+            ..Self::new()
+        }
+    }
+
+    /// What `effects` needs, or `None` when it holds no container at all.
+    ///
+    /// The one rule for which scratch a chain gets, read by the loader and
+    /// by the control thread's span publisher alike.
+    pub fn for_chain(effects: &[mooloop_core::EffectSlotState]) -> Option<Self> {
+        let mut flows = effects.iter().filter_map(|effect| effect.params.container_flow());
+        let first = flows.next()?;
+        let layered = first == mooloop_core::ContainerFlow::Parallel
+            || flows.any(|flow| flow == mooloop_core::ContainerFlow::Parallel);
+        Some(if layered { Self::with_layers() } else { Self::new() })
+    }
+
+    /// Whether this scratch can run a layer.
+    pub fn holds_layers(&self) -> bool {
+        self.branches.is_some()
     }
 }
 
@@ -1234,6 +1298,14 @@ struct OpenRun {
     end: usize,
     /// The container's own row, which owns the mix and the dry-path ring.
     slot: usize,
+    /// Whether the run is a layer's: its direct children are branches, each
+    /// started from the layer's input and summed at the end.
+    parallel: bool,
+    /// For a layer, the row heading the branch now running, whose
+    /// `branch_align` delays it...
+    branch: usize,
+    /// ...and one past that branch's last row, where the next one starts.
+    branch_end: usize,
 }
 
 impl EffectChain {
@@ -1722,12 +1794,29 @@ impl EffectChain {
                 state.container_align = align;
             }
         }
+        // Each layer's shorter branches, held back to meet its longest.
+        for layer in 0..slots.len().min(MAX_EFFECTS_PER_CHANNEL) {
+            if slots[layer].params.container_flow() != Some(mooloop_core::ContainerFlow::Parallel) {
+                continue;
+            }
+            for branch in mooloop_core::layer_branches(slots, layer) {
+                let align = IntegerDelay::new(mooloop_core::branch_alignment(slots, layer, branch))
+                    .map(Box::new);
+                if let Some(state) = self.slot_mut(branch) {
+                    state.branch_align = align;
+                }
+            }
+        }
         // One allocation for the whole chain, and only for a chain that
-        // actually holds a box.
-        if self.container_dry.is_none()
-            && slots.iter().any(|effect| effect.kind().is_container())
-        {
-            self.container_dry = Some(Box::new(ContainerScratch::new()));
+        // actually holds a box -- with branch buffers only if one is a layer.
+        let wanted = ContainerScratch::for_chain(slots);
+        let upgrade = match (&self.container_dry, &wanted) {
+            (None, Some(_)) => true,
+            (Some(have), Some(want)) => want.holds_layers() && !have.holds_layers(),
+            _ => false,
+        };
+        if upgrade {
+            self.container_dry = wanted.map(Box::new);
         }
     }
 
@@ -1855,20 +1944,38 @@ impl EffectChain {
     ) {
         // The containers this chain is currently inside, innermost last.
         // Fixed at the depth cap and never grown, so nothing here allocates.
-        let mut open = [OpenRun { end: 0, slot: 0 }; MAX_CONTAINER_DEPTH];
+        let mut open = [OpenRun {
+            end: 0,
+            slot: 0,
+            parallel: false,
+            branch: 0,
+            branch_end: 0,
+        }; MAX_CONTAINER_DEPTH];
         let mut depth = 0usize;
         // Set past the end of a bypassed container's run: a bypassed box
         // skips its whole run rather than its own row.
         let mut skip_until = 0usize;
 
         for slot in 0..self.bound {
-            // Close every run that ends here, innermost first. A `while`
+            // Close every run that ends here, innermost first. A loop
             // rather than an `if` because several boxes can end on the same
             // row, and they nest, so the innermost is always on top.
-            while depth > 0 && open[depth - 1].end == slot {
-                depth -= 1;
-                let run = open[depth];
-                self.close_run(run, depth, bus, context, device_display);
+            //
+            // A layer's *branch* can end here too, and only once every run
+            // inside that branch has closed -- a branch is a whole run -- so
+            // it is asked of whichever run is on top after the closing.
+            while depth > 0 {
+                let run = open[depth - 1];
+                if run.end == slot {
+                    depth -= 1;
+                    self.close_run(run, depth, bus, context, device_display);
+                    continue;
+                }
+                if run.parallel && run.branch_end == slot {
+                    self.finish_branch(run, depth - 1, bus, context);
+                    self.start_branch(&mut open[depth - 1], slot, depth - 1, bus, context);
+                }
+                break;
             }
             if slot < skip_until {
                 continue;
@@ -1919,9 +2026,13 @@ impl EffectChain {
                     }
                     continue;
                 }
-                let open_run = OpenRun {
-                    end: (slot + 1 + children).min(self.bound),
+                let end = (slot + 1 + children).min(self.bound);
+                let mut open_run = OpenRun {
+                    end,
                     slot,
+                    parallel: false,
+                    branch: slot + 1,
+                    branch_end: end,
                 };
                 if self.bypassed(slot) {
                     // **Bypassing a box bypasses the run**, and costs exactly
@@ -1963,11 +2074,33 @@ impl EffectChain {
                     // anyway; `docs/LOOSE_ENDS.md` carries the whole of it.
                     continue;
                 }
+                // **A layer splits here.** Its input is kept for every
+                // branch to start from and its sum starts empty; the first
+                // branch runs on the bus as it stands. A scratch without
+                // branch buffers cannot happen once the span has arrived --
+                // the same command carries the upgrade -- and would run the
+                // layer in series rather than fail.
+                let layered = self
+                    .slot(slot)
+                    .and_then(|state| state.kind)
+                    .and_then(mooloop_core::EffectKind::container_flow)
+                    == Some(mooloop_core::ContainerFlow::Parallel);
+                let first_branch_end = self.run_end(slot + 1).min(end);
                 if let Some(scratch) = self.container_dry.as_mut() {
                     scratch.dry[depth].l[..context.frames]
                         .copy_from_slice(&bus.l[..context.frames]);
                     scratch.dry[depth].r[..context.frames]
                         .copy_from_slice(&bus.r[..context.frames]);
+                    if let (true, Some(branches)) = (layered, scratch.branches.as_mut()) {
+                        branches.input[depth].l[..context.frames]
+                            .copy_from_slice(&bus.l[..context.frames]);
+                        branches.input[depth].r[..context.frames]
+                            .copy_from_slice(&bus.r[..context.frames]);
+                        branches.sum[depth].l[..context.frames].fill(0.0);
+                        branches.sum[depth].r[..context.frames].fill(0.0);
+                        open_run.parallel = true;
+                        open_run.branch_end = first_branch_end;
+                    }
                     open[depth] = open_run;
                     depth += 1;
                 }
@@ -2153,6 +2286,19 @@ impl EffectChain {
         context: &ProcessContext,
         device_display: Option<(&DeviceMeters, &DeviceTelemetry, usize)>,
     ) {
+        if run.parallel {
+            // The last branch joins the others, and what the layer carries
+            // on with is their sum.
+            self.finish_branch(run, depth, bus, context);
+            if let Some(branches) = self
+                .container_dry
+                .as_ref()
+                .and_then(|scratch| scratch.branches.as_ref())
+            {
+                bus.l[..context.frames].copy_from_slice(&branches.sum[depth].l[..context.frames]);
+                bus.r[..context.frames].copy_from_slice(&branches.sum[depth].r[..context.frames]);
+            }
+        }
         self.blend_run(run, depth, bus, context);
         // The box's OUT is what leaves the far end of its run, taken after
         // the blend. It used to be published at the container's own row from
@@ -2165,6 +2311,74 @@ impl EffectChain {
         if let Some((meters, _, target)) = device_display {
             let (left, right) = bus.peak(context.frames);
             meters.publish_output(target, run.slot + 1, left, right);
+        }
+    }
+
+    /// One past the last row of the run headed by `slot`: itself, and what
+    /// it holds when it is a container.
+    fn run_end(&self, slot: usize) -> usize {
+        slot + 1 + self.container_children(slot)
+    }
+
+    /// A layer's branch is done: hold it back to meet the longest branch,
+    /// then add it to the sum.
+    ///
+    /// **At unity.** Two branches carrying the same signal come out 6 dB
+    /// hotter than one, and that is what a layer is; any other gain would be
+    /// a decision about level, not a default an engine step gets to choose.
+    ///
+    /// A branch that has gone quiet still adds -- nothing here skips one --
+    /// and adding silence is the same number as not adding it, so the idle
+    /// skip inside a branch cannot change the sum.
+    fn finish_branch(
+        &mut self,
+        run: OpenRun,
+        depth: usize,
+        bus: &mut StereoBus,
+        context: &ProcessContext,
+    ) {
+        let Self {
+            slots,
+            container_dry,
+            ..
+        } = self;
+        if let Some(align) = slots[run.branch]
+            .as_mut()
+            .and_then(|state| state.branch_align.as_mut())
+        {
+            align.process(&mut bus.l[..context.frames], &mut bus.r[..context.frames]);
+        }
+        let Some(branches) = container_dry
+            .as_mut()
+            .and_then(|scratch| scratch.branches.as_mut())
+        else {
+            return;
+        };
+        let sum = &mut branches.sum[depth];
+        for frame in 0..context.frames {
+            sum.l[frame] += bus.l[frame];
+            sum.r[frame] += bus.r[frame];
+        }
+    }
+
+    /// Start the layer's next branch at `slot`, from the layer's input.
+    fn start_branch(
+        &mut self,
+        run: &mut OpenRun,
+        slot: usize,
+        depth: usize,
+        bus: &mut StereoBus,
+        context: &ProcessContext,
+    ) {
+        run.branch = slot;
+        run.branch_end = self.run_end(slot).min(run.end);
+        if let Some(branches) = self
+            .container_dry
+            .as_ref()
+            .and_then(|scratch| scratch.branches.as_ref())
+        {
+            bus.l[..context.frames].copy_from_slice(&branches.input[depth].l[..context.frames]);
+            bus.r[..context.frames].copy_from_slice(&branches.input[depth].r[..context.frames]);
         }
     }
 
@@ -5098,10 +5312,16 @@ impl RenderState {
                 // A chain keeps the first scratch it is given and hands every
                 // later one straight back, the way the graph keeps the first
                 // storage a channel index is ever given.
-                let scratch = match (chain.container_dry.is_some(), scratch) {
-                    (false, Some(scratch)) => {
+                // ...unless the arrival can run a layer and what it has
+                // cannot, which is the one time the chain trades up; the
+                // smaller one goes back to be dropped like any other.
+                let scratch = match (&chain.container_dry, scratch) {
+                    (None, Some(scratch)) => {
                         chain.container_dry = Some(scratch);
                         None
+                    }
+                    (Some(have), Some(scratch)) if scratch.holds_layers() && !have.holds_layers() => {
+                        chain.container_dry.replace(scratch)
                     }
                     (_, scratch) => scratch,
                 };
@@ -5115,6 +5335,27 @@ impl RenderState {
                         scratch,
                     },
                 )
+            }
+            StructuralCommand::SetBranchAlign {
+                target,
+                slot,
+                align,
+            } => {
+                let Some(chain) = Self::chain_for(&mut self.strips, &mut self.buses, target)
+                else {
+                    return Some(StructuralReclaim::Container {
+                        align,
+                        scratch: None,
+                    });
+                };
+                let displaced = match chain.slot_mut(slot as usize) {
+                    Some(state) => std::mem::replace(&mut state.branch_align, align),
+                    None => align,
+                };
+                displaced.map(|align| StructuralReclaim::Container {
+                    align: Some(align),
+                    scratch: None,
+                })
             }
             StructuralCommand::RemoveEffect { target, slot } => {
                 let chain = Self::chain_for(&mut self.strips, &mut self.buses, target);
@@ -12177,10 +12418,9 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             // path of its own. Equal-power leaks a cos(pi/2) ~ 6e-8 of the
             // aligned dry alongside either, inaudible but not bit-exact.
             //
-            // A *layer* is transparent here for a second reason as well,
-            // and only until `containers/08`: with one row and nothing to
-            // sum against, a branch is its input. This arm does not have to
-            // move when the split lands -- an empty layer stays its input.
+            // A *layer* here is empty -- nothing is wrapped -- so it has no
+            // branch to split into and is its input, the same as an empty
+            // chain.
             if kind == mooloop_core::EffectKind::Buffer || kind.is_container() {
                 assert!(
                     (wet - dry).abs() < dry * 1.0e-5,
@@ -14113,7 +14353,12 @@ mod footprint {
         // it would need a second lookup on the realtime path to find the
         // container's ring from its slot, which is the table the identity
         // work exists to avoid.
-        assert_eq!(size_of::<EffectSlot>(), 512);
+        //
+        // Eight more for the ring that holds a layer's shorter branch back to
+        // meet its longest (`docs/plans/containers/08`), on the branch head's
+        // slot for the same reason: `None` everywhere but a branch that
+        // declares less than its siblings.
+        assert_eq!(size_of::<EffectSlot>(), 520);
         assert_eq!(size_of::<Option<Box<EffectSlot>>>(), 8);
         // Eight of this is the pointer to the per-depth dry buffers a chain
         // needs while it is *inside* containers. One pointer, not four

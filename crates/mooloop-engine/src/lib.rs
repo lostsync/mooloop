@@ -254,6 +254,19 @@ pub enum StructuralCommand {
         align: Option<Box<IntegerDelay>>,
         scratch: Option<Box<ContainerScratch>>,
     },
+    /// Hand the head of a layer's branch the ring that holds it back to meet
+    /// the layer's longest branch (`mooloop_core::branch_alignment`), or
+    /// `None` when it is the longest.
+    ///
+    /// Sent beside [`Self::SetContainerSpan`], after every structural edit,
+    /// for every direct child of every layer on the chain. Structural for the
+    /// same reason: the ring is allocated here and the displaced one comes
+    /// back as [`StructuralReclaim::Container`].
+    SetBranchAlign {
+        target: EffectTarget,
+        slot: u8,
+        align: Option<Box<IntegerDelay>>,
+    },
     /// Remove whatever is at `slot`, if anything. Also reclaimed, not dropped.
     RemoveEffect { target: EffectTarget, slot: u8 },
     /// Append one channel's storage, built on this thread. The graph only

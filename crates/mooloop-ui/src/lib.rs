@@ -4478,10 +4478,7 @@ impl UiState {
         let Some(effects) = self.session.effect_chain_of(target) else {
             return;
         };
-        let mut scratch = effects
-            .iter()
-            .any(|effect| effect.kind().is_container())
-            .then(|| Box::new(ContainerScratch::new()));
+        let mut scratch = ContainerScratch::for_chain(effects).map(Box::new);
         for (slot, effect) in effects.iter().enumerate() {
             let Some(children) = effect.params.container_children() else {
                 continue;
@@ -4501,9 +4498,29 @@ impl UiState {
                 children,
                 align,
                 // Rides the first container's command; the chain keeps the
-                // first one it is given and hands every later one back.
+                // first one it is given and hands every later one back,
+                // unless this one can run a layer and its own cannot.
                 scratch: scratch.take(),
             });
+            // A layer's branches, each held back to meet the longest. Every
+            // branch, every time, `None` included, so a branch that has
+            // become the longest lets go of the ring it no longer needs.
+            if effect.params.container_flow() != Some(mooloop_core::ContainerFlow::Parallel) {
+                continue;
+            }
+            for branch in mooloop_core::layer_branches(effects, slot) {
+                let Ok(branch_index) = u8::try_from(branch) else {
+                    continue;
+                };
+                let align =
+                    IntegerDelay::new(mooloop_core::branch_alignment(effects, slot, branch))
+                        .map(Box::new);
+                stx.send(StructuralCommand::SetBranchAlign {
+                    target,
+                    slot: branch_index,
+                    align,
+                });
+            }
         }
     }
 

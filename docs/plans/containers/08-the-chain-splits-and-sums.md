@@ -40,8 +40,10 @@ edit):
 `container_dry`'s existing per-depth copy is still what the layer's own
 `mix` blends against at the end, so a layer needs no third buffer. Two buses
 × `MAX_CONTAINER_DEPTH` (4) × `MAX_BLOCK_SIZE` (8192) × 2 channels × 4 bytes
-is **2 MiB per chain that has ever held a layer**, which is the number that
-has to go in `00-status.md` and be weighed against `container_dry`'s 1 MiB.
+is **512 KiB per chain that has ever held a layer**, which is the number that
+has to go in `00-status.md` and be weighed against `container_dry`'s 256 KiB.
+(This paragraph said 2 MiB and 1 MiB until 2026-09-23; both were four times
+too high.)
 
 If that is judged too much, the honest lever is `MAX_CONTAINER_DEPTH`, not a
 smaller buffer: a block is a block. Say which was chosen and why.

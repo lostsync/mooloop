@@ -1401,10 +1401,15 @@ land on its own when it starts to matter:
   `docs/plans/containers/00-status.md`.
 - A second container kind, **Layer**, sits under Chain in the insert menu and
   saves and reloads as its own kind. It holds a run, nests, wraps, bypasses
-  and mixes exactly as a chain does -- and **it runs what it holds in
-  series, exactly as a chain does**, until `containers/08` teaches the engine
-  to split its input across its devices and sum them. The rack draws it as a
-  chain's box with "Layer" on its face until `containers/09`. The wrap button
+  and mixes as a chain does, but **it splits its input across its direct
+  children and sums them**: each device it holds directly -- or each Chain
+  it holds, with whatever that chain holds -- is one parallel branch fed the
+  layer's input. Branches sum at unity (two identical branches are exactly
+  6 dB up), a branch holding a Drive is matched by delaying the others to it
+  so the sum does not comb, and the layer declares its longest branch as its
+  latency. Its Mix blends the sum against its input; bypassing it passes the
+  input, delayed by that latency. A layer of one branch is a chain. The rack
+  draws it as a chain's box with "Layer" on its face until `containers/09`. The wrap button
   always makes a Chain, and a layer's preset carries only its own mix, not
   what it holds (`containers/10`).
 - `ParamAddr` addresses parameters owned by a source, a rack device, a

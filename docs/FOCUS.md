@@ -67,9 +67,11 @@ Three things to carry into it:
   container's enclosure was drawn three times without one, and each wrong
   version was restyled rather than questioned. Steps 07 and 08 do not wait for
   it.
-- **08 is the step with a sound.** Do not close it on green tests: a drum loop
-  into a clean branch and a Drive → Bitcrush branch, mix swept, is parallel
-  drum compression and it is the oldest reason this device exists.
+- **08 is the step with a sound.** A drum loop into a clean branch and a
+  Drive → Bitcrush branch, mix swept, is parallel drum compression and it is
+  the oldest reason this device exists. 08 landed 2026-09-23; its listening
+  pass was closed on Adam's instruction to treat outstanding listening passes
+  as done with nothing heard, so the case is still worth playing.
 
 ### 2. Close `audio-recording/`
 

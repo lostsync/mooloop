@@ -882,7 +882,7 @@ pub fn clamp_bus(bus: u8) -> u8 {
 /// effect. Removing the device is what gives the latency back.
 ///
 /// **This walks the container tree rather than summing the flat list**, and
-/// today the two agree on every chain that exists. `containers/02` recorded,
+/// the two agree on every chain without a layer in it. `containers/02` recorded,
 /// correctly at the time, that containers needed no change here: a
 /// container's children are rows of the same chain, its own declared latency
 /// is zero, and so a flat sum already counted them exactly once.
@@ -896,26 +896,36 @@ pub fn clamp_bus(bus: u8) -> u8 {
 /// number, so the channel holding the layer would sit late against the whole
 /// song while sounding perfectly correct on its own.
 ///
-/// The walk is here before the kind that needs it, so that the commit adding
-/// `Layer` changes one arm rather than the compensation model. On a serial
-/// tree it is a restructure and
-/// `the_latency_walk_agrees_with_the_flat_sum_on_every_serial_arrangement`
-/// is what says so.
+/// So the walk asks each container how it combines what it holds
+/// ([`crate::ContainerFlow`]): a chain's rows add and a layer's branches take
+/// the longest. On a tree with no layer in it that is the flat sum, and
+/// `the_latency_walk_agrees_with_the_flat_sum_on_every_serial_arrangement` is
+/// what says so.
 pub fn chain_latency(effects: &[EffectSlotState]) -> u32 {
-    latency_of_runs(effects, 0..effects.len())
+    latency_of_runs(effects, 0..effects.len(), crate::ContainerFlow::Series)
 }
 
 /// Declared latency of `range`, which must be a whole number of complete runs
-/// sitting at one depth -- a chain, or everything inside one container.
+/// sitting at one depth -- a chain, or everything inside one container --
+/// combined as `flow` says.
 ///
-/// Sibling runs are in series with each other, so they add. What a *container*
-/// does with the runs inside it is the question that is about to have two
-/// answers, and it is asked one level down in [`latency_of_run`].
-fn latency_of_runs(effects: &[EffectSlotState], range: std::ops::Range<usize>) -> u32 {
+/// Sibling runs in **series** are one after another, so they add. Sibling runs
+/// in **parallel** are a layer's branches, each fed the same input and summed,
+/// so the signal leaves when the longest one does and the others are delayed
+/// to meet it (`branch_alignment`).
+fn latency_of_runs(
+    effects: &[EffectSlotState],
+    range: std::ops::Range<usize>,
+    flow: crate::ContainerFlow,
+) -> u32 {
     let mut total: u32 = 0;
     let mut slot = range.start;
     while slot < range.end {
-        total = total.saturating_add(latency_of_run(effects, slot));
+        let run = latency_of_run(effects, slot);
+        total = match flow {
+            crate::ContainerFlow::Series => total.saturating_add(run),
+            crate::ContainerFlow::Parallel => total.max(run),
+        };
         // `run_of` already guarantees an end past `slot`; the `max` is here
         // because this is a loop over data that arrives from a file, and
         // `integrity.rs` has no depth or span check that would catch a run
@@ -930,19 +940,15 @@ fn latency_of_runs(effects: &[EffectSlotState], range: std::ops::Range<usize>) -
 /// whatever it holds.
 ///
 /// A container's own declared latency is zero and stays zero -- it has no
-/// signal path of its own. What it contributes is its contents, and **the
-/// rule for combining them is the one thing a second container kind
-/// changes**: a chain's rows are in series and add, where a layer's branches
-/// are in parallel and the longest one wins.
+/// signal path of its own. What it contributes is its contents, combined the
+/// way its kind says ([`run_latency`]).
 fn latency_of_run(effects: &[EffectSlotState], slot: usize) -> u32 {
     let Some(head) = effects.get(slot) else {
         return 0;
     };
-    let own = head.kind().latency_frames();
-    if !head.params.is_container() {
-        return own;
-    }
-    own.saturating_add(latency_of_runs(effects, crate::span_of(effects, slot)))
+    head.kind()
+        .latency_frames()
+        .saturating_add(run_latency(effects, slot))
 }
 
 /// Declared latency of the run the container in `slot` encloses.
@@ -953,16 +959,60 @@ fn latency_of_run(effects: &[EffectSlotState], slot: usize) -> u32 {
 /// without a Drive in it, and so most of them.
 ///
 /// This is `chain_latency` over a sub-range and it is deliberately not the
-/// container's *own* declared latency, which is zero: the mixer's plan sums
+/// container's *own* declared latency, which is zero: the mixer's plan walks
 /// the whole chain and already counts these rows, so declaring the run here
 /// too would compensate the channel twice. See question 4 in
 /// `docs/plans/containers/README.md`.
 ///
-/// It walks the tree for the same reason `chain_latency` does, and it is the
-/// number `containers/08` will read per branch to size the alignment delays:
-/// a branch's latency is its run's, and the layer waits for the longest.
+/// For a layer it is the **longest branch**, which is both what its dry copy
+/// waits for and what every shorter branch is delayed up to.
 pub fn run_latency(effects: &[EffectSlotState], slot: usize) -> u32 {
-    latency_of_runs(effects, crate::span_of(effects, slot))
+    let flow = effects
+        .get(slot)
+        .and_then(|head| head.params.container_flow())
+        .unwrap_or(crate::ContainerFlow::Series);
+    latency_of_runs(effects, crate::span_of(effects, slot), flow)
+}
+
+/// How long the branch headed by `branch` has to wait for the longest branch
+/// of the layer in `layer`, in base-rate frames.
+///
+/// Zero for the longest branch itself -- which, in a layer whose branches
+/// declare nothing, is every branch, so the common case sizes no delay at
+/// all. Zero too when `layer` is not a layer, or `branch` is not one of its
+/// direct children: nothing else is delayed to meet a sibling.
+///
+/// Without it a branch holding a Drive and a clean branch beside it sum 15
+/// frames apart, which is a comb filter across the whole spectrum
+/// (`docs/plans/containers/08-the-chain-splits-and-sums.md`).
+pub fn branch_alignment(effects: &[EffectSlotState], layer: usize, branch: usize) -> u32 {
+    let is_layer = effects
+        .get(layer)
+        .and_then(|head| head.params.container_flow())
+        == Some(crate::ContainerFlow::Parallel);
+    if !is_layer || !layer_branches(effects, layer).any(|head| head == branch) {
+        return 0;
+    }
+    run_latency(effects, layer).saturating_sub(latency_of_run(effects, branch))
+}
+
+/// The rows that head the direct children of the container in `slot`, in
+/// order: one per branch when it is a layer. Empty for a leaf.
+pub fn layer_branches(
+    effects: &[EffectSlotState],
+    slot: usize,
+) -> impl Iterator<Item = usize> + '_ {
+    let span = crate::span_of(effects, slot);
+    let mut next = span.start;
+    std::iter::from_fn(move || {
+        if next >= span.end {
+            return None;
+        }
+        let head = next;
+        // The same guard `latency_of_runs` keeps, for the same reason.
+        next = crate::run_of(effects, head).end.max(head + 1);
+        Some(head)
+    })
 }
 
 /// What each producer must be delayed by so that everything summing at a
@@ -2797,6 +2847,56 @@ mod tests {
             run_latency(&effects, 0),
             0,
             "a leaf encloses nothing, whatever its own latency"
+        );
+    }
+
+    /// **A layer declares its longest branch, not the total of them.**
+    /// Branches run side by side from the same input, so a layer holding
+    /// `[Drive Drive]`, a lone Drive and a Filter leaves when the two-Drive
+    /// branch does -- 30 frames -- and each shorter branch is delayed up to
+    /// that. Summing the rows would declare 45, and the channel would sit
+    /// 15 frames late against the song while sounding right on its own.
+    #[test]
+    fn a_layer_declares_its_longest_branch() {
+        let drive = EffectKind::Drive.latency_frames();
+        // Filter Drive Drive Drive: box rows 1..3 as a chain, which makes
+        // Filter [Drive Drive] Drive, then layer everything.
+        let mut effects = leaves(&[
+            EffectKind::Filter,
+            EffectKind::Drive,
+            EffectKind::Drive,
+            EffectKind::Drive,
+        ]);
+        wrap(&mut effects, 1..3);
+        let mut next = u32::from(u16::MAX);
+        wrap_in_container(
+            &mut effects,
+            &mut next,
+            0..5,
+            EffectSlotState::of_kind(EffectKind::Layer),
+        )
+        .expect("a wrappable run");
+        // Layer | Filter | Chain Drive Drive | Drive
+        let layer = 0;
+        assert_eq!(
+            layer_branches(&effects, layer).collect::<Vec<_>>(),
+            [1, 2, 5],
+            "three branches, each headed by a direct child"
+        );
+        assert_eq!(run_latency(&effects, layer), 2 * drive, "the longest branch");
+        assert_eq!(chain_latency(&effects), 2 * drive, "and the chain declares it");
+        assert_eq!(branch_alignment(&effects, layer, 1), 2 * drive, "the Filter waits");
+        assert_eq!(branch_alignment(&effects, layer, 2), 0, "the longest waits for nobody");
+        assert_eq!(branch_alignment(&effects, layer, 5), drive, "the lone Drive waits one");
+        assert_eq!(
+            branch_alignment(&effects, layer, 3),
+            0,
+            "a row inside a branch is not a branch"
+        );
+        assert_eq!(
+            branch_alignment(&effects, 2, 3),
+            0,
+            "a chain's rows are not branches"
         );
     }
 }

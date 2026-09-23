@@ -12,7 +12,7 @@
 
 use crate::meters::DeviceMeters;
 use crate::render::RenderState;
-use crate::render_test_support::{render_blocks, SAMPLE_RATE};
+use crate::render_test_support::{peak_of, render_blocks, worst_difference, SAMPLE_RATE};
 use mooloop_core::{
     ContainerParams, EffectKind, EffectParams, EffectSlotState, NoteEvent, Project, ProjectChannel,
 };
@@ -179,40 +179,327 @@ fn a_container_round_trips_through_the_document() {
     assert_eq!(render_blocks(&reloaded, 0.5, 128), before);
 }
 
-/// **`containers/07`'s acceptance case.** A layer lands running its rows in
-/// series, exactly as a chain does, so it has to *be* a chain: the same run,
-/// wrapped in a `Layer` and in a `Chain` at the same mix, renders sample for
-/// sample the same at three block sizes.
+/// One drum channel hitting on the downbeat, through `kinds` in order, the
+/// rows named in `bypassed` switched out.
+fn drum_through(kinds: &[EffectKind], bypassed: &[usize]) -> Project {
+    let mut channel = ProjectChannel::drum_synth(0, 1);
+    channel.setup.channel.volume = 0.5;
+    channel.notes[0].push(NoteEvent::new(1, 0, 96, 36, 127));
+    for kind in kinds {
+        channel
+            .setup
+            .push_effect(EffectSlotState::of_kind(*kind))
+            .expect("room");
+    }
+    for row in bypassed {
+        channel.setup.effects[*row].bypassed = true;
+    }
+    Project {
+        channels: vec![channel],
+        ..Project::default()
+    }
+}
+
+/// `a + b`, sample for sample: what two renders summed at the master would
+/// be if the engine had summed them earlier.
+fn summed(a: &[f32], b: &[f32]) -> Vec<f32> {
+    a.iter().zip(b).map(|(x, y)| x + y).collect()
+}
+
+/// **`containers/08`'s first acceptance case.** A layer of one branch is a
+/// chain: the same run, as the one branch of a `Layer` and as a `Chain` at
+/// the same mix, renders sample for sample the same at three block sizes.
 ///
-/// Drive is in the run for the reason step 02 gives -- it is the only kind
-/// that declares a latency, so a layer that sized its dry path differently
-/// would comb at the partial mix rather than pass. That is also why the mix
-/// is not only 1.0: at full wet the dry path is never heard.
+/// Twice over, because a branch is a run: once with the branch a lone Drive,
+/// and once with it a whole chain of Filter → Drive → Delay. Drive is in both
+/// for the reason step 02 gives -- it is the only kind that declares a
+/// latency, so a layer that sized its dry path differently from a chain's
+/// would comb at the partial mix rather than pass.
 ///
-/// This is the thing `containers/08`'s "a layer of one branch is a chain" is
-/// identical *to*. When 08 teaches the engine to split, a layer of three
-/// leaves stops being serial and this case gives way to that one.
+/// It replaces 07's `a_layer_running_in_series_is_a_chain`, which this step
+/// makes untrue for any layer of more than one row.
 #[test]
-fn a_layer_running_in_series_is_a_chain() {
-    let bare = three_device_chain();
+fn a_layer_of_one_branch_is_a_chain() {
     for mix in [1.0, 0.6] {
-        let mut chain = bare.clone();
-        wrap_as(&mut chain, EffectKind::Chain, 0..3, mix);
-        let mut layer = bare.clone();
-        wrap_as(&mut layer, EffectKind::Layer, 0..3, mix);
+        // A lone Drive, boxed each way.
+        let mut chain = drum_through(&[EffectKind::Drive], &[]);
+        wrap_as(&mut chain, EffectKind::Chain, 0..1, mix);
+        let mut layer = drum_through(&[EffectKind::Drive], &[]);
+        wrap_as(&mut layer, EffectKind::Layer, 0..1, mix);
+        // A three-device run: a layer holding one chain, against the chain.
+        let mut long_chain = three_device_chain();
+        wrap_as(&mut long_chain, EffectKind::Chain, 0..3, mix);
+        let mut long_layer = three_device_chain();
+        wrap_as(&mut long_layer, EffectKind::Chain, 0..3, 1.0);
+        wrap_as(&mut long_layer, EffectKind::Layer, 0..4, mix);
         for block in [64, 128, 512] {
-            let reference = render_blocks(&chain, 0.5, block);
-            assert!(
-                reference.iter().any(|s| s.abs() > 1.0e-4),
-                "the reference render was silent, so this proves nothing"
-            );
-            assert_eq!(
-                render_blocks(&layer, 0.5, block),
-                reference,
-                "a layer at mix {mix} was not its chain at block {block}"
-            );
+            for (what, chain, layer) in [
+                ("a lone Drive", &chain, &layer),
+                ("Filter, Drive and Delay", &long_chain, &long_layer),
+            ] {
+                let reference = render_blocks(chain, 0.5, block);
+                assert!(
+                    reference.iter().any(|s| s.abs() > 1.0e-4),
+                    "the reference render was silent, so this proves nothing"
+                );
+                assert_eq!(
+                    render_blocks(layer, 0.5, block),
+                    reference,
+                    "a layer of one branch ({what}) at mix {mix} was not its chain \
+                     at block {block}"
+                );
+            }
         }
     }
+}
+
+/// **The second.** Two branches doing the same thing to the same input are
+/// that thing *doubled* -- not "about 6 dB louder", but every sample exactly
+/// twice what one branch gives. Branches sum at unity, and any other gain
+/// would be a decision about level this step has no business making.
+///
+/// Exact because doubling is: a factor of two moves only the exponent, so
+/// every linear stage downstream of the layer (the strip, the master) gives
+/// exactly twice what it gave before -- for every normal float. The one
+/// place it is not is the subnormal range, where a multiply has fewer bits
+/// to round to; the assertion says how that is allowed for.
+#[test]
+fn two_identical_branches_are_exactly_six_db() {
+    let mut one = drum_through(&[EffectKind::Filter], &[]);
+    wrap_as(&mut one, EffectKind::Layer, 0..1, 1.0);
+    let mut two = drum_through(&[EffectKind::Filter, EffectKind::Filter], &[]);
+    wrap_as(&mut two, EffectKind::Layer, 0..2, 1.0);
+    for block in [64, 512] {
+        let single = render_blocks(&one, 0.5, block);
+        assert!(
+            single.iter().any(|s| s.abs() > 1.0e-4),
+            "the reference render was silent, so this proves nothing"
+        );
+        let doubled: Vec<f32> = single.iter().map(|s| 2.0 * s).collect();
+        let rendered = render_blocks(&two, 0.5, block);
+        // Exact wherever the sample is a normal float. Down in the subnormal
+        // range -- the filter's tail, around 1e-39 -- the strip's gain rounds
+        // `2a` and `a` to fewer significant bits than each other, so the two
+        // can differ in their last one. Measured: two samples of 24,000,
+        // at 2.18e-39. Those are still required to be subnormal on both sides.
+        let differing: Vec<usize> = (0..rendered.len())
+            .filter(|i| {
+                let (got, want) = (rendered[*i], doubled[*i]);
+                if want.is_normal() || got.is_normal() {
+                    got != want
+                } else {
+                    (got - want).abs() >= f32::MIN_POSITIVE
+                }
+            })
+            .collect();
+        assert!(
+            differing.is_empty(),
+            "two identical branches were not one branch doubled at block {block}: \
+             {} samples differ, first at {:?} ({:?} against {:?}), last at {:?}",
+            differing.len(),
+            differing.first(),
+            differing.first().map(|i| rendered[*i]),
+            differing.first().map(|i| doubled[*i]),
+            differing.last(),
+        );
+    }
+}
+
+/// **The most audible thing this step can get wrong.** A Drive in one branch
+/// and nothing in the other -- a bypassed Filter, which passes its input and
+/// declares nothing -- fed the same drum. Drive's oversampler runs 15 frames
+/// late, so an unaligned sum is the dry drum against itself 15 frames apart:
+/// a comb filter across the whole spectrum.
+///
+/// Asserted against the aligned reference, built from two renders the engine
+/// already makes: the Drive alone, and the drum through a *bypassed* box
+/// around that Drive, which is exactly the input delayed by the Drive's
+/// latency. The layer must be their sum. The unaligned sum -- the Drive plus
+/// the bare drum -- is checked to be far away, so the test can tell the two
+/// apart.
+#[test]
+fn a_branch_that_declares_latency_does_not_comb_against_one_that_does_not() {
+    let mut layered = drum_through(&[EffectKind::Drive, EffectKind::Filter], &[1]);
+    wrap_as(&mut layered, EffectKind::Layer, 0..2, 1.0);
+    assert_eq!(
+        mooloop_core::chain_latency(&layered.channels[0].setup.effects),
+        EffectKind::Drive.latency_frames(),
+        "the layer declares its longest branch"
+    );
+
+    let driven = render_blocks(&drum_through(&[EffectKind::Drive], &[]), 0.5, 128);
+    let mut late = drum_through(&[EffectKind::Drive], &[]);
+    wrap(&mut late, 0..1, 1.0);
+    late.channels[0].setup.effects[0].bypassed = true;
+    let aligned = summed(&driven, &render_blocks(&late, 0.5, 128));
+    let combed = summed(&driven, &render_blocks(&drum_through(&[], &[]), 0.5, 128));
+
+    let rendered = render_blocks(&layered, 0.5, 128);
+    let scale = peak_of(&aligned);
+    assert!(scale > 1.0e-3, "the reference render was silent, so this proves nothing");
+    assert!(
+        worst_difference(&aligned, &combed) > scale * 1.0e-2,
+        "aligned and combed are indistinguishable, so this proves nothing"
+    );
+    assert!(
+        worst_difference(&rendered, &aligned) <= scale * 1.0e-6,
+        "the layer is not its branches aligned and summed (worst {} against a peak of {scale})",
+        worst_difference(&rendered, &aligned)
+    );
+}
+
+/// **A bypassed layer is its input**, delayed by the latency the layer
+/// declares -- its longest branch -- and so does not move the channel in time.
+///
+/// Written against the order that has bitten this plan once: step 03 shipped
+/// a bypassed container whose generic bypass arm ran first and let its run
+/// play. For a layer that failure is every branch still summing, and a layer
+/// of a Drive and a pass-through would then come out as roughly twice the
+/// input rather than the input.
+#[test]
+fn a_bypassed_layer_is_its_input() {
+    let mut layered = drum_through(&[EffectKind::Drive, EffectKind::Filter], &[1]);
+    wrap_as(&mut layered, EffectKind::Layer, 0..2, 1.0);
+    layered.channels[0].setup.effects[0].bypassed = true;
+
+    // The drum through a bypassed box around one Drive: the input, 15 frames
+    // late.
+    let mut late = drum_through(&[EffectKind::Drive], &[]);
+    wrap(&mut late, 0..1, 1.0);
+    late.channels[0].setup.effects[0].bypassed = true;
+
+    for block in [64, 512] {
+        let reference = render_blocks(&late, 0.5, block);
+        assert!(
+            reference.iter().any(|s| s.abs() > 1.0e-4),
+            "the reference render was silent, so this proves nothing"
+        );
+        assert_eq!(
+            render_blocks(&layered, 0.5, block),
+            reference,
+            "a bypassed layer was not its input at block {block}"
+        );
+    }
+    assert_eq!(
+        mooloop_core::chain_latency(&layered.channels[0].setup.effects),
+        mooloop_core::chain_latency(&late.channels[0].setup.effects),
+        "bypassing the layer moved the channel in time"
+    );
+}
+
+/// A layer inside a chain inside a layer, down to `MAX_CONTAINER_DEPTH`:
+///
+/// ```text
+/// Layer                 depth 0
+///   Chain               depth 1
+///     Layer             depth 2
+///       Chain           depth 3
+///         Drive
+///       Filter (off)
+///   Filter (off)
+/// ```
+///
+/// Each layer is a Drive-carrying branch beside a pass-through, so the answer
+/// is the Drive plus the input twice, both copies aligned to the Drive. The
+/// branch buffers are indexed by *depth*, and two layers open at once is the
+/// case that catches them being indexed by anything else: the inner layer
+/// overwriting the outer one's input would lose one of the two copies.
+#[test]
+fn a_layer_inside_a_chain_inside_a_layer() {
+    let mut nested = drum_through(
+        &[EffectKind::Drive, EffectKind::Filter, EffectKind::Filter],
+        &[1, 2],
+    );
+    wrap_as(&mut nested, EffectKind::Chain, 0..1, 1.0);
+    wrap_as(&mut nested, EffectKind::Layer, 0..3, 1.0);
+    wrap_as(&mut nested, EffectKind::Chain, 0..4, 1.0);
+    wrap_as(&mut nested, EffectKind::Layer, 0..6, 1.0);
+    let effects = &nested.channels[0].setup.effects;
+    let shape: Vec<(usize, EffectKind)> = (0..effects.len())
+        .map(|slot| (mooloop_core::depth_at(effects, slot), effects[slot].kind()))
+        .collect();
+    assert_eq!(
+        shape,
+        [
+            (0, EffectKind::Layer),
+            (1, EffectKind::Chain),
+            (2, EffectKind::Layer),
+            (3, EffectKind::Chain),
+            (4, EffectKind::Drive),
+            (3, EffectKind::Filter),
+            (1, EffectKind::Filter),
+        ],
+        "the nesting is not the one this test is about"
+    );
+    assert_eq!(
+        mooloop_core::depth_at(effects, 4),
+        mooloop_core::MAX_CONTAINER_DEPTH,
+        "the Drive is not at the depth cap, so the cap is not exercised"
+    );
+
+    let driven = render_blocks(&drum_through(&[EffectKind::Drive], &[]), 0.5, 128);
+    let mut late = drum_through(&[EffectKind::Drive], &[]);
+    wrap(&mut late, 0..1, 1.0);
+    late.channels[0].setup.effects[0].bypassed = true;
+    let late = render_blocks(&late, 0.5, 128);
+    let expected = summed(&summed(&driven, &late), &late);
+
+    let rendered = render_blocks(&nested, 0.5, 128);
+    let scale = peak_of(&expected);
+    assert!(scale > 1.0e-3, "the reference render was silent, so this proves nothing");
+    assert!(
+        worst_difference(&rendered, &expected) <= scale * 1.0e-6,
+        "the nested layers are not the Drive plus the input twice (worst {} against {scale})",
+        worst_difference(&rendered, &expected)
+    );
+}
+
+/// **A layer allocates nothing on the callback**, measured with the
+/// `CountingAllocator` rather than reasoned: the nested layers above,
+/// rendered block after block, and a branch's ring swapped in through the
+/// structural path the control thread uses.
+///
+/// The branch buffers and every ring are allocated when the project is
+/// built, which is the control thread's work; what is measured is the block.
+#[test]
+fn a_layer_allocates_nothing_on_the_callback() {
+    let mut nested = drum_through(
+        &[EffectKind::Drive, EffectKind::Filter, EffectKind::Filter],
+        &[1, 2],
+    );
+    wrap_as(&mut nested, EffectKind::Chain, 0..1, 1.0);
+    wrap_as(&mut nested, EffectKind::Layer, 0..3, 0.7);
+    wrap_as(&mut nested, EffectKind::Chain, 0..4, 1.0);
+    wrap_as(&mut nested, EffectKind::Layer, 0..6, 0.5);
+
+    let mut render = RenderState::from_project(SAMPLE_RATE, &nested, &[]);
+    render.play();
+    // Warm: first touches of anything lazily initialised are not the layer's.
+    for _ in 0..4 {
+        render.process_once_block(256);
+    }
+    // Built here, on what stands in for the control thread.
+    let ring = crate::StructuralCommand::SetBranchAlign {
+        target: mooloop_core::EffectTarget::Channel(0),
+        slot: 6,
+        align: mooloop_dsp::IntegerDelay::new(7).map(Box::new),
+    };
+
+    let before = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+    for _ in 0..16 {
+        render.process_once_block(256);
+    }
+    let displaced = render.apply_structural(ring);
+    for _ in 0..4 {
+        render.process_once_block(256);
+    }
+    let after = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+    drop(displaced);
+
+    assert_eq!(
+        after, before,
+        "a layer allocated or freed on the thread that would be the callback"
+    );
 }
 
 /// A layer survives a save and a reload as a layer, inside a chain, with its

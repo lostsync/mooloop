@@ -41,10 +41,11 @@ pub enum EffectKind {
     /// `Chain` child is a branch holding as many devices as it likes, which
     /// is how Drive → Delay becomes one branch with no new syntax.
     ///
-    /// **It runs in series until `containers/08`**, which is what makes that
-    /// step's "a layer of one branch is bit-identical to a chain" a claim
-    /// about something. A project written now opens the same after it.
-    /// See `docs/plans/containers/07-a-branch-is-a-run.md`.
+    /// Each branch starts from the layer's input, the shorter ones are held
+    /// back to meet the longest, and the branches sum at unity before the
+    /// layer's mix blends the result against its dry copy
+    /// (`docs/plans/containers/08-the-chain-splits-and-sums.md`). A layer of
+    /// one branch is a chain, sample for sample.
     Layer,
 }
 
@@ -3776,8 +3777,9 @@ mod tests {
     /// Stated per kind rather than swept, because the sweep above can only
     /// say that every container has *a* flow. A layer that answered `Series`
     /// would pass it, run its branches one into the next, and still be called
-    /// a layer -- which is exactly how `containers/07` lands it on purpose,
-    /// and exactly what must stop being true in `containers/08`.
+    /// a layer -- which is how `containers/07` landed it on purpose, and
+    /// what `containers/08` made untrue: the renderer and the latency walk
+    /// both read this answer to decide whether to split.
     #[test]
     fn a_chain_runs_in_series_and_a_layer_in_parallel() {
         assert_eq!(EffectKind::Chain.container_flow(), Some(ContainerFlow::Series));
