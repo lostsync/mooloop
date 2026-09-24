@@ -763,6 +763,10 @@ export component SamplerDeviceFace inherits Rectangle {
                         VerticalLayout {
                             alignment: center;
                             MiniKnob {
+                                // The detector's own settings, held by the
+                                // face rather than the song: plain, so written
+                                // in place (MOO-220).
+                                controlled: false;
                                 label: "Sensitivity";
                                 hint: "How quiet a hit still gets a marker";
                                 value <=> root.slice-sensitivity;
@@ -773,6 +777,7 @@ export component SamplerDeviceFace inherits Rectangle {
                         VerticalLayout {
                             alignment: center;
                             MiniKnob {
+                                controlled: false;
                                 label: "Spacing";
                                 hint: "The closest two markers may land: a flam or a roll faster than this is one slice";
                                 minimum: 10; maximum: 250; default-value: 50;
@@ -800,6 +805,7 @@ export component SamplerDeviceFace inherits Rectangle {
                     if root.play-mode == 1 && root.slice-pattern-open : HorizontalLayout {
                         spacing: 4px;
                         ToggleButton {
+                            controlled: false;
                             text: "1/16"; min-width: 40px; max-width: 40px; max-height: 20px;
                             tooltip: "Quantize"; hint: "Put each note on the nearest sixteenth; off keeps the break's own timing";
                             checked <=> root.slice-pattern-grid;
