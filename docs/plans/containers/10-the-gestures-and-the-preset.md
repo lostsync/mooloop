@@ -9,20 +9,26 @@ If this step is large, `07` was done wrong.
 
 ## The gestures
 
+Rewritten 2026-09-23 with 09, whose list face (Adam's answer: copy Bitwig's FX
+Layer) takes over two of the gestures this step used to have to invent.
+
 `04` found that two gestures were enough for containers and a third already
-worked:
+worked. 09 makes **a Chain the unit of a branch**, because a branch's Level,
+Mute and Solo are a container's parameters, so every gesture that makes a
+branch makes a Chain:
 
 | Gesture | Chain today | Layer |
 | --- | --- | --- |
-| **Wrap** | left-rail button puts a box around the clicked row's *run* | the same button needs to offer a choice of kind |
+| **Wrap** | left-rail button puts a box around the clicked row's *run* | the same button offers a choice of kind. Wrapping in a layer makes a layer of **one branch**, a Chain holding the run, so the branch has its controls from the start |
 | **Unwrap** | right-rail button, leaves the contents where they are | reads the predicate; no change |
-| **Drop into a run** | already worked — `move_effect` decides what the landing index falls inside | already works; a drop into a layer makes a new branch |
-| **Add a branch** | `insert_effect_into_container` is the container rail's `+` | the same call; inside a layer it lands a branch |
+| **Add a branch** | `insert_effect_into_container` is the container rail's `+` | **the list's `+`**: an empty Chain appended as the layer's *last* branch, and selected, so the rack shows it ready to fill from its own `+` |
+| **Remove a branch** | the rail's remove, a box going with its contents | **a row's context menu** in the list: *Remove* takes the branch head and its run (`remove_effect` already does exactly that) |
+| **Drop into a run** | already worked -- `move_effect` decides what the landing index falls inside | a drop between two branches makes a leaf branch, which 09 records as legal and control-less. Wrapping it in a Chain as it lands is the fix, if it turns out to matter in use |
 
-So the only new interface object is **choosing which box to wrap in**, and
-there are two honest options: a second rail button, or one button with a
-menu. A menu is the more extensible answer and it is the one with a known
-trap.
+So the new interface objects are **choosing which box to wrap in** and **the
+list row's context menu**. The wrap choice is a menu on the existing button
+rather than a second rail button, because a menu extends to a third kind and a
+button row does not. Both are menus, and a menu comes with a known trap.
 
 **`scripts/dupe-audit popup-close-order`.** A `PopupWindow` tears down the
 repeater item whose handler is still running, so a callback written after
