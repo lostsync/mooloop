@@ -410,3 +410,18 @@ In the order worth playing:
     loop starts, a slide through every frame. On sixteenths they resolve to
     13, which is the grid. Play `off.wav` against `sixteenth.wav`. The
     second should step in rhythm, a sixteenth at a time.
+12. **Slices detected on a break** (MOO-44). A two-bar synthetic break with
+    a ghost snare and a bass tone under it, where every hit's frame is
+    known. It's detected at three sensitivities, then chopped with the
+    default's slices played backwards on the sixteenths:
+
+    ```sh
+    scripts/antibox --no-incremental --pull target/sampler-slice-detect \
+      cargo run -p mooloop-engine --example sampler_slice_detect -- target/sampler-slice-detect
+    ```
+
+    At the default the binary reports 18 of 18 hits within 2 ms and no
+    marker on anything else. At 0.25 it finds 16 and misses the ghost
+    snares. Play `chop.wav`: every slice should start on its hit, with no
+    flam and no pre-echo. Then, in the app, DETECT a real break, move a
+    marker by hand, and REPLACE. The moved marker should stay.

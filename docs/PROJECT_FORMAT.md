@@ -225,6 +225,12 @@ Slice mode adds `play_mode` and `slice_base_note` to the parameters, plus a
 pairs sorted by source frame. All three default, so a song written before
 slicing loads as an ordinary pitched sampler with no markers.
 
+Each marker also carries `hand` (MOO-44, 2026-09-24): whether it was placed
+or moved by hand, rather than laid down by Divide or by transient detection.
+Detection's Replace keeps hand-placed markers. A marker saved without the
+field loads as hand-placed, so accepting a detection never drops a marker
+from an older song.
+
 A committed time stretch stores a `commit` table: the stretch mode, resolved
 ratio and grain that were baked, plus the start/end/loop fractions and the
 `{ id, frame }` markers the editor held before the commit. The rendered audio

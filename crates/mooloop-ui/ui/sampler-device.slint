@@ -257,6 +257,15 @@ export component SamplerDeviceFace inherits Rectangle {
     // How many slices DIVIDE should lay down. Pure view state: the request,
     // not the result.
     in-out property <int> slice-count: 8;
+    // Transient detection (MOO-44). While a preview is up, the markers it
+    // proposes are drawn ghosted over the real ones, and the slice row
+    // becomes its controls: sensitivity, the closest two markers may land
+    // (ms), Replace, Merge, Cancel. Sensitivity and spacing are view state
+    // the face owns; each change asks Rust to detect again.
+    in property <bool> slice-preview;
+    in property <[float]> slice-preview-markers;
+    in-out property <float> slice-sensitivity: 0.5;
+    in-out property <float> slice-spacing-ms: 50;
     // Whether the published buffer is a committed render, what it was baked
     // at, and whether the project has since moved off the tempo it was fitted
     // to. Stale is shown, never acted on: re-baking a loop underneath someone
@@ -379,6 +388,9 @@ export component SamplerDeviceFace inherits Rectangle {
     callback slice-audition-released(int);
     callback slices-divided(int);
     callback slices-cleared();
+    callback slices-detect(float, float);
+    callback slices-accept(int);
+    callback slices-cancel();
     // Bracket a marker drag so the history collapses its frames into one
     // undo entry, the way the piano roll's gestures already do.
     callback slice-drag-started();
@@ -620,6 +632,17 @@ export component SamplerDeviceFace inherits Rectangle {
                         root.loop-end = clamp(abs, root.loop-start + 0.001, root.end-pos); root.loop-end-changed(root.loop-end);
                     }
                 }
+                // A detection preview, ghosted: what Replace or Merge would
+                // lay down. Drawn, not handled; the row below decides.
+                if root.slice-preview : Rectangle {
+                    for position in root.slice-preview-markers : Rectangle {
+                        x: clamp(root.to-view(position), 0, 1) * (parent.width - 1px);
+                        width: 1px;
+                        height: parent.height;
+                        background: Theme.focus;
+                        opacity: root.to-view(position) >= 0 && root.to-view(position) <= 1 ? 0.45 : 0.0;
+                    }
+                }
                 // Last, so a handle sitting under a trim marker is the one
                 // the pointer finds: the trim markers are two fixed points a
                 // user rarely moves, and the slices are what this mode is for.
@@ -719,7 +742,46 @@ export component SamplerDeviceFace inherits Rectangle {
                             picked(i) => { root.loop-grid-changed(i); }
                         }
                     }
-                    if root.play-mode == 1 : HorizontalLayout {
+                    if root.play-mode == 1 && root.slice-preview : HorizontalLayout {
+                        spacing: 4px;
+                        VerticalLayout {
+                            alignment: center;
+                            MiniKnob {
+                                label: "Sensitivity";
+                                hint: "How quiet a hit still gets a marker";
+                                value <=> root.slice-sensitivity;
+                                value-text: round(root.slice-sensitivity * 100) + "%";
+                                changed(v) => { root.slices-detect(v, root.slice-spacing-ms); }
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            MiniKnob {
+                                label: "Spacing";
+                                hint: "The closest two markers may land: a flam or a roll faster than this is one slice";
+                                minimum: 10; maximum: 250; default-value: 50;
+                                value <=> root.slice-spacing-ms;
+                                value-text: round(root.slice-spacing-ms) + " ms";
+                                changed(v) => { root.slices-detect(root.slice-sensitivity, v); }
+                            }
+                        }
+                        ToolButton {
+                            text: "REPLACE"; min-width: 56px; max-width: 56px; min-height: 20px;
+                            tooltip: "Replace"; hint: "Keep the markers you placed by hand and replace the rest";
+                            clicked => { root.slices-accept(0); }
+                        }
+                        ToolButton {
+                            text: "MERGE"; min-width: 46px; max-width: 46px; min-height: 20px;
+                            tooltip: "Merge"; hint: "Keep every marker, and add the detected ones that aren't beside one";
+                            clicked => { root.slices-accept(1); }
+                        }
+                        ToolButton {
+                            text: "CANCEL"; min-width: 50px; max-width: 50px; min-height: 20px;
+                            tooltip: "Cancel"; hint: "Drop the preview and change nothing";
+                            clicked => { root.slices-cancel(); }
+                        }
+                    }
+                    if root.play-mode == 1 && !root.slice-preview : HorizontalLayout {
                         spacing: 4px;
                         StepperField {
                             label: "BASE"; value <=> root.slice-base-note;
@@ -737,6 +799,11 @@ export component SamplerDeviceFace inherits Rectangle {
                             text: "DIVIDE"; min-width: 46px; max-width: 46px; min-height: 20px;
                             tooltip: "Divide"; hint: "Replace the slices with equal divisions of the playback region";
                             clicked => { root.slices-divided(root.slice-count); }
+                        }
+                        ToolButton {
+                            text: "DETECT"; min-width: 48px; max-width: 48px; min-height: 20px;
+                            tooltip: "Detect"; hint: "Find the hits and preview a marker on each";
+                            clicked => { root.slices-detect(root.slice-sensitivity, root.slice-spacing-ms); }
                         }
                         ToolButton {
                             text: "CLEAR"; min-width: 42px; max-width: 42px; min-height: 20px;

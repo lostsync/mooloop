@@ -2142,6 +2142,7 @@ mod tests {
                     .map(|index| mooloop_core::SliceMarker {
                         id: index + 1,
                         frame: index as u32 * 1_000,
+                        hand: true,
                     })
                     .collect(),
                 source_start: 0.0,

@@ -10,14 +10,37 @@ use crate::channel::ChannelState;
 use crate::sample::{sample_description, sample_duration, waveform_peaks};
 use crate::session::{Session, WAVEFORM_BINS};
 use mooloop_dsp::sample_analysis::{
-    fraction_from_frame, frame_from_fraction, snap_to_zero_crossing, snap_window_frames,
-    SnapResult, DEFAULT_SNAP_WINDOW_MS,
+    detect_onsets, fraction_from_frame, frame_from_fraction, snap_to_zero_crossing,
+    snap_window_frames, OnsetSettings, SnapResult, DEFAULT_SNAP_WINDOW_MS,
 };
 use mooloop_dsp::SampleData;
 use mooloop_core::{
     EngineCommand, SampleCommit, SamplerParams, SliceMap, SliceMarker, StretchMode, MAX_SLICES,
     MAX_STRETCH_BARS, MAX_STRETCH_RATIO, MIN_STRETCH_BARS, MIN_STRETCH_RATIO,
 };
+
+/// How a detection preview is accepted (MOO-44).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SliceAccept {
+    /// Keep the markers placed by hand, replace the rest.
+    Replace,
+    /// Keep every marker, and add the detected ones that aren't beside one.
+    Merge,
+}
+
+/// Source frames as fractions of the published buffer, for a preview.
+pub fn frame_fractions(channel: &ChannelState, frames: &[u32]) -> Vec<f32> {
+    let len = channel
+        .published_sample()
+        .map_or(0, |sample| sample.frames.len());
+    if len == 0 {
+        return Vec::new();
+    }
+    frames
+        .iter()
+        .map(|frame| fraction_from_frame(*frame as usize, len))
+        .collect()
+}
 
 /// What a slice edit did.
 pub enum SliceEdit {
@@ -406,8 +429,8 @@ impl Session {
                 .markers()
                 .iter()
                 .map(|marker| SliceMarker {
-                    id: marker.id,
                     frame: snap_slice_frame(&params, &sample, marker.frame as usize) as u32,
+                    ..*marker
                 })
                 .collect();
             channel.slices.rebuild(snapped);
@@ -447,6 +470,50 @@ impl Session {
         let after = *params;
         self.mark_dirty();
         Some(after)
+    }
+
+    /// Detects the onsets in the selected channel's playback region, as
+    /// source frames, for the editor to preview (MOO-44). Nothing changes
+    /// until [`Self::accept_slices`]; `None` with no audio.
+    ///
+    /// Runs on the calling thread: a two-bar break is a few milliseconds of
+    /// arithmetic, and nothing here is near the audio thread.
+    pub fn detect_slices(&self, settings: OnsetSettings) -> Option<Vec<u32>> {
+        let channel = self.channels.get(self.selected)?;
+        let sample = channel.published_sample()?;
+        let len = sample.frames.len();
+        let params = channel.sampler_params();
+        let start = frame_from_fraction(params.start, len);
+        let end = frame_from_fraction(params.end, len);
+        Some(
+            detect_onsets(&sample.frames, sample.sample_rate, start, end, settings)
+                .into_iter()
+                .map(|frame| frame as u32)
+                .collect(),
+        )
+    }
+
+    /// Accepts a detection preview (MOO-44). Replace keeps the markers
+    /// placed by hand and replaces the rest, and Merge adds beside every
+    /// marker. A detected frame within `settings.min_spacing_ms` of a kept
+    /// marker is left out. Returns the map as fractions and how many markers
+    /// were added; the caller records it as one undo step.
+    pub fn accept_slices(
+        &mut self,
+        frames: &[u32],
+        settings: OnsetSettings,
+        how: SliceAccept,
+    ) -> Option<(Vec<f32>, usize)> {
+        let (_, channel) = self.sliced_channel()?;
+        let rate = channel.published_sample()?.sample_rate;
+        let gap = (settings.min_spacing_ms.max(0.0) / 1_000.0 * rate as f32) as u32;
+        let added = match how {
+            SliceAccept::Replace => channel.slices.replace_detected(frames, gap),
+            SliceAccept::Merge => channel.slices.merge_detected(frames, gap),
+        };
+        let markers = slice_fractions(channel);
+        self.mark_dirty();
+        Some((markers, added))
     }
 
     /// Empties the slice map.

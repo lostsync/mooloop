@@ -1000,6 +1000,19 @@ boundary.
   points inside the region leaves the loop free. Loop grid is automatable
   and not modulatable, and Free (the default, and every older song) is the
   loop as it always was.
+- **Slices can be detected** (MOO-44, 2026-09-24). DETECT in Slice mode
+  finds the hits in the playback region and previews a ghosted marker on
+  each. Nothing changes until the preview is accepted. While it's up, the
+  slice row holds Sensitivity (how quiet a hit still counts) and Spacing
+  (the closest two markers may land, 10-250 ms). Each of them re-detects.
+  REPLACE keeps the markers placed or moved by hand and replaces the rest,
+  MERGE keeps every marker and adds the detected ones that aren't beside
+  one, and CANCEL changes nothing. Either accept is one undo step. The
+  detector measures both channels and a high-passed copy of each, so a hit
+  panned to one side counts and a steady tone doesn't. Each marker lands
+  just before its attack. Detected markers are ordinary markers. Whether
+  a marker was placed by hand is saved, and every marker in an older song
+  counts as hand-placed.
 - Sampler voice allocation is fixed-capacity and deterministic: restart reuses
   the oldest matching pitch, layer mode overlaps notes, and overflow steals
   a releasing voice before a held one, the oldest of either. The sampler, the

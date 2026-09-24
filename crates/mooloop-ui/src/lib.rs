@@ -121,9 +121,10 @@ use mooloop_session::take::{FinishedTake, TakeRecorder};
 use mooloop_session::project::{
     fresh_starter_seed, normalize_project_pattern_banks, HistoryMove, ProjectEdit, ProjectSnapshot,
 };
+use mooloop_dsp::sample_analysis::OnsetSettings;
 use mooloop_session::sampler::{
-    commit_is_stale, fit_readout, slice_fractions, snap_marker, snap_status, typed_bars,
-    SampleMarker, SliceEdit,
+    commit_is_stale, fit_readout, frame_fractions, slice_fractions, snap_marker, snap_status,
+    typed_bars, SampleMarker, SliceAccept, SliceEdit,
 };
 use mooloop_session::sample::{
     adjacent_sample, inspect_sample, load_sample_at_path, sample_description, sample_duration,
@@ -13551,6 +13552,79 @@ impl AppUi {
                 }
                 record_project_history(&commands, before, &history_state, &window, "Slices divided");
             });
+        }
+        {
+            // Transient detection (MOO-44). The preview is the detector's
+            // frames and the settings that found them, held here until it is
+            // accepted or cancelled; the song does not change until then.
+            // The channel it was detected on, its frames, and its settings.
+            type SlicePreview = Option<(usize, Vec<u32>, OnsetSettings)>;
+            let preview: Rc<RefCell<SlicePreview>> = Rc::new(RefCell::new(None));
+            {
+                let st = state.clone();
+                let weak = window.as_weak();
+                let preview = preview.clone();
+                window.on_slices_detect(move |sensitivity, spacing| {
+                    let Some(window) = weak.upgrade() else { return };
+                    let settings = OnsetSettings {
+                        sensitivity,
+                        min_spacing_ms: spacing,
+                    };
+                    let st = st.borrow();
+                    let Some(frames) = st.session.detect_slices(settings) else {
+                        window.set_status_message("No sample to detect".into());
+                        return;
+                    };
+                    let Some(channel) = st.session.channels.get(st.session.selected) else {
+                        return;
+                    };
+                    let fractions = frame_fractions(channel, &frames);
+                    window.set_status_message(format!("Found {} hits", frames.len()).into());
+                    window.set_slice_preview_markers(ModelRc::new(VecModel::from(fractions)));
+                    window.set_slice_preview(true);
+                    *preview.borrow_mut() = Some((st.session.selected, frames, settings));
+                });
+            }
+            {
+                let st = state.clone();
+                let history_state = state.clone();
+                let commands = command_state.clone();
+                let weak = window.as_weak();
+                let audio_out = channel_audio_tx.clone();
+                let preview = preview.clone();
+                window.on_slices_accept(move |how| {
+                    let Some(window) = weak.upgrade() else { return };
+                    let Some((channel, frames, settings)) = preview.borrow_mut().take() else {
+                        return;
+                    };
+                    window.set_slice_preview(false);
+                    // A preview belongs to the channel it was detected on.
+                    if st.borrow().session.selected != channel {
+                        return;
+                    }
+                    let how = if how == 1 { SliceAccept::Merge } else { SliceAccept::Replace };
+                    let before = project_snapshot(&st.borrow(), &window);
+                    {
+                        let mut st = st.borrow_mut();
+                        let Some((markers, added)) = st.session.accept_slices(&frames, settings, how)
+                        else {
+                            return;
+                        };
+                        st.slice_model.set_vec(markers);
+                        st.publish_selected_audio(&audio_out);
+                        window.set_status_message(format!("Added {added} detected slices").into());
+                    }
+                    record_project_history(&commands, before, &history_state, &window, "Slices detected");
+                });
+            }
+            {
+                let weak = window.as_weak();
+                window.on_slices_cancel(move || {
+                    let Some(window) = weak.upgrade() else { return };
+                    preview.borrow_mut().take();
+                    window.set_slice_preview(false);
+                });
+            }
         }
         {
             let st = state.clone();

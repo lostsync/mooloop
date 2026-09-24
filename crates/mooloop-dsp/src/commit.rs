@@ -101,8 +101,8 @@ pub fn commit_stretch(
     // did not become different slices.
     let mut committed_slices = SliceMap::new();
     committed_slices.rebuild(slices.markers().iter().map(|marker| SliceMarker {
-        id: marker.id,
         frame: render.output_frame_of(f64::from(marker.frame)).round() as u32,
+        ..*marker
     }));
 
     let to_fraction = |fraction: f32| {

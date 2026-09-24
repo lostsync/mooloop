@@ -187,6 +187,19 @@ pub const DEFAULT_SLICE_BASE_NOTE: u8 = 36;
 pub struct SliceMarker {
     pub id: u64,
     pub frame: u32,
+    /// Placed or moved by hand, as opposed to laid down by Divide or by
+    /// transient detection (MOO-44). Detection's Replace keeps these and
+    /// replaces the rest, so accepting a detection never loses manual work.
+    ///
+    /// Absent in a song saved before detection existed, and read there as
+    /// placed by hand: nothing was detected then, and the careful reading of
+    /// an old map is that every marker in it is somebody's.
+    #[serde(default = "placed_by_hand")]
+    pub hand: bool,
+}
+
+fn placed_by_hand() -> bool {
+    true
 }
 
 /// The slice boundaries of one sample, sorted by frame and unique.
@@ -284,7 +297,14 @@ impl SliceMap {
         let at = self
             .markers
             .partition_point(|marker| marker.frame < frame);
-        self.markers.insert(at, SliceMarker { id, frame });
+        self.markers.insert(
+            at,
+            SliceMarker {
+                id,
+                frame,
+                hand: true,
+            },
+        );
         Some(id)
     }
 
@@ -316,6 +336,8 @@ impl SliceMap {
             return false;
         }
         self.markers[index].frame = frame;
+        // A marker the hand moved is the hand's, wherever it came from.
+        self.markers[index].hand = true;
         self.markers.sort_by_key(|marker| marker.frame);
         true
     }
@@ -337,9 +359,55 @@ impl SliceMap {
             // `round` can land two low slice counts on the same frame in a
             // very short region; `add` refuses the duplicate rather than
             // producing a zero-length slice.
-            self.add(frame);
+            if let Some(id) = self.add(frame) {
+                // Laid down by arithmetic, not by hand: detection may
+                // replace it (MOO-44).
+                if let Some(index) = self.index_of(id) {
+                    self.markers[index].hand = false;
+                }
+            }
         }
     }
+
+    /// Keep the markers placed by hand, drop the rest, and add `frames`
+    /// (MOO-44's Replace). A detected frame within `min_gap` of a kept
+    /// marker is left out, since the hand already put one there. Returns how
+    /// many were added; the map's cap is respected, earliest first.
+    pub fn replace_detected(&mut self, frames: &[u32], min_gap: u32) -> usize {
+        self.markers.retain(|marker| marker.hand);
+        self.merge_detected(frames, min_gap)
+    }
+
+    /// Add `frames` beside every marker already here (MOO-44's Merge),
+    /// leaving out any within `min_gap` of one. Returns how many were added.
+    pub fn merge_detected(&mut self, frames: &[u32], min_gap: u32) -> usize {
+        let mut added = 0;
+        for &frame in frames {
+            if self.markers.len() >= MAX_SLICES {
+                break;
+            }
+            let near = self
+                .markers
+                .iter()
+                .any(|marker| marker.frame.abs_diff(frame) < min_gap.max(1));
+            if near {
+                continue;
+            }
+            let id = self.mint();
+            let at = self.markers.partition_point(|marker| marker.frame < frame);
+            self.markers.insert(
+                at,
+                SliceMarker {
+                    id,
+                    frame,
+                    hand: false,
+                },
+            );
+            added += 1;
+        }
+        added
+    }
+
 
     pub fn clear(&mut self) {
         self.markers.clear();
@@ -1047,6 +1115,51 @@ mod slice_tests {
         assert_eq!(map.get(1).map(|marker| marker.frame), Some(150));
     }
 
+    /// Replace keeps what the hand placed or moved and drops what Divide
+    /// laid down; a detected frame beside a kept marker is left out, because
+    /// the hand already put one there (MOO-44).
+    #[test]
+    fn replacing_with_detected_markers_keeps_the_hand_placed_ones() {
+        let mut map = SliceMap::new();
+        map.divide_evenly(4, 0, 4_000);
+        assert!(map.markers().iter().all(|marker| !marker.hand));
+        let placed = map.add(2_500).unwrap();
+        let moved = map.markers()[1].id;
+        assert!(map.move_to(moved, 1_100));
+
+        let added = map.replace_detected(&[0, 1_120, 1_900, 2_510, 3_300], 50);
+        let frames: Vec<u32> = map.markers().iter().map(|marker| marker.frame).collect();
+        assert_eq!(frames, [0, 1_100, 1_900, 2_500, 3_300]);
+        assert_eq!(added, 3, "1_120 and 2_510 sit beside kept markers");
+        assert!(map.index_of(placed).is_some() && map.index_of(moved).is_some());
+        assert!(!map.markers()[0].hand, "a detected marker is not the hand's");
+    }
+
+    /// Merge keeps every marker, and adds only what isn't beside one.
+    #[test]
+    fn merging_detected_markers_keeps_every_existing_one() {
+        let mut map = SliceMap::new();
+        map.divide_evenly(2, 0, 2_000);
+        let before: Vec<u64> = map.markers().iter().map(|marker| marker.id).collect();
+        let added = map.merge_detected(&[10, 500, 1_020, 1_500], 50);
+        assert_eq!(added, 2);
+        for id in before {
+            assert!(map.index_of(id).is_some(), "merge dropped marker {id}");
+        }
+        let frames: Vec<u32> = map.markers().iter().map(|marker| marker.frame).collect();
+        assert_eq!(frames, [0, 500, 1_000, 1_500]);
+    }
+
+    /// Detection respects the map's cap: what doesn't fit is not added.
+    #[test]
+    fn detection_never_overfills_the_map() {
+        let mut map = SliceMap::new();
+        let frames: Vec<u32> = (0..(MAX_SLICES as u32 + 40)).map(|n| n * 100).collect();
+        let added = map.merge_detected(&frames, 10);
+        assert_eq!(added, MAX_SLICES);
+        assert_eq!(map.len(), MAX_SLICES);
+    }
+
     /// Deserialization is the one way into the map that skips its mutators,
     /// so it is the one way an unsorted or duplicated map could reach a
     /// voice. A hand-edited document is repaired on the way in, like every
@@ -1066,9 +1179,18 @@ markers = [
         .unwrap();
         assert_eq!(
             map.markers(),
+            // Saved with no `hand`, so both load as placed by hand (MOO-44).
             &[
-                SliceMarker { id: 2, frame: 100 },
-                SliceMarker { id: 1, frame: 900 },
+                SliceMarker {
+                    id: 2,
+                    frame: 100,
+                    hand: true
+                },
+                SliceMarker {
+                    id: 1,
+                    frame: 900,
+                    hand: true
+                },
             ]
         );
         // And a fresh marker must not collide with an adopted id.

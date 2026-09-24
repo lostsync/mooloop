@@ -2031,6 +2031,9 @@ export component MainWindow inherits Window {
     in-out property <int> slice-base-note: 36;
     in-out property <[float]> slice-markers;
     in-out property <int> slice-count: 8;
+    // Transient detection's preview (MOO-44).
+    in-out property <bool> slice-preview;
+    in-out property <[float]> slice-preview-markers;
     in-out property <bool> sample-committed;
     in-out property <string> commit-label;
     in-out property <bool> commit-stale;
@@ -2146,6 +2149,9 @@ export component MainWindow inherits Window {
     callback slice-audition-released(int);
     callback slices-divided(int);
     callback slices-cleared();
+    callback slices-detect(float, float);
+    callback slices-accept(int);
+    callback slices-cancel();
     callback slice-drag-started();
     callback slice-drag-finished();
     callback commit-clicked();
@@ -4401,6 +4407,11 @@ export component MainWindow inherits Window {
                                                 slice-audition-released(i) => { root.slice-audition-released(i); }
                                                 slices-divided(n) => { root.slices-divided(n); }
                                                 slices-cleared() => { root.slices-cleared(); }
+                                                slice-preview: root.slice-preview;
+                                                slice-preview-markers: root.slice-preview-markers;
+                                                slices-detect(sensitivity, spacing) => { root.slices-detect(sensitivity, spacing); }
+                                                slices-accept(how) => { root.slices-accept(how); }
+                                                slices-cancel() => { root.slices-cancel(); }
                                                 slice-drag-started() => { root.slice-drag-started(); }
                                                 slice-drag-finished() => { root.slice-drag-finished(); }
                                                 commit-clicked() => { root.commit-clicked(); }
