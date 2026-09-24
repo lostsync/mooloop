@@ -113,6 +113,12 @@ pub struct LoadMeters {
     peak_period_permille: AtomicU32,
     faults: AtomicU32,
     realtime: AtomicU32,
+    /// The callback thread, as the kernel names it (a Linux thread id, a
+    /// macOS Mach port), recorded on its first block; zero until then. The
+    /// GUI asks the kernel about *this* thread each time it reads the status
+    /// (MOO-215), because a driver may promote it to realtime after its first
+    /// block, and rtkit may demote it at any time.
+    thread: AtomicU64,
     /// Every callback since the engine started, never cleared: whether this
     /// has moved is whether the engine is running at all, which is a
     /// different question from the window's and must not be answered by
@@ -132,6 +138,7 @@ impl LoadMeters {
             peak_period_permille: AtomicU32::new(0),
             faults: AtomicU32::new(0),
             realtime: AtomicU32::new(RealtimeStatus::Unknown.code()),
+            thread: AtomicU64::new(0),
             callbacks: AtomicU64::new(0),
         })
     }
@@ -178,15 +185,40 @@ impl LoadMeters {
         }
     }
 
-    /// Publish how the callback thread is scheduled. Cheap enough to call
-    /// every block, but the caller asks the kernel only once.
+    /// Publish how the callback thread is scheduled.
     pub fn set_realtime(&self, status: RealtimeStatus) {
         self.realtime.store(status.code(), Ordering::Relaxed);
     }
 
-    /// The status without draining the window, for a caller that only wants
-    /// to know whether the thread is realtime.
+    /// Record the calling thread as the callback's, and publish how it is
+    /// scheduled now. Called once, from the callback's first block: two
+    /// system calls then, and none on any block after it -- every later
+    /// reading is made by whoever asks, from their own thread
+    /// ([`Self::realtime`]).
+    pub fn set_callback_thread(&self) {
+        self.thread.store(current_thread_id(), Ordering::Relaxed);
+        self.set_realtime(thread_realtime_status());
+    }
+
+    /// How the callback thread is scheduled **now**, without draining the
+    /// window. Never call it from the callback.
+    ///
+    /// Asked of the kernel each time, about the thread the first block
+    /// recorded (MOO-215). The first block's own answer used to stand for
+    /// the whole session, and PipeWire's JACK layer can promote the thread
+    /// after that block, so the readout said "not realtime" for a thread
+    /// `chrt -p` reported as `SCHED_FIFO`. It is also how a demotion
+    /// mid-session shows, which is the case the readout exists for. Before
+    /// the first block, and on a platform with no way to ask about another
+    /// thread, it is the last published answer.
     pub fn realtime(&self) -> RealtimeStatus {
+        let thread = self.thread.load(Ordering::Relaxed);
+        if thread != 0 {
+            if let Some(status) = realtime_status_of(thread) {
+                self.set_realtime(status);
+                return status;
+            }
+        }
         RealtimeStatus::from_code(self.realtime.load(Ordering::Relaxed))
     }
 
@@ -253,11 +285,38 @@ fn raise(cell: &AtomicU32, value: u32) {
 pub fn thread_realtime_status() -> RealtimeStatus {
     // SAFETY: `sched_getscheduler(0)` reads the calling thread's policy and
     // takes no pointer. It cannot fail for pid 0.
-    match unsafe { libc::sched_getscheduler(0) } {
+    linux_policy_status(unsafe { libc::sched_getscheduler(0) })
+}
+
+#[cfg(target_os = "linux")]
+fn linux_policy_status(policy: libc::c_int) -> RealtimeStatus {
+    match policy {
         libc::SCHED_FIFO | libc::SCHED_RR => RealtimeStatus::Realtime,
         code if code < 0 => RealtimeStatus::Unsupported,
         _ => RealtimeStatus::TimeShared,
     }
+}
+
+/// The calling thread's kernel id, for [`LoadMeters::set_callback_thread`].
+#[cfg(target_os = "linux")]
+fn current_thread_id() -> u64 {
+    // SAFETY: `gettid` takes no arguments and cannot fail.
+    let tid = unsafe { libc::syscall(libc::SYS_gettid) };
+    u64::try_from(tid).unwrap_or(0)
+}
+
+/// How the thread `thread` names is scheduled, asked from any thread of
+/// this process. A thread that has gone is `Unsupported`: the kernel no
+/// longer has an answer, and repeating the last one would be a guess. Until
+/// the kernel reuses its id, that is; after the callback thread ends, a
+/// later thread may take its id and be the one described, which only
+/// matters while no engine is running and nothing reads the badge.
+#[cfg(target_os = "linux")]
+fn realtime_status_of(thread: u64) -> Option<RealtimeStatus> {
+    let tid = libc::pid_t::try_from(thread).ok()?;
+    // SAFETY: reads another thread's policy by id; takes no pointer. An id
+    // that is no longer a thread fails with ESRCH, read as `Unsupported`.
+    Some(linux_policy_status(unsafe { libc::sched_getscheduler(tid) }))
 }
 
 /// macOS has no `SCHED_FIFO` for an audio thread to hold. Core Audio's I/O
@@ -267,6 +326,27 @@ pub fn thread_realtime_status() -> RealtimeStatus {
 /// defaults.
 #[cfg(target_os = "macos")]
 pub fn thread_realtime_status() -> RealtimeStatus {
+    // SAFETY: `pthread_mach_thread_np` borrows the calling thread's port
+    // without adding a right, so nothing needs deallocating.
+    mach_policy_status(unsafe { libc::pthread_mach_thread_np(libc::pthread_self()) })
+}
+
+/// The calling thread's Mach port, for [`LoadMeters::set_callback_thread`].
+/// A port name is valid from any thread of the task that holds it.
+#[cfg(target_os = "macos")]
+fn current_thread_id() -> u64 {
+    // SAFETY: as in `thread_realtime_status`.
+    u64::from(unsafe { libc::pthread_mach_thread_np(libc::pthread_self()) })
+}
+
+#[cfg(target_os = "macos")]
+fn realtime_status_of(thread: u64) -> Option<RealtimeStatus> {
+    Some(mach_policy_status(libc::mach_port_t::try_from(thread).ok()?))
+}
+
+/// The time-constraint policy question, asked of the thread `port` names.
+#[cfg(target_os = "macos")]
+fn mach_policy_status(port: libc::mach_port_t) -> RealtimeStatus {
     let mut policy = libc::thread_time_constraint_policy {
         period: 0,
         computation: 0,
@@ -275,13 +355,12 @@ pub fn thread_realtime_status() -> RealtimeStatus {
     };
     let mut count = libc::THREAD_TIME_CONSTRAINT_POLICY_COUNT;
     let mut get_default: libc::boolean_t = 0;
-    // SAFETY: `pthread_mach_thread_np` borrows the calling thread's port
-    // without adding a right, so nothing needs deallocating. `policy` is the
-    // struct the flavor names and `count` says how many integers it holds;
-    // the kernel writes no more than that.
+    // SAFETY: `policy` is the struct the flavor names and `count` says how
+    // many integers it holds; the kernel writes no more than that. A port
+    // that no longer names a thread fails, read as `Unsupported`.
     let status = unsafe {
         libc::thread_policy_get(
-            libc::pthread_mach_thread_np(libc::pthread_self()),
+            port,
             libc::THREAD_TIME_CONSTRAINT_POLICY as libc::thread_policy_flavor_t,
             (&mut policy as *mut libc::thread_time_constraint_policy).cast(),
             &mut count,
@@ -300,6 +379,16 @@ pub fn thread_realtime_status() -> RealtimeStatus {
     RealtimeStatus::Unsupported
 }
 
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn current_thread_id() -> u64 {
+    0
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn realtime_status_of(_thread: u64) -> Option<RealtimeStatus> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,6 +403,74 @@ mod tests {
     #[test]
     fn an_ordinary_thread_is_reported_time_shared() {
         assert_eq!(thread_realtime_status(), RealtimeStatus::TimeShared);
+    }
+
+    /// **The status is the callback thread's as it is now, asked from the
+    /// thread reading it** (MOO-215). A thread standing in for the callback
+    /// records itself on its first block and waits. The reading, made from
+    /// this thread, is that thread's. On Linux, where the kernel allows it,
+    /// the stand-in is then promoted to `SCHED_FIFO` *after* its first block,
+    /// which is what PipeWire's JACK layer does, and the next reading says
+    /// realtime. Pointed at an id that is no thread, the next reading says
+    /// the kernel has no answer instead of repeating the stored one.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn the_status_is_the_callback_threads_now_not_at_its_first_block() {
+        use std::sync::mpsc;
+        let meters = LoadMeters::new();
+        assert_eq!(meters.realtime(), RealtimeStatus::Unknown, "no block yet");
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+        let callback = std::thread::spawn({
+            let meters = Arc::clone(&meters);
+            move || {
+                meters.set_callback_thread();
+                ready_tx.send(()).expect("the test is waiting");
+                done_rx.recv().expect("the test says when");
+            }
+        });
+        ready_rx.recv().expect("the stand-in recorded itself");
+        assert_eq!(meters.take().realtime, RealtimeStatus::TimeShared);
+
+        #[cfg(target_os = "linux")]
+        {
+            let tid = libc::pid_t::try_from(meters.thread.load(Ordering::Relaxed))
+                .expect("a thread id fits a pid_t");
+            let param = libc::sched_param { sched_priority: 1 };
+            // SAFETY: sets another thread's policy by id, reading `param`.
+            let promoted = unsafe { libc::sched_setscheduler(tid, libc::SCHED_FIFO, &param) } == 0;
+            if promoted {
+                assert_eq!(
+                    meters.take().realtime,
+                    RealtimeStatus::Realtime,
+                    "promoted after its first block, and the reading followed"
+                );
+            } else {
+                eprintln!(
+                    "sched_setscheduler(SCHED_FIFO) was refused here (RLIMIT_RTPRIO), so the \
+                     promotion half of this test did not run; the stand-in and the gone \
+                     thread still did"
+                );
+            }
+        }
+
+        done_tx.send(()).expect("the stand-in is waiting");
+        callback.join().expect("the stand-in did not panic");
+        // Asked each time, not remembered: point the record at an id no
+        // thread can have (above Linux's `pid_max` ceiling of 2^22), and the
+        // reading is the kernel's "no such thread" rather than the
+        // `TimeShared` stored a moment ago. Not the joined stand-in's own
+        // id: a parallel test run reuses thread ids at once, and the first
+        // draft of this read another test's thread.
+        #[cfg(target_os = "linux")]
+        {
+            meters.thread.store(u64::from(i32::MAX.unsigned_abs()), Ordering::Relaxed);
+            assert_eq!(
+                meters.take().realtime,
+                RealtimeStatus::Unsupported,
+                "an id that is no thread has no policy to read"
+            );
+        }
     }
 
     #[test]

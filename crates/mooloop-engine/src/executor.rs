@@ -219,7 +219,10 @@ impl Executor {
             // Once per thread, and on the first block only when the driver
             // gave no earlier chance: see `prepare_audio_thread`.
             prepare_audio_thread();
-            self.load.set_realtime(crate::load::thread_realtime_status());
+            // The thread is recorded, and the GUI asks the kernel about it
+            // each time it reads the status (MOO-215): a driver can promote
+            // it after this block, and rtkit can demote it at any time.
+            self.load.set_callback_thread();
         }
         // `Instant::now` is a vDSO read of the monotonic clock on Linux and
         // `mach_absolute_time` on macOS: no syscall, no lock, tens of

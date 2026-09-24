@@ -413,7 +413,9 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   The bar's right end reads the audio callback once a second: its load as a
   share of the block budget, a dropout count in amber that a click resets,
   and a "not realtime" badge when the callback thread is ordinary rather than
-  realtime; it shows "DSP –" while no audio is heard, rather than the null
+  realtime. The badge reads the thread's policy at each refresh (MOO-215), so
+  it clears when the driver promotes the thread after its first block and
+  appears if the thread is demoted mid-session. It shows "DSP –" while no audio is heard, rather than the null
   driver's timing. Hovering either segment explains it in the hint line.
   `status_bar::notify` in `ui/src/status_bar.rs` is the one door.
 - **An edit the engine's command ring has no room for waits instead of

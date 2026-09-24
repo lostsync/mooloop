@@ -17308,9 +17308,12 @@ impl AppUi {
                         w.set_audio_load(-1.0);
                         w.set_audio_time_shared(false);
                     }
-                    // Once, not once a second: this cannot change without a
-                    // new callback thread, and a warning that repeats forever
-                    // is one that gets scrolled past.
+                    // Once, not once a second: a warning that repeats forever
+                    // is one that gets scrolled past. The reading is the
+                    // thread's policy now, not at its first block (MOO-215),
+                    // so this fires on the first window that finds it
+                    // time-shared -- after a driver's late promotion has had
+                    // its chance, or when rtkit demotes it mid-session.
                     if heard
                         && !reported_time_shared
                         && load.realtime == mooloop_engine::load::RealtimeStatus::TimeShared

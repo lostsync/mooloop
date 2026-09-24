@@ -967,6 +967,13 @@ shows it as "Demoting known real-time threads", and
 each matching thread's policy and realtime priority beside the process that
 owns it, and agrees with `chrt -p` because it reads the same two stat fields.
 
+The status bar's "not realtime" reads the same thing. Since MOO-215 it asks
+the kernel about the callback thread each time the load readout refreshes
+(about once a second), not once at the first block. So it agrees with
+`chrt -p` even when PipeWire promotes the thread late, and it turns on if
+rtkit demotes the thread mid-session. If the two ever disagree for longer
+than a second, that's a bug.
+
 This file carried `chrt -p $(pgrep -f data-loop)` for that check until
 2026-09-15, and it could never have worked. `data-loop` is a *thread* inside
 `pipewire`, and a thread name is not in any command line, so `pgrep -f` never
