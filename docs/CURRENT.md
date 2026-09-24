@@ -1735,9 +1735,16 @@ land on its own when it starts to matter:
   would, and is designed to nest four deep -- though nothing refuses a fifth,
   and a box past the cap stops blending (it still bypasses; see
   `docs/LOOSE_ENDS.md`). It is made either from the insert menu, like any
-  other device, or by wrapping a device that is already there (the fourth
-  button on its left rail). Inserting from a container's own `+` puts the new
-  device *inside* it; inserting from a leaf's `+` puts it before that leaf.
+  other device, or by wrapping a device that is already there (a button on
+  its left rail). **A device is added from the arrow between two devices**
+  (MOO-218, 2026-09-24): the `→` turns into a `+` under the pointer and opens
+  the insert menu, and the device lands in that gap -- inside a box when the
+  arrow is inside it, after the box when the arrow leads out of it. An empty
+  box draws an arrow of its own inside it, which adds into the box. The arrow
+  after a layer's head adds nothing: a new branch is the layer face's `+`.
+  There is no `+` on a device's rail and no add slot after the chain; the
+  last arrow adds at the end. A preset dragged out of the browser and dropped
+  on an arrow lands there too.
   Appending to the end of a box is a drag rather than an insert, because the
   end of a run has to stay addressable as "after the container" -- for an
   empty box, "just inside" and "just after" are the same position, so which

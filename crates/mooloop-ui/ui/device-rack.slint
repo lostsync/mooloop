@@ -90,10 +90,15 @@ export global BrowserDrag {
     in-out property <length> pointer-y: 0px;
     // Set by the rack while the pointer is over it.
     in-out property <bool> over-rack: false;
+    // The row a drop would insert before, set by the join under the
+    // pointer (MOO-218), or -1 when no join is: then the rack as a whole
+    // takes it, as a double-click would.
+    in-out property <int> target-before: -1;
 
     public function end() {
         active = false;
         over-rack = false;
+        target-before = -1;
         path = "";
         name = "";
     }
@@ -171,6 +176,8 @@ component EffectTypeRow inherits Rectangle {
     height: 22px;
     border-radius: Theme.radius-md;
     background: touch.has-hover ? Theme.surface-active : transparent;
+    accessible-role: button;
+    accessible-label: root.text;
 
     label := Text {
         x: 10px;
@@ -195,9 +202,9 @@ component EffectTypeRow inherits Rectangle {
 // a row of the insert menu, and wrapping inserts nothing of its own kind.
 component WrapKindRow inherits EffectTypeRow {}
 
-// The effect-type list shared by every "insert effect" trigger (the rail
-// `+` on each device, and the end-of-chain add slot). Kept as one
-// component so the catalog is edited in a single place.
+// The effect-type list every "add a device" trigger opens -- the joins
+// between devices (MOO-218). Kept as one component so the catalog is edited
+// in a single place.
 component EffectTypeMenu inherits VerticalLayout {
     callback kind-selected(int);
     padding: 4px;
@@ -301,9 +308,9 @@ export component DeviceOutputRail inherits Rectangle {
 }
 
 export component DeviceFrame inherits Rectangle {
-    in property <bool> insertion-enabled: true;
+    // No `+` on the rail since MOO-218: a device is added from the join
+    // between two devices (`DeviceJoin`), which is where it lands.
     in property <bool> removal-enabled: false;
-    callback effect-kind-selected(int);
     callback remove-requested();
     // Per-device presets: the entries saved for this device's kind, offered
     // from the left rail. Generator and effect alike -- a preset's unit is a
@@ -405,31 +412,6 @@ export component DeviceFrame inherits Rectangle {
             width: parent.width - 2px;
             padding: 2px;
             spacing: 2px;
-            IconButton {
-                text: "+"; size: 24px; enabled: root.insertion-enabled;
-                tooltip: "Insert effect";
-                clicked => { insert-menu.show(); }
-
-                insert-menu := PopupWindow {
-                    x: 0px;
-                    y: parent.height + 2px;
-                    width: menu-content.preferred-width;
-                    height: menu-content.preferred-height;
-                    close-policy: close-on-click;
-                    Rectangle {
-                        background: Theme.surface;
-                        border-width: Theme.hairline;
-                        border-color: Theme.border;
-                        border-radius: Theme.radius-md;
-                        menu-content := EffectTypeMenu {
-                            kind-selected(kind) => {
-                                insert-menu.close();
-                                root.effect-kind-selected(kind);
-                            }
-                        }
-                    }
-                }
-            }
             IconButton {
                 text: "⌑"; size: 24px; enabled: root.preset-enabled;
                 tooltip: "Save preset"; hint: "Save this device's settings as a preset";
@@ -607,10 +589,10 @@ export component DeviceFrame inherits Rectangle {
     // instead of the insert menu above, whose entries are a fixed twelve.
     //
     // Placed beside the rail rather than over it, at the button's own y:
-    // three 24px buttons from a 2px inset with 2px between them.
+    // two 24px buttons from a 2px inset with 2px between them.
     preset-menu := PopupWindow {
         x: DeviceRackMetrics.rail-width;
-        y: 80px;
+        y: 54px;
         width: 220px;
         height: min(root.preset-options.length, 12) * 22px + 8px;
         close-policy: close-on-click;
@@ -836,44 +818,84 @@ export component EffectDeviceShell inherits Rectangle {
     }
 }
 
+// The arrow between two devices, and the place a device is added (MOO-218).
+//
+// Adam, 2026-09-24: *"the add device buttons...let's just put them between
+// devices where those little white arrows are."* The arrow marks exactly
+// where an inserted device lands, so it is the button: at rest it reads as
+// signal flow, and under the pointer it turns into a `+` that opens the
+// effect-type menu. Where it inserts is the caller's -- the rack hands each
+// join the row it inserts before -- because only the rack can see past the
+// rows a layer is hiding.
 export component DeviceJoin inherits Rectangle {
-    width: 20px;
+    in property <bool> enabled: true;
+    // The row a preset dropped here lands before, or -1 when this join is not
+    // a place to drop one (the inner join of an empty box, which inserts
+    // *into* rather than before anything).
+    in property <int> drop-before: -1;
+    callback kind-selected(int);
+
+    // A preset from the browser is over this join: the drop lands here.
+    property <bool> drop-hot: BrowserDrag.active && root.enabled && root.drop-before >= 0
+        && BrowserDrag.pointer-x >= self.absolute-position.x
+        && BrowserDrag.pointer-x < self.absolute-position.x + self.width
+        && BrowserDrag.pointer-y >= self.absolute-position.y
+        && BrowserDrag.pointer-y < self.absolute-position.y + self.height;
+    changed drop-hot => {
+        if (self.drop-hot) {
+            BrowserDrag.target-before = root.drop-before;
+        } else if (BrowserDrag.target-before == root.drop-before) {
+            BrowserDrag.target-before = -1;
+        }
+    }
+    property <bool> lit: (touch.has-hover || root.drop-hot) && root.enabled;
+
+    width: DeviceRackMetrics.join-width;
     height: DeviceRackMetrics.face-height;
+    border-radius: Theme.radius-md;
+    background: root.drop-hot ? Theme.accent-active
+        : root.lit ? Theme.surface-raised : transparent;
+    accessible-role: button;
+    accessible-label: "Add device";
+    accessible-enabled: root.enabled;
+
+    // Both glyphs are always there and only their opacity changes: what a
+    // `Text` says is part of what the join asks of the rack's layout, and the
+    // layout is where the join's own position -- and so whether the pointer
+    // is over it -- comes from. Swapping the text was a binding loop.
     Text {
         text: "\u{2192}";
+        opacity: root.lit ? 0 : 1;
         color: Theme.text-muted;
         font-size: Theme.text-3xl;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
-}
-
-export component DeviceAddSlot inherits Rectangle {
-    callback kind-selected(int);
-    in property <bool> enabled: true;
-    width: 50px;
-    height: DeviceRackMetrics.face-height;
-    border-width: Theme.hairline;
-    border-color: Theme.border;
-    border-radius: Theme.radius-md;
-    background: add-touch.has-hover && root.enabled ? Theme.surface : transparent;
     Text {
         text: "+";
-        color: root.enabled ? Theme.text-muted : Theme.text-faint;
-        font-size: Theme.text-4xl;
+        opacity: root.lit ? 1 : 0;
+        color: Theme.text;
+        font-size: Theme.text-3xl;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
-    add-touch := TouchArea {
+    touch := TouchArea {
         enabled: root.enabled;
         mouse-cursor: root.enabled ? pointer : default;
         clicked => { insert-menu.show(); }
+        changed has-hover => {
+            if (self.has-hover) { StatusHint.show("Add a device here"); }
+            else { StatusHint.clear("Add a device here"); }
+        }
     }
-    Tooltip { text: @markdown("Add a device"); }
+    if root.enabled : Tooltip { text: @markdown("Add device"); }
 
+    // Callback first, close after: closing tears the menu's rows down, and a
+    // handler written after `close()` never lands
+    // (`dupe-audit popup-close-order`).
     insert-menu := PopupWindow {
         x: 0px;
-        y: parent.height + 2px;
+        y: DeviceRackMetrics.header-height;
         width: menu-content.preferred-width;
         height: menu-content.preferred-height;
         close-policy: close-on-click;
@@ -884,8 +906,8 @@ export component DeviceAddSlot inherits Rectangle {
             border-radius: Theme.radius-md;
             menu-content := EffectTypeMenu {
                 kind-selected(kind) => {
-                    insert-menu.close();
                     root.kind-selected(kind);
+                    insert-menu.close();
                 }
             }
         }

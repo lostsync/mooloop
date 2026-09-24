@@ -12,7 +12,7 @@ import {
 } from "meters.slint";
 import { BusPicker, MixerPane, MixerStripRow } from "mixer.slint";
 import {
-    DeviceAddSlot, DeviceFrame, DeviceHeader, DeviceJoin, DevicePageButton, DeviceRackMetrics,
+    DeviceFrame, DeviceHeader, DeviceJoin, DevicePageButton, DeviceRackMetrics,
     EffectDeviceShell
 } from "device-rack.slint";
 import {
@@ -295,7 +295,10 @@ export global MockupCatalog {
             groups: ["Device rack"], default-width: 20px, default-height: 268px, behavior: 0,
         },
         {
-            component: "DeviceAddSlot", name: "Device add slot", module: "device-rack.slint",
+            // The slot a retired `DeviceAddSlot` held (MOO-218): a join that
+            // adds nothing, as the one after a layer's head draws. Kept in
+            // this position because a saved mockup names a kind by index.
+            component: "DeviceJoin", name: "Device join (inert)", module: "device-rack.slint",
             groups: ["Device rack"], default-width: 50px, default-height: 268px, behavior: 0,
         },
         {
@@ -714,9 +717,10 @@ export component MockupSpecimen inherits Rectangle {
         width: 100%;
         height: 100%;
     }
-    if root.kind == 59: DeviceAddSlot {
+    if root.kind == 59: DeviceJoin {
         width: 100%;
         height: 100%;
+        enabled: false;
     }
     if root.kind == 60: DevicePageButton {
         text: root.label == "" ? "OSC" : root.label;

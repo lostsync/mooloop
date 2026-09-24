@@ -29,7 +29,7 @@ import { ExportDialog } from "export-dialog.slint";
 import { MenuBar, MenuBarItem, MenuRow, MenuSeparator } from "menubar.slint";
 import { PianoGrid, NoteCell, NoteHit, GestureMod, PianoGestures, RollMetrics } from "piano-grid.slint";
 import {
-    ContainerEnclosure, DeviceAddSlot, DeviceFrame, DeviceHeader, DeviceJoin, DeviceOutputRail,
+    ContainerEnclosure, DeviceFrame, DeviceHeader, DeviceJoin, DeviceOutputRail,
     DevicePageButton, DeviceRackMetrics, RackDrag, BrowserDrag
 } from "device-rack.slint";
 import { AddSourceButton, ChannelDrag, SourceKinds } from "channel-rack.slint";
@@ -396,6 +396,11 @@ struct EffectSlotRow {
     // it was `effect-slots[index + 1].depth` until hidden rows meant the next
     // row might not be drawn.
     next-depth: int,
+    // The row the join after this one inserts before: the next *drawn* row,
+    // or the chain's length past the last. -1 where that join adds nothing
+    // (right after a layer's head, where a new branch is the layer face's
+    // job). Rust's, because a layer may be hiding the next row (MOO-218).
+    join-before: int,
     // Layer-only: its branches, in rack order, and the rack index of the one
     // it is showing (-1 for none). S, M and each branch's meter are read from
     // the branch head's own row, `effect-slots[branch.slot]`.
@@ -1730,6 +1735,8 @@ export component MainWindow inherits Window {
     callback browser-preset-loaded(string);
     // Always a new device, from the preset row's menu (MOO-9).
     callback browser-preset-appended(string);
+    // A preset dropped on a join: a new device before that row (MOO-218).
+    callback browser-preset-dropped(string, int);
     // The browser's filter field, both tabs (MOO-9).
     in-out property <string> browser-filter;
     callback browser-filter-changed(string);
@@ -4307,7 +4314,6 @@ export component MainWindow inherits Window {
                                             output-trim-changed(v) => {
                                                 root.channel-volume-changed(root.selected-channel, GainMath.db-to-linear(v));
                                             }
-                                            effect-kind-selected(kind) => { root.add-effect-clicked(kind, 0); }
                                             // The generator's presets belong on the generator,
                                             // in the same rail position an effect row keeps
                                             // them: one device, one place to save and load it.
@@ -4860,7 +4866,12 @@ export component MainWindow inherits Window {
                                             }
                                         }
 
-                                        DeviceJoin { }
+                                        // The first join, after the chain's head:
+                                        // a device added here runs first.
+                                        DeviceJoin {
+                                            drop-before: 0;
+                                            kind-selected(kind) => { root.add-effect-clicked(kind, 0); }
+                                        }
 
                                         // The strip's own row, pinned. When
                                         // `STRIP_PIN` pins it to the head it is
@@ -4890,6 +4901,11 @@ export component MainWindow inherits Window {
                                             // innermost first, between this row and the join.
                                             property <length> tail-width:
                                                 slot.closing.length * DeviceRackMetrics.rail-width;
+                                            // An empty box draws a join inside it, between its
+                                            // face and its own output rail (MOO-218).
+                                            property <bool> inner-join: self.is-container && slot.children == 0;
+                                            property <length> inner-width:
+                                                self.inner-join ? DeviceRackMetrics.join-width : 0px;
                                             // The level of the innermost box closing here.
                                             // An empty container closes itself, one level in
                                             // from its own depth; everything else closes the
@@ -4935,8 +4951,8 @@ export component MainWindow inherits Window {
                                             // A row in a branch its layer is not showing
                                             // takes no room at all (`containers/09`).
                                             visible: !slot.hidden;
-                                            width: slot.hidden ? 0px : self.frame-width + self.tail-width
-                                                + DeviceRackMetrics.join-width;
+                                            width: slot.hidden ? 0px : self.frame-width + self.inner-width
+                                                + self.tail-width + DeviceRackMetrics.join-width;
                                             height: DeviceRackMetrics.face-height;
 
                                             // The box, behind the face. One slice per level per row;
@@ -4977,7 +4993,7 @@ export component MainWindow inherits Window {
                                                 // spans the arrow too, because that arrow is
                                                 // inside it.
                                                 width: self.cap-right
-                                                    ? cell.frame-width
+                                                    ? cell.frame-width + cell.inner-width
                                                         + (cell.innermost-close - level + 1)
                                                             * DeviceRackMetrics.rail-width
                                                     : cell.width;
@@ -4991,7 +5007,7 @@ export component MainWindow inherits Window {
                                             // arrow that leads out of the branch.
                                             if slot.bracket : LayerBracket {
                                                 x: cell.shift;
-                                                width: slot.bracket-end ? cell.frame-width : cell.width;
+                                                width: slot.bracket-end ? cell.frame-width + cell.inner-width : cell.width;
                                                 start: slot.bracket-start;
                                                 end: slot.bracket-end;
                                             }
@@ -5070,21 +5086,6 @@ export component MainWindow inherits Window {
                                                 selected: slot.selected;
                                                 duplicate-enabled: true;
                                                 duplicate-requested => { root.duplicate-effect-clicked(index); }
-                                                // `+` on a container means insert *into*
-                                                // it; on a leaf it means insert before
-                                                // that row. Two callbacks rather than an
-                                                // adjusted index, because the position
-                                                // just after a container is also the
-                                                // position just after its first child --
-                                                // for an empty box those are the same
-                                                // number, and no index can mean both.
-                                                effect-kind-selected(kind) => {
-                                                    if (slot.is-container) {
-                                                        root.add-effect-into-container(kind, index);
-                                                    } else {
-                                                        root.add-effect-clicked(kind, index);
-                                                    }
-                                                }
                                                 remove-requested => { root.remove-effect-clicked(index); }
                                                 preset-enabled: true;
                                                 preset-options: slot.preset-options;
@@ -5637,7 +5638,7 @@ export component MainWindow inherits Window {
                                             // that device's control, standing at the far end
                                             // of its own run.
                                             for container[tail] in slot.closing : DeviceOutputRail {
-                                                x: cell.shift + cell.frame-width
+                                                x: cell.shift + cell.frame-width + cell.inner-width
                                                     + tail * DeviceRackMetrics.rail-width;
                                                 y: 0px;
                                                 height: DeviceRackMetrics.face-height;
@@ -5656,9 +5657,26 @@ export component MainWindow inherits Window {
                                                     root.effect-output-trim-changed(container, v);
                                                 }
                                             }
-                                            DeviceJoin {
-                                                x: cell.shift + cell.frame-width + cell.tail-width;
+                                            // An empty box's own join, inside it: the one
+                                            // place a device can be added *into* a container
+                                            // that holds nothing. Its own callback rather
+                                            // than an index, because the position just
+                                            // after an empty container is also the position
+                                            // just after it, and no index can mean both.
+                                            if cell.inner-join : DeviceJoin {
+                                                x: cell.shift + cell.frame-width;
                                                 y: 0px;
+                                                kind-selected(kind) => { root.add-effect-into-container(kind, index); }
+                                            }
+                                            // The join leading out of this row, and past any
+                                            // box that ends here: a device added from it lands
+                                            // before the next drawn row, at that row's depth.
+                                            DeviceJoin {
+                                                x: cell.shift + cell.frame-width + cell.inner-width + cell.tail-width;
+                                                y: 0px;
+                                                enabled: slot.join-before >= 0;
+                                                drop-before: slot.join-before;
+                                                kind-selected(kind) => { root.add-effect-clicked(kind, slot.join-before); }
                                             }
                                         }
 
@@ -5726,13 +5744,6 @@ export component MainWindow inherits Window {
                                             voicing-picked(voicing) => { root.bus-voicing-picked(root.editing-bus-index, voicing); }
                                             point-dragged(band, hz, gain) => {
                                                 root.bus-strip-point-dragged(root.editing-bus-index, band, hz, gain);
-                                            }
-                                        }
-                                        Rectangle {
-                                            width: 50px;
-                                            height: DeviceRackMetrics.face-height;
-                                            DeviceAddSlot {
-                                                kind-selected(kind) => { root.add-effect-clicked(kind, root.effect-slots.length); }
                                             }
                                         }
                                         Rectangle { horizontal-stretch: 1; }
@@ -7477,11 +7488,16 @@ export component MainWindow inherits Window {
                                                     self.press-y = self.absolute-position.y + self.mouse-y;
                                                 } else if (e.kind == PointerEventKind.up
                                                         || e.kind == PointerEventKind.cancel) {
-                                                    // Dropped on the rack: the same load a
-                                                    // double-click does.
-                                                    if (BrowserDrag.active && BrowserDrag.over-rack
-                                                            && e.kind == PointerEventKind.up) {
-                                                        root.browser-preset-loaded(BrowserDrag.path);
+                                                    // Dropped on a join: there, in the chain
+                                                    // (MOO-218). Anywhere else on the rack: the
+                                                    // same load a double-click does.
+                                                    if (BrowserDrag.active && e.kind == PointerEventKind.up) {
+                                                        if (BrowserDrag.target-before >= 0) {
+                                                            root.browser-preset-dropped(BrowserDrag.path,
+                                                                BrowserDrag.target-before);
+                                                        } else if (BrowserDrag.over-rack) {
+                                                            root.browser-preset-loaded(BrowserDrag.path);
+                                                        }
                                                     }
                                                     BrowserDrag.end();
                                                 }

@@ -37,10 +37,10 @@ const DEVICE_RACK_SLINT: &str = include_str!("../ui/device-rack.slint");
 const MAIN_SLINT: &str = include_str!("../ui/main.slint");
 
 slint::slint! {
-    import { DeviceFrame } from "../ui/device-rack.slint";
+    import { DeviceFrame, DeviceJoin } from "../ui/device-rack.slint";
 
     export component PresetHarness inherits Window {
-        width: 320px;
+        width: 460px;
         height: 460px;
         background: #101010;
         in property <[string]> options;
@@ -56,30 +56,40 @@ slint::slint! {
             preset-options: root.options;
             preset-selected(i) => { root.preset-selected(i); }
             save-preset-requested => { root.save-requested(); }
-            effect-kind-selected(k) => { root.kind-selected(k); }
             wrap-enabled: true;
             wrap-requested(k) => { root.wrapped(k); }
+        }
+        // Where a device is added from since MOO-218: the join after a
+        // device, not a button on its rail.
+        DeviceJoin {
+            x: 290px; y: 0px;
+            kind-selected(k) => { root.kind-selected(k); }
         }
     }
 }
 
 /// The left rail stacks its buttons from the top with 2px of padding and 2px
-/// between them, each 24px square: insert, save preset, load preset, and --
-/// added last so these three keep their coordinates -- wrap in a container.
+/// between them, each 24px square: save preset, load preset, and wrap in a
+/// container. They moved up one button on 2026-09-24, when the rail's insert
+/// `+` gave way to the joins between devices (MOO-218).
 const BUTTON_X: f32 = 14.0;
-const SAVE_Y: f32 = 40.0;
-const LOAD_Y: f32 = 66.0;
+const SAVE_Y: f32 = 14.0;
+const LOAD_Y: f32 = 40.0;
 
 /// The popup opens beside the rail at the load button's own height, and its
 /// list is inset by 4px with 22px rows. These are the middles of the first
 /// two entries.
-const FIRST_ENTRY: (f32, f32) = (120.0, 95.0);
-const SECOND_ENTRY: (f32, f32) = (120.0, 117.0);
+const FIRST_ENTRY: (f32, f32) = (120.0, 69.0);
+const SECOND_ENTRY: (f32, f32) = (120.0, 91.0);
 
-/// The insert button, and the menu it opens below itself: rows are 22px on a
-/// 23px pitch from a 4px inset, and the first row's middle is at 43.
-const INSERT_Y: f32 = 14.0;
-const MENU_X: f32 = 36.0;
+/// The join, and the menu it opens under the device header (28px down): rows
+/// are 22px on a 23px pitch from a 4px inset, so the first row's middle is
+/// at 43.
+const JOIN: (f32, f32) = (300.0, 134.0);
+const MENU_X: f32 = 320.0;
+
+/// The rail's own menus (wrap) open under their button, inset from the rail.
+const RAIL_MENU_X: f32 = 36.0;
 const FIRST_ROW_Y: f32 = 43.0;
 const ROW_PITCH: f32 = 23.0;
 
@@ -98,7 +108,7 @@ fn every_kind_index() -> Vec<i32> {
 fn harness() -> PresetHarness {
     i_slint_backend_testing::init_no_event_loop();
     let ui = PresetHarness::new().unwrap();
-    ui.window().set_size(LogicalSize::new(320.0, 460.0));
+    ui.window().set_size(LogicalSize::new(460.0, 460.0));
     ui.set_options(ModelRc::from(Rc::new(VecModel::from(vec![
         SharedString::from("Factory — Telephone"),
         SharedString::from("Factory — Warm Low-Pass"),
@@ -121,8 +131,8 @@ fn click(window: &slint::Window, at: (f32, f32)) {
 
 /// The wrap button, fourth on the rail, and the two-row menu it opens below
 /// itself (`containers/10`): 4px inset, 22px rows on a 23px pitch.
-const WRAP_Y: f32 = 92.0;
-const WRAP_ROWS_Y: [f32; 2] = [121.0, 144.0];
+const WRAP_Y: f32 = 66.0;
+const WRAP_ROWS_Y: [f32; 2] = [95.0, 118.0];
 
 /// The wrap menu reaches its callback with the kind of each row, clicked.
 /// A menu that closed itself before calling back would open, draw, and do
@@ -136,7 +146,7 @@ fn the_wrap_menu_reports_the_kind_each_row_offers() {
     ui.on_wrapped(move |kind| log.borrow_mut().push(kind));
     for row_y in WRAP_ROWS_Y {
         click(ui.window(), (BUTTON_X, WRAP_Y));
-        click(ui.window(), (MENU_X, row_y));
+        click(ui.window(), (RAIL_MENU_X, row_y));
     }
     assert_eq!(
         *seen.borrow(),
@@ -223,7 +233,7 @@ fn the_insert_menu_offers_every_kind() {
     );
 
     for row in 0..kinds {
-        click(ui.window(), (BUTTON_X, INSERT_Y));
+        click(ui.window(), JOIN);
         click(ui.window(), (MENU_X, menu_row_y(row)));
     }
 
@@ -406,8 +416,9 @@ fn predicate_face_branches() -> Vec<(bool, String)> {
 }
 
 /// The control experiment. The insert menu is the same shape -- a
-/// `PopupWindow` hung off a rail `IconButton`, closed by the row it contains
-/// -- and it has worked since the shell was drawn. If this passes where the
+/// `PopupWindow` hung off a control, closed by the row it contains -- and it
+/// has worked since the shell was drawn; it hangs off the join between two
+/// devices now (MOO-218) rather than a rail button. If this passes where the
 /// preset menu fails, the difference between them is the bug; if both fail,
 /// the harness cannot drive popups and the preset test proves nothing.
 #[test]
@@ -417,7 +428,7 @@ fn the_insert_menu_reports_its_kind() {
     let seen = picked.clone();
     ui.on_kind_selected(move |kind| seen.borrow_mut().push(kind));
 
-    click(ui.window(), (BUTTON_X, INSERT_Y));
+    click(ui.window(), JOIN);
     click(ui.window(), (MENU_X, menu_row_y(0)));
 
     // Which kind is first is the menu's business -- it lists them in the

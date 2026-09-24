@@ -17,6 +17,8 @@ mod channel_sidebar_tests;
 #[cfg(test)]
 mod controlled_faces_tests;
 #[cfg(test)]
+mod rack_join_tests;
+#[cfg(test)]
 mod window_probe;
 mod meter;
 #[cfg(feature = "mockup")]
@@ -3013,6 +3015,7 @@ fn effect_slot_row(
         is_layer: slot.params.container_flow() == Some(mooloop_core::ContainerFlow::Parallel),
         hidden: view.hidden,
         next_depth: view.next_depth,
+        join_before: view.join_before,
         branches,
         selected_branch: view.selected_branch,
         bracket: view.bracket,
@@ -15701,6 +15704,43 @@ impl AppUi {
             });
         }
         {
+            // A preset dropped on a join (MOO-218): an effect preset becomes
+            // a new device before that row. Any other preset has no place in
+            // a chain to land at, so it loads the way a double-click does.
+            let st = state.clone();
+            let edit_tx = project_edit_tx.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_browser_preset_dropped(move |path, before| {
+                let Some(window) = weak.upgrade() else { return };
+                let path_buf = PathBuf::from(path.to_string());
+                let effect = {
+                    let st = st.borrow();
+                    st.preset_catalog.iter().find_map(|group| {
+                        let PresetSlot::Effect(kind) = group.slot else {
+                            return None;
+                        };
+                        let preset =
+                            group.presets.iter().find(|preset| preset.path == path_buf)?;
+                        Some((kind, preset.name.clone()))
+                    })
+                };
+                let Some((kind, name)) = effect else {
+                    window.invoke_browser_preset_loaded(path);
+                    return;
+                };
+                let before = usize::try_from(before).ok();
+                if let Some((snapshot_before, after)) =
+                    place_effect_preset(&st, &window, &path_buf, kind, &name, before)
+                {
+                    if queue_project_edit(&edit_tx, snapshot_before, after, "Effect preset added") {
+                        commands.borrow_mut().project_edit_pending = true;
+                        sync_command_availability(&window, &commands.borrow());
+                    }
+                }
+            });
+        }
+        {
             // The filter field (MOO-9). Looking, not editing: nothing here
             // reaches the document or the engine.
             let st = state.clone();
@@ -19549,6 +19589,20 @@ fn append_effect_preset(
     kind: EffectKind,
     name: &str,
 ) -> Option<(ProjectSnapshot, ProjectSnapshot)> {
+    place_effect_preset(st, window, path, kind, name, None)
+}
+
+/// `append_effect_preset`, landing before the row `at` names rather than
+/// at the end -- a preset dropped on the join in front of that row
+/// (MOO-218). `None` is the end of the chain.
+fn place_effect_preset(
+    st: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    path: &Path,
+    kind: EffectKind,
+    name: &str,
+    at: Option<usize>,
+) -> Option<(ProjectSnapshot, ProjectSnapshot)> {
     let loaded = match mooloop_project::load_bundle(path) {
         Ok(report) => match report.document {
             LoadedDocument::Effect(effect) => Ok(*effect),
@@ -19569,7 +19623,8 @@ fn append_effect_preset(
     let before = project_snapshot(&st.borrow(), window);
     {
         let mut state = st.borrow_mut();
-        let tail = state.session.effect_chain().map(Vec::len)?;
+        let len = state.session.effect_chain().map(Vec::len)?;
+        let tail = at.map_or(len, |at| at.min(len));
         // The row the preset lands on has to exist before it can be loaded
         // over, and it has to be the preset's own kind -- a run always starts
         // with the container that `load_effect_run` insists on.

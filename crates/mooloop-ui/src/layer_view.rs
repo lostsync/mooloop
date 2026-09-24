@@ -34,6 +34,12 @@ pub(crate) struct RowView {
     /// The depth of the next row that is drawn, or 0 past the last: what a
     /// box asks to know whether it ends here.
     pub next_depth: i32,
+    /// The row the join after this one adds a device before: the next drawn
+    /// row, or the chain's length past the last. -1 on a layer's own row,
+    /// whose join leads into the branch it shows: a device added there would
+    /// be a new branch, which is the layer face's `+`, not the rack's
+    /// (MOO-218).
+    pub join_before: i32,
     /// The containers whose last *drawn* row this is, innermost first, as
     /// rack indices.
     pub closing: Vec<i32>,
@@ -164,6 +170,22 @@ pub(crate) fn rack_view(
             .find(|later| visible(*later, &rows))
             .map_or(0, |later| mooloop_core::depth_at(effects, later) as i32);
     }
+    // Where a device added from each drawn row's join lands: before the next
+    // drawn row, which is at the depth the join is drawn at -- a join past a
+    // box's last row is outside the box, and so is the row after it
+    // (`mooloop_core::insert_effect`: landing on a run's end is landing after
+    // it).
+    for row in 0..count {
+        rows[row].join_before = if effects[row].params.container_flow()
+            == Some(mooloop_core::ContainerFlow::Parallel)
+        {
+            -1
+        } else {
+            (row + 1..count)
+                .find(|later| visible(*later, &rows))
+                .unwrap_or(count) as i32
+        };
+    }
     // Which boxes end at each drawn row: every drawn container closes at the
     // last drawn row of its span, or on its own row when none is drawn.
     for container in 0..count {
@@ -253,6 +275,21 @@ mod tests {
         assert_eq!(view[0].next_depth, 1);
         assert_eq!(view[5].closing, [4, 0]);
         assert!(view[4].bracket_start && view[5].bracket_end);
+    }
+
+    /// A join adds before the next *drawn* row (MOO-218): past a branch a
+    /// layer is hiding, and out of every box that ends where it is drawn. A
+    /// layer's own join adds nothing -- a new branch is the layer face's.
+    #[test]
+    fn a_join_inserts_before_the_next_drawn_row() {
+        let effects = two_branches();
+        let view = rack_view(&effects, |_| None, |_| None);
+        let joins: Vec<i32> = view.iter().map(|row| row.join_before).collect();
+        assert_eq!(joins[0], -1, "the layer's own join");
+        assert_eq!(joins[1], 2, "the shown branch's head leads into it");
+        assert_eq!(joins[2], 3);
+        assert_eq!(joins[3], 6, "past the hidden branch, and out of the layer");
+        assert_eq!(joins[6], 7, "the last row's join appends");
     }
 
     #[test]
