@@ -115,9 +115,11 @@ the laws found, and that the engine's master is the law run over the mix
 sample for sample. **Nobody has listened to it**: "turning it on should feel
 special" is Adam's pass, `FOCUS.md` item 6 of "Listening is a step".
 
-`plugin-hosting/` was added 2026-09-16 and is **not started, outside the
-`FOCUS.md` sequence**, because Adam asked for it directly: CLAP effects and
-instruments now, then VST3, then AU if ever. Thirteen steps. The first four
+`plugin-hosting/` was added 2026-09-16. Steps 01-06 landed by 2026-09-23,
+and **07, 08 and the two bugs they found (MOO-212, MOO-213) are lane 2 of the
+2026-09-24 `FOCUS.md` sequence**, with 09-10 (CLAP instruments) as its
+stretch. Adam asked for it directly: CLAP effects and instruments now, then
+VST3, then AU if ever. Thirteen steps. The first four
 build the host-neutral contract (#26) with a fake plugin before any protocol
 code, and the rule running through all of them is that no format type leaves
 `mooloop-plugin-host`. Adam settled four questions while it was written: plugin
