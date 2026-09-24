@@ -1087,3 +1087,147 @@ fn an_install_that_changed_one_device_keeps_the_channel_sounding() {
         ),
     );
 }
+
+// --- Engine: MOO-213 ---------------------------------------------------------
+
+/// Render `frames` of the master through `live`'s executor in [`BLOCK`]-sized
+/// callbacks and a shorter last one, as a driver calls it, keeping every
+/// node a swap displaced.
+///
+/// [`BLOCK`]: crate::render_test_support::BLOCK
+fn executor_frames(
+    live: &mut crate::plugin_host_tests::Live,
+    frames: usize,
+    displaced: &mut Vec<Box<dyn mooloop_dsp::AudioNode + Send>>,
+) -> (Vec<f32>, Vec<f32>) {
+    let block = crate::render_test_support::BLOCK;
+    let silence = vec![0.0f32; block];
+    let (mut l, mut r) = (vec![0.0f32; block], vec![0.0f32; block]);
+    let (mut left, mut right) = (Vec::with_capacity(frames), Vec::with_capacity(frames));
+    let mut done = 0;
+    while done < frames {
+        let n = block.min(frames - done);
+        live.executor.process_with_input(
+            std::iter::empty(),
+            &silence[..n],
+            &silence[..n],
+            &mut l[..n],
+            &mut r[..n],
+        );
+        left.extend_from_slice(&l[..n]);
+        right.extend_from_slice(&r[..n]);
+        while live.events.pop().is_ok() {}
+        while let Ok(reclaimed) = live.reclaim.pop() {
+            if let crate::StructuralReclaim::Effect(effect) = reclaimed {
+                displaced.extend(effect.node);
+            }
+        }
+        done += n;
+    }
+    (left, right)
+}
+
+/// **A hosted plugin's processor leaves and rejoins its chain without a
+/// step** (MOO-213). The plugin rack swaps a slot between the real
+/// processor and the pass-through placeholder with `ReplaceEffect` on every
+/// restart, rate change, reinstall and late find, because CLAP gives an
+/// instance one processor. Both moves are held to the family's bound.
+#[test]
+fn swapping_a_hosted_plugin_for_its_placeholder_and_back_is_continuous() {
+    let (away, back) = plugin_swapped_away_and_back(0);
+    assert_continuous("swapping a hosted plugin for its placeholder", away);
+    assert_continuous("swapping the placeholder back for the plugin", back);
+}
+
+/// The same with the plugin reporting 64 frames of latency. The fade runs
+/// against the slot's dry ring, which is the plugin's latency long, so the
+/// placeholder stands in as late as the plugin (the rack's pull-back sends
+/// `PluginPlaceholder::with_latency`), the ring outlives the swap, and each
+/// incoming node plays its latency at the dry path before it is faded in.
+/// A jump in time either side would be a step on the sine.
+#[test]
+fn swapping_a_latent_hosted_plugin_for_its_placeholder_and_back_is_continuous() {
+    assert_eq!(mooloop_test_plugin::LATENCY_STEPS[1], 64, "the premise: step 1 is 64 frames");
+    let (away, back) = plugin_swapped_away_and_back(1);
+    assert_continuous("swapping a latent plugin for its placeholder", away);
+    assert_continuous("swapping the placeholder back for the latent plugin", back);
+}
+
+/// The test gain at -12 dB with `latency_step`'s latency, playing the sine,
+/// swapped for its placeholder mid-note through the executor as the rack's
+/// pull-back sends it (as late as the plugin), and then the same processor
+/// swapped back. Returns the two transitions.
+///
+/// -12 dB is a quarter of the dry level, so wet and dry differ by three
+/// quarters of the sine everywhere. Through the executor rather than
+/// `step_across` on a renderer, because the executor is what holds a swap
+/// back while the slot fades.
+fn plugin_swapped_away_and_back(latency_step: u32) -> (Transition, Transition) {
+    use crate::plugin_host_tests::{gain_ref, live, open_gain, replace};
+    use mooloop_core::PluginSlotState;
+    use mooloop_plugin_host::{HostedInstance, Lifeline};
+
+    let mut project = sine_project();
+    project.assign_channel_ids();
+    let slot = project.add_plugin_slot(PluginSlotState::new(gain_ref()));
+    let mut device = EffectSlotState::of_kind(EffectKind::Plugin);
+    device.params = EffectParams::Plugin(slot);
+    project.channels[0].setup.push_effect(device).expect("room");
+
+    // Opened here, on the test's thread, which is its CLAP main thread; the
+    // processor only ever runs on the thread spawned below.
+    let mut instance = open_gain(-12.0, latency_step);
+    let lifeline = Lifeline::new();
+    let processor = instance.build_processor(lifeline.tie()).expect("a processor");
+    // Known at activation, which is what building the processor is -- and
+    // what the rack's pull-back reads for its placeholder.
+    let latency = instance.latency_frames();
+    assert_eq!(
+        latency,
+        mooloop_test_plugin::LATENCY_STEPS[latency_step as usize],
+        "the plugin reports the latency it was opened with"
+    );
+    let mut live = live(RenderState::from_project(SAMPLE_RATE, &project, &[]));
+    // Before the first block, as a song opening gets it: nothing has been
+    // heard yet, so it goes straight in.
+    assert!(live.commands.push(replace(FX, 0, slot, processor)).is_ok());
+    assert!(live
+        .commands
+        .push(crate::RealtimeCommand::Engine(EngineCommand::Play))
+        .is_ok());
+
+    let (away, back) = std::thread::scope(|scope| {
+        scope
+            .spawn(move || {
+                crate::executor::prepare_audio_thread();
+                let mut displaced = Vec::new();
+                let lead = executor_frames(&mut live, LEAD, &mut displaced);
+                assert_eq!(displaced.len(), 1, "the placeholder the song opened with came back");
+                displaced.clear();
+                let placeholder =
+                    Box::new(mooloop_dsp::effects::PluginPlaceholder::with_latency(slot, latency));
+                assert!(live.commands.push(replace(FX, 0, slot, placeholder)).is_ok());
+                let tail = executor_frames(&mut live, TAIL, &mut displaced);
+                let away = Transition::measure((&lead.0, &lead.1), (&tail.0, &tail.1));
+
+                let processor = displaced.pop().expect("the processor came back");
+                assert!(live.commands.push(replace(FX, 0, slot, processor)).is_ok());
+                let again = executor_frames(&mut live, TAIL, &mut displaced);
+                // The lead into the second swap is the settled half of the
+                // first one's tail: the dry sine, clear of the first move.
+                let settled = TAIL / 2;
+                let back = Transition::measure(
+                    (&tail.0[settled..], &tail.1[settled..]),
+                    (&again.0, &again.1),
+                );
+                drop(displaced);
+                drop(live);
+                (away, back)
+            })
+            .join()
+            .expect("the audio thread did not panic")
+    });
+    assert!(lifeline.is_alone(), "the processor came home");
+    assert_eq!(instance.misbehaviour(), 0, "no call on the wrong thread");
+    (away, back)
+}

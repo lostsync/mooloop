@@ -176,21 +176,31 @@ pub(crate) fn step_across(
     let (lead_l, lead_r) = render_frames(render, lead_frames);
     change(render);
     let (tail_l, tail_r) = render_frames(render, tail_frames);
+    Transition::measure((&lead_l, &lead_r), (&tail_l, &tail_r))
+}
 
-    let window = tail_frames.min(lead_frames);
-    let from = lead_frames - window;
-    let before = largest_step(&lead_l[from..], &lead_r[from..]);
-    let peak = peak_of(&lead_l[from..]).max(peak_of(&lead_r[from..]));
-    // The last frame before the change leads each side, so the step onto the
-    // first frame after it is counted.
-    let across_l: Vec<f32> = lead_l.last().into_iter().chain(&tail_l).copied().collect();
-    let across_r: Vec<f32> = lead_r.last().into_iter().chain(&tail_r).copied().collect();
-    let settled = tail_frames / 2;
-    Transition {
-        before,
-        across: largest_step(&across_l, &across_r),
-        after: largest_step(&tail_l[settled..], &tail_r[settled..]),
-        peak,
+impl Transition {
+    /// Measure a change that landed between `lead` and `tail`, each the
+    /// master's `(left, right)`: what [`step_across`] does with a renderer,
+    /// for a test that has to drive something else -- the executor, when
+    /// the change is one it holds back (MOO-213).
+    pub(crate) fn measure(lead: (&[f32], &[f32]), tail: (&[f32], &[f32])) -> Self {
+        let ((lead_l, lead_r), (tail_l, tail_r)) = (lead, tail);
+        let window = tail_l.len().min(lead_l.len());
+        let from = lead_l.len() - window;
+        let before = largest_step(&lead_l[from..], &lead_r[from..]);
+        let peak = peak_of(&lead_l[from..]).max(peak_of(&lead_r[from..]));
+        // The last frame before the change leads each side, so the step onto
+        // the first frame after it is counted.
+        let across_l: Vec<f32> = lead_l.last().into_iter().chain(tail_l).copied().collect();
+        let across_r: Vec<f32> = lead_r.last().into_iter().chain(tail_r).copied().collect();
+        let settled = tail_l.len() / 2;
+        Self {
+            before,
+            across: largest_step(&across_l, &across_r),
+            after: largest_step(&tail_l[settled..], &tail_r[settled..]),
+            peak,
+        }
     }
 }
 

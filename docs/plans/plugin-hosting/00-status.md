@@ -1108,6 +1108,38 @@ stepped parameter's values are, so a lane on one of LSP's could only reach
 its first and last choice. Nothing in this step automates one; it is noted
 for step 08's face, which will show these parameters.
 
+## Found after step 07: the swap fades (MOO-213, 2026-09-24)
+
+The rack's `ReplaceEffect` between a processor and the placeholder used to
+switch in one sample. The test gain at -12 dB stepped by 0.19 against the
+continuity family's bound of 0.008. Now:
+
+- **The executor holds a plugin swap** until the slot has faded out of the
+  path, the same way it holds a removal (`RenderState::plugin_slot_ready_for_swap`
+  over `effect_slot_vacated`: about 35 ms, 100 ms at most, and at once for a
+  slot that has never rendered). The slot then fades back in with the new
+  node. An export's `host_plugins` swaps before anything renders and is
+  never held, so exports are unchanged. A swap the chain would refuse is not
+  held and fades nothing.
+- **A restart keeps the chain's timeline.** The pull-back placeholder is as
+  late as the plugin it replaces (`PluginPlaceholder::with_latency`, at the
+  instance's current latency, which is also what `device_latency` compensates
+  for). `replace_if_kind` keeps the live dry ring when the incoming one is the
+  same length, and a latent incoming node runs its latency at the dry path
+  before it fades in (`EffectSlot::rejoin_hold`), so it has caught up with the
+  ring it fades against.
+- **Not covered:** a swap between different latencies, which is a missing
+  plugin found late or a restart that changes the latency. The channel's
+  timeline moves by the difference, as it does for any latency change, and
+  the dry ring starts empty.
+- **Cost:** each swap holds the command ring for about 35 ms. A quit that
+  pulls back many plugins does it one after another, so at 57 or more
+  sounding plugins it runs past the two-second quit wait, and the
+  instances still out are leaked, as the wait already allows.
+
+Pinned by `continuity_tests::swapping_a_hosted_plugin_for_its_placeholder_and_back_is_continuous`
+and `swapping_a_latent_hosted_plugin_…` (64 frames).
+
 ## The test plugins
 
 CI cannot install third-party plugins, so step 01 builds **an in-repo CLAP

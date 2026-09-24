@@ -2175,7 +2175,13 @@ land on its own when it starts to matter:
   its parameters included. It is tried again when a scan finds new plugins.
   A structural edit (paste, move, delete, undo) keeps a hosted plugin
   running, state and all. A new sample rate, or a restart the plugin asks
-  for, rebuilds its processor. On quit, mooloop waits up to two seconds for
+  for, rebuilds its processor. **The rebuild fades rather than clicks**
+  (MOO-213). The plugin fades out to the dry signal over about 35 ms, the
+  device plays dry, still as late as the plugin was, while the new
+  processor is built, and then the plugin fades back in. A missing plugin
+  that turns up fades in the same way, unless it reports latency: then the
+  channel moves later by that much when it arrives, as it does for any
+  latency change. On quit, mooloop waits up to two seconds for
   every plugin's processor to come back from the audio thread before it
   destroys the plugin. Its GUI does not open (step 11).
 - **A hosted plugin's parameters take lanes and routes** (MOO-82,

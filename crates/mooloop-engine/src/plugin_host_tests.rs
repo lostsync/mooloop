@@ -169,14 +169,14 @@ fn render_hosted(
 
 /// An executor over `render`, the way a driver owns one, and the rings to
 /// feed it.
-struct Live {
-    executor: Executor,
-    commands: rtrb::Producer<RealtimeCommand>,
-    events: rtrb::Consumer<mooloop_core::EngineEvent>,
-    reclaim: rtrb::Consumer<crate::StructuralReclaim>,
+pub(crate) struct Live {
+    pub(crate) executor: Executor,
+    pub(crate) commands: rtrb::Producer<RealtimeCommand>,
+    pub(crate) events: rtrb::Consumer<mooloop_core::EngineEvent>,
+    pub(crate) reclaim: rtrb::Consumer<crate::StructuralReclaim>,
 }
 
-fn live(render: RenderState) -> Live {
+pub(crate) fn live(render: RenderState) -> Live {
     let (commands, cmd_rx) = rtrb::RingBuffer::new(256);
     let (evt_tx, events) = rtrb::RingBuffer::new(4096);
     let (reclaim_tx, reclaim) = rtrb::RingBuffer::new(256);
@@ -199,7 +199,7 @@ fn live(render: RenderState) -> Live {
 }
 
 /// What the session sends to swap a hosted processor into its device.
-fn replace(target: EffectTarget, row: u8, slot: PluginSlotId, node: Box<dyn AudioNode + Send>) -> RealtimeCommand {
+pub(crate) fn replace(target: EffectTarget, row: u8, slot: PluginSlotId, node: Box<dyn AudioNode + Send>) -> RealtimeCommand {
     let key = u64::from(slot.0);
     let align = mooloop_dsp::IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
     RealtimeCommand::Structural(StructuralCommand::ReplaceEffect {

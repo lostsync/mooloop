@@ -825,9 +825,8 @@ impl crate::session::Session {
                     let _ = self.replace_plugin_processor(slot, node, align, handle);
                 }
                 RackEvent::PullBack { slot } => {
-                    let placeholder: Box<dyn AudioNode + Send> =
-                        Box::new(PluginPlaceholder::new(slot));
-                    let _ = self.replace_plugin_processor(slot, placeholder, None, handle);
+                    let (placeholder, align) = self.pull_back_placeholder(slot);
+                    let _ = self.replace_plugin_processor(slot, placeholder, align, handle);
                 }
                 RackEvent::Opened { slot, params } => {
                     // What the plugin reports now replaces what the song last
@@ -1071,9 +1070,24 @@ impl crate::session::Session {
     /// [`Self::plugins_retired`], or its bounded wait runs out.
     pub fn close_plugins(&mut self, handle: &mut impl CommandSink) {
         for slot in self.plugin_rack.close() {
-            let placeholder: Box<dyn AudioNode + Send> = Box::new(PluginPlaceholder::new(slot));
-            let _ = self.replace_plugin_processor(slot, placeholder, None, handle);
+            let (placeholder, align) = self.pull_back_placeholder(slot);
+            let _ = self.replace_plugin_processor(slot, placeholder, align, handle);
         }
+    }
+
+    /// The placeholder that pulls a running processor back, and its dry
+    /// ring: a pass-through as late as the plugin it replaces, which is the
+    /// latency the chain is compensated for until the next processor reports
+    /// its own (`Self::device_latency` reads the same instance). A plain
+    /// placeholder would move the channel earlier by that much and back
+    /// again, and the engine's fade could not hide a jump in time (MOO-213).
+    fn pull_back_placeholder(
+        &self,
+        slot: PluginSlotId,
+    ) -> (Box<dyn AudioNode + Send>, Option<Box<IntegerDelay>>) {
+        let latency = self.plugin_rack.latency_frames(slot).unwrap_or(0);
+        let align = IntegerDelay::new(latency).map(Box::new);
+        (Box::new(PluginPlaceholder::with_latency(slot, latency)), align)
     }
 
     /// Drop the retired instances whose processors have come back.

@@ -297,6 +297,13 @@ In the order worth playing:
    with hysteresis, and the Compressor with its own Mix (MOO-142).
 5. **Transitions that used to click**: fader, mute, solo, bypass, preset
    loads and sampler steals (MOO-104, MOO-172). These should now be silent.
+   So should a hosted plugin's restart (MOO-213). With the LSP filter from
+   item 7 on a sustained pad at a low cutoff, change the latency or
+   oversampling setting that makes it ask for a restart, or change JACK's
+   sample rate while it plays: the filter should fade to dry and back, with
+   no click. There's no offline render for this, because a restart only
+   happens live. The measured version is
+   `scripts/antibox --no-incremental cargo test -p mooloop-engine --lib -- hosted_plugin_for_its_placeholder --nocapture`.
 6. **The master bus compressor, each voicing** (MOO-13, step 3). *"Turning it
    on should feel special"* is the acceptance case and only a listen can pass
    it. A kick, a bass line and chords a few decibels hot, rendered with the

@@ -275,6 +275,29 @@ impl Executor {
                             break;
                         }
                     }
+                    // A hosted plugin's processor leaving or rejoining its
+                    // slot (the rack's swap with the placeholder, which CLAP's
+                    // one processor per instance forces on every restart)
+                    // waits for the slot to fade out the same way, and the
+                    // slot fades back in with what arrives (MOO-213).
+                    if let StructuralCommand::ReplaceEffect {
+                        target,
+                        slot,
+                        expected_kind: mooloop_core::EffectKind::Plugin,
+                        expected_resource_key,
+                        ..
+                    } = &command
+                    {
+                        if !self.render.plugin_slot_ready_for_swap(
+                            *target,
+                            *slot,
+                            *expected_resource_key,
+                            frames,
+                        ) {
+                            self.pending_command = Some(RealtimeCommand::Structural(command));
+                            break;
+                        }
+                    }
                     if let Some(displaced) = self.render.apply_structural(command) {
                         match self.reclaim_tx.push(displaced) {
                             Ok(()) => {}

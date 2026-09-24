@@ -1164,6 +1164,13 @@ pub struct EffectSlot {
     /// [`leaving`](Self::leaving): it fades out as a bypass would, without
     /// touching `bypassed`, which is the user's and has to survive a swap.
     removal_waited: Option<u32>,
+    /// Frames a slot that has just had a hosted plugin swapped in (MOO-213)
+    /// still holds its blend at the dry path while the incoming node runs:
+    /// its latency, so the node's output has caught up with the dry ring
+    /// before it is heard. `Some(0)` once that has passed and until the
+    /// fade has started, so the slot is not taken for one returning from
+    /// out of the path and reset; `None` otherwise.
+    rejoin_hold: Option<u32>,
     /// Whether this slot arrived with its own host controls and base
     /// parameters ([`EffectSlot::for_effect`]) rather than inheriting the
     /// occupant's ([`EffectSlot::for_device`]). Read once, by `install`.
@@ -1219,6 +1226,7 @@ impl EffectSlot {
             output_trim: 1.0,
             ramps: HostRamps::new(),
             removal_waited: None,
+            rejoin_hold: None,
             carries_host: false,
             container_children: 0,
             container_align: None,
@@ -1280,7 +1288,11 @@ impl EffectSlot {
             self.wet_dry,
             self.input_trim,
             self.output_trim,
-            if self.leaving() { 0.0 } else { 1.0 },
+            if self.leaving() || self.rejoin_hold.is_some_and(|hold| hold > 0) {
+                0.0
+            } else {
+                1.0
+            },
             self.container_mix(),
             self.container_level(),
         ]
@@ -1333,7 +1345,17 @@ impl EffectSlot {
     /// device just installed is here too, and starts clean for the same
     /// reason: it has heard nothing yet.
     fn returning(&self) -> bool {
-        !self.leaving() && self.ramps.active.value() == 0.0
+        !self.leaving() && self.rejoin_hold.is_none() && self.ramps.active.value() == 0.0
+    }
+
+    /// Count a processed block against a rejoining slot's hold, and end the
+    /// hold once its fade has begun (MOO-213).
+    fn count_rejoin(&mut self, frames: usize) {
+        match self.rejoin_hold {
+            Some(0) if self.ramps.active.value() > 0.0 => self.rejoin_hold = None,
+            Some(hold) => self.rejoin_hold = Some(hold.saturating_sub(frames as u32)),
+            None => {}
+        }
     }
 
     /// Land a bypass fade that has reached [`BYPASS_FADE_FLOOR`]: the
@@ -1902,6 +1924,22 @@ impl EffectChain {
         if matches && !frozen {
             if let Some(state) = self.slot_mut(slot) {
                 state.resource_key = Some(resource_key);
+                // A hosted plugin's swap was held while the slot faded out
+                // (`RenderState::plugin_slot_ready_for_swap`, MOO-213). It is
+                // no longer leaving, so it fades back in with the new node,
+                // as an install does -- and a slot that had not got far, or
+                // never rendered, is back at once where it was.
+                //
+                // A latent node waits its latency at the dry path first,
+                // running, so that what it plays when the fade starts has
+                // caught up with the dry ring it fades against; before that
+                // it is the ring's length of zeros.
+                if state.removal_waited.take().is_some() {
+                    let latency = node.latency_frames();
+                    if latency > 0 && state.ramps.active.value() == 0.0 {
+                        state.rejoin_hold = Some(latency);
+                    }
+                }
             }
             // **The history comes across** (MOO-137). A tempo change or a
             // HISTORY change builds a buffer at the new length, and until
@@ -1915,9 +1953,22 @@ impl EffectChain {
             ) {
                 incoming.adopt_history_from(outgoing);
             }
+            // The dry ring stays when it is as long as the incoming one: it
+            // holds the last frames the slot heard, where a new ring would
+            // play its length of silence on the path the swap fades through
+            // (MOO-213). The new one goes back unused.
+            let keep_ring = matches!(
+                (&self.dry_align[slot], &align),
+                (Some(live), Some(incoming)) if live.frames() == incoming.frames()
+            );
+            let align = if keep_ring {
+                align
+            } else {
+                std::mem::replace(&mut self.dry_align[slot], align)
+            };
             ReclaimedEffect {
                 node: self.nodes[slot].replace(node),
-                align: std::mem::replace(&mut self.dry_align[slot], align),
+                align,
                 analyzer: None,
                 state: None,
                 channel: None,
@@ -2929,6 +2980,7 @@ impl EffectChain {
                 if let Some(state) = self.slots[slot].as_deref_mut() {
                     state.ramps = ramps;
                     state.finish_bypass_fade();
+                    state.count_rejoin(context.frames);
                 }
                 if let Some((meters, telemetry, target)) = device_display {
                     let (left, right) = bus.peak(context.frames);
@@ -6368,6 +6420,32 @@ impl RenderState {
         // at once: nothing has heard it.
         let limit = (REMOVAL_MAX_WAIT_S * state.ramps.sample_rate as f32) as u32;
         waited >= limit
+    }
+
+    /// Whether a hosted plugin's `ReplaceEffect` into `slot` can be applied
+    /// now without a step (MOO-213): the slot has faded out of the path, as
+    /// for a removal ([`Self::effect_slot_vacated`]), and `replace_if_kind`
+    /// then fades it back in with the incoming node. So the processor and the
+    /// pass-through placeholder trade places along wet, dry, wet, rather than
+    /// in one sample.
+    ///
+    /// A swap the chain will refuse -- the slot now holds another device, or
+    /// another plugin slot -- goes at once, and fades nothing: it is a no-op
+    /// and must not take an unrelated device out of the path.
+    pub(crate) fn plugin_slot_ready_for_swap(
+        &mut self,
+        target: EffectTarget,
+        slot: u8,
+        expected_resource_key: u64,
+        frames: usize,
+    ) -> bool {
+        let matches = self.chain_mut(target).is_some_and(|chain| {
+            chain.slot(slot as usize).is_some_and(|state| {
+                state.kind == Some(mooloop_core::EffectKind::Plugin)
+                    && state.resource_key == Some(expected_resource_key)
+            })
+        });
+        !matches || self.effect_slot_vacated(target, slot, frames)
     }
 
     /// Apply a structural change (install/remove of a boxed node). Called on
@@ -16790,7 +16868,11 @@ mod footprint {
         // And by twenty-four for `containers/09`: a container's Level ramp and
         // a branch's mute/solo gate, two more `Smoothed`, with the flag saying
         // whether the gate has been aimed falling in padding.
-        assert_eq!(size_of::<EffectSlot>(), 616);
+        //
+        // And by eight for MOO-213: the frames a slot that has just had a
+        // latent hosted plugin swapped in holds at its dry path before
+        // fading in, so the incoming node has caught up with the dry ring.
+        assert_eq!(size_of::<EffectSlot>(), 624);
         assert_eq!(size_of::<Option<Box<EffectSlot>>>(), 8);
         // Eight of this is the pointer to the per-depth dry buffers a chain
         // needs while it is *inside* containers. One pointer, not four
