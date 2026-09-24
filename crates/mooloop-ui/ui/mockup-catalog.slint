@@ -12,7 +12,7 @@ import {
 } from "meters.slint";
 import { BusPicker, MixerPane, MixerStripRow } from "mixer.slint";
 import {
-    DeviceFrame, DeviceHeader, DeviceJoin, DevicePageButton, DeviceRackMetrics,
+    CollapsedDevice, DeviceFrame, DeviceHeader, DeviceJoin, DevicePageButton, DeviceRackMetrics,
     EffectDeviceShell
 } from "device-rack.slint";
 import {
@@ -320,6 +320,12 @@ export global MockupCatalog {
         {
             component: "ChannelMuteSolo", name: "Channel mute/solo", module: "controls.slint",
             groups: ["Buttons", "Mixer"], default-width: 18px, default-height: 18px, behavior: 2,
+        },
+        // A device folded to its header (MOO-219). Appended for the same
+        // reason: a saved layout names a kind by its position.
+        {
+            component: "CollapsedDevice", name: "Collapsed device", module: "device-rack.slint",
+            groups: ["Device rack"], default-width: 30px, default-height: 268px, behavior: 2,
         },
     ];
 
@@ -757,5 +763,14 @@ export component MockupSpecimen inherits Rectangle {
     if root.kind == 63: ChannelMuteSolo {
         muted: root.value > 0.5;
         soloed: root.value > 0.5;
+    }
+    // The toggle folds the specimen's own bypass, so both lamp states can be
+    // looked at.
+    if root.kind == 64: CollapsedDevice {
+        name: root.label == "" ? "Delay" : root.label;
+        kind: "FX / 3U";
+        bypassed: root.value > 0.5;
+        wet-dry: 1.0;
+        wet-dry-text: "100% wet";
     }
 }
