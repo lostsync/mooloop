@@ -6218,6 +6218,32 @@ impl UiState {
         window.set_midi_channel_index(channel.midi_input.channel.row() as i32);
     }
 
+    /// The loop fade's knob, readout and span (MOO-43). Its own function
+    /// because the span moves whenever the loop does, so the loop's handlers
+    /// republish it without a whole editor refresh.
+    fn publish_loop_fade(window: &MainWindow, channel: &ChannelState) {
+        let params = channel.sampler_params();
+        let descriptor = DeviceKind::Sampler
+            .descriptor(mooloop_core::generator::SAMPLER_PARAM_LOOP_FADE)
+            .expect("the sampler describes its loop fade");
+        window.set_sampler_loop_fade(descriptor.to_normalized(params.loop_crossfade_ms));
+        window.set_sampler_loop_fade_label(
+            if params.loop_crossfade_ms > 0.0 {
+                format!("{:.1} ms", params.loop_crossfade_ms)
+            } else {
+                "Off".to_string()
+            }
+            .into(),
+        );
+        let span = channel
+            .published_sample()
+            .and_then(|sample| mooloop_dsp::Sampler::loop_seam_span(params, sample));
+        window.set_sampler_loop_fade_shown(span.is_some());
+        let (start, end) = span.unwrap_or((0.0, 0.0));
+        window.set_sampler_loop_fade_start(start);
+        window.set_sampler_loop_fade_end(end);
+    }
+
     /// Refresh the bottom editor's properties from `selected`.
     fn refresh_editor(&self, window: &MainWindow) {
         let Some(ch) = self.session.channels.get(self.session.selected) else {
@@ -6550,6 +6576,7 @@ impl UiState {
         window.set_stretch_sync(p.stretch_sync);
         window.set_stretch_bars(stretch_bars_to_norm(p.stretch_bars));
         window.set_stretch_bars_label(format_bars(p.stretch_bars).into());
+        Self::publish_loop_fade(window, ch);
         window.set_filter_cutoff(p.filter_cutoff);
         window.set_filter_resonance(p.filter_resonance);
         window.set_filter_env((p.filter_env_amount + 1.0) * 0.5);
@@ -12883,6 +12910,12 @@ impl AppUi {
                     });
                     let (value, status) = resolved.into_inner();
                     set_marker_property(&window, marker, value);
+                    {
+                        let st = st.borrow();
+                        if let Some(channel) = st.session.channels.get(st.session.selected) {
+                            UiState::publish_loop_fade(&window, channel);
+                        }
+                    }
                     if let Some(status) = status {
                         window.set_status_message(status.into());
                     }
@@ -12955,6 +12988,43 @@ impl AppUi {
                     );
                     true
                 });
+            });
+        }
+        {
+            // Normalized in, through the descriptor: the face holds no copy
+            // of the fade's range (MOO-43).
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_sampler_loop_fade_changed(move |norm: f32| {
+                let Some(window) = weak.upgrade() else { return };
+                let descriptor = DeviceKind::Sampler
+                    .descriptor(mooloop_core::generator::SAMPLER_PARAM_LOOP_FADE)
+                    .expect("the sampler describes its loop fade");
+                let ms = descriptor.from_normalized(norm);
+                with_gesture_history(&st, &commands, &window, "Loop fade", || {
+                    let mut st = st.borrow_mut();
+                    let ch = st.session.selected;
+                    let Some(channel) = st.session.channels.get_mut(ch) else {
+                        return false;
+                    };
+                    if channel.sampler_params().loop_crossfade_ms == ms {
+                        return false;
+                    }
+                    if let Some(p) = channel.sampler_params_mut() {
+                        p.loop_crossfade_ms = ms;
+                    }
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: ch as u8,
+                        params: channel.sampler_params(),
+                    });
+                    true
+                });
+                let st = st.borrow();
+                if let Some(channel) = st.session.channels.get(st.session.selected) {
+                    UiState::publish_loop_fade(&window, channel);
+                }
             });
         }
         wire_unit_param!(on_filter_cutoff_changed, filter_cutoff);
@@ -13216,6 +13286,10 @@ impl AppUi {
                     });
                     true
                 });
+                let st = st.borrow();
+                if let Some(channel) = st.session.channels.get(st.session.selected) {
+                    UiState::publish_loop_fade(&window, channel);
+                }
             });
         }
 

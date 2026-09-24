@@ -204,7 +204,8 @@ Files marked *shared* are split in the table above.
   `mlp8_factory.rs`, `aux_in.rs`, `input.rs`
 - `session/src/`: `audio_file.rs`, `sample.rs`, `sampler.rs`
 - `engine/src/ds01_tests.rs`, and the listening renders
-  `engine/examples/mlp8_volume_pump.rs` (MOO-214)
+  `engine/examples/mlp8_volume_pump.rs` (MOO-214) and
+  `engine/examples/sampler_loop_seam.rs` (MOO-43)
 - `ui/ui/`: `sampler-device.slint`, `drum-device.slint`, `ds01-device.slint`,
   `mono-device.slint`, `poly-device.slint`, `mlm1-device.slint`,
   `mlp8-device.slint`, `aux-in-device.slint`, `device-oscillator.slint`,

@@ -285,6 +285,7 @@ const FROZEN: &[(Owner, &[(u32, &str)])] = &[
         (33, "Live tune"),
         (34, "Play mode"),
         (35, "Slice base"),
+        (36, "Loop fade"),
     ]),
     (Device(DeviceKind::DrumSynth), &[
         (0, "Mode"),

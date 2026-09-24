@@ -39,7 +39,7 @@ use mooloop_dsp::{
     SILENCE_PEAK,
 };
 use mooloop_dsp::interpolate::{Region, SincTable};
-use mooloop_dsp::smooth::Smoothed;
+use mooloop_dsp::smooth::{equal_power, Smoothed};
 use mooloop_dsp::strip::Strip;
 
 use crate::meters::{BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters};
@@ -1459,12 +1459,6 @@ impl HostRamps {
             .zip(targets)
             .all(|(ramp, target)| ramp.value() == target)
     }
-}
-
-/// The equal-power pair for a wet/dry or Mix position: `(dry, wet)` gains.
-fn equal_power(wet: f32) -> (f32, f32) {
-    let blend = wet * core::f32::consts::FRAC_PI_2;
-    (blend.cos(), blend.sin())
 }
 
 impl EffectSlot {

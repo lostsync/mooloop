@@ -141,6 +141,20 @@ impl Smoothed {
     }
 }
 
+/// The two gains of an equal-power crossfade at `phase`, from `0` (all
+/// outgoing) to `1` (all incoming): `(outgoing, incoming)`.
+///
+/// Their squares sum to one, so two uncorrelated signals cross at constant
+/// power. Two identical ones swell by up to 3 dB at the middle, which is the
+/// price of never dipping on unrelated material. The one copy of this law
+/// (MOO-43): Buffer's jumps, `DelayLine`'s read head, the effect host's
+/// wet/dry and container Mix, and the sampler's loop seam all call it.
+#[inline]
+pub fn equal_power(phase: f32) -> (f32, f32) {
+    let angle = phase * core::f32::consts::FRAC_PI_2;
+    (angle.cos(), angle.sin())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

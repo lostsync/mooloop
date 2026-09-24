@@ -964,6 +964,18 @@ boundary.
 - NoteOn, NoteOff, and choke events are sample-accurate and deterministically
   ordered. One-shot loops exit into their remaining sample tail; gated loops
   release through the amplitude envelope.
+- **A forward loop's seam can be crossfaded** (MOO-43, 2026-09-24). Loop
+  fade, beside the loop mode on the sampler's header, is 0 to 100 ms of the
+  sample's own time. The loop's last stretch blends, equal-power, into the
+  material just before its start, so its last frame is its first frame's
+  neighbour and the seam has nothing to click on. The loop keeps its length
+  and its start (a break's downbeat) plays as it always did. A loop that
+  starts at the region's first frame has no material before it, so its end
+  fades out to silence and its first millisecond fades back in. The
+  waveform shades the span the fade covers. Reverse crosses the same blend, ping-pong has no seam, a fade
+  is never more than half the loop, and 0 ms (the default, and every song
+  saved before) is the hard seam, bit for bit. The fade is a descriptor, so
+  it can be automated and modulated.
 - Sampler voice allocation is fixed-capacity and deterministic: restart reuses
   the oldest matching pitch, layer mode overlaps notes, and overflow steals
   a releasing voice before a held one, the oldest of either. The sampler, the

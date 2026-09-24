@@ -2015,6 +2015,13 @@ export component MainWindow inherits Window {
     in-out property <float> sampler-filter-release;
     in-out property <int> sampler-filter-view;
     in-out property <int>   loop-mode;     // 0=Off 1=Fwd 2=Pong
+    // The loop seam's crossfade (MOO-43): normalized, its readout, and the
+    // span it covers as fractions of the sample, all published by Rust.
+    in-out property <float> sampler-loop-fade;
+    in-out property <string> sampler-loop-fade-label;
+    in-out property <float> sampler-loop-fade-start;
+    in-out property <float> sampler-loop-fade-end;
+    in-out property <bool> sampler-loop-fade-shown;
     in-out property <int> play-mode;        // 0=Pitched 1=Slice
     in-out property <int> slice-base-note: 36;
     in-out property <[float]> slice-markers;
@@ -2119,6 +2126,7 @@ export component MainWindow inherits Window {
     callback tune-cents-changed(float);
     callback retune-live-changed(bool);
     callback loop-mode-changed(int);
+    callback sampler-loop-fade-changed(float);
     callback play-mode-changed(int);
     callback slice-base-note-changed(int);
     callback slice-added(float);
@@ -4313,6 +4321,11 @@ export component MainWindow inherits Window {
                                                 filter-release <=> root.sampler-filter-release;
                                                 filter-view <=> root.sampler-filter-view;
                                                 loop-mode <=> root.loop-mode;
+                                                loop-fade <=> root.sampler-loop-fade;
+                                                loop-fade-label: root.sampler-loop-fade-label;
+                                                loop-fade-start: root.sampler-loop-fade-start;
+                                                loop-fade-end: root.sampler-loop-fade-end;
+                                                loop-fade-shown: root.sampler-loop-fade-shown;
                                                 play-mode <=> root.play-mode;
                                                 slice-base-note <=> root.slice-base-note;
                                                 slice-markers <=> root.slice-markers;
@@ -4360,6 +4373,7 @@ export component MainWindow inherits Window {
                                                 tune-cents-changed(v) => { root.tune-cents-changed(v); }
                                                 retune-live-changed(v) => { root.retune-live-changed(v); }
                                                 loop-mode-changed(v) => { root.loop-mode-changed(v); }
+                                                loop-fade-changed(v) => { root.sampler-loop-fade-changed(v); }
                                                 play-mode-changed(v) => { root.play-mode-changed(v); }
                                                 slice-base-note-changed(v) => { root.slice-base-note-changed(v); }
                                                 slice-added(p) => { root.slice-added(p); }

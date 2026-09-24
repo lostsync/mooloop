@@ -455,8 +455,7 @@ impl BufferDevice {
                     FadeSource::Detached { position, .. } => self.read_stereo(position),
                 };
                 let phase = fade.frame as f32 / fade.frames as f32;
-                let from_gain = (phase * core::f32::consts::FRAC_PI_2).cos();
-                let to_gain = (phase * core::f32::consts::FRAC_PI_2).sin();
+                let (from_gain, to_gain) = crate::smooth::equal_power(phase);
                 output_l = from_l * from_gain + output_l * to_gain;
                 output_r = from_r * from_gain + output_r * to_gain;
                 if let FadeSource::Detached { position, step } = &mut fade.source {

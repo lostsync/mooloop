@@ -345,6 +345,10 @@ impl StretchMode {
     }
 }
 
+/// The longest loop crossfade, in milliseconds of the sample's own time
+/// (MOO-43). A drum loop wants a few; a sustained pad's seam can want tens.
+pub const MAX_LOOP_CROSSFADE_MS: f32 = 100.0;
+
 /// Bar-count bounds for tempo-synced stretching.
 pub const MIN_STRETCH_BARS: f32 = 0.0625;
 pub const MAX_STRETCH_BARS: f32 = 64.0;
@@ -564,6 +568,13 @@ pub struct SamplerParams {
     /// Loop end point as a fraction.
     pub loop_end: f32,
     pub loop_mode: LoopMode,
+    /// How long a forward loop's seam is crossfaded, in milliseconds of the
+    /// sample's own time; 0 is a hard seam (MOO-43).
+    ///
+    /// Defaulted to 0, so a song saved before the fade existed loads with a
+    /// hard seam and renders exactly as it did.
+    #[serde(default)]
+    pub loop_crossfade_ms: f32,
     /// Attack time (seconds).
     pub attack: f32,
     /// Decay time (seconds).
@@ -697,6 +708,7 @@ impl Default for SamplerParams {
             loop_start: 0.0,
             loop_end: 1.0,
             loop_mode: LoopMode::Off,
+            loop_crossfade_ms: 0.0,
             attack: 0.001,
             decay: 0.25,
             sustain: 1.0,
@@ -804,6 +816,9 @@ rate_reduction = 0.0
         );
         // And the trim from the same era still loads at unity.
         assert_eq!(params.output_gain, 1.0);
+        // And its loops keep their hard seam (MOO-43): no fade means the
+        // voice reads the plain wrap it always did, bit for bit.
+        assert_eq!(params.loop_crossfade_ms, 0.0);
     }
 
     /// Once a patch has its own filter envelope, a round trip keeps it

@@ -391,10 +391,7 @@ impl Stretcher {
     /// one-shot ends in silence.
     #[inline]
     fn frame_at(frames: &[[f32; 2]], region: Region, index: i64) -> [f32; 2] {
-        match region.resolve(index, frames.len()) {
-            Some(resolved) => frames[resolved],
-            None => [0.0, 0.0],
-        }
+        region.frame(frames, index).unwrap_or([0.0, 0.0])
     }
 
     #[inline]
@@ -543,7 +540,7 @@ fn region_span(region: Region) -> Option<f64> {
         // reversing it. Reverse and ping-pong under stretch are out of scope
         // for v1 (#13), and the UI disables stretch for them rather than
         // silently producing this.
-        crate::interpolate::RegionEdge::Wrap => {
+        crate::interpolate::RegionEdge::Wrap | crate::interpolate::RegionEdge::Crossfade { .. } => {
             let span = region.end - region.start;
             (span > 0.0).then_some(span)
         }

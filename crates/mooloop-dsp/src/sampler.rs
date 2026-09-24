@@ -290,6 +290,10 @@ const CHOKE_RELEASE_S: f32 = 0.005;
 /// the one number a listener already hears for it.
 const VOICE_FADE_S: f32 = CHOKE_RELEASE_S;
 
+/// How long a loop with no material before its start fades back in there
+/// (MOO-43): see [`Sampler::loop_head_frames`].
+const LOOP_HEAD_FADE_S: f64 = 0.001;
+
 /// How long before the end of a non-looping region a voice starts fading,
 /// so it stops at silence rather than wherever the waveform was (MOO-110).
 const REGION_END_FADE_S: f32 = 0.002;
@@ -1207,6 +1211,71 @@ impl Sampler {
         Self::resolve_loop_bounds(self.params, len, None)
     }
 
+    /// How many source frames the loop seam's crossfade spans (MOO-43), or
+    /// `None` for a hard seam.
+    ///
+    /// Loop fade is milliseconds of the *sample's* own time, so a seam is
+    /// the same stretch of material whichever note plays it; a transposed or
+    /// stretched voice crosses it faster or slower, as it does everything
+    /// else in the sample. Never more than half the loop, which keeps the
+    /// blend inside it. `None` at 0 ms, and then the region is an ordinary
+    /// [`RegionEdge::Wrap`], read bit for bit as before the fade existed.
+    pub fn loop_seam_frames(
+        params: SamplerParams,
+        sample_rate: u32,
+        loop_start: f64,
+        loop_end: f64,
+    ) -> Option<u32> {
+        let ms = f64::from(params.loop_crossfade_ms);
+        if ms.is_nan() || ms <= 0.0 {
+            return None;
+        }
+        let ms = ms.min(f64::from(mooloop_core::sampler::MAX_LOOP_CROSSFADE_MS));
+        let start = loop_start.floor();
+        let span = (loop_end.ceil() - start).max(1.0);
+        let frames = (ms * f64::from(sample_rate) / 1_000.0)
+            .round()
+            .min((span / 2.0).floor());
+        (frames >= 1.0).then_some(frames as u32)
+    }
+
+    /// How long a loop with no pre-roll takes to fade back in at its start:
+    /// a millisecond of the sample's own time, or the fade if that is
+    /// shorter. Short on purpose. The start is a break's downbeat, and a
+    /// millisecond takes the step out of it without softening the hit.
+    pub fn loop_head_frames(sample_rate: u32) -> u32 {
+        ((f64::from(sample_rate) * LOOP_HEAD_FADE_S).round() as u32).max(1)
+    }
+
+    /// The span a loop's crossfade covers, as fractions of the sample, for
+    /// the waveform display; `None` when there is no fade to draw.
+    ///
+    /// The same arithmetic the voice uses, so what is drawn is what plays: a
+    /// forward loop in Pitched mode only, since a ping-pong turnaround has no
+    /// seam and a slice's loop is the slice.
+    pub fn loop_seam_span(params: SamplerParams, sample: &SampleData) -> Option<(f32, f32)> {
+        let len = sample.len();
+        if len == 0 || params.loop_mode != LoopMode::Forward || params.play_mode != PlayMode::Pitched
+        {
+            return None;
+        }
+        let (play_start, _) = Self::resolve_playback_bounds(params, len, None);
+        let (loop_start, loop_end) = Self::resolve_loop_bounds(params, len, None);
+        let fade = Self::loop_seam_frames(params, sample.sample_rate, loop_start, loop_end)?;
+        // A blend into real pre-roll is as long as the pre-roll there is,
+        // the rule `RegionEdge::Crossfade` reads by; a fade out to silence is
+        // the whole fade.
+        let pre_roll = (loop_start.floor() - play_start.floor()).max(0.0);
+        let fade = if pre_roll > 0.0 {
+            f64::from(fade).min(pre_roll)
+        } else {
+            f64::from(fade)
+        };
+        let end = loop_end.ceil();
+        let len = len as f64;
+        Some((((end - fade) / len) as f32, (end / len) as f32))
+    }
+
     /// Render the voice into `bus[start..end]`, adding into the buffers.
     /// Handles looping, envelope advancement, and voice termination.
     fn render_voice_range(
@@ -1248,6 +1317,17 @@ impl Sampler {
         } else {
             LoopMode::Off
         };
+        // A forward loop's seam, crossfaded when Loop fade asks for it
+        // (MOO-43). The pre-roll stops at the playback region's start, which
+        // is the slice's own start in Slice mode: nothing outside what this
+        // voice plays is ever read.
+        let source_rate = voice.sample.as_ref().map_or(sample_rate, |s| s.sample_rate);
+        let forward_edge = Self::loop_seam_frames(params, source_rate, ls, le)
+            .map_or(RegionEdge::Wrap, |fade| RegionEdge::Crossfade {
+                fade,
+                floor: play_start.floor() as i64,
+                head: Self::loop_head_frames(source_rate).min(fade),
+            });
         let table = SincTable::shared();
 
         // Re-derive the rate from the voice's fixed key/sample-rate ratio and
@@ -1315,8 +1395,10 @@ impl Sampler {
                     start: ls,
                     end: le,
                     edge: match loop_mode {
+                        // A turnaround has no seam: the head reverses on the
+                        // frame it reached, so there is no step to fade.
                         LoopMode::Pingpong => RegionEdge::Mirror,
-                        _ => RegionEdge::Wrap,
+                        _ => forward_edge,
                     },
                 }
             } else {
@@ -3444,5 +3526,230 @@ mod tests {
         sampler.process(&stopped, &mut bus, &EventList::empty(), None);
 
         assert!(sampler.voices[0].env.is_releasing());
+    }
+
+    // --- Loop seams (MOO-43) ---------------------------------------------
+
+    /// A ramp sampler looping forward over `[loop_start, 1)`, rendered for
+    /// `frames` at the sample's own rate, so every read lands on a whole
+    /// frame and the seam is exactly where the ramp falls back.
+    fn render_ramp_loop(len: usize, loop_start: f32, fade_ms: f32, frames: usize) -> Vec<f32> {
+        render_ramp_loop_with(len, frames, SamplerParams {
+            loop_mode: LoopMode::Forward,
+            loop_start,
+            loop_end: 1.0,
+            loop_crossfade_ms: fade_ms,
+            output_gain: 1.0,
+            ..SamplerParams::default()
+        })
+    }
+
+    fn render_ramp_loop_with(len: usize, frames: usize, params: SamplerParams) -> Vec<f32> {
+        let sr = 48_000;
+        let mut sampler = sampler_with_frames(sr, len, params);
+        render_note(&mut sampler, sr, 60, frames).l[..frames].to_vec()
+    }
+
+    fn largest_step(signal: &[f32]) -> f32 {
+        signal
+            .windows(2)
+            .fold(0.0_f32, |worst, pair| worst.max((pair[1] - pair[0]).abs()))
+    }
+
+    /// The headline: a ramp looped over itself falls from nearly 1 to 0 at
+    /// every seam, the worst loop point there is. With a 10 ms fade the fall
+    /// is spread over the loop's last 480 frames, whether the loop starts at
+    /// the sample's first frame (and fades out and back in) or part-way in
+    /// (and blends into the real ramp before it).
+    #[test]
+    fn a_loop_fade_takes_the_step_out_of_a_forward_seam() {
+        const LEN: usize = 4_800;
+        for loop_start in [0.0, 0.25] {
+            let hard = render_ramp_loop(LEN, loop_start, 0.0, 3 * LEN);
+            let faded = render_ramp_loop(LEN, loop_start, 10.0, 3 * LEN);
+            // After the attack, so only the loop is measured.
+            let (hard_step, faded_step) = (largest_step(&hard[200..]), largest_step(&faded[200..]));
+            assert!(hard_step > 0.5, "the premise: a hard seam steps ({hard_step})");
+            assert!(
+                faded_step < hard_step * 0.02,
+                "loop from {loop_start}: the faded seam still steps by {faded_step} \
+                 against {hard_step} hard"
+            );
+            assert!(faded.iter().all(|s| s.is_finite() && s.abs() <= 1.5));
+        }
+    }
+
+    /// With pre-roll, the fade prepares the loop's end and never its start:
+    /// after every wrap the loop's opening (a break's downbeat) is what a
+    /// hard seam plays.
+    #[test]
+    fn a_loop_fade_leaves_the_loop_start_alone() {
+        const LEN: usize = 4_800;
+        const LEAD: usize = LEN / 4;
+        const LOOP: usize = LEN - LEAD;
+        let hard = render_ramp_loop(LEN, 0.25, 0.0, 3 * LEN);
+        let faded = render_ramp_loop(LEN, 0.25, 10.0, 3 * LEN);
+        // Where the head wraps: after the run-in, then once a loop.
+        let fade = 480;
+        for seam in [LEN, LEN + LOOP] {
+            // To rounding rather than to the bit: at a whole-frame position
+            // the kernel's other taps are ~1e-17, not zero, and the first few
+            // after a wrap reach back into the faded frames.
+            let moved = faded[seam..seam + LOOP - fade - 16]
+                .iter()
+                .zip(&hard[seam..seam + LOOP - fade - 16])
+                .fold(0.0_f32, |worst, (a, b)| worst.max((a - b).abs()));
+            assert!(moved < 1.0e-6, "the loop after the seam at {seam} moved by {moved}");
+            assert_ne!(
+                faded[seam - fade / 2],
+                hard[seam - fade / 2],
+                "the fade did not reach the loop's end"
+            );
+        }
+    }
+
+    /// A loop with nothing before its start has no pre-roll to blend into,
+    /// so its end fades out and its first millisecond fades back in. It only
+    /// ever takes level away: blending into the loop's own opening played
+    /// backwards was tried, and it put a full-level reversed kick in front of
+    /// the downbeat. Everything outside the two fades is the hard seam's
+    /// render.
+    #[test]
+    fn a_loop_with_no_pre_roll_fades_out_and_back_in() {
+        const LEN: usize = 4_800;
+        let hard = render_ramp_loop(LEN, 0.0, 0.0, 3 * LEN);
+        let faded = render_ramp_loop(LEN, 0.0, 10.0, 3 * LEN);
+        let (fade, head) = (480, 48);
+        for (frame, (h, f)) in hard.iter().zip(&faded).enumerate().skip(200) {
+            assert!(
+                f.abs() <= h.abs() + 1.0e-6,
+                "frame {frame} gained level: {f} against {h}"
+            );
+        }
+        for seam in [LEN, 2 * LEN] {
+            assert!(faded[seam - 1].abs() < 1.0e-3, "the end did not reach silence");
+            assert!(faded[seam - fade / 2].abs() < hard[seam - fade / 2].abs());
+            // Past the head fade and the kernel's reach, the hard render.
+            let moved = faded[seam + head + 16..seam + LEN - fade - 16]
+                .iter()
+                .zip(&hard[seam + head + 16..seam + LEN - fade - 16])
+                .fold(0.0_f32, |worst, (a, b)| worst.max((a - b).abs()));
+            assert!(moved < 1.0e-6, "the loop's body moved by {moved}");
+        }
+    }
+
+    /// A reverse voice crosses the same blend from the other side, so its
+    /// seam is as smooth with no rule of its own.
+    #[test]
+    fn a_reversed_loop_crosses_the_same_fade() {
+        const LEN: usize = 4_800;
+        let params = |fade| SamplerParams {
+            loop_mode: LoopMode::Forward,
+            loop_start: 0.0,
+            loop_end: 1.0,
+            loop_crossfade_ms: fade,
+            output_gain: 1.0,
+            reverse: true,
+            ..SamplerParams::default()
+        };
+        let hard = render_ramp_loop_with(LEN, 3 * LEN, params(0.0));
+        let faded = render_ramp_loop_with(LEN, 3 * LEN, params(10.0));
+        let (hard_step, faded_step) = (largest_step(&hard[200..]), largest_step(&faded[200..]));
+        assert!(hard_step > 0.5, "the premise: a hard reversed seam steps ({hard_step})");
+        assert!(
+            faded_step < hard_step * 0.02,
+            "the reversed seam still steps by {faded_step} against {hard_step}"
+        );
+    }
+
+    /// A ping-pong turnaround has no seam to fade, so the setting changes
+    /// nothing there.
+    #[test]
+    fn a_loop_fade_leaves_ping_pong_alone() {
+        let params = |fade| SamplerParams {
+            loop_mode: LoopMode::Pingpong,
+            loop_start: 0.25,
+            loop_end: 0.75,
+            loop_crossfade_ms: fade,
+            output_gain: 1.0,
+            ..SamplerParams::default()
+        };
+        assert_eq!(
+            render_ramp_loop_with(4_800, 12_000, params(0.0)),
+            render_ramp_loop_with(4_800, 12_000, params(30.0))
+        );
+    }
+
+    /// A fade longer than the loop is clamped to half of it, and a loop of a
+    /// handful of frames under the longest fade reads nothing outside
+    /// itself: the frames outside the loop are NaN here, so one read of
+    /// them would show.
+    #[test]
+    fn a_long_fade_on_a_short_loop_stays_inside_it() {
+        assert_eq!(
+            Sampler::loop_seam_frames(
+                SamplerParams { loop_crossfade_ms: 100.0, ..SamplerParams::default() },
+                48_000,
+                1_000.0,
+                1_010.0,
+            ),
+            Some(5)
+        );
+        assert_eq!(
+            Sampler::loop_seam_frames(
+                SamplerParams { loop_crossfade_ms: 100.0, ..SamplerParams::default() },
+                48_000,
+                1_000.0,
+                1_001.0,
+            ),
+            None,
+            "a one-frame loop has no room for a fade"
+        );
+        let table = SincTable::shared();
+        // No pre-roll (the loop starts at the floor), and a pre-roll of two
+        // frames under a fade of three: neither may read past what it has.
+        for (floor, readable) in [(20, 20..27), (18, 18..27)] {
+            let frames: Vec<[f32; 2]> = (0..64)
+                .map(|index| {
+                    if readable.contains(&index) {
+                        [index as f32, index as f32]
+                    } else {
+                        [f32::NAN, f32::NAN]
+                    }
+                })
+                .collect();
+            let region = Region {
+                start: 20.0,
+                end: 27.0,
+                edge: RegionEdge::Crossfade { fade: 3, floor, head: 2 },
+            };
+            for index in -100..200 {
+                let frame = region.frame(&frames, index).expect("a looping region always plays");
+                assert!(frame[0].is_finite(), "floor {floor}: index {index} read outside");
+            }
+            for step in 0..400 {
+                let read = table.read(&frames, 20.0 + step as f64 * 0.37, 1.7, region);
+                assert!(read[0].is_finite(), "floor {floor}: a kernel read outside at {step}");
+            }
+        }
+    }
+
+    /// 0 ms is not a short fade, it is no fade: the region is the ordinary
+    /// wrap it always was, which is why a song saved before the setting
+    /// existed renders exactly as it did.
+    #[test]
+    fn a_zero_fade_is_the_hard_seam_it_always_was() {
+        let params = SamplerParams {
+            loop_mode: LoopMode::Forward,
+            ..SamplerParams::default()
+        };
+        assert_eq!(params.loop_crossfade_ms, 0.0);
+        assert_eq!(Sampler::loop_seam_frames(params, 48_000, 0.0, 48_000.0), None);
+        let wrap = Region { start: 3.0, end: 40.0, edge: RegionEdge::Wrap };
+        let frames: Vec<[f32; 2]> = (0..64).map(|i| [i as f32, -(i as f32)]).collect();
+        for index in -80..120 {
+            let resolved = wrap.resolve(index, frames.len()).map(|i| frames[i]);
+            assert_eq!(wrap.frame(&frames, index), resolved);
+        }
     }
 }

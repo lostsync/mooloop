@@ -1876,6 +1876,12 @@ fn check_sampler(doctor: &mut Doctor, who: &str, params: &mut SamplerParams) {
             mooloop_core::MIN_STRETCH_BARS,
             mooloop_core::MAX_STRETCH_BARS,
         ),
+        (
+            "the loop crossfade",
+            &mut params.loop_crossfade_ms,
+            0.0,
+            mooloop_core::sampler::MAX_LOOP_CROSSFADE_MS,
+        ),
     ] {
         doctor.fit("channel.sampler.range", who, field, value, min, max);
     }

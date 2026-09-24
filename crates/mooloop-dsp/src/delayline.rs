@@ -252,8 +252,7 @@ impl ReadHead {
         let previous = line.read(self.fade_offset);
         // Progress runs 0 -> 1 across the fade.
         let t = 1.0 - self.fade_remaining as f32 / self.fade_len as f32;
-        let angle = t * core::f32::consts::FRAC_PI_2;
-        let (gain_new, gain_old) = (angle.sin(), angle.cos());
+        let (gain_old, gain_new) = crate::smooth::equal_power(t);
         (
             current.0 * gain_new + previous.0 * gain_old,
             current.1 * gain_new + previous.1 * gain_old,

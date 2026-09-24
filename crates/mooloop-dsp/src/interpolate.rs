@@ -74,6 +74,34 @@ pub enum RegionEdge {
     /// A ping-pong turnaround: material past an edge is the region reflected
     /// back into itself, which is what the read head is about to play.
     Mirror,
+    /// A forward loop whose seam is crossfaded (MOO-43): it folds exactly as
+    /// [`RegionEdge::Wrap`] does, and its last `fade` frames are prepared so
+    /// the seam has nothing to click on.
+    ///
+    /// Where the sample has material before the loop's start (down to
+    /// `floor`, the playback region's own start), the loop's end blends,
+    /// equal-power, into that material, the classic sampler loop crossfade.
+    /// The frame at `end - 1` is wholly the frame at `start - 1`, so the last
+    /// frame and the first are neighbours. The loop keeps its length and its
+    /// start is untouched. If there's less pre-roll than `fade`, the blend
+    /// shortens to what there is.
+    ///
+    /// Where there is none, because the loop starts at the region's first
+    /// frame, the loop's end fades out to silence over `fade` frames and its
+    /// start fades back in over `head`. Blending into the loop's own opening
+    /// played backwards was measured and rejected: on a loop that starts on
+    /// a kick, it put a full-level reversed kick in front of the downbeat.
+    ///
+    /// A reverse voice crosses either one the other way round, so it needs no
+    /// rule of its own. A fade is never more than half the loop.
+    Crossfade {
+        /// Frames of the blend, at the end of the loop. At least one.
+        fade: u32,
+        /// The first frame the pre-roll may read.
+        floor: i64,
+        /// Frames the loop's start fades in over, when there is no pre-roll.
+        head: u32,
+    },
 }
 
 /// The span of frames a voice is currently reading, and what happens at its
@@ -124,7 +152,9 @@ impl Region {
                 }
                 index
             }
-            RegionEdge::Wrap => start + (index - start).rem_euclid(span),
+            RegionEdge::Wrap | RegionEdge::Crossfade { .. } => {
+                start + (index - start).rem_euclid(span)
+            }
             RegionEdge::Mirror => {
                 // Reflect into `[0, span)` through a period of `2 * span`:
                 // the material past an edge is the region played backwards.
@@ -139,6 +169,60 @@ impl Region {
             }
         };
         usize::try_from(folded).ok().filter(|frame| *frame < len)
+    }
+
+    /// The stereo frame the kernel sees at `index`: [`Region::resolve`]'s
+    /// frame, blended across a crossfaded seam, or `None` where nothing plays.
+    ///
+    /// Every edge but [`RegionEdge::Crossfade`] returns the resolved frame
+    /// untouched, so a region without a fade reads bit for bit what it did
+    /// before the seam existed.
+    pub(crate) fn frame(&self, frames: &[[f32; 2]], index: i64) -> Option<[f32; 2]> {
+        let resolved = self.resolve(index, frames.len())?;
+        let source = frames[resolved];
+        let RegionEdge::Crossfade { fade, floor, head } = self.edge else {
+            return Some(source);
+        };
+        let start = self.start.floor() as i64;
+        let end = (self.end.ceil() as i64).max(start + 1);
+        let span = end - start;
+        let pre_roll = (start - floor).max(0);
+        let at = resolved as i64;
+        if pre_roll == 0 {
+            // Out and back in: the end to silence, the start up from it.
+            let fade = i64::from(fade).min(span / 2);
+            let head = i64::from(head).min(fade);
+            let into = at - (end - fade);
+            if fade >= 1 && into >= 0 {
+                let (gain, _) = crate::smooth::equal_power((into + 1) as f32 / fade as f32);
+                return Some([source[0] * gain, source[1] * gain]);
+            }
+            let from_start = at - start;
+            if head >= 1 && from_start < head {
+                let (_, gain) =
+                    crate::smooth::equal_power((from_start + 1) as f32 / (head + 1) as f32);
+                return Some([source[0] * gain, source[1] * gain]);
+            }
+            return Some(source);
+        }
+        let fade = i64::from(fade).min(span / 2).min(pre_roll);
+        let into = at - (end - fade);
+        if fade < 1 || into < 0 {
+            return Some(source);
+        }
+        // `into + 1` so the last frame of the loop is wholly the pre-roll and
+        // the first frame of the fade is already a step into it: the frame
+        // before the fade has weight zero, the frame at the seam weight one.
+        let phase = (into + 1) as f32 / fade as f32;
+        let (out_gain, in_gain) = crate::smooth::equal_power(phase);
+        let before = usize::try_from(at - span)
+            .ok()
+            .filter(|frame| *frame < frames.len())
+            .map_or([0.0, 0.0], |frame| frames[frame]);
+        Some([
+            source[0] * out_gain + before[0] * in_gain,
+            source[1] * out_gain + before[1] * in_gain,
+        ])
     }
 }
 
@@ -227,8 +311,7 @@ impl SincTable {
             if coeff == 0.0 {
                 continue;
             }
-            if let Some(frame) = region.resolve(index, len) {
-                let source = frames[frame];
+            if let Some(source) = region.frame(frames, index) {
                 left += source[0] * coeff;
                 right += source[1] * coeff;
             }

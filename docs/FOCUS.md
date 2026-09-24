@@ -366,3 +366,20 @@ In the order worth playing:
    the fix and 100 dB under after. Then do the real case, an Envelope gated
    by the kick and routed to ML-P8's Volume with negative depth, at an
    Attack well under 500 ms.
+9. **The sampler's loop seam** (MOO-43). A one-bar synthetic break whose
+   bass tone doesn't fit the bar, so the hard seam clicks. It's looped two
+   ways, from the top (starting on the kick, with nothing before it) and
+   after a lead-in, at Loop fade 0, 2, 10 and 30 ms:
+
+   ```sh
+   scripts/antibox --no-incremental --pull target/sampler-loop-seam \
+     cargo run -p mooloop-engine --example sampler_loop_seam -- target/sampler-loop-seam
+   ```
+
+   Play `top-0ms.wav` against `top-10ms.wav`, and the same for `lead-in-*`.
+   The binary prints what it measured. The step across the seam goes from
+   0.18 to 0.0004 from the top, and from 0.16 to 0.012 after the lead-in,
+   where 0.012 is the kick's own attack. From the top the fade only takes
+   level away. Its first millisecond fades back in, which moves the kick's
+   onset by up to 15 dB under its peak. Listen for whether that softens the
+   downbeat. The 0 ms files hash the same as before the change.

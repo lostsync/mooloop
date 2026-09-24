@@ -24,6 +24,8 @@ use crate::{
     MIN_STRETCH_BARS, MIN_STRETCH_GRAIN, MIN_STRETCH_RATIO,
 };
 
+use crate::sampler::MAX_LOOP_CROSSFADE_MS;
+
 // --- Sampler ---------------------------------------------------------------
 
 pub const SAMPLER_PARAM_START: u32 = 0;
@@ -62,6 +64,8 @@ pub const SAMPLER_PARAM_STRETCH_BARS: u32 = 32;
 pub const SAMPLER_PARAM_RETUNE_LIVE: u32 = 33;
 pub const SAMPLER_PARAM_PLAY_MODE: u32 = 34;
 pub const SAMPLER_PARAM_SLICE_BASE_NOTE: u32 = 35;
+/// The loop seam's crossfade, in ms (MOO-43).
+pub const SAMPLER_PARAM_LOOP_FADE: u32 = 36;
 
 /// Envelope stages share this range across every generator. Exponential, so
 /// the fast end where percussion lives gets most of the travel.
@@ -225,7 +229,7 @@ static DRUM_DESCRIPTORS: [ParamDescriptor; 20] = [
     unit(DRUM_PARAM_HAT_METALLIC, "Hat metallic", 0.5),
 ];
 
-static SAMPLER_DESCRIPTORS: [ParamDescriptor; 36] = [
+static SAMPLER_DESCRIPTORS: [ParamDescriptor; 37] = [
     unit(SAMPLER_PARAM_START, "Start", 0.0),
     unit(SAMPLER_PARAM_END, "End", 1.0),
     stepped(SAMPLER_PARAM_REVERSE, "Reverse", 2, 0.0),
@@ -371,6 +375,18 @@ static SAMPLER_DESCRIPTORS: [ParamDescriptor; 36] = [
         max: 127.0,
         curve: ParamCurve::Stepped(128),
         default: DEFAULT_SLICE_BASE_NOTE as f32,
+    },
+    // Linear because 0 has to be reachable and has to mean a hard seam;
+    // an exponential curve needs a floor above zero. Approved by Control
+    // 2026-09-24 (MOO-43), and frozen from here like every range.
+    ParamDescriptor {
+        id: SAMPLER_PARAM_LOOP_FADE,
+        name: "Loop fade",
+        unit: "ms",
+        min: 0.0,
+        max: MAX_LOOP_CROSSFADE_MS,
+        curve: ParamCurve::Linear,
+        default: 0.0,
     },
 ];
 
@@ -1014,6 +1030,7 @@ impl GeneratorParams {
                 SAMPLER_PARAM_RETUNE_LIVE => f32::from(u8::from(p.retune_live)),
                 SAMPLER_PARAM_PLAY_MODE => p.play_mode.to_index() as f32,
                 SAMPLER_PARAM_SLICE_BASE_NOTE => f32::from(p.slice_base_note),
+                SAMPLER_PARAM_LOOP_FADE => p.loop_crossfade_ms,
                 _ => return None,
             }),
             Self::MonoSynth(p) => {
@@ -1185,6 +1202,9 @@ impl GeneratorParams {
                     p.play_mode = PlayMode::from_index(value.round() as i32)
                 }
                 SAMPLER_PARAM_SLICE_BASE_NOTE => p.slice_base_note = value.round() as u8,
+                SAMPLER_PARAM_LOOP_FADE => {
+                    p.loop_crossfade_ms = value.clamp(0.0, MAX_LOOP_CROSSFADE_MS)
+                }
                 _ => return None,
             },
             Self::MonoSynth(p) => {

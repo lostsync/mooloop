@@ -207,6 +207,12 @@ a pattern is lossless. The sampler state also contains every field in
 `SamplerParams`: voice/retrigger/choke settings, trim, reverse, root and tune,
 loop settings, ADSR, filter, drive, bit reduction, and rate reduction.
 
+`loop_crossfade_ms` (MOO-43, 2026-09-24) is how long a forward loop's seam
+is crossfaded, in milliseconds of the sample's own time, from 0 to 100. It
+defaults to 0, a hard seam, so a song written before it existed loads and
+renders exactly as it did. A value outside the range, or not a number, is
+repaired into it on load.
+
 Slice mode adds `play_mode` and `slice_base_note` to the parameters, plus a
 `slices` table beside them holding the slice boundaries as `{ id, frame }`
 pairs sorted by source frame. All three default, so a song written before

@@ -222,6 +222,16 @@ export component SamplerDeviceFace inherits Rectangle {
     // the two that exist.
     in-out property <int> filter-view;
     in-out property <int> loop-mode;
+    // The loop seam's crossfade (MOO-43), normalized through its descriptor
+    // by Rust, with the readout Rust formats: the face holds no copy of the
+    // range. The span is the part of the waveform the fade covers, as
+    // fractions of the sample, and `loop-fade-shown` is whether there is one
+    // to draw -- Rust resolves it with the voice's own arithmetic.
+    in-out property <float> loop-fade;
+    in property <string> loop-fade-label;
+    in property <float> loop-fade-start;
+    in property <float> loop-fade-end;
+    in property <bool> loop-fade-shown;
     // Whether a note transposes the region or picks a slice out of it.
     in-out property <int> play-mode;
     // The note that plays slice 0; each semitone above steps one slice on.
@@ -306,6 +316,7 @@ export component SamplerDeviceFace inherits Rectangle {
     callback tune-cents-changed(float);
     callback retune-live-changed(bool);
     callback loop-mode-changed(int);
+    callback loop-fade-changed(float);
     callback voice-mode-changed(int);
     callback polyphony-changed(int);
     callback retrigger-mode-changed(int);
@@ -466,6 +477,28 @@ export component SamplerDeviceFace inherits Rectangle {
                         : "Loop mode";
                     selected(i) => { root.loop-mode-changed(i); }
                 }
+                // Only a forward loop has a seam: a ping-pong turnaround
+                // reverses on the frame it reached.
+                VerticalLayout {
+                    alignment: center;
+                    MiniKnob {
+                        diameter: 22px; fill: Theme.warning;
+                        label: "Loop fade";
+                        hint: "Crossfade the loop's seam, so its end runs into its start without a click";
+                        enabled: root.loop-mode == 1;
+                        value <=> root.loop-fade;
+                        value-text: root.loop-fade-label;
+                        modulation-armed: root.modulation-armed;
+                        modulation-allowed: root.modulation-allowed[36];
+                        modulation-depth: root.modulation-depths[36];
+                        modulation-offset: root.modulation-offsets[36];
+                        modulation-route-count: root.modulation-route-counts[36];
+                        changed(v) => { root.loop-fade-changed(v); }
+                        modulation-depth-changed(v) => { root.modulation-depth-changed(36, v); }
+                        modulation-edit-started => { root.modulation-edit-started(36); }
+                        modulation-edit-finished => { root.modulation-edit-finished(36); }
+                    }
+                }
             }
 
             waveform-view := Rectangle {
@@ -496,6 +529,15 @@ export component SamplerDeviceFace inherits Rectangle {
                     width: max(1px, (clamp(root.to-view(clamp(root.loop-end, root.start-pos, root.end-pos)), 0, 1)
                         - clamp(root.to-view(clamp(root.loop-start, root.start-pos, root.end-pos)), 0, 1)) * parent.width);
                     height: parent.height; background: Theme.accent-active; opacity: 0.32;
+                }
+                // The loop fade's span, at the loop's end: the stretch that
+                // runs into the loop's start, or out to silence when there is
+                // nothing before the start to run into.
+                if root.loop-fade-shown : Rectangle {
+                    x: clamp(root.to-view(root.loop-fade-start), 0, 1) * parent.width;
+                    width: max(1px, (clamp(root.to-view(root.loop-fade-end), 0, 1)
+                        - clamp(root.to-view(root.loop-fade-start), 0, 1)) * parent.width);
+                    height: parent.height; background: Theme.warning; opacity: 0.28;
                 }
                 Rectangle { y: parent.height / 2; width: 100%; height: 1px; background: Theme.border; }
                 // Declared before the handles and the trim markers so they
