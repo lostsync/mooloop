@@ -160,7 +160,7 @@ fn main() {
     // `set_stretch_sync` writes exactly this.
     let frozen = SamplerParams {
         stretch_sync: false,
-        stretch_ratio: Sampler::synced_ratio(synced, &sample, 120.0),
+        stretch_ratio: Sampler::synced_ratio(synced, &sample, 120.0, None),
         ..synced
     };
     for (name, bpm, params) in [

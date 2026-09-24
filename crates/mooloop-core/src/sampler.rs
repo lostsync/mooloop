@@ -46,6 +46,82 @@ impl LoopMode {
     }
 }
 
+/// What a loop's bounds snap to (MOO-47): nothing, the slice markers, or a
+/// division of the bar.
+///
+/// Applied where the bounds are resolved, so a lane or a modulator moving
+/// Loop start steps through the grid audibly instead of sliding through
+/// every frame. The bar is the sample's musical length, `stretch_bars` bars
+/// over the playback region, which is the same length fit-to-tempo lays
+/// against the grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoopQuantize {
+    /// Any frame. What every song saved before this existed does.
+    #[default]
+    Off,
+    /// The nearest slice marker, or the playback region's own ends.
+    Slices,
+    Bar,
+    Half,
+    Quarter,
+    Eighth,
+    Sixteenth,
+    ThirtySecond,
+}
+
+impl LoopQuantize {
+    /// In the order the descriptor's positions mean. A saved lane stores the
+    /// position, so this order is frozen from the day it shipped (Control,
+    /// 2026-09-24): a new grid is appended, and none is ever reordered.
+    pub const ALL: [Self; 8] = [
+        Self::Off,
+        Self::Slices,
+        Self::Bar,
+        Self::Half,
+        Self::Quarter,
+        Self::Eighth,
+        Self::Sixteenth,
+        Self::ThirtySecond,
+    ];
+
+    /// Out-of-range input clamps to the nearest end, the `ALL`-table
+    /// convention.
+    pub fn from_index(index: i32) -> Self {
+        Self::ALL[index.clamp(0, Self::ALL.len() as i32 - 1) as usize]
+    }
+
+    pub fn to_index(self) -> i32 {
+        Self::ALL.iter().position(|q| *q == self).unwrap_or(0) as i32
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Slices => "Slices",
+            Self::Bar => "1 bar",
+            Self::Half => "1/2",
+            Self::Quarter => "1/4",
+            Self::Eighth => "1/8",
+            Self::Sixteenth => "1/16",
+            Self::ThirtySecond => "1/32",
+        }
+    }
+
+    /// Grid steps per bar, or `None` for Off and Slices.
+    pub fn divisions_per_bar(self) -> Option<u32> {
+        match self {
+            Self::Off | Self::Slices => None,
+            Self::Bar => Some(1),
+            Self::Half => Some(2),
+            Self::Quarter => Some(4),
+            Self::Eighth => Some(8),
+            Self::Sixteenth => Some(16),
+            Self::ThirtySecond => Some(32),
+        }
+    }
+}
+
 /// How a note picks material out of the sample.
 ///
 /// The two are genuinely different instruments, not a quality setting. In
@@ -575,6 +651,10 @@ pub struct SamplerParams {
     /// hard seam and renders exactly as it did.
     #[serde(default)]
     pub loop_crossfade_ms: f32,
+    /// What the loop's bounds snap to (MOO-47). Defaulted to Off, so a song
+    /// saved before the grid existed loops where it always did.
+    #[serde(default)]
+    pub loop_quantize: LoopQuantize,
     /// Attack time (seconds).
     pub attack: f32,
     /// Decay time (seconds).
@@ -709,6 +789,7 @@ impl Default for SamplerParams {
             loop_end: 1.0,
             loop_mode: LoopMode::Off,
             loop_crossfade_ms: 0.0,
+            loop_quantize: LoopQuantize::Off,
             attack: 0.001,
             decay: 0.25,
             sustain: 1.0,

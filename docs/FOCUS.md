@@ -383,3 +383,30 @@ In the order worth playing:
    level away. Its first millisecond fades back in, which moves the kick's
    onset by up to 15 dB under its peak. Listen for whether that softens the
    downbeat. The 0 ms files hash the same as before the change.
+10. **Fit to tempo, and SYNC off keeping the sound** (MOO-39). A 1.5 s loop
+    fitted to one bar, rendered three ways: synced at 120 BPM, synced at
+    90, and frozen at 120 then played at 90:
+
+    ```sh
+    scripts/antibox --no-incremental --pull target/sampler-fit-freeze \
+      cargo run -p mooloop-engine --example sampler_fit_freeze -- target/sampler-fit-freeze
+    ```
+
+    The binary measures each loop's period from the render. Synced, the
+    period follows the bar: 2.00 s at 120 and 2.66 s at 90. Frozen, it stays
+    at 2.00 s at 90 BPM. Play the three, and the frozen one should be the
+    120 BPM loop, unchanged. Then, in the app, turn SYNC off on a fitted loop
+    and change the tempo. The loop's sound should stay put.
+11. **A lane sweeping Loop start on a grid** (MOO-47). A one-bar break
+    loops for four bars while a lane sweeps Loop start from the top to the
+    last quarter, with the grid off and then on sixteenths:
+
+    ```sh
+    scripts/antibox --no-incremental --pull target/sampler-loop-grid \
+      cargo run -p mooloop-engine --example sampler_loop_grid -- target/sampler-loop-grid
+    ```
+
+    With the grid off, the lane's 12,000 control ticks resolve to 12,000
+    loop starts, a slide through every frame. On sixteenths they resolve to
+    13, which is the grid. Play `off.wav` against `sixteenth.wav`. The
+    second should step in rhythm, a sixteenth at a time.

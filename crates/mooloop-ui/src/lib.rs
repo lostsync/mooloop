@@ -6225,7 +6225,7 @@ impl UiState {
         let params = channel.sampler_params();
         let readout = channel
             .published_sample()
-            .and_then(|sample| fit_readout(&params, sample, bpm));
+            .and_then(|sample| fit_readout(&params, sample, Some(&channel.slices), bpm));
         let Some(readout) = readout else {
             window.set_stretch_fit_label("".into());
             window.set_stretch_fit_warning(false);
@@ -6273,13 +6273,37 @@ impl UiState {
             }
             .into(),
         );
-        let span = channel
-            .published_sample()
-            .and_then(|sample| mooloop_dsp::Sampler::loop_seam_span(params, sample));
+        let span = channel.published_sample().and_then(|sample| {
+            mooloop_dsp::Sampler::loop_seam_span(params, sample, Some(&channel.slices))
+        });
         window.set_sampler_loop_fade_shown(span.is_some());
         let (start, end) = span.unwrap_or((0.0, 0.0));
         window.set_sampler_loop_fade_start(start);
         window.set_sampler_loop_fade_end(end);
+        // The loop grid (MOO-47): the options by the enum's own labels, and
+        // the band at the bounds the voice resolves.
+        window.set_sampler_loop_grid(params.loop_quantize.to_index());
+        let options: Vec<slint::SharedString> = mooloop_core::sampler::LoopQuantize::ALL
+            .iter()
+            .map(|grid| grid.label().into())
+            .collect();
+        window.set_sampler_loop_grid_options(slint::ModelRc::new(slint::VecModel::from(options)));
+        let (band_start, band_end) = channel.published_sample().map_or(
+            (params.loop_start, params.loop_end),
+            |sample| {
+                let len = sample.frames.len();
+                let (start, end) = mooloop_dsp::Sampler::resolve_loop_bounds(
+                    params,
+                    len,
+                    None,
+                    Some(&channel.slices),
+                );
+                let len = len.max(1) as f64;
+                ((start / len) as f32, (end / len) as f32)
+            },
+        );
+        window.set_sampler_loop_band_start(band_start);
+        window.set_sampler_loop_band_end(band_end);
     }
 
     /// Refresh the bottom editor's properties from `selected`.
@@ -13068,6 +13092,39 @@ impl AppUi {
                 }
             });
         }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_sampler_loop_grid_changed(move |index| {
+                let Some(window) = weak.upgrade() else { return };
+                let grid = mooloop_core::sampler::LoopQuantize::from_index(index);
+                with_gesture_history(&st, &commands, &window, "Loop grid", || {
+                    let mut st = st.borrow_mut();
+                    let ch = st.session.selected;
+                    let Some(channel) = st.session.channels.get_mut(ch) else {
+                        return false;
+                    };
+                    if channel.sampler_params().loop_quantize == grid {
+                        return false;
+                    }
+                    if let Some(p) = channel.sampler_params_mut() {
+                        p.loop_quantize = grid;
+                    }
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: ch as u8,
+                        params: channel.sampler_params(),
+                    });
+                    true
+                });
+                let st = st.borrow();
+                if let Some(channel) = st.session.channels.get(st.session.selected) {
+                    UiState::publish_loop_fade(&window, channel);
+                    UiState::publish_fit_readout(&window, channel, window.get_bpm() as f64);
+                }
+            });
+        }
         wire_unit_param!(on_filter_cutoff_changed, filter_cutoff);
         wire_unit_param!(on_filter_resonance_changed, filter_resonance);
         wire_unit_param!(on_sampler_drive_changed, drive);
@@ -13930,7 +13987,7 @@ impl AppUi {
                     let channel = &mut st.session.channels[channel_index];
                     let was = channel.sampler_params();
                     let sample = channel.published_sample().map(|sample| sample.as_ref());
-                    let Some(bars) = typed_bars(&was, sample, text.as_str())
+                    let Some(bars) = typed_bars(&was, sample, Some(&channel.slices), text.as_str())
                     else {
                         return false;
                     };

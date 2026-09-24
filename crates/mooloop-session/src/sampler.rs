@@ -15,7 +15,7 @@ use mooloop_dsp::sample_analysis::{
 };
 use mooloop_dsp::SampleData;
 use mooloop_core::{
-    EngineCommand, SampleCommit, SamplerParams, SliceMarker, StretchMode, MAX_SLICES,
+    EngineCommand, SampleCommit, SamplerParams, SliceMap, SliceMarker, StretchMode, MAX_SLICES,
     MAX_STRETCH_BARS, MAX_STRETCH_RATIO, MIN_STRETCH_BARS, MIN_STRETCH_RATIO,
 };
 
@@ -147,12 +147,17 @@ pub struct FitReadout {
 const PLAUSIBLE_BPM: std::ops::RangeInclusive<f64> = 60.0..=200.0;
 
 /// Reads a sampler's fit, or `None` with no audio.
-pub fn fit_readout(params: &SamplerParams, sample: &SampleData, bpm: f64) -> Option<FitReadout> {
+pub fn fit_readout(
+    params: &SamplerParams,
+    sample: &SampleData,
+    slices: Option<&SliceMap>,
+    bpm: f64,
+) -> Option<FitReadout> {
     let len = sample.frames.len();
     if len == 0 || sample.sample_rate == 0 {
         return None;
     }
-    let (start, end) = mooloop_dsp::Sampler::fitted_span(*params, len);
+    let (start, end) = mooloop_dsp::Sampler::fitted_span_in(*params, len, slices);
     let rate = f64::from(sample.sample_rate);
     let source_seconds = (end - start) / rate;
     let bars = f64::from(params.stretch_bars.clamp(MIN_STRETCH_BARS, MAX_STRETCH_BARS));
@@ -161,7 +166,7 @@ pub fn fit_readout(params: &SamplerParams, sample: &SampleData, bpm: f64) -> Opt
     let bar_at_one = mooloop_core::frames_per_bar(sample.sample_rate, 1.0) / rate;
     let source_bpm = bars * bar_at_one / source_seconds;
     let fitted_seconds = bars * bar_at_one / bpm;
-    let ratio = mooloop_dsp::Sampler::synced_ratio(*params, sample, bpm);
+    let ratio = mooloop_dsp::Sampler::synced_ratio(*params, sample, bpm, slices);
     let doubt = if ratio <= MIN_STRETCH_RATIO || ratio >= MAX_STRETCH_RATIO {
         Some(format!(
             "Fitting {bars} bars to {bpm:.0} BPM needs more stretch than the sampler has; check the bar count"
@@ -196,7 +201,12 @@ pub fn fit_readout(params: &SamplerParams, sample: &SampleData, bpm: f64) -> Opt
 /// after it, the loop's own tempo, turned into the bar count that makes the
 /// fitted span last that many bars at that tempo. `None` for text that
 /// isn't a number, or a tempo with no audio to measure.
-pub fn typed_bars(params: &SamplerParams, sample: Option<&SampleData>, text: &str) -> Option<f32> {
+pub fn typed_bars(
+    params: &SamplerParams,
+    sample: Option<&SampleData>,
+    slices: Option<&SliceMap>,
+    text: &str,
+) -> Option<f32> {
     let value = crate::values::parse_typed_value(text)?;
     if !text.to_ascii_lowercase().contains("bpm") {
         return Some(value.clamp(MIN_STRETCH_BARS, MAX_STRETCH_BARS));
@@ -206,7 +216,7 @@ pub fn typed_bars(params: &SamplerParams, sample: Option<&SampleData>, text: &st
     if len == 0 || sample.sample_rate == 0 || value <= 0.0 {
         return None;
     }
-    let (start, end) = mooloop_dsp::Sampler::fitted_span(*params, len);
+    let (start, end) = mooloop_dsp::Sampler::fitted_span_in(*params, len, slices);
     let rate = f64::from(sample.sample_rate);
     let bar = mooloop_core::frames_per_bar(sample.sample_rate, f64::from(value)) / rate;
     let bars = ((end - start) / rate / bar) as f32;
@@ -424,7 +434,9 @@ impl Session {
         } else {
             channel
                 .published_sample()
-                .map(|sample| mooloop_dsp::Sampler::synced_ratio(before, sample, bpm))
+                .map(|sample| {
+                    mooloop_dsp::Sampler::synced_ratio(before, sample, bpm, Some(&channel.slices))
+                })
         };
         let params = channel.sampler_params_mut()?;
         params.stretch_sync = on;
@@ -594,14 +606,14 @@ mod tests {
             stretch_bars: 1.0,
             ..SamplerParams::default()
         };
-        let wild = fit_readout(&params, &sample, 100.0).expect("a readout");
+        let wild = fit_readout(&params, &sample, None, 100.0).expect("a readout");
         assert!((wild.source_seconds - 1.0).abs() < 1.0e-9);
         assert!((wild.source_bpm - 240.0).abs() < 1.0e-6, "{}", wild.source_bpm);
         let doubt = wild.doubt.expect("240 BPM should be doubted");
         assert!(doubt.contains("0.5 bars"), "{doubt}");
 
         params.stretch_bars = 0.5;
-        let sane = fit_readout(&params, &sample, 100.0).expect("a readout");
+        let sane = fit_readout(&params, &sample, None, 100.0).expect("a readout");
         assert!((sane.source_bpm - 120.0).abs() < 1.0e-6);
         assert!(sane.doubt.is_none(), "{:?}", sane.doubt);
         // Half a bar at 100 BPM is 1.2 s.
@@ -615,11 +627,11 @@ mod tests {
         let session = session_with_audio();
         let sample = session.channels[0].published_sample().cloned().expect("audio");
         let params = SamplerParams::default();
-        assert_eq!(typed_bars(&params, Some(sample.as_ref()), "120 bpm"), Some(0.5));
-        assert_eq!(typed_bars(&params, Some(sample.as_ref()), "60BPM"), Some(0.25));
-        assert_eq!(typed_bars(&params, Some(sample.as_ref()), "4"), Some(4.0));
-        assert_eq!(typed_bars(&params, None, "120 bpm"), None, "no audio to measure");
-        assert_eq!(typed_bars(&params, Some(sample.as_ref()), "fast"), None);
+        assert_eq!(typed_bars(&params, Some(sample.as_ref()), None, "120 bpm"), Some(0.5));
+        assert_eq!(typed_bars(&params, Some(sample.as_ref()), None, "60BPM"), Some(0.25));
+        assert_eq!(typed_bars(&params, Some(sample.as_ref()), None, "4"), Some(4.0));
+        assert_eq!(typed_bars(&params, None, None, "120 bpm"), None, "no audio to measure");
+        assert_eq!(typed_bars(&params, Some(sample.as_ref()), None, "fast"), None);
     }
 
     /// Turning SYNC off freezes the ratio it was running into the knob
@@ -637,7 +649,7 @@ mod tests {
         let bpm = 90.0;
         let sample = session.channels[0].published_sample().cloned().expect("audio");
         let running =
-            mooloop_dsp::Sampler::synced_ratio(session.channels[0].sampler_params(), &sample, bpm);
+            mooloop_dsp::Sampler::synced_ratio(session.channels[0].sampler_params(), &sample, bpm, None);
         // One second of audio as one bar at 90 BPM (2.667 s) is a real
         // stretch, so a frozen 1.0 could not pass by accident.
         assert!((running - 1.0).abs() > 0.5, "the premise: {running}");

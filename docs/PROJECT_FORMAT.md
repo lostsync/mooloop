@@ -213,6 +213,13 @@ defaults to 0, a hard seam, so a song written before it existed loads and
 renders exactly as it did. A value outside the range, or not a number, is
 repaired into it on load.
 
+`loop_quantize` (MOO-47, 2026-09-24) is what a loop's bounds snap to:
+`"off"`, `"slices"`, or a division of the bar (`"bar"`, `"half"`,
+`"quarter"`, `"eighth"`, `"sixteenth"`, `"thirty_second"`). The bar is the
+sample's musical length, `stretch_bars` bars over the playback region. It
+defaults to `"off"`, so a song written before it existed loops where it
+always did.
+
 Slice mode adds `play_mode` and `slice_base_note` to the parameters, plus a
 `slices` table beside them holding the slice boundaries as `{ id, frame }`
 pairs sorted by source frame. All three default, so a song written before

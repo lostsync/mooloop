@@ -1,5 +1,5 @@
 import { Theme, StatusHint } from "theme.slint";
-import { CutoffLaw, KnobField, MiniKnob, NoteFormat, ParameterKnob, SelectorBank, TimeFormat, ToggleButton, ToolButton, TrimKnob, ValueScale, ZoomScrollBar } from "controls.slint";
+import { CutoffLaw, KnobField, MiniKnob, NoteFormat, ParameterKnob, PickerChip, SelectorBank, TimeFormat, ToggleButton, ToolButton, TrimKnob, ValueScale, ZoomScrollBar } from "controls.slint";
 import { GainMath } from "gain.slint";
 import { DevicePageButton } from "device-rack.slint";
 import { BitcrusherTrace, FilterResponseDisplay } from "device-displays.slint";
@@ -232,6 +232,14 @@ export component SamplerDeviceFace inherits Rectangle {
     in property <float> loop-fade-start;
     in property <float> loop-fade-end;
     in property <bool> loop-fade-shown;
+    // The loop grid (MOO-47): the picked position, the options as Rust
+    // names them, and the bounds the loop actually plays once snapped, as
+    // fractions of the sample. The band is drawn at the snapped bounds, so a
+    // moving loop reads as the grid it steps on.
+    in property <int> loop-grid;
+    in property <[string]> loop-grid-options;
+    in property <float> loop-band-start;
+    in property <float> loop-band-end: 1;
     // What fit-to-tempo is doing, in words Rust writes (MOO-39): the loop's
     // own length and tempo, and what it is fitted to. `warning` is set when
     // the bar count looks wrong, and `hint` then says why in the status bar.
@@ -323,6 +331,7 @@ export component SamplerDeviceFace inherits Rectangle {
     callback retune-live-changed(bool);
     callback loop-mode-changed(int);
     callback loop-fade-changed(float);
+    callback loop-grid-changed(int);
     callback voice-mode-changed(int);
     callback polyphony-changed(int);
     callback retrigger-mode-changed(int);
@@ -531,9 +540,9 @@ export component SamplerDeviceFace inherits Rectangle {
                 // there the loop is the slice, so a band drawn between the
                 // global loop points describes nothing that happens.
                 if root.loop-mode != 0 && root.play-mode == 0 : Rectangle {
-                    x: clamp(root.to-view(clamp(root.loop-start, root.start-pos, root.end-pos)), 0, 1) * parent.width;
-                    width: max(1px, (clamp(root.to-view(clamp(root.loop-end, root.start-pos, root.end-pos)), 0, 1)
-                        - clamp(root.to-view(clamp(root.loop-start, root.start-pos, root.end-pos)), 0, 1)) * parent.width);
+                    x: clamp(root.to-view(root.loop-band-start), 0, 1) * parent.width;
+                    width: max(1px, (clamp(root.to-view(root.loop-band-end), 0, 1)
+                        - clamp(root.to-view(root.loop-band-start), 0, 1)) * parent.width);
                     height: parent.height; background: Theme.accent-active; opacity: 0.32;
                 }
                 // The loop fade's span, at the loop's end: the stretch that
@@ -700,6 +709,14 @@ export component SamplerDeviceFace inherits Rectangle {
                                 let abs = root.sample-frames > 0 ? v / root.sample-frames : 1;
                                 root.loop-end = clamp(abs, root.loop-start + 0.001, root.end-pos); root.loop-end-changed(root.loop-end);
                             }
+                        }
+                        // What the loop's bounds snap to: free, the slice
+                        // markers, or a division of the sample's bar count.
+                        PickerChip {
+                            options: root.loop-grid-options;
+                            selected-index: root.loop-grid;
+                            tooltip: "Loop grid: snap the loop's bounds to slices or a division of the bar";
+                            picked(i) => { root.loop-grid-changed(i); }
                         }
                     }
                     if root.play-mode == 1 : HorizontalLayout {

@@ -28,6 +28,7 @@ use crate::taps::AudioTaps;
 use crate::scale::cutoff_hz_from_normalized;
 use crate::voice_filter::{env_octaves, VoiceCutoff};
 use crate::smooth::Smoothed;
+use mooloop_core::sampler::LoopQuantize;
 use mooloop_core::{
     clamp01, EnvTimes, LoopMode, PlayMode, RetriggerMode, SamplerParams, SliceMap, VoiceMode,
     MAX_CHOKE_GROUP, MAX_LINEAR_GAIN, MAX_SAMPLER_VOICES, SAMPLER_TUNE_CENT_CLAMP,
@@ -740,10 +741,23 @@ impl Sampler {
         bpm: f64,
         playback_rate: f64,
     ) -> f64 {
+        Self::effective_ratio_in(params, len, sample_rate, bpm, playback_rate, None)
+    }
+
+    /// [`Self::effective_ratio`] against the slice map a Slices loop grid
+    /// snaps to (MOO-47), which is what the voice runs.
+    pub fn effective_ratio_in(
+        params: SamplerParams,
+        len: usize,
+        sample_rate: u32,
+        bpm: f64,
+        playback_rate: f64,
+        slices: Option<&SliceMap>,
+    ) -> f64 {
         if !params.stretch_sync {
             return f64::from(params.stretch_ratio);
         }
-        let (region_start, region_end) = Self::fitted_span(params, len);
+        let (region_start, region_end) = Self::fitted_span_in(params, len, slices);
         let region = region_end - region_start;
         if region <= 0.0 {
             return 1.0;
@@ -769,17 +783,23 @@ impl Sampler {
     /// different ratio under SYNC, because that ratio follows the pitch.
     /// After the freeze it runs this one, and it plays shorter or longer,
     /// which is what a fixed ratio means.
-    pub fn synced_ratio(params: SamplerParams, sample: &SampleData, bpm: f64) -> f32 {
+    pub fn synced_ratio(
+        params: SamplerParams,
+        sample: &SampleData,
+        bpm: f64,
+        slices: Option<&SliceMap>,
+    ) -> f32 {
         let params = SamplerParams {
             stretch_sync: true,
             ..params
         };
-        Self::effective_ratio(
+        Self::effective_ratio_in(
             params,
             sample.len(),
             sample.sample_rate,
             bpm,
             tuning_ratio(params),
+            slices,
         ) as f32
     }
 
@@ -788,10 +808,16 @@ impl Sampler {
     /// region otherwise (see [`Self::fits_the_playback_region`]). Public so
     /// the face's readout (MOO-39) measures the span the derivation does.
     pub fn fitted_span(params: SamplerParams, len: usize) -> (f64, f64) {
+        Self::fitted_span_in(params, len, None)
+    }
+
+    /// [`Self::fitted_span`] against the slice map a Slices loop grid
+    /// snaps to.
+    pub fn fitted_span_in(params: SamplerParams, len: usize, slices: Option<&SliceMap>) -> (f64, f64) {
         if Self::fits_the_playback_region(params) {
             Self::resolve_playback_bounds(params, len, None)
         } else {
-            Self::resolve_loop_bounds(params, len, None)
+            Self::resolve_loop_bounds(params, len, None, slices)
         }
     }
 
@@ -1219,10 +1245,15 @@ impl Sampler {
     /// loop points are explicitly deferred by #15, and a global loop fraction
     /// pointed at some other part of the sample would be meaningless once a
     /// note has chosen its material.
-    fn resolve_loop_bounds(
+    ///
+    /// A free loop then snaps to the loop grid (MOO-47): the slice markers,
+    /// or a division of the bar. `slices` is the map the voice plays from;
+    /// `None` reads a Slices grid as having no markers.
+    pub fn resolve_loop_bounds(
         params: SamplerParams,
         len: usize,
         slice: Option<(f64, f64)>,
+        slices: Option<&SliceMap>,
     ) -> (f64, f64) {
         let len_f = len.max(1) as f64;
         let (play_start, play_end) = Self::resolve_playback_bounds(params, len, slice);
@@ -1234,12 +1265,86 @@ impl Sampler {
         let loop_end = (f64::from(clamp01(params.loop_end)) * len_f)
             .max(loop_start + 1.0)
             .min(play_end);
-        (loop_start.min(loop_end - 1.0), loop_end)
+        let free = (loop_start.min(loop_end - 1.0), loop_end);
+        Self::quantize_loop_bounds(params, slices, (play_start, play_end), free)
     }
+
+    /// Loop bounds resolved onto the loop grid (MOO-47), from the free bounds
+    /// `resolve_loop_bounds` already clamped into the playback region.
+    ///
+    /// A division grid counts from the region's start, one step every
+    /// `region / (stretch_bars * divisions)` frames. The slice grid is the
+    /// markers inside the region plus the region's own two ends. Each bound
+    /// goes to its nearest grid point, and ties go to the earlier one, so a
+    /// sweep is deterministic. If both land on the same point, the end moves
+    /// one point on (or the start one back, at the region's end), so the loop
+    /// can't collapse. A grid with no two points inside the region (a bar
+    /// grid on a half-bar region) leaves the bounds free, rather than
+    /// inventing a loop the grid cannot draw.
+    ///
+    /// Constant time for a division; a binary search over at most
+    /// `MAX_SLICES` markers for slices. Nothing allocates.
+    fn quantize_loop_bounds(
+        params: SamplerParams,
+        slices: Option<&SliceMap>,
+        (play_start, play_end): (f64, f64),
+        (loop_start, loop_end): (f64, f64),
+    ) -> (f64, f64) {
+        let region = play_end - play_start;
+        if region < 2.0 {
+            return (loop_start, loop_end);
+        }
+        match params.loop_quantize {
+            LoopQuantize::Off => (loop_start, loop_end),
+            LoopQuantize::Slices => {
+                // The grid: region start, the markers strictly inside, region
+                // end. No map is the region's two ends alone.
+                let markers = slices.map_or(&[][..], SliceMap::markers);
+                let inside = |frame: u32| {
+                    let frame = f64::from(frame);
+                    frame > play_start && frame < play_end
+                };
+                let count = markers.iter().filter(|m| inside(m.frame)).count();
+                let point = |index: usize| -> f64 {
+                    if index == 0 {
+                        return play_start;
+                    }
+                    if index > count {
+                        return play_end;
+                    }
+                    f64::from(
+                        markers
+                            .iter()
+                            .filter(|m| inside(m.frame))
+                            .nth(index - 1)
+                            .map_or(0, |m| m.frame),
+                    )
+                };
+                snap_pair(count + 2, point, loop_start, loop_end)
+            }
+            division => {
+                let divisions = division.divisions_per_bar().unwrap_or(1);
+                let bars = f64::from(
+                    params
+                        .stretch_bars
+                        .clamp(mooloop_core::MIN_STRETCH_BARS, mooloop_core::MAX_STRETCH_BARS),
+                );
+                let step = region / (bars * f64::from(divisions));
+                let points = (region / step).floor() as usize + 1;
+                snap_pair(
+                    points,
+                    |index| (play_start + index as f64 * step).min(play_end),
+                    loop_start,
+                    loop_end,
+                )
+            }
+        }
+    }
+
 
     #[cfg(test)]
     fn loop_bounds(&self, len: usize) -> (f64, f64) {
-        Self::resolve_loop_bounds(self.params, len, None)
+        Self::resolve_loop_bounds(self.params, len, None, None)
     }
 
     /// How many source frames the loop seam's crossfade spans (MOO-43), or
@@ -1284,14 +1389,18 @@ impl Sampler {
     /// The same arithmetic the voice uses, so what is drawn is what plays: a
     /// forward loop in Pitched mode only, since a ping-pong turnaround has no
     /// seam and a slice's loop is the slice.
-    pub fn loop_seam_span(params: SamplerParams, sample: &SampleData) -> Option<(f32, f32)> {
+    pub fn loop_seam_span(
+        params: SamplerParams,
+        sample: &SampleData,
+        slices: Option<&SliceMap>,
+    ) -> Option<(f32, f32)> {
         let len = sample.len();
         if len == 0 || params.loop_mode != LoopMode::Forward || params.play_mode != PlayMode::Pitched
         {
             return None;
         }
         let (play_start, _) = Self::resolve_playback_bounds(params, len, None);
-        let (loop_start, loop_end) = Self::resolve_loop_bounds(params, len, None);
+        let (loop_start, loop_end) = Self::resolve_loop_bounds(params, len, None, slices);
         let fade = Self::loop_seam_frames(params, sample.sample_rate, loop_start, loop_end)?;
         // A blend into real pre-roll is as long as the pre-roll there is,
         // the rule `RegionEdge::Crossfade` reads by; a fade out to silence is
@@ -1318,6 +1427,8 @@ impl Sampler {
         // One range rather than two loose indices: they are always the
         // segment the block was split into, never independent.
         range: core::ops::Range<usize>,
+        // The slice map a Slices loop grid snaps to (MOO-47).
+        slices: Option<&SliceMap>,
     ) {
         let VoiceContext {
             params,
@@ -1342,7 +1453,7 @@ impl Sampler {
             return;
         };
         let (play_start, play_end) = Self::resolve_playback_bounds(params, len, voice.slice);
-        let (ls, le) = Self::resolve_loop_bounds(params, len, voice.slice);
+        let (ls, le) = Self::resolve_loop_bounds(params, len, voice.slice, slices);
         let loop_mode = if voice.loop_enabled {
             params.loop_mode
         } else {
@@ -1382,8 +1493,7 @@ impl Sampler {
         // every event.
         let mut stretch = stretch.filter(|_| Self::stretch_is_active(params));
         if let Some(reader) = stretch.as_mut() {
-            let ratio =
-                Self::effective_ratio(params, len, sample_rate, bpm, rate);
+            let ratio = Self::effective_ratio_in(params, len, sample_rate, bpm, rate, slices);
             let stretcher = reader.stretcher_mut();
             stretcher.set_mode(params.stretch_mode);
             stretcher.set_grain_frames(u32::from(params.stretch_grain));
@@ -1547,12 +1657,13 @@ impl Sampler {
         // voices fading out after a steal or a lowered count. An idle slot
         // returns at once.
         let mut readers = self.stretch.as_mut().map(|pool| pool.readers_mut());
+        let slices = self.last_audio.as_deref().and_then(|audio| audio.slices.as_deref());
         for voice in &mut self.voices {
             let mut gain = entry;
             // Advanced in lockstep with the voices, so voice `n` always gets
             // reader `n` whether or not it is sounding.
             let reader = readers.as_mut().and_then(Iterator::next);
-            Self::render_voice_range(cx, voice, reader, &mut gain, bus, start..end);
+            Self::render_voice_range(cx, voice, reader, &mut gain, bus, start..end, slices);
         }
         // A voice that ends mid-segment stops walking its copy, and a silent
         // sampler renders no voices at all, so the trim advances here rather
@@ -1696,6 +1807,52 @@ impl SourceNode for Sampler {
     fn as_sampler_mut(&mut self) -> Option<&mut Sampler> {
         Some(self)
     }
+}
+
+/// The nearest of `count` ascending grid points to `value`, by index; ties
+/// go to the earlier point.
+fn nearest_point(count: usize, point: impl Fn(usize) -> f64, value: f64) -> usize {
+    // The first point at or past `value`.
+    let (mut low, mut high) = (0usize, count);
+    while low < high {
+        let mid = (low + high) / 2;
+        if point(mid) < value {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    if low == 0 {
+        return 0;
+    }
+    if low >= count {
+        return count - 1;
+    }
+    if value - point(low - 1) <= point(low) - value {
+        low - 1
+    } else {
+        low
+    }
+}
+
+/// Both loop bounds onto a grid of `count` ascending points, kept at least
+/// one point apart. Fewer than two points leaves the bounds as they were.
+fn snap_pair(count: usize, point: impl Fn(usize) -> f64, start: f64, end: f64) -> (f64, f64) {
+    if count < 2 {
+        return (start, end);
+    }
+    let first = nearest_point(count, &point, start);
+    let mut last = nearest_point(count, &point, end);
+    let mut first = first;
+    if last <= first {
+        if first + 1 < count {
+            last = first + 1;
+        } else {
+            first = count - 2;
+            last = count - 1;
+        }
+    }
+    (point(first), point(last))
 }
 
 #[cfg(test)]
@@ -1957,7 +2114,7 @@ mod tests {
             120.0,
             tuning_ratio(synced),
         );
-        let frozen = Sampler::synced_ratio(synced, &sample, 120.0);
+        let frozen = Sampler::synced_ratio(synced, &sample, 120.0, None);
         assert!(
             (f64::from(frozen) - running).abs() < 1.0e-6,
             "froze {frozen}, was running {running}"
@@ -3807,6 +3964,128 @@ mod tests {
         for index in -80..120 {
             let resolved = wrap.resolve(index, frames.len()).map(|i| frames[i]);
             assert_eq!(wrap.frame(&frames, index), resolved);
+        }
+    }
+
+    // --- The loop grid (MOO-47) -----------------------------------------
+
+    fn grid_params(grid: LoopQuantize, loop_start: f32, loop_end: f32) -> SamplerParams {
+        SamplerParams {
+            loop_mode: LoopMode::Forward,
+            loop_start,
+            loop_end,
+            loop_quantize: grid,
+            stretch_bars: 1.0,
+            ..SamplerParams::default()
+        }
+    }
+
+    /// Off is the loop it always was: a sweep of both bounds resolves to
+    /// exactly what the resolver gave before the grid existed.
+    #[test]
+    fn an_unquantized_loop_is_the_free_loop() {
+        const LEN: usize = 48_000;
+        for step in 0..200 {
+            let start = step as f32 / 200.0;
+            let params = grid_params(LoopQuantize::Off, start, (start + 0.3).min(1.0));
+            let len_f = LEN as f64;
+            let free_start = (f64::from(start) * len_f).clamp(0.0, len_f - 1.0);
+            let free_end = (f64::from((start + 0.3).min(1.0)) * len_f)
+                .max(free_start + 1.0)
+                .min(len_f);
+            assert_eq!(
+                Sampler::resolve_loop_bounds(params, LEN, None, None),
+                (free_start.min(free_end - 1.0), free_end)
+            );
+        }
+    }
+
+    /// The headline: a Loop start swept through a one-bar loop on a
+    /// sixteenth grid lands on sixteen places and no others, each on a
+    /// sixteenth, and moves in steps rather than sliding. That is what a
+    /// lane or an LFO on Loop start sounds like with the grid on.
+    #[test]
+    fn a_swept_loop_start_steps_through_the_grid() {
+        const LEN: usize = 96_000;
+        let sixteenth = LEN as f64 / 16.0;
+        let mut seen = Vec::new();
+        for step in 0..=1_000 {
+            let start = step as f32 / 1_000.0 * 0.99;
+            let params = grid_params(LoopQuantize::Sixteenth, start, 1.0);
+            let (loop_start, loop_end) = Sampler::resolve_loop_bounds(params, LEN, None, None);
+            let on_grid = (loop_start / sixteenth).round() * sixteenth;
+            assert!((loop_start - on_grid).abs() < 1.0e-6, "{loop_start} is off the grid");
+            assert!(loop_end > loop_start, "the loop collapsed at {start}");
+            if seen.last() != Some(&loop_start) {
+                seen.push(loop_start);
+            }
+        }
+        assert_eq!(seen.len(), 16, "a sweep crossed {} places", seen.len());
+    }
+
+    /// The grid is the sample's musical length: at two bars, a quarter
+    /// note is an eighth of the region, not a quarter of it.
+    #[test]
+    fn the_grid_follows_the_bar_count() {
+        const LEN: usize = 96_000;
+        let mut params = grid_params(LoopQuantize::Quarter, 0.1, 0.9);
+        params.stretch_bars = 2.0;
+        let (start, end) = Sampler::resolve_loop_bounds(params, LEN, None, None);
+        let quarter = LEN as f64 / 8.0;
+        assert_eq!((start, end), (quarter, 7.0 * quarter));
+    }
+
+    /// With the slice table as the grid, the loop lands on markers, and on
+    /// the region's own ends where those are nearer.
+    #[test]
+    fn a_slice_grid_lands_on_the_markers() {
+        const LEN: usize = 48_000;
+        let mut map = SliceMap::new();
+        for frame in [6_000, 13_000, 29_000, 41_000] {
+            map.add(frame);
+        }
+        let params = grid_params(LoopQuantize::Slices, 0.3, 0.7);
+        assert_eq!(
+            Sampler::resolve_loop_bounds(params, LEN, None, Some(&map)),
+            (13_000.0, 29_000.0)
+        );
+        let params = grid_params(LoopQuantize::Slices, 0.05, 0.95);
+        assert_eq!(
+            Sampler::resolve_loop_bounds(params, LEN, None, Some(&map)),
+            (0.0, LEN as f64)
+        );
+        // No map is a grid with only the region's ends.
+        assert_eq!(
+            Sampler::resolve_loop_bounds(params, LEN, None, None),
+            (0.0, LEN as f64)
+        );
+    }
+
+    /// A grid coarser than the loop cannot invert or collapse it, or put it
+    /// outside the region: a tiny loop on a bar grid becomes the whole bar,
+    /// and a grid with fewer than two points inside the region (a bar grid
+    /// on half a bar) leaves the loop free.
+    #[test]
+    fn a_coarse_grid_never_collapses_or_escapes_the_loop() {
+        const LEN: usize = 96_000;
+        let tiny = grid_params(LoopQuantize::Bar, 0.30, 0.31);
+        assert_eq!(Sampler::resolve_loop_bounds(tiny, LEN, None, None), (0.0, LEN as f64));
+        let mut half_bar = grid_params(LoopQuantize::Bar, 0.2, 0.8);
+        half_bar.stretch_bars = 0.5;
+        let free = Sampler::resolve_loop_bounds(
+            SamplerParams { loop_quantize: LoopQuantize::Off, ..half_bar },
+            LEN,
+            None,
+            None,
+        );
+        assert_eq!(Sampler::resolve_loop_bounds(half_bar, LEN, None, None), free);
+        for grid in LoopQuantize::ALL {
+            for step in 0..50 {
+                let a = step as f32 / 50.0;
+                let params = grid_params(grid, a, (a + 0.013).min(1.0));
+                let (start, end) = Sampler::resolve_loop_bounds(params, LEN, None, None);
+                assert!(start >= 0.0 && end <= LEN as f64 && end > start, "{grid:?} {a}: {start}..{end}");
+            }
         }
     }
 }

@@ -2022,6 +2022,11 @@ export component MainWindow inherits Window {
     in-out property <float> sampler-loop-fade-start;
     in-out property <float> sampler-loop-fade-end;
     in-out property <bool> sampler-loop-fade-shown;
+    // The loop grid (MOO-47), and the bounds the loop plays once snapped.
+    in-out property <int> sampler-loop-grid;
+    in-out property <[string]> sampler-loop-grid-options;
+    in-out property <float> sampler-loop-band-start;
+    in-out property <float> sampler-loop-band-end: 1;
     in-out property <int> play-mode;        // 0=Pitched 1=Slice
     in-out property <int> slice-base-note: 36;
     in-out property <[float]> slice-markers;
@@ -2131,6 +2136,7 @@ export component MainWindow inherits Window {
     callback retune-live-changed(bool);
     callback loop-mode-changed(int);
     callback sampler-loop-fade-changed(float);
+    callback sampler-loop-grid-changed(int);
     callback play-mode-changed(int);
     callback slice-base-note-changed(int);
     callback slice-added(float);
@@ -4330,6 +4336,10 @@ export component MainWindow inherits Window {
                                                 loop-fade-start: root.sampler-loop-fade-start;
                                                 loop-fade-end: root.sampler-loop-fade-end;
                                                 loop-fade-shown: root.sampler-loop-fade-shown;
+                                                loop-grid: root.sampler-loop-grid;
+                                                loop-grid-options: root.sampler-loop-grid-options;
+                                                loop-band-start: root.sampler-loop-band-start;
+                                                loop-band-end: root.sampler-loop-band-end;
                                                 play-mode <=> root.play-mode;
                                                 slice-base-note <=> root.slice-base-note;
                                                 slice-markers <=> root.slice-markers;
@@ -4381,6 +4391,7 @@ export component MainWindow inherits Window {
                                                 retune-live-changed(v) => { root.retune-live-changed(v); }
                                                 loop-mode-changed(v) => { root.loop-mode-changed(v); }
                                                 loop-fade-changed(v) => { root.sampler-loop-fade-changed(v); }
+                                                loop-grid-changed(i) => { root.sampler-loop-grid-changed(i); }
                                                 play-mode-changed(v) => { root.play-mode-changed(v); }
                                                 slice-base-note-changed(v) => { root.slice-base-note-changed(v); }
                                                 slice-added(p) => { root.slice-added(p); }

@@ -988,6 +988,18 @@ boundary.
   touched. That ratio is the root key's at the current tune; a transposed
   note plays shorter or longer from then on, which is what a fixed ratio
   means. A fitted loop renders the same offline as live.
+- **A loop's bounds can snap to a grid** (MOO-47, 2026-09-24). Loop grid,
+  beside the L/R fields, is Free, Slices, or 1 bar down to 1/32. A division
+  is of the sample's own bar count (the Bars fit-to-tempo uses), counted
+  from the playback region's start. Slices snaps to the slice markers and
+  the region's ends. It applies wherever the bounds come from, the markers,
+  a lane or a modulator, so a lane sweeping Loop start steps through the
+  grid in rhythm instead of sliding through every frame. The loop band is
+  drawn at the snapped bounds. A grid can't collapse or invert the loop: a
+  loop shorter than one step becomes one step. A grid with fewer than two
+  points inside the region leaves the loop free. Loop grid is automatable
+  and not modulatable, and Free (the default, and every older song) is the
+  loop as it always was.
 - Sampler voice allocation is fixed-capacity and deterministic: restart reuses
   the oldest matching pitch, layer mode overlaps notes, and overflow steals
   a releasing voice before a held one, the oldest of either. The sampler, the
