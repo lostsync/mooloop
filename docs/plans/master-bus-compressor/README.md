@@ -26,7 +26,7 @@ reported like any other, so take alignment and monitoring account for it.
 
 1. **It lives in the master's strip.** The parameters are a
    `MasterSectionParams` inside `StripParams`, ids appended to the strip's own
-   table from 48, so they cross to the engine as `SetStripParam` and load with
+   table from 44, so they cross to the engine as `SetStripParam` and load with
    the strip: no new `EngineCommand`, no new install path. Every track's strip
    carries the struct (a few dozen bytes, like the strip itself) and only the
    master's runs; the session refuses the ids on any other track.

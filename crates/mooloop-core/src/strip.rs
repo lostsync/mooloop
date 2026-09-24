@@ -662,6 +662,388 @@ static DESCRIPTORS: [ParamDescriptor; 4 + STRIP_EQ_BANDS * 4 + 8] = [
     },
 ];
 
+// ---------------------------------------------------------------------------
+// The master section
+// ---------------------------------------------------------------------------
+
+/// The master bus compressor's three voicings (`docs/plans/master-bus-compressor/`,
+/// MOO-13).
+///
+/// **A voicing is a law, not a set of values** -- the channel strip's rule --
+/// and here the three laws are measured units (`docs/SCOPE.md` §2.1): Grip is
+/// the SSL G-bus's peak VCA, Punch the API-2500's RMS VCA, Tube the
+/// Fairchild 670's vari-mu. Named the way the strip names its voicings, after
+/// what they do rather than whose they are. `mooloop_dsp::strip::bus_comp`
+/// holds what each one is made of.
+///
+/// Persisted by name, so renaming one is a serde alias rather than a
+/// migration.
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum BusCompVoicing {
+    /// Peak detection, a soft knee, and the SSL's marked times.
+    #[default]
+    Grip,
+    /// RMS detection, a near-hard knee, and the API-2500's attack floor.
+    Punch,
+    /// Peak detection on the 670's own curve, and its six coupled TIME
+    /// positions in place of attack and release.
+    Tube,
+}
+
+impl BusCompVoicing {
+    pub const ALL: [Self; 3] = [Self::Grip, Self::Punch, Self::Tube];
+
+    /// The position a stepped control stores. Out-of-range input clamps to
+    /// the nearest end, the `ALL`-table convention.
+    pub fn from_index(index: i32) -> Self {
+        Self::ALL[index.clamp(0, Self::ALL.len() as i32 - 1) as usize]
+    }
+
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::Grip => 0,
+            Self::Punch => 1,
+            Self::Tube => 2,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Grip => "GRIP",
+            Self::Punch => "PUNCH",
+            Self::Tube => "TUBE",
+        }
+    }
+}
+
+/// Positions on each voicing's own switches. Grip's are the SSL's panel
+/// (ratio 2/4/10, six attacks, four releases and Auto); Punch's the
+/// API-2500's (six ratios, seven attacks, six releases); Tube's the 670's
+/// six TIME positions. `mooloop_dsp::strip::bus_comp` says what each
+/// position is worth and is held to these lengths.
+pub const GRIP_RATIO_POSITIONS: u8 = 3;
+pub const GRIP_ATTACK_POSITIONS: u8 = 6;
+pub const GRIP_RELEASE_POSITIONS: u8 = 5;
+pub const PUNCH_RATIO_POSITIONS: u8 = 6;
+pub const PUNCH_ATTACK_POSITIONS: u8 = 7;
+pub const PUNCH_RELEASE_POSITIONS: u8 = 6;
+pub const TUBE_TIME_POSITIONS: u8 = 6;
+
+/// The longest lookahead the master's safety limiter offers, in
+/// milliseconds. Adam, 2026-09-23 (MOO-169): *"make it a knob, defaults to
+/// 0.0"*; a few milliseconds is the usual span.
+pub const MAX_LOOKAHEAD_MS: f32 = 5.0;
+
+/// First id of the master section: the next one after the strip's own
+/// table, so the two tables are one contiguous id space and
+/// `StripSpec`'s arithmetic on position still finds each row.
+pub const MASTER_FIRST: u32 = STRIP_COMP_MAKEUP_DB + 1;
+pub const MASTER_COMP_IN: u32 = MASTER_FIRST;
+pub const MASTER_COMP_VOICING: u32 = MASTER_FIRST + 1;
+pub const MASTER_COMP_THRESHOLD_DB: u32 = MASTER_FIRST + 2;
+pub const MASTER_COMP_MAKEUP_DB: u32 = MASTER_FIRST + 3;
+pub const MASTER_COMP_MIX: u32 = MASTER_FIRST + 4;
+pub const MASTER_GRIP_RATIO: u32 = MASTER_FIRST + 5;
+pub const MASTER_GRIP_ATTACK: u32 = MASTER_FIRST + 6;
+pub const MASTER_GRIP_RELEASE: u32 = MASTER_FIRST + 7;
+pub const MASTER_PUNCH_RATIO: u32 = MASTER_FIRST + 8;
+pub const MASTER_PUNCH_ATTACK: u32 = MASTER_FIRST + 9;
+pub const MASTER_PUNCH_RELEASE: u32 = MASTER_FIRST + 10;
+pub const MASTER_TUBE_TIME: u32 = MASTER_FIRST + 11;
+pub const MASTER_LOOKAHEAD_MS: u32 = MASTER_FIRST + 12;
+
+/// The master's own section: the bus compressor and the safety limiter's
+/// lookahead.
+///
+/// **Each voicing keeps its own controls.** Grip's ratio, attack and release
+/// are separate fields from Punch's, and Tube has one TIME instead of either
+/// pair, so switching voicing swaps a unit in the rack rather than
+/// reinterpreting three knobs -- and no control ever shows a range its
+/// voicing does not have (Adam, 2026-09-23: *"the face is per voicing"*).
+/// Threshold, makeup and mix mean the same thing under all three and are
+/// shared.
+///
+/// A stepped field holds a **position**, as a band's frequency does: what it
+/// is worth belongs to the law table.
+///
+/// Every track's strip will carry one, and only the master's runs; the
+/// default is out, with the lookahead at 0, which is the master exactly as
+/// it was before this existed.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct MasterSectionParams {
+    pub comp_in: bool,
+    pub voicing: BusCompVoicing,
+    pub threshold_db: f32,
+    pub makeup_db: f32,
+    /// Parallel balance, as the strip's: 0 is the dry mix exactly.
+    pub mix: f32,
+    pub grip_ratio: u8,
+    pub grip_attack: u8,
+    pub grip_release: u8,
+    pub punch_ratio: u8,
+    pub punch_attack: u8,
+    pub punch_release: u8,
+    pub tube_time: u8,
+    /// The safety limiter's lookahead, `0..=MAX_LOOKAHEAD_MS`. Not the
+    /// compressor's: it is kept here because it is the other control the
+    /// master's own face carries, and because the master's strip is the one
+    /// saved thing that belongs to the master alone.
+    pub lookahead_ms: f32,
+}
+
+impl Default for MasterSectionParams {
+    fn default() -> Self {
+        let position = |id: u32| {
+            MasterSectionParams::descriptor(id).map_or(0, |descriptor| descriptor.default as u8)
+        };
+        Self {
+            comp_in: false,
+            voicing: BusCompVoicing::Grip,
+            threshold_db: MASTER_DESCRIPTORS[2].default,
+            makeup_db: MASTER_DESCRIPTORS[3].default,
+            mix: MASTER_DESCRIPTORS[4].default,
+            grip_ratio: position(MASTER_GRIP_RATIO),
+            grip_attack: position(MASTER_GRIP_ATTACK),
+            grip_release: position(MASTER_GRIP_RELEASE),
+            punch_ratio: position(MASTER_PUNCH_RATIO),
+            punch_attack: position(MASTER_PUNCH_ATTACK),
+            punch_release: position(MASTER_PUNCH_RELEASE),
+            tube_time: position(MASTER_TUBE_TIME),
+            lookahead_ms: 0.0,
+        }
+    }
+}
+
+impl MasterSectionParams {
+    /// Every parameter's range, curve and default, in id order.
+    pub fn descriptors() -> &'static [ParamDescriptor] {
+        &MASTER_DESCRIPTORS
+    }
+
+    pub fn descriptor(id: u32) -> Option<&'static ParamDescriptor> {
+        MASTER_DESCRIPTORS.iter().find(|descriptor| descriptor.id == id)
+    }
+
+    /// Whether this is the section nobody has touched, which is what a song
+    /// does not need to write down.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn get(&self, id: u32) -> Option<f32> {
+        Some(match id {
+            MASTER_COMP_IN => switch_to_f32(self.comp_in),
+            MASTER_COMP_VOICING => self.voicing.to_index() as f32,
+            MASTER_COMP_THRESHOLD_DB => self.threshold_db,
+            MASTER_COMP_MAKEUP_DB => self.makeup_db,
+            MASTER_COMP_MIX => self.mix,
+            MASTER_GRIP_RATIO => f32::from(self.grip_ratio),
+            MASTER_GRIP_ATTACK => f32::from(self.grip_attack),
+            MASTER_GRIP_RELEASE => f32::from(self.grip_release),
+            MASTER_PUNCH_RATIO => f32::from(self.punch_ratio),
+            MASTER_PUNCH_ATTACK => f32::from(self.punch_attack),
+            MASTER_PUNCH_RELEASE => f32::from(self.punch_release),
+            MASTER_TUBE_TIME => f32::from(self.tube_time),
+            MASTER_LOOKAHEAD_MS => self.lookahead_ms,
+            _ => return None,
+        })
+    }
+
+    /// Store `value` under `id`, clamped to its descriptor, and report
+    /// whether the id is one of this section's. The same contract as
+    /// [`StripParams::set`]: a non-finite value is the default.
+    pub fn set(&mut self, id: u32, value: f32) -> bool {
+        let Some(descriptor) = Self::descriptor(id) else {
+            return false;
+        };
+        let value = if value.is_finite() {
+            value.clamp(descriptor.min, descriptor.max)
+        } else {
+            descriptor.default
+        };
+        let position = value.round().max(0.0) as u8;
+        match id {
+            MASTER_COMP_IN => self.comp_in = switch_from_f32(value),
+            MASTER_COMP_VOICING => self.voicing = BusCompVoicing::from_index(value.round() as i32),
+            MASTER_COMP_THRESHOLD_DB => self.threshold_db = value,
+            MASTER_COMP_MAKEUP_DB => self.makeup_db = value,
+            MASTER_COMP_MIX => self.mix = value,
+            MASTER_GRIP_RATIO => self.grip_ratio = position,
+            MASTER_GRIP_ATTACK => self.grip_attack = position,
+            MASTER_GRIP_RELEASE => self.grip_release = position,
+            MASTER_PUNCH_RATIO => self.punch_ratio = position,
+            MASTER_PUNCH_ATTACK => self.punch_attack = position,
+            MASTER_PUNCH_RELEASE => self.punch_release = position,
+            MASTER_TUBE_TIME => self.tube_time = position,
+            MASTER_LOOKAHEAD_MS => self.lookahead_ms = value,
+            _ => return false,
+        }
+        true
+    }
+}
+
+/// A stepped descriptor over `positions` switch positions.
+const fn stepped(id: u32, name: &'static str, positions: u8, default: u8) -> ParamDescriptor {
+    ParamDescriptor {
+        id,
+        name,
+        unit: "",
+        min: 0.0,
+        max: (positions - 1) as f32,
+        curve: ParamCurve::Stepped(positions as u16),
+        default: default as f32,
+    }
+}
+
+/// The master section's table, contiguous with the strip's.
+///
+/// **Ids are frozen from the day they land**: append, never renumber
+/// (`crate::ParamDescriptor`'s rule). The defaults are the settings a mix
+/// engineer reaches for first -- Grip at 4:1, 10 ms, 0.3 s; Punch at 4:1,
+/// 3 ms, 0.2 s; Tube at position 2 -- so switching the section in does
+/// something musical before anything is turned.
+static MASTER_DESCRIPTORS: [ParamDescriptor; 13] = [
+    stepped(MASTER_COMP_IN, "Comp In", 2, 0),
+    stepped(MASTER_COMP_VOICING, "Voicing", 3, 0),
+    ParamDescriptor {
+        id: MASTER_COMP_THRESHOLD_DB,
+        name: "Thresh",
+        unit: "dB",
+        min: -40.0,
+        max: 0.0,
+        curve: ParamCurve::Linear,
+        default: -16.0,
+    },
+    ParamDescriptor {
+        id: MASTER_COMP_MAKEUP_DB,
+        name: "Makeup",
+        unit: "dB",
+        min: 0.0,
+        max: 18.0,
+        curve: ParamCurve::Linear,
+        default: 0.0,
+    },
+    ParamDescriptor {
+        id: MASTER_COMP_MIX,
+        name: "Mix",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 1.0,
+    },
+    stepped(MASTER_GRIP_RATIO, "Ratio", GRIP_RATIO_POSITIONS, 1),
+    stepped(MASTER_GRIP_ATTACK, "Attack", GRIP_ATTACK_POSITIONS, 4),
+    stepped(MASTER_GRIP_RELEASE, "Release", GRIP_RELEASE_POSITIONS, 1),
+    stepped(MASTER_PUNCH_RATIO, "Ratio", PUNCH_RATIO_POSITIONS, 3),
+    stepped(MASTER_PUNCH_ATTACK, "Attack", PUNCH_ATTACK_POSITIONS, 4),
+    stepped(MASTER_PUNCH_RELEASE, "Release", PUNCH_RELEASE_POSITIONS, 2),
+    stepped(MASTER_TUBE_TIME, "Time", TUBE_TIME_POSITIONS, 1),
+    ParamDescriptor {
+        id: MASTER_LOOKAHEAD_MS,
+        name: "Lookahead",
+        unit: "ms",
+        min: 0.0,
+        max: MAX_LOOKAHEAD_MS,
+        curve: ParamCurve::Linear,
+        default: 0.0,
+    },
+];
+
+#[cfg(test)]
+mod master_tests {
+    use super::*;
+
+    #[test]
+    fn every_master_descriptor_default_is_the_default_section() {
+        let params = MasterSectionParams::default();
+        for descriptor in MasterSectionParams::descriptors() {
+            let held = params
+                .get(descriptor.id)
+                .unwrap_or_else(|| panic!("no value behind {}", descriptor.name));
+            assert_eq!(held, descriptor.default, "{} ({})", descriptor.name, descriptor.id);
+        }
+        assert!(!params.comp_in, "the section arrives out");
+        assert_eq!(params.lookahead_ms, 0.0, "the limiter arrives with no lookahead");
+        assert!(params.is_default());
+    }
+
+    /// The two tables are one id space: the master's continues where the
+    /// strip's stops, in table order, which is what `StripSpec` finds a row
+    /// by.
+    #[test]
+    fn the_master_ids_continue_the_strips_with_no_holes() {
+        let strip_end = STRIP_FIRST + StripParams::descriptors().len() as u32;
+        assert_eq!(MASTER_FIRST, strip_end);
+        for (offset, descriptor) in MasterSectionParams::descriptors().iter().enumerate() {
+            assert_eq!(descriptor.id, MASTER_FIRST + offset as u32, "{}", descriptor.name);
+            assert!(StripParams::descriptor(descriptor.id).is_none());
+        }
+    }
+
+    /// The ids are frozen once they land: a renumber would move every saved
+    /// setting a face or a later lane addresses.
+    #[test]
+    fn the_master_ids_are_frozen() {
+        assert_eq!(MASTER_COMP_IN, 44);
+        assert_eq!(MASTER_TUBE_TIME, 55);
+        assert_eq!(MASTER_LOOKAHEAD_MS, 56);
+    }
+
+    #[test]
+    fn every_master_parameter_round_trips_and_strangers_are_refused() {
+        let mut params = MasterSectionParams::default();
+        for descriptor in MasterSectionParams::descriptors() {
+            assert!(params.set(descriptor.id, descriptor.max), "{}", descriptor.name);
+            assert_eq!(params.get(descriptor.id), Some(descriptor.max), "{}", descriptor.name);
+        }
+        assert!(!params.set(STRIP_COMP_MAKEUP_DB, 1.0));
+        assert!(!params.set(MASTER_LOOKAHEAD_MS + 1, 1.0));
+        assert!(params.get(MASTER_LOOKAHEAD_MS + 1).is_none());
+    }
+
+    /// A stepped control holds exactly its switch's positions: one past the
+    /// end clamps onto the last, and a NaN is the default.
+    #[test]
+    fn a_position_past_the_switch_clamps_and_a_nan_is_the_default() {
+        let mut params = MasterSectionParams::default();
+        params.set(MASTER_PUNCH_ATTACK, 40.0);
+        assert_eq!(params.punch_attack, PUNCH_ATTACK_POSITIONS - 1);
+        params.set(MASTER_GRIP_RELEASE, -3.0);
+        assert_eq!(params.grip_release, 0);
+        params.set(MASTER_TUBE_TIME, f32::NAN);
+        assert_eq!(params.tube_time, 1);
+        params.set(MASTER_COMP_VOICING, 9.0);
+        assert_eq!(params.voicing, BusCompVoicing::Tube);
+        params.set(MASTER_LOOKAHEAD_MS, 60.0);
+        assert_eq!(params.lookahead_ms, MAX_LOOKAHEAD_MS);
+    }
+
+    #[test]
+    fn a_voicing_index_round_trips() {
+        for voicing in BusCompVoicing::ALL {
+            assert_eq!(BusCompVoicing::from_index(voicing.to_index()), voicing);
+        }
+    }
+
+    /// Serde-defaulted field by field, so a section written by an older
+    /// build that lacked a field opens with that field at its default.
+    #[test]
+    fn a_section_missing_fields_loads_with_their_defaults() {
+        let loaded: MasterSectionParams =
+            toml::from_str("comp_in = true\nvoicing = \"Tube\"\n").expect("partial section");
+        assert!(loaded.comp_in);
+        assert_eq!(loaded.voicing, BusCompVoicing::Tube);
+        assert_eq!(loaded.tube_time, MasterSectionParams::default().tube_time);
+        let round: MasterSectionParams =
+            toml::from_str(&toml::to_string(&loaded).unwrap()).unwrap();
+        assert_eq!(round, loaded);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

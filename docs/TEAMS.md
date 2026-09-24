@@ -169,7 +169,8 @@ Files marked *shared* are split in the table above.
 ### 3. Mixer & Routing
 
 - `core/src/`: `mixer.rs`, `gain.rs`, `strip.rs`, `outlet.rs`
-- `dsp/src/`: `strip.rs`, `console.rs`, `preamp.rs` (the strip's input stage;
+- `dsp/src/`: `strip.rs` and `strip/` (`strip/bus_comp.rs`, the master bus
+  compressor's laws, MOO-13), `console.rs`, `preamp.rs` (the strip's input stage;
   the Preamp insert is Effects'), `output_guard.rs` (the master's non-finite
   scrub and safety limiter)
 - `engine/src/`: `meters.rs`, and the tests `console_tests.rs`,

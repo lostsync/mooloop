@@ -11,7 +11,7 @@ Mixer & Routing's files. Rungs 1-2 on those two crates.
   and per voicing `grip_ratio`, `grip_attack`, `grip_release`, `punch_ratio`,
   `punch_attack`, `punch_release`, `tube_time`, each a **position** on the
   unit's own switch, plus `lookahead_ms` for step 02's guard. Its descriptor
-  rows are appended to `StripParams`'s table from id 48; ids are frozen from
+  rows continue `StripParams`'s table from id 44; ids are frozen from
   the day they land. Not yet a field of `StripParams` -- that is step 03,
   which is where it becomes a saved field.
 - `mooloop_dsp::strip::bus_comp::BusComp`: one stereo-linked compressor that

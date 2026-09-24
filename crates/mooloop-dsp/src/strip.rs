@@ -52,6 +52,10 @@ use crate::node::DynamicsFrame;
 use crate::preamp::Preamp;
 use crate::smooth::Smoothed;
 
+/// The master bus compressor, which runs on the master's strip alone and has
+/// its own laws rather than this module's (MOO-13).
+pub mod bus_comp;
+
 /// Drive, mix and makeup all scale amplitude directly, so a step in
 /// any of them is a click. The same constant the dynamics effects and the
 /// preamp device use, for the same reason.

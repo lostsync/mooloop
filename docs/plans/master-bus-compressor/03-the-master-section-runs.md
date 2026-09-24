@@ -30,6 +30,18 @@ Engine call sites; both need an ack on the board.
     file starts on the bar line whatever the lookahead (`offline.rs`,
     Engine's, ack needed). The tail's at-rest check waits for the ring to
     empty.
+  - **MIDI notes recorded while monitoring are not compensated, and that is
+    filed rather than half-done** (MOO-209, Sequencing). A player hears the
+    master L late and plays L late, exactly as for an audio take; but note
+    capture compensates no output latency at all today, not even the
+    driver's playback latency, which is usually the larger. Subtracting only
+    the lookahead would leave it half-compensated, so the whole correction is
+    one decision in Sequencing's code, with `RenderState::output_latency_frames`
+    as the lookahead's half of it.
+  - **At 0 nothing moves**, pinned through both paths: a live render at a
+    256-frame block and an export, each with the section present but at its
+    defaults, are bit-identical to the same song without one, and the export
+    has the same length and the same first frame.
 
 ## The acceptance render
 
