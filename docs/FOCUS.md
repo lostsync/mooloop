@@ -352,7 +352,7 @@ In the order worth playing:
    reopened present identically and missing as the dry loop, its slot and
    lanes kept. `live-64.wav` is what the executor played. In the app, open
    `clap-automation/clap-automation.mooloop` and play it on JACK.
-8. **ML-P8's Volume under modulation** (MOO-214). A held chord of sines,
+9. **ML-P8's Volume under modulation** (MOO-214). A held chord of sines,
    its Volume pumped by a quarter-note LFO. It should duck smoothly, with
    no buzz on the duck:
 
@@ -366,24 +366,24 @@ In the order worth playing:
    the fix and 100 dB under after. Then do the real case, an Envelope gated
    by the kick and routed to ML-P8's Volume with negative depth, at an
    Attack well under 500 ms.
-9. **The sampler's loop seam** (MOO-43). A one-bar synthetic break whose
-   bass tone doesn't fit the bar, so the hard seam clicks. It's looped two
-   ways, from the top (starting on the kick, with nothing before it) and
-   after a lead-in, at Loop fade 0, 2, 10 and 30 ms:
+10. **The sampler's loop seam** (MOO-43). A one-bar synthetic break whose
+    bass tone doesn't fit the bar, so the hard seam clicks. It's looped two
+    ways, from the top (starting on the kick, with nothing before it) and
+    after a lead-in, at Loop fade 0, 2, 10 and 30 ms:
 
-   ```sh
-   scripts/antibox --no-incremental --pull target/sampler-loop-seam \
+    ```sh
+    scripts/antibox --no-incremental --pull target/sampler-loop-seam \
      cargo run -p mooloop-engine --example sampler_loop_seam -- target/sampler-loop-seam
-   ```
+    ```
 
-   Play `top-0ms.wav` against `top-10ms.wav`, and the same for `lead-in-*`.
-   The binary prints what it measured. The step across the seam goes from
-   0.18 to 0.0004 from the top, and from 0.16 to 0.012 after the lead-in,
-   where 0.012 is the kick's own attack. From the top the fade only takes
-   level away. Its first millisecond fades back in, which moves the kick's
-   onset by up to 15 dB under its peak. Listen for whether that softens the
-   downbeat. The 0 ms files hash the same as before the change.
-10. **Fit to tempo, and SYNC off keeping the sound** (MOO-39). A 1.5 s loop
+    Play `top-0ms.wav` against `top-10ms.wav`, and the same for `lead-in-*`.
+    The binary prints what it measured. The step across the seam goes from
+    0.18 to 0.0004 from the top, and from 0.16 to 0.012 after the lead-in,
+    where 0.012 is the kick's own attack. From the top the fade only takes
+    level away. Its first millisecond fades back in, which moves the kick's
+    onset by up to 15 dB under its peak. Listen for whether that softens the
+    downbeat. The 0 ms files hash the same as before the change.
+11. **Fit to tempo, and SYNC off keeping the sound** (MOO-39). A 1.5 s loop
     fitted to one bar, rendered three ways: synced at 120 BPM, synced at
     90, and frozen at 120 then played at 90:
 
@@ -397,7 +397,7 @@ In the order worth playing:
     at 2.00 s at 90 BPM. Play the three, and the frozen one should be the
     120 BPM loop, unchanged. Then, in the app, turn SYNC off on a fitted loop
     and change the tempo. The loop's sound should stay put.
-11. **A lane sweeping Loop start on a grid** (MOO-47). A one-bar break
+12. **A lane sweeping Loop start on a grid** (MOO-47). A one-bar break
     loops for four bars while a lane sweeps Loop start from the top to the
     last quarter, with the grid off and then on sixteenths:
 
@@ -410,7 +410,7 @@ In the order worth playing:
     loop starts, a slide through every frame. On sixteenths they resolve to
     13, which is the grid. Play `off.wav` against `sixteenth.wav`. The
     second should step in rhythm, a sixteenth at a time.
-12. **Slices detected on a break** (MOO-44). A two-bar synthetic break with
+13. **Slices detected on a break** (MOO-44). A two-bar synthetic break with
     a ghost snare and a bass tone under it, where every hit's frame is
     known. It's detected at three sensitivities, then chopped with the
     default's slices played backwards on the sixteenths:
@@ -425,7 +425,7 @@ In the order worth playing:
     snares. Play `chop.wav`: every slice should start on its hit, with no
     flam and no pre-echo. Then, in the app, DETECT a real break, move a
     marker by hand, and REPLACE. The moved marker should stay.
-13. **A sliced break played back from its pattern** (MOO-46). The same kind
+14. **A sliced break played back from its pattern** (MOO-46). The same kind
     of two-bar break is sliced by detection, and PATTERN's function writes a
     note per slice. It renders once as written and once with neighbouring
     slices swapped:
