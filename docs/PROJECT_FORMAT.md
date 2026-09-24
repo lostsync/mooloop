@@ -521,6 +521,18 @@ before any of them existed still loads:
   one, and only the master's is run: the session refuses its ids on any other
   track. See `docs/plans/archive/master-bus-compressor/`.
 
+  **The same compressor as an insert** (MOO-216) is an ordinary effect row,
+  `type = "bus_comp"`, whose `state` is a `BusCompParams`: the master
+  section's compressor fields under the same names and meanings -- `voicing`
+  by name, `threshold_db`, `makeup_db`, `mix`, and the seven switch
+  **positions** -- with no `comp_in` (the row's `bypassed` is its in/out) and
+  no `lookahead_ms` (the limiter's, not the compressor's). `serde(default)`
+  field by field, the defaults being the master section's. Its parameter
+  ids, which automation lanes and modulation routes store, are the master
+  section's ids 45..=55 moved down to 0..=10 and frozen with the rest
+  (`param_id_freeze_tests.rs`). A reader that predates the kind refuses the
+  row by name, as it would any unknown effect.
+
   There is deliberately **no field for where the strip sits in the chain.**
   `mooloop_core::mixer::STRIP_PIN` is a constant, not a project value: the
   pinned position is a policy the application states once, and a per-track

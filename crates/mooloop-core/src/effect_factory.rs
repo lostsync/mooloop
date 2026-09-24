@@ -53,6 +53,7 @@ pub fn patches(kind: EffectKind) -> Vec<EffectFactoryPatch> {
         EffectKind::Plate => plate(),
         EffectKind::Gate => gate(),
         EffectKind::Compressor => compressor(),
+        EffectKind::BusComp => bus_comp(),
         EffectKind::Limiter => limiter(),
         EffectKind::Buffer => buffer(),
         // A container has one control and it is a mix. There is no patch of
@@ -605,6 +606,71 @@ fn gate() -> Vec<EffectFactoryPatch> {
 }
 
 // --- Compressor -------------------------------------------------------------
+
+// --- Bus Comp ---------------------------------------------------------------
+
+/// One patch per voicing at least (MOO-216), because the voicing is the unit
+/// in the rack: Grip is the SSL's law, Punch the API-2500's, Tube the 670's.
+/// Every stepped field is a switch **position** into
+/// `mooloop_dsp::strip::bus_comp`'s tables, and the comment beside each says
+/// what the switch reads there.
+fn bus_comp() -> Vec<EffectFactoryPatch> {
+    use crate::strip::BusCompVoicing;
+    let with = |name, tags, description, edit: fn(&mut crate::BusCompParams)| {
+        patch(EffectKind::BusComp, name, tags, description, |effect| {
+            if let EffectParams::BusComp(params) = &mut effect.params {
+                edit(params);
+            }
+        })
+    };
+    vec![
+        with("Grip Glue", &["grip", "bus", "gentle"], "The SSL at 2:1, 30 ms and Auto: a couple of dB that holds a mix together.", |p| {
+            p.voicing = BusCompVoicing::Grip;
+            p.threshold_db = -18.0;
+            p.grip_ratio = 0; // 2:1
+            p.grip_attack = 5; // 30 ms
+            p.grip_release = 4; // Auto
+            p.makeup_db = 1.5;
+        }),
+        with("Grip Drum Bus", &["grip", "drums", "punchy"], "The SSL at 4:1, 10 ms and 0.1 s: lets the transient through and pumps with the groove.", |p| {
+            p.voicing = BusCompVoicing::Grip;
+            p.threshold_db = -22.0;
+            p.grip_ratio = 1; // 4:1
+            p.grip_attack = 4; // 10 ms
+            p.grip_release = 0; // 0.1 s
+            p.makeup_db = 3.0;
+        }),
+        with("Punch Drums", &["punch", "drums", "aggressive"], "The API at 4:1, reading power: thick, with the attack floor keeping the crack.", |p| {
+            p.voicing = BusCompVoicing::Punch;
+            p.threshold_db = -24.0;
+            p.punch_ratio = 3; // 4:1
+            p.punch_attack = 3; // 1 ms
+            p.punch_release = 1; // 0.1 s
+            p.makeup_db = 4.0;
+        }),
+        with("Punch Parallel", &["punch", "parallel", "drums"], "The API at 10:1, smashed and blended under the dry bus.", |p| {
+            p.voicing = BusCompVoicing::Punch;
+            p.threshold_db = -30.0;
+            p.punch_ratio = 5; // 10:1
+            p.punch_attack = 2; // 0.3 ms
+            p.punch_release = 1; // 0.1 s
+            p.makeup_db = 8.0;
+            p.mix = 0.4;
+        }),
+        with("Tube Glow", &["tube", "smooth", "bus"], "The 670 at TIME 3: slow, smooth, and hard to hear until it is gone.", |p| {
+            p.voicing = BusCompVoicing::Tube;
+            p.threshold_db = -20.0;
+            p.tube_time = 2; // position 3
+            p.makeup_db = 2.0;
+        }),
+        with("Tube Two-Stage", &["tube", "programme", "master"], "The 670 at TIME 5: a fast release on hits over a slow one on the whole.", |p| {
+            p.voicing = BusCompVoicing::Tube;
+            p.threshold_db = -18.0;
+            p.tube_time = 4; // position 5
+            p.makeup_db = 1.5;
+        }),
+    ]
+}
 
 fn compressor() -> Vec<EffectFactoryPatch> {
     let with = |name, tags, description, edit: fn(&mut crate::CompressorParams)| {

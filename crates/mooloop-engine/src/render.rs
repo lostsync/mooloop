@@ -14705,6 +14705,11 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                     params.set(mooloop_core::COMP_PARAM_RATIO, 20.0);
                     params.set(mooloop_core::COMP_PARAM_ATTACK_MS, 0.05);
                 }
+                mooloop_core::EffectKind::BusComp => {
+                    // The lowest threshold and the SSL's fastest attack.
+                    params.set(mooloop_core::BUS_COMP_PARAM_THRESHOLD_DB, -40.0);
+                    params.set(mooloop_core::BUS_COMP_PARAM_GRIP_ATTACK, 0.0);
+                }
                 mooloop_core::EffectKind::Limiter => {
                     params.set(mooloop_core::LIMITER_PARAM_CEILING_DB, -24.0);
                 }

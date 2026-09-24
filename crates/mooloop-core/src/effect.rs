@@ -31,6 +31,11 @@ pub enum EffectKind {
     /// ML-M1 shipped under a name nobody chose and that is frozen forever.
     #[serde(rename = "preamp")]
     Preamp,
+    /// The master's bus compressor as an insert (MOO-216): the same
+    /// `BusComp` the master section runs, not a copy of it. Serialized as
+    /// `bus_comp`, stated for the Preamp's reason.
+    #[serde(rename = "bus_comp")]
+    BusComp,
     /// A container: a device that holds an ordered run of the devices after
     /// it. See `docs/plans/archive/containers/02-the-container-is-a-device.md`.
     Chain,
@@ -127,6 +132,8 @@ impl EffectKind {
             | Self::Plate
             | Self::Gate
             | Self::Compressor
+            // No lookahead: the detector reads the sample it is turning down.
+            | Self::BusComp
             | Self::Buffer
             // A container declares nothing of its own. Its children are rows
             // of the same chain, so `chain_latency` already counts them; a
@@ -192,6 +199,7 @@ impl EffectKind {
             | Self::Plate
             | Self::Gate
             | Self::Compressor
+            | Self::BusComp
             | Self::Limiter
             | Self::Buffer
             | Self::Plugin => None,
@@ -199,7 +207,7 @@ impl EffectKind {
     }
 
     /// Every kind, in the order the UI offers them when adding an effect.
-    pub const ALL: [EffectKind; 15] = [
+    pub const ALL: [EffectKind; 16] = [
         EffectKind::Eq,
         EffectKind::Modulation,
         EffectKind::Filter,
@@ -211,6 +219,7 @@ impl EffectKind {
         EffectKind::Plate,
         EffectKind::Gate,
         EffectKind::Compressor,
+        EffectKind::BusComp,
         EffectKind::Limiter,
         EffectKind::Buffer,
         EffectKind::Chain,
@@ -231,6 +240,7 @@ impl EffectKind {
             Self::Plate => "Plate",
             Self::Gate => "Gate",
             Self::Compressor => "Comp",
+            Self::BusComp => "Bus Comp",
             Self::Limiter => "Limiter",
             Self::Buffer => "Buffer",
             Self::Chain => "Chain",
@@ -254,6 +264,7 @@ impl EffectKind {
             Self::Plate => &PLATE_DESCRIPTORS,
             Self::Gate => &GATE_DESCRIPTORS,
             Self::Compressor => &COMPRESSOR_DESCRIPTORS,
+            Self::BusComp => &*BUS_COMP_DESCRIPTORS,
             Self::Limiter => &LIMITER_DESCRIPTORS,
             Self::Buffer => &BUFFER_DESCRIPTORS,
             Self::Chain | Self::Layer => &CONTAINER_DESCRIPTORS,
@@ -284,6 +295,7 @@ impl EffectKind {
             Self::Plate => EffectParams::Plate(PlateParams::default()),
             Self::Gate => EffectParams::Gate(GateParams::default()),
             Self::Compressor => EffectParams::Compressor(CompressorParams::default()),
+            Self::BusComp => EffectParams::BusComp(BusCompParams::default()),
             Self::Limiter => EffectParams::Limiter(LimiterParams::default()),
             Self::Buffer => EffectParams::Buffer(BufferParams::default()),
             Self::Chain => EffectParams::Chain(ContainerParams::default()),
@@ -1550,6 +1562,145 @@ impl Default for PreampParams {
             output_db: 0.0,
             display_enabled: false,
         }
+    }
+}
+
+// --- Bus Comp --------------------------------------------------------------
+
+/// `Event::ParamValue` ids for [`BusCompParams`].
+///
+/// **The master section's ids, shifted down to start at zero** (MOO-216):
+/// each is its master twin minus [`crate::strip::MASTER_COMP_VOICING`], and
+/// the insert runs the master's own `BusComp` by adding it back
+/// ([`bus_comp_master_id`]). The master's Comp In has no twin, because an
+/// insert's in/out is its rail's bypass, and neither has its Lookahead,
+/// which is the safety limiter's and not the compressor's.
+pub const BUS_COMP_PARAM_VOICING: u32 = 0;
+pub const BUS_COMP_PARAM_THRESHOLD_DB: u32 = 1;
+pub const BUS_COMP_PARAM_MAKEUP_DB: u32 = 2;
+pub const BUS_COMP_PARAM_MIX: u32 = 3;
+pub const BUS_COMP_PARAM_GRIP_RATIO: u32 = 4;
+pub const BUS_COMP_PARAM_GRIP_ATTACK: u32 = 5;
+pub const BUS_COMP_PARAM_GRIP_RELEASE: u32 = 6;
+pub const BUS_COMP_PARAM_PUNCH_RATIO: u32 = 7;
+pub const BUS_COMP_PARAM_PUNCH_ATTACK: u32 = 8;
+pub const BUS_COMP_PARAM_PUNCH_RELEASE: u32 = 9;
+pub const BUS_COMP_PARAM_TUBE_TIME: u32 = 10;
+
+/// How many parameters the insert has: every master id from Voicing to Tube
+/// Time.
+pub const BUS_COMP_PARAM_COUNT: u32 = 11;
+
+/// The master section's id for one of the insert's. The one conversion
+/// between the two id spaces.
+pub const fn bus_comp_master_id(id: u32) -> u32 {
+    id + crate::strip::MASTER_COMP_VOICING
+}
+
+/// The insert's table, **derived from the master section's** rather than
+/// written a second time: each row is its master twin with the id moved
+/// down, so a range, a default or a step count changed on the master is
+/// changed here by the same edit. Two tables that happen to agree today are
+/// how this codebase's values drift (`AGENTS.md`, *Duplication*).
+static BUS_COMP_DESCRIPTORS: std::sync::LazyLock<[ParamDescriptor; BUS_COMP_PARAM_COUNT as usize]> =
+    std::sync::LazyLock::new(|| {
+        std::array::from_fn(|id| {
+            let twin = crate::strip::MasterSectionParams::descriptor(bus_comp_master_id(id as u32))
+                .expect("every Bus Comp id has a master twin");
+            ParamDescriptor { id: id as u32, ..*twin }
+        })
+    });
+
+/// Parameters for the Bus Comp insert (`BusCompEffect` in `mooloop-dsp`):
+/// the master's bus compressor as a device of its own, for a drum bus or a
+/// branch (MOO-216; Adam, 2026-09-24: *"could we also make it a device of
+/// its own? it'd be useful e.g. on the drum bus"*).
+///
+/// Every field is a field of [`crate::strip::MasterSectionParams`] with the
+/// same meaning and the same default, and [`Self::section`] is the one
+/// conversion. A stepped field holds a switch **position**, as the master's
+/// does.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct BusCompParams {
+    pub voicing: crate::strip::BusCompVoicing,
+    pub threshold_db: f32,
+    pub makeup_db: f32,
+    /// Parallel balance: 0 is the dry signal exactly.
+    pub mix: f32,
+    pub grip_ratio: u8,
+    pub grip_attack: u8,
+    pub grip_release: u8,
+    pub punch_ratio: u8,
+    pub punch_attack: u8,
+    pub punch_release: u8,
+    pub tube_time: u8,
+}
+
+impl Default for BusCompParams {
+    /// The master section's defaults, read from it.
+    fn default() -> Self {
+        Self::from_section(&crate::strip::MasterSectionParams::default())
+    }
+}
+
+impl BusCompParams {
+    /// The compressor's half of a master section.
+    pub fn from_section(section: &crate::strip::MasterSectionParams) -> Self {
+        Self {
+            voicing: section.voicing,
+            threshold_db: section.threshold_db,
+            makeup_db: section.makeup_db,
+            mix: section.mix,
+            grip_ratio: section.grip_ratio,
+            grip_attack: section.grip_attack,
+            grip_release: section.grip_release,
+            punch_ratio: section.punch_ratio,
+            punch_attack: section.punch_attack,
+            punch_release: section.punch_release,
+            tube_time: section.tube_time,
+        }
+    }
+
+    /// The master section this insert runs: these settings, switched in,
+    /// and nothing else of the master's. What `BusComp` is built from.
+    pub fn section(&self) -> crate::strip::MasterSectionParams {
+        crate::strip::MasterSectionParams {
+            comp_in: true,
+            voicing: self.voicing,
+            threshold_db: self.threshold_db,
+            makeup_db: self.makeup_db,
+            mix: self.mix,
+            grip_ratio: self.grip_ratio,
+            grip_attack: self.grip_attack,
+            grip_release: self.grip_release,
+            punch_ratio: self.punch_ratio,
+            punch_attack: self.punch_attack,
+            punch_release: self.punch_release,
+            tube_time: self.tube_time,
+            ..crate::strip::MasterSectionParams::default()
+        }
+    }
+
+    pub fn get(&self, id: u32) -> Option<f32> {
+        if id >= BUS_COMP_PARAM_COUNT {
+            return None;
+        }
+        self.section().get(bus_comp_master_id(id))
+    }
+
+    /// Store `value` under `id` through the master section's own setter, so
+    /// a position rounds and a voicing decodes exactly as it does there.
+    pub fn set(&mut self, id: u32, value: f32) -> bool {
+        if id >= BUS_COMP_PARAM_COUNT {
+            return false;
+        }
+        let mut section = self.section();
+        if !section.set(bus_comp_master_id(id), value) {
+            return false;
+        }
+        *self = Self::from_section(&section);
+        true
     }
 }
 
@@ -3156,6 +3307,8 @@ pub enum EffectParams {
     Plate(PlateParams),
     Gate(GateParams),
     Compressor(CompressorParams),
+    #[serde(rename = "bus_comp")]
+    BusComp(BusCompParams),
     Limiter(LimiterParams),
     Buffer(BufferParams),
     Chain(ContainerParams),
@@ -3187,6 +3340,7 @@ impl EffectParams {
             Self::Plate(_) => EffectKind::Plate,
             Self::Gate(_) => EffectKind::Gate,
             Self::Compressor(_) => EffectKind::Compressor,
+            Self::BusComp(_) => EffectKind::BusComp,
             Self::Limiter(_) => EffectKind::Limiter,
             Self::Buffer(_) => EffectKind::Buffer,
             Self::Chain(_) => EffectKind::Chain,
@@ -3276,6 +3430,13 @@ impl EffectParams {
     pub fn preamp(&self) -> Option<&PreampParams> {
         match self {
             Self::Preamp(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn bus_comp(&self) -> Option<&BusCompParams> {
+        match self {
+            Self::BusComp(p) => Some(p),
             _ => None,
         }
     }
@@ -3459,6 +3620,7 @@ impl EffectParams {
                 COMP_PARAM_MIX => Some(p.mix),
                 _ => None,
             },
+            Self::BusComp(p) => p.get(id),
             Self::Limiter(p) => match id {
                 LIMITER_PARAM_CEILING_DB => Some(p.ceiling_db),
                 LIMITER_PARAM_RELEASE_MS => Some(p.release_ms),
@@ -3608,6 +3770,11 @@ impl EffectParams {
                 COMP_PARAM_MIX => p.mix = value,
                 _ => return None,
             },
+            Self::BusComp(p) => {
+                if !p.set(id, value) {
+                    return None;
+                }
+            }
             Self::Limiter(p) => match id {
                 LIMITER_PARAM_CEILING_DB => p.ceiling_db = value,
                 LIMITER_PARAM_RELEASE_MS => p.release_ms = value,
@@ -3926,6 +4093,10 @@ impl EffectSlotState {
 
     pub fn limiter(params: LimiterParams) -> Self {
         Self::new(EffectParams::Limiter(params))
+    }
+
+    pub fn bus_comp(params: BusCompParams) -> Self {
+        Self::new(EffectParams::BusComp(params))
     }
 
     pub fn kind(&self) -> EffectKind {
@@ -4491,6 +4662,53 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// **The Bus Comp insert's table is the master section's, row for row**
+    /// (MOO-216): every id from Voicing to Tube Time, moved down by the
+    /// master's Voicing id, with the same name, unit, range, curve and
+    /// default. The table is derived, so this pins the derivation: that it
+    /// took the right span, and that no row of it was left out or added.
+    #[test]
+    fn the_bus_comp_table_is_the_master_sections_moved_down() {
+        use crate::strip::{MasterSectionParams, MASTER_COMP_VOICING, MASTER_TUBE_TIME};
+        let table = EffectKind::BusComp.descriptors();
+        assert_eq!(table.len(), (MASTER_TUBE_TIME - MASTER_COMP_VOICING + 1) as usize);
+        assert_eq!(table.len() as u32, BUS_COMP_PARAM_COUNT);
+        for (position, row) in table.iter().enumerate() {
+            assert_eq!(row.id, position as u32, "ids are positions");
+            let twin = MasterSectionParams::descriptor(bus_comp_master_id(row.id)).unwrap();
+            assert_eq!(*row, ParamDescriptor { id: row.id, ..*twin }, "{}", row.name);
+        }
+        assert_eq!(bus_comp_master_id(BUS_COMP_PARAM_VOICING), MASTER_COMP_VOICING);
+        assert_eq!(bus_comp_master_id(BUS_COMP_PARAM_TUBE_TIME), MASTER_TUBE_TIME);
+    }
+
+    /// A fresh insert is the master section's defaults switched in, and
+    /// every value written by id lands in the master field of the same name.
+    #[test]
+    fn a_bus_comp_insert_is_a_master_section_switched_in() {
+        use crate::strip::MasterSectionParams;
+        let fresh = BusCompParams::default();
+        assert_eq!(
+            fresh.section(),
+            MasterSectionParams { comp_in: true, ..MasterSectionParams::default() }
+        );
+        let mut params = EffectKind::BusComp.default_params();
+        for descriptor in EffectKind::BusComp.descriptors() {
+            let value = descriptor.max;
+            assert_eq!(params.set(descriptor.id, value), Some(value), "{}", descriptor.name);
+            assert_eq!(params.get(descriptor.id), Some(value), "{}", descriptor.name);
+            let section = params.bus_comp().unwrap().section();
+            assert_eq!(
+                section.get(bus_comp_master_id(descriptor.id)),
+                Some(value),
+                "{} did not reach its master field",
+                descriptor.name
+            );
+        }
+        assert_eq!(params.set(BUS_COMP_PARAM_COUNT, 1.0), None);
+        assert_eq!(params.get(BUS_COMP_PARAM_COUNT), None);
     }
 
     /// A saved effect that cannot be read says which effect it was

@@ -617,6 +617,22 @@ pub fn install_master_spec(window: &MainWindow) {
 }
 
 /// The master section as its face takes it.
+/// A Bus Comp face's edit, as the rack's generic one: the master section's
+/// id and a natural value in, this kind's **descriptor position** and a
+/// normalized value out -- what `effect-param-changed` takes (`AGENTS.md`,
+/// *Parameter identity across the session boundary*). `None` for an id the
+/// insert does not have, which is the master's Comp In and Lookahead.
+///
+/// The one place the two id spaces meet on the UI side, and it goes through
+/// `bus_comp_master_id` and the table rather than an offset of its own.
+pub fn bus_comp_edit(master_id: i32, natural: f32) -> Option<(i32, f32)> {
+    let table = EffectKind::BusComp.descriptors();
+    let position = table
+        .iter()
+        .position(|descriptor| mooloop_core::bus_comp_master_id(descriptor.id) as i32 == master_id)?;
+    Some((position as i32, table[position].to_normalized(natural)))
+}
+
 pub fn master_row(params: &MasterSectionParams) -> MasterRow {
     MasterRow {
         comp_in: params.comp_in,
@@ -2687,6 +2703,7 @@ pub fn effect_kind_index(kind: EffectKind) -> i32 {
         // gives it one. Not reachable from the insert menu: that maps back
         // through `EffectKind::ALL`, which leaves plugins out.
         EffectKind::Plugin => 15,
+        EffectKind::BusComp => 16,
     }
 }
 
@@ -2711,6 +2728,9 @@ pub fn effect_kind_units(kind: EffectKind) -> i32 {
         EffectKind::Gate | EffectKind::Compressor | EffectKind::Plate => 2,
         EffectKind::Delay => 3,
         EffectKind::Reverb => 3,
+        // The master section's face, needle and all, at the master's width
+        // (MOO-216): one component draws both.
+        EffectKind::BusComp => 3,
         EffectKind::Modulation => 2,
         EffectKind::Eq => 2,
         // One unit: a name, a mix, and a collapse. The devices it holds are
@@ -2999,6 +3019,12 @@ fn effect_slot_row(
         buffer_position_tick: 0,
         detector_db: METER_FLOOR_DB,
         gain_reduction_db: 0.0,
+        bus_comp: slot
+            .params
+            .bus_comp()
+            .map(|params| master_row(&params.section()))
+            .unwrap_or_default(),
+        held_reduction_db: 0.0,
         children: slot.params.container_children().unwrap_or(0) as i32,
         // The markup asked `kind == 13` in seven places, which is the Rust
         // predicate re-derived from a number the comment above `kind` calls a
@@ -10335,6 +10361,18 @@ impl AppUi {
                     enabled,
                 });
             });
+            // A Bus Comp control reports the master section's id and a value
+            // in its own units (MOO-216); it becomes the rack's ordinary edit
+            // here, where the descriptor table is, and goes through the same
+            // handler -- history, gesture and all -- as every other knob.
+            let weak = window.as_weak();
+            window.on_bus_comp_param_changed(move |slot, master_id, natural| {
+                let Some(window) = weak.upgrade() else { return };
+                let Some((position, normalized)) = bus_comp_edit(master_id, natural) else {
+                    return;
+                };
+                window.invoke_effect_param_changed(slot, position, normalized);
+            });
             window.on_eq_analyzer_changed(move |slot, enabled| {
                 let mut st = st.borrow_mut();
                 let Some((target, slot)) = st.session.set_eq_analyzer(slot, enabled) else {
@@ -15947,6 +15985,9 @@ impl AppUi {
             (0..MAX_BUSES).map(|_| Default::default()).collect();
         // The master bus compressor's needle (MOO-13).
         let mut master_needle = ReductionBallistics::default();
+        // Each Bus Comp insert's needle (MOO-216), by rack row: the same
+        // ballistics as the master's, so the one panel moves the same way.
+        let mut bus_comp_needles: Vec<ReductionBallistics> = Vec::new();
         let mut last_meter_update = std::time::Instant::now();
         // The audio callback's own health, read once a second rather than
         // once a frame: every field is a count over a window, so polling it
@@ -17610,6 +17651,26 @@ impl AppUi {
                             handle.take_device_dynamics(device_target, slot + 1);
                         if showing_device_rack {
                             if let Some(mut row) = state.effect_slot_model.row_data(slot) {
+                                // A Bus Comp draws the master's needle, so it
+                                // reads through the master's ballistics: the
+                                // row carries the needle and its held mark
+                                // rather than the tick's raw extreme.
+                                let (reduction_db, held_reduction_db) =
+                                    if row.kind == effect_kind_index(EffectKind::BusComp) {
+                                        if bus_comp_needles.len() <= slot {
+                                            bus_comp_needles
+                                                .resize_with(slot + 1, ReductionBallistics::default);
+                                        }
+                                        let (needle, held) =
+                                            bus_comp_needles[slot].update(-reduction_db, elapsed);
+                                        (-needle, held)
+                                    } else {
+                                        (reduction_db, row.held_reduction_db)
+                                    };
+                                let held_changed = dynamics_display_changed(
+                                    row.held_reduction_db,
+                                    held_reduction_db,
+                                );
                                 let input_left_db = linear_to_db(in_l);
                                 let input_right_db = linear_to_db(in_r);
                                 let output_left_db = linear_to_db(out_l);
@@ -17691,6 +17752,7 @@ impl AppUi {
                                 }
                                 if meter_changed
                                     || dynamics_changed
+                                    || held_changed
                                     || collisions_changed
                                     || buffer_drawn
                                     || row.eq_analyzer_enabled
@@ -17703,6 +17765,7 @@ impl AppUi {
                                     row.buffer_collisions = collisions;
                                     row.detector_db = detector_db;
                                     row.gain_reduction_db = reduction_db;
+                                    row.held_reduction_db = held_reduction_db;
                                     state.effect_slot_model.set_row_data(slot, row);
                                 }
                             }

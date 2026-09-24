@@ -10,6 +10,7 @@
 //! `docs/MODULATION.md` for why the split falls there.
 
 mod bitcrush;
+mod bus_comp;
 mod preamp;
 mod container;
 mod delay;
@@ -23,6 +24,7 @@ mod plugin_placeholder;
 mod reverb;
 
 pub use bitcrush::BitcrushEffect;
+pub use bus_comp::BusCompEffect;
 pub use preamp::PreampEffect;
 pub use delay::DelayEffect;
 pub use drive::DriveEffect;
@@ -282,6 +284,7 @@ pub fn build_effect_at_tempo(
         EffectParams::Plate(p) => Box::new(PlateEffect::new(p, sample_rate)),
         EffectParams::Gate(p) => Box::new(GateEffect::new(p, sample_rate)),
         EffectParams::Compressor(p) => Box::new(CompressorEffect::new(p, sample_rate)),
+        EffectParams::BusComp(p) => Box::new(BusCompEffect::new(p, sample_rate)),
         EffectParams::Limiter(p) => Box::new(LimiterEffect::new(p, sample_rate)),
         EffectParams::Buffer(p) => Box::new(crate::BufferDevice::new(p, sample_rate, bpm)),
         // Transparent, and deliberately so: a container's mix belongs to the
@@ -957,6 +960,16 @@ mod tests {
                     knee_db: 24.0,
                     makeup_db: 0.0,
                     mix: 1.0,
+                }),
+                0.1,
+            ),
+            // The same: with no makeup a bus comp only turns down.
+            (
+                "bus comp at its lowest threshold, no makeup",
+                EffectParams::BusComp(BusCompParams {
+                    threshold_db: -40.0,
+                    makeup_db: 0.0,
+                    ..BusCompParams::default()
                 }),
                 0.1,
             ),

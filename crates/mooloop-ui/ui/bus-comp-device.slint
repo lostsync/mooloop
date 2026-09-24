@@ -1,0 +1,55 @@
+import { Theme } from "theme.slint";
+import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
+import { BusCompPanel, MasterRow, MasterSpec } from "master-comp.slint";
+
+// The Bus Comp insert (MOO-216): the master's bus compressor as a device of
+// its own, for a drum bus or a branch. Adam, 2026-09-24: *"could we also
+// make it a device of its own? it'd be useful e.g. on the drum bus."*
+//
+// **The master section's face, not a copy of it.** `BusCompPanel` draws the
+// needle, the voicing switches and each voicing's own knobs for both, with
+// the insert's accent where the master has its warning colour and no IN
+// switch, because the frame's bypass is this device's in and out. Every
+// range, step count and marking comes from the tables Rust hands
+// `StripSpec` and `MasterSpec`; nothing here is spelled twice.
+//
+// The panel reports the master's ids in natural units. `moved` passes them
+// on, and Rust turns each into this kind's own id and a normalized value
+// through its descriptor (`bus_comp_edit` in `lib.rs`), so the conversion
+// lives beside the table. The modulation callbacks carry this kind's ids
+// already: they are the master's moved down to Voicing, which is how
+// `mooloop_core::bus_comp_master_id` numbers them.
+export component BusCompDeviceFace inherits EffectDeviceShell {
+    name: "Bus Comp";
+    kind: "FX / 3U";
+    in property <MasterRow> section;
+    in property <float> reduction-db;
+    in property <float> held-reduction-db;
+    // A master section id and a value in its natural units.
+    callback moved(int, float);
+
+    BusCompPanel {
+        x: 8px;
+        y: DeviceRackMetrics.header-height + 8px;
+        width: root.width - 16px;
+        height: root.height - DeviceRackMetrics.header-height - 16px;
+        section: root.section;
+        reduction-db: root.reduction-db;
+        held-reduction-db: root.held-reduction-db;
+        // Editable while bypassed, as every insert's knobs are.
+        on: true;
+        in-switch: false;
+        fill: Theme.accent;
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed;
+        modulation-depths: root.modulation-depths;
+        modulation-offsets: root.modulation-offsets;
+        modulation-route-counts: root.modulation-route-counts;
+        moved(id, value) => { root.moved(id, value); }
+        modulation-depth-changed(id, value) => {
+            root.modulation-depth-changed(id - MasterSpec.voicing, value);
+        }
+        modulation-edit-started(id) => { root.modulation-edit-started(id - MasterSpec.voicing); }
+        modulation-edit-finished(id) => { root.modulation-edit-finished(id - MasterSpec.voicing); }
+    }
+}

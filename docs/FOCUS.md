@@ -448,3 +448,18 @@ In the order worth playing:
     Play `pattern.wav` against `break.wav`, which should be the same loop,
     and `reordered.wav`, which is the chop. Then, in the app, slice a real
     break, press PATTERN, then REPLACE, and move a few notes in the roll.
+15. **The Bus Comp on a drum bus** (MOO-216). A two-bar kick, snare and
+    hat loop on a drum bus, rendered dry, then with a Bus Comp insert on
+    the drum bus, then with no insert and the master's own section in at
+    the same settings (threshold -24 dB, no makeup), for each voicing:
+
+    ```sh
+    scripts/antibox --no-incremental --pull target/bus-comp-insert \
+      cargo run -p mooloop-engine --example bus_comp_insert -- target/bus-comp-insert
+    ```
+
+    The binary prints each render's reduction against `dry.wav`, per 10 ms
+    window. MEASURED. Play `insert-grip.wav`, `insert-punch.wav` and
+    `insert-tube.wav` against `dry.wav`. Each `master-*.wav` should be the
+    same sound. Then, in the app, put a Bus Comp on a real drum bus from the
+    insert menu and try each voicing.

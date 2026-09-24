@@ -175,6 +175,8 @@ mod block_cost;
 #[cfg(test)]
 mod buffer_workflow_tests;
 #[cfg(test)]
+mod bus_comp_tests;
+#[cfg(test)]
 mod container_tests;
 #[cfg(test)]
 mod console_tests;

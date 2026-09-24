@@ -198,6 +198,20 @@ const FROZEN: &[(Owner, &[(u32, &str)])] = &[
         // Appended by MOO-142, 2026-09-23.
         (6, "Mix"),
     ]),
+    // MOO-216, 2026-09-24: the master section's 45..=55, moved down by 45.
+    (Effect(EffectKind::BusComp), &[
+        (0, "Voicing"),
+        (1, "Thresh"),
+        (2, "Makeup"),
+        (3, "Mix"),
+        (4, "Ratio"),
+        (5, "Attack"),
+        (6, "Release"),
+        (7, "Ratio"),
+        (8, "Attack"),
+        (9, "Release"),
+        (10, "Time"),
+    ]),
     (Effect(EffectKind::Limiter), &[
         (0, "Ceiling"),
         (1, "Release"),

@@ -216,6 +216,7 @@ component EffectTypeMenu inherits VerticalLayout {
     EffectTypeRow { text: "Delay"; tooltip: "Insert a delay"; selected => { root.kind-selected(3); } }
     EffectTypeRow { text: "Gate"; tooltip: "Insert a noise gate"; selected => { root.kind-selected(4); } }
     EffectTypeRow { text: "Comp"; tooltip: "Insert a compressor"; selected => { root.kind-selected(5); } }
+    EffectTypeRow { text: "Bus Comp"; tooltip: "Insert the master's bus compressor: Grip, Punch or Tube, for a drum bus or a mix"; selected => { root.kind-selected(16); } }
     EffectTypeRow { text: "Limiter"; tooltip: "Insert a limiter"; selected => { root.kind-selected(6); } }
     EffectTypeRow { text: "EQ"; tooltip: "Insert a parametric equalizer"; selected => { root.kind-selected(7); } }
     EffectTypeRow { text: "Reverb"; tooltip: "Insert a spacious feedback-delay-network hall"; selected => { root.kind-selected(8); } }

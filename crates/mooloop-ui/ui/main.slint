@@ -56,7 +56,8 @@ import { MixerMetrics, MixerPane, MixerSendRow, MixerStripRow, BusPicker } from 
 export { MixerMetrics }
 import { BusDeviceFace, BusFaderRow, StripRackRow } from "bus-device.slint";
 import { StripMeters, StripRow, StripSpec } from "strip.slint";
-import { MasterCompFace, MasterSection, MasterSpec } from "master-comp.slint";
+import { MasterCompFace, MasterRow, MasterSection, MasterSpec } from "master-comp.slint";
+import { BusCompDeviceFace } from "bus-comp-device.slint";
 // The master bus compressor's row and ids, set from Rust (MOO-13).
 export { MasterSection, MasterSpec }
 export { StripMeters }
@@ -231,7 +232,8 @@ struct BrowserRow {
 struct EffectSlotRow {
     // Matches EffectKind: 0=Filter, 1=Drive, 2=Bitcrush, 3=Delay,
     // 4=Gate, 5=Compressor, 6=Limiter, 7=EQ, 8=Reverb, 9=Mod,
-    // 10=Plate, 11=Buffer, 12=Preamp, 13=Chain, 14=Layer.
+    // 10=Plate, 11=Buffer, 12=Preamp, 13=Chain, 14=Layer, 15=Plugin,
+    // 16=Bus Comp.
     //
     // This numbering is `effect_kind_index` in `lib.rs` and it is a *runtime*
     // binding: a project persists the `EffectKind` by name, and the index is
@@ -348,6 +350,13 @@ struct EffectSlotRow {
     // carry the attack and release the device is actually running.
     detector-db: float,
     gain-reduction-db: float,
+    // Bus Comp only (MOO-216): its settings as the master section's face
+    // takes them, positions and natural units, so the one panel draws both;
+    // and the needle's held mark as a positive depth. On a Bus Comp row
+    // `gain-reduction-db` is the needle, through `ReductionBallistics`,
+    // rather than the block's raw extreme.
+    bus-comp: MasterRow,
+    held-reduction-db: float,
     // Container-only: how many of the rows after this one are inside it, and
     // how deeply this row is nested. `children` is structure rather than a
     // parameter, which is why it is not one of the `pN` fields. The frame the
@@ -1835,6 +1844,10 @@ export component MainWindow inherits Window {
     callback effect-buffer-history-bars(int, int);
     callback eq-analyzer-changed(int, bool);
     callback preamp-display-changed(int, bool);
+    // A Bus Comp insert's control moved (MOO-216): the rack slot, the master
+    // section's id for it, and the value in natural units. Rust maps it onto
+    // the insert's own id and normalizes it through that descriptor.
+    callback bus-comp-param-changed(int, int, float);
     callback reorder-effect(int, int);              // from slot, to slot
 
     // ---- channel modulation shelf ----
@@ -5345,6 +5358,34 @@ export component MainWindow inherits Window {
                                                     ceiling-changed(v) => { root.effect-param-changed(index, 0, v); }
                                                     release-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                     gain-changed(v) => { root.effect-param-changed(index, 2, v); }
+                                                    reorder-requested(target) => { root.reorder-effect(index, target); }
+                                                    select-requested => { root.device-selected(index); }
+                                                }
+                                                // The master's section as an insert (MOO-216).
+                                                // It reads its settings from `bus-comp`, in
+                                                // natural units, and reports the master's ids;
+                                                // Rust maps both onto this kind's table.
+                                                if slot.kind == 16 : BusCompDeviceFace {
+                                                    modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                    modulation-depths: slot.modulation-depths;
+                                                    modulation-allowed: slot.modulation-allowed;
+                                                    modulation-offsets: slot.modulation-offsets;
+                                                    modulation-route-counts: slot.modulation-route-counts;
+                                                    modulation-depth-changed(p, v) => { root.effect-modulation-depth-changed(index, p, v); }
+                                                    modulation-edit-started(p) => { root.effect-modulation-edit-started(index, p); }
+                                                    modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
+                                                    x: DeviceRackMetrics.rail-width;
+                                                    y: 0px;
+                                                    width: parent.content-width;
+                                                    height: parent.height;
+                                                    slot-index: index;
+                                                    slot-count: root.effect-slots.length;
+                                                    bypassed: slot.bypassed;
+                                                    preset-name: slot.preset-name;
+                                                    section: slot.bus-comp;
+                                                    reduction-db: -slot.gain-reduction-db;
+                                                    held-reduction-db: slot.held-reduction-db;
+                                                    moved(id, v) => { root.bus-comp-param-changed(index, id, v); }
                                                     reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     select-requested => { root.device-selected(index); }
                                                 }

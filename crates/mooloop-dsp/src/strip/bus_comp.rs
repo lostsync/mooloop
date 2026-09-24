@@ -580,13 +580,27 @@ impl BusComp {
     /// Run the section over the block, in place. Out is out: nothing is
     /// read or written.
     pub fn process_block(&mut self, bus: &mut StereoBus, frames: usize) {
+        self.begin_block();
+        self.process_range(bus, 0, frames);
+    }
+
+    /// Start a block: forget the last one's extremes, so
+    /// [`Self::dynamics_frame`] reports only what the next ranges do.
+    pub fn begin_block(&mut self) {
         self.block_reduction_db = 0.0;
         self.block_detector = 0.0;
+    }
+
+    /// Run the section over `start..end` of the bus, in place, carrying the
+    /// block's extremes on from any range before it. [`Self::process_block`]
+    /// is one of these after [`Self::begin_block`]; the Bus Comp insert
+    /// (MOO-216) runs several, cut at its parameter events. Out is out.
+    pub fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         if !self.params.comp_in {
             return;
         }
-        let frames = frames.min(bus.capacity());
-        for frame in 0..frames {
+        let end = end.min(bus.capacity());
+        for frame in start..end {
             let (l, r) = self.process_frame(bus.l[frame], bus.r[frame]);
             bus.l[frame] = l;
             bus.r[frame] = r;

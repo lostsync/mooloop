@@ -316,6 +316,7 @@ fn resting_effect_cost() {
         EffectKind::Plate,
         EffectKind::Gate,
         EffectKind::Compressor,
+        EffectKind::BusComp,
         EffectKind::Limiter,
     ] {
         let (nanos, slept) =

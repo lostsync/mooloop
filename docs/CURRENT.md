@@ -746,7 +746,8 @@ The master's meter reads the mix *before* the guard, so a mix that is over
 still lights the clip latch, and a non-finite sample reads as an infinite
 peak rather than as silence.
 
-**The master bus compressor** (MOO-13, `docs/GAIN_STRUCTURE.md`) is the
+**The Bus Comp** (MOO-13, `docs/GAIN_STRUCTURE.md`; called that everywhere
+it is shown since MOO-216) is the
 master's own section, drawn in the master's device rack between its inserts
 and its fader, where it runs. Three voicings, each a measured unit's law:
 **Grip** (the SSL G bus), **Punch** (the API-2500) and **Tube** (the
@@ -756,6 +757,16 @@ instead. Threshold, makeup and wet/dry are shared, and each voicing keeps its
 own settings when another is picked. A needle meter reads its gain reduction,
 with a held mark. Out, it leaves the mix bit for bit. It is saved with the
 master's strip.
+
+**The Bus Comp is also an insert** (MOO-216), in the insert menu after Comp,
+so a drum bus, a channel or a container branch can have one. It is the
+master section's compressor, not a copy: the same DSP, the same face
+(needle, voicing switches, per-voicing knobs) in the accent colour, three
+units wide, and the same settings and defaults. Its in/out is the rail's
+bypass, so it has no IN switch, and it has no lookahead. Every knob automates
+and takes modulation, it reports no latency, and it ships a factory bank of
+six (two per voicing). At the end of the master's chain it renders the same
+as the master's section at the same settings, sample for sample.
 
 **The safety limiter's lookahead** (MOO-169) is a small knob on the master's
 Out face, beside its clip lamp: 0 ms by default, which is the zero-latency

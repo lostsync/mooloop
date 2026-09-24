@@ -1416,6 +1416,7 @@ fn effect_kind_slug(kind: EffectKind) -> &'static str {
         EffectKind::Plate => "plate",
         EffectKind::Gate => "gate",
         EffectKind::Compressor => "compressor",
+        EffectKind::BusComp => "bus_comp",
         EffectKind::Limiter => "limiter",
         EffectKind::Buffer => "buffer",
         EffectKind::Chain => "chain",

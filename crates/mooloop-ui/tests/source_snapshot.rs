@@ -663,6 +663,8 @@ fn effect_slot(kind: EffectKind) -> EffectSlotRow {
         output_right_db: -60.0,
         detector_db: -60.0,
         gain_reduction_db: 0.0,
+        bus_comp: Default::default(),
+        held_reduction_db: 0.0,
         children: 0,
         is_container: kind.is_container(),
         label: kind.label().into(),

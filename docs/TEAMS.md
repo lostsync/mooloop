@@ -78,6 +78,7 @@ ids (C2, P4, …) are the report's.
 | The effect host: `EffectChain`/`EffectSlot` (bypass, wet/dry, trims, sleep, container scheduling) | Effects | Engine | It decides most of what is heard at a transition (E2) |
 | A hosted plugin's processor in a chain: built by the rack and swapped into its device's placeholder by `ReplaceEffect` keyed by the plugin's slot | Engine, with Effects owning the `EffectChain` it lands in, unchanged | nobody | MOO-81. The chain hosts it like any node (`replace_if_kind`, `build_effect`'s `PluginPlaceholder`). A plugin inside a container is sized as zero latency until MOO-212 |
 | A hosted plugin's parameter driven by a lane or a route: which ids are driven, their conversion to the plugin's units, and the offset a route sends | Control, with Engine owning the adapter that turns `ParamValue`/`ParamMod` into CLAP events | nobody | MOO-82. `EffectChain::plugin_curves` (in Effects' `EffectChain`) walks the routes and lanes naming the device and resolves each id with `AudioNode::hosted_param`; a lane is a value, a route an offset (`Event::ParamMod`), because the plugin holds the base. A plugin's own edits are undo steps, recorded by the pump around `Session::capture_plugin_edits` |
+| The Bus Comp as an insert: `EffectKind::BusComp`, `BusCompEffect`, its face and bank | Effects, running Mixer's `strip::bus_comp::BusComp` and drawing Mixer's `BusCompPanel` (`master-comp.slint`) unchanged | nothing | MOO-216. One compressor for the master's section and the insert: the insert's ids are the master's moved down (`bus_comp_master_id`), its descriptor table is derived from `MasterSectionParams::descriptors()`, and a change to the law or the panel is Mixer's and reaches both |
 | Output-stage declicking: fader, mute, solo, polarity | Mixer | between Engine and Mixer | M2 fell between the two |
 | The session reconcilers, the channel output verbs, `STRIP_DESCRIPTORS`, `pan_gains`/`balance_gains`, `ui/src/meter.rs` | Mixer | Session, core, dsp, Interface | Mixer state kept outside the mixer |
 | The browser preview voice | Instruments | nobody | It plays files at the wrong pitch (I2) |
@@ -225,8 +226,10 @@ Files marked *shared* are split in the table above.
 - `dsp/src/effects/`, `dsp/src/buffer_device.rs`
 - `core/src/`: `effect.rs`, `effect_factory.rs`, `buffer.rs`
 - `session/src/effects.rs`
-- `engine/src/`: the tests `buffer_workflow_tests.rs`, `container_tests.rs`
-- `ui/ui/`: `bitcrush-device.slint`, `buffer-device.slint`,
+- `engine/src/`: the tests `buffer_workflow_tests.rs`, `container_tests.rs`,
+  `bus_comp_tests.rs`, and the Bus Comp insert's acceptance render
+  `engine/examples/bus_comp_insert.rs` (MOO-216)
+- `ui/ui/`: `bitcrush-device.slint`, `buffer-device.slint`, `bus-comp-device.slint`,
   `compressor-device.slint`, `container-device.slint`, `delay-device.slint`,
   `drive-device.slint`, `eq-device.slint`, `filter-device.slint`,
   `gate-device.slint`, `layer-device.slint`, `limiter-device.slint`,

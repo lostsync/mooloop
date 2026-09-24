@@ -57,6 +57,65 @@ const MAIN_SLINT: &str = include_str!("../ui/main.slint");
 const CONTAINER_SLINT: &str = include_str!("../ui/container-device.slint");
 const LAYER_SLINT: &str = include_str!("../ui/layer-device.slint");
 const AUX_IN_SLINT: &str = include_str!("../ui/aux-in-device.slint");
+const BUS_COMP_SLINT: &str = include_str!("../ui/bus-comp-device.slint");
+
+/// **The Bus Comp insert is the master section's face, and states nothing of
+/// its own** (MOO-216).
+///
+/// It draws `BusCompPanel` from `master-comp.slint`, whose ranges all come
+/// through `StripSpec` (`strip_face.rs` holds that file to declaring none),
+/// so the insert's markup must not spell a bound either. Its ids cross two
+/// spaces -- the panel reports the master's, the rack speaks the insert's --
+/// and each crossing is read here rather than restated: the edit goes to
+/// Rust as a master id, where `bus_comp_edit` resolves it through the table,
+/// and each modulation callback moves the id down by `MasterSpec.voicing`,
+/// which is `bus_comp_master_id` read backwards.
+#[test]
+fn the_bus_comp_face_is_the_master_panel_and_states_nothing() {
+    use mooloop_core::{bus_comp_master_id, strip};
+
+    assert!(BUS_COMP_SLINT.contains("BusCompPanel {"), "the insert draws its own panel");
+    for key in ["minimum:", "maximum:", "default-value:"] {
+        assert!(!BUS_COMP_SLINT.contains(key), "bus-comp-device.slint states a {key}");
+    }
+    for callback in [
+        "modulation-depth-changed(id - MasterSpec.voicing",
+        "modulation-edit-started(id - MasterSpec.voicing",
+        "modulation-edit-finished(id - MasterSpec.voicing",
+    ] {
+        assert!(
+            BUS_COMP_SLINT.contains(callback),
+            "the face no longer moves a modulation id down to the insert's: {callback}"
+        );
+    }
+
+    let index = mooloop_ui::effect_kind_index(EffectKind::BusComp);
+    let header = format!("if slot.kind == {index} : BusCompDeviceFace");
+    let (_, arm) = blocks_after(MAIN_SLINT, &header)
+        .into_iter()
+        .next()
+        .expect("main.slint draws the Bus Comp by its kind's number");
+    assert!(arm.contains("section: slot.bus-comp;"), "the face reads its row");
+    assert!(
+        arm.contains("moved(id, v) => { root.bus-comp-param-changed(index, id, v); }"),
+        "the face's edits no longer reach bus_comp_edit"
+    );
+
+    // The Rust half of the crossing: every insert id round-trips through the
+    // master's, lands on its own descriptor, and normalizes by that table.
+    let table = EffectKind::BusComp.descriptors();
+    for (position, descriptor) in table.iter().enumerate() {
+        let master = bus_comp_master_id(descriptor.id) as i32;
+        let (at, normalized) = mooloop_ui::bus_comp_edit(master, descriptor.max)
+            .unwrap_or_else(|| panic!("{} is not editable from the face", descriptor.name));
+        assert_eq!(at as usize, position, "{}", descriptor.name);
+        assert_eq!(normalized, 1.0, "{}", descriptor.name);
+        let (_, low) = mooloop_ui::bus_comp_edit(master, descriptor.min).unwrap();
+        assert_eq!(low, 0.0, "{}", descriptor.name);
+    }
+    // The master's own IN switch is not the insert's: its bypass is.
+    assert_eq!(mooloop_ui::bus_comp_edit(strip::MASTER_COMP_IN as i32, 1.0), None);
+}
 
 /// A Buffer edit crosses two address spaces in `main.slint`: row fields and
 /// modulation overlays use stable descriptor ids, while
@@ -1168,6 +1227,10 @@ fn face_markup(face: &str) -> (&'static str, &'static str) {
         "BufferDeviceFace" => ("buffer-device.slint", BUFFER_SLINT),
         "ContainerDeviceFace" => ("container-device.slint", CONTAINER_SLINT),
         "LayerDeviceFace" => ("layer-device.slint", LAYER_SLINT),
+        // Reads no `slot.pK` at all: its row is `slot.bus-comp`, in natural
+        // units; `the_bus_comp_face_is_the_master_panel_and_states_nothing`
+        // is where it is held.
+        "BusCompDeviceFace" => ("bus-comp-device.slint", BUS_COMP_SLINT),
         other => panic!("main.slint dispatches to {other}, which this test does not know"),
     }
 }

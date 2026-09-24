@@ -17,6 +17,13 @@ import { StripSpec } from "strip.slint";
 // It is drawn where the engine runs it: after the master's inserts, before
 // its fader. It is the master's own section, not an insert, so it has no
 // rails -- the same absence that says "pinned" on the strip's row.
+//
+// **The Bus Comp insert draws the same panel** (MOO-216, `BusCompPanel`
+// below, used by `bus-comp-device.slint`): one component for both, as one
+// `BusComp` runs both. The panel speaks the master's ids; the insert's are
+// the same moved down to Voicing, and it translates at its own edge. What
+// differs is only what says "this is the master": the warning colour, the
+// IN switch (an insert's in/out is its rail's bypass) and the header.
 
 // The section as the face takes it: positions for the stepped controls,
 // natural units for the rest.
@@ -94,7 +101,17 @@ component MasterKnob inherits VerticalLayout {
     in property <string> hint;
     in property <length> size: 30px;
     in property <bool> enabled: true;
+    in property <color> fill: Theme.warning;
+    // The destination contract, for the insert; the master leaves it unset.
+    in property <bool> modulation-armed;
+    in property <bool> modulation-allowed: true;
+    in property <float> modulation-depth;
+    in property <float> modulation-offset;
+    in property <int> modulation-route-count;
     callback changed(float);
+    callback modulation-depth-changed(float);
+    callback modulation-edit-started();
+    callback modulation-edit-finished();
 
     spacing: 2px;
     alignment: center;
@@ -115,8 +132,16 @@ component MasterKnob inherits VerticalLayout {
             controlled: true;
             enabled: root.enabled;
             value-text: root.readout;
-            fill: Theme.warning;
+            fill: root.fill;
+            modulation-armed: root.modulation-armed;
+            modulation-allowed: root.modulation-allowed;
+            modulation-depth: root.modulation-depth;
+            modulation-offset: root.modulation-offset;
+            modulation-route-count: root.modulation-route-count;
             changed(v) => { root.changed(v); }
+            modulation-depth-changed(v) => { root.modulation-depth-changed(v); }
+            modulation-edit-started => { root.modulation-edit-started(); }
+            modulation-edit-finished => { root.modulation-edit-finished(); }
         }
     }
     Text {
@@ -244,6 +269,250 @@ export component ReductionNeedle inherits Rectangle {
     }
 }
 
+// The section's working face: the needle and the switches on the left, the
+// voicing's own knobs on the right. Drawn by the master (`MasterCompFace`)
+// and by the Bus Comp insert (`bus-comp-device.slint`), so the two cannot
+// come to look or behave differently (MOO-216).
+//
+// Every id it reports is the master's, from `MasterSpec`. The modulation
+// arrays, which only the insert passes, are indexed by the insert's id: the
+// master's moved down to Voicing, which is how `mooloop_core` numbers them
+// (`bus_comp_master_id`).
+export component BusCompPanel inherits HorizontalLayout {
+    in property <MasterRow> section;
+    in property <float> reduction-db;
+    in property <float> held-reduction-db;
+    // Whether the compressor is running: the master's IN switch, and always
+    // for an insert, whose bypass is drawn by its frame.
+    in property <bool> on: root.section.comp-in;
+    in property <bool> in-switch: true;
+    in property <color> fill: Theme.warning;
+    in property <bool> modulation-armed;
+    in property <[bool]> modulation-allowed;
+    in property <[float]> modulation-depths;
+    in property <[float]> modulation-offsets;
+    in property <[int]> modulation-route-counts;
+    callback moved(int, float);
+    callback modulation-depth-changed(int, float);
+    callback modulation-edit-started(int);
+    callback modulation-edit-finished(int);
+
+    private property <bool> tube: root.section.voicing == 2;
+    private property <bool> punch: root.section.voicing == 1;
+
+    // A control's place in the modulation arrays.
+    pure function slot(id: int) -> int {
+        return id - MasterSpec.voicing;
+    }
+    // Allowed unless the caller says otherwise: the master passes no arrays
+    // and its knobs keep MiniKnob's own default.
+    pure function allowed(id: int) -> bool {
+        return root.modulation-allowed.length == 0 ? true
+            : root.modulation-allowed[root.slot(id)];
+    }
+
+    spacing: 10px;
+
+    VerticalLayout {
+        width: 250px;
+        spacing: 6px;
+        ReductionNeedle {
+            vertical-stretch: 1;
+            reduction-db: root.reduction-db;
+            held-db: root.held-reduction-db;
+            active: root.on;
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            height: 26px;
+            if root.in-switch : ToolButton {
+                text: root.on ? "IN" : "OUT";
+                tooltip: root.on ? "In" : "Out";
+                hint: "Run the bus compressor. Out is out: the mix is not touched.";
+                active: root.on;
+                min-width: 44px;
+                max-width: 44px;
+                clicked => { root.moved(MasterSpec.comp-in, root.on ? 0 : 1); }
+            }
+            // Buttons that read the row rather than a bank that holds its
+            // own selection: a bank's click overwrites the binding, and
+            // an undo that moved the voicing would then not move it.
+            HorizontalLayout {
+                spacing: 1px;
+                for label[i] in MasterSpec.voicings : ToolButton {
+                    text: label;
+                    tooltip: label;
+                    hint: "Grip is the SSL bus compressor's law, Punch the API-2500's, "
+                        + "Tube the Fairchild 670's. Each keeps its own settings.";
+                    active: root.section.voicing == i;
+                    min-width: 60px;
+                    max-width: 60px;
+                    clicked => { root.moved(MasterSpec.voicing, i); }
+                }
+            }
+        }
+    }
+
+    VerticalLayout {
+        horizontal-stretch: 1;
+        spacing: 8px;
+        alignment: center;
+        HorizontalLayout {
+            spacing: 24px;
+            alignment: center;
+            MasterKnob {
+                param: MasterSpec.threshold-db;
+                natural: root.section.threshold-db;
+                size: 50px;
+                enabled: root.on;
+                fill: root.fill;
+                readout: GainMath.format-plain-db(root.section.threshold-db) + " dB";
+                hint: "Threshold: where the compressor starts working.";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.allowed(self.param);
+                modulation-depth: root.modulation-depths[root.slot(self.param)];
+                modulation-offset: root.modulation-offsets[root.slot(self.param)];
+                modulation-route-count: root.modulation-route-counts[root.slot(self.param)];
+                changed(v) => { root.moved(self.param, v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(self.param, v); }
+                modulation-edit-started => { root.modulation-edit-started(self.param); }
+                modulation-edit-finished => { root.modulation-edit-finished(self.param); }
+            }
+            if !root.tube : MasterKnob {
+                param: root.punch ? MasterSpec.punch-ratio : MasterSpec.grip-ratio;
+                natural: root.punch ? root.section.punch-ratio : root.section.grip-ratio;
+                size: 50px;
+                enabled: root.on;
+                fill: root.fill;
+                readout: MasterSpec.word(
+                    root.punch ? MasterSpec.punch-ratios : MasterSpec.grip-ratios,
+                    root.punch ? root.section.punch-ratio : root.section.grip-ratio);
+                hint: "Ratio, as the unit's switch reads it; it delivers what it says.";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.allowed(self.param);
+                modulation-depth: root.modulation-depths[root.slot(self.param)];
+                modulation-offset: root.modulation-offsets[root.slot(self.param)];
+                modulation-route-count: root.modulation-route-counts[root.slot(self.param)];
+                changed(v) => { root.moved(self.param, v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(self.param, v); }
+                modulation-edit-started => { root.modulation-edit-started(self.param); }
+                modulation-edit-finished => { root.modulation-edit-finished(self.param); }
+            }
+            if root.tube : MasterKnob {
+                param: MasterSpec.tube-time;
+                natural: root.section.tube-time;
+                size: 50px;
+                enabled: root.on;
+                fill: root.fill;
+                readout: MasterSpec.word(MasterSpec.tube-times, root.section.tube-time);
+                hint: "Time constant: the 670's six coupled attack and release positions, "
+                    + MasterSpec.word(MasterSpec.tube-time-measured, root.section.tube-time)
+                    + ". Five and six release in two stages.";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.allowed(self.param);
+                modulation-depth: root.modulation-depths[root.slot(self.param)];
+                modulation-offset: root.modulation-offsets[root.slot(self.param)];
+                modulation-route-count: root.modulation-route-counts[root.slot(self.param)];
+                changed(v) => { root.moved(self.param, v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(self.param, v); }
+                modulation-edit-started => { root.modulation-edit-started(self.param); }
+                modulation-edit-finished => { root.modulation-edit-finished(self.param); }
+            }
+            MasterKnob {
+                param: MasterSpec.makeup-db;
+                natural: root.section.makeup-db;
+                size: 50px;
+                enabled: root.on;
+                fill: root.fill;
+                readout: GainMath.format-db(root.section.makeup-db);
+                hint: "Makeup gain after the compressor.";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.allowed(self.param);
+                modulation-depth: root.modulation-depths[root.slot(self.param)];
+                modulation-offset: root.modulation-offsets[root.slot(self.param)];
+                modulation-route-count: root.modulation-route-counts[root.slot(self.param)];
+                changed(v) => { root.moved(self.param, v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(self.param, v); }
+                modulation-edit-started => { root.modulation-edit-started(self.param); }
+                modulation-edit-finished => { root.modulation-edit-finished(self.param); }
+            }
+        }
+        HorizontalLayout {
+            spacing: 24px;
+            alignment: center;
+            if !root.tube : MasterKnob {
+                param: root.punch ? MasterSpec.punch-attack : MasterSpec.grip-attack;
+                natural: root.punch ? root.section.punch-attack : root.section.grip-attack;
+                size: 38px;
+                enabled: root.on;
+                fill: root.fill;
+                readout: MasterSpec.word(
+                    root.punch ? MasterSpec.punch-attacks : MasterSpec.grip-attacks,
+                    root.punch ? root.section.punch-attack : root.section.grip-attack);
+                hint: "Attack, as the unit marks it; it measures "
+                    + MasterSpec.word(
+                        root.punch ? MasterSpec.punch-attack-measured
+                            : MasterSpec.grip-attack-measured,
+                        root.punch ? root.section.punch-attack : root.section.grip-attack)
+                    + ".";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.allowed(self.param);
+                modulation-depth: root.modulation-depths[root.slot(self.param)];
+                modulation-offset: root.modulation-offsets[root.slot(self.param)];
+                modulation-route-count: root.modulation-route-counts[root.slot(self.param)];
+                changed(v) => { root.moved(self.param, v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(self.param, v); }
+                modulation-edit-started => { root.modulation-edit-started(self.param); }
+                modulation-edit-finished => { root.modulation-edit-finished(self.param); }
+            }
+            if !root.tube : MasterKnob {
+                param: root.punch ? MasterSpec.punch-release : MasterSpec.grip-release;
+                natural: root.punch ? root.section.punch-release : root.section.grip-release;
+                size: 38px;
+                enabled: root.on;
+                fill: root.fill;
+                readout: MasterSpec.word(
+                    root.punch ? MasterSpec.punch-releases : MasterSpec.grip-releases,
+                    root.punch ? root.section.punch-release : root.section.grip-release);
+                hint: "Release, as the unit marks it; it measures "
+                    + MasterSpec.word(
+                        root.punch ? MasterSpec.punch-release-measured
+                            : MasterSpec.grip-release-measured,
+                        root.punch ? root.section.punch-release : root.section.grip-release)
+                    + ".";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.allowed(self.param);
+                modulation-depth: root.modulation-depths[root.slot(self.param)];
+                modulation-offset: root.modulation-offsets[root.slot(self.param)];
+                modulation-route-count: root.modulation-route-counts[root.slot(self.param)];
+                changed(v) => { root.moved(self.param, v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(self.param, v); }
+                modulation-edit-started => { root.modulation-edit-started(self.param); }
+                modulation-edit-finished => { root.modulation-edit-finished(self.param); }
+            }
+            MasterKnob {
+                param: MasterSpec.mix;
+                natural: root.section.mix;
+                size: 38px;
+                enabled: root.on;
+                fill: root.fill;
+                readout: round(root.section.mix * 100) + "%";
+                hint: "Wet/dry: a parallel balance. At zero this is the mix as it arrived, "
+                    + "exactly.";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.allowed(self.param);
+                modulation-depth: root.modulation-depths[root.slot(self.param)];
+                modulation-offset: root.modulation-offsets[root.slot(self.param)];
+                modulation-route-count: root.modulation-route-counts[root.slot(self.param)];
+                changed(v) => { root.moved(self.param, v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(self.param, v); }
+                modulation-edit-started => { root.modulation-edit-started(self.param); }
+                modulation-edit-finished => { root.modulation-edit-finished(self.param); }
+            }
+        }
+    }
+}
+
 export component MasterCompFace inherits Rectangle {
     in property <MasterRow> section;
     in property <float> reduction-db;
@@ -252,8 +521,6 @@ export component MasterCompFace inherits Rectangle {
     callback moved(int, float);
 
     private property <bool> on: root.section.comp-in;
-    private property <bool> tube: root.section.voicing == 2;
-    private property <bool> punch: root.section.voicing == 1;
 
     width: DeviceRackMetrics.unit-width * 3 + DeviceRackMetrics.half-gap * 2;
     height: DeviceRackMetrics.face-height;
@@ -262,155 +529,22 @@ export component MasterCompFace inherits Rectangle {
     border-color: root.on ? Theme.warning : Theme.border;
     border-radius: Theme.radius-md;
 
-    HorizontalLayout {
+    BusCompPanel {
         x: 8px;
         y: DeviceRackMetrics.header-height + 8px;
         width: parent.width - 16px;
         height: parent.height - DeviceRackMetrics.header-height - 16px;
-        spacing: 10px;
-
-        VerticalLayout {
-            width: 250px;
-            spacing: 6px;
-            ReductionNeedle {
-                vertical-stretch: 1;
-                reduction-db: root.reduction-db;
-                held-db: root.held-reduction-db;
-                active: root.on;
-            }
-            HorizontalLayout {
-                spacing: 6px;
-                height: 26px;
-                ToolButton {
-                    text: root.on ? "IN" : "OUT";
-                    tooltip: root.on ? "In" : "Out";
-                    hint: "Run the master bus compressor. Out is out: the mix is not touched.";
-                    active: root.on;
-                    min-width: 44px;
-                    max-width: 44px;
-                    clicked => { root.moved(MasterSpec.comp-in, root.on ? 0 : 1); }
-                }
-                // Buttons that read the row rather than a bank that holds its
-                // own selection: a bank's click overwrites the binding, and
-                // an undo that moved the voicing would then not move it.
-                HorizontalLayout {
-                    spacing: 1px;
-                    for label[i] in MasterSpec.voicings : ToolButton {
-                        text: label;
-                        tooltip: label;
-                        hint: "Grip is the SSL bus compressor's law, Punch the API-2500's, "
-                            + "Tube the Fairchild 670's. Each keeps its own settings.";
-                        active: root.section.voicing == i;
-                        min-width: 60px;
-                        max-width: 60px;
-                        clicked => { root.moved(MasterSpec.voicing, i); }
-                    }
-                }
-            }
-        }
-
-        VerticalLayout {
-            horizontal-stretch: 1;
-            spacing: 8px;
-            alignment: center;
-            HorizontalLayout {
-                spacing: 24px;
-                alignment: center;
-                MasterKnob {
-                    param: MasterSpec.threshold-db;
-                    natural: root.section.threshold-db;
-                    size: 50px;
-                    enabled: root.on;
-                    readout: GainMath.format-plain-db(root.section.threshold-db) + " dB";
-                    hint: "Threshold: where the compressor starts working.";
-                    changed(v) => { root.moved(self.param, v); }
-                }
-                if !root.tube : MasterKnob {
-                    param: root.punch ? MasterSpec.punch-ratio : MasterSpec.grip-ratio;
-                    natural: root.punch ? root.section.punch-ratio : root.section.grip-ratio;
-                    size: 50px;
-                    enabled: root.on;
-                    readout: MasterSpec.word(
-                        root.punch ? MasterSpec.punch-ratios : MasterSpec.grip-ratios,
-                        root.punch ? root.section.punch-ratio : root.section.grip-ratio);
-                    hint: "Ratio, as the unit's switch reads it; it delivers what it says.";
-                    changed(v) => { root.moved(self.param, v); }
-                }
-                if root.tube : MasterKnob {
-                    param: MasterSpec.tube-time;
-                    natural: root.section.tube-time;
-                    size: 50px;
-                    enabled: root.on;
-                    readout: MasterSpec.word(MasterSpec.tube-times, root.section.tube-time);
-                    hint: "Time constant: the 670's six coupled attack and release positions, "
-                        + MasterSpec.word(MasterSpec.tube-time-measured, root.section.tube-time)
-                        + ". Five and six release in two stages.";
-                    changed(v) => { root.moved(self.param, v); }
-                }
-                MasterKnob {
-                    param: MasterSpec.makeup-db;
-                    natural: root.section.makeup-db;
-                    size: 50px;
-                    enabled: root.on;
-                    readout: GainMath.format-db(root.section.makeup-db);
-                    hint: "Makeup gain after the compressor.";
-                    changed(v) => { root.moved(self.param, v); }
-                }
-            }
-            HorizontalLayout {
-                spacing: 24px;
-                alignment: center;
-                if !root.tube : MasterKnob {
-                    param: root.punch ? MasterSpec.punch-attack : MasterSpec.grip-attack;
-                    natural: root.punch ? root.section.punch-attack : root.section.grip-attack;
-                    size: 38px;
-                    enabled: root.on;
-                    readout: MasterSpec.word(
-                        root.punch ? MasterSpec.punch-attacks : MasterSpec.grip-attacks,
-                        root.punch ? root.section.punch-attack : root.section.grip-attack);
-                    hint: "Attack, as the unit marks it; it measures "
-                        + MasterSpec.word(
-                            root.punch ? MasterSpec.punch-attack-measured
-                                : MasterSpec.grip-attack-measured,
-                            root.punch ? root.section.punch-attack : root.section.grip-attack)
-                        + ".";
-                    changed(v) => { root.moved(self.param, v); }
-                }
-                if !root.tube : MasterKnob {
-                    param: root.punch ? MasterSpec.punch-release : MasterSpec.grip-release;
-                    natural: root.punch ? root.section.punch-release : root.section.grip-release;
-                    size: 38px;
-                    enabled: root.on;
-                    readout: MasterSpec.word(
-                        root.punch ? MasterSpec.punch-releases : MasterSpec.grip-releases,
-                        root.punch ? root.section.punch-release : root.section.grip-release);
-                    hint: "Release, as the unit marks it; it measures "
-                        + MasterSpec.word(
-                            root.punch ? MasterSpec.punch-release-measured
-                                : MasterSpec.grip-release-measured,
-                            root.punch ? root.section.punch-release : root.section.grip-release)
-                        + ".";
-                    changed(v) => { root.moved(self.param, v); }
-                }
-                MasterKnob {
-                    param: MasterSpec.mix;
-                    natural: root.section.mix;
-                    size: 38px;
-                    enabled: root.on;
-                    readout: round(root.section.mix * 100) + "%";
-                    hint: "Wet/dry: a parallel balance. At zero this is the mix as it arrived, "
-                        + "exactly.";
-                    changed(v) => { root.moved(self.param, v); }
-                }
-            }
-        }
+        section: root.section;
+        reduction-db: root.reduction-db;
+        held-reduction-db: root.held-reduction-db;
+        moved(id, value) => { root.moved(id, value); }
     }
 
     DeviceHeader {
         x: 0px;
         y: 0px;
         width: parent.width;
-        name: "Bus comp";
+        name: "Bus Comp";
         kind: "MASTER / 3U";
         role: "COMP";
         device-color: Theme.warning;
