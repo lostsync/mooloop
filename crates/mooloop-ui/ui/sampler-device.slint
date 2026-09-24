@@ -1,4 +1,4 @@
-import { Theme } from "theme.slint";
+import { Theme, StatusHint } from "theme.slint";
 import { CutoffLaw, KnobField, MiniKnob, NoteFormat, ParameterKnob, SelectorBank, TimeFormat, ToggleButton, ToolButton, TrimKnob, ValueScale, ZoomScrollBar } from "controls.slint";
 import { GainMath } from "gain.slint";
 import { DevicePageButton } from "device-rack.slint";
@@ -232,6 +232,12 @@ export component SamplerDeviceFace inherits Rectangle {
     in property <float> loop-fade-start;
     in property <float> loop-fade-end;
     in property <bool> loop-fade-shown;
+    // What fit-to-tempo is doing, in words Rust writes (MOO-39): the loop's
+    // own length and tempo, and what it is fitted to. `warning` is set when
+    // the bar count looks wrong, and `hint` then says why in the status bar.
+    in property <string> stretch-fit-label;
+    in property <bool> stretch-fit-warning;
+    in property <string> stretch-fit-hint;
     // Whether a note transposes the region or picks a slice out of it.
     in-out property <int> play-mode;
     // The note that plays slice 0; each semitone above steps one slice on.
@@ -954,6 +960,26 @@ export component SamplerDeviceFace inherits Rectangle {
                         color: Theme.text-faint;
                         font-size: Theme.text-sm;
                         height: 10px;
+                    }
+                    // Synced, the ratio is derived, so what is worth reading
+                    // is where it came from: the loop's own length and tempo
+                    // and what it now lasts. In the warning colour when the
+                    // bar count gives the loop an unlikely tempo.
+                    if root.stretch-sync : Rectangle {
+                        height: 10px;
+                        Text {
+                            width: 100%;
+                            text: root.stretch-fit-label;
+                            color: root.stretch-fit-warning ? Theme.warning : Theme.text-faint;
+                            font-size: Theme.text-sm;
+                            overflow: elide;
+                        }
+                        TouchArea {
+                            changed has-hover => {
+                                if (self.has-hover) { StatusHint.show(root.stretch-fit-hint); }
+                                else { StatusHint.clear(root.stretch-fit-hint); }
+                            }
+                        }
                     }
                     Rectangle { vertical-stretch: 1; }
                     // Committing bakes the stretch into the buffer, after

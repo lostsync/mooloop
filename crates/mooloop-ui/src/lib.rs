@@ -72,8 +72,8 @@ use mooloop_core::{
     MAX_CHANNELS, MAX_MODULATORS_PER_CHANNEL,
     MAX_MOD_ROUTES_PER_CHANNEL,
     MOD_STEP_MAX_STEPS,
-    MAX_SAMPLER_VOICES, MAX_STRETCH_BARS, MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO,
-    MIN_STRETCH_BARS, MIN_STRETCH_GRAIN, MIN_STRETCH_RATIO,
+    MAX_SAMPLER_VOICES, MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO,
+    MIN_STRETCH_GRAIN, MIN_STRETCH_RATIO,
     MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS,
     MAX_POLY_VOICES, STRIP_DESCRIPTORS,
     TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
@@ -122,7 +122,8 @@ use mooloop_session::project::{
     fresh_starter_seed, normalize_project_pattern_banks, HistoryMove, ProjectEdit, ProjectSnapshot,
 };
 use mooloop_session::sampler::{
-    commit_is_stale, slice_fractions, snap_marker, snap_status, SampleMarker, SliceEdit,
+    commit_is_stale, fit_readout, slice_fractions, snap_marker, snap_status, typed_bars,
+    SampleMarker, SliceEdit,
 };
 use mooloop_session::sample::{
     adjacent_sample, inspect_sample, load_sample_at_path, sample_description, sample_duration,
@@ -6218,6 +6219,43 @@ impl UiState {
         window.set_midi_channel_index(channel.midi_input.channel.row() as i32);
     }
 
+    /// Fit-to-tempo's readout (MOO-39): the loop's own length and tempo,
+    /// what it lasts fitted, and a warning when the bar count looks wrong.
+    fn publish_fit_readout(window: &MainWindow, channel: &ChannelState, bpm: f64) {
+        let params = channel.sampler_params();
+        let readout = channel
+            .published_sample()
+            .and_then(|sample| fit_readout(&params, sample, bpm));
+        let Some(readout) = readout else {
+            window.set_stretch_fit_label("".into());
+            window.set_stretch_fit_warning(false);
+            window.set_stretch_fit_hint("".into());
+            return;
+        };
+        window.set_stretch_fit_label(
+            format!(
+                "{:.2} s at {:.1} BPM \u{2192} {:.2} s",
+                readout.source_seconds, readout.source_bpm, readout.fitted_seconds
+            )
+            .into(),
+        );
+        window.set_stretch_fit_warning(readout.doubt.is_some());
+        window.set_stretch_fit_hint(
+            readout
+                .doubt
+                .unwrap_or_else(|| {
+                    format!(
+                        "The loop is {:.2} s at {:.1} BPM, fitted to {:.2} s ({:.2}x)",
+                        readout.source_seconds,
+                        readout.source_bpm,
+                        readout.fitted_seconds,
+                        readout.ratio
+                    )
+                })
+                .into(),
+        );
+    }
+
     /// The loop fade's knob, readout and span (MOO-43). Its own function
     /// because the span moves whenever the loop does, so the loop's handlers
     /// republish it without a whole editor refresh.
@@ -6577,6 +6615,7 @@ impl UiState {
         window.set_stretch_bars(stretch_bars_to_norm(p.stretch_bars));
         window.set_stretch_bars_label(format_bars(p.stretch_bars).into());
         Self::publish_loop_fade(window, ch);
+        Self::publish_fit_readout(window, ch, window.get_bpm() as f64);
         window.set_filter_cutoff(p.filter_cutoff);
         window.set_filter_resonance(p.filter_resonance);
         window.set_filter_env((p.filter_env_amount + 1.0) * 0.5);
@@ -8669,6 +8708,7 @@ impl AppUi {
                                     .as_ref()
                                     .is_some_and(|commit| commit_is_stale(channel, commit, bpm)),
                             );
+                            UiState::publish_fit_readout(&window, channel, bpm);
                         }
                     }
                     true
@@ -12914,6 +12954,7 @@ impl AppUi {
                         let st = st.borrow();
                         if let Some(channel) = st.session.channels.get(st.session.selected) {
                             UiState::publish_loop_fade(&window, channel);
+                            UiState::publish_fit_readout(&window, channel, window.get_bpm() as f64);
                         }
                     }
                     if let Some(status) = status {
@@ -13772,19 +13813,31 @@ impl AppUi {
             let st = state.clone();
             window.on_stretch_sync_changed(move |on| {
                 let Some(window) = weak.upgrade() else { return };
+                // Off freezes the ratio SYNC was running into the knob, in
+                // the same undo step (MOO-39).
+                let bpm = window.get_bpm() as f64;
+                let mut changed = None;
                 with_gesture_history(&st, &commands, &window, "Stretch sync", || {
                     let mut st = st.borrow_mut();
                     let channel_index = st.session.selected;
-                    let channel = &mut st.session.channels[channel_index];
-                    if let Some(p) = channel.sampler_params_mut() {
-                        p.stretch_sync = on;
-                    }
+                    let Some(params) = st.session.set_stretch_sync(on, bpm) else {
+                        return false;
+                    };
                     let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                         channel: channel_index as u8,
-                        params: channel.sampler_params(),
+                        params,
                     });
+                    changed = Some(params);
                     true
                 });
+                if let Some(params) = changed {
+                    window.set_stretch_ratio(stretch_ratio_to_norm(params.stretch_ratio));
+                    window.set_stretch_ratio_label(format!("{:.2}x", params.stretch_ratio).into());
+                    let st = st.borrow();
+                    if let Some(channel) = st.session.channels.get(st.session.selected) {
+                        UiState::publish_fit_readout(&window, channel, bpm);
+                    }
+                }
             });
         }
 
@@ -13809,6 +13862,7 @@ impl AppUi {
                     });
                     if let Some(window) = weak.upgrade() {
                         window.set_stretch_bars_label(format_bars(bars).into());
+                        UiState::publish_fit_readout(&window, channel, window.get_bpm() as f64);
                     }
                     true
                 });
@@ -13859,9 +13913,43 @@ impl AppUi {
         wire_typed_stretch_field!(on_stretch_ratio_typed, |p: &mut SamplerParams, v: f32| {
             p.stretch_ratio = v.clamp(MIN_STRETCH_RATIO, MAX_STRETCH_RATIO);
         });
-        wire_typed_stretch_field!(on_stretch_bars_typed, |p: &mut SamplerParams, v: f32| {
-            p.stretch_bars = v.clamp(MIN_STRETCH_BARS, MAX_STRETCH_BARS);
-        });
+        {
+            // Bars, or the loop's own tempo: "96 bpm" is read as the tempo
+            // the fitted span is `stretch_bars` bars at, and turned into the
+            // bar count that says so (MOO-39). The conversion needs the
+            // sample, which is why this is not the macro above.
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_stretch_bars_typed(move |text| {
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Typed value", || {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    let was = channel.sampler_params();
+                    let sample = channel.published_sample().map(|sample| sample.as_ref());
+                    let Some(bars) = typed_bars(&was, sample, text.as_str())
+                    else {
+                        return false;
+                    };
+                    let Some(params) = channel.sampler_params_mut() else {
+                        return false;
+                    };
+                    params.stretch_bars = bars;
+                    if channel.sampler_params() == was {
+                        return false;
+                    }
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: channel_index as u8,
+                        params: channel.sampler_params(),
+                    });
+                    true
+                });
+                st.borrow().refresh_editor(&window);
+            });
+        }
         wire_typed_stretch_field!(on_stretch_grain_typed, |p: &mut SamplerParams, v: f32| {
             p.stretch_grain = (v.round() as i32)
                 .clamp(i32::from(MIN_STRETCH_GRAIN), i32::from(MAX_STRETCH_GRAIN))

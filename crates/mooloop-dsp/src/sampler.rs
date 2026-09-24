@@ -743,11 +743,7 @@ impl Sampler {
         if !params.stretch_sync {
             return f64::from(params.stretch_ratio);
         }
-        let (region_start, region_end) = if Self::fits_the_playback_region(params) {
-            Self::resolve_playback_bounds(params, len, None)
-        } else {
-            Self::resolve_loop_bounds(params, len, None)
-        };
+        let (region_start, region_end) = Self::fitted_span(params, len);
         let region = region_end - region_start;
         if region <= 0.0 {
             return 1.0;
@@ -762,6 +758,41 @@ impl Sampler {
             f64::from(mooloop_core::MIN_STRETCH_RATIO),
             f64::from(mooloop_core::MAX_STRETCH_RATIO),
         )
+    }
+
+    /// The ratio fit-to-tempo runs for a note at the root key and the
+    /// current tune: what turning SYNC off freezes into the ratio knob
+    /// (MOO-39, Adam 2026-09-24), so nothing jumps at the switch.
+    ///
+    /// Measured in the sample's own frames at its own rate, which is what the
+    /// live derivation reduces to at the root key. A transposed note ran a
+    /// different ratio under SYNC, because that ratio follows the pitch.
+    /// After the freeze it runs this one, and it plays shorter or longer,
+    /// which is what a fixed ratio means.
+    pub fn synced_ratio(params: SamplerParams, sample: &SampleData, bpm: f64) -> f32 {
+        let params = SamplerParams {
+            stretch_sync: true,
+            ..params
+        };
+        Self::effective_ratio(
+            params,
+            sample.len(),
+            sample.sample_rate,
+            bpm,
+            tuning_ratio(params),
+        ) as f32
+    }
+
+    /// The source frames fit-to-tempo lays against the grid, resolved the
+    /// way the voice resolves them: the loop when there is one, the playback
+    /// region otherwise (see [`Self::fits_the_playback_region`]). Public so
+    /// the face's readout (MOO-39) measures the span the derivation does.
+    pub fn fitted_span(params: SamplerParams, len: usize) -> (f64, f64) {
+        if Self::fits_the_playback_region(params) {
+            Self::resolve_playback_bounds(params, len, None)
+        } else {
+            Self::resolve_loop_bounds(params, len, None)
+        }
     }
 
     /// Which span fit-to-tempo measures: the playback region, or the loop.
@@ -1901,17 +1932,43 @@ mod tests {
         }
     }
 
-    /// With sync off the knob is the ratio, untouched.
+    /// With sync off the knob is the ratio, untouched. Turning SYNC off
+    /// writes the ratio it was running into that knob first (MOO-39), so
+    /// the knob a voice reads afterwards is `synced_ratio`: the same number
+    /// the root key was playing at, at the same tune.
     #[test]
-    fn without_sync_the_ratio_is_the_knob() {
-        let params = SamplerParams {
+    fn without_sync_the_ratio_is_the_knob_sync_left_behind() {
+        let synced = SamplerParams {
             stretch_enabled: true,
-            stretch_sync: false,
-            stretch_ratio: 3.25,
+            stretch_sync: true,
+            stretch_bars: 2.0,
+            tune_semitones: 3.0,
             ..SamplerParams::default()
         };
-        let ratio = Sampler::effective_ratio(params, 48_000, 48_000, 120.0, 2.0);
-        assert!((ratio - 3.25).abs() < 1.0e-6, "the rate leaked in: {ratio}");
+        let sample = SampleData {
+            frames: vec![[0.0, 0.0]; 90_000],
+            sample_rate: 48_000,
+            root_note: 60,
+        };
+        let running = Sampler::effective_ratio(
+            synced,
+            sample.len(),
+            48_000,
+            120.0,
+            tuning_ratio(synced),
+        );
+        let frozen = Sampler::synced_ratio(synced, &sample, 120.0);
+        assert!(
+            (f64::from(frozen) - running).abs() < 1.0e-6,
+            "froze {frozen}, was running {running}"
+        );
+        let unsynced = SamplerParams {
+            stretch_sync: false,
+            stretch_ratio: frozen,
+            ..synced
+        };
+        let ratio = Sampler::effective_ratio(unsynced, sample.len(), 48_000, 120.0, 2.0);
+        assert!((ratio - f64::from(frozen)).abs() < 1.0e-6, "the rate leaked in: {ratio}");
     }
 
     /// The loop is what gets fitted when there is one, since the loop is the

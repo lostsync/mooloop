@@ -2043,6 +2043,10 @@ export component MainWindow inherits Window {
     in-out property <bool> stretch-sync;
     in-out property <float> stretch-bars: 0.4;
     in-out property <string> stretch-bars-label;
+    // Fit-to-tempo's readout (MOO-39), written by Rust.
+    in-out property <string> stretch-fit-label;
+    in-out property <bool> stretch-fit-warning;
+    in-out property <string> stretch-fit-hint;
     in-out property <string> sample-name;
     in-out property <string> sample-description;
     in-out property <float> sample-duration;
@@ -4347,6 +4351,9 @@ export component MainWindow inherits Window {
                                                 stretch-sync <=> root.stretch-sync;
                                                 stretch-bars <=> root.stretch-bars;
                                                 stretch-bars-label <=> root.stretch-bars-label;
+                                                stretch-fit-label: root.stretch-fit-label;
+                                                stretch-fit-warning: root.stretch-fit-warning;
+                                                stretch-fit-hint: root.stretch-fit-hint;
                                                 sample-name <=> root.sample-name;
                                                 sample-description <=> root.sample-description;
                                                 waveform <=> root.waveform;

@@ -14,7 +14,10 @@ use mooloop_dsp::sample_analysis::{
     SnapResult, DEFAULT_SNAP_WINDOW_MS,
 };
 use mooloop_dsp::SampleData;
-use mooloop_core::{EngineCommand, SampleCommit, SamplerParams, SliceMarker, StretchMode, MAX_SLICES};
+use mooloop_core::{
+    EngineCommand, SampleCommit, SamplerParams, SliceMarker, StretchMode, MAX_SLICES,
+    MAX_STRETCH_BARS, MAX_STRETCH_RATIO, MIN_STRETCH_BARS, MIN_STRETCH_RATIO,
+};
 
 /// What a slice edit did.
 pub enum SliceEdit {
@@ -119,6 +122,95 @@ pub fn commit_is_stale(channel: &ChannelState, commit: &SampleCommit, bpm: f64) 
         1.0,
     );
     (now - f64::from(commit.ratio)).abs() > 1.0e-3
+}
+
+/// What fit-to-tempo is doing, in words for the face (MOO-39): the fitted
+/// span's own length and the tempo that makes it `stretch_bars` bars, and
+/// what it lasts at the project's tempo.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FitReadout {
+    /// The span fit-to-tempo measures, in seconds of the sample's own time.
+    pub source_seconds: f64,
+    /// The tempo at which that span is `stretch_bars` bars long.
+    pub source_bpm: f64,
+    /// How long it lasts fitted, at the project tempo.
+    pub fitted_seconds: f64,
+    /// The ratio the root key runs.
+    pub ratio: f32,
+    /// Why the fit can't be trusted, if it can't: a readable sentence for the
+    /// status bar, and the face shows the line in the warning colour.
+    pub doubt: Option<String>,
+}
+
+/// The tempo band a loop's own tempo is believed in. Outside it, the bar
+/// count is more likely wrong than the loop is that fast or slow.
+const PLAUSIBLE_BPM: std::ops::RangeInclusive<f64> = 60.0..=200.0;
+
+/// Reads a sampler's fit, or `None` with no audio.
+pub fn fit_readout(params: &SamplerParams, sample: &SampleData, bpm: f64) -> Option<FitReadout> {
+    let len = sample.frames.len();
+    if len == 0 || sample.sample_rate == 0 {
+        return None;
+    }
+    let (start, end) = mooloop_dsp::Sampler::fitted_span(*params, len);
+    let rate = f64::from(sample.sample_rate);
+    let source_seconds = (end - start) / rate;
+    let bars = f64::from(params.stretch_bars.clamp(MIN_STRETCH_BARS, MAX_STRETCH_BARS));
+    // A bar at 1 BPM, in seconds, from the one function that knows how many
+    // beats a bar has.
+    let bar_at_one = mooloop_core::frames_per_bar(sample.sample_rate, 1.0) / rate;
+    let source_bpm = bars * bar_at_one / source_seconds;
+    let fitted_seconds = bars * bar_at_one / bpm;
+    let ratio = mooloop_dsp::Sampler::synced_ratio(*params, sample, bpm);
+    let doubt = if ratio <= MIN_STRETCH_RATIO || ratio >= MAX_STRETCH_RATIO {
+        Some(format!(
+            "Fitting {bars} bars to {bpm:.0} BPM needs more stretch than the sampler has; check the bar count"
+        ))
+    } else if !PLAUSIBLE_BPM.contains(&source_bpm) {
+        // The nearest power-of-two bar count, either way, that lands in
+        // the band.
+        let suggestion = [0.5, 2.0, 0.25, 4.0, 0.125, 8.0]
+            .into_iter()
+            .map(|factor| bars * factor)
+            .find(|candidate| PLAUSIBLE_BPM.contains(&(candidate * bar_at_one / source_seconds)));
+        Some(match suggestion {
+            Some(better) => format!(
+                "{bars} bars makes this loop {source_bpm:.0} BPM; {better} bars would be {:.0}",
+                better * bar_at_one / source_seconds
+            ),
+            None => format!("{bars} bars makes this loop {source_bpm:.0} BPM"),
+        })
+    } else {
+        None
+    };
+    Some(FitReadout {
+        source_seconds,
+        source_bpm,
+        fitted_seconds,
+        ratio,
+        doubt,
+    })
+}
+
+/// What the Bars field means by `text` (MOO-39): a bar count, or with "bpm"
+/// after it, the loop's own tempo, turned into the bar count that makes the
+/// fitted span last that many bars at that tempo. `None` for text that
+/// isn't a number, or a tempo with no audio to measure.
+pub fn typed_bars(params: &SamplerParams, sample: Option<&SampleData>, text: &str) -> Option<f32> {
+    let value = crate::values::parse_typed_value(text)?;
+    if !text.to_ascii_lowercase().contains("bpm") {
+        return Some(value.clamp(MIN_STRETCH_BARS, MAX_STRETCH_BARS));
+    }
+    let sample = sample?;
+    let len = sample.frames.len();
+    if len == 0 || sample.sample_rate == 0 || value <= 0.0 {
+        return None;
+    }
+    let (start, end) = mooloop_dsp::Sampler::fitted_span(*params, len);
+    let rate = f64::from(sample.sample_rate);
+    let bar = mooloop_core::frames_per_bar(sample.sample_rate, f64::from(value)) / rate;
+    let bars = ((end - start) / rate / bar) as f32;
+    Some(bars.clamp(MIN_STRETCH_BARS, MAX_STRETCH_BARS))
 }
 
 /// One of the four draggable positions on the waveform.
@@ -315,6 +407,36 @@ impl Session {
         Some(markers)
     }
 
+    /// Turns fit-to-tempo on or off for the selected channel (MOO-39).
+    ///
+    /// Off *freezes* the ratio SYNC was running into the ratio knob (Adam,
+    /// 2026-09-24), so the loop keeps sounding the same until the knob is
+    /// touched. The caller records the whole change as one undo step. `None`
+    /// when nothing changed.
+    pub fn set_stretch_sync(&mut self, on: bool, bpm: f64) -> Option<SamplerParams> {
+        let (_, channel) = self.sliced_channel()?;
+        let before = channel.sampler_params();
+        if before.stretch_sync == on {
+            return None;
+        }
+        let frozen = if on {
+            None
+        } else {
+            channel
+                .published_sample()
+                .map(|sample| mooloop_dsp::Sampler::synced_ratio(before, sample, bpm))
+        };
+        let params = channel.sampler_params_mut()?;
+        params.stretch_sync = on;
+        if let Some(ratio) = frozen {
+            params.stretch_ratio =
+                ratio.clamp(mooloop_core::MIN_STRETCH_RATIO, mooloop_core::MAX_STRETCH_RATIO);
+        }
+        let after = *params;
+        self.mark_dirty();
+        Some(after)
+    }
+
     /// Empties the slice map.
     pub fn clear_slices(&mut self) -> Option<Vec<f32>> {
         let (_, channel) = self.sliced_channel()?;
@@ -456,6 +578,79 @@ mod tests {
             root_note: 60,
         }));
         session
+    }
+
+    /// The readout says what the fit is doing: a one-second loop called one
+    /// bar is a 240 BPM loop, too fast to believe, so the readout doubts it
+    /// and names the bar count that would put it in range. Called half a bar
+    /// it is 120 BPM, and fitted to half a bar at the project's tempo.
+    #[test]
+    fn the_fit_readout_says_what_the_loop_is_and_doubts_a_wild_tempo() {
+        let session = session_with_audio();
+        let sample = session.channels[0].published_sample().cloned().expect("audio");
+        let mut params = SamplerParams {
+            stretch_enabled: true,
+            stretch_sync: true,
+            stretch_bars: 1.0,
+            ..SamplerParams::default()
+        };
+        let wild = fit_readout(&params, &sample, 100.0).expect("a readout");
+        assert!((wild.source_seconds - 1.0).abs() < 1.0e-9);
+        assert!((wild.source_bpm - 240.0).abs() < 1.0e-6, "{}", wild.source_bpm);
+        let doubt = wild.doubt.expect("240 BPM should be doubted");
+        assert!(doubt.contains("0.5 bars"), "{doubt}");
+
+        params.stretch_bars = 0.5;
+        let sane = fit_readout(&params, &sample, 100.0).expect("a readout");
+        assert!((sane.source_bpm - 120.0).abs() < 1.0e-6);
+        assert!(sane.doubt.is_none(), "{:?}", sane.doubt);
+        // Half a bar at 100 BPM is 1.2 s.
+        assert!((sane.fitted_seconds - 1.2).abs() < 1.0e-9, "{}", sane.fitted_seconds);
+    }
+
+    /// The Bars field takes the loop's own tempo too: a one-second loop at
+    /// 120 BPM is half a bar, and a plain number is still a bar count.
+    #[test]
+    fn a_typed_tempo_becomes_the_bar_count_that_matches_it() {
+        let session = session_with_audio();
+        let sample = session.channels[0].published_sample().cloned().expect("audio");
+        let params = SamplerParams::default();
+        assert_eq!(typed_bars(&params, Some(sample.as_ref()), "120 bpm"), Some(0.5));
+        assert_eq!(typed_bars(&params, Some(sample.as_ref()), "60BPM"), Some(0.25));
+        assert_eq!(typed_bars(&params, Some(sample.as_ref()), "4"), Some(4.0));
+        assert_eq!(typed_bars(&params, None, "120 bpm"), None, "no audio to measure");
+        assert_eq!(typed_bars(&params, Some(sample.as_ref()), "fast"), None);
+    }
+
+    /// Turning SYNC off freezes the ratio it was running into the knob
+    /// (MOO-39), so the stretch the loop plays at doesn't move at the switch;
+    /// turning it back on leaves the knob alone.
+    #[test]
+    fn turning_sync_off_freezes_the_ratio_it_was_running() {
+        let mut session = session_with_audio();
+        if let Some(params) = session.channels[0].sampler_params_mut() {
+            params.stretch_enabled = true;
+            params.stretch_sync = true;
+            params.stretch_bars = 1.0;
+            params.stretch_ratio = 1.0;
+        }
+        let bpm = 90.0;
+        let sample = session.channels[0].published_sample().cloned().expect("audio");
+        let running =
+            mooloop_dsp::Sampler::synced_ratio(session.channels[0].sampler_params(), &sample, bpm);
+        // One second of audio as one bar at 90 BPM (2.667 s) is a real
+        // stretch, so a frozen 1.0 could not pass by accident.
+        assert!((running - 1.0).abs() > 0.5, "the premise: {running}");
+
+        let off = session.set_stretch_sync(false, bpm).expect("a change");
+        assert!(!off.stretch_sync);
+        assert_eq!(off.stretch_ratio, running);
+        assert!(session.dirty);
+        assert!(session.set_stretch_sync(false, bpm).is_none(), "already off");
+
+        let on = session.set_stretch_sync(true, 140.0).expect("a change");
+        assert!(on.stretch_sync);
+        assert_eq!(on.stretch_ratio, running, "turning SYNC on moved the knob");
     }
 
     /// Markers are reported as fractions of the published buffer, which is

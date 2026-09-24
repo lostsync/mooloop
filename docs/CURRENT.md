@@ -976,6 +976,18 @@ boundary.
   is never more than half the loop, and 0 ms (the default, and every song
   saved before) is the hard seam, bit for bit. The fade is a descriptor, so
   it can be automated and modulated.
+- **Fit to tempo says what it's doing, and SYNC off keeps the sound**
+  (MOO-39, 2026-09-24). With SYNC on, a line under Bars reads the loop's own
+  length and tempo and what it lasts fitted, for example "1.00 s at 120.0
+  BPM → 2.00 s". It turns the warning colour when the bar count gives the
+  loop a tempo outside 60-200 BPM, or needs more stretch than the sampler
+  has, and the status bar then says why and suggests a bar count. The Bars
+  field also takes the loop's own tempo, "96 bpm", and turns it into bars.
+  Turning SYNC off writes the ratio it was running into the Speed knob, in
+  the same undo step, so the loop keeps sounding the same until the knob is
+  touched. That ratio is the root key's at the current tune; a transposed
+  note plays shorter or longer from then on, which is what a fixed ratio
+  means. A fitted loop renders the same offline as live.
 - Sampler voice allocation is fixed-capacity and deterministic: restart reuses
   the oldest matching pitch, layer mode overlaps notes, and overflow steals
   a releasing voice before a held one, the oldest of either. The sampler, the
