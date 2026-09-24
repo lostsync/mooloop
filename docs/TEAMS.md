@@ -206,7 +206,7 @@ Files marked *shared* are split in the table above.
   `mlp8_factory.rs`, `aux_in.rs`, `input.rs`
 - `session/src/`: `audio_file.rs`, `sample.rs`, `sampler.rs`, and the listening
   render `session/examples/slice_pattern_case.rs` (MOO-46)
-- `engine/src/ds01_tests.rs`, and the listening renders
+- `engine/src/ds01_tests.rs`, `engine/src/sampler_tests.rs` (MOO-39), and the listening renders
   `engine/examples/mlp8_volume_pump.rs` (MOO-214),
   `engine/examples/sampler_loop_seam.rs` (MOO-43),
   `engine/examples/sampler_fit_freeze.rs` (MOO-39),
