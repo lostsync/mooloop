@@ -308,6 +308,15 @@ pub(crate) static ACTIONS: &[ActionSpec] = &[
     action!("view.pane-notes", "Show Notes", "View", ctrl + "4"),
     action!("view.pane-playlist", "Show Playlist", "View", ctrl + "5"),
     action!("view.split-toggle", "Split Top Pane", "View", ctrl + "\\"),
+    // The left sidebar (MOO-8), which only the status-bar chip could show
+    // before. Ctrl+[ because it opens on the left; `]` is free for the
+    // browser on the right if that ever wants a toggle of its own.
+    action!(
+        "view.channel-sidebar-toggle",
+        "Toggle Channel Sidebar",
+        "View",
+        ctrl + "["
+    ),
     // Same key as the split, because they are the two questions about a
     // pane's size and answering them from one place is easier to remember
     // than two unrelated chords.

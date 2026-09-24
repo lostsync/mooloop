@@ -32,7 +32,7 @@
 // list, which is the fault `AGENTS.md` opens on.
 
 import { Theme } from "theme.slint";
-import { PeakMeter, SectionLabel, ToggleButton } from "controls.slint";
+import { MiniKnob, MuteButton, PeakMeter, SectionLabel, SoloButton, ToggleButton, TrimKnob } from "controls.slint";
 import { GainMath } from "gain.slint";
 import { MenuField, NameField } from "toolbar.slint";
 import { ColorChipButton, ColorChoice } from "color-picker.slint";
@@ -110,6 +110,22 @@ export component ChannelSidebar inherits Rectangle {
     in property <bool> audio-monitor;
     in property <float> audio-input-level-db: GainMath.min-db;
     in property <float> audio-input-held-db: GainMath.min-db;
+
+    // The MIX row (MOO-8): mute, solo, volume and pan of whatever the panel
+    // describes. Adam, 2026-09-23: they go in both places -- the rack row
+    // keeps its own -- and both drive the same verbs, so `main.slint` feeds
+    // these from the same row the rack row reads and hands the edits to the
+    // same callbacks. Volume is in dB, as the rack row's knob takes it.
+    in property <bool> muted;
+    in property <bool> soloed;
+    in property <float> volume-db;
+    in property <float> pan;
+    // The master has no solo: every track reaches it.
+    in property <bool> solo-enabled: true;
+    callback mute-toggled();
+    callback solo-toggled();
+    callback volume-changed(float);   // dB
+    callback pan-changed(float);
 
     callback midi-input-picked(int);
     callback midi-channel-picked(int);
@@ -391,6 +407,70 @@ export component ChannelSidebar inherits Rectangle {
                         color: Theme.warning;
                         wrap: word-wrap;
                         width: parent.value-width + 38px;
+                    }
+                }
+            }
+
+            // The four controls every channel and track has, in the order the
+            // mixer strip draws them, and last in the panel, where a strip
+            // keeps its fader -- which also leaves every row above where it
+            // was. Controlled, like every control since MOO-220, so the rack
+            // row, the mixer, undo and a MIDI controller all move these too.
+            Rectangle {
+                height: 1px;
+                background: Theme.border;
+                opacity: 0.6;
+            }
+            SidebarField {
+                label: "MIX";
+                HorizontalLayout {
+                    spacing: 6px;
+                    alignment: start;
+                    MuteButton {
+                        muted: root.muted;
+                        clicked => { root.mute-toggled(); }
+                    }
+                    if root.solo-enabled : SoloButton {
+                        soloed: root.soloed;
+                        clicked => { root.solo-toggled(); }
+                    }
+                    Rectangle { width: 4px; }
+                    TrimKnob {
+                        label: "Volume";
+                        hint: root.is-track ? "This track's level" : "This channel's level";
+                        diameter: 24px;
+                        value: root.volume-db;
+                        // The fader's ceiling, as on the rack row (MOO-131).
+                        maximum: GainMath.fader-db[0];
+                        changed(v) => { root.volume-changed(v); }
+                    }
+                    Text {
+                        text: GainMath.format-db(root.volume-db);
+                        color: Theme.text-muted;
+                        font-size: Theme.text-md;
+                        vertical-alignment: center;
+                    }
+                    MiniKnob {
+                        label: "Pan";
+                        hint: root.is-track ? "This track's pan" : "This channel's pan";
+                        diameter: 24px;
+                        value: root.pan;
+                        minimum: -1;
+                        maximum: 1;
+                        default-value: 0;
+                        bipolar: true;
+                        value-text: abs(root.pan) < 0.01 ? "Center"
+                            : root.pan < 0 ? "L " + round(abs(root.pan) * 100)
+                            : "R " + round(root.pan * 100);
+                        changed(v) => { root.pan-changed(v); }
+                    }
+                    Text {
+                        text: abs(root.pan) < 0.01 ? "C"
+                            : root.pan < 0 ? "L" + round(abs(root.pan) * 100)
+                            : "R" + round(root.pan * 100);
+                        color: Theme.text-muted;
+                        font-size: Theme.text-md;
+                        vertical-alignment: center;
                     }
                 }
             }

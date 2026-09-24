@@ -43,8 +43,8 @@ the command layer, and applies equally to any future console/MCP command.
 ## What's registered today
 
 `actions.rs`'s `ACTIONS` table is the source of truth; read it rather than
-this document for the current list. **It holds 70 actions in 12 categories**
-as of 2026-09-23, and a test in `actions.rs` reads that sentence and fails if
+this document for the current list. **It holds 71 actions in 12 categories**
+as of 2026-09-24, and a test in `actions.rs` reads that sentence and fails if
 either number stops being true.
 
 This sentence has been wrong twice. On 2026-09-08 it said 46 where the table
@@ -61,8 +61,9 @@ three contextual clipboard verbs, select-all and delete), Navigation (the
 four arrow keys — transpose lives there now, because the same key picks a
 channel or walks the browser tree when the roll is not where you are), Notes
 (the five pointer tools on keys 1-5 and the snap toggle on 6), View
-(revealing a view, splitting the top pane on Ctrl+\\, zooming a pane to the
-window on Ctrl+Shift+\\, and piano-roll zoom), Channel (add, remove, clone,
+(revealing a view, showing or hiding the channel sidebar on Ctrl+[,
+splitting the top pane on Ctrl+\\, zooming a pane to the window on
+Ctrl+Shift+\\, and piano-roll zoom), Channel (add, remove, clone,
 mute, solo), Track (solo on Ctrl+Shift+M and mute on Ctrl+Alt+M, plus moving
 the track one seat left or right, all aimed at the track the rack is editing),
 Device (the clipboard's four on Ctrl+Shift+C/X/V/D, plus bypass, remove,

@@ -31,106 +31,17 @@
 //! about.
 
 use super::*;
-use i_slint_core::accessibility::AccessibleStringProperty;
-use i_slint_core::item_tree::ItemRc;
+use crate::window_probe::{click, controls, install_backend, sliders, wheel, Control};
 use i_slint_core::items::AccessibleRole;
-use i_slint_core::window::WindowInner;
-use slint::platform::{PointerEventButton, WindowEvent};
-use slint::{LogicalPosition, LogicalSize};
-use std::ops::ControlFlow;
+use slint::LogicalSize;
 
 const WIDTH: f32 = 2400.0;
 const HEIGHT: f32 = 1400.0;
 
-/// One control, as a user meets it: where it is, what it is called, and
-/// what its readout says.
-#[derive(Clone, Debug, PartialEq)]
-struct Control {
-    label: String,
-    value: String,
-    centre: (f32, f32),
-}
-
-/// Every visible element with `role`, in tree order, that lies inside the
-/// window.
-fn controls(window: &MainWindow, role: AccessibleRole) -> Vec<Control> {
-    let inner = WindowInner::from_pub(window.window());
-    let root = ItemRc::new_root(inner.component());
-    let mut found = Vec::new();
-    root.visit_descendants(|item| {
-        if item.accessible_role() != role || !item.is_visible() {
-            return ControlFlow::<()>::Continue(());
-        }
-        let geometry = item.geometry();
-        let origin = item.map_to_window(geometry.origin);
-        let centre = (
-            origin.x + geometry.size.width / 2.0,
-            origin.y + geometry.size.height / 2.0,
-        );
-        let inside = centre.0 > 0.0 && centre.1 > 0.0 && centre.0 < WIDTH && centre.1 < HEIGHT;
-        if inside && geometry.size.width > 0.0 && geometry.size.height > 0.0 {
-            let text = |what| {
-                item.accessible_string_property(what)
-                    .map(|text| text.to_string())
-                    .unwrap_or_default()
-            };
-            found.push(Control {
-                label: text(AccessibleStringProperty::Label),
-                value: text(AccessibleStringProperty::Value),
-                centre,
-            });
-        }
-        ControlFlow::Continue(())
-    });
-    found
-}
-
-fn sliders(window: &MainWindow) -> Vec<Control> {
-    controls(window, AccessibleRole::Slider)
-}
-
-fn at(point: (f32, f32)) -> LogicalPosition {
-    LogicalPosition::new(point.0, point.1)
-}
-
-/// One wheel step up, at the control's centre: the smallest edit a control
-/// can be given, and it goes through the same write a drag does.
-fn wheel(window: &MainWindow, control: &Control) {
-    let window = window.window();
-    window.dispatch_event(WindowEvent::PointerMoved { position: at(control.centre) });
-    window.dispatch_event(WindowEvent::PointerScrolled {
-        position: at(control.centre),
-        delta_x: 0.0,
-        delta_y: -60.0,
-    });
-}
-
-fn click(window: &MainWindow, point: (f32, f32)) {
-    let window = window.window();
-    window.dispatch_event(WindowEvent::PointerMoved { position: at(point) });
-    window.dispatch_event(WindowEvent::PointerPressed {
-        position: at(point),
-        button: PointerEventButton::Left,
-    });
-    window.dispatch_event(WindowEvent::PointerReleased {
-        position: at(point),
-        button: PointerEventButton::Left,
-    });
-}
-
 /// A window with the rack in the main pane and nothing docked below it, the
 /// state `AppUi::new` would leave it in for the parts a face reads.
 fn rack_window() -> (MainWindow, Rc<RefCell<UiState>>) {
-    // `.ok()` rather than `init_no_event_loop`, which panics on the second
-    // window a test builds on its thread; see `tests/common/mod.rs`.
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            ..Default::default()
-        },
-    )))
-    .ok();
+    install_backend();
     let window = MainWindow::new().expect("the testing backend builds a window");
     window.window().set_size(LogicalSize::new(WIDTH, HEIGHT));
     install_strip_spec(&window);

@@ -327,6 +327,12 @@ export component MenuField inherits Rectangle {
                 VerticalLayout {
                     for option[i] in root.options : Rectangle {
                         height: 22px;
+                        // A row a screen reader -- and a test -- can find by
+                        // what it says.
+                        accessible-role: list-item;
+                        accessible-label: option;
+                        accessible-item-selectable: true;
+                        accessible-item-selected: i == root.selected-index;
                         border-radius: Theme.radius-sm;
                         background: row-touch.has-hover ? Theme.surface-active
                             : i == root.selected-index ? Theme.accent-active : transparent;

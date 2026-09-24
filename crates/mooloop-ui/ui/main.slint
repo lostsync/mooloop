@@ -1479,6 +1479,14 @@ export component MainWindow inherits Window {
     // Open or close the split. Closing folds its views back into the main
     // slot rather than losing them, which is also what the divider does when
     // it is dragged to an edge -- one behaviour, two ways to ask for it.
+    // The left sidebar's one switch (MOO-8): the status-bar chip, the View
+    // menu row and `view.channel-sidebar-toggle` all come through here, so
+    // there is one place that knows showing it is a layout change to save.
+    public function toggle-channel-sidebar() {
+        root.channel-sidebar-visible = !root.channel-sidebar-visible;
+        root.layout-changed();
+    }
+
     public function toggle-split() {
         if (root.split-active >= 0) {
             if (root.steps-slot == 1) { root.steps-slot = 0; }
@@ -2932,6 +2940,12 @@ export component MainWindow inherits Window {
                     }
                     MenuSeparator {}
                     MenuRow {
+                        text: "Channel Sidebar";
+                        shortcut: "Ctrl+[";
+                        checked: root.channel-sidebar-visible;
+                        selected => { root.toggle-channel-sidebar(); }
+                    }
+                    MenuRow {
                         text: "Split Top Pane";
                         shortcut: "Ctrl+\\";
                         checked: root.split-active >= 0;
@@ -3283,6 +3297,47 @@ export component MainWindow inherits Window {
                             }
                             send-enable-toggled(i) => {
                                 root.send-enable-toggled(root.editing-bus-index, i);
+                            }
+                            // MIX: the rack row's four for a channel, the
+                            // track face's four for a track -- the same rows
+                            // and the same verbs, so two views of one edit.
+                            muted: root.editing-bus
+                                ? root.editing-bus-muted : root.channels[root.selected-channel].muted;
+                            soloed: root.editing-bus
+                                ? root.editing-bus-solo : root.channels[root.selected-channel].solo;
+                            solo-enabled: !(root.editing-bus && root.editing-bus-is-master);
+                            volume-db: root.editing-bus
+                                ? GainMath.linear-to-db(root.editing-bus-volume)
+                                : root.channels[root.selected-channel].volume-db;
+                            pan: root.editing-bus
+                                ? root.editing-bus-pan : root.channels[root.selected-channel].pan;
+                            mute-toggled => {
+                                if (root.editing-bus) {
+                                    root.bus-muted(root.editing-bus-index);
+                                } else {
+                                    root.channel-muted(root.selected-channel);
+                                }
+                            }
+                            solo-toggled => {
+                                if (root.editing-bus) {
+                                    root.bus-solo-toggled(root.editing-bus-index);
+                                } else {
+                                    root.channel-soloed(root.selected-channel);
+                                }
+                            }
+                            volume-changed(db) => {
+                                if (root.editing-bus) {
+                                    root.bus-volume-changed(root.editing-bus-index, GainMath.db-to-linear(db));
+                                } else {
+                                    root.channel-volume-changed(root.selected-channel, GainMath.db-to-linear(db));
+                                }
+                            }
+                            pan-changed(v) => {
+                                if (root.editing-bus) {
+                                    root.bus-pan-changed(root.editing-bus-index, v);
+                                } else {
+                                    root.channel-pan-changed(root.selected-channel, v);
+                                }
                             }
                         }
 
@@ -7670,8 +7725,7 @@ export component MainWindow inherits Window {
                             || root.other-main-view() >= 0;
                         clicked => {
                             if (k == 0) {
-                                root.channel-sidebar-visible = !root.channel-sidebar-visible;
-                                root.layout-changed();
+                                root.toggle-channel-sidebar();
                             } else if (k == 1) {
                                 root.bottom-pane-visible = !root.bottom-pane-visible;
                                 root.layout-changed();

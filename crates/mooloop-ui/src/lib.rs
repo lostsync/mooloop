@@ -11,7 +11,11 @@ mod channel_colors;
 mod gestures;
 mod layer_view;
 #[cfg(test)]
+mod channel_sidebar_tests;
+#[cfg(test)]
 mod controlled_faces_tests;
+#[cfg(test)]
+mod window_probe;
 mod meter;
 #[cfg(feature = "mockup")]
 mod mockup;
@@ -8181,6 +8185,7 @@ impl AppUi {
                     "view.pane-notes" => show_pane(&commands, &window, Pane::Notes),
                     "view.pane-playlist" => show_pane(&commands, &window, Pane::Playlist),
                     "view.split-toggle" => window.invoke_toggle_split(),
+                    "view.channel-sidebar-toggle" => window.invoke_toggle_channel_sidebar(),
                     "view.zoom-pane" => window.invoke_toggle_zoom_active(),
                     "view.pane-next" => {
                         let pane = cycle_pane(commands.borrow().pane, true);

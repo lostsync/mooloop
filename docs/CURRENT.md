@@ -31,7 +31,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   rows at all rather than disabled ones: disabled means "not configurable
   yet", which is true of OUT and would be a lie about a track, which has no
   MIDI input to configure. It is hidden until the status
-  bar's leftmost chip opens it. For a track it also holds that track's
+  bar's leftmost chip, **View > Channel Sidebar** or **Ctrl+[**
+  (`view.channel-sidebar-toggle`, 2026-09-24, MOO-8) opens it. At the
+  bottom it has a **MIX** row -- mute, solo, volume and pan -- for the channel
+  or the track it shows, as of 2026-09-24 (MOO-8). The rack row keeps its
+  own four, and both drive the same verbs, so moving one moves the other. For a track it also holds that track's
   **sends**: one row each with destination, level, pre/post tap, enable and
   remove, plus a picker that routes a copy to another track. They were an area
   of the track's device face until 2026-09-13, and moving them put the editor
