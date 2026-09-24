@@ -2184,7 +2184,12 @@ land on its own when it starts to matter:
   comb-filter when they meet at a bus -- see the mixer entry above. A hosted
   plugin's latency is its own, read once it is active: the compensation plan
   asks the plugin for it, live and in an export (MOO-81). A plugin *inside a
-  container* is still sized as zero latency there (MOO-212).
+  container* sizes the container too (MOO-212): a Chain's dry copy waits for
+  it and a Layer's other branches are held back to meet it, resent whenever
+  the plugin reports a latency, so a latent plugin in a container sums as one
+  copy rather than combing against an early one. A resend at the same length
+  keeps the ring that is playing, so it is silent; a real change of latency
+  jumps, as any latency change does.
 - **A CLAP effect plays in a chain, headless** (MOO-81, plugin-hosting 06).
   **Nothing in the window inserts one yet**: the browser, the insert-menu row
   and the plugin's face are step 08. Today a plugin reaches a song in two

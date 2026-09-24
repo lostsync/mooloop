@@ -195,6 +195,83 @@ pub struct EffectRemoved {
 }
 
 impl Session {
+    /// The rings the containers on `target`'s chain hold, as the structural
+    /// commands that size them: each container's span with its dry ring,
+    /// and each layer branch's ring, sized with every device's **real**
+    /// latency (`device_latency`, which asks the plugin rack for a hosted
+    /// plugin, MOO-212). The rings are allocated here, on the control
+    /// thread. No scratch is attached; the interface adds it to the first
+    /// span when it publishes after an edit.
+    pub fn container_ring_commands(
+        &self,
+        target: EffectTarget,
+    ) -> Vec<mooloop_engine::StructuralCommand> {
+        let Some(effects) = self.effect_chain_of(target) else {
+            return Vec::new();
+        };
+        let own = |effect: &EffectSlotState| self.device_latency(effect);
+        mooloop_core::container_rings_with(effects, &own)
+            .into_iter()
+            .filter_map(|ring| match ring {
+                mooloop_core::ContainerRing::Span { slot, children, frames } => {
+                    Some(mooloop_engine::StructuralCommand::SetContainerSpan {
+                        target,
+                        slot: u8::try_from(slot).ok()?,
+                        children,
+                        align: mooloop_dsp::IntegerDelay::new(frames).map(Box::new),
+                        scratch: None,
+                    })
+                }
+                mooloop_core::ContainerRing::Branch { slot, frames } => {
+                    Some(mooloop_engine::StructuralCommand::SetBranchAlign {
+                        target,
+                        slot: u8::try_from(slot).ok()?,
+                        align: mooloop_dsp::IntegerDelay::new(frames).map(Box::new),
+                    })
+                }
+            })
+            .collect()
+    }
+
+    /// Resend the container rings of the chain holding hosted plugin `slot`,
+    /// now that its instance says what latency it adds (MOO-212). Nothing
+    /// when the plugin sits in no container: the channel's own compensation
+    /// follows it by the plan, every tick.
+    ///
+    /// Sent after the processor's `ReplaceEffect`, which the executor holds
+    /// until the slot has faded (MOO-213), so the rings land with it. A ring
+    /// the same length as the live one is kept there (`adopt_ring`), so a
+    /// restart at an unchanged latency is silent; a real change jumps, as
+    /// every latency change does.
+    pub fn resize_plugin_containers(
+        &self,
+        slot: mooloop_core::PluginSlotId,
+        handle: &mut impl mooloop_engine::CommandSink,
+    ) {
+        let wanted = EffectParams::Plugin(slot);
+        let channels = self
+            .channels
+            .iter()
+            .enumerate()
+            .map(|(index, channel)| (EffectTarget::Channel(index as u8), &channel.effects));
+        let buses = self
+            .buses
+            .iter()
+            .enumerate()
+            .map(|(index, bus)| (EffectTarget::Bus(index as u8), &bus.effects));
+        let Some(target) = channels.chain(buses).find_map(|(target, effects)| {
+            let row = effects.iter().position(|effect| effect.params == wanted)?;
+            mooloop_core::parent_of(effects, row).map(|_| target)
+        }) else {
+            return;
+        };
+        for command in self.container_ring_commands(target) {
+            // A refusal drops the ring here; the next latency report or edit
+            // sends the list again.
+            let _ = handle.send_structural(command);
+        }
+    }
+
     /// Inserts `kind` before slot `insert_before`, minting it an identity.
     ///
     /// Nothing is retargeted. Every address in the project names a device, so

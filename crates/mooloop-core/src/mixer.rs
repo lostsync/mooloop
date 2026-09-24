@@ -992,7 +992,9 @@ pub fn run_latency(effects: &[EffectSlotState], slot: usize) -> u32 {
     run_latency_with(effects, slot, &declared_latency)
 }
 
-fn run_latency_with(
+/// [`run_latency`], with each device's own latency asked of `own`: a hosted
+/// plugin's is its instance's, known only once it is active (MOO-212).
+pub fn run_latency_with(
     effects: &[EffectSlotState],
     slot: usize,
     own: &dyn Fn(&EffectSlotState) -> u32,
@@ -1016,6 +1018,17 @@ fn run_latency_with(
 /// frames apart, which is a comb filter across the whole spectrum
 /// (`docs/plans/archive/containers/08-the-chain-splits-and-sums.md`).
 pub fn branch_alignment(effects: &[EffectSlotState], layer: usize, branch: usize) -> u32 {
+    branch_alignment_with(effects, layer, branch, &declared_latency)
+}
+
+/// [`branch_alignment`], with each device's own latency asked of `own`
+/// (MOO-212): a branch holding a hosted plugin is as long as the plugin says.
+pub fn branch_alignment_with(
+    effects: &[EffectSlotState],
+    layer: usize,
+    branch: usize,
+    own: &dyn Fn(&EffectSlotState) -> u32,
+) -> u32 {
     let is_layer = effects
         .get(layer)
         .and_then(|head| head.params.container_flow())
@@ -1023,7 +1036,51 @@ pub fn branch_alignment(effects: &[EffectSlotState], layer: usize, branch: usize
     if !is_layer || !layer_branches(effects, layer).any(|head| head == branch) {
         return 0;
     }
-    run_latency(effects, layer).saturating_sub(latency_of_run(effects, branch, &declared_latency))
+    run_latency_with(effects, layer, own).saturating_sub(latency_of_run(effects, branch, own))
+}
+
+/// One ring a container on a chain holds, sized in base-rate frames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerRing {
+    /// The container in `slot`: how many rows it holds, and how long its dry
+    /// copy waits for its run ([`run_latency_with`]).
+    Span { slot: usize, children: u8, frames: u32 },
+    /// The head of a layer's branch in `slot`, and how long it waits for the
+    /// layer's longest branch ([`branch_alignment_with`]). Every branch of
+    /// every layer, zero included, so a branch that has become the longest
+    /// lets go of the ring it no longer needs.
+    Branch { slot: usize, frames: u32 },
+}
+
+/// Every ring the containers on `effects` hold, in rack order, each sized
+/// with `own`'s latencies.
+///
+/// **The one list** the interface sends after an edit, the session resends
+/// when a hosted plugin's latency becomes known or changes, and an export
+/// applies once its processors are in (MOO-212). Three call sites that each
+/// walked the chain themselves would be three places to forget a plugin.
+pub fn container_rings_with(
+    effects: &[EffectSlotState],
+    own: &dyn Fn(&EffectSlotState) -> u32,
+) -> Vec<ContainerRing> {
+    let mut rings = Vec::new();
+    for (slot, effect) in effects.iter().enumerate() {
+        let Some(children) = effect.params.container_children() else {
+            continue;
+        };
+        let frames = if children > 0 { run_latency_with(effects, slot, own) } else { 0 };
+        rings.push(ContainerRing::Span { slot, children, frames });
+        if effect.params.container_flow() != Some(crate::ContainerFlow::Parallel) {
+            continue;
+        }
+        for branch in layer_branches(effects, slot) {
+            rings.push(ContainerRing::Branch {
+                slot: branch,
+                frames: branch_alignment_with(effects, slot, branch, own),
+            });
+        }
+    }
+    rings
 }
 
 /// The rows that head the direct children of the container in `slot`, in

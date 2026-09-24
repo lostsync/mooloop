@@ -1281,6 +1281,30 @@ pub struct EffectSlot {
     silent_frames: u32,
 }
 
+/// Put `incoming` in `live`'s place, unless the two are the same length, and
+/// return whichever one goes back to the control thread.
+///
+/// A same-length ring stays where it is: it holds the last frames the path
+/// heard, and a fresh one would play its length of silence there (MOO-213's
+/// rule for the dry ring, and MOO-212's for a container's and a branch's,
+/// which the session resends whenever a hosted plugin's latency is
+/// announced, changed or not). A ring of a new length is a latency change,
+/// and jumps as every latency change does.
+fn adopt_ring(
+    live: &mut Option<Box<IntegerDelay>>,
+    incoming: Option<Box<IntegerDelay>>,
+) -> Option<Box<IntegerDelay>> {
+    let same = matches!(
+        (&*live, &incoming),
+        (Some(have), Some(new)) if have.frames() == new.frames()
+    );
+    if same {
+        incoming
+    } else {
+        std::mem::replace(live, incoming)
+    }
+}
+
 impl EffectSlot {
     /// A fresh slot, allocated on the control thread to be installed.
     pub fn new() -> Self {
@@ -2465,6 +2489,35 @@ impl EffectChain {
                 offset: 0,
                 event: Event::BufferRelease,
             });
+        }
+    }
+
+    /// Size every container's dry ring and every layer branch's ring on this
+    /// chain with `own`'s latencies (MOO-212): an export's, once its hosted
+    /// processors are in and report what they add. Allocates, so this is the
+    /// control thread's, as [`Self::load`] is; the live path sends the same
+    /// rings as `SetContainerSpan`/`SetBranchAlign`. A ring of the length a
+    /// slot already has is kept (`adopt_ring`).
+    fn resize_container_rings(
+        &mut self,
+        slots: &[mooloop_core::EffectSlotState],
+        own: &dyn Fn(&mooloop_core::EffectSlotState) -> u32,
+    ) {
+        for ring in mooloop_core::container_rings_with(slots, own) {
+            match ring {
+                mooloop_core::ContainerRing::Span { slot, frames, .. } => {
+                    let incoming = IntegerDelay::new(frames).map(Box::new);
+                    if let Some(state) = self.slot_mut(slot) {
+                        drop(adopt_ring(&mut state.container_align, incoming));
+                    }
+                }
+                mooloop_core::ContainerRing::Branch { slot, frames } => {
+                    let incoming = IntegerDelay::new(frames).map(Box::new);
+                    if let Some(state) = self.slot_mut(slot) {
+                        drop(adopt_ring(&mut state.branch_align, incoming));
+                    }
+                }
+            }
         }
     }
 
@@ -5893,10 +5946,34 @@ impl RenderState {
         }
         let hosted = latency.len();
         if hosted > 0 {
-            self.install_compensation_with(project, &|effect| match effect.params {
+            let own = |effect: &mooloop_core::EffectSlotState| match effect.params {
                 mooloop_core::EffectParams::Plugin(slot) => latency.get(&slot).copied().unwrap_or(0),
                 _ => effect.kind().latency_frames(),
-            });
+            };
+            self.install_compensation_with(project, &own);
+            // And inside the chains: a container's dry copy and a layer's
+            // branches were sized at load for a pass-through (MOO-212).
+            let channels = project.channels.iter().take(MAX_CHANNELS).enumerate().map(
+                |(index, channel)| (EffectTarget::Channel(index as u8), &channel.setup.effects),
+            );
+            let buses = project
+                .buses
+                .iter()
+                .take(MAX_BUSES)
+                .enumerate()
+                .map(|(index, bus)| (EffectTarget::Bus(index as u8), &bus.effects));
+            for (target, effects) in channels.chain(buses) {
+                let holds_plugin = effects
+                    .iter()
+                    .any(|effect| matches!(effect.params, mooloop_core::EffectParams::Plugin(_)));
+                if !holds_plugin {
+                    continue;
+                }
+                if let Some(chain) = self.chain_mut(target) {
+                    // On the control thread, where the displaced rings drop.
+                    chain.resize_container_rings(effects, &own);
+                }
+            }
             // The sends were rebuilt with the plan, so they start at the
             // document's levels as `load_project` left everything else.
             self.settle_mixer();
@@ -6729,7 +6806,7 @@ impl RenderState {
                 };
                 let displaced = chain.slot_mut(slot as usize).and_then(|state| {
                     state.container_children = children;
-                    std::mem::replace(&mut state.container_align, align)
+                    adopt_ring(&mut state.container_align, align)
                 });
                 (displaced.is_some() || scratch.is_some()).then_some(
                     StructuralReclaim::Container {
@@ -6751,7 +6828,7 @@ impl RenderState {
                     });
                 };
                 let displaced = match chain.slot_mut(slot as usize) {
-                    Some(state) => std::mem::replace(&mut state.branch_align, align),
+                    Some(state) => adopt_ring(&mut state.branch_align, align),
                     None => align,
                 };
                 displaced.map(|align| StructuralReclaim::Container {

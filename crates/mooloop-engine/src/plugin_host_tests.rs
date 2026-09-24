@@ -136,7 +136,7 @@ pub(crate) fn drum_loop(channels: usize, hosted: &[usize]) -> (Project, Vec<Plug
 /// Render `frames` of `project` through a fresh state in `block`-sized
 /// blocks, with `plugins` swapped in the way an export swaps them, on a
 /// thread of its own.
-fn render_hosted(
+pub(crate) fn render_hosted(
     project: &Project,
     plugins: BTreeMap<PluginSlotId, Box<dyn AudioNode + Send>>,
     frames: usize,
@@ -316,8 +316,26 @@ fn play(
     frames: usize,
     block: usize,
 ) -> Vec<f32> {
+    play_with(
+        project,
+        vec![replace(EffectTarget::Channel(0), 0, slot, node)],
+        frames,
+        block,
+    )
+}
+
+/// [`play`] with any commands queued ahead of Play: a swap and whatever the
+/// session sends beside it (MOO-212's container rings).
+pub(crate) fn play_with(
+    project: &Project,
+    commands: Vec<RealtimeCommand>,
+    frames: usize,
+    block: usize,
+) -> Vec<f32> {
     let mut live = live(RenderState::from_project(SAMPLE_RATE, project, &[]));
-    assert!(live.commands.push(replace(EffectTarget::Channel(0), 0, slot, node)).is_ok());
+    for command in commands {
+        assert!(live.commands.push(command).is_ok());
+    }
     assert!(live.commands.push(RealtimeCommand::Engine(EngineCommand::Play)).is_ok());
     std::thread::scope(|scope| {
         scope

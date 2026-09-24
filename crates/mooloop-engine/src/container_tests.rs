@@ -1263,3 +1263,125 @@ fn layer_parallel_drums_render_offline_as_they_play() {
     }
     writer.finalize().expect("the listening file closes");
 }
+
+// ---------------------------------------------------------------------------
+// A hosted plugin inside a container (MOO-212).
+// ---------------------------------------------------------------------------
+
+/// Channel 0 of a one-channel drum loop, with the test gain inside a
+/// container: `[Chain(1) at Mix 50%, Plugin]` or, as one branch of two,
+/// `[Layer(3), Chain(1), Plugin, Chain(0)]`. The plugin's row and slot.
+fn plugin_in_container(layer: bool) -> (Project, u8, mooloop_core::PluginSlotId) {
+    let (mut project, _) = crate::plugin_host_tests::drum_loop(1, &[]);
+    let slot = project.add_plugin_slot(mooloop_core::PluginSlotState::new(
+        crate::plugin_host_tests::gain_ref(),
+    ));
+    let mut device = EffectSlotState::of_kind(EffectKind::Plugin);
+    device.params = EffectParams::Plugin(slot);
+    let mut chain = EffectSlotState::of_kind(EffectKind::Chain);
+    chain.params.set_container_children(1);
+    let (effects, row) = if layer {
+        let mut head = EffectSlotState::of_kind(EffectKind::Layer);
+        head.params.set_container_children(3);
+        (vec![head, chain, device, EffectSlotState::of_kind(EffectKind::Chain)], 2)
+    } else {
+        chain.params.set(mooloop_core::CONTAINER_PARAM_MIX, 0.5).expect("a mix");
+        (vec![chain, device], 1)
+    };
+    let setup = &mut project.channels[0].setup;
+    setup.effects = effects;
+    setup.assign_device_ids();
+    (project, row, slot)
+}
+
+/// **A plugin's latency sizes the container around it** (MOO-212). The
+/// test gain at 0 dB and 64 frames, inside a Chain at 50% Mix and inside
+/// one branch of a two-branch Layer: each sums the loop to a single copy,
+/// 64 frames late, with nothing early -- at the Chain's equal-power middle
+/// that copy is `sqrt(2)` of the loop (dry and wet are the same signal), and
+/// at the Layer's two unity branches it is twice the loop. Before the fix
+/// the container's dry ring, and the empty branch's, were sized for the
+/// placeholder's zero, so a copy arrived 64 frames early: a comb.
+///
+/// Both paths: an export, where `host_plugins` sizes the rings from the
+/// processors, and the executor, sent the swap and the rings the session
+/// sends (`Session::resize_plugin_containers`, pinned in `plugin_rack.rs`).
+/// The executor holds a plugin swap until its slot has faded and fades it
+/// back in (MOO-213), so it is compared from 0.3 s on.
+#[test]
+fn a_hosted_plugins_latency_sizes_the_container_around_it() {
+    use crate::plugin_host_tests::{open_gain, play_with, render_hosted, replace};
+    use mooloop_plugin_host::{HostedInstance, Lifeline};
+    use std::collections::BTreeMap;
+
+    let latency = mooloop_test_plugin::LATENCY_STEPS[1];
+    let frames = SAMPLE_RATE as usize;
+    let early = 2 * latency as usize;
+    let (plain, _) = crate::plugin_host_tests::drum_loop(1, &[]);
+    let without = render_hosted(&plain, BTreeMap::new(), frames, 512);
+    assert!(peak_of(&without) > 0.05, "the loop has to be sounding");
+
+    for (name, layer, gain) in [
+        ("a chain at 50%", false, std::f32::consts::SQRT_2),
+        ("one branch of a layer", true, 2.0),
+    ] {
+        let (project, row, slot) = plugin_in_container(layer);
+        let expected: Vec<f32> = without[..without.len() - early]
+            .iter()
+            .map(|sample| sample * gain)
+            .collect();
+
+        let mut instance = open_gain(0.0, 1);
+        let lifeline = Lifeline::new();
+        let node = instance.build_processor(lifeline.tie()).expect("a processor");
+        assert_eq!(node.latency_frames(), latency);
+        let exported = render_hosted(&project, BTreeMap::from([(slot, node)]), frames, 512);
+        assert!(
+            exported[..early].iter().all(|&sample| sample == 0.0),
+            "{name}, export: something arrived before the plugin's latency"
+        );
+        let worst = worst_difference(&exported[early..], &expected);
+        println!("{name}, export: worst {worst:e} against the loop x{gain}, {latency} frames late");
+        assert!(worst < 1e-5, "{name}, export: not one copy {latency} frames late ({worst})");
+
+        // The executor, sent what the session sends: the swap, then the
+        // rings sized with the instance's latency.
+        drop(instance);
+        let mut instance = open_gain(0.0, 1);
+        let node = instance.build_processor(lifeline.tie()).expect("a processor");
+        let effects = &project.channels[0].setup.effects;
+        let own = |effect: &EffectSlotState| match effect.params {
+            EffectParams::Plugin(_) => latency,
+            _ => effect.kind().latency_frames(),
+        };
+        let target = mooloop_core::EffectTarget::Channel(0);
+        let mut commands = vec![replace(target, row, slot, node)];
+        for ring in mooloop_core::container_rings_with(effects, &own) {
+            let command = match ring {
+                mooloop_core::ContainerRing::Span { slot, children, frames } => {
+                    crate::StructuralCommand::SetContainerSpan {
+                        target,
+                        slot: slot as u8,
+                        children,
+                        align: mooloop_dsp::IntegerDelay::new(frames).map(Box::new),
+                        scratch: None,
+                    }
+                }
+                mooloop_core::ContainerRing::Branch { slot, frames } => {
+                    crate::StructuralCommand::SetBranchAlign {
+                        target,
+                        slot: slot as u8,
+                        align: mooloop_dsp::IntegerDelay::new(frames).map(Box::new),
+                    }
+                }
+            };
+            commands.push(crate::RealtimeCommand::Structural(command));
+        }
+        let live = play_with(&project, commands, frames, 256);
+        let from = 2 * (SAMPLE_RATE as usize * 3 / 10);
+        let worst = worst_difference(&live[from..], &exported[from..]);
+        println!("{name}, executor: worst {worst:e} against the export from 0.3 s");
+        assert!(worst < 1e-5, "{name}, executor: the rings did not follow the plugin ({worst})");
+        drop(instance);
+    }
+}

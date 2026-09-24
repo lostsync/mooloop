@@ -4851,7 +4851,8 @@ impl UiState {
     /// window once; this refreshes its contents after structural changes
     /// (add/remove/reorder) and after the rack is pointed somewhere else.
     /// Tell the engine how far every container on `target`'s chain reaches,
-    /// and hand each one a ring sized to its run's declared latency.
+    /// and hand each one a ring sized to its run's latency -- a hosted
+    /// plugin's as its instance reports it, not its kind's zero (MOO-212).
     ///
     /// Every container, every time, rather than a diff. A chain holds a
     /// handful of boxes and this runs on a hand gesture, so the cost is
@@ -4870,48 +4871,18 @@ impl UiState {
             return;
         };
         let mut scratch = ContainerScratch::for_chain(effects).map(Box::new);
-        for (slot, effect) in effects.iter().enumerate() {
-            let Some(children) = effect.params.container_children() else {
-                continue;
-            };
-            let Ok(slot_index) = u8::try_from(slot) else {
-                continue;
-            };
-            // Allocated here, off the audio thread, for the same reason the
-            // node beside it is.
-            let align = (children > 0)
-                .then(|| IntegerDelay::new(mooloop_core::run_latency(effects, slot)))
-                .flatten()
-                .map(Box::new);
-            stx.send(StructuralCommand::SetContainerSpan {
-                target,
-                slot: slot_index,
-                children,
-                align,
+        // The rings are allocated in the session, off the audio thread, for
+        // the same reason the node beside them is; the list is the one the
+        // session resends when a plugin's latency arrives.
+        for mut command in self.session.container_ring_commands(target) {
+            if let StructuralCommand::SetContainerSpan { scratch: slot_scratch, .. } = &mut command
+            {
                 // Rides the first container's command; the chain keeps the
                 // first one it is given and hands every later one back,
                 // unless this one can run a layer and its own cannot.
-                scratch: scratch.take(),
-            });
-            // A layer's branches, each held back to meet the longest. Every
-            // branch, every time, `None` included, so a branch that has
-            // become the longest lets go of the ring it no longer needs.
-            if effect.params.container_flow() != Some(mooloop_core::ContainerFlow::Parallel) {
-                continue;
+                *slot_scratch = scratch.take();
             }
-            for branch in mooloop_core::layer_branches(effects, slot) {
-                let Ok(branch_index) = u8::try_from(branch) else {
-                    continue;
-                };
-                let align =
-                    IntegerDelay::new(mooloop_core::branch_alignment(effects, slot, branch))
-                        .map(Box::new);
-                stx.send(StructuralCommand::SetBranchAlign {
-                    target,
-                    slot: branch_index,
-                    align,
-                });
-            }
+            stx.send(command);
         }
     }
 

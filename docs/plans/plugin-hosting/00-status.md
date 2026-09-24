@@ -903,8 +903,12 @@ into an activate-deactivate every 8 ms.
   `RenderState::host_plugins` swaps the processors in and re-derives the plan
   with their latencies (`install_compensation_with`). The container case,
   where a plugin inside a Chain or a Layer has its dry ring and branch
-  alignment sized for zero latency, is **not** fixed. It is Effects' code, and
-  it is filed as MOO-212.
+  alignment sized for zero latency, was filed as MOO-212 and is fixed: one
+  list of rings (`mooloop_core::container_rings_with`) is sized with the
+  real latencies by the interface after an edit, by the session when a
+  plugin's latency arrives or changes (`Session::resize_plugin_containers`),
+  and by `host_plugins` for an export
+  (`container_tests::a_hosted_plugins_latency_sizes_the_container_around_it`).
 - **Buffers are copied, never passed in place.** `clack-host` takes input and
   output as separate `&mut` slices, so in place would need aliasing. Two
   stereo copies of at most `MAX_BLOCK_SIZE` frames per block are the price.

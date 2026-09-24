@@ -823,6 +823,10 @@ impl crate::session::Session {
                     // leaves the lifeline alone: the rack tries again, a
                     // bounded number of times.
                     let _ = self.replace_plugin_processor(slot, node, align, handle);
+                    // A container holding it sized its rings for the
+                    // placeholder; now the instance says what it adds
+                    // (MOO-212, Effects').
+                    self.resize_plugin_containers(slot, handle);
                 }
                 RackEvent::PullBack { slot } => {
                     let (placeholder, align) = self.pull_back_placeholder(slot);
@@ -841,7 +845,9 @@ impl crate::session::Session {
                         }
                     }
                 }
-                RackEvent::LatencyChanged { .. } => {}
+                // The channel's compensation follows by the plan each tick;
+                // the rings inside a container are this chain's own.
+                RackEvent::LatencyChanged { slot } => self.resize_plugin_containers(slot, handle),
                 RackEvent::ParamsRescanned { slot, params } => {
                     // Replacing the list never touches an address: a lane
                     // whose id went away is kept and reads as missing, and
@@ -1436,6 +1442,9 @@ pub(crate) mod tests {
         replaced: Vec<(EffectTarget, u8, u64)>,
         installed: Vec<(EffectTarget, u8, EffectKind, Option<u64>)>,
         moved: Vec<(u8, u8)>,
+        /// Container rings sent, as `(slot, frames)` (MOO-212).
+        spans: Vec<(u8, usize)>,
+        branches: Vec<(u8, usize)>,
         /// The nodes sent, kept alive the way the engine would keep them.
         nodes: Vec<Box<dyn AudioNode + Send>>,
         rate: u32,
@@ -1472,6 +1481,12 @@ pub(crate) mod tests {
                 } => {
                     self.installed.push((target, slot, kind, resource_key));
                     self.nodes.push(node);
+                }
+                StructuralCommand::SetContainerSpan { slot, align, .. } => {
+                    self.spans.push((slot, align.map_or(0, |ring| ring.frames())));
+                }
+                StructuralCommand::SetBranchAlign { slot, align, .. } => {
+                    self.branches.push((slot, align.map_or(0, |ring| ring.frames())));
                 }
                 _ => {}
             }
@@ -1548,6 +1563,57 @@ pub(crate) mod tests {
         // the pass-through it plays as.
         session.plugin_rack.remove(slot);
         assert_eq!(session.latency_plan().channel(1), 0);
+    }
+
+    /// **A plugin inside a container sizes the container's rings** (MOO-212).
+    /// A layer on channel 0 whose first branch is a chain holding the plugin
+    /// and whose second is a Filter: when the plugin reports 512 frames, the
+    /// session resends the layer's dry ring at 512, the chain's at 512, the
+    /// plugin's branch unheld and the Filter's branch held 512 frames. A
+    /// plugin in no container resends nothing.
+    #[test]
+    fn a_plugin_inside_a_container_resizes_its_rings_when_its_latency_arrives() {
+        use mooloop_core::{ChannelId, Project, ProjectChannel};
+        let probe = Arc::new(FakeProbe::default());
+        let mut project = Project {
+            channels: vec![ProjectChannel::sampler(0, 1).with_id(ChannelId(0))],
+            next_channel_id: 1,
+            ..Project::default()
+        };
+        let slot = project.add_plugin_slot(PluginSlotState::new(fake_ref()));
+        // [Layer(3), Chain(1), Plugin, Filter]
+        let mut layer = EffectSlotState::of_kind(EffectKind::Layer);
+        layer.params.set_container_children(3);
+        let mut chain = EffectSlotState::of_kind(EffectKind::Chain);
+        chain.params.set_container_children(1);
+        let mut device = EffectSlotState::of_kind(EffectKind::Plugin);
+        device.params = EffectParams::Plugin(slot);
+        for effect in [layer, chain, device, EffectSlotState::of_kind(EffectKind::Filter)] {
+            project.channels[0].setup.push_effect(effect);
+        }
+        let mut session = crate::session::Session::default();
+        session.replace_project(&project, &[]);
+        let _processor = session
+            .plugin_rack
+            .insert(slot, FakeInstance::new(Arc::clone(&probe)))
+            .unwrap();
+
+        probe.latency.store(512, Ordering::SeqCst);
+        probe.requests.raise(Requests::LATENCY_CHANGED);
+        let mut sink = Sink::default();
+        session.service_plugins(&mut sink);
+        assert_eq!(sink.spans, [(0, 512), (1, 512)], "the layer's and the chain's dry rings");
+        assert_eq!(sink.branches, [(1, 0), (3, 512)], "the Filter's branch waits for the plugin's");
+
+        // The same plugin in no container: the channel's plan follows it, and
+        // no ring is sent.
+        let probe = Arc::new(FakeProbe::default());
+        let (mut session, _, _processor) = session_hosting(&probe);
+        probe.latency.store(512, Ordering::SeqCst);
+        probe.requests.raise(Requests::LATENCY_CHANGED);
+        let mut sink = Sink::default();
+        session.service_plugins(&mut sink);
+        assert!(sink.spans.is_empty() && sink.branches.is_empty());
     }
 
     /// A restart pulls the processor back and swaps the next one in by the
