@@ -207,10 +207,10 @@ export component BufferDeviceFace inherits EffectDeviceShell {
     in-out property <float> stutter-length;
     in-out property <float> crossfade;
     in-out property <float> quant-start;
-    // `in-out`, because `ToggleButton.checked` is: a click assigns to it, and
-    // assigning to a property drops whatever binding it had. Bound one way
-    // these would follow the engine until the first press and then stop,
-    // which is a control that lies after exactly one use.
+    // `in-out` only because `ToggleButton.checked` is, for the `<=>` below.
+    // The `<=>` never protected it: a click that assigned `checked` wrote
+    // through to the row binding at the far end and dropped it. The button
+    // is controlled now (MOO-220) and writes nothing; the row is the value.
     in-out property <bool> quantize;
 
     callback position-changed(float);
@@ -308,7 +308,8 @@ export component BufferDeviceFace inherits EffectDeviceShell {
             region-start: root.region-start;
             region-end: root.region-end;
             frozen: root.frozen;
-            position-picked(p) => { root.position = p; root.position-changed(p); }
+            // Reported, not written: `position` is the model row's (MOO-220).
+            position-picked(p) => { root.position-changed(p); }
         }
 
         // --- the standing parameters ---------------------------------------

@@ -10,6 +10,8 @@ mod actions;
 mod channel_colors;
 mod gestures;
 mod layer_view;
+#[cfg(test)]
+mod controlled_faces_tests;
 mod meter;
 #[cfg(feature = "mockup")]
 mod mockup;
@@ -14884,6 +14886,11 @@ impl AppUi {
                     drop(st);
                     if let Some(window) = weak.upgrade() {
                         window.set_aux_in_level_text(format!("{:.1} dB", linear_to_db(value)).into());
+                        // The knob is controlled (MOO-220): it moves when
+                        // the row it reads does, so the row is restated.
+                        let mut row = window.get_source();
+                        row.p2 = descriptor.to_normalized(value);
+                        window.set_source(row);
                     }
                     true
                 });

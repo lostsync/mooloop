@@ -476,6 +476,7 @@ export component AppearancePage inherits VerticalLayout {
             width: 54px;
         }
         SegmentedControl {
+            controlled: false;
             options: ["Dark", "Light", "Auto"];
             max-width: 240px;
             hint: "Auto follows the desktop's own light/dark setting.";
@@ -652,6 +653,7 @@ export component AppearancePage inherits VerticalLayout {
 
     SectionLabel { text: "INTERFACE"; }
     ParameterFader {
+        controlled: false;
         label: "Roundness";
         tooltip: "Corner radius across the whole interface";
         label-width: 54px;
@@ -663,6 +665,7 @@ export component AppearancePage inherits VerticalLayout {
         changed(v) => { root.preview-changed(); }
     }
     ParameterFader {
+        controlled: false;
         label: "Contrast";
         tooltip: "Spread between the background, surfaces, and text";
         label-width: 54px;
@@ -677,6 +680,7 @@ export component AppearancePage inherits VerticalLayout {
     // 7-11px, and before the type tokens existed turning it up meant editing
     // three hundred literals.
     ParameterFader {
+        controlled: false;
         label: "Text size";
         tooltip: "Scales every label, readout and heading together";
         label-width: 54px;
@@ -688,6 +692,7 @@ export component AppearancePage inherits VerticalLayout {
         changed(v) => { root.preview-changed(); }
     }
     ParameterFader {
+        controlled: false;
         label: "Density";
         tooltip: "Control heights, padding and spacing";
         label-width: 54px;
@@ -699,6 +704,7 @@ export component AppearancePage inherits VerticalLayout {
         changed(v) => { root.preview-changed(); }
     }
     ParameterFader {
+        controlled: false;
         label: "Borders";
         tooltip: "Hairline width. Zero gives a borderless interface.";
         label-width: 54px;
@@ -710,6 +716,7 @@ export component AppearancePage inherits VerticalLayout {
         changed(v) => { root.preview-changed(); }
     }
     ParameterFader {
+        controlled: false;
         label: "Emphasis";
         tooltip: "The heavier stroke: selection, focus and the active border";
         label-width: 54px;
@@ -741,6 +748,7 @@ export component AppearancePage inherits VerticalLayout {
         }
         Rectangle { horizontal-stretch: 1; }
         SegmentedControl {
+            controlled: false;
             options: ["Flat", "Bevel", "Inset"];
             max-width: 180px;
             selected-index <=> root.relief;
@@ -748,6 +756,7 @@ export component AppearancePage inherits VerticalLayout {
         }
     }
     ParameterFader {
+        controlled: false;
         label: "Depth";
         tooltip: "How far a bevel's edges depart from the surface";
         label-width: 54px;
@@ -834,6 +843,7 @@ export component AppearancePage inherits VerticalLayout {
         }
         Rectangle { horizontal-stretch: 1; }
         ToggleButton {
+            controlled: false;
             text: root.smooth-curves ? "On" : "Off";
             tooltip: "Smooth"; hint: "Draw smooth antialiased curves";
             max-width: 72px;
@@ -859,6 +869,7 @@ export component AppearancePage inherits VerticalLayout {
         }
         Rectangle { horizontal-stretch: 1; }
         SegmentedControl {
+            controlled: false;
             options: ["Instant", "Fast", "Normal", "Slow"];
             max-width: 240px;
             selected-index <=> Motion.speed;
@@ -876,6 +887,7 @@ export component AppearancePage inherits VerticalLayout {
         }
         Rectangle { horizontal-stretch: 1; }
         SegmentedControl {
+            controlled: false;
             options: ["Linear", "Ease out", "In-out", "Overshoot"];
             max-width: 240px;
             selected-index <=> Motion.easing;
@@ -902,6 +914,7 @@ export component AppearancePage inherits VerticalLayout {
         }
         Rectangle { horizontal-stretch: 1; }
         SegmentedControl {
+            controlled: false;
             options: root.meter-falloff-options;
             max-width: 240px;
             hint: "Meter fall rate. 12 dB/s is the broadcast standard.";
@@ -1367,7 +1380,7 @@ export component PreferencesDialog inherits Rectangle {
                                     Text { text: "Show developer tools and diagnostics"; color: Theme.text-muted; font-size: Theme.text-lg; }
                                 }
                                 Rectangle { horizontal-stretch: 1; }
-                                ToggleButton { text: "Enabled"; tooltip: "Show developer preferences"; checked <=> root.developer-mode; }
+                                ToggleButton { controlled: false; text: "Enabled"; tooltip: "Show developer preferences"; checked <=> root.developer-mode; }
                             }
                         }
                         if root.page == 1 : ScrollView {
@@ -1566,6 +1579,7 @@ export component PreferencesDialog inherits Rectangle {
                                         alignment: start;
                                         height: 26px;
                                         SegmentedControl {
+                                            controlled: false;
                                             // Stated, because the segments
                                             // size from the panel otherwise
                                             // and these three labels are

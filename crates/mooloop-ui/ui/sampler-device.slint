@@ -485,6 +485,7 @@ export component SamplerDeviceFace inherits Rectangle {
                     Text { text: root.sample-description; color: Theme.text-faint; font-size: Theme.text-sm; overflow: elide; }
                 }
                 StepperField {
+                    controlled: false;
                     label: "ROOT"; value <=> root.root-note; minimum: 0; maximum: 127; step: 1; value-width: 24px;
                     tooltip: "Root"; hint: "MIDI root note for original sample pitch";
                     changed(v) => { root.root-note-changed(v); }
@@ -495,6 +496,7 @@ export component SamplerDeviceFace inherits Rectangle {
                     clicked => { root.reverse-playback = !root.reverse-playback; root.reverse-playback-changed(root.reverse-playback); }
                 }
                 SelectorBank {
+                    controlled: false;
                     options: ["Pitch", "Slice"];
                     selected-index <=> root.play-mode;
                     segment-width: 40px;
@@ -502,6 +504,7 @@ export component SamplerDeviceFace inherits Rectangle {
                     selected(i) => { root.play-mode-changed(i); }
                 }
                 SelectorBank {
+                    controlled: false;
                     options: ["Off", "Loop", "Pong"];
                     selected-index <=> root.loop-mode;
                     segment-width: 42px;
@@ -820,6 +823,7 @@ export component SamplerDeviceFace inherits Rectangle {
                     if root.play-mode == 1 && !root.slice-preview && !root.slice-pattern-open : HorizontalLayout {
                         spacing: 4px;
                         StepperField {
+                            controlled: false;
                             label: "BASE"; value <=> root.slice-base-note;
                             minimum: 0; maximum: 127; step: 1; value-width: 26px;
                             display-text: NoteFormat.midi-name(root.slice-base-note);
@@ -827,6 +831,7 @@ export component SamplerDeviceFace inherits Rectangle {
                             changed(v) => { root.slice-base-note-changed(v); }
                         }
                         StepperField {
+                            controlled: false;
                             label: "N"; value <=> root.slice-count;
                             minimum: 1; maximum: 128; step: 1; value-width: 20px;
                             tooltip: "Slices"; hint: "How many slices DIVIDE lays down";
@@ -855,6 +860,7 @@ export component SamplerDeviceFace inherits Rectangle {
                     alignment: center;
                     spacing: 3px;
                     ToggleButton {
+                        controlled: false;
                         text: "AUTO"; min-width: 44px; max-width: 44px; min-height: 20px;
                         tooltip: "Zero-cross"; hint: "Snap markers to zero crossings while editing";
                         checked <=> root.snap-to-zero;
@@ -877,10 +883,10 @@ export component SamplerDeviceFace inherits Rectangle {
                 VerticalLayout {
                     padding: 6px; spacing: 6px;
                     Text { text: "VOICE"; color: Theme.text-faint; font-size: Theme.text-sm; }
-                    SelectorBank { options: ["One Shot", "Gate"]; selected-index <=> root.voice-mode; segment-width: 74px; tooltip: "Playback mode"; selected(i) => { root.voice-mode-changed(i); } }
-                    SelectorBank { options: ["Restart", "Layer"]; selected-index <=> root.retrigger-mode; segment-width: 74px; tooltip: "Retrigger behavior"; selected(i) => { root.retrigger-mode-changed(i); } }
-                    StepperField { label: "VOICES"; value <=> root.polyphony; minimum: 1; maximum: 16; step: 1; value-width: 18px; tooltip: "Voices"; hint: "Maximum simultaneous voices"; changed(v) => { root.polyphony-changed(v); } }
-                    StepperField { label: "CHOKE"; value <=> root.choke-group; minimum: 0; maximum: 16; step: 1; value-width: 18px; tooltip: "Choke"; hint: "Matching non-zero groups choke each other"; changed(v) => { root.choke-group-changed(v); } }
+                    SelectorBank { controlled: false; options: ["One Shot", "Gate"]; selected-index <=> root.voice-mode; segment-width: 74px; tooltip: "Playback mode"; selected(i) => { root.voice-mode-changed(i); } }
+                    SelectorBank { controlled: false; options: ["Restart", "Layer"]; selected-index <=> root.retrigger-mode; segment-width: 74px; tooltip: "Retrigger behavior"; selected(i) => { root.retrigger-mode-changed(i); } }
+                    StepperField { controlled: false; label: "VOICES"; value <=> root.polyphony; minimum: 1; maximum: 16; step: 1; value-width: 18px; tooltip: "Voices"; hint: "Maximum simultaneous voices"; changed(v) => { root.polyphony-changed(v); } }
+                    StepperField { controlled: false; label: "CHOKE"; value <=> root.choke-group; minimum: 0; maximum: 16; step: 1; value-width: 18px; tooltip: "Choke"; hint: "Matching non-zero groups choke each other"; changed(v) => { root.choke-group-changed(v); } }
                     // Without this the column shares its slack out between the
                     // rows, floating them into the middle of an empty panel.
                     Rectangle { vertical-stretch: 1; }
@@ -900,6 +906,7 @@ export component SamplerDeviceFace inherits Rectangle {
                         Text { text: "PITCH & SPEED"; color: Theme.text-faint; font-size: Theme.text-sm; vertical-alignment: center; }
                         Rectangle { horizontal-stretch: 1; }
                         ToggleButton {
+                            controlled: false;
                             text: "ON";
                             tooltip: "Stretch";
                             // Live stretch is bypassed rather than refused in
@@ -930,6 +937,7 @@ export component SamplerDeviceFace inherits Rectangle {
                         spacing: 6px;
                         alignment: start;
                         KnobField {
+                            controlled: false;
                             label: "Tune";
                             tooltip: root.tune-label;
                             diameter: 28px;
@@ -944,6 +952,7 @@ export component SamplerDeviceFace inherits Rectangle {
                         VerticalLayout {
                             alignment: center;
                             MiniKnob {
+                                controlled: false;
                                 diameter: 22px; fill: Theme.accent;
                                 label: "Fine tuning";
                                 value <=> root.tune-cents; minimum: -100; maximum: 100; default-value: 0; step: 1;
@@ -963,6 +972,7 @@ export component SamplerDeviceFace inherits Rectangle {
                         }
                         Rectangle { horizontal-stretch: 1; }
                         ToggleButton {
+                            controlled: false;
                             text: "LIVE";
                             // Off reproduces the sampler's original behavior:
                             // a held or looping voice keeps the pitch it was
@@ -979,6 +989,7 @@ export component SamplerDeviceFace inherits Rectangle {
                     HorizontalLayout {
                         spacing: 4px;
                         SelectorBank {
+                            controlled: false;
                             options: ["Music", "Drums", "Grain"];
                             selected-index <=> root.stretch-mode;
                             segment-width: 46px;
@@ -989,6 +1000,7 @@ export component SamplerDeviceFace inherits Rectangle {
                         VerticalLayout {
                             alignment: center;
                             ToggleButton {
+                                controlled: false;
                                 text: "SYNC";
                                 tooltip: "Sync"; hint: "Fit the loop to the project tempo";
                                 min-width: 46px; max-width: 46px; max-height: 20px;
@@ -1001,6 +1013,7 @@ export component SamplerDeviceFace inherits Rectangle {
                     // the ratio is derived, so showing it as an editable knob
                     // would be offering a control that does nothing.
                     if root.stretch-sync : KnobField {
+                        controlled: false;
                         label: "Bars";
                         tooltip: root.stretch-bars-label;
                         diameter: 26px;
@@ -1032,6 +1045,7 @@ export component SamplerDeviceFace inherits Rectangle {
                         modulation-edit-finished => { root.modulation-edit-finished(32); }
                     }
                     if !root.stretch-sync : KnobField {
+                        controlled: false;
                         label: "Speed";
                         tooltip: root.stretch-ratio-label;
                         diameter: 26px;
@@ -1053,6 +1067,7 @@ export component SamplerDeviceFace inherits Rectangle {
                     // Grain size only means anything without the similarity
                     // search, and the search is what the other modes turn on.
                     if root.stretch-mode == 2 : KnobField {
+                        controlled: false;
                         label: "Grain";
                         tooltip: root.stretch-grain-label;
                         diameter: 26px;
@@ -1160,10 +1175,10 @@ export component SamplerDeviceFace inherits Rectangle {
                     }
                     HorizontalLayout {
                         spacing: 4px;
-                        ParameterKnob { diameter: 36px; label: "Attack"; tooltip: "Amplitude attack"; value <=> root.attack; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.001; value-text: TimeFormat.seconds(root.attack); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[8]; modulation-depth: root.modulation-depths[8]; modulation-offset: root.modulation-offsets[8]; modulation-route-count: root.modulation-route-counts[8]; changed(v) => { root.attack-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(8, v); } modulation-edit-started => { root.modulation-edit-started(8); } modulation-edit-finished => { root.modulation-edit-finished(8); } }
-                        ParameterKnob { diameter: 36px; label: "Decay"; tooltip: "Amplitude decay"; value <=> root.decay; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.25; value-text: TimeFormat.seconds(root.decay); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[9]; modulation-depth: root.modulation-depths[9]; modulation-offset: root.modulation-offsets[9]; modulation-route-count: root.modulation-route-counts[9]; changed(v) => { root.decay-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(9, v); } modulation-edit-started => { root.modulation-edit-started(9); } modulation-edit-finished => { root.modulation-edit-finished(9); } }
-                        ParameterKnob { diameter: 36px; label: "Sustain"; tooltip: "Amplitude sustain"; value <=> root.sustain; default-value: 1; value-text: round(root.sustain * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[10]; modulation-depth: root.modulation-depths[10]; modulation-offset: root.modulation-offsets[10]; modulation-route-count: root.modulation-route-counts[10]; changed(v) => { root.sustain-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(10, v); } modulation-edit-started => { root.modulation-edit-started(10); } modulation-edit-finished => { root.modulation-edit-finished(10); } }
-                        ParameterKnob { diameter: 36px; label: "Release"; tooltip: "Amplitude release"; value <=> root.release; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.05; value-text: TimeFormat.seconds(root.release); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[11]; modulation-depth: root.modulation-depths[11]; modulation-offset: root.modulation-offsets[11]; modulation-route-count: root.modulation-route-counts[11]; changed(v) => { root.release-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(11, v); } modulation-edit-started => { root.modulation-edit-started(11); } modulation-edit-finished => { root.modulation-edit-finished(11); } }
+                        ParameterKnob { controlled: false; diameter: 36px; label: "Attack"; tooltip: "Amplitude attack"; value <=> root.attack; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.001; value-text: TimeFormat.seconds(root.attack); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[8]; modulation-depth: root.modulation-depths[8]; modulation-offset: root.modulation-offsets[8]; modulation-route-count: root.modulation-route-counts[8]; changed(v) => { root.attack-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(8, v); } modulation-edit-started => { root.modulation-edit-started(8); } modulation-edit-finished => { root.modulation-edit-finished(8); } }
+                        ParameterKnob { controlled: false; diameter: 36px; label: "Decay"; tooltip: "Amplitude decay"; value <=> root.decay; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.25; value-text: TimeFormat.seconds(root.decay); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[9]; modulation-depth: root.modulation-depths[9]; modulation-offset: root.modulation-offsets[9]; modulation-route-count: root.modulation-route-counts[9]; changed(v) => { root.decay-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(9, v); } modulation-edit-started => { root.modulation-edit-started(9); } modulation-edit-finished => { root.modulation-edit-finished(9); } }
+                        ParameterKnob { controlled: false; diameter: 36px; label: "Sustain"; tooltip: "Amplitude sustain"; value <=> root.sustain; default-value: 1; value-text: round(root.sustain * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[10]; modulation-depth: root.modulation-depths[10]; modulation-offset: root.modulation-offsets[10]; modulation-route-count: root.modulation-route-counts[10]; changed(v) => { root.sustain-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(10, v); } modulation-edit-started => { root.modulation-edit-started(10); } modulation-edit-finished => { root.modulation-edit-finished(10); } }
+                        ParameterKnob { controlled: false; diameter: 36px; label: "Release"; tooltip: "Amplitude release"; value <=> root.release; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.05; value-text: TimeFormat.seconds(root.release); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[11]; modulation-depth: root.modulation-depths[11]; modulation-offset: root.modulation-offsets[11]; modulation-route-count: root.modulation-route-counts[11]; changed(v) => { root.release-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(11, v); } modulation-edit-started => { root.modulation-edit-started(11); } modulation-edit-finished => { root.modulation-edit-finished(11); } }
                         Rectangle { horizontal-stretch: 1; }
                     }
                 }
@@ -1184,6 +1199,7 @@ export component SamplerDeviceFace inherits Rectangle {
                         Text { text: "FILTER / DRIVE"; color: Theme.text-faint; font-size: Theme.text-sm; vertical-alignment: center; }
                         Rectangle { horizontal-stretch: 1; }
                         SelectorBank {
+                            controlled: false;
                             options: ["CURVE", "ENV"];
                             selected-index <=> root.filter-view;
                             segment-width: 34px;
@@ -1206,15 +1222,16 @@ export component SamplerDeviceFace inherits Rectangle {
                     }
                     if root.filter-view == 1 : HorizontalLayout {
                         spacing: 5px;
-                        ParameterKnob { diameter: 36px; label: "Attack"; tooltip: "Filter envelope attack"; value <=> root.filter-attack; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.001; value-text: TimeFormat.seconds(root.filter-attack); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[23]; modulation-depth: root.modulation-depths[23]; modulation-offset: root.modulation-offsets[23]; modulation-route-count: root.modulation-route-counts[23]; changed(v) => { root.filter-attack-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(23, v); } modulation-edit-started => { root.modulation-edit-started(23); } modulation-edit-finished => { root.modulation-edit-finished(23); } }
-                        ParameterKnob { diameter: 36px; label: "Decay"; tooltip: "Filter envelope decay"; value <=> root.filter-decay; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.25; value-text: TimeFormat.seconds(root.filter-decay); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[24]; modulation-depth: root.modulation-depths[24]; modulation-offset: root.modulation-offsets[24]; modulation-route-count: root.modulation-route-counts[24]; changed(v) => { root.filter-decay-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(24, v); } modulation-edit-started => { root.modulation-edit-started(24); } modulation-edit-finished => { root.modulation-edit-finished(24); } }
-                        ParameterKnob { diameter: 36px; label: "Sustain"; tooltip: "Filter envelope sustain"; value <=> root.filter-sustain; default-value: 1; value-text: round(root.filter-sustain * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[25]; modulation-depth: root.modulation-depths[25]; modulation-offset: root.modulation-offsets[25]; modulation-route-count: root.modulation-route-counts[25]; changed(v) => { root.filter-sustain-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(25, v); } modulation-edit-started => { root.modulation-edit-started(25); } modulation-edit-finished => { root.modulation-edit-finished(25); } }
-                        ParameterKnob { diameter: 36px; label: "Release"; tooltip: "Filter envelope release"; value <=> root.filter-release; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.05; value-text: TimeFormat.seconds(root.filter-release); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[26]; modulation-depth: root.modulation-depths[26]; modulation-offset: root.modulation-offsets[26]; modulation-route-count: root.modulation-route-counts[26]; changed(v) => { root.filter-release-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(26, v); } modulation-edit-started => { root.modulation-edit-started(26); } modulation-edit-finished => { root.modulation-edit-finished(26); } }
+                        ParameterKnob { controlled: false; diameter: 36px; label: "Attack"; tooltip: "Filter envelope attack"; value <=> root.filter-attack; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.001; value-text: TimeFormat.seconds(root.filter-attack); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[23]; modulation-depth: root.modulation-depths[23]; modulation-offset: root.modulation-offsets[23]; modulation-route-count: root.modulation-route-counts[23]; changed(v) => { root.filter-attack-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(23, v); } modulation-edit-started => { root.modulation-edit-started(23); } modulation-edit-finished => { root.modulation-edit-finished(23); } }
+                        ParameterKnob { controlled: false; diameter: 36px; label: "Decay"; tooltip: "Filter envelope decay"; value <=> root.filter-decay; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.25; value-text: TimeFormat.seconds(root.filter-decay); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[24]; modulation-depth: root.modulation-depths[24]; modulation-offset: root.modulation-offsets[24]; modulation-route-count: root.modulation-route-counts[24]; changed(v) => { root.filter-decay-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(24, v); } modulation-edit-started => { root.modulation-edit-started(24); } modulation-edit-finished => { root.modulation-edit-finished(24); } }
+                        ParameterKnob { controlled: false; diameter: 36px; label: "Sustain"; tooltip: "Filter envelope sustain"; value <=> root.filter-sustain; default-value: 1; value-text: round(root.filter-sustain * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[25]; modulation-depth: root.modulation-depths[25]; modulation-offset: root.modulation-offsets[25]; modulation-route-count: root.modulation-route-counts[25]; changed(v) => { root.filter-sustain-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(25, v); } modulation-edit-started => { root.modulation-edit-started(25); } modulation-edit-finished => { root.modulation-edit-finished(25); } }
+                        ParameterKnob { controlled: false; diameter: 36px; label: "Release"; tooltip: "Filter envelope release"; value <=> root.filter-release; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.05; value-text: TimeFormat.seconds(root.filter-release); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[26]; modulation-depth: root.modulation-depths[26]; modulation-offset: root.modulation-offsets[26]; modulation-route-count: root.modulation-route-counts[26]; changed(v) => { root.filter-release-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(26, v); } modulation-edit-started => { root.modulation-edit-started(26); } modulation-edit-finished => { root.modulation-edit-finished(26); } }
                         Rectangle { horizontal-stretch: 1; }
                     }
                     if root.filter-view == 0 : HorizontalLayout {
                         spacing: 5px;
                         ParameterKnob {
+                            controlled: false;
                             diameter: 36px; label: "Cutoff"; tooltip: "Low-pass cutoff";
                             value <=> root.filter-cutoff; default-value: 1;
                             modulation-armed: root.modulation-armed;
@@ -1228,9 +1245,9 @@ export component SamplerDeviceFace inherits Rectangle {
                             modulation-edit-started => { root.modulation-edit-started(12); }
                             modulation-edit-finished => { root.modulation-edit-finished(12); }
                         }
-                        ParameterKnob { diameter: 36px; label: "Reso"; tooltip: "Filter resonance"; value <=> root.filter-resonance; default-value: 0; value-text: round(root.filter-resonance * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[13]; modulation-depth: root.modulation-depths[13]; modulation-offset: root.modulation-offsets[13]; modulation-route-count: root.modulation-route-counts[13]; changed(v) => { root.filter-resonance-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(13, v); } modulation-edit-started => { root.modulation-edit-started(13); } modulation-edit-finished => { root.modulation-edit-finished(13); } }
-                        ParameterKnob { diameter: 36px; label: "Env"; tooltip: "Envelope modulation"; value <=> root.filter-env; default-value: 0.5; bipolar: true; value-text: (round((root.filter-env * 2 - 1) * 100) > 0 ? "+" : "") + round((root.filter-env * 2 - 1) * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[14]; modulation-depth: root.modulation-depths[14]; modulation-offset: root.modulation-offsets[14]; modulation-route-count: root.modulation-route-counts[14]; changed(v) => { root.filter-env-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(14, v); } modulation-edit-started => { root.modulation-edit-started(14); } modulation-edit-finished => { root.modulation-edit-finished(14); } }
-                        ParameterKnob { diameter: 36px; label: "Drive"; tooltip: "Pre-filter saturation"; value <=> root.drive; default-value: 0; value-text: round(root.drive * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[15]; modulation-depth: root.modulation-depths[15]; modulation-offset: root.modulation-offsets[15]; modulation-route-count: root.modulation-route-counts[15]; changed(v) => { root.drive-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(15, v); } modulation-edit-started => { root.modulation-edit-started(15); } modulation-edit-finished => { root.modulation-edit-finished(15); } }
+                        ParameterKnob { controlled: false; diameter: 36px; label: "Reso"; tooltip: "Filter resonance"; value <=> root.filter-resonance; default-value: 0; value-text: round(root.filter-resonance * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[13]; modulation-depth: root.modulation-depths[13]; modulation-offset: root.modulation-offsets[13]; modulation-route-count: root.modulation-route-counts[13]; changed(v) => { root.filter-resonance-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(13, v); } modulation-edit-started => { root.modulation-edit-started(13); } modulation-edit-finished => { root.modulation-edit-finished(13); } }
+                        ParameterKnob { controlled: false; diameter: 36px; label: "Env"; tooltip: "Envelope modulation"; value <=> root.filter-env; default-value: 0.5; bipolar: true; value-text: (round((root.filter-env * 2 - 1) * 100) > 0 ? "+" : "") + round((root.filter-env * 2 - 1) * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[14]; modulation-depth: root.modulation-depths[14]; modulation-offset: root.modulation-offsets[14]; modulation-route-count: root.modulation-route-counts[14]; changed(v) => { root.filter-env-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(14, v); } modulation-edit-started => { root.modulation-edit-started(14); } modulation-edit-finished => { root.modulation-edit-finished(14); } }
+                        ParameterKnob { controlled: false; diameter: 36px; label: "Drive"; tooltip: "Pre-filter saturation"; value <=> root.drive; default-value: 0; value-text: round(root.drive * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[15]; modulation-depth: root.modulation-depths[15]; modulation-offset: root.modulation-offsets[15]; modulation-route-count: root.modulation-route-counts[15]; changed(v) => { root.drive-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(15, v); } modulation-edit-started => { root.modulation-edit-started(15); } modulation-edit-finished => { root.modulation-edit-finished(15); } }
                     }
                 }
             }
@@ -1246,8 +1263,8 @@ export component SamplerDeviceFace inherits Rectangle {
                     }
                     HorizontalLayout {
                         spacing: 8px;
-                        ParameterKnob { label: "Bits"; tooltip: "Bit-depth reduction"; value <=> root.bit-reduction; default-value: 0; value-text: round(16 - root.bit-reduction * 12) + " bit"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[16]; modulation-depth: root.modulation-depths[16]; modulation-offset: root.modulation-offsets[16]; modulation-route-count: root.modulation-route-counts[16]; changed(v) => { root.bit-reduction-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(16, v); } modulation-edit-started => { root.modulation-edit-started(16); } modulation-edit-finished => { root.modulation-edit-finished(16); } }
-                        ParameterKnob { label: "Rate"; tooltip: "Sample-rate reduction"; value <=> root.rate-reduction; default-value: 0; value-text: "÷" + round(1 + root.rate-reduction * 31); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[17]; modulation-depth: root.modulation-depths[17]; modulation-offset: root.modulation-offsets[17]; modulation-route-count: root.modulation-route-counts[17]; changed(v) => { root.rate-reduction-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(17, v); } modulation-edit-started => { root.modulation-edit-started(17); } modulation-edit-finished => { root.modulation-edit-finished(17); } }
+                        ParameterKnob { controlled: false; label: "Bits"; tooltip: "Bit-depth reduction"; value <=> root.bit-reduction; default-value: 0; value-text: round(16 - root.bit-reduction * 12) + " bit"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[16]; modulation-depth: root.modulation-depths[16]; modulation-offset: root.modulation-offsets[16]; modulation-route-count: root.modulation-route-counts[16]; changed(v) => { root.bit-reduction-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(16, v); } modulation-edit-started => { root.modulation-edit-started(16); } modulation-edit-finished => { root.modulation-edit-finished(16); } }
+                        ParameterKnob { controlled: false; label: "Rate"; tooltip: "Sample-rate reduction"; value <=> root.rate-reduction; default-value: 0; value-text: "÷" + round(1 + root.rate-reduction * 31); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[17]; modulation-depth: root.modulation-depths[17]; modulation-offset: root.modulation-offsets[17]; modulation-route-count: root.modulation-route-counts[17]; changed(v) => { root.rate-reduction-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(17, v); } modulation-edit-started => { root.modulation-edit-started(17); } modulation-edit-finished => { root.modulation-edit-finished(17); } }
                         Rectangle { horizontal-stretch: 1; }
                     }
                 }
@@ -1293,6 +1310,7 @@ export component SamplerDeviceFace inherits Rectangle {
                 }
                 Rectangle { horizontal-stretch: 1; }
                 ToggleButton {
+                    controlled: false;
                     width: 52px;
                     text: "CLIP";
                     tooltip: "Clip";
@@ -1301,6 +1319,7 @@ export component SamplerDeviceFace inherits Rectangle {
                     toggled(on) => { root.record-clip-changed(on); }
                 }
                 StepperField {
+                    controlled: false;
                     label: "LENGTH";
                     tooltip: "Length";
                     hint: "How long a take records with Clip on.";

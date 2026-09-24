@@ -110,7 +110,9 @@ export component CompressorDeviceDragHarness inherits Window {
         makeup <=> root.makeup;
         detector-db: root.detector-db;
         gain-reduction-db: root.gain-reduction-db;
-        threshold-changed(v) => { root.threshold-changed(v); }
+        // The owner's half of a reported edit, as Rust's republished row is
+        // in the application: the face reports and does not write (MOO-220).
+        threshold-changed(v) => { root.threshold = v; root.threshold-changed(v); }
     }
 }
 

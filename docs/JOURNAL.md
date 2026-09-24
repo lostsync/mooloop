@@ -1765,6 +1765,12 @@ A usage limit stopped both of the last two teams mid-verification at 02:00. Thei
 
 Nothing in this sequence has been heard. The layer's parallel compression, the three compressor voicings and the LSP flanger were each rendered offline and measured against their claims. That is all an agent can do. They are items 1, 6 and 7 on `FOCUS.md`'s listening list, and the list of passes actually heard still ends on Sep 18.
 
+## Sep 24 — the knob that stopped listening, and a sentence in this journal that said it couldn't
+
+Adam: *"when you pick a new point in the EQ, the knobs all stay on the last point's values."* The Rust side republished the right row every time; the knobs had stopped reading it. The Sep 4 entry for DS-01's face explains why no face but DS-01 could ever have that fault -- a two-way `<=>` *intercepts* a write and forwards it, so a face that declares a property per parameter is "exempt by construction". The first half is true and the conclusion is not. The write is forwarded to the property at the far end of the chain, and `Property::set` there removes *its* binding. On the source faces the far end is a window property Rust sets directly, so there was nothing to remove and the reasoning held. On every insert face the far end is `frequency: slot.p2`, and the first touch cut the face loose from its row for good.
+
+So `controlled` is the default now on every shared value control (MOO-220), and `controlled: false` is the exception a caller has to state. The test that holds it walks the item tree for every `slider` in the real window, turns each one a notch, puts the document back underneath it, and reads the readout. On the unfixed tree it named five controls on the EQ alone, including both trims, which nobody had reported. The lesson is the Sep 4 one again, one level up: that entry's own test was right about the face it tested, and the prose that generalised from it was never tested at all.
+
 ## Open threads
 
 Refreshed 2026-09-02, with the September documentation audit's threads merged in on 2026-09-04 and Adam's 2026-09-05 list merged in after that. Four of the six threads listed here in August are closed: modulation drives things now, the buffer device exists, undo and clipboard are real, and the convolution reverb that needed an IR loader was replaced outright by an FDN hall — so `StereoIr` is no longer the boundary anything is waiting on.

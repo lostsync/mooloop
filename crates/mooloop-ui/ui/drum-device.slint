@@ -56,6 +56,7 @@ export component DrumDeviceFace inherits Rectangle {
         HorizontalLayout {
             spacing: 6px;
             SelectorBank {
+                controlled: false;
                 options: ["Kick", "Snare", "Hat"];
                 selected-index <=> root.mode;
                 segment-width: 46px;
@@ -64,6 +65,7 @@ export component DrumDeviceFace inherits Rectangle {
             }
             Rectangle { width: 1px; background: Theme.border; }
             if root.mode == 0 : SelectorBank {
+                controlled: false;
                 options: ["Sub", "Punch", "Deep", "Kit", "DNB"];
                 selected-index <=> root.kick-character;
                 segment-width: 54px;
@@ -71,6 +73,7 @@ export component DrumDeviceFace inherits Rectangle {
                 selected(i) => { root.kick-character-changed(i); }
             }
             if root.mode == 1 : SelectorBank {
+                controlled: false;
                 options: ["Pop", "Snap", "Power", "Clap", "Rim"];
                 selected-index <=> root.snare-character;
                 segment-width: 54px;
@@ -78,6 +81,7 @@ export component DrumDeviceFace inherits Rectangle {
                 selected(i) => { root.snare-character-changed(i); }
             }
             if root.mode == 2 : SelectorBank {
+                controlled: false;
                 options: ["Soft", "Tight", "Metal", "Sizzle", "Trash"];
                 selected-index <=> root.hat-character;
                 segment-width: 54px;
@@ -93,23 +97,27 @@ export component DrumDeviceFace inherits Rectangle {
             spacing: 4px;
             alignment: start;
             ParameterKnob {
+                controlled: false;
                 label: "Decay"; tooltip: "Amplitude decay";
                 value <=> root.decay; minimum: 0.005; maximum: 2; default-value: 0.24; scale: ValueScale.logarithmic;
                 value-text: round(root.decay * 1000) + " ms";
                 changed(v) => { root.decay-changed(v); }
             }
             ParameterKnob {
+                controlled: false;
                 label: "Tune"; tooltip: "Keyboard tracking offset";
                 value <=> root.tune-semitones; minimum: -48; maximum: 48; default-value: 0; step: 1;
                 value-text: (root.tune-semitones > 0 ? "+" : "") + round(root.tune-semitones) + " st";
                 changed(v) => { root.tune-semitones-changed(v); }
             }
             ParameterKnob {
+                controlled: false;
                 label: "Drive"; tooltip: "Soft saturation";
                 value <=> root.drive; default-value: 0;                value-text: round(root.drive * 100) + "%";
                 changed(v) => { root.drive-changed(v); }
             }
             ParameterKnob {
+                controlled: false;
                 label: "Punch"; tooltip: "Transient emphasis";
                 value <=> root.punch; default-value: 0.35;                value-text: round(root.punch * 100) + "%";
                 changed(v) => { root.punch-changed(v); }
@@ -118,6 +126,7 @@ export component DrumDeviceFace inherits Rectangle {
                 width: 84px;
                 height: 80px;
                 StepperField {
+                    controlled: false;
                     x: 4px;
                     y: (parent.height - self.height) / 2;
                     label: "CHOKE";
@@ -153,11 +162,13 @@ export component DrumDeviceFace inherits Rectangle {
             HorizontalLayout {
                 spacing: 10px;
                 ParameterFader {
+                    controlled: false;
                     horizontal-stretch: 1; label: "Start"; tooltip: "Kick sweep start frequency";
                     value <=> root.kick-start-hz; minimum: 20; maximum: 1000; default-value: 160; scale: ValueScale.logarithmic;
                     value-text: round(root.kick-start-hz) + " Hz"; changed(v) => { root.kick-start-hz-changed(v); }
                 }
                 ParameterFader {
+                    controlled: false;
                     horizontal-stretch: 1; label: "End"; tooltip: "Kick sweep end frequency";
                     value <=> root.kick-end-hz; minimum: 20; maximum: 400; default-value: 48; scale: ValueScale.logarithmic;
                     value-text: round(root.kick-end-hz) + " Hz"; changed(v) => { root.kick-end-hz-changed(v); }
@@ -166,11 +177,13 @@ export component DrumDeviceFace inherits Rectangle {
             HorizontalLayout {
                 spacing: 10px;
                 ParameterFader {
+                    controlled: false;
                     horizontal-stretch: 1; label: "Sweep"; tooltip: "Kick pitch sweep time";
                     value <=> root.kick-sweep; minimum: 0.005; maximum: 1; default-value: 0.045; scale: ValueScale.logarithmic;
                     value-text: round(root.kick-sweep * 1000) + " ms"; changed(v) => { root.kick-sweep-changed(v); }
                 }
                 ParameterFader {
+                    controlled: false;
                     horizontal-stretch: 1; label: "Click"; tooltip: "Beater click level";
                     value <=> root.kick-click; default-value: 0.5;
                     value-text: round(root.kick-click * 100) + "%"; changed(v) => { root.kick-click-changed(v); }
@@ -182,16 +195,19 @@ export component DrumDeviceFace inherits Rectangle {
             HorizontalLayout {
                 spacing: 10px;
                 ParameterFader {
+                    controlled: false;
                     horizontal-stretch: 1; label: "Tone"; tooltip: "Snare body frequency";
                     value <=> root.snare-tone-hz; minimum: 40; maximum: 2000; default-value: 180; scale: ValueScale.logarithmic;
                     value-text: round(root.snare-tone-hz) + " Hz"; changed(v) => { root.snare-tone-hz-changed(v); }
                 }
                 ParameterFader {
+                    controlled: false;
                     horizontal-stretch: 1; label: "Tone 2"; tooltip: "Secondary body frequency";
                     value <=> root.snare-tone2-hz; minimum: 80; maximum: 4000; default-value: 330; scale: ValueScale.logarithmic;
                     value-text: round(root.snare-tone2-hz) + " Hz"; changed(v) => { root.snare-tone2-hz-changed(v); }
                 }
                 ParameterFader {
+                    controlled: false;
                     horizontal-stretch: 1; label: "T2 Mix"; tooltip: "Secondary tone level";
                     value <=> root.snare-tone2-mix; default-value: 0.2;
                     value-text: round(root.snare-tone2-mix * 100) + "%"; changed(v) => { root.snare-tone2-mix-changed(v); }
@@ -200,16 +216,19 @@ export component DrumDeviceFace inherits Rectangle {
             HorizontalLayout {
                 spacing: 10px;
                 ParameterFader {
+                    controlled: false;
                     horizontal-stretch: 1; label: "Noise"; tooltip: "Noise versus body mix";
                     value <=> root.snare-noise-mix; default-value: 0.6;
                     value-text: round(root.snare-noise-mix * 100) + "%"; changed(v) => { root.snare-noise-mix-changed(v); }
                 }
                 ParameterFader {
+                    controlled: false;
                     horizontal-stretch: 1; label: "N Decay"; tooltip: "Noise burst decay";
                     value <=> root.snare-noise-decay; minimum: 0.005; maximum: 2; default-value: 0.11; scale: ValueScale.logarithmic;
                     value-text: round(root.snare-noise-decay * 1000) + " ms"; changed(v) => { root.snare-noise-decay-changed(v); }
                 }
                 ParameterFader {
+                    controlled: false;
                     horizontal-stretch: 1; label: "Color"; tooltip: "Noise brightness";
                     value <=> root.snare-noise-color; default-value: 0.65;
                     value-text: round(root.snare-noise-color * 100) + "%"; changed(v) => { root.snare-noise-color-changed(v); }
@@ -219,11 +238,13 @@ export component DrumDeviceFace inherits Rectangle {
         if root.mode == 2 : HorizontalLayout {
             spacing: 10px;
             ParameterFader {
+                controlled: false;
                 horizontal-stretch: 1; label: "High-pass"; tooltip: "Hat high-pass cutoff";
                 value <=> root.hat-hp-hz; minimum: 500; maximum: 16000; default-value: 7500; scale: ValueScale.logarithmic;
                 value-text: NoteFormat.frequency-value(root.hat-hp-hz); changed(v) => { root.hat-hp-hz-changed(v); }
             }
             ParameterFader {
+                controlled: false;
                 horizontal-stretch: 1; label: "Metallic"; tooltip: "Metallic square oscillator blend";
                 value <=> root.hat-metallic; default-value: 0.5;
                 value-text: round(root.hat-metallic * 100) + "%"; changed(v) => { root.hat-metallic-changed(v); }

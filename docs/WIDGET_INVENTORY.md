@@ -51,6 +51,11 @@ pages are its layers can tint each page's dials to match, and `ParameterKnob`
 and `MiniKnob` gained `controlled` — report the change, do not write the
 property — which is what a face indexed by parameter id needs, because a knob
 that writes its own value drops the binding onto the model row it reads.
+**Since 2026-09-24 (MOO-220) it is the default** on every shared value control
+-- the knobs and faders, `ToggleButton`, `SegmentedControl`, `SelectorBank`,
+and `toolbar.slint`'s `StepperField`, `MenuField` and `TempoField` -- because a
+`<=>` does not protect a binding at the far end of the chain, and the EQ's
+knobs were the proof. A caller over a plain property says `controlled: false`.
 
 A third caller arrived 2026-09-05 and needed nothing new: `aux-in-device.slint`
 picks a source channel and a published outlet from two `PickerChip`s, and the

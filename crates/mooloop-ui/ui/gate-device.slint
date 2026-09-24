@@ -52,8 +52,9 @@ export component GateDeviceFace inherits EffectDeviceShell {
                 detector-db: root.detector-db;
                 gain-reduction-db: root.gain-reduction-db;
                 threshold-dragged(db) => {
-                    root.threshold = clamp((db + 80) / 80, 0, 1);
-                    root.threshold-changed(root.threshold);
+                    // Reported, not written: `threshold` is the model row's, and
+                    // writing it would drop that binding (MOO-220).
+                    root.threshold-changed(clamp((db + 80) / 80, 0, 1));
                 }
             }
         }

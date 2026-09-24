@@ -419,6 +419,7 @@ export component MockupCanvas inherits Window {
                     clicked => { root.snap-enabled = !root.snap-enabled; }
                 }
                 StepperField {
+                    controlled: false;
                     horizontal-stretch: 0;
                     label: "GRID";
                     tooltip: "Grid size";
@@ -456,12 +457,14 @@ export component MockupCanvas inherits Window {
                     padding: 6px;
                     spacing: 4px;
                     SegmentedControl {
+                        controlled: false;
                         height: 26px;
                         options: ["PALETTE", "LAYERS"];
                         selected-index <=> root.sidebar-tab;
                     }
 
                     if root.sidebar-tab == 0: SegmentedControl {
+                        controlled: false;
                         height: 26px;
                         options: ["Role", "Module", "A-Z"];
                         selected-index <=> root.palette-axis;

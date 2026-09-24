@@ -361,6 +361,8 @@ export component ToggleButton inherits Rectangle {
     in property <string> hint;
     in-out property <bool> checked;
     in property <bool> enabled: true;
+    /// Whether the owner writes `checked`; see `ParameterKnob.controlled`.
+    in property <bool> controlled: true;
     callback toggled(bool);
     min-width: 44px;
     min-height: 24px;
@@ -371,9 +373,12 @@ export component ToggleButton inherits Rectangle {
         hint: root.hint;
         active: root.checked;
         enabled: root.enabled;
+        accessible-checkable: true;
+        accessible-checked: root.checked;
         clicked => {
-            root.checked = !root.checked;
-            root.toggled(root.checked);
+            let next = !root.checked;
+            if (!root.controlled) { root.checked = next; }
+            root.toggled(next);
         }
     }
 }
@@ -385,6 +390,9 @@ export component SegmentedControl inherits Rectangle {
     /// What the bank as a whole does, for the status bar. Each segment's
     /// tooltip stays its own label.
     in property <string> hint;
+    /// Whether the owner writes `selected-index`; see
+    /// `ParameterKnob.controlled`.
+    in property <bool> controlled: true;
     callback selected(int);
 
     min-height: 26px;
@@ -402,8 +410,10 @@ export component SegmentedControl inherits Rectangle {
             active: root.selected-index == i;
             enabled: root.enabled;
             horizontal-stretch: 1;
+            accessible-checkable: true;
+            accessible-checked: root.selected-index == i;
             clicked => {
-                root.selected-index = i;
+                if (!root.controlled) { root.selected-index = i; }
                 root.selected(i);
             }
         }
@@ -419,6 +429,9 @@ export component SelectorBank inherits Rectangle {
     in property <bool> enabled: true;
     in property <string> tooltip;
     in property <length> segment-width: 44px;
+    /// Whether the owner writes `selected-index`; see
+    /// `ParameterKnob.controlled`.
+    in property <bool> controlled: true;
     callback selected(int);
 
     height: 26px;
@@ -443,8 +456,10 @@ export component SelectorBank inherits Rectangle {
             enabled: root.enabled;
             min-width: root.segment-width;
             max-width: root.segment-width;
+            accessible-checkable: true;
+            accessible-checked: root.selected-index == i;
             clicked => {
-                root.selected-index = i;
+                if (!root.controlled) { root.selected-index = i; }
                 root.selected(i);
             }
         }
@@ -875,25 +890,35 @@ export component ParameterKnob inherits Rectangle {
     // right now, and how many routes land on it.
     in property <float> modulation-offset;
     in property <int> modulation-route-count;
-    /// Whether the caller owns this knob's value.
+    /// Whether the owner writes this knob's value: **yes, unless it says
+    /// otherwise** (MOO-220).
     ///
-    /// A knob normally writes its own `value` and reports the change. That is
-    /// right when the value is a property Rust sets one by one — but a face
-    /// indexed by parameter id binds `value` to a *model row*, and **Slint
-    /// drops a binding at the first assignment to the property it feeds**. So
-    /// such a knob would keep the last value it was dragged to for the rest
-    /// of the session, and the next patch loaded over it would leave that one
-    /// control behind, with nothing to see.
+    /// A controlled knob reports a change and does not write it. The owner
+    /// puts the new value into its model, the model is published, and the
+    /// knob draws what was published -- so the value lives in one place and
+    /// the knob always shows it, whoever moved it: a drag, an undo, a preset,
+    /// a MIDI controller, automation, or the same parameter in another view.
     ///
-    /// Set this and the knob reports the change without writing it. The owner
-    /// updates the model, the binding re-evaluates, and there is exactly one
-    /// place the value lives. `modulation-depth` follows the same rule.
+    /// It is the default because the other way round fails silently. **Slint
+    /// drops a binding at the first assignment to the property it feeds**,
+    /// and a two-way `<=>` does not protect it: the write is forwarded to the
+    /// property at the far end of the chain, and if *that* one is bound --
+    /// `frequency: slot.p2` on a face, `value: root.values[id]` in a row --
+    /// the binding is gone for the life of the element. The knob then shows
+    /// what it was last dragged to, and nothing else can move it. That was
+    /// the EQ's knobs keeping the last band's values, and every touched knob
+    /// on every face ignoring undo (`JOURNAL.md`, 2026-09-24).
     ///
-    /// A face that binds `value` with `<=>` does not need it: a two-way
-    /// binding intercepts the write and forwards it up the chain instead of
-    /// being dropped (`Property::set` in `i-slint-core`), which is why every
-    /// other device face here is fine as it is.
-    in property <bool> controlled;
+    /// `controlled: false` is for a value that is a plain property with no
+    /// binding behind it, which Rust sets directly (`set_mono_glide`) or a
+    /// dialog keeps as its own state. Writing that drops nothing, and the
+    /// knob moves without a round trip. `controlled_faces_tests.rs` holds
+    /// both kinds to the same claim: after an outside change, every control
+    /// shows the new value.
+    ///
+    /// `modulation-depth` is never written by the knob, controlled or not:
+    /// every caller binds it to a model array.
+    in property <bool> controlled: true;
     callback changed(float);
     callback modulation-depth-changed(float);
     callback modulation-edit-started();
@@ -961,7 +986,6 @@ export component ParameterKnob inherits Rectangle {
         if (ControlAssign.midi-learn) { return; }
         let next = clamp(depth, -1, 1);
         if (next != root.modulation-depth) {
-            if (!root.controlled) { root.modulation-depth = next; }
             root.modulation-edited = true;
             root.modulation-depth-changed(next);
         }
@@ -1363,11 +1387,9 @@ export component KnobField inherits Rectangle {
     in property <length> diameter: 30px;
     in property <length> label-width: 34px;
     in property <length> field-width: 62px;
-    /// Whether the caller owns this row's value; see `ParameterKnob`. A row
-    /// drawn from a model -- one route in a list, say -- must set it, or the
-    /// first drag drops the binding that feeds it and the field goes on
-    /// showing whatever the model said when the drag began.
-    in property <bool> controlled;
+    /// Whether the owner writes this row's value; see
+    /// `ParameterKnob.controlled`, whose default this shares.
+    in property <bool> controlled: true;
     in property <bool> modulation-armed;
     in property <bool> modulation-allowed: true;
     in-out property <float> modulation-depth;
@@ -1442,21 +1464,41 @@ export component KnobField inherits Rectangle {
         border-color: entry.has-focus ? Theme.accent : Theme.border;
         accessible-role: text-input;
         accessible-label: root.tooltip;
+        accessible-value: root.display-text;
 
+        // The readout, while nobody is typing. A `TextInput` cannot be it:
+        // typing assigns its `text`, which drops the binding to
+        // `display-text`, and the field then showed the last thing typed
+        // for the rest of its life -- the MOO-220 fault in a text box.
+        if !entry.has-focus : Text {
+            x: 4px;
+            width: parent.width - 8px;
+            height: 100%;
+            text: root.display-text;
+            color: Theme.text;
+            font-size: Theme.text-md;
+            font-family: Theme.font-family-mono;
+            vertical-alignment: center;
+            overflow: elide;
+        }
         entry := TextInput {
             x: 4px;
             width: parent.width - 8px;
             height: 100%;
-            // Rebinds whenever the caller's text changes, which is what pulls
-            // the field back into agreement after a knob drag or a modulated
-            // value lands.
             text: root.display-text;
-            color: Theme.text;
+            // Drawn only while it is being typed into; the `Text` above is
+            // the readout the rest of the time.
+            color: self.has-focus ? Theme.text : transparent;
             font-size: Theme.text-md;
             font-family: Theme.font-family-mono;
             single-line: true;
             vertical-alignment: center;
             selection-background-color: Theme.accent;
+            // Each entry starts from what the parameter says now, not from
+            // what was typed last time.
+            changed has-focus => {
+                if (self.has-focus) { self.text = root.display-text; }
+            }
             accepted => {
                 root.text-committed(self.text);
                 self.clear-focus();
@@ -1558,6 +1600,9 @@ export component TimeDivisionKnob inherits Rectangle {
     in-out property <float> modulation-depth;
     in property <float> modulation-offset;
     in property <int> modulation-route-count;
+    /// Whether the owner writes `value`, `division` and `tempo-sync`; see
+    /// `ParameterKnob.controlled`. All three are the delay's model.
+    in property <bool> controlled: true;
     callback changed(float);
     callback tempo-sync-changed(bool);
     callback division-changed(int);
@@ -1581,19 +1626,24 @@ export component TimeDivisionKnob inherits Rectangle {
         return clamp(ln(clamp(ms, 1, 2000)) / ln(2000), 0, 1);
     }
 
+    // The time a synced division plays at, worked out from the division
+    // being chosen rather than from `division`, which a controlled knob has
+    // not been handed back yet.
     function set-division(next: int) {
         let clamped = clamp(next, 0, 20);
         if (clamped != root.division) {
-            root.division = clamped;
+            if (!root.controlled) { root.division = clamped; }
             root.division-changed(clamped);
         }
-        root.value = root.normalized-for-ms(root.effective-ms);
-        root.changed(root.value);
+        let ms = min(Divisions.beats(clamped) * 60000 / max(root.bpm, 1), root.maximum-ms);
+        let normalized = root.normalized-for-ms(ms);
+        if (!root.controlled) { root.value = normalized; }
+        root.changed(normalized);
     }
 
     function set-sync(on: bool) {
         if (on != root.tempo-sync) {
-            root.tempo-sync = on;
+            if (!root.controlled) { root.tempo-sync = on; }
             root.tempo-sync-changed(on);
             if (on) { root.set-division(root.division); }
         }
@@ -1633,7 +1683,7 @@ export component TimeDivisionKnob inherits Rectangle {
                 if (root.tempo-sync) {
                     root.set-division(round(v));
                 } else {
-                    root.value = v;
+                    if (!root.controlled) { root.value = v; }
                     root.changed(v);
                 }
             }
@@ -1679,6 +1729,9 @@ export component ParameterFader inherits Rectangle {
     in property <length> layout-spacing: 6px;
     in property <color> fill: Theme.accent;
     in property <color> text-color: Theme.text-muted;
+    /// Whether the owner writes this fader's value; see
+    /// `ParameterKnob.controlled`, whose default this shares.
+    in property <bool> controlled: true;
     callback changed(float);
 
     private property <float> normalized: root.normalized-value(root.value);
@@ -1718,9 +1771,17 @@ export component ParameterFader inherits Rectangle {
             : raw;
         let next = clamp(quantized, root.minimum, root.maximum);
         if (next != root.value) {
-            root.value = next;
+            if (!root.controlled) { root.value = next; }
             root.changed(next);
         }
+    }
+
+    function reset-to-default() {
+        Gesture.begin();
+        let reset = clamp(root.default-value, root.minimum, root.maximum);
+        if (!root.controlled) { root.value = reset; }
+        root.changed(reset);
+        Gesture.end();
     }
 
     if root.orientation == AudioOrientation.horizontal : HorizontalLayout {
@@ -1791,7 +1852,7 @@ export component ParameterFader inherits Rectangle {
                         Gesture.end();
                     }
                 }
-                double-clicked => { Gesture.begin(); root.value = clamp(root.default-value, root.minimum, root.maximum); root.changed(root.value); Gesture.end(); }
+                double-clicked => { root.reset-to-default(); }
                 scroll-event(e) => {
                     Gesture.begin();
                     root.set-normalized(root.normalized
@@ -1856,7 +1917,7 @@ export component ParameterFader inherits Rectangle {
                         Gesture.end();
                     }
                 }
-                double-clicked => { Gesture.begin(); root.value = clamp(root.default-value, root.minimum, root.maximum); root.changed(root.value); Gesture.end(); }
+                double-clicked => { root.reset-to-default(); }
                 scroll-event(e) => {
                     Gesture.begin();
                     root.set-normalized(root.normalized
@@ -2081,10 +2142,9 @@ export component MiniKnob inherits Rectangle {
     in-out property <float> modulation-depth;
     in property <float> modulation-offset;
     in property <int> modulation-route-count;
-    /// Whether the caller owns this knob's value; see `ParameterKnob`. A face
-    /// that binds `value` to a model row must set it, or the first drag drops
-    /// the binding and the control stops following the patch.
-    in property <bool> controlled;
+    /// Whether the owner writes this knob's value; see
+    /// `ParameterKnob.controlled`, whose default this shares.
+    in property <bool> controlled: true;
     callback changed(float);
     callback modulation-depth-changed(float);
     callback modulation-edit-started();
@@ -2151,7 +2211,6 @@ export component MiniKnob inherits Rectangle {
         if (ControlAssign.midi-learn) { return; }
         let next = clamp(depth, -1, 1);
         if (next != root.modulation-depth) {
-            if (!root.controlled) { root.modulation-depth = next; }
             root.modulation-edited = true;
             root.modulation-depth-changed(next);
         }
@@ -2505,10 +2564,9 @@ export component KnobStack inherits Rectangle {
     /// page's controls to match the layer, so a knob says which one it belongs
     /// to without a second label.
     in property <color> fill: Theme.accent;
-    /// Whether the caller owns this knob's value; see `ParameterKnob`. A face
-    /// that binds `value` to a model row must set it, or the first drag drops
-    /// the binding and the control stops following the patch.
-    in property <bool> controlled;
+    /// Whether the owner writes this knob's value; see
+    /// `ParameterKnob.controlled`, whose default this shares.
+    in property <bool> controlled: true;
     in property <bool> modulation-armed;
     in property <bool> modulation-allowed: true;
     in-out property <float> modulation-depth;
@@ -2604,7 +2662,9 @@ export component KnobStack inherits Rectangle {
             border-color: stacked-entry.has-focus ? Theme.accent : Theme.border;
             accessible-role: text-input;
             accessible-label: root.tooltip;
-            stacked-entry := TextInput {
+            accessible-value: root.display-text;
+            // The readout while nobody is typing; `KnobField`'s reason.
+            if !stacked-entry.has-focus : Text {
                 x: 3px;
                 width: parent.width - 6px;
                 height: 100%;
@@ -2612,10 +2672,25 @@ export component KnobStack inherits Rectangle {
                 color: Theme.text;
                 font-size: Theme.text-md;
                 font-family: Theme.font-family-mono;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            stacked-entry := TextInput {
+                x: 3px;
+                width: parent.width - 6px;
+                height: 100%;
+                text: root.display-text;
+                color: self.has-focus ? Theme.text : transparent;
+                font-size: Theme.text-md;
+                font-family: Theme.font-family-mono;
                 single-line: true;
                 horizontal-alignment: center;
                 vertical-alignment: center;
                 selection-background-color: Theme.accent;
+                changed has-focus => {
+                    if (self.has-focus) { self.text = root.display-text; }
+                }
                 accepted => {
                     root.text-committed(self.text);
                     self.clear-focus();
@@ -2830,6 +2905,9 @@ export component MixerFader inherits Rectangle {
     in property <bool> enabled: true;
     in property <string> value-text;
     in property <color> fill: Theme.accent;
+    /// Whether the owner writes this fader's value; see
+    /// `ParameterKnob.controlled`, whose default this shares.
+    in property <bool> controlled: true;
     callback changed(float);
 
     private property <float> normalized: root.maximum <= root.minimum
@@ -2862,7 +2940,7 @@ export component MixerFader inherits Rectangle {
             let db = GainMath.fader-position-to-db(clamp(n, 0, 1));
             let next = clamp(GainMath.db-to-linear(db), root.minimum, root.maximum);
             if (next != root.value) {
-                root.value = next;
+                if (!root.controlled) { root.value = next; }
                 root.changed(next);
             }
             return;
@@ -2873,7 +2951,7 @@ export component MixerFader inherits Rectangle {
             : raw;
         let next = clamp(quantized, root.minimum, root.maximum);
         if (next != root.value) {
-            root.value = next;
+            if (!root.controlled) { root.value = next; }
             root.changed(next);
         }
     }
@@ -2966,8 +3044,9 @@ export component MixerFader inherits Rectangle {
             }
             double-clicked => {
                 Gesture.begin();
-                root.value = clamp(root.default-value, root.minimum, root.maximum);
-                root.changed(root.value);
+                let reset = clamp(root.default-value, root.minimum, root.maximum);
+                if (!root.controlled) { root.value = reset; }
+                root.changed(reset);
                 Gesture.end();
             }
             scroll-event(e) => {

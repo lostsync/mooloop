@@ -145,7 +145,8 @@ export component ModulationDeviceFace inherits EffectDeviceShell {
                     if (root.tempo-sync) {
                         root.rate-division-changed(round(v));
                     } else {
-                        root.rate = v;
+                        // Reported, not written: `rate` is the model row's,
+                        // and writing it would drop that binding (MOO-220).
                         root.rate-changed(v);
                     }
                 }

@@ -130,10 +130,10 @@ export component MlM1DeviceFace inherits Rectangle {
                     }
                     HorizontalLayout {
                         spacing: 0px;
-                        ParameterKnob { width: 52px; diameter: 34px; label: "Attack"; tooltip: "Amplitude attack"; value <=> root.attack; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.005; value-text: TimeFormat.seconds(root.attack); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[1]; modulation-depth: root.modulation-depths[1]; modulation-offset: root.modulation-offsets[1]; modulation-route-count: root.modulation-route-counts[1]; changed(v) => { root.attack-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); } modulation-edit-started => { root.modulation-edit-started(1); } modulation-edit-finished => { root.modulation-edit-finished(1); } }
-                        ParameterKnob { width: 52px; diameter: 34px; label: "Decay"; tooltip: "Amplitude decay"; value <=> root.decay; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.2; value-text: TimeFormat.seconds(root.decay); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[2]; modulation-depth: root.modulation-depths[2]; modulation-offset: root.modulation-offsets[2]; modulation-route-count: root.modulation-route-counts[2]; changed(v) => { root.decay-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); } modulation-edit-started => { root.modulation-edit-started(2); } modulation-edit-finished => { root.modulation-edit-finished(2); } }
-                        ParameterKnob { width: 52px; diameter: 34px; label: "Sustain"; tooltip: "Amplitude sustain"; value <=> root.sustain; default-value: 0.7; value-text: round(root.sustain * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[3]; modulation-depth: root.modulation-depths[3]; modulation-offset: root.modulation-offsets[3]; modulation-route-count: root.modulation-route-counts[3]; changed(v) => { root.sustain-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); } modulation-edit-started => { root.modulation-edit-started(3); } modulation-edit-finished => { root.modulation-edit-finished(3); } }
-                        ParameterKnob { width: 52px; diameter: 34px; label: "Release"; tooltip: "Amplitude release"; value <=> root.release; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.15; value-text: TimeFormat.seconds(root.release); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[4]; modulation-depth: root.modulation-depths[4]; modulation-offset: root.modulation-offsets[4]; modulation-route-count: root.modulation-route-counts[4]; changed(v) => { root.release-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(4, v); } modulation-edit-started => { root.modulation-edit-started(4); } modulation-edit-finished => { root.modulation-edit-finished(4); } }
+                        ParameterKnob { controlled: false; width: 52px; diameter: 34px; label: "Attack"; tooltip: "Amplitude attack"; value <=> root.attack; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.005; value-text: TimeFormat.seconds(root.attack); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[1]; modulation-depth: root.modulation-depths[1]; modulation-offset: root.modulation-offsets[1]; modulation-route-count: root.modulation-route-counts[1]; changed(v) => { root.attack-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); } modulation-edit-started => { root.modulation-edit-started(1); } modulation-edit-finished => { root.modulation-edit-finished(1); } }
+                        ParameterKnob { controlled: false; width: 52px; diameter: 34px; label: "Decay"; tooltip: "Amplitude decay"; value <=> root.decay; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.2; value-text: TimeFormat.seconds(root.decay); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[2]; modulation-depth: root.modulation-depths[2]; modulation-offset: root.modulation-offsets[2]; modulation-route-count: root.modulation-route-counts[2]; changed(v) => { root.decay-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); } modulation-edit-started => { root.modulation-edit-started(2); } modulation-edit-finished => { root.modulation-edit-finished(2); } }
+                        ParameterKnob { controlled: false; width: 52px; diameter: 34px; label: "Sustain"; tooltip: "Amplitude sustain"; value <=> root.sustain; default-value: 0.7; value-text: round(root.sustain * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[3]; modulation-depth: root.modulation-depths[3]; modulation-offset: root.modulation-offsets[3]; modulation-route-count: root.modulation-route-counts[3]; changed(v) => { root.sustain-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); } modulation-edit-started => { root.modulation-edit-started(3); } modulation-edit-finished => { root.modulation-edit-finished(3); } }
+                        ParameterKnob { controlled: false; width: 52px; diameter: 34px; label: "Release"; tooltip: "Amplitude release"; value <=> root.release; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.15; value-text: TimeFormat.seconds(root.release); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[4]; modulation-depth: root.modulation-depths[4]; modulation-offset: root.modulation-offsets[4]; modulation-route-count: root.modulation-route-counts[4]; changed(v) => { root.release-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(4, v); } modulation-edit-started => { root.modulation-edit-started(4); } modulation-edit-finished => { root.modulation-edit-finished(4); } }
                     }
                 }
             }
@@ -148,6 +148,7 @@ export component MlM1DeviceFace inherits Rectangle {
                         Text { text: "FILTER"; color: Theme.text-faint; font-size: Theme.text-sm; vertical-alignment: center; }
                         Rectangle { horizontal-stretch: 1; }
                         SelectorBank {
+                            controlled: false;
                             options: ["LADDER", "ACID", "CLEAN"];
                             selected-index <=> root.filter-model;
                             segment-width: 54px;
@@ -182,6 +183,7 @@ export component MlM1DeviceFace inherits Rectangle {
                     HorizontalLayout {
                         spacing: 0px;
                         ParameterKnob {
+                            controlled: false;
                             width: 52px; diameter: 34px; label: "Cutoff"; tooltip: "Low-pass cutoff";
                             value <=> root.filter-cutoff; default-value: 1;
                             modulation-armed: root.modulation-armed;
@@ -195,10 +197,10 @@ export component MlM1DeviceFace inherits Rectangle {
                             modulation-edit-started => { root.modulation-edit-started(5); }
                             modulation-edit-finished => { root.modulation-edit-finished(5); }
                         }
-                        ParameterKnob { width: 52px; diameter: 34px; label: "Reso"; tooltip: "Filter resonance"; value <=> root.filter-resonance; default-value: 0; value-text: round(root.filter-resonance * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[6]; modulation-depth: root.modulation-depths[6]; modulation-offset: root.modulation-offsets[6]; modulation-route-count: root.modulation-route-counts[6]; changed(v) => { root.filter-resonance-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(6, v); } modulation-edit-started => { root.modulation-edit-started(6); } modulation-edit-finished => { root.modulation-edit-finished(6); } }
-                        ParameterKnob { width: 52px; diameter: 34px; label: "Env"; tooltip: "Envelope depth"; value <=> root.filter-env; minimum: -1; maximum: 1; default-value: 0; bipolar: true; value-text: (root.filter-env > 0 ? "+" : "") + round(root.filter-env * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[7]; modulation-depth: root.modulation-depths[7]; modulation-offset: root.modulation-offsets[7]; modulation-route-count: root.modulation-route-counts[7]; changed(v) => { root.filter-env-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(7, v); } modulation-edit-started => { root.modulation-edit-started(7); } modulation-edit-finished => { root.modulation-edit-finished(7); } }
-                        ParameterKnob { width: 52px; diameter: 34px; label: "Track"; tooltip: "Keyboard tracking"; value <=> root.filter-keytrack; default-value: 0; value-text: round(root.filter-keytrack * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[24]; modulation-depth: root.modulation-depths[24]; modulation-offset: root.modulation-offsets[24]; modulation-route-count: root.modulation-route-counts[24]; changed(v) => { root.filter-keytrack-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(24, v); } modulation-edit-started => { root.modulation-edit-started(24); } modulation-edit-finished => { root.modulation-edit-finished(24); } }
-                        ParameterKnob { width: 52px; diameter: 34px; label: "Drive"; tooltip: "Soft saturation"; value <=> root.drive; default-value: 0; value-text: round(root.drive * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[8]; modulation-depth: root.modulation-depths[8]; modulation-offset: root.modulation-offsets[8]; modulation-route-count: root.modulation-route-counts[8]; changed(v) => { root.drive-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(8, v); } modulation-edit-started => { root.modulation-edit-started(8); } modulation-edit-finished => { root.modulation-edit-finished(8); } }
+                        ParameterKnob { controlled: false; width: 52px; diameter: 34px; label: "Reso"; tooltip: "Filter resonance"; value <=> root.filter-resonance; default-value: 0; value-text: round(root.filter-resonance * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[6]; modulation-depth: root.modulation-depths[6]; modulation-offset: root.modulation-offsets[6]; modulation-route-count: root.modulation-route-counts[6]; changed(v) => { root.filter-resonance-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(6, v); } modulation-edit-started => { root.modulation-edit-started(6); } modulation-edit-finished => { root.modulation-edit-finished(6); } }
+                        ParameterKnob { controlled: false; width: 52px; diameter: 34px; label: "Env"; tooltip: "Envelope depth"; value <=> root.filter-env; minimum: -1; maximum: 1; default-value: 0; bipolar: true; value-text: (root.filter-env > 0 ? "+" : "") + round(root.filter-env * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[7]; modulation-depth: root.modulation-depths[7]; modulation-offset: root.modulation-offsets[7]; modulation-route-count: root.modulation-route-counts[7]; changed(v) => { root.filter-env-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(7, v); } modulation-edit-started => { root.modulation-edit-started(7); } modulation-edit-finished => { root.modulation-edit-finished(7); } }
+                        ParameterKnob { controlled: false; width: 52px; diameter: 34px; label: "Track"; tooltip: "Keyboard tracking"; value <=> root.filter-keytrack; default-value: 0; value-text: round(root.filter-keytrack * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[24]; modulation-depth: root.modulation-depths[24]; modulation-offset: root.modulation-offsets[24]; modulation-route-count: root.modulation-route-counts[24]; changed(v) => { root.filter-keytrack-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(24, v); } modulation-edit-started => { root.modulation-edit-started(24); } modulation-edit-finished => { root.modulation-edit-finished(24); } }
+                        ParameterKnob { controlled: false; width: 52px; diameter: 34px; label: "Drive"; tooltip: "Soft saturation"; value <=> root.drive; default-value: 0; value-text: round(root.drive * 100) + "%"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[8]; modulation-depth: root.modulation-depths[8]; modulation-offset: root.modulation-offsets[8]; modulation-route-count: root.modulation-route-counts[8]; changed(v) => { root.drive-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(8, v); } modulation-edit-started => { root.modulation-edit-started(8); } modulation-edit-finished => { root.modulation-edit-finished(8); } }
                     }
                 }
             }
@@ -222,6 +224,7 @@ export component MlM1DeviceFace inherits Rectangle {
                         alignment: center;
                         spacing: 10px;
                         ParameterKnob {
+                            controlled: false;
                             width: 60px; diameter: 44px; label: "Glide"; tooltip: "Portamento time";
                             value <=> root.glide; minimum: 0; maximum: 2; default-value: 0;
                             value-text: round(root.glide * 1000) + " ms";
@@ -239,6 +242,7 @@ export component MlM1DeviceFace inherits Rectangle {
                         // glide is: it changes what playing harder does, not
                         // what the patch is.
                         ParameterKnob {
+                            controlled: false;
                             width: 60px; diameter: 44px; label: "Accent"; tooltip: "Velocity depth into filter and drive";
                             value <=> root.accent; default-value: 0;
                             value-text: round(root.accent * 100) + "%";
@@ -262,6 +266,7 @@ export component MlM1DeviceFace inherits Rectangle {
                             spacing: 8px;
                             Text { width: 74px; text: "GLIDE MODE"; color: Theme.text-muted; font-size: Theme.text-md; vertical-alignment: center; }
                             SelectorBank {
+                                controlled: false;
                                 options: ["ALWAYS", "LEGATO"];
                                 selected-index <=> root.glide-mode;
                                 segment-width: 62px;
@@ -274,6 +279,7 @@ export component MlM1DeviceFace inherits Rectangle {
                             spacing: 8px;
                             Text { width: 74px; text: "ENV TRIGGER"; color: Theme.text-muted; font-size: Theme.text-md; vertical-alignment: center; }
                             SelectorBank {
+                                controlled: false;
                                 options: ["RETRIG", "LEGATO"];
                                 selected-index <=> root.env-trigger;
                                 segment-width: 62px;
@@ -286,6 +292,7 @@ export component MlM1DeviceFace inherits Rectangle {
                             spacing: 8px;
                             Text { width: 74px; text: "PRIORITY"; color: Theme.text-muted; font-size: Theme.text-md; vertical-alignment: center; }
                             SelectorBank {
+                                controlled: false;
                                 options: ["LAST", "LOW", "HIGH"];
                                 selected-index <=> root.priority;
                                 segment-width: 52px;

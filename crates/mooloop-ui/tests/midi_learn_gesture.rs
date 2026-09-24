@@ -38,6 +38,9 @@ slint::slint! {
                 width: 100px;
                 height: 120px;
                 label: "Cutoff";
+                // Plain properties, written by the knob itself: the path
+                // the source faces take (MOO-220).
+                controlled: false;
                 value <=> root.value;
                 changed(v) => { root.changed(v); }
                 modulation-edit-started => { root.assign-started(); }
@@ -46,6 +49,7 @@ slint::slint! {
                 width: 100px;
                 height: 120px;
                 label: "Trim";
+                controlled: false;
                 value <=> root.mini-value;
                 changed(v) => { root.changed(v); }
                 modulation-edit-started => { root.assign-started(); }

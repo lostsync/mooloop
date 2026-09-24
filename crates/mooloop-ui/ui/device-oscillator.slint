@@ -53,6 +53,7 @@ export component OscillatorDeviceStrip inherits Rectangle {
             Text { text: root.title; color: Theme.text-muted; font-size: Theme.text-md; vertical-alignment: center; }
             Rectangle { horizontal-stretch: 1; }
             SelectorBank {
+                controlled: false;
                 options: ["S", "T", "W", "P"];
                 selected-index <=> root.wave;
                 segment-width: 30px;
@@ -75,6 +76,7 @@ export component OscillatorDeviceStrip inherits Rectangle {
         HorizontalLayout {
             spacing: 0px;
             ParameterKnob {
+                controlled: false;
                 width: 48px; diameter: 36px; label: "Semi"; tooltip: "Coarse tuning";
                 value <=> root.semitones; minimum: -48; maximum: 48; default-value: root.param-defaults[root.param-base + 1]; step: 1;
                 value-text: (root.semitones > 0 ? "+" : "") + round(root.semitones) + " st";
@@ -89,6 +91,7 @@ export component OscillatorDeviceStrip inherits Rectangle {
                 modulation-edit-finished => { root.modulation-edit-finished(root.param-base + 1); }
             }
             ParameterKnob {
+                controlled: false;
                 width: 48px; diameter: 36px; label: "Fine"; tooltip: "Fine tuning";
                 value <=> root.cents; minimum: -100; maximum: 100; default-value: root.param-defaults[root.param-base + 2]; step: 1;
                 value-text: (root.cents > 0 ? "+" : "") + round(root.cents) + " ct";
@@ -131,6 +134,7 @@ export component OscillatorDeviceStrip inherits Rectangle {
                 modulation-edit-finished => { root.modulation-edit-finished(root.param-base + 3); }
             }
             ParameterKnob {
+                controlled: false;
                 width: 48px; diameter: 36px; label: "Width"; tooltip: "Pulse width";
                 value <=> root.pulse-width; minimum: 0.05; maximum: 0.95; default-value: root.param-defaults[root.param-base + 4];
                 enabled: root.wave == 3;

@@ -140,6 +140,9 @@ export component StepperField inherits Rectangle {
     /// shift click moves by 4 or something". Zero leaves Shift alone.
     in property <int> coarse-step: 0;
     in property <bool> enabled: true;
+    /// Whether the owner writes `value`; see `ParameterKnob.controlled` in
+    /// `controls.slint`, whose default this shares.
+    in property <bool> controlled: true;
     in property <string> display-text: root.value;
     in property <length> value-width: 30px;
     in property <brush> field-background: Theme.surface-raised;
@@ -164,7 +167,7 @@ export component StepperField inherits Rectangle {
         if (!root.enabled) { return; }
         let clamped = clamp(next, root.minimum, root.maximum);
         if (clamped != root.value) {
-            root.value = clamped;
+            if (!root.controlled) { root.value = clamped; }
             root.changed(clamped);
         }
     }
@@ -248,6 +251,9 @@ export component MenuField inherits Rectangle {
     in property <int> visible-rows: 10;
     in property <bool> enabled: true;
     in property <brush> field-background: Theme.surface-raised;
+    /// Whether the owner writes `selected-index`; see
+    /// `ParameterKnob.controlled` in `controls.slint`.
+    in property <bool> controlled: true;
     callback selected(int);
 
     height: ToolbarMetrics.control-height;
@@ -338,7 +344,7 @@ export component MenuField inherits Rectangle {
                         row-touch := TouchArea {
                             mouse-cursor: pointer;
                             clicked => {
-                                root.selected-index = i;
+                                if (!root.controlled) { root.selected-index = i; }
                                 root.selected(i);
                             }
                         }
@@ -546,6 +552,9 @@ export component TempoField inherits Rectangle {
     in property <int> minimum: 20;
     in property <int> maximum: 999;
     out property <bool> hovered: tempo-touch.has-hover;
+    /// Whether the owner writes `bpm`; see `ParameterKnob.controlled` in
+    /// `controls.slint`. Tempo is the document's.
+    in property <bool> controlled: true;
     callback changed(int);
 
     private property <int> pressed-bpm;
@@ -562,7 +571,7 @@ export component TempoField inherits Rectangle {
     function apply(next: int) {
         let clamped = clamp(next, root.minimum, root.maximum);
         if (clamped != root.bpm) {
-            root.bpm = clamped;
+            if (!root.controlled) { root.bpm = clamped; }
             root.changed(clamped);
         }
     }

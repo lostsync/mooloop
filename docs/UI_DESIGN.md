@@ -936,6 +936,19 @@ writing another.
   `Theme.warning` while a modulation source is armed on it. Value readout
   `Theme.accent` in `Theme.font-family-mono`. The value arc is `Theme.accent`
   unless the device has a colour of its own.
+- **The value is the owner's, not the control's** (MOO-220). A control
+  reports a change and does not write its own value: `controlled` is `true`
+  by default on every shared value control -- the knobs, the faders,
+  `ToggleButton`, `SegmentedControl`, `SelectorBank`, `StepperField`,
+  `MenuField` and `TempoField` -- so what it shows is always what its owner
+  published last, whoever changed it: a drag, an undo, a preset, a MIDI
+  controller, automation, or the same parameter in another view. A face
+  does not write a model-bound property either; it reports, the way a
+  dragged threshold line does. `controlled: false` is only for a value that
+  is a plain property with nothing bound to it (a source face's window
+  property, which Rust sets with `set_*`; a dialog's own state).
+  `controlled_faces_tests.rs` turns every slider on every face and then
+  changes the document from outside; each one has to follow.
 - **Identity.** A control that can reach Rust names its parameter through its
   face's `modulation-edit-started(index)`, the one callback every face
   forwards with the parameter's identity. Learn, Automate and descriptor-read

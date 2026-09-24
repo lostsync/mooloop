@@ -38,6 +38,10 @@ slint::slint! {
             width: 60px;
             height: 80px;
             label: "Bare";
+            // The harness's properties are plain, with no binding behind
+            // them, so the knobs write them: `controlled: false`, the path
+            // the source faces take (MOO-220).
+            controlled: false;
             value <=> root.bare-value;
             value-text: round(root.bare-value * 100) + "%";
         }
@@ -48,6 +52,7 @@ slint::slint! {
             width: 60px;
             height: 80px;
             label: "Amount";
+            controlled: false;
             value <=> root.value;
             modulation-armed: root.armed;
             value-text: round(root.value * 100) + "%";

@@ -459,6 +459,7 @@ component OscEditor inherits Rectangle {
         spacing: 4px;
         SectionLabel { text: root.title; }
         SelectorBank {
+            controlled: false;
             options: ["SIN", "TRI", "SAW", "PLS"];
             selected-index <=> root.wave;
             segment-width: 44px;
@@ -477,6 +478,7 @@ component OscEditor inherits Rectangle {
         }
         HorizontalLayout {
             P8Knob {
+                controlled: false;
                 label: "SEMI"; tooltip: "Coarse tuning";
                 param: root.base + 1;
                 value <=> root.semitones; minimum: -48; maximum: 48; default-value: 0; step: 1;
@@ -490,6 +492,7 @@ component OscEditor inherits Rectangle {
                 route-edit-finished(p) => { root.route-edit-finished(p); }
             }
             P8Knob {
+                controlled: false;
                 label: "FINE"; tooltip: "Fine tuning";
                 param: root.base + 2;
                 value <=> root.cents; minimum: -100; maximum: 100; default-value: 0; step: 1;
@@ -503,6 +506,7 @@ component OscEditor inherits Rectangle {
                 route-edit-finished(p) => { root.route-edit-finished(p); }
             }
             P8Knob {
+                controlled: false;
                 label: "LEVEL"; tooltip: "Mix level";
                 param: root.base + 3;
                 value <=> root.level; minimum: 0; maximum: 1; default-value: 0;
@@ -516,6 +520,7 @@ component OscEditor inherits Rectangle {
                 route-edit-finished(p) => { root.route-edit-finished(p); }
             }
             P8Knob {
+                controlled: false;
                 label: "WIDTH"; tooltip: "Pulse width";
                 param: root.base + 4;
                 value <=> root.pulse-width; minimum: 0.05; maximum: 0.95; default-value: 0.5;
@@ -724,6 +729,7 @@ export component MlP8DeviceFace inherits Rectangle {
                                 spacing: 6px;
                                 SectionLabel { text: "OCT"; width: 34px; vertical-alignment: center; }
                                 SelectorBank {
+                                    controlled: false;
                                     options: ["-1", "-2"];
                                     selected-index <=> root.sub-octave;
                                     segment-width: 42px;
@@ -736,6 +742,7 @@ export component MlP8DeviceFace inherits Rectangle {
                                 spacing: 6px;
                                 SectionLabel { text: "WAVE"; width: 34px; vertical-alignment: center; }
                                 SelectorBank {
+                                    controlled: false;
                                     options: ["SIN", "SQR"];
                                     selected-index <=> root.sub-wave;
                                     segment-width: 42px;
@@ -748,6 +755,7 @@ export component MlP8DeviceFace inherits Rectangle {
                                 spacing: 6px;
                                 SectionLabel { text: "FROM"; width: 34px; vertical-alignment: center; }
                                 SelectorBank {
+                                    controlled: false;
                                     options: ["1", "2", "3"];
                                     selected-index <=> root.sub-source;
                                     segment-width: 28px;
@@ -763,6 +771,7 @@ export component MlP8DeviceFace inherits Rectangle {
                             spacing: 2px;
                             SectionLabel { text: "NOISE"; horizontal-alignment: center; }
                             P8Knob {
+                                controlled: false;
                                 label: "COLOUR"; tooltip: "Noise tilt: dark, white, bright";
                                 param: 26;
                                 value <=> root.noise-color; minimum: -100; maximum: 100; default-value: 0; bipolar: true;
@@ -784,6 +793,7 @@ export component MlP8DeviceFace inherits Rectangle {
                     HorizontalLayout {
                         alignment: center;
                         P8Knob {
+                            controlled: false;
                             label: "VOLUME"; tooltip: "Device output level";
                             param: 69;
                             value <=> root.master-volume; minimum: 0; maximum: 1; default-value: 1;
@@ -798,6 +808,7 @@ export component MlP8DeviceFace inherits Rectangle {
                             route-edit-finished(p) => { root.modulation-edit-finished(p); }
                         }
                         P8Knob {
+                            controlled: false;
                             label: "PAN"; tooltip: "Device position";
                             param: 70;
                             value <=> root.master-pan; minimum: -1; maximum: 1; default-value: 0; bipolar: true;
@@ -1336,6 +1347,7 @@ export component MlP8DeviceFace inherits Rectangle {
                 width: 430px;
                 title: "FILTER";
                 SelectorBank {
+                    controlled: false;
                     options: ["LP12", "LP24", "BP", "HP"];
                     selected-index <=> root.filter-mode;
                     segment-width: 60px;
@@ -1367,6 +1379,7 @@ export component MlP8DeviceFace inherits Rectangle {
                         spacing: 0px;
                         HorizontalLayout {
                     P8Knob {
+                        controlled: false;
                         label: "CUTOFF"; tooltip: "Filter cutoff";
                         param: 43;
                         value <=> root.filter-cutoff; minimum: 0; maximum: 1; default-value: 1; 
@@ -1381,6 +1394,7 @@ export component MlP8DeviceFace inherits Rectangle {
                         route-edit-finished(p) => { root.modulation-edit-finished(p); }
                     }
                     P8Knob {
+                        controlled: false;
                         label: "RESO"; tooltip: "Filter resonance";
                         param: 44;
                         value <=> root.filter-resonance; minimum: 0; maximum: 1; default-value: 0; 
@@ -1397,6 +1411,7 @@ export component MlP8DeviceFace inherits Rectangle {
                         }
                         HorizontalLayout {
                     P8Knob {
+                        controlled: false;
                         label: "DRIVE"; tooltip: "Pre-filter drive, inside the feedback loop";
                         param: 46;
                         value <=> root.drive; minimum: 0; maximum: 1; default-value: 0; 
@@ -1411,6 +1426,7 @@ export component MlP8DeviceFace inherits Rectangle {
                         route-edit-finished(p) => { root.modulation-edit-finished(p); }
                     }
                     P8Knob {
+                        controlled: false;
                         label: "FEEDBACK"; tooltip: "Filter output back into its input";
                         param: 54;
                         value <=> root.voice-feedback; minimum: -1; maximum: 1; default-value: 0; bipolar: true; 
@@ -1449,6 +1465,7 @@ export component MlP8DeviceFace inherits Rectangle {
                 HorizontalLayout {
                     alignment: center;
                     P8Knob {
+                        controlled: false;
                         label: "ATTACK"; tooltip: "Filter attack";
                         param: 48;
                         value <=> root.filter-attack; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.005;
@@ -1463,6 +1480,7 @@ export component MlP8DeviceFace inherits Rectangle {
                         route-edit-finished(p) => { root.modulation-edit-finished(p); }
                     }
                     P8Knob {
+                        controlled: false;
                         label: "DECAY"; tooltip: "Filter decay";
                         param: 49;
                         value <=> root.filter-decay; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.2;
@@ -1477,6 +1495,7 @@ export component MlP8DeviceFace inherits Rectangle {
                         route-edit-finished(p) => { root.modulation-edit-finished(p); }
                     }
                     P8Knob {
+                        controlled: false;
                         label: "SUSTAIN"; tooltip: "Filter sustain";
                         param: 50;
                         value <=> root.filter-sustain; minimum: 0; maximum: 1; default-value: 0.7; 
@@ -1491,6 +1510,7 @@ export component MlP8DeviceFace inherits Rectangle {
                         route-edit-finished(p) => { root.modulation-edit-finished(p); }
                     }
                     P8Knob {
+                        controlled: false;
                         label: "RELEASE"; tooltip: "Filter release";
                         param: 51;
                         value <=> root.filter-release; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.15;
@@ -1505,6 +1525,7 @@ export component MlP8DeviceFace inherits Rectangle {
                         route-edit-finished(p) => { root.modulation-edit-finished(p); }
                     }
                     P8Knob {
+                        controlled: false;
                         label: "ENV AMT"; tooltip: "How far the envelope sweeps the cutoff";
                         param: 45;
                         value <=> root.filter-env; minimum: -1; maximum: 1; default-value: 0; bipolar: true; 
@@ -1519,6 +1540,7 @@ export component MlP8DeviceFace inherits Rectangle {
                         route-edit-finished(p) => { root.modulation-edit-finished(p); }
                     }
                     P8Knob {
+                        controlled: false;
                         label: "KEYTRACK"; tooltip: "Cutoff per played octave";
                         param: 47;
                         value <=> root.keytrack; minimum: 0; maximum: 2; default-value: 0; 
@@ -1533,6 +1555,7 @@ export component MlP8DeviceFace inherits Rectangle {
                         route-edit-finished(p) => { root.modulation-edit-finished(p); }
                     }
                     P8Knob {
+                        controlled: false;
                         label: "VELOCITY"; tooltip: "How much velocity adds to the envelope depth";
                         param: 53;
                         value <=> root.filter-velocity; minimum: -1; maximum: 1; default-value: 0; bipolar: true; 
@@ -1573,6 +1596,7 @@ export component MlP8DeviceFace inherits Rectangle {
                 HorizontalLayout {
                     alignment: center;
                     P8Knob {
+                        controlled: false;
                         label: "ATTACK"; tooltip: "Amplitude attack";
                         param: 15;
                         value <=> root.attack; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.005;
@@ -1587,6 +1611,7 @@ export component MlP8DeviceFace inherits Rectangle {
                         route-edit-finished(p) => { root.modulation-edit-finished(p); }
                     }
                     P8Knob {
+                        controlled: false;
                         label: "DECAY"; tooltip: "Amplitude decay";
                         param: 16;
                         value <=> root.decay; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.2;
@@ -1601,6 +1626,7 @@ export component MlP8DeviceFace inherits Rectangle {
                         route-edit-finished(p) => { root.modulation-edit-finished(p); }
                     }
                     P8Knob {
+                        controlled: false;
                         label: "SUSTAIN"; tooltip: "Amplitude sustain";
                         param: 17;
                         value <=> root.sustain; minimum: 0; maximum: 1; default-value: 0.7; 
@@ -1615,6 +1641,7 @@ export component MlP8DeviceFace inherits Rectangle {
                         route-edit-finished(p) => { root.modulation-edit-finished(p); }
                     }
                     P8Knob {
+                        controlled: false;
                         label: "RELEASE"; tooltip: "Amplitude release";
                         param: 18;
                         value <=> root.release; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.15;
@@ -1629,6 +1656,7 @@ export component MlP8DeviceFace inherits Rectangle {
                         route-edit-finished(p) => { root.modulation-edit-finished(p); }
                     }
                     P8Knob {
+                        controlled: false;
                         label: "VELOCITY"; tooltip: "How much velocity scales the VCA";
                         param: 52;
                         value <=> root.amp-velocity; minimum: 0; maximum: 1; default-value: 1; 
@@ -1654,6 +1682,7 @@ export component MlP8DeviceFace inherits Rectangle {
                     spacing: 6px;
                     SectionLabel { text: "UNISON"; width: 52px; vertical-alignment: center; }
                     SelectorBank {
+                        controlled: false;
                         options: ["1x", "2x", "4x", "8x"];
                         selected-index <=> root.unison;
                         segment-width: 44px;
@@ -1666,6 +1695,7 @@ export component MlP8DeviceFace inherits Rectangle {
                     spacing: 6px;
                     SectionLabel { text: "CHORUS"; width: 52px; vertical-alignment: center; }
                     SelectorBank {
+                        controlled: false;
                         options: ["OFF", "I", "II", "ENS"];
                         selected-index <=> root.chorus;
                         segment-width: 44px;
@@ -1678,6 +1708,7 @@ export component MlP8DeviceFace inherits Rectangle {
                 HorizontalLayout {
                     alignment: start;
                     P8Knob {
+                        controlled: false;
                         label: "DETUNE"; tooltip: "Symmetric detune across a unison group";
                         param: 66;
                         value <=> root.detune; minimum: 0; maximum: 1; default-value: 0; 
@@ -1692,6 +1723,7 @@ export component MlP8DeviceFace inherits Rectangle {
                         route-edit-finished(p) => { root.modulation-edit-finished(p); }
                     }
                     P8Knob {
+                        controlled: false;
                         label: "SPREAD"; tooltip: "How far voices spread across the field";
                         param: 67;
                         value <=> root.spread; minimum: 0; maximum: 1; default-value: 0; 
@@ -1706,6 +1738,7 @@ export component MlP8DeviceFace inherits Rectangle {
                         route-edit-finished(p) => { root.modulation-edit-finished(p); }
                     }
                     P8Knob {
+                        controlled: false;
                         label: "DRIFT"; tooltip: "Stable per-slot character";
                         param: 64;
                         value <=> root.drift; minimum: 0; maximum: 1; default-value: 0; 
@@ -1720,6 +1753,7 @@ export component MlP8DeviceFace inherits Rectangle {
                         route-edit-finished(p) => { root.modulation-edit-finished(p); }
                     }
                     P8Knob {
+                        controlled: false;
                         label: "GLIDE"; tooltip: "Portamento between reused voices";
                         param: 19;
                         value <=> root.glide; minimum: 0; maximum: 2; default-value: 0;
@@ -1746,6 +1780,7 @@ export component MlP8DeviceFace inherits Rectangle {
                 spacing: 4px;
                 SectionLabel { text: "ML-P8 LFO"; }
                 SelectorBank {
+                    controlled: false;
                     options: ["SIN", "TRI", "RMP", "PLS", "S&H", "CHA"];
                     selected-index <=> root.lfo-wave;
                     segment-width: 52px;
@@ -1787,6 +1822,7 @@ export component MlP8DeviceFace inherits Rectangle {
                         VerticalLayout {
                             alignment: center;
                             P8Knob {
+                                controlled: false;
                                 label: "PHASE"; tooltip: "Where the shape is read from, in cycles";
                                 param: 59;
                                 value <=> root.lfo-phase; minimum: 0; maximum: 1; default-value: 0;
@@ -1800,6 +1836,7 @@ export component MlP8DeviceFace inherits Rectangle {
                         VerticalLayout {
                             alignment: center;
                             P8Knob {
+                                controlled: false;
                                 label: "WARP";
                                 // Two honest meanings, decided by the wave
                                 // rather than by a second knob, so the tooltip
@@ -1819,6 +1856,7 @@ export component MlP8DeviceFace inherits Rectangle {
                         VerticalLayout {
                             alignment: center;
                             P8Knob {
+                                controlled: false;
                                 label: "SLEW"; tooltip: "How much of a cycle the shape is rounded off by";
                                 param: 61;
                                 value <=> root.lfo-slew; minimum: 0; maximum: 1; default-value: 0;
@@ -1885,6 +1923,7 @@ export component MlP8DeviceFace inherits Rectangle {
                     spacing: 6px;
                     SectionLabel { text: "RETRIG"; width: 44px; vertical-alignment: center; }
                     SelectorBank {
+                        controlled: false;
                         options: ["FREE", "CHORD", "NOTE"];
                         selected-index <=> root.lfo-retrigger;
                         segment-width: 66px;

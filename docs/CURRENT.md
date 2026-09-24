@@ -2234,6 +2234,17 @@ land on its own when it starts to matter:
 
 - The application is usable but still has interaction and responsive-layout
   edge cases.
+- **A control keeps following its parameter after you have touched it**
+  (MOO-220, 2026-09-24). Before, the first drag, wheel step or reset on a
+  knob, fader, toggle, segmented bank or stepper cut it loose from the value
+  it showed: picking another EQ band left Freq, Gain and Q on the band just
+  left, and undo, a preset load, a MIDI-mapped controller or automation moved
+  the sound but not a touched control on any insert face, the source output
+  trims, the sidebar's volume and pan, the mixer's faders and sends, the
+  modulation shelf, or the pattern and snap fields. Every shared control now
+  reports its change and draws what the document says; a knob's typed field
+  (`KnobField`, `KnobStack`) shows the live value whenever it is not being
+  typed into.
 - **A shortcut fires from wherever focus happens to be.** Fixed 2026-09-07;
   the entry that stood here described the defect and got its cause wrong, so
   it is worth recording what the cause actually was. Slint delivers a key to
