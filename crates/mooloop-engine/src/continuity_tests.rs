@@ -595,6 +595,158 @@ fn moving_a_containers_mix_is_continuous() {
     );
 }
 
+/// The sine through a layer of two chain branches, each holding the same
+/// low-pass: rows `[Layer, Chain, Filter, Chain, Filter]`, so the branch
+/// heads are rows 1 and 3 (containers/09).
+fn layered_sine() -> RenderState {
+    let filter = || {
+        EffectSlotState::new(EffectParams::Filter(FilterParams {
+            cutoff_hz: 150.0,
+            resonance: 0.0,
+            mode: FilterMode::LowPass,
+            ..FilterParams::default()
+        }))
+    };
+    let mut channel = sine_channel();
+    let setup = &mut channel.setup;
+    setup.push_effect(filter()).expect("room");
+    setup.push_effect(filter()).expect("room");
+    for row in [1, 0] {
+        mooloop_core::wrap_in_container(
+            &mut setup.effects,
+            &mut setup.next_device_id,
+            row..row + 1,
+            EffectSlotState::of_kind(EffectKind::Chain),
+        )
+        .expect("each filter in its own chain");
+    }
+    mooloop_core::wrap_in_container(
+        &mut setup.effects,
+        &mut setup.next_device_id,
+        0..4,
+        EffectSlotState::of_kind(EffectKind::Layer),
+    )
+    .expect("both chains in a layer");
+    render_of(vec![channel])
+}
+
+/// The sine through a layer of an empty chain -- a clean branch -- and a
+/// chain holding the low-pass: rows `[Layer, Chain, Chain, Filter]`.
+fn layered_sine_beside_a_clean_branch() -> RenderState {
+    let mut channel = sine_channel();
+    let setup = &mut channel.setup;
+    setup
+        .push_effect(EffectSlotState::new(EffectParams::Filter(FilterParams {
+            cutoff_hz: 150.0,
+            resonance: 0.0,
+            mode: FilterMode::LowPass,
+            ..FilterParams::default()
+        })))
+        .expect("room");
+    mooloop_core::wrap_in_container(
+        &mut setup.effects,
+        &mut setup.next_device_id,
+        0..1,
+        EffectSlotState::of_kind(EffectKind::Chain),
+    )
+    .expect("the filter in a chain");
+    let mut layer = EffectSlotState::of_kind(EffectKind::Layer);
+    layer.params.set_container_children(3);
+    let mut clean = EffectSlotState::of_kind(EffectKind::Chain);
+    clean.params.set_container_children(0);
+    setup.effects.insert(0, clean);
+    setup.effects.insert(0, layer);
+    mooloop_core::assign_device_ids(&mut setup.effects, &mut setup.next_device_id);
+    render_of(vec![channel])
+}
+
+fn set_container_param(slot: u8, id: u32, value: f32) -> EngineCommand {
+    EngineCommand::SetEffectParam {
+        target: FX,
+        slot,
+        id,
+        value,
+    }
+}
+
+/// A branch's Mute, Solo and Level, and the layer's own Level, all ramp
+/// (containers/09). Muting one of two equal branches halves the sum and
+/// unmuting it brings it back; soloing one silences the other, which is
+/// the switch a solo makes in a branch that was not itself touched.
+#[test]
+fn a_layer_branchs_mute_solo_and_level_are_continuous() {
+    use mooloop_core::{CONTAINER_PARAM_LEVEL, CONTAINER_PARAM_MUTE, CONTAINER_PARAM_SOLO};
+    let mut render = layered_sine();
+    let muting = step_across(
+        &mut render,
+        LEAD,
+        |render| render.apply_command(set_container_param(3, CONTAINER_PARAM_MUTE, 1.0)),
+        TAIL,
+    );
+    assert_continuous("muting a branch", muting);
+    // Measured against the material before the mute, as `across_return`
+    // does: one frame of lead says nothing about how far the sine steps.
+    let unmuting = step_across(
+        &mut render,
+        1,
+        |render| render.apply_command(set_container_param(3, CONTAINER_PARAM_MUTE, 0.0)),
+        TAIL,
+    );
+    assert_continuous(
+        "unmuting it",
+        Transition {
+            before: muting.before,
+            after: unmuting.after,
+            peak: muting.peak,
+            across: unmuting.across,
+        },
+    );
+    let mut render = layered_sine();
+    assert_continuous(
+        "soloing the other branch",
+        step_across(
+            &mut render,
+            LEAD,
+            |render| render.apply_command(set_container_param(1, CONTAINER_PARAM_SOLO, 1.0)),
+            TAIL,
+        ),
+    );
+    // An empty chain is a clean branch, and its switches ramp too: an empty
+    // box used to settle every ramp it had on every block.
+    let mut render = layered_sine_beside_a_clean_branch();
+    assert_continuous(
+        "muting a clean branch",
+        step_across(
+            &mut render,
+            LEAD,
+            |render| render.apply_command(set_container_param(1, CONTAINER_PARAM_MUTE, 1.0)),
+            TAIL,
+        ),
+    );
+    let mut render = layered_sine_beside_a_clean_branch();
+    assert_continuous(
+        "a clean branch's Level",
+        step_across(
+            &mut render,
+            LEAD,
+            |render| render.apply_command(set_container_param(1, CONTAINER_PARAM_LEVEL, 0.1)),
+            TAIL,
+        ),
+    );
+    for (what, slot) in [("a branch's Level", 3), ("the layer's Level", 0)] {
+        let mut render = layered_sine();
+        assert_continuous(
+            what,
+            step_across(
+                &mut render,
+                LEAD,
+                |render| render.apply_command(set_container_param(slot, CONTAINER_PARAM_LEVEL, 0.1)),
+                TAIL,
+            ),
+        );
+    }
+}
+
 /// Removal is two moments: the executor asking, which starts the fade, and
 /// the removal itself once the fade has run. Both are held to the bound.
 #[test]

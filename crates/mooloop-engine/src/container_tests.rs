@@ -825,3 +825,441 @@ fn a_limiter_in_a_layer_branch_lines_up_with_the_branch_beside_it() {
         worst_difference(&rendered, &aligned)
     );
 }
+
+// --- containers/09: a branch's Level, Mute and Solo -------------------------
+
+/// `project` with the container at `row` of channel 0's chain given `id =
+/// value`.
+fn with_param(mut project: Project, row: usize, id: u32, value: f32) -> Project {
+    project.channels[0].setup.effects[row]
+        .params
+        .set(id, value)
+        .expect("a container parameter");
+    project
+}
+
+/// The drum through a layer of two chain branches, one Filter and one
+/// Bitcrush, neither of which declares a latency, so a branch left out of the
+/// sum is exactly the render of the layer without it:
+///
+/// ```text
+/// Layer        row 0
+///   Chain      row 1
+///     Filter   row 2
+///   Chain      row 3
+///     Bitcrush row 4
+/// ```
+fn two_chain_branches() -> Project {
+    let mut project = drum_through(&[EffectKind::Filter, EffectKind::Bitcrush], &[]);
+    wrap_as(&mut project, EffectKind::Chain, 1..2, 1.0);
+    wrap_as(&mut project, EffectKind::Chain, 0..1, 1.0);
+    wrap_as(&mut project, EffectKind::Layer, 0..4, 1.0);
+    project
+}
+
+/// The same layer holding only one of its two branches.
+fn one_chain_branch(second: bool) -> Project {
+    let kind = if second { EffectKind::Bitcrush } else { EffectKind::Filter };
+    let mut project = drum_through(&[kind], &[]);
+    wrap_as(&mut project, EffectKind::Chain, 0..1, 1.0);
+    wrap_as(&mut project, EffectKind::Layer, 0..2, 1.0);
+    project
+}
+
+/// A muted branch adds nothing, and a soloed one is all the layer carries.
+/// Each against the render of the layer with the other branch deleted,
+/// sample for sample: the gate is exactly zero once shut and exactly one when
+/// open, from the first frame of a song that was saved that way.
+#[test]
+fn a_muted_branch_is_absent_and_a_soloed_one_is_alone() {
+    use mooloop_core::{CONTAINER_PARAM_MUTE, CONTAINER_PARAM_SOLO};
+    for block in [64, 512] {
+        let first = render_blocks(&one_chain_branch(false), 0.5, block);
+        let second = render_blocks(&one_chain_branch(true), 0.5, block);
+        assert!(
+            worst_difference(&first, &second) > 1.0e-3,
+            "the two branches have to sound different, or this proves nothing"
+        );
+        for (what, project, want) in [
+            (
+                "the second muted",
+                with_param(two_chain_branches(), 3, CONTAINER_PARAM_MUTE, 1.0),
+                &first,
+            ),
+            (
+                "the first muted",
+                with_param(two_chain_branches(), 1, CONTAINER_PARAM_MUTE, 1.0),
+                &second,
+            ),
+            (
+                "the first soloed",
+                with_param(two_chain_branches(), 1, CONTAINER_PARAM_SOLO, 1.0),
+                &first,
+            ),
+            (
+                "the second soloed",
+                with_param(two_chain_branches(), 3, CONTAINER_PARAM_SOLO, 1.0),
+                &second,
+            ),
+        ] {
+            assert_eq!(render_blocks(&project, 0.5, block), *want, "{what}, block {block}");
+        }
+        // Both soloed is both heard: solo silences what is *not* soloed.
+        let both = with_param(
+            with_param(two_chain_branches(), 1, CONTAINER_PARAM_SOLO, 1.0),
+            3,
+            CONTAINER_PARAM_SOLO,
+            1.0,
+        );
+        assert_eq!(
+            render_blocks(&both, 0.5, block),
+            render_blocks(&two_chain_branches(), 0.5, block),
+            "two soloed branches are the whole layer, block {block}"
+        );
+        // A soloed branch that is also muted is still muted, and its sibling
+        // is still silenced by the solo.
+        let muted_solo = with_param(
+            with_param(two_chain_branches(), 3, CONTAINER_PARAM_SOLO, 1.0),
+            3,
+            CONTAINER_PARAM_MUTE,
+            1.0,
+        );
+        assert!(
+            peak_of(&render_blocks(&muted_solo, 0.5, block)) < 1.0e-6,
+            "a soloed branch that is also muted left something sounding"
+        );
+    }
+}
+
+/// Solo is within its layer. A solo in the first of two sibling layers does
+/// not reach into the second.
+#[test]
+fn a_solo_stays_inside_its_layer() {
+    use mooloop_core::{CONTAINER_PARAM_MUTE, CONTAINER_PARAM_SOLO};
+    // Two copies of the two-branch layer, one after the other.
+    let build = || {
+        let mut project = drum_through(
+            &[
+                EffectKind::Filter,
+                EffectKind::Bitcrush,
+                EffectKind::Filter,
+                EffectKind::Bitcrush,
+            ],
+            &[],
+        );
+        // The second pair first, so the first pair's rows do not move.
+        wrap_as(&mut project, EffectKind::Chain, 3..4, 1.0);
+        wrap_as(&mut project, EffectKind::Chain, 2..3, 1.0);
+        wrap_as(&mut project, EffectKind::Layer, 2..6, 1.0);
+        wrap_as(&mut project, EffectKind::Chain, 1..2, 1.0);
+        wrap_as(&mut project, EffectKind::Chain, 0..1, 1.0);
+        wrap_as(&mut project, EffectKind::Layer, 0..4, 1.0);
+        project
+    };
+    let kinds: Vec<EffectKind> = build().channels[0]
+        .setup
+        .effects
+        .iter()
+        .map(|effect| effect.kind())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            EffectKind::Layer,
+            EffectKind::Chain,
+            EffectKind::Filter,
+            EffectKind::Chain,
+            EffectKind::Bitcrush,
+            EffectKind::Layer,
+            EffectKind::Chain,
+            EffectKind::Filter,
+            EffectKind::Chain,
+            EffectKind::Bitcrush,
+        ],
+        "the premise: two sibling layers of two chain branches"
+    );
+    // A solo on the first layer's Filter branch is its Bitcrush branch
+    // muted, and nothing in the second layer.
+    let soloed = with_param(build(), 1, CONTAINER_PARAM_SOLO, 1.0);
+    let reference = with_param(build(), 3, CONTAINER_PARAM_MUTE, 1.0);
+    let rendered = render_blocks(&soloed, 0.5, 128);
+    assert!(peak_of(&rendered) > 1.0e-3, "the render has to be sounding");
+    assert_eq!(
+        rendered,
+        render_blocks(&reference, 0.5, 128),
+        "a solo in the first layer reached past its sibling"
+    );
+}
+
+/// Level scales a branch, and the layer's own Level (its Gain) scales the
+/// sum, both before the layer's Mix. A branch at Level 0 is exactly absent;
+/// one at half is half, to rounding.
+#[test]
+fn a_branchs_level_and_the_layers_gain_scale_what_they_say() {
+    use mooloop_core::CONTAINER_PARAM_LEVEL;
+    let first = render_blocks(&one_chain_branch(false), 0.5, 128);
+    let second = render_blocks(&one_chain_branch(true), 0.5, 128);
+    assert_eq!(
+        render_blocks(
+            &with_param(two_chain_branches(), 3, CONTAINER_PARAM_LEVEL, 0.0),
+            0.5,
+            128
+        ),
+        first,
+        "a branch at level zero was not absent"
+    );
+    let halved = render_blocks(
+        &with_param(two_chain_branches(), 3, CONTAINER_PARAM_LEVEL, 0.5),
+        0.5,
+        128,
+    );
+    let want: Vec<f32> = first.iter().zip(&second).map(|(a, b)| a + 0.5 * b).collect();
+    assert!(
+        worst_difference(&halved, &want) < 1.0e-5,
+        "a branch at half level was {} from half its render",
+        worst_difference(&halved, &want)
+    );
+    // A clean branch is an empty chain, and its Level is its fader too: an
+    // empty box passes its input at its Level.
+    let dry = render_blocks(&drum_through(&[], &[]), 0.5, 128);
+    let mut clean = drum_through(&[], &[]);
+    {
+        let setup = &mut clean.channels[0].setup;
+        let mut layer = EffectSlotState::of_kind(EffectKind::Layer);
+        layer.params.set_container_children(1);
+        let mut branch = EffectSlotState::of_kind(EffectKind::Chain);
+        branch
+            .params
+            .set(CONTAINER_PARAM_LEVEL, 0.5)
+            .expect("a level");
+        setup.effects = vec![layer, branch];
+        mooloop_core::assign_device_ids(&mut setup.effects, &mut setup.next_device_id);
+    }
+    let want: Vec<f32> = dry.iter().map(|s| 0.5 * s).collect();
+    assert!(
+        worst_difference(&render_blocks(&clean, 0.5, 128), &want) < 1.0e-6,
+        "an empty branch at half level was not half its input"
+    );
+    let whole = render_blocks(&two_chain_branches(), 0.5, 128);
+    let quiet = render_blocks(
+        &with_param(two_chain_branches(), 0, CONTAINER_PARAM_LEVEL, 0.25),
+        0.5,
+        128,
+    );
+    let want: Vec<f32> = whole.iter().map(|s| 0.25 * s).collect();
+    assert!(
+        worst_difference(&quiet, &want) < 1.0e-5,
+        "the layer's Gain at a quarter was {} from a quarter of the layer",
+        worst_difference(&quiet, &want)
+    );
+}
+
+/// **The case the layer exists for, and 09's acceptance render.** A drum
+/// loop on a track whose chain is a layer: a clean branch (an empty chain)
+/// beside a Drive → Bitcrush branch, the drum's transients kept by the clean
+/// side and the crushed side filling in under them. The layer's Mix is swept
+/// across five settings, one section after another.
+///
+/// Authored, saved, reopened and rendered offline the way the application
+/// does it, and then measured, because an agent cannot listen:
+///
+/// - the reopened song needs no repair;
+/// - the offline render is sample-identical to the live loop's;
+/// - muting the crushed branch is soloing the clean one, sample for sample;
+/// - each branch's and each section's level is printed.
+///
+/// The five sections are written to `target/listening/layer-parallel-drums.wav`
+/// (float32, 48 kHz) for Adam to play. `FOCUS.md` names the command.
+#[test]
+fn layer_parallel_drums_render_offline_as_they_play() {
+    use mooloop_core::{DrumMode, DrumSynthParams, CONTAINER_PARAM_MUTE, CONTAINER_PARAM_SOLO};
+    const TRACK: usize = 1;
+    // Two bars of sixteenths: kick on 1 and the "and" of 2, snare on 2 and
+    // 4, closed hat on every eighth.
+    let song = |mix: f32, mute_crushed: bool, solo_clean: bool| {
+        let mut channels = Vec::new();
+        for (mode, steps) in [
+            (DrumMode::Kick, vec![0u32, 6, 10, 16, 22, 26]),
+            (DrumMode::Snare, vec![4, 12, 20, 28]),
+            (DrumMode::Hat, (0..32).step_by(2).collect::<Vec<u32>>()),
+        ] {
+            let mut channel = ProjectChannel::drum_synth_with_params(
+                channels.len(),
+                1,
+                DrumSynthParams {
+                    mode,
+                    ..DrumSynthParams::default()
+                },
+            );
+            channel.setup.channel.bus = TRACK as u8;
+            for (n, step) in steps.into_iter().enumerate() {
+                let tick = step * mooloop_core::TICKS_PER_STEP;
+                channel.notes[0].push(NoteEvent::new((n + 1) as _, tick, 12, 60, 110));
+            }
+            channels.push(channel);
+        }
+        let mut project = Project {
+            channels,
+            pattern_lengths: vec![32],
+            ..Project::default()
+        };
+        project.ensure_tracks(TRACK + 1);
+        let bus = &mut project.buses[TRACK];
+        // [Layer, Chain (clean, empty), Chain, Drive, Bitcrush]
+        let mut layer = EffectSlotState::of_kind(EffectKind::Layer);
+        layer.params.set_container_children(4);
+        layer
+            .params
+            .set(mooloop_core::CONTAINER_PARAM_MIX, mix)
+            .expect("a mix");
+        let mut clean = EffectSlotState::of_kind(EffectKind::Chain);
+        if solo_clean {
+            clean.params.set(CONTAINER_PARAM_SOLO, 1.0).expect("a solo");
+        }
+        let mut crushed = EffectSlotState::of_kind(EffectKind::Chain);
+        crushed.params.set_container_children(2);
+        if mute_crushed {
+            crushed.params.set(CONTAINER_PARAM_MUTE, 1.0).expect("a mute");
+        }
+        let mut drive = EffectSlotState::of_kind(EffectKind::Drive);
+        if let EffectParams::Drive(params) = &mut drive.params {
+            params.drive = 8.0;
+        }
+        let mut crush = EffectSlotState::of_kind(EffectKind::Bitcrush);
+        if let EffectParams::Bitcrush(params) = &mut crush.params {
+            params.bits = 6.0;
+            params.downsample = 4.0;
+        }
+        bus.effects = vec![layer, clean, crushed, drive, crush];
+        mooloop_core::assign_device_ids(&mut bus.effects, &mut bus.next_device_id);
+        project
+    };
+
+    let temp = tempfile::tempdir().expect("a temp dir");
+    let render = |project: &Project, name: &str| -> (Project, Vec<f32>) {
+        let path = temp.path().join(format!("{name}.mooloop"));
+        mooloop_project::save_song(&path, project, mooloop_project::AssetMode::Referenced)
+            .expect("the song saves");
+        let report = mooloop_project::load_bundle(&path).expect("it reopens");
+        assert!(
+            report.repairs.is_empty(),
+            "{name} needed repairs: {:?}",
+            report.repairs
+        );
+        let mooloop_project::LoadedDocument::Song(reloaded) = report.document else {
+            panic!("a song came back as something else");
+        };
+        let wav = temp.path().join(format!("{name}.wav"));
+        crate::offline::OfflineRenderer::render(
+            &reloaded,
+            &[],
+            SAMPLE_RATE,
+            &crate::offline::ExportSpec {
+                path: wav.clone(),
+                scope: crate::offline::RenderScope::Pattern { index: 0 },
+                tail_seconds: 0.0,
+                format: crate::offline::ExportFormat::Wav(crate::offline::WavEncoding::Float32),
+            },
+        )
+        .expect("it renders offline");
+        let samples = hound::WavReader::open(&wav)
+            .expect("the export is readable")
+            .samples::<f32>()
+            .map(|sample| sample.expect("a decoded sample"))
+            .collect();
+        (reloaded, samples)
+    };
+    let rms = |samples: &[f32]| -> f32 {
+        (samples.iter().map(|s| s * s).sum::<f32>() / samples.len().max(1) as f32).sqrt()
+    };
+    let db = |value: f32| 20.0 * value.max(1.0e-9).log10();
+
+    // Parity: the export against the live loop, at the mix in the middle.
+    // Both from the document as it reopened, played the way the export
+    // plays it: the pattern, looped from its top.
+    let (mut middle, exported) = render(&song(0.5, false, false), "middle");
+    middle.playback_mode = mooloop_core::PlaybackMode::Pattern;
+    middle.current_pattern = 0;
+    let mut live_state = RenderState::from_project(SAMPLE_RATE, &middle, &[]);
+    live_state.play();
+    let frames = exported.len() / 2;
+    let mut live = Vec::with_capacity(frames * 2 + 1024);
+    while live.len() < frames * 2 {
+        live_state.process_block(512);
+        let master = live_state.master();
+        for frame in 0..512 {
+            live.push(master.l[frame]);
+            live.push(master.r[frame]);
+        }
+    }
+    live.truncate(frames * 2);
+    assert!(peak_of(&exported) > 0.05, "the drums have to be sounding");
+    // Every frame but the last is identical. The export's last frame is
+    // where the pattern ends and the live loop's is where it wraps to its
+    // top, and the two were measured 1.5e-22 apart there -- a denormal
+    // residue of the loop point, which has nothing to do with the layer and
+    // is bounded rather than excused.
+    let last = exported.len() - 2;
+    let first_difference = exported[..last]
+        .iter()
+        .zip(&live[..last])
+        .position(|(a, b)| a != b);
+    assert_eq!(
+        first_difference,
+        None,
+        "the export and the live loop disagree, first at sample {first_difference:?} \
+         (worst {})",
+        worst_difference(&exported, &live)
+    );
+    assert!(
+        worst_difference(&exported[last..], &live[last..]) < 1.0e-12,
+        "the export's last frame is not the live loop's"
+    );
+
+    // The branches alone, and what the switches do.
+    let clean = render(&song(1.0, false, true), "clean-soloed").1;
+    let muted = render(&song(1.0, true, false), "crushed-muted").1;
+    let whole = render(&song(1.0, false, false), "whole").1;
+    assert_eq!(clean, muted, "muting the crushed branch is soloing the clean one");
+    assert!(
+        worst_difference(&whole, &clean) > 1.0e-3,
+        "the crushed branch has to change the sound, or the layer is not on the track"
+    );
+    let crushed: Vec<f32> = whole.iter().zip(&clean).map(|(w, c)| w - c).collect();
+    println!(
+        "layer parallel drums: clean branch {:.1} dB RMS, crushed branch {:.1} dB RMS, both {:.1} dB RMS",
+        db(rms(&clean)),
+        db(rms(&crushed)),
+        db(rms(&whole))
+    );
+    assert!(
+        rms(&crushed) > 0.1 * rms(&clean),
+        "the crushed branch has to be audible beside the clean one"
+    );
+
+    // The sweep, one section per mix.
+    let mut sweep = Vec::new();
+    for mix in [0.0f32, 0.25, 0.5, 0.75, 1.0] {
+        let section = render(&song(mix, false, false), &format!("mix-{mix}")).1;
+        println!(
+            "layer parallel drums: mix {mix:.2} {:.1} dB RMS, peak {:.1} dBFS",
+            db(rms(&section)),
+            db(peak_of(&section))
+        );
+        sweep.extend_from_slice(&section);
+    }
+    let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/listening");
+    std::fs::create_dir_all(&out).expect("the listening directory");
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate: SAMPLE_RATE,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let mut writer = hound::WavWriter::create(out.join("layer-parallel-drums.wav"), spec)
+        .expect("the listening file");
+    for sample in &sweep {
+        writer.write_sample(*sample).expect("a sample");
+    }
+    writer.finalize().expect("the listening file closes");
+}

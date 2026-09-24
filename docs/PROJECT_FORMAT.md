@@ -563,6 +563,11 @@ before any of them existed still loads:
   the chain, and spans nest rather than straddle. A file that breaks either
   loads with its containers flattened, because a chain of the right devices in
   the right order is recoverable and an impossible nesting is not.
+- A container (`chain` or `layer`) also carries `state.level` (linear gain on
+  its run's output before the blend, default 1.0), `state.mute` and
+  `state.solo` (default false), added 2026-09-23 (`containers/09`). Mute and
+  solo act only when the container is a branch of a layer. Every file written
+  before them reads as unity, unmuted and unsoloed, which is how it sounded.
 - `channels[].setup.modulation` is that channel's `ModRack`. Only occupied
   slots are written, each with its slot index, its durable `id`, and its
   module parameters. Routes persist their durable `source` id alone; the

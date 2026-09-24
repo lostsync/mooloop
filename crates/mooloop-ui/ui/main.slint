@@ -42,6 +42,7 @@ import { BitcrushDeviceFace } from "bitcrush-device.slint";
 import { PreampDeviceFace } from "preamp-device.slint";
 import { BufferDeviceFace } from "buffer-device.slint";
 import { ContainerDeviceFace } from "container-device.slint";
+import { LayerBracket, LayerBranchListRow, LayerBranchRow, LayerDeviceFace } from "layer-device.slint";
 import { DelayDeviceFace } from "delay-device.slint";
 import { GateDeviceFace } from "gate-device.slint";
 import { CompressorDeviceFace } from "compressor-device.slint";
@@ -375,8 +376,30 @@ struct EffectSlotRow {
     //
     // Derived in Rust rather than in the rack, because "the last row of this
     // box" cannot be read off one row: `depth` and `children` say what a row
-    // is inside, not what ends at it.
+    // is inside, not what ends at it. Since `containers/09` it is the last
+    // *drawn* row, because a layer hides the branches it is not showing.
     closing: [int],
+    // Whether this row is a layer, which draws `LayerDeviceFace` rather than
+    // the chain's face. A bool for `is-container`'s reason: the markup asks
+    // what a row is, not what number its kind has this frame.
+    is-layer: bool,
+    // The row lies in a branch its layer is not showing, so the rack draws
+    // nothing of it and it takes no width (`containers/09`).
+    hidden: bool,
+    // The depth of the next row that is drawn. The box's right cap asks it;
+    // it was `effect-slots[index + 1].depth` until hidden rows meant the next
+    // row might not be drawn.
+    next-depth: int,
+    // Layer-only: its branches, in rack order, and the rack index of the one
+    // it is showing (-1 for none). S, M and each branch's meter are read from
+    // the branch head's own row, `effect-slots[branch.slot]`.
+    branches: [LayerBranchRow],
+    selected-branch: int,
+    // The row lies in the branch its innermost layer is showing, and its
+    // first and last drawn rows: where the bracket over that branch is drawn.
+    bracket: bool,
+    bracket-start: bool,
+    bracket-end: bool,
 }
 
 // The selected channel's generator, addressed the way `EffectSlotRow`
@@ -1749,6 +1772,11 @@ export component MainWindow inherits Window {
     callback add-effect-clicked(int, int);
     // Insert a device as the first thing inside the container in this slot.
     callback add-effect-into-container(int, int);   // kind, container slot
+    // A layer's list (`containers/09`): show this branch in the rack, which
+    // is looking rather than an edit and reaches no engine; and add an empty
+    // branch at the end of the layer.
+    callback layer-branch-selected(int, int);       // layer slot, branch head slot
+    callback layer-branch-added(int);               // layer slot
     callback remove-effect-clicked(int);            // slot
     // Wrap the device in `slot` -- and its run, when it is already a
     // container -- in a new container. Unwrap takes a container out and
@@ -4746,8 +4774,9 @@ export component MainWindow inherits Window {
                                             // container's box closes. A repeater item can index its
                                             // own model, so the box needs nothing from Rust that
                                             // `children` and `depth` were not already carrying.
-                                            property <int> next-depth: index + 1 < root.effect-slots.length
-                                                ? root.effect-slots[index + 1].depth : 0;
+                                            // Rust's, because a layer may be hiding the
+                                            // next row: see `EffectSlotRow.next-depth`.
+                                            property <int> next-depth: slot.next-depth;
                                             property <bool> dragging: RackDrag.source == index;
                                             // Which row the pointer is over, answered by the row
                                             // itself from its own bounds. One row is hot at a time
@@ -4776,7 +4805,10 @@ export component MainWindow inherits Window {
                                                 index, RackDrag.source, RackDrag.target, RackDrag.source-width);
                                             animate shift { duration: Motion.duration; easing: Motion.curve; }
 
-                                            width: self.frame-width + self.tail-width
+                                            // A row in a branch its layer is not showing
+                                            // takes no room at all (`containers/09`).
+                                            visible: !slot.hidden;
+                                            width: slot.hidden ? 0px : self.frame-width + self.tail-width
                                                 + DeviceRackMetrics.join-width;
                                             height: DeviceRackMetrics.face-height;
 
@@ -4826,6 +4858,17 @@ export component MainWindow inherits Window {
 
                                             // What the dragged row left behind, so the grab has a
                                             // visible origin to snap back to when nothing moves.
+                                            // The bracket over the branch a layer is
+                                            // showing (`containers/09`). The last row's
+                                            // slice stops at its face, before the join
+                                            // arrow that leads out of the branch.
+                                            if slot.bracket : LayerBracket {
+                                                x: cell.shift;
+                                                width: slot.bracket-end ? cell.frame-width : cell.width;
+                                                start: slot.bracket-start;
+                                                end: slot.bracket-end;
+                                            }
+
                                             if cell.dragging : Rectangle {
                                                 x: cell.shift;
                                                 width: cell.frame-width;
@@ -5394,7 +5437,52 @@ export component MainWindow inherits Window {
                                                     reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     select-requested => { root.device-selected(index); }
                                                 }
-                                                if slot.is-container : ContainerDeviceFace {
+                                                if slot.is-layer : LayerDeviceFace {
+                                                    x: DeviceRackMetrics.rail-width;
+                                                    y: 0px;
+                                                    width: parent.content-width;
+                                                    height: parent.height;
+                                                    name: slot.label;
+                                                    slot-index: index;
+                                                    slot-count: root.effect-slots.length;
+                                                    bypassed: slot.bypassed;
+                                                    preset-name: slot.preset-name;
+                                                    branch-count: slot.branches.length;
+                                                    mix: slot.p0;
+                                                    gain: slot.p1;
+                                                    mix-changed(v) => { root.effect-param-changed(index, 0, v); }
+                                                    gain-changed(v) => { root.effect-param-changed(index, 1, v); }
+                                                    add-branch-requested => { root.layer-branch-added(index); }
+                                                    reorder-requested(target) => { root.reorder-effect(index, target); }
+                                                    select-requested => { root.device-selected(index); }
+                                                    // One row per branch. `branch.slot` is the
+                                                    // branch head's rack index, and every read and
+                                                    // callback here goes through it -- `i` is only
+                                                    // the row's place in the list.
+                                                    for branch[i] in slot.branches : LayerBranchListRow {
+                                                        name: branch.name;
+                                                        controls: branch.controls;
+                                                        selected: branch.slot == slot.selected-branch;
+                                                        // Only a container head has these ids: on a
+                                                        // leaf branch p2 and p3 are its own knobs.
+                                                        muted: branch.controls && root.effect-slots[branch.slot].p2 >= 0.5;
+                                                        soloed: branch.controls && root.effect-slots[branch.slot].p3 >= 0.5;
+                                                        level-db: max(root.effect-slots[branch.slot].output-left-db,
+                                                            root.effect-slots[branch.slot].output-right-db);
+                                                        select-requested => { root.layer-branch-selected(index, branch.slot); }
+                                                        // Ids 2 and 3, `CONTAINER_PARAM_MUTE` and
+                                                        // `_SOLO`, on the branch head's own row.
+                                                        mute-toggled => {
+                                                            root.effect-param-changed(branch.slot, 2,
+                                                                root.effect-slots[branch.slot].p2 >= 0.5 ? 0.0 : 1.0);
+                                                        }
+                                                        solo-toggled => {
+                                                            root.effect-param-changed(branch.slot, 3,
+                                                                root.effect-slots[branch.slot].p3 >= 0.5 ? 0.0 : 1.0);
+                                                        }
+                                                    }
+                                                }
+                                                if slot.is-container && !slot.is-layer : ContainerDeviceFace {
                                                     x: DeviceRackMetrics.rail-width;
                                                     y: 0px;
                                                     width: parent.content-width;
@@ -5406,7 +5494,9 @@ export component MainWindow inherits Window {
                                                     preset-name: slot.preset-name;
                                                     children: slot.children;
                                                     mix: slot.p0;
+                                                    level: slot.p1;
                                                     mix-changed(v) => { root.effect-param-changed(index, 0, v); }
+                                                    level-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                     reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     select-requested => { root.device-selected(index); }
                                                 }

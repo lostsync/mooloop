@@ -210,10 +210,13 @@ Files marked *shared* are split in the table above.
 - `ui/ui/`: `bitcrush-device.slint`, `buffer-device.slint`,
   `compressor-device.slint`, `container-device.slint`, `delay-device.slint`,
   `drive-device.slint`, `eq-device.slint`, `filter-device.slint`,
-  `gate-device.slint`, `limiter-device.slint`, `plate-device.slint`,
-  `preamp-device.slint`, `reverb-device.slint`
+  `gate-device.slint`, `layer-device.slint`, `limiter-device.slint`,
+  `plate-device.slint`, `preamp-device.slint`, `reverb-device.slint`
+- `ui/src/layer_view.rs`: what the rack draws of a chain holding layers
+  (which rows a layer hides, where each box closes, the branch list and the
+  bracket), the container drawing's derivation (`containers/09`)
 - `ui/tests/`: `eq_face.rs`, `eq_reverb_drag.rs`, `effect_preset_menu.rs`,
-  `rack_reorder.rs`
+  `layer_face.rs`, `rack_reorder.rs`
 
 ### 6. DSP Foundations
 

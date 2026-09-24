@@ -78,7 +78,9 @@ than hidden. 10 can wrap a dropped leaf in a Chain as it lands.
 The rules are chosen so that one reading covers every container. There are no
 separate meanings for "inside a layer" and "outside a layer":
 
-- **Level scales a container's run before its Mix blend.** For a layer that
+- **Level scales a container's run before its Mix blend.** An empty
+  container's run is its input, so an empty chain, the natural clean branch,
+  passes its input at its Level. For a layer that
   is the sum of its branches, which is Bitwig's Gain: parallel compression is
   Gain and Mix on the layer. For a Chain it is the run's output. In a branch
   whose Mix is at 1.0 (the default) that is the branch's fader. A layer's face
@@ -144,7 +146,9 @@ chain keeps `ContainerDeviceFace`, which gains its Level knob.
   layer's row. S and M write through the existing `effect-param-changed`,
   with the branch head's index and ids 3 and 2, so they are undoable by the
   path every knob already takes.
-- **`+`** under the list adds a branch (10 wires it).
+- **`+`** under the list adds an empty Chain as the layer's last branch and
+  shows it (`append_into_container`; one undo step). It was 10's, and was
+  built here so the face contract crosses `main.slint` once.
 - **Gain** (id 1) and **Mix** (id 0) knobs beside the list.
 
 ### Only the selected branch is in the rack

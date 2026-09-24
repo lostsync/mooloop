@@ -1700,10 +1700,21 @@ land on its own when it starts to matter:
   6 dB up), a branch holding a Drive is matched by delaying the others to it
   so the sum does not comb, and the layer declares its longest branch as its
   latency. Its Mix blends the sum against its input; bypassing it passes the
-  input, delayed by that latency. A layer of one branch is a chain. The rack
-  draws it as a chain's box with "Layer" on its face until `containers/09`. The wrap button
-  always makes a Chain, and a layer's preset carries only its own mix, not
-  what it holds (`containers/10`).
+  input, delayed by that latency. A layer of one branch is a chain.
+- **A layer draws like Bitwig's FX Layer** (`containers/09`). Its face is one
+  rack unit: a list of its branches, each row with a name, **S**, **M** and a
+  level meter, a `+` under the list that adds an empty branch at the end, and
+  **Gain** and **Mix** knobs. Only the selected branch's devices are drawn in
+  the rack, to the right of the layer under an accent bracket; clicking
+  another row in the list shows that branch instead. Which branch is shown is
+  not saved and is not an undo step. Every branch the `+` makes is a Chain,
+  whose face now has a **Level** knob beside its Mix: inside a layer it is
+  the branch's fader. Mute takes a branch out of the sum and Solo keeps only
+  the soloed branches of that one layer; both ramp, and both are undoable
+  and saved. A device sitting directly inside a layer, not in a chain, is a
+  branch with no S or M. The wrap button still always makes a Chain, and a
+  layer's preset carries only its own row, not what it holds
+  (`containers/10`).
 - `ParamAddr` addresses parameters owned by a source, a rack device, a
   modulator slot, or the strip, within its channel-or-bus scope. A rack device
   is named by a durable `DeviceId` minted when it is inserted, so reordering,

@@ -532,6 +532,42 @@ pub fn insert_into_container(
     Some(at)
 }
 
+/// Insert `effect` as the **last** row inside the container at `container`,
+/// minting it an identity. Returns where it landed.
+///
+/// [`insert_into_container`]'s sibling at the other end of the run, for the
+/// layer's list (`docs/plans/containers/09`): its `+` adds a branch after
+/// the ones already there, the order the list reads in. The position is one
+/// past the box's run, which for an index alone would also mean "the next
+/// device after the box" -- so, as there, the operation names the box rather
+/// than trusting an index. For an empty box the two ends are one position
+/// and this is exactly `insert_into_container`.
+pub fn append_into_container(
+    effects: &mut Vec<EffectSlotState>,
+    next_id: &mut u32,
+    container: usize,
+    effect: EffectSlotState,
+) -> Option<usize> {
+    if !slot_is_container(effects, container) {
+        return None;
+    }
+    if effects.len() >= MAX_EFFECTS_PER_CHANNEL {
+        return None;
+    }
+    if !can_insert_into_container(effects, container, effect.params) {
+        return None;
+    }
+    let at = span_of(effects, container).end.max(container + 1);
+    resize_enclosing(effects, container, 1);
+    if let Some(children) = effects[container].params.container_children() {
+        effects[container]
+            .params
+            .set_container_children(children.saturating_add(1));
+    }
+    effects.insert(at, effect.with_id(mint_device_id(next_id)));
+    Some(at)
+}
+
 /// Remove the device at `at`, and its whole run when it is a container.
 /// Returns what went, in rack order, container first. `None` when there is
 /// nothing there.
@@ -1441,6 +1477,42 @@ mod tests {
             "wrapping the row after an empty box changed what that box holds"
         );
         assert_eq!(span_problem(&effects), None);
+    }
+
+    /// Appending lands after everything a box holds, inside it, and grows
+    /// every box around it: a layer's `+` adds its *last* branch
+    /// (`containers/09`). Nested, so the enclosing boxes are tested too.
+    #[test]
+    fn appending_into_a_container_lands_at_the_end_of_its_run() {
+        // [Chain, Layer, Filter, Drive, Delay]: a layer of two leaf branches
+        // inside a chain, and a device after both.
+        let mut effects = chain(&[EffectKind::Filter, EffectKind::Drive, EffectKind::Delay]);
+        let mut next = effects.len() as u32;
+        let layer = EffectSlotState::of_kind(EffectKind::Layer);
+        wrap_in_container(&mut effects, &mut next, 0..2, layer).expect("a layer");
+        wrap_in_container(&mut effects, &mut next, 0..3, container()).expect("a chain");
+        let at = append_into_container(&mut effects, &mut next, 1, container()).expect("room");
+        assert_eq!(at, 4, "the new branch lands after the Drive, before the Delay");
+        assert_eq!(
+            shape(&effects),
+            [
+                (0, EffectKind::Chain),
+                (1, EffectKind::Layer),
+                (2, EffectKind::Filter),
+                (2, EffectKind::Drive),
+                (2, EffectKind::Chain),
+                (0, EffectKind::Delay),
+            ],
+        );
+        assert_eq!(span_problem(&effects), None);
+        // An empty box: the two ends are one position.
+        let mut empty = vec![container().with_id(DeviceId(0))];
+        let mut next = 1;
+        assert_eq!(append_into_container(&mut empty, &mut next, 0, container()), Some(1));
+        assert_eq!(depth_at(&empty, 1), 1);
+        // A leaf holds nothing and takes nothing.
+        let mut leaf = chain(&[EffectKind::Filter]);
+        assert_eq!(append_into_container(&mut leaf, &mut next, 0, container()), None);
     }
 
     /// Wrapping does not move anything. It adds one row and gives it a reach.

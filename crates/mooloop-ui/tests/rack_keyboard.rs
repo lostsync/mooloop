@@ -166,6 +166,16 @@ fn effect_slot(kind: EffectKind) -> EffectSlotRow {
         // about the depth cap, so wrapping is offered.
         wrap_enabled: true,
         closing: Vec::<i32>::new().as_slice().into(),
+        // `containers/09`: what the rack draws of a layer. Nothing here is
+        // hidden or bracketed, and the next row's depth is the caller's to set.
+        is_layer: false,
+        hidden: false,
+        next_depth: 0,
+        branches: Vec::<mooloop_ui::LayerBranchRow>::new().as_slice().into(),
+        selected_branch: -1,
+        bracket: false,
+        bracket_start: false,
+        bracket_end: false,
         selected: false,
     }
 }

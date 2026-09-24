@@ -1218,14 +1218,49 @@ impl EffectSlot {
             .clamp(0.0, 1.0)
     }
 
+    /// A container's Level, the gain on its run's output before the blend.
+    /// Unity on a leaf, for `container_mix`'s reason.
+    fn container_level(&self) -> f32 {
+        if !self.kind.is_some_and(mooloop_core::EffectKind::is_container) {
+            return 1.0;
+        }
+        self.base_params
+            .and_then(|params| params.get(mooloop_core::CONTAINER_PARAM_LEVEL))
+            .unwrap_or(1.0)
+            .clamp(0.0, MAX_LINEAR_GAIN)
+    }
+
+    /// A branch head's own Mute and Solo, `(mute, solo)`. Both off on a
+    /// leaf, which has neither control: a leaf directly inside a layer is a
+    /// branch with no controls of its own (containers/09).
+    fn branch_switches(&self) -> (bool, bool) {
+        if !self.kind.is_some_and(mooloop_core::EffectKind::is_container) {
+            return (false, false);
+        }
+        let on = |id| {
+            self.base_params
+                .and_then(|params| params.get(id))
+                .is_some_and(|value| value >= 0.5)
+        };
+        (
+            on(mooloop_core::CONTAINER_PARAM_MUTE),
+            on(mooloop_core::CONTAINER_PARAM_SOLO),
+        )
+    }
+
     /// Where each ramp is headed: the controls as they stand.
-    fn ramp_targets(&self) -> [f32; 5] {
+    ///
+    /// A branch's gate is not here. Its target depends on the branch's
+    /// siblings, so only the layer's `finish_branch` can aim it -- see
+    /// [`HostRamps::gate`].
+    fn ramp_targets(&self) -> [f32; 6] {
         [
             self.wet_dry,
             self.input_trim,
             self.output_trim,
             if self.leaving() { 0.0 } else { 1.0 },
             self.container_mix(),
+            self.container_level(),
         ]
     }
 
@@ -1322,6 +1357,25 @@ struct HostRamps {
     active: Smoothed,
     /// A container's Mix. Unused on a leaf.
     mix: Smoothed,
+    /// A container's Level, applied to its run's output before the Mix
+    /// blend. Unused on a leaf.
+    level: Smoothed,
+    /// A layer's branch: 1 while this branch is heard in the layer's sum, 0
+    /// while it is muted or a sibling is soloed (containers/09).
+    ///
+    /// Kept out of the five-plus-one arrays below on purpose. Its target is
+    /// not this slot's to know -- solo is a fact about the siblings -- so it
+    /// is aimed and advanced only where a branch joins the sum, and a row
+    /// that stops being a branch keeps whatever it last held with nothing
+    /// reading it. Being outside `settled_at` is what stops a muted chain
+    /// *outside* a layer from holding a ramp that never moves and so keeping
+    /// its channel awake forever.
+    gate: Smoothed,
+    /// Whether `gate` has been aimed since the slot arrived or was settled.
+    /// Until it has, the first `finish_branch` jumps it to its target: a
+    /// branch muted in the saved song is silent from its first frame rather
+    /// than fading out over the first five milliseconds.
+    gate_primed: bool,
     /// The rate the times were last set for. A slot is built before it
     /// knows one, and learns it from the first block it runs in.
     sample_rate: u32,
@@ -1339,23 +1393,30 @@ impl HostRamps {
             output: at(1.0),
             active: at(1.0),
             mix: at(1.0),
+            level: at(1.0),
+            gate: at(1.0),
+            gate_primed: false,
             sample_rate: Self::RATE_UNSET,
         }
     }
 
-    fn all_mut(&mut self) -> [&mut Smoothed; 5] {
+    fn all_mut(&mut self) -> [&mut Smoothed; 6] {
         [
             &mut self.wet,
             &mut self.input,
             &mut self.output,
             &mut self.active,
             &mut self.mix,
+            &mut self.level,
         ]
     }
 
-    fn aim(&mut self, targets: [f32; 5], sample_rate: u32) {
+    fn aim(&mut self, targets: [f32; 6], sample_rate: u32) {
         let retime = sample_rate != self.sample_rate;
         self.sample_rate = sample_rate;
+        if retime {
+            self.gate.set_time(STRIP_GAIN_SMOOTH_S, sample_rate);
+        }
         for (ramp, target) in self.all_mut().into_iter().zip(targets) {
             if retime {
                 ramp.set_time(STRIP_GAIN_SMOOTH_S, sample_rate);
@@ -1364,14 +1425,14 @@ impl HostRamps {
         }
     }
 
-    fn settle(&mut self, targets: [f32; 5]) {
+    fn settle(&mut self, targets: [f32; 6]) {
         for (ramp, target) in self.all_mut().into_iter().zip(targets) {
             ramp.reset_to(target);
         }
     }
 
-    fn settled_at(&self, targets: [f32; 5]) -> bool {
-        [self.wet, self.input, self.output, self.active, self.mix]
+    fn settled_at(&self, targets: [f32; 6]) -> bool {
+        [self.wet, self.input, self.output, self.active, self.mix, self.level]
             .iter()
             .zip(targets)
             .all(|(ramp, target)| ramp.value() == target)
@@ -1583,6 +1644,10 @@ struct OpenRun {
     branch: usize,
     /// ...and one past that branch's last row, where the next one starts.
     branch_end: usize,
+    /// For a layer: whether any of its branches is soloed, read as the run
+    /// opens. While one is, every branch that is not is gated out of the
+    /// sum. Within this layer only -- a solo is not a fact about the rack.
+    any_solo: bool,
 }
 
 impl EffectChain {
@@ -1639,6 +1704,13 @@ impl EffectChain {
     fn settle_ramps(&mut self) {
         for state in self.slots[..self.bound].iter_mut().flatten() {
             state.settle_ramps();
+            // A branch's gate cannot be settled from here -- its target is
+            // the layer's to say -- so the next `finish_branch` jumps it
+            // instead of ramping. Here, on a document arriving, and not in
+            // the slot's own `settle_ramps`: that one runs every block on an
+            // empty box, and re-priming there would make an empty branch's
+            // mute switch in one sample.
+            state.ramps.gate_primed = false;
         }
     }
 
@@ -2358,6 +2430,7 @@ impl EffectChain {
             parallel: false,
             branch: 0,
             branch_end: 0,
+            any_solo: false,
         }; MAX_CONTAINER_DEPTH];
         let mut depth = 0usize;
         // Set past the end of a bypassed container's run: a bypassed box
@@ -2438,12 +2511,26 @@ impl EffectChain {
                 }
                 let children = self.container_children(slot);
                 if children == 0 {
+                    // Everything but its Level, which ramps below.
+                    let bypassed = self.bypassed(slot);
                     if let Some(state) = self.slots[slot].as_mut() {
+                        let level = state.ramps.level;
                         state.settle_ramps();
+                        if !bypassed {
+                            state.ramps.level = level;
+                        }
                     }
                     // An empty box is a row that does nothing, so what comes
-                    // out of it is what went in.
+                    // out of it is what went in -- at its Level, which is
+                    // what makes an empty chain a *clean branch* with a fader
+                    // (`containers/09`). Its Mix blends the input with
+                    // itself, which is the identity it always was here, and
+                    // bypassed it is the identity whatever its Level.
+                    if !bypassed {
+                        self.apply_run_level(slot, bus, context);
+                    }
                     if let Some((meters, _, target)) = device_display {
+                        let (left, right) = bus.peak(context.frames);
                         meters.publish_output(target, slot + 1, left, right);
                     }
                     continue;
@@ -2455,6 +2542,7 @@ impl EffectChain {
                     parallel: false,
                     branch: slot + 1,
                     branch_end: end,
+                    any_solo: false,
                 };
                 if self.bypassed(slot) {
                     // **Bypassing a box bypasses the run**, and costs exactly
@@ -2475,6 +2563,13 @@ impl EffectChain {
                     if let Some((meters, _, target)) = device_display {
                         let (left, right) = bus.peak(context.frames);
                         meters.publish_output(target, slot + 1, left, right);
+                    }
+                    // Its Level is not heard while the run is skipped, so it
+                    // has nothing to ramp along; left aimed and unmoved it
+                    // would keep the chain awake.
+                    if let Some(state) = self.slots[slot].as_mut() {
+                        let level = state.container_level();
+                        state.ramps.level.reset_to(level);
                     }
                     skip_until = open_run.end;
                     continue;
@@ -2526,6 +2621,9 @@ impl EffectChain {
                         branches.sum[depth].r[..context.frames].fill(0.0);
                         open_run.parallel = true;
                         open_run.branch_end = first_branch_end;
+                    }
+                    if open_run.parallel {
+                        open_run.any_solo = self.any_branch_soloed(slot + 1, end);
                     }
                     open[depth] = open_run;
                     depth += 1;
@@ -2772,6 +2870,7 @@ impl EffectChain {
                 bus.r[..context.frames].copy_from_slice(&branches.sum[depth].r[..context.frames]);
             }
         }
+        self.apply_run_level(run.slot, bus, context);
         self.blend_run(run, depth, bus, context);
         // The box's OUT is what leaves the far end of its run, taken after
         // the blend. It used to be published at the container's own row from
@@ -2828,9 +2927,81 @@ impl EffectChain {
             return;
         };
         let sum = &mut branches.sum[depth];
+        // Mute and solo (containers/09): the branch is gated into the sum,
+        // after its own blend, so a muted branch adds nothing at any Mix.
+        // The gate ramps on the branch head's slot; a still, open gate is
+        // the plain add this was before, sample for sample.
+        let Some(head) = slots[run.branch].as_deref_mut() else {
+            for frame in 0..context.frames {
+                sum.l[frame] += bus.l[frame];
+                sum.r[frame] += bus.r[frame];
+            }
+            return;
+        };
+        let (mute, solo) = head.branch_switches();
+        let target = if mute || (run.any_solo && !solo) { 0.0 } else { 1.0 };
+        let gate = &mut head.ramps.gate;
+        if head.ramps.gate_primed {
+            gate.set_target(target);
+        } else {
+            gate.set_time(STRIP_GAIN_SMOOTH_S, context.sample_rate);
+            gate.reset_to(target);
+            head.ramps.gate_primed = true;
+        }
+        if gate.is_settled() {
+            if gate.value() == 1.0 {
+                for frame in 0..context.frames {
+                    sum.l[frame] += bus.l[frame];
+                    sum.r[frame] += bus.r[frame];
+                }
+            }
+            // Settled shut: the branch ran and is heard nowhere.
+            return;
+        }
         for frame in 0..context.frames {
-            sum.l[frame] += bus.l[frame];
-            sum.r[frame] += bus.r[frame];
+            let gain = gate.advance();
+            sum.l[frame] += bus.l[frame] * gain;
+            sum.r[frame] += bus.r[frame] * gain;
+        }
+    }
+
+    /// Whether any direct child of the layer whose run is `first..end` is
+    /// soloed. Walks one row per branch, so it costs the branch count.
+    fn any_branch_soloed(&self, first: usize, end: usize) -> bool {
+        let mut branch = first;
+        while branch < end {
+            if self.slot(branch).is_some_and(|state| state.branch_switches().1) {
+                return true;
+            }
+            branch = self.run_end(branch);
+        }
+        false
+    }
+
+    /// A container's Level, on what its run produced, before the blend.
+    ///
+    /// A still unity Level is skipped rather than multiplied by one, which is
+    /// the same number and keeps the argument short: every container written
+    /// before containers/09 renders exactly as it did.
+    fn apply_run_level(&mut self, slot: usize, bus: &mut StereoBus, context: &ProcessContext) {
+        let Some(state) = self.slots[slot].as_deref_mut() else {
+            return;
+        };
+        let level = &mut state.ramps.level;
+        if level.is_settled() {
+            let gain = level.value();
+            if gain != 1.0 {
+                for frame in 0..context.frames {
+                    bus.l[frame] *= gain;
+                    bus.r[frame] *= gain;
+                }
+            }
+            return;
+        }
+        for frame in 0..context.frames {
+            let gain = level.advance();
+            bus.l[frame] *= gain;
+            bus.r[frame] *= gain;
         }
     }
 
@@ -16376,7 +16547,11 @@ mod footprint {
         // switching (five `Smoothed` and the rate they were timed for), and
         // eight for the frames a removal has waited on its fade. Again per
         // occupied slot only.
-        assert_eq!(size_of::<EffectSlot>(), 592);
+        //
+        // And by twenty-four for `containers/09`: a container's Level ramp and
+        // a branch's mute/solo gate, two more `Smoothed`, with the flag saying
+        // whether the gate has been aimed falling in padding.
+        assert_eq!(size_of::<EffectSlot>(), 616);
         assert_eq!(size_of::<Option<Box<EffectSlot>>>(), 8);
         // Eight of this is the pointer to the per-depth dry buffers a chain
         // needs while it is *inside* containers. One pointer, not four

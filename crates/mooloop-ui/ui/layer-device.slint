@@ -1,0 +1,211 @@
+import { Theme } from "theme.slint";
+import { GainMath } from "gain.slint";
+import { AudioOrientation, MuteButton, ParameterKnob, PeakMeter, SoloButton, ToolButton } from "controls.slint";
+import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
+
+// One branch of a layer, as the layer's face lists it. `slot` is the rack
+// index of the branch's head -- the number every callback about the branch
+// wants -- and not the row's position in the list, which is the `lvl`/`level`
+// trap `docs/plans/containers/09` warns about.
+export struct LayerBranchRow {
+    slot: int,
+    // The branch's preset name if it has one, otherwise the first device
+    // inside it, otherwise its kind. Worked out in Rust.
+    name: string,
+    // Whether the head is a container, which is what has Level, Mute and
+    // Solo. A leaf directly inside a layer sums at unity with no switches.
+    controls: bool,
+}
+
+// One row of the branch list: the name, S, M and a level meter, in Bitwig's
+// FX Layer order. The state of S and M and the meter are the branch head's
+// own row, read by the caller from `effect-slots`, so nothing here is a copy
+// that has to be republished when the branch changes.
+export component LayerBranchListRow inherits Rectangle {
+    in property <string> name;
+    in property <bool> controls;
+    in property <bool> selected;
+    in property <bool> muted;
+    in property <bool> soloed;
+    in property <float> level-db: GainMath.min-db;
+    callback select-requested();
+    callback mute-toggled();
+    callback solo-toggled();
+
+    height: 22px;
+    border-radius: Theme.radius-sm;
+    background: root.selected ? Theme.surface-raised : transparent;
+
+    // The selected row wears the bracket's colour on its left edge: it is
+    // the branch the rack is showing to the right.
+    if root.selected : Rectangle {
+        x: 0px;
+        width: 2px;
+        height: parent.height;
+        background: Theme.accent;
+    }
+
+    pick := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.select-requested(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 2px;
+        spacing: 2px;
+        alignment: stretch;
+        Text {
+            horizontal-stretch: 1;
+            vertical-alignment: center;
+            overflow: elide;
+            text: root.name;
+            color: root.muted ? Theme.text-faint : root.selected ? Theme.text : Theme.text-muted;
+            font-size: Theme.text-md;
+        }
+        if root.controls : VerticalLayout {
+            alignment: center;
+            SoloButton {
+                soloed: root.soloed;
+                tooltip: "Solo this branch within the layer";
+                clicked => { root.solo-toggled(); }
+            }
+        }
+        if root.controls : VerticalLayout {
+            alignment: center;
+            MuteButton {
+                muted: root.muted;
+                tooltip: "Mute this branch";
+                clicked => { root.mute-toggled(); }
+            }
+        }
+        VerticalLayout {
+            padding-top: 3px;
+            padding-bottom: 3px;
+            PeakMeter {
+                width: 5px;
+                min-height: 0px;
+                orientation: AudioOrientation.vertical;
+                level-db: root.level-db;
+                held-db: root.level-db;
+            }
+        }
+    }
+}
+
+// The layer's face (`docs/plans/containers/09`, after Bitwig's FX Layer):
+// the list of its branches with `+` under it, and Gain and Mix beside it.
+// The rows are the caller's children, because each reads its branch head's
+// row out of the rack model, which a face cannot see.
+export component LayerDeviceFace inherits EffectDeviceShell {
+    kind: "FX / 1U";
+    // Normalized 0..1: Mix is a ratio, and Gain is fader travel through the
+    // mixer's taper (`ParamCurve::Fader`).
+    in-out property <float> mix;
+    in-out property <float> gain;
+    in property <int> branch-count;
+    callback mix-changed(float);
+    callback gain-changed(float);
+    callback add-branch-requested();
+
+    HorizontalLayout {
+        padding: 6px;
+        padding-top: DeviceRackMetrics.header-height + 6px;
+        spacing: 6px;
+
+        Rectangle {
+            horizontal-stretch: 1;
+            background: Theme.panel;
+            border-radius: Theme.radius-sm;
+            clip: true;
+
+            VerticalLayout {
+                padding: 3px;
+                spacing: 1px;
+                alignment: start;
+                @children
+                if root.branch-count == 0 : Text {
+                    height: 22px;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                    text: "no branches";
+                    color: Theme.text-faint;
+                    font-size: Theme.text-md;
+                }
+                HorizontalLayout {
+                    alignment: center;
+                    padding-top: 3px;
+                    ToolButton {
+                        text: "+";
+                        tooltip: "Add a branch";
+                        width: 22px;
+                        height: 18px;
+                        clicked => { root.add-branch-requested(); }
+                    }
+                }
+            }
+        }
+
+        VerticalLayout {
+            spacing: 6px;
+            alignment: end;
+            ParameterKnob {
+                width: 56px;
+                diameter: 34px;
+                label: "Gain";
+                tooltip: "The summed branches' level, before Mix";
+                value <=> root.gain;
+                // Unity: three-quarter travel on the mixer's taper. A literal
+                // so `slint_face_agreement.rs` can hold it to the table.
+                default-value: 0.75;
+                value-text: GainMath.format-db(GainMath.fader-position-to-db(root.gain));
+                changed(v) => { root.gain-changed(v); }
+            }
+            ParameterKnob {
+                width: 56px;
+                diameter: 34px;
+                label: "Mix";
+                tooltip: "Dry/wet across the whole layer";
+                value <=> root.mix;
+                default-value: 1.0;
+                value-text: round(root.mix * 100) + "%";
+                changed(v) => { root.mix-changed(v); }
+            }
+        }
+    }
+}
+
+// The bar over the branch a layer is showing, one slice per row the way
+// `ContainerEnclosure` is drawn: the first row turns its left end down and
+// the last its right, so the slices read as one bracket over the branch.
+// Drawn in the rack's top padding, above the enclosures.
+export component LayerBracket inherits Rectangle {
+    in property <bool> start;
+    in property <bool> end;
+    property <length> thickness: 3px;
+    property <length> drop: 6px;
+
+    y: -DeviceRackMetrics.rack-padding + 2px;
+    height: root.thickness + root.drop;
+
+    Rectangle {
+        y: 0px;
+        width: parent.width;
+        height: root.thickness;
+        background: Theme.accent;
+        border-top-left-radius: root.start ? 2px : 0px;
+        border-top-right-radius: root.end ? 2px : 0px;
+    }
+    if root.start : Rectangle {
+        x: 0px;
+        width: root.thickness;
+        height: root.thickness + root.drop;
+        background: Theme.accent;
+    }
+    if root.end : Rectangle {
+        x: parent.width - root.thickness;
+        width: root.thickness;
+        height: root.thickness + root.drop;
+        background: Theme.accent;
+    }
+}

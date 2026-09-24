@@ -266,6 +266,35 @@ impl Session {
         })
     }
 
+    /// Adds an empty branch at the end of the layer in `slot`: what the
+    /// layer list's `+` does (`docs/plans/containers/09`).
+    ///
+    /// The branch is a Chain, because a branch's Level, Mute and Solo are a
+    /// container's parameters -- a leaf directly inside a layer has none --
+    /// and empty, so the rack shows it ready to fill from its own `+`.
+    /// `None` when `slot` is not a layer, or the chain or the nesting is
+    /// full.
+    pub fn add_layer_branch(&mut self, slot: usize) -> Option<EffectInserted> {
+        let target = self.effect_target;
+        let (effects, next_id) = self.effect_chain_parts_mut()?;
+        if effects.get(slot)?.params.container_flow()
+            != Some(mooloop_core::ContainerFlow::Parallel)
+        {
+            return None;
+        }
+        let tail = effects.len();
+        let branch = EffectSlotState::of_kind(EffectKind::Chain);
+        let landed = mooloop_core::append_into_container(effects, next_id, slot, branch)?;
+        Some(EffectInserted {
+            target,
+            slot: landed,
+            tail,
+            device: effects[landed].id,
+            kind: EffectKind::Chain,
+            params: branch.params,
+        })
+    }
+
     /// Wraps `run` in a new container, minting it an identity.
     ///
     /// The gesture that actually makes containers: one is far more often made
@@ -1625,6 +1654,7 @@ mod tests {
         preset.params = EffectParams::Chain(mooloop_core::ContainerParams {
             children: 200,
             mix: 0.25,
+            ..Default::default()
         });
 
         session
@@ -1790,6 +1820,40 @@ mod tests {
 
     /// nesting reachable from a single button rather than needing a selection
     /// model to exist first.
+    #[test]
+    fn a_layers_plus_adds_an_empty_chain_as_its_last_branch() {
+        let mut session = Session::default();
+        for kind in [EffectKind::Layer, EffectKind::Delay] {
+            session.insert_effect_at(kind, usize::MAX).expect("room");
+        }
+        let first = session.add_layer_branch(0).expect("a first branch");
+        assert_eq!(first.slot, 1, "an empty layer's first branch is its first row");
+        let second = session.add_layer_branch(0).expect("a second branch");
+        assert_eq!(second.slot, 2, "the second lands after the first, not before it");
+        assert_eq!(second.kind, EffectKind::Chain);
+        assert_eq!(
+            kinds(&session),
+            [
+                EffectKind::Layer,
+                EffectKind::Chain,
+                EffectKind::Chain,
+                EffectKind::Delay
+            ]
+        );
+        assert_eq!(
+            mooloop_core::layer_branches(&session.channels[0].effects, 0).collect::<Vec<_>>(),
+            [1, 2]
+        );
+        assert!(
+            session.add_layer_branch(3).is_none(),
+            "a Delay is not a layer and takes no branch"
+        );
+        assert!(
+            session.add_layer_branch(1).is_none(),
+            "a Chain is a container but not a layer"
+        );
+    }
+
     #[test]
     fn wrapping_and_unwrapping_leave_every_device_where_it_was() {
         let mut session = Session::default();

@@ -9,6 +9,7 @@
 mod actions;
 mod channel_colors;
 mod gestures;
+mod layer_view;
 mod meter;
 #[cfg(feature = "mockup")]
 mod mockup;
@@ -139,7 +140,7 @@ use slint::{
     VecModel,
 };
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -2632,35 +2633,6 @@ fn effect_presets_of_kind(
         .filter(move |preset| preset.kind == PresetKind::Effect(kind))
 }
 
-/// The containers whose run ends at `slot`, innermost first.
-///
-/// The rack draws each one's output rail here, past everything it holds. An
-/// empty container closes on its own row: its span covers nothing, so there
-/// is no later row for it to end at.
-///
-/// Innermost first is the greatest index first, because containers nest: the
-/// rails then read outwards from the device, which is the order the boxes
-/// close in.
-fn containers_closing_at(effects: &[EffectSlotState], slot: usize) -> Vec<i32> {
-    (0..=slot)
-        .rev()
-        .filter(|container| {
-            effects
-                .get(*container)
-                .is_some_and(|effect| effect.params.is_container())
-        })
-        .filter(|container| {
-            let span = mooloop_core::span_of(effects, *container);
-            if span.is_empty() {
-                *container == slot
-            } else {
-                span.end == slot + 1
-            }
-        })
-        .map(|container| container as i32)
-        .collect()
-}
-
 /// The parameter id behind each of the EQ face's controls, for the target it
 /// is currently showing, indexed by the face's own control number.
 ///
@@ -2734,8 +2706,10 @@ fn effect_face_param_id(effect: &EffectSlotState, control: u32) -> Option<u32> {
 /// will eventually be called wrongly.
 struct RackPlacement {
     depth: i32,
-    /// The containers that close at this row.
-    closing: Vec<i32>,
+    /// What the rack draws of this row beyond the row itself: whether a
+    /// layer is hiding it, which boxes close at it, and a layer's branch
+    /// list (`docs/plans/containers/09`).
+    view: layer_view::RowView,
     selected: bool,
     /// Whether wrapping this row would leave every container inside
     /// `MAX_CONTAINER_DEPTH`. Answered by `mooloop_core::can_wrap` rather than
@@ -2743,6 +2717,19 @@ struct RackPlacement {
     /// interface -- the markup asks this and the gesture asks the same
     /// function, which is what stopped the button lying.
     wrap_enabled: bool,
+}
+
+/// A layer's branch list as its row carries it to the face.
+fn layer_branch_rows(branches: &[layer_view::BranchView]) -> ModelRc<LayerBranchRow> {
+    let rows: Vec<LayerBranchRow> = branches
+        .iter()
+        .map(|branch| LayerBranchRow {
+            slot: branch.slot as i32,
+            name: branch.name.as_str().into(),
+            controls: branch.controls,
+        })
+        .collect();
+    ModelRc::from(Rc::new(VecModel::from(rows)))
 }
 
 fn effect_slot_row(
@@ -2757,10 +2744,11 @@ fn effect_slot_row(
 ) -> EffectSlotRow {
     let RackPlacement {
         depth,
-        closing,
+        view,
         selected,
         wrap_enabled,
     } = placement;
+    let branches = layer_branch_rows(&view.branches);
     let kind = slot.kind();
     let preset_options: Vec<slint::SharedString> = effect_presets_of_kind(presets, kind)
         .map(preset_menu_label)
@@ -2910,9 +2898,17 @@ fn effect_slot_row(
         // The kind's own name, for the one face that draws two kinds.
         label: kind.label().into(),
         depth,
-        closing: ModelRc::from(Rc::new(VecModel::from(closing))),
+        closing: ModelRc::from(Rc::new(VecModel::from(view.closing))),
         selected,
         wrap_enabled,
+        is_layer: slot.params.container_flow() == Some(mooloop_core::ContainerFlow::Parallel),
+        hidden: view.hidden,
+        next_depth: view.next_depth,
+        branches,
+        selected_branch: view.selected_branch,
+        bracket: view.bracket,
+        bracket_start: view.bracket_start,
+        bracket_end: view.bracket_end,
     }
 }
 
@@ -4029,6 +4025,11 @@ struct UiState {
     /// `Cell` because `sync_effects` takes `&self`, and that is the one
     /// function every rack edit already calls.
     effect_spectra_stale: std::cell::Cell<bool>,
+    /// Which branch each layer is showing in the rack, by the layer's
+    /// identity on its chain: `containers/09`'s selection. View state -- not
+    /// saved, not in undo, never sent to the engine. A layer with no entry,
+    /// or whose entry names a branch that has gone, shows its first.
+    layer_selection: HashMap<(EffectTarget, mooloop_core::DeviceId), mooloop_core::DeviceId>,
     /// Raised when a project has been installed, so the pump knows the track
     /// its per-bus meter ballistics belong to may have changed underneath
     /// them.
@@ -4162,6 +4163,7 @@ impl UiState {
             browser_tab: BrowserTab::default(),
             preset_catalog: Vec::new(),
             effect_spectra_stale: std::cell::Cell::new(false),
+            layer_selection: HashMap::new(),
             bus_meters_stale: false,
             automation_point_model,
             automation_target_model,
@@ -4615,6 +4617,24 @@ impl UiState {
         }
     }
 
+    /// What the rack draws of `effects`, the chain of `target`, given which
+    /// branch each of its layers is showing (`layer_view`).
+    fn rack_view(
+        &self,
+        target: EffectTarget,
+        effects: &[EffectSlotState],
+    ) -> Vec<layer_view::RowView> {
+        layer_view::rack_view(
+            effects,
+            |layer| self.layer_selection.get(&(target, layer)).copied(),
+            |device| {
+                self.session
+                    .effect_preset_name(target, device)
+                    .map(str::to_string)
+            },
+        )
+    }
+
     /// Re-draws one device-rack row from the slot behind it.
     fn refresh_effect_row(&self, slot: usize) {
         let Some(chain) = self.session.effect_chain() else {
@@ -4622,6 +4642,9 @@ impl UiState {
         };
         if let Some(effect) = chain.get(slot) {
             let depth = mooloop_core::depth_at(chain, slot) as i32;
+            let view = self
+                .rack_view(self.session.effect_target, chain)
+                .swap_remove(slot);
             self.effect_slot_model.set_row_data(
                 slot,
                 effect_slot_row(
@@ -4631,13 +4654,28 @@ impl UiState {
                         .effect_preset_name(self.session.effect_target, effect.id),
                     RackPlacement {
                         depth,
-                        closing: containers_closing_at(chain, slot),
+                        view,
                         selected: self.session.selected_device_slot() == Some(slot),
                         wrap_enabled: wrap_enabled_at(chain, slot),
                     },
                     self.audio_sample_rate,
                 ),
             );
+            // A branch head's name is its layer's list entry, so the layer's
+            // row moves with it. Its S, M and meter are read live from this
+            // row and need nothing.
+            if let Some(layer) = mooloop_core::parent_of(chain, slot).filter(|parent| {
+                chain[*parent].params.container_flow()
+                    == Some(mooloop_core::ContainerFlow::Parallel)
+            }) {
+                if let Some(mut row) = self.effect_slot_model.row_data(layer) {
+                    let view = self
+                        .rack_view(self.session.effect_target, chain)
+                        .swap_remove(layer);
+                    row.branches = layer_branch_rows(&view.branches);
+                    self.effect_slot_model.set_row_data(layer, row);
+                }
+            }
         }
     }
 
@@ -4897,6 +4935,7 @@ impl UiState {
                 .session.channels
                 .get(channel as usize)
                 .map(|state| {
+                    let views = self.rack_view(EffectTarget::Channel(channel), &state.effects);
                     state
                         .effects
                         .iter()
@@ -4911,7 +4950,7 @@ impl UiState {
                                 ),
                                 RackPlacement {
                                     depth: mooloop_core::depth_at(&state.effects, slot) as i32,
-                                    closing: containers_closing_at(&state.effects, slot),
+                                    view: views[slot].clone(),
                                     selected: selected == Some(slot),
                                     wrap_enabled: wrap_enabled_at(&state.effects, slot),
                                 },
@@ -4959,6 +4998,7 @@ impl UiState {
                 self.session
                     .effect_chain()
                     .map(|effects| {
+                        let views = self.rack_view(target, effects);
                         effects
                             .iter()
                             .enumerate()
@@ -4969,7 +5009,7 @@ impl UiState {
                                     self.session.effect_preset_name(target, effect.id),
                                     RackPlacement {
                                         depth: mooloop_core::depth_at(effects, slot) as i32,
-                                        closing: containers_closing_at(effects, slot),
+                                        view: views[slot].clone(),
                                         selected: selected == Some(slot),
                                         wrap_enabled: wrap_enabled_at(effects, slot),
                                     },
@@ -11893,6 +11933,67 @@ impl AppUi {
                     st.install_added_effect(&added, window.get_bpm() as f64, sample_rate, &tx, &stx);
                 }
                 record_project_history(&commands, before, &st, &window, "Effect added");
+            });
+        }
+
+        // A layer's list (`docs/plans/containers/09`). Choosing the branch
+        // the rack shows is looking, not editing: it redraws the rack and
+        // sends the engine nothing, and it is not in undo.
+        {
+            let st = state.clone();
+            window.on_layer_branch_selected(move |layer, branch| {
+                let (Ok(layer), Ok(branch)) = (usize::try_from(layer), usize::try_from(branch))
+                else {
+                    return;
+                };
+                let mut st = st.borrow_mut();
+                let target = st.session.effect_target;
+                let Some((layer_id, branch_id)) = st
+                    .session
+                    .effect_chain()
+                    .and_then(|chain| Some((chain.get(layer)?.id, chain.get(branch)?.id)))
+                else {
+                    return;
+                };
+                st.layer_selection.insert((target, layer_id), branch_id);
+                st.sync_effects();
+            });
+        }
+
+        // The list's `+`: an empty branch at the end of the layer, shown in
+        // the rack at once so its own `+` is where the next device goes.
+        {
+            let tx = cmd_tx.clone();
+            let stx = structural_tx.clone();
+            let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_layer_branch_added(move |layer| {
+                let Some(window) = weak.upgrade() else { return };
+                let Ok(layer) = usize::try_from(layer) else {
+                    return;
+                };
+                let before = project_snapshot(&st.borrow(), &window);
+                {
+                    let mut st = st.borrow_mut();
+                    let Some(added) = st.session.add_layer_branch(layer) else {
+                        return;
+                    };
+                    let target = st.session.effect_target;
+                    if let Some(layer_id) = st
+                        .session
+                        .effect_chain()
+                        .and_then(|chain| chain.get(layer))
+                        .map(|effect| effect.id)
+                    {
+                        st.layer_selection.insert((target, layer_id), added.device);
+                    }
+                    st.sync_effects();
+                    st.refresh_automation(&window);
+                    st.refresh_modulation(&window);
+                    st.install_added_effect(&added, window.get_bpm() as f64, sample_rate, &tx, &stx);
+                }
+                record_project_history(&commands, before, &st, &window, "Branch added");
             });
         }
 
@@ -19083,7 +19184,7 @@ mod tests {
                 None,
                 super::RackPlacement {
                     depth: 0,
-                    closing: Vec::new(),
+                    view: super::layer_view::RowView::default(),
                     selected: false,
                     wrap_enabled: true,
                 },

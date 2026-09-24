@@ -77,12 +77,42 @@ fn every_kind_has_a_preset_in_the_corpus() {
     }
 }
 
+/// Parameters a corpus version was written without, because they were added
+/// after it: that version's file cannot hold them, so they open at their
+/// defaults, and that is the claim to check rather than an exception.
+///
+/// A container's Level arrived with `containers/09` (2026-09-23). Its Mute
+/// and Solo arrived with it too, but land on "off" at 37% of a two-position
+/// range either way, so they need no row.
+const ADDED_AFTER: [(&str, EffectKind, u32); 2] = [
+    ("v0.1.4", EffectKind::Chain, mooloop_core::CONTAINER_PARAM_LEVEL),
+    ("v0.1.4", EffectKind::Layer, mooloop_core::CONTAINER_PARAM_LEVEL),
+];
+
+/// What `version`'s files should open as: every parameter moved, except
+/// those added after it was written, at their defaults.
+fn expected_from(version: &Path) -> Vec<EffectSlotState> {
+    let name = version.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    every_kind_moved_off_its_defaults()
+        .into_iter()
+        .map(|mut slot| {
+            for (added_after, kind, id) in ADDED_AFTER {
+                if added_after == name && slot.kind() == kind {
+                    let descriptor = kind.descriptor(id).expect("a described parameter");
+                    slot.params.set(id, descriptor.default);
+                }
+            }
+            slot
+        })
+        .collect()
+}
+
 #[test]
 fn every_preset_in_the_corpus_opens_as_the_device_it_was() {
-    let expected = every_kind_moved_off_its_defaults();
     let mut opened = 0;
     for version in std::fs::read_dir(root()).expect("the preset corpus exists") {
         let version = version.unwrap().path();
+        let expected = expected_from(&version);
         for slot in &expected {
             let path = version.join(file_name(slot.kind()));
             if !path.exists() {

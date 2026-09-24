@@ -253,17 +253,31 @@ fn the_menu_and_the_faces_cover_every_kind() {
             kind.label()
         );
 
-        // A container is drawn by the predicate arm, because every container
-        // kind shares one face until `containers/09` gives a layer its own.
-        // The question is unchanged -- exactly one arm draws this kind -- but
-        // it is asked of `is-container` rather than of the index.
+        // A container is drawn by a predicate arm rather than by its index:
+        // the chain by `is-container && !is-layer`, the layer by `is-layer`
+        // (`containers/09` gave it its own face). The question is unchanged
+        // -- exactly one arm draws this kind -- but it is asked of the
+        // predicates rather than of the number.
         if kind.is_container() {
+            let expected = if kind.container_flow() == Some(mooloop_core::ContainerFlow::Parallel)
+            {
+                "LayerDeviceFace"
+            } else {
+                "ContainerDeviceFace"
+            };
+            let drawing: Vec<&String> = predicate_faces
+                .iter()
+                .filter(|(parallel, _)| {
+                    *parallel
+                        == (kind.container_flow() == Some(mooloop_core::ContainerFlow::Parallel))
+                })
+                .map(|(_, face)| face)
+                .collect();
             assert_eq!(
-                predicate_faces,
-                vec!["ContainerDeviceFace".to_string()],
-                "{} is a container, so it is drawn by the single \
-                 `if slot.is-container : ContainerDeviceFace` arm in \
-                 main.slint, and that arm has to exist exactly once",
+                drawing,
+                vec![expected],
+                "{} is a container, so exactly one predicate arm in main.slint \
+                 draws it, and that arm draws {expected}",
                 kind.label()
             );
             assert!(
@@ -324,9 +338,11 @@ fn face_branches() -> Vec<(i32, String)> {
         .collect()
 }
 
-/// The faces drawn by a predicate rather than by an index.
+/// The faces drawn by a predicate rather than by an index, each with whether
+/// its predicate admits a layer.
 ///
-/// One arm, `if slot.is-container : ContainerDeviceFace`. It is keyed that
+/// Two arms since `containers/09`: `if slot.is-container && !slot.is-layer :
+/// ContainerDeviceFace` and `if slot.is-layer : LayerDeviceFace`. Keyed that
 /// way because containment is a property of the row and not of its number:
 /// the markup asked `slot.kind == 13` in seven places until 2026-09-21, and
 /// a second container kind would have had to be added to all seven as
@@ -335,15 +351,23 @@ fn face_branches() -> Vec<(i32, String)> {
 /// It means face dispatch is no longer one arm per kind, so the cover test
 /// below asks a container kind a different question -- but the same one
 /// underneath: **is there exactly one arm that draws it.**
-fn predicate_face_branches() -> Vec<String> {
-    MAIN_SLINT
-        .lines()
-        .filter_map(|line| line.split_once("if slot.is-container : "))
-        .filter_map(|(_, face)| {
-            let face = face.trim().trim_end_matches('{').trim();
-            face.ends_with("DeviceFace").then(|| face.to_string())
-        })
-        .collect()
+fn predicate_face_branches() -> Vec<(bool, String)> {
+    let mut out = Vec::new();
+    for (predicate, parallel) in [
+        ("if slot.is-container && !slot.is-layer : ", false),
+        ("if slot.is-layer : ", true),
+    ] {
+        out.extend(
+            MAIN_SLINT
+                .lines()
+                .filter_map(|line| line.split_once(predicate))
+                .filter_map(|(_, face)| {
+                    let face = face.trim().trim_end_matches('{').trim();
+                    face.ends_with("DeviceFace").then(|| (parallel, face.to_string()))
+                }),
+        );
+    }
+    out
 }
 
 /// The control experiment. The insert menu is the same shape -- a

@@ -10,7 +10,7 @@ Linear: project [Containers and the layer device](https://linear.app/mooloop/pro
 | --- | --- | --- | --- |
 | [07](07-a-branch-is-a-run.md) | One container predicate, latency as a tree, `EffectKind::Layer` landing silent | [MOO-69](https://linear.app/mooloop/issue/MOO-69) | **landed 2026-09-22** — see below |
 | [08](08-the-chain-splits-and-sums.md) | Branch buffers, alignment, the sum — the engine | [MOO-70](https://linear.app/mooloop/issue/MOO-70) | **landed 2026-09-23** — see below |
-| [09](09-the-rack-draws-branches.md) | Per-branch Level, Mute and Solo in the engine, the list face, and the selected branch drawn to the right. **Rewritten 2026-09-23** around Adam's answer (Bitwig's FX Layer) | [MOO-71](https://linear.app/mooloop/issue/MOO-71) | in progress |
+| [09](09-the-rack-draws-branches.md) | Per-branch Level, Mute and Solo in the engine, the list face, and the selected branch drawn to the right. **Rewritten 2026-09-23** around Adam's answer (Bitwig's FX Layer) | [MOO-71](https://linear.app/mooloop/issue/MOO-71) | **landed 2026-09-23** — see below |
 | [10](10-the-gestures-and-the-preset.md) | Wrap-as-layer, add/remove a branch, a preset with branches | [MOO-72](https://linear.app/mooloop/issue/MOO-72) | not started |
 
 **09's answer, 2026-09-23.** Adam chose none of 09's three height options:
@@ -32,6 +32,94 @@ selection. No second representation, no new field on `EffectSlotState`. What
 does change, and 02 recorded the opposite in good faith, is that
 **`chain_latency` stops being a sum** — the time a signal spends inside a
 layer is its longest branch, not the total of all of them.
+
+## Step 09 — the rack draws branches
+
+Landed 2026-09-23, built from the rewritten work order. **A layer now draws
+like Bitwig's FX Layer**: a one-unit face listing its branches (name, S, M,
+meter), a `+` that appends an empty chain branch, Gain and Mix, and only the
+selected branch's devices in the rack, under an accent bracket.
+
+### Where it went
+
+- **The controls** are descriptors 1-3 on every container (`Level`, `Mute`,
+  `Solo`), fields on `ContainerParams` with serde defaults. Level ramps on a
+  sixth `HostRamps` smoother and is applied in `close_run` before the blend
+  (`apply_run_level`). Mute and Solo resolve to a per-branch **gate**, a
+  seventh smoother on the branch head's slot, aimed and advanced only in
+  `finish_branch`. `OpenRun::any_solo` is read when the layer opens its run.
+- **The gate is primed, not settled.** Settling a chain when a document
+  arrives cannot settle the gate, because its target belongs to the layer, so
+  it clears `gate_primed` instead and the first `finish_branch` jumps the gate
+  to its target. Without that, a branch saved muted would sound for its first
+  five milliseconds, and `a_muted_branch_is_absent_and_a_soloed_one_is_alone`
+  (exact equality from frame 0) would fail. The clearing sits in the chain's
+  `settle_ramps` and not the slot's, because the slot's runs on **every block**
+  for an empty box. The first cut put it there, and an empty branch's mute
+  then switched in one sample.
+- **An empty chain is a clean branch, so it has a Level too.** An empty box
+  used to pass its input untouched and settle every ramp it had. It now
+  passes its input at its Level, ramped, unless it is bypassed. Its Mix
+  blends the input with itself, which stays the identity it always was.
+- **The drawing** is derived in `mooloop-ui/src/layer_view.rs`
+  (`rack_view`): which rows a layer hides, each drawn row's next *drawn*
+  depth, which boxes close at each drawn row, the branch list, and the
+  bracket. It replaced `containers_closing_at`, which answered "where does
+  this box end" from the next row, and so would have left a layer whose last
+  branch is hidden with no right cap and no output rail.
+  `a_chain_with_no_layer_is_drawn_as_before` pins that nothing changes for a
+  chain without a layer.
+- **The list reads the branch heads' own rows.** `LayerBranchListRow` is
+  instantiated in `main.slint`'s layer arm as the face's children, so S, M
+  and the meter read `effect-slots[branch.slot]` live, and S and M write
+  through `effect-param-changed(branch.slot, 2|3, ..)`. That path already
+  records undo. The only new callbacks are `layer-branch-selected` (view
+  state, sends nothing) and `layer-branch-added` (one undo step, "Branch
+  added").
+- **`append_into_container`** (`structure.rs`) is `insert_into_container`
+  at the other end of the run, so the list's `+` adds the *last* branch.
+- **The chain's face gained a Level knob**, which is a branch's fader.
+
+### What it cost
+
+`EffectSlot` went from 592 bytes to 616, for two more `Smoothed` (Level and
+the gate), per occupied slot, pinned by `the_render_graph_costs_what_the_project_uses`.
+`ContainerParams` grew by six bytes inside a payload the poly synth's
+parameter block floors, so `EffectParams`, `EffectSlotState` and the command
+ring did not move (`capacity_no_longer_moves_the_command_ring` still passes
+unchanged).
+
+### What the doing found
+
+- **A container's output-trim knob does nothing.** The output rail every
+  container draws past its run carries an output trim wired to
+  `SetEffectOutputTrim`, and the container arm of `EffectChain::process`
+  settles the leaf ramps and never applies it. Found while deciding where
+  Level goes, and filed rather than fixed here (open: MOO-210).
+- **The export and the live loop differ in the last frame of a pattern**, by
+  1.5e-22, where one ends and the other wraps to its top. That is unrelated
+  to the layer, and the parity test bounds it rather than ignoring it.
+
+### Acceptance
+
+In `crates/mooloop-engine/src/container_tests.rs`:
+`a_muted_branch_is_absent_and_a_soloed_one_is_alone`,
+`a_solo_stays_inside_its_layer`,
+`a_branchs_level_and_the_layers_gain_scale_what_they_say`, and
+`layer_parallel_drums_render_offline_as_they_play`. The last is the case to
+play: authored, saved, reopened with no repairs, rendered offline, and
+identical to the live loop. It also writes the listening file `FOCUS.md`
+names. `a_layer_branchs_mute_solo_and_level_are_continuous`
+(`continuity_tests.rs`) holds every switch to the click bound.
+`a_container_saved_before_branch_controls_reads_them_at_rest` (`effect.rs`)
+pins the old-file defaults. Every pre-09 container render test still passes
+bit for bit. In `mooloop-ui`: `layer_view`'s seven (a nested layer's
+bracket among them), `layer_face.rs`, which clicks the list and requires every
+press to name the branch head's rack index rather than the row's place in the
+list, the face agreement test reading the layer arm, and the insert-menu
+cover test asking both predicate arms.
+
+**Nobody has listened to it.** It is first on `FOCUS.md`'s list.
 
 ## Step 08 — the chain splits and sums
 

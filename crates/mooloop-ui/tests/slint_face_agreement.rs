@@ -55,6 +55,7 @@ const MODULATION_SLINT: &str = include_str!("../ui/modulation-device.slint");
 const BUFFER_SLINT: &str = include_str!("../ui/buffer-device.slint");
 const MAIN_SLINT: &str = include_str!("../ui/main.slint");
 const CONTAINER_SLINT: &str = include_str!("../ui/container-device.slint");
+const LAYER_SLINT: &str = include_str!("../ui/layer-device.slint");
 const AUX_IN_SLINT: &str = include_str!("../ui/aux-in-device.slint");
 
 /// A Buffer edit crosses two address spaces in `main.slint`: row fields and
@@ -954,10 +955,9 @@ fn every_effect_face_knob_agrees_with_its_table() {
 /// A list is worth having rather than a note, because `EffectKind::ALL` is
 /// fifteen and the automatic pass covers thirteen. Leaving the other two to a
 /// sentence is how the effect faces came to be uncovered while the generators
-/// were checked. Both container kinds are named, although they share one face
-/// and one table today, so that `containers/09` giving the layer its own face
-/// has a row here to move rather than an absence to notice.
-const UNROUTED_KNOBS: [(&str, &str, EffectKind, &str, u32); 2] = [
+/// were checked. `containers/09` gave the layer its own face and both kinds a
+/// Level (the layer captions it Gain), so each kind has two rows.
+const UNROUTED_KNOBS: [(&str, &str, EffectKind, &str, u32); 4] = [
     (
         "container-device.slint",
         CONTAINER_SLINT,
@@ -968,9 +968,23 @@ const UNROUTED_KNOBS: [(&str, &str, EffectKind, &str, u32); 2] = [
     (
         "container-device.slint",
         CONTAINER_SLINT,
+        EffectKind::Chain,
+        "level",
+        mooloop_core::CONTAINER_PARAM_LEVEL,
+    ),
+    (
+        "layer-device.slint",
+        LAYER_SLINT,
         EffectKind::Layer,
         "mix",
         mooloop_core::CONTAINER_PARAM_MIX,
+    ),
+    (
+        "layer-device.slint",
+        LAYER_SLINT,
+        EffectKind::Layer,
+        "gain",
+        mooloop_core::CONTAINER_PARAM_LEVEL,
     ),
 ];
 
@@ -1108,7 +1122,7 @@ fn the_aux_in_face_reads_and_writes_level_by_id() {
 /// face's own markup can name, because the control is a selector, a switch, a
 /// slider, a knob whose `value` is an expression, or a knob that refuses
 /// modulation. Each is the descriptor id the property displays.
-const UNKNOBBED_BINDINGS: [(EffectKind, &str, u32); 13] = [
+const UNKNOBBED_BINDINGS: [(EffectKind, &str, u32); 15] = [
     (EffectKind::Filter, "mode", mooloop_core::FILTER_PARAM_MODE),
     (EffectKind::Filter, "slope", mooloop_core::FILTER_PARAM_SLOPE),
     (EffectKind::Drive, "curve", mooloop_core::DRIVE_PARAM_CURVE),
@@ -1121,7 +1135,9 @@ const UNKNOBBED_BINDINGS: [(EffectKind, &str, u32); 13] = [
     (EffectKind::Modulation, "rate", mooloop_core::MODULATION_PARAM_RATE_HZ),
     (EffectKind::Buffer, "quantize", mooloop_core::BUFFER_PARAM_QUANTIZE),
     (EffectKind::Chain, "mix", mooloop_core::CONTAINER_PARAM_MIX),
+    (EffectKind::Chain, "level", mooloop_core::CONTAINER_PARAM_LEVEL),
     (EffectKind::Layer, "mix", mooloop_core::CONTAINER_PARAM_MIX),
+    (EffectKind::Layer, "gain", mooloop_core::CONTAINER_PARAM_LEVEL),
 ];
 
 /// The face properties fed from the row's reserved fields: a tempo-sync flag
@@ -1151,6 +1167,7 @@ fn face_markup(face: &str) -> (&'static str, &'static str) {
         "PlateDeviceFace" => ("plate-device.slint", PLATE_SLINT),
         "BufferDeviceFace" => ("buffer-device.slint", BUFFER_SLINT),
         "ContainerDeviceFace" => ("container-device.slint", CONTAINER_SLINT),
+        "LayerDeviceFace" => ("layer-device.slint", LAYER_SLINT),
         other => panic!("main.slint dispatches to {other}, which this test does not know"),
     }
 }
@@ -1230,23 +1247,35 @@ fn every_face_reads_its_parameters_by_id() {
             .unwrap_or_else(|| panic!("main.slint:{line}: no effect kind is numbered {number}"));
         arms.push((face, kind, body));
     }
-    let mut predicate_arms = 0usize;
-    for (line, body) in blocks_after(MAIN_SLINT, "if slot.is-container : ") {
-        let header = MAIN_SLINT.lines().nth(line - 1).expect("header line");
-        let Some(face) = header.trim().strip_prefix("if slot.is-container : ") else {
-            continue;
-        };
-        let face = face.trim().trim_end_matches('{').trim();
-        predicate_arms += 1;
-        for kind in EffectKind::ALL.into_iter().filter(|kind| kind.is_container()) {
-            arms.push((face, kind, body));
+    // Since `containers/09` the predicate arms are two: the chain's face for
+    // a container that is not a layer, and the layer's own. Each is read for
+    // every kind its predicate admits, and each must be found exactly once.
+    for (predicate, parallel) in [
+        ("if slot.is-container && !slot.is-layer : ", false),
+        ("if slot.is-layer : ", true),
+    ] {
+        let mut found = 0usize;
+        for (line, body) in blocks_after(MAIN_SLINT, predicate) {
+            let header = MAIN_SLINT.lines().nth(line - 1).expect("header line");
+            let Some(face) = header.trim().strip_prefix(predicate) else {
+                continue;
+            };
+            let face = face.trim().trim_end_matches('{').trim();
+            found += 1;
+            for kind in EffectKind::ALL.into_iter().filter(|kind| {
+                kind.is_container()
+                    && (kind.container_flow() == Some(mooloop_core::ContainerFlow::Parallel))
+                        == parallel
+            }) {
+                arms.push((face, kind, body));
+            }
         }
+        assert_eq!(
+            found, 1,
+            "main.slint draws containers through exactly one `{predicate}` arm, \
+             and this test has to be reading it"
+        );
     }
-    assert_eq!(
-        predicate_arms, 1,
-        "main.slint draws containers through exactly one `if slot.is-container` \
-         arm, and this test has to be reading it"
-    );
 
     let mut failures = Vec::new();
     let mut checked = 0usize;

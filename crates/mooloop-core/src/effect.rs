@@ -3017,9 +3017,28 @@ pub struct ContainerParams {
     /// went in rather than against what went in `run_latency` frames ago.
     #[serde(default = "default_container_mix")]
     pub mix: f32,
+    /// Linear gain on the run's output, before the Mix blend: for a layer the
+    /// sum of its branches (Bitwig's Gain), for a chain its run, which in a
+    /// branch whose Mix is 1.0 is the branch's fader. See
+    /// `docs/plans/containers/09-the-rack-draws-branches.md`.
+    #[serde(default = "default_container_level")]
+    pub level: f32,
+    /// Whether this container, as a branch of a layer, is left out of the
+    /// layer's sum. Inert outside a layer.
+    #[serde(default)]
+    pub mute: bool,
+    /// Whether this container, as a branch of a layer, is soloed within it:
+    /// while any branch of a layer is soloed, the ones that are not are
+    /// silent. Inert outside a layer.
+    #[serde(default)]
+    pub solo: bool,
 }
 
 fn default_container_mix() -> f32 {
+    1.0
+}
+
+fn default_container_level() -> f32 {
     1.0
 }
 
@@ -3028,6 +3047,9 @@ impl Default for ContainerParams {
         Self {
             children: 0,
             mix: 1.0,
+            level: 1.0,
+            mute: false,
+            solo: false,
         }
     }
 }
@@ -3058,16 +3080,53 @@ pub struct EffectRun {
 /// is: it is structure rather than a control. A curve drawn on it would
 /// rewrite the shape of the chain from the audio thread.
 pub const CONTAINER_PARAM_MIX: u32 = 0;
+/// The run's output gain before the blend. A layer's face captions it Gain.
+pub const CONTAINER_PARAM_LEVEL: u32 = 1;
+/// A branch's mute within its layer.
+pub const CONTAINER_PARAM_MUTE: u32 = 2;
+/// A branch's solo within its layer.
+pub const CONTAINER_PARAM_SOLO: u32 = 3;
 
-static CONTAINER_DESCRIPTORS: [ParamDescriptor; 1] = [ParamDescriptor {
-    id: CONTAINER_PARAM_MIX,
-    name: "Mix",
-    unit: "",
-    min: 0.0,
-    max: 1.0,
-    curve: ParamCurve::Linear,
-    default: 1.0,
-}];
+static CONTAINER_DESCRIPTORS: [ParamDescriptor; 4] = [
+    ParamDescriptor {
+        id: CONTAINER_PARAM_MIX,
+        name: "Mix",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 1.0,
+    },
+    // The mixer's fader taper and range, so a branch's level and a channel's
+    // fader move alike under the mouse, a lane and a controller.
+    ParamDescriptor {
+        id: CONTAINER_PARAM_LEVEL,
+        name: "Level",
+        unit: "x",
+        min: 0.0,
+        max: crate::gain::FADER_MAX_GAIN,
+        curve: ParamCurve::Fader,
+        default: 1.0,
+    },
+    ParamDescriptor {
+        id: CONTAINER_PARAM_MUTE,
+        name: "Mute",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Stepped(2),
+        default: 0.0,
+    },
+    ParamDescriptor {
+        id: CONTAINER_PARAM_SOLO,
+        name: "Solo",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Stepped(2),
+        default: 0.0,
+    },
+];
 
 impl Default for LimiterParams {
     fn default() -> Self {
@@ -3422,6 +3481,9 @@ impl EffectParams {
             },
             Self::Chain(p) | Self::Layer(p) => match id {
                 CONTAINER_PARAM_MIX => Some(p.mix),
+                CONTAINER_PARAM_LEVEL => Some(p.level),
+                CONTAINER_PARAM_MUTE => Some(if p.mute { 1.0 } else { 0.0 }),
+                CONTAINER_PARAM_SOLO => Some(if p.solo { 1.0 } else { 0.0 }),
                 _ => None,
             },
             // A plugin's values live in its instance and its saved state.
@@ -3568,6 +3630,9 @@ impl EffectParams {
             },
             Self::Chain(p) | Self::Layer(p) => match id {
                 CONTAINER_PARAM_MIX => p.mix = value,
+                CONTAINER_PARAM_LEVEL => p.level = value,
+                CONTAINER_PARAM_MUTE => p.mute = value >= 0.5,
+                CONTAINER_PARAM_SOLO => p.solo = value >= 0.5,
                 _ => return None,
             },
             // Unreachable today: `descriptor` above found nothing in the
@@ -3950,6 +4015,9 @@ mod tests {
         let dialled = EffectParams::Layer(ContainerParams {
             children: 2,
             mix: 0.25,
+            level: 0.5,
+            mute: true,
+            solo: true,
         });
         let written = toml::to_string(&dialled).expect("a layer encodes");
         assert!(
@@ -3965,9 +4033,34 @@ mod tests {
             chain,
             EffectParams::Chain(ContainerParams {
                 children: 2,
-                mix: 0.25
+                mix: 0.25,
+                ..ContainerParams::default()
             })
         );
+    }
+
+    /// A container written before a branch had Level, Mute and Solo
+    /// (containers/09) reads as unity, unmuted and unsoloed, which is what
+    /// it sounded like when it was written -- and the three answer by id
+    /// through the same table every face and lane reads.
+    #[test]
+    fn a_container_saved_before_branch_controls_reads_them_at_rest() {
+        for tag in ["chain", "layer"] {
+            let old: EffectParams =
+                toml::from_str(&format!("type = \"{tag}\"\n[state]\nchildren = 1\nmix = 0.5\n"))
+                    .expect("a pre-09 container decodes");
+            assert_eq!(old.get(CONTAINER_PARAM_LEVEL), Some(1.0), "{tag} level");
+            assert_eq!(old.get(CONTAINER_PARAM_MUTE), Some(0.0), "{tag} mute");
+            assert_eq!(old.get(CONTAINER_PARAM_SOLO), Some(0.0), "{tag} solo");
+            assert_eq!(old.get(CONTAINER_PARAM_MIX), Some(0.5), "{tag} mix kept");
+        }
+        let mut params = EffectKind::Layer.default_params();
+        params.set(CONTAINER_PARAM_MUTE, 1.0);
+        params.set(CONTAINER_PARAM_SOLO, 1.0);
+        params.set(CONTAINER_PARAM_LEVEL, 0.5);
+        let EffectParams::Layer(layer) = params else { unreachable!() };
+        assert!(layer.mute && layer.solo);
+        assert_eq!(layer.level, 0.5);
     }
 
     /// Each of the seven call sites this setter replaced was an `if let`

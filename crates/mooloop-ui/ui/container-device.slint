@@ -1,4 +1,5 @@
 import { Theme } from "theme.slint";
+import { GainMath } from "gain.slint";
 import { ParameterKnob } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 
@@ -13,15 +14,19 @@ import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 // rides between the two lanes at the blend position, so the picture answers
 // "how much of this is the run?" before the percentage is read.
 //
-// It draws both container kinds until `containers/09` gives a layer its own
-// drawing, so its title is the row's `label` rather than a word written here.
+// A chain's face. The layer has its own since `containers/09`
+// (`layer-device.slint`); the title is still the row's `label` rather than a
+// word written here.
 export component ContainerDeviceFace inherits EffectDeviceShell {
     kind: "FX / 1U";
     // Normalized 0..1, and already the natural range: a mix is a ratio.
     in-out property <float> mix;
+    // Normalized fader travel (`ParamCurve::Fader`): 0.75 is unity.
+    in-out property <float> level;
     // How many rows of the rack are inside this one.
     in property <int> children;
     callback mix-changed(float);
+    callback level-changed(float);
 
     // A lane at its own end of the blend is drawn at full strength and the
     // other is held at a floor rather than taken to zero: a path that is
@@ -152,6 +157,20 @@ export component ContainerDeviceFace inherits EffectDeviceShell {
                 default-value: 1.0;
                 value-text: round(root.mix * 100) + "%";
                 changed(v) => { root.mix-changed(v); }
+            }
+            // The run's level before the blend (`containers/09`). Inside a
+            // layer this is the branch's fader; the layer's list shows its
+            // meter, S and M.
+            ParameterKnob {
+                width: 69px;
+                diameter: 38px;
+                label: "Level";
+                tooltip: "The level of everything in this container, before Mix";
+                value <=> root.level;
+                // Unity: three-quarter travel on the mixer's taper.
+                default-value: 0.75;
+                value-text: GainMath.format-db(GainMath.fader-position-to-db(root.level));
+                changed(v) => { root.level-changed(v); }
             }
             Rectangle { horizontal-stretch: 1; }
         }

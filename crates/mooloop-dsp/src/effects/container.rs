@@ -94,7 +94,11 @@ mod tests {
     #[test]
     fn a_container_is_transparent_at_every_mix() {
         for mix in [0.0, 0.25, 0.5, 1.0] {
-            let mut node = ContainerEffect::new(ContainerParams { children: 2, mix });
+            let mut node = ContainerEffect::new(ContainerParams {
+                children: 2,
+                mix,
+                ..ContainerParams::default()
+            });
             let mut bus = StereoBus::with_capacity(64);
             for frame in 0..64 {
                 bus.l[frame] = frame as f32 / 64.0;

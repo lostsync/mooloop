@@ -671,6 +671,16 @@ fn effect_slot(kind: EffectKind) -> EffectSlotRow {
         // about the depth cap, so wrapping is offered.
         wrap_enabled: true,
         closing: Vec::<i32>::new().as_slice().into(),
+        // `containers/09`: what the rack draws of a layer. Nothing here is
+        // hidden or bracketed, and the next row's depth is the caller's to set.
+        is_layer: false,
+        hidden: false,
+        next_depth: 0,
+        branches: Vec::<mooloop_ui::LayerBranchRow>::new().as_slice().into(),
+        selected_branch: -1,
+        bracket: false,
+        bracket_start: false,
+        bracket_end: false,
         selected: false,
     }
 }
@@ -746,13 +756,20 @@ fn a_container_draws_its_run_and_its_nesting() {
     inner_child.depth = 2;
     let mut outer_child = effect_slot(EffectKind::Filter);
     outer_child.depth = 1;
-    ui.set_effect_slots(ModelRc::from(Rc::new(VecModel::from(vec![
+    let mut rows = vec![
         container(3, 0),
         outer_child,
         container(1, 1),
         inner_child,
         effect_slot(EffectKind::Delay),
-    ]))));
+    ];
+    // Rust's since `containers/09` (the markup used to read it off the next
+    // row): the depth of the row drawn after each one.
+    let depths: Vec<i32> = rows.iter().map(|row| row.depth).collect();
+    for (row, next) in rows.iter_mut().zip(depths.into_iter().skip(1).chain([0])) {
+        row.next_depth = next;
+    }
+    ui.set_effect_slots(ModelRc::from(Rc::new(VecModel::from(rows))));
 
     let nested = ui.window().take_snapshot().unwrap();
     write_snapshot(&nested, "MOOLOOP_CONTAINER_SNAPSHOT");

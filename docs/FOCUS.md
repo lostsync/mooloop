@@ -256,7 +256,13 @@ with nothing heard. **Nothing from 2026-09-22 or 2026-09-23 has been
 heard**, and some of it changes existing sounds rather than adding new ones.
 In the order worth playing:
 
-1. **The layer device's parallel compression** (step 1's case).
+1. **The layer device's parallel compression** (step 1's case). A drum loop
+   on a track whose layer holds a clean branch and a Drive → Bitcrush branch,
+   the layer's Mix at 0, 25, 50, 75 and 100% in turn, two bars each:
+   `scripts/antibox --no-incremental --pull target/listening/layer-parallel-drums.wav cargo test -p mooloop-engine --lib -- layer_parallel_drums --nocapture`,
+   then play `target/listening/layer-parallel-drums.wav`. The test prints
+   each branch's and each section's level. Then build the same thing in the
+   rack, from the list's `+`, and play with S and M.
 2. **Bend, sustain, mod wheel and aftertouch** on every source, from a real
    keyboard (MOO-126, MOO-128).
 3. **Saved patches whose sound moved.** The cutoff law is now one law at

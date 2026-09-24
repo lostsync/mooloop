@@ -21,9 +21,17 @@ branch makes a Chain:
 | --- | --- | --- |
 | **Wrap** | left-rail button puts a box around the clicked row's *run* | the same button offers a choice of kind. Wrapping in a layer makes a layer of **one branch**, a Chain holding the run, so the branch has its controls from the start |
 | **Unwrap** | right-rail button, leaves the contents where they are | reads the predicate; no change |
-| **Add a branch** | `insert_effect_into_container` is the container rail's `+` | **the list's `+`**: an empty Chain appended as the layer's *last* branch, and selected, so the rack shows it ready to fill from its own `+` |
+| **Add a branch** | `insert_effect_into_container` is the container rail's `+` | **the list's `+`**: an empty Chain appended as the layer's *last* branch, and selected, so the rack shows it ready to fill from its own `+`. **Built in 09** (`Session::add_layer_branch`) |
 | **Remove a branch** | the rail's remove, a box going with its contents | **a row's context menu** in the list: *Remove* takes the branch head and its run (`remove_effect` already does exactly that) |
 | **Drop into a run** | already worked -- `move_effect` decides what the landing index falls inside | a drop between two branches makes a leaf branch, which 09 records as legal and control-less. Wrapping it in a Chain as it lands is the fix, if it turns out to matter in use |
+
+**Remove takes the whole branch**: the branch head and its run, as one
+removal and one undo step, because `remove_effect` already takes a box with
+its contents. Nothing is left orphaned or re-parented into a sibling branch.
+**The last branch can be removed too**, leaving an empty layer. An empty layer
+is already legal (it caps itself and passes its input), its list says "no
+branches", and its `+` is right there. Refusing would make the list's Remove
+behave differently for one row out of many.
 
 So the new interface objects are **choosing which box to wrap in** and **the
 list row's context menu**. The wrap choice is a menu on the existing button
