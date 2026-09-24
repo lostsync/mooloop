@@ -40,24 +40,33 @@ Two siblings, kept because they outlived the plans they came from:
 
 ## The sequence
 
-### 1. The layer device is a gesture — `containers/` step 10 (MOO-72)
+### 1. The layer device, finished — `containers/` steps 09 and 10 (MOO-71, MOO-72)
 
 07 and 08 landed 2026-09-23: a layer is a device, it is in the insert menu,
 it splits its input across its branches, aligns them and sums them. What it
-does not have is the gestures: wrapping a selection *as a layer* (the wrap
-button only knows chains), adding and removing a branch as a named act, and
-a layer that saves as a preset. Step 10 is those, and it closes the plan
-except for the drawing.
+lacks is a face and the gestures.
 
-- **10 does not wait on 09.** 09 is the drawing and stays blocked on Adam's
-  mock-up (MOO-71), deliberately: the chain's enclosure was drawn three times
-  without one. 10's own text never depends on the drawing. It keeps whatever
-  the rack draws for a layer today and must not invent a branch treatment on
-  the way. That is 09's question, and 09 lays out three options.
+**09 is unblocked.** Adam answered it on 2026-09-23, choosing none of 09's
+three options: *"like container, but with a list (of the layers). pretty much
+just copy bitwig"*, with `reference/img/bitwig-fxlayer.png` as the mock-up.
+Bitwig's FX Layer is one rack unit tall. Its face is a **list of branches**,
+each row with a name, **S**, **M** and a level meter, a `+` under the list,
+and Gain and Mix beside it. **The selected branch's chain continues to the
+right in the rack**, under a coloured bracket. So nothing grows vertically,
+and every branch stays visible at a glance.
+
+- **Rewrite 09's work order around that before building it.** Its three
+  height options are now moot. What it adds that 08 didn't build is
+  **per-branch solo, mute and level**: a branch gain before the sum, a mute,
+  and solo within the layer. Those are engine parameters with ids, undo and
+  persistence, not drawing.
+- **10 folds into it naturally.** The list's `+` is "add a branch", and a
+  row's context menu is "remove". Wrap-as-layer and the layer preset are
+  still 10's.
 - **The case to play** is the one the device exists for: a drum loop into a
   clean branch and a Drive → Bitcrush branch, mix swept. That is parallel
   compression. It has never been heard (08's pass was closed unheard), so
-  play it at the start of 10 as well as the end.
+  play it before starting as well as at the end.
 - **`scripts/dupe-audit popup-close-order`** before any menu is written. A
   wrap-kind menu is the fifth place that trap would be found.
 
@@ -78,39 +87,59 @@ because nothing finds a plugin on disk and nothing puts one in a chain.
   instruments, GUI windows) are the rest of the plan. They are next after 06
   unless this document is rewritten first.
 
-### 3. Adam's answers, as a batch
+### 3. The master bus compressor (MOO-13)
 
-About twenty open Linear issues carry the `Question` label, and they now gate
-more of 0.2.0 than the engineering does. Take them in one sitting rather than
-one at a time as each blocks a step: the master bus compressor (MOO-13),
-sampler key zones (MOO-14), Sampler V2's loop seams, tempo fit and mono/legato
-(MOO-43, MOO-39, MOO-45), the stretching-polyphony cap (MOO-7), the left
-sidebar (MOO-8), the browser (MOO-9), the layer's drawing (MOO-71), and the
-smaller calls listed under "Waiting on Adam" below.
+Every question in front of it was answered on 2026-09-23, the three voicings
+are measured (`SCOPE.md` §2.1), and it is the most audible 0.2.0 item left.
+**The face is per voicing**: SSL and API get attack and release, and vari-mu
+swaps them for its six-position TIME selector. The safety limiter's new
+**lookahead control** (MOO-169: default 0, a small knob or number box on the
+master's face) lands in the same face, so build them together. *"Turning it
+on should feel special"* is a listening pass, and it is the acceptance case.
 
-**Record every answer on its issue and in the plan it settles**, then rewrite
-this document. What gets answered decides what step 4 is.
+After it, **sampler key zones** (MOO-14) are the next largest 0.2.0 item, and
+unblocked. Rewrite this document before choosing between them and the rest.
+
+## Answered 2026-09-23, now construction
+
+Adam answered the `Question` batch in one sitting on 2026-09-23. Each answer
+is on its issue. These are the ones that change what gets built:
+
+- **Key zones** (MOO-14): zones for 0.2.0, with a data model that leaves room
+  for velocity layers, which are not built.
+- **Sampler V2**: the stretch pool follows Voices by a structural resize
+  (MOO-7), loop seams get a crossfade *and* zero-crossing snap (MOO-43),
+  turning SYNC off freezes the derived ratio (MOO-39), and mono glide uses
+  ML-M1's `GlideMode` + `EnvTrigger` pair (MOO-45).
+- **Left sidebar** (MOO-8): mute/solo, volume and pan appear in both the
+  sidebar and the rack row, and rename stays in both places.
+- **Browser** (MOO-9): a click on a preset selects and auditions it.
+  Double-click or Enter loads it, and dragging places it.
+- **Tails ring out after Stop** (MOO-171). The rack keeps rendering while
+  stopped until it is at rest.
+- **Buffer's Freeze is not saved at all** (MOO-196): *"freeze is
+  temporary."*
+- **Clipboards survive New and Open** and re-resolve ids against the new song
+  (MOO-161).
+- **Note-drag axis lock is Alt**, rebindable (MOO-164).
+- **Grip gets the SSL's drive-dependent low shelf**, and only Grip (MOO-163).
+- **A solo click keeps its own undo step** (MOO-162, closed, no change).
+
+Deferred past 0.2.0: modulators inside containers (MOO-160) and the tracker
+question (MOO-159).
 
 ## Waiting on Adam, not on work
 
-The `Question` label in Linear is the complete list. These bear on 0.2.0:
+The `Question` label in Linear is the complete list, and after 2026-09-23 it
+is short:
 
-- **The layer device's drawing** (MOO-71): a mock-up, not a paragraph. 09
-  has the three options (the rack grows, branches scale, or branches are
-  tabs).
-- **The master bus compressor** (MOO-13): three voicings, all measured
-  (`SCOPE.md` §2.1). Open: the face, since vari-mu is six coupled positions
-  rather than an attack and a release, and whether the safety limiter should
-  look ahead (MOO-169).
-- **Sampler key zones and Sampler V2** (MOO-14, MOO-43, MOO-39, MOO-45,
-  MOO-7).
-- **The left sidebar and the browser** (MOO-8, MOO-9).
-- **Smaller calls:** whether tails ring after Stop (MOO-171), whether a
-  saved Buffer freeze keeps its audio (MOO-196), the drag-lock key (MOO-164),
-  whether a solo click is an undo step (MOO-162), whether the clipboards
-  outlive the song (MOO-161), Grip's low shelf (MOO-163), a modulator inside
-  a container (MOO-160), and the tracker question (MOO-159).
-- **Theming:** relief (MOO-153) and the face paddings (MOO-157).
+- **Relief beyond the first controls** (MOO-153). `d3c90211` shipped the
+  bevel, Platinum and Impulse, and stopped where the step says to look before
+  converting the rest of the controls. It needs a look, not a paragraph.
+- **The listening passes** below, which nobody has taken since 2026-09-18.
+
+MOO-159 (the tracker) keeps its label, because "not now" defers the question
+rather than answering it.
 
 ## Fixes that may interrupt the sequence
 
@@ -145,7 +174,8 @@ way `coreaudio-driver/` was: asked for directly, and worked when asked.
   it). MOO-180, the dialog that picks a folder and a name and lets one render
   write several files, is in progress and the rest stand on it.
 - **Theming's remainder**: MOO-154 (accessibility), MOO-205 (the type scale
-  grows glyphs but not boxes), and the two questions above.
+  grows glyphs but not boxes), MOO-157 (face paddings), and relief (MOO-153,
+  above).
 - **The polish backlog's remainder** (Linear project Polish backlog, about
   seventeen issues). The ones that matter to a player: the control menu and
   typed entry stopping at `ParameterKnob` (MOO-202), and keyboard reach in

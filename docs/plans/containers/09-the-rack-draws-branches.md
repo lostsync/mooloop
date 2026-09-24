@@ -1,5 +1,14 @@
 # 09 — The rack draws branches
 
+> **Superseded in part, 2026-09-23.** Adam answered the height question with
+> none of the three options below: copy Bitwig's FX Layer
+> (`reference/img/bitwig-fxlayer.png`). A one-unit face lists the branches
+> (name, S, M, meter, `+`, Gain, Mix), and the selected branch's chain
+> continues to the right in the rack. See `00-status.md` and MOO-71. What
+> follows is kept for the surrounding facts (`ContainerEnclosure`,
+> `containers_closing_at`, the `lvl`/`level` trap), and this step needs
+> rewriting before it is built.
+
 The drawing step, and the one with a genuine design question in it.
 
 **Read `04-the-rack-draws-the-box.md`'s status entry before starting.** The

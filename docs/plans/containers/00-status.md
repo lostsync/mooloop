@@ -10,8 +10,19 @@ Linear: project [Containers and the layer device](https://linear.app/mooloop/pro
 | --- | --- | --- | --- |
 | [07](07-a-branch-is-a-run.md) | One container predicate, latency as a tree, `EffectKind::Layer` landing silent | [MOO-69](https://linear.app/mooloop/issue/MOO-69) | **landed 2026-09-22** — see below |
 | [08](08-the-chain-splits-and-sums.md) | Branch buffers, alignment, the sum — the engine | [MOO-70](https://linear.app/mooloop/issue/MOO-70) | **landed 2026-09-23** — see below |
-| [09](09-the-rack-draws-branches.md) | The drawing. **Blocked on a mock-up from Adam**, deliberately | [MOO-71](https://linear.app/mooloop/issue/MOO-71) | not started |
+| [09](09-the-rack-draws-branches.md) | The drawing. **Unblocked 2026-09-23**: Adam's answer is Bitwig's FX Layer (see the note under this table); the work order needs rewriting first | [MOO-71](https://linear.app/mooloop/issue/MOO-71) | not started |
 | [10](10-the-gestures-and-the-preset.md) | Wrap-as-layer, add/remove a branch, a preset with branches | [MOO-72](https://linear.app/mooloop/issue/MOO-72) | not started |
+
+**09's answer, 2026-09-23.** Adam chose none of 09's three height options:
+*"like container, but with a list (of the layers). pretty much just copy
+bitwig"*, with `reference/img/bitwig-fxlayer.png` (untracked, under the
+top-level `reference/`) as the mock-up. The layer's face is one rack unit: a
+list of branches, each row with a name, S, M and a level meter, a `+` to add
+one, and Gain and Mix. The **selected** branch's chain continues to the right
+in the rack under a coloured bracket. What that adds beyond 08 is per-branch
+solo, mute and level in the engine. 09's work order is still written against
+the three options and needs rewriting before anyone builds from it. The full
+reading is on MOO-71.
 
 **The one thing 06 priced that turned out not to be true:** it said the span
 representation could not express parallel branches, and it can. A branch is a
