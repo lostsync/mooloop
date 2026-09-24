@@ -17,6 +17,8 @@ mod channel_sidebar_tests;
 #[cfg(test)]
 mod controlled_faces_tests;
 #[cfg(test)]
+mod rack_fold_tests;
+#[cfg(test)]
 mod rack_join_tests;
 #[cfg(test)]
 mod window_probe;
@@ -3042,6 +3044,7 @@ fn effect_slot_row(
         hidden: view.hidden,
         next_depth: view.next_depth,
         join_before: view.join_before,
+        collapsed: slot.collapsed,
         branches,
         selected_branch: view.selected_branch,
         bracket: view.bracket,
@@ -10141,6 +10144,8 @@ impl AppUi {
                     0 => {
                         close_edit_stream(&st, &commands, &window);
                         let entry = commands.borrow().history.undo_target().cloned();
+                        let entry =
+                            entry.map(|entry| with_live_view_state(entry, &st.borrow().session));
                         if let Some(entry) = entry {
                             if queue_history_target(&tx, entry, HistoryMove::Undo) {
                                 commands.borrow_mut().project_edit_pending = true;
@@ -10151,6 +10156,8 @@ impl AppUi {
                     1 => {
                         close_edit_stream(&st, &commands, &window);
                         let entry = commands.borrow().history.redo_target().cloned();
+                        let entry =
+                            entry.map(|entry| with_live_view_state(entry, &st.borrow().session));
                         if let Some(entry) = entry {
                             if queue_history_target(&tx, entry, HistoryMove::Redo) {
                                 commands.borrow_mut().project_edit_pending = true;
@@ -12193,6 +12200,33 @@ impl AppUi {
                     st.install_added_effect(&added, window.get_bpm() as f64, sample_rate, &tx, &stx);
                 }
                 record_project_history(&commands, before, &st, &window, "Effect added");
+            });
+        }
+
+        // Folding a device (MOO-219). View state, saved with the song: it
+        // dirties the document so the fold is kept, sends the engine nothing
+        // -- a folded device runs exactly as it did -- and is not an undo
+        // step. Undo and redo carry the live folds across the snapshot they
+        // install (`with_live_view_state`), so the next Ctrl+Z cannot undo a
+        // fold it never recorded.
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_effect_collapse_toggled(move |slot| {
+                let Some(window) = weak.upgrade() else { return };
+                let Ok(slot) = usize::try_from(slot) else { return };
+                let mut st = st.borrow_mut();
+                let Some(effect) = st
+                    .session
+                    .effect_chain_mut()
+                    .and_then(|chain| chain.get_mut(slot))
+                else {
+                    return;
+                };
+                effect.collapsed = !effect.collapsed;
+                st.session.mark_dirty();
+                st.update_document_title(&window);
+                st.sync_effects();
             });
         }
 
@@ -18996,6 +19030,44 @@ fn preset_load_target(session: &Session, kind: EffectKind, path: &Path) -> Optio
     Some((slot, index))
 }
 
+/// A history entry whose snapshots carry the rack's *live* view state
+/// (MOO-219): each device's fold, as the session holds it now.
+///
+/// A fold is saved with the song but is not an undo step, and an undo
+/// installs a whole-project snapshot -- so without this, undoing an unrelated
+/// edit would unfold whatever had been folded since that snapshot was taken,
+/// and redo would fold it back. Devices are matched by their chain and their
+/// identity, so a device the step brings back or removes is simply the
+/// snapshot's.
+fn with_live_view_state(
+    mut entry: mooloop_session::history::Entry<ProjectSnapshot>,
+    session: &Session,
+) -> mooloop_session::history::Entry<ProjectSnapshot> {
+    carry_folds(&mut entry.before.project, session);
+    carry_folds(&mut entry.after.project, session);
+    entry
+}
+
+fn carry_folds(project: &mut Project, session: &Session) {
+    let fold = |effects: &mut [EffectSlotState], live: &[EffectSlotState]| {
+        for effect in effects.iter_mut().filter(|effect| effect.id.is_assigned()) {
+            if let Some(now) = live.iter().find(|other| other.id == effect.id) {
+                effect.collapsed = now.collapsed;
+            }
+        }
+    };
+    for channel in &mut project.channels {
+        if let Some(live) = session.channels.iter().find(|live| live.id == channel.id) {
+            fold(&mut channel.setup.effects, &live.effects);
+        }
+    }
+    for bus in &mut project.buses {
+        if let Some(live) = session.buses.iter().find(|live| live.id == bus.id) {
+            fold(&mut bus.effects, &live.effects);
+        }
+    }
+}
+
 /// Whether `text` answers the browser's `filter` (MOO-9): every word of the
 /// filter, case-insensitively, somewhere in it. Words rather than the whole
 /// string, so "warm pad" finds "Pad -- Warm Strings" as a musician expects.
@@ -20093,6 +20165,7 @@ mod tests {
             wet_dry: 1.0,
             input_trim: 1.0,
             output_trim: 1.0,
+            collapsed: false,
         };
         let mut analyzing = slot(EffectKind::Eq);
         if let mooloop_core::EffectParams::Eq(eq) = &mut analyzing.params {

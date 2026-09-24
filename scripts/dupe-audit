@@ -833,6 +833,11 @@ def unrecorded_edit():
         ),
         "on_slice_auditioned": "auditioning a slice changes nothing that is saved",
         "on_slice_audition_released": "the release of an audition, likewise",
+        "on_effect_collapse_toggled": (
+            "folding a device is view state saved with the song, not an undo"
+            " step (MOO-219); undo and redo carry the live folds across the"
+            " snapshot they install, so no Ctrl+Z can destroy one"
+        ),
         "on_sampler_record_clicked": (
             "arms and starts a take; what a take changes is the recording it"
             " lands, which is recorded where it lands"

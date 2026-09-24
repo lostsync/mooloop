@@ -4015,10 +4015,23 @@ pub struct EffectSlotState {
     pub input_trim: f32,
     #[serde(default = "default_output_trim")]
     pub output_trim: f32,
+    /// The rack draws this device folded to its header, on its side
+    /// (MOO-219). **View state, and nothing else**: no engine command
+    /// carries it, no DSP reads it, and toggling it is not an undo step --
+    /// undo and redo carry the live value across the snapshot they install.
+    /// Saved with the song so a rack folded to make room is still folded when
+    /// it is reopened; absent (and so unfolded) in every song written before
+    /// it, and not written while false, so such a song stays byte-identical.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub collapsed: bool,
 }
 
 fn id_is_unassigned(id: &DeviceId) -> bool {
     !id.is_assigned()
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn default_wet_dry() -> f32 {
@@ -4040,6 +4053,7 @@ impl EffectSlotState {
             wet_dry: 1.0,
             input_trim: 1.0,
             output_trim: 1.0,
+            collapsed: false,
         }
     }
 

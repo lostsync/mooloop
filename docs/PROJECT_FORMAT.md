@@ -358,6 +358,13 @@ before any of them existed still loads:
   ids takes its **positions** as its ids — which is exactly what the routes
   and lanes in such a project already mean by `slot`, so an older song loads
   pointing where it pointed.
+- **A device may be folded** (MOO-219, 2026-09-24): `collapsed: true` on an
+  `EffectSlotState` means the rack draws it as its header on its side, and a
+  folded container hides its run. It is view state -- no engine command, no
+  DSP reads it, and toggling it is not an undo step (undo and redo carry the
+  live folds across the snapshot they install). Defaulted and not written
+  while false, so a song saved with nothing folded is byte-identical to one
+  written before the field existed.
 - **A channel carries a durable `id`, and `next_channel_id` is the mint it
   comes from.** Both default and are skipped when unset, so a song written
   before channels had identities is byte-identical to one saved now with

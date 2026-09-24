@@ -463,3 +463,11 @@ In the order worth playing:
     `insert-tube.wav` against `dry.wav`. Each `master-*.wav` should be the
     same sound. Then, in the app, put a Bus Comp on a real drum bus from the
     insert menu and try each voicing.
+16. **A folded device's label, turned on its side** (MOO-219). A look, not a
+    listen: fold a device with the `<` at the top of its rail. Its name and
+    kind should read top to bottom down the strip, rotated a quarter turn
+    clockwise, as the header reads left to right. It is the interface's
+    first rotated element. The software renderer (`slint-sketch`, the tests)
+    ignores rotation, so it has only been seen unrotated. The desktop app
+    renders with femtovg, which rotates. Also fold a Chain holding a folded
+    device, open it again, and check the inner fold is still folded.

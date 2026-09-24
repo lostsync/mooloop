@@ -164,6 +164,16 @@ pub(crate) fn rack_view(
         rows[row].bracket_start = !(head..row).any(wears);
         rows[row].bracket_end = !(row + 1..run.end).any(wears);
     }
+    // A folded container shows only its own strip (MOO-219): everything it
+    // holds is hidden, whatever its layers were showing, and it draws no box
+    // -- so it closes nothing, below.
+    for container in 0..count {
+        if effects[container].collapsed && effects[container].params.is_container() {
+            for row in mooloop_core::span_of(effects, container) {
+                rows[row].hidden = true;
+            }
+        }
+    }
     // Where each drawn row's next drawn neighbour sits.
     for row in 0..count {
         rows[row].next_depth = (row + 1..count)
@@ -189,7 +199,10 @@ pub(crate) fn rack_view(
     // Which boxes end at each drawn row: every drawn container closes at the
     // last drawn row of its span, or on its own row when none is drawn.
     for container in 0..count {
-        if !effects[container].params.is_container() || !visible(container, &rows) {
+        if !effects[container].params.is_container()
+            || effects[container].collapsed
+            || !visible(container, &rows)
+        {
             continue;
         }
         let span = mooloop_core::span_of(effects, container);
@@ -290,6 +303,30 @@ mod tests {
         assert_eq!(joins[2], 3);
         assert_eq!(joins[3], 6, "past the hidden branch, and out of the layer");
         assert_eq!(joins[6], 7, "the last row's join appends");
+    }
+
+    /// A folded container hides everything it holds and draws no box, and
+    /// the join past it leads to the row after its whole run (MOO-219).
+    #[test]
+    fn a_folded_container_hides_its_run() {
+        let mut effects = chain(&[
+            (EffectKind::Chain, 2),
+            (EffectKind::Drive, 0),
+            (EffectKind::Filter, 0),
+            (EffectKind::Delay, 0),
+        ]);
+        effects[0].collapsed = true;
+        let view = rack_view(&effects, |_| None, |_| None);
+        assert_eq!(hidden(&view), [false, true, true, false]);
+        assert!(view.iter().all(|row| row.closing.is_empty()), "no box is drawn");
+        assert_eq!(view[0].join_before, 3);
+        assert_eq!(view[0].next_depth, 0);
+
+        // A folded leaf is just a narrower row: nothing else changes.
+        let mut effects = chain(&[(EffectKind::Drive, 0), (EffectKind::Filter, 0)]);
+        effects[0].collapsed = true;
+        let view = rack_view(&effects, |_| None, |_| None);
+        assert_eq!(hidden(&view), [false, false]);
     }
 
     #[test]

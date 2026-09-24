@@ -14587,6 +14587,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             wet_dry: 1.0,
             input_trim: 1.0,
             output_trim: 1.0,
+            collapsed: false,
         });
         let latency = mooloop_core::EffectKind::Drive.latency_frames() as usize;
         assert!(latency > 0, "the alignment case needs a device that declares one");

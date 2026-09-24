@@ -69,18 +69,18 @@ slint::slint! {
 }
 
 /// The left rail stacks its buttons from the top with 2px of padding and 2px
-/// between them, each 24px square: save preset, load preset, and wrap in a
-/// container. They moved up one button on 2026-09-24, when the rail's insert
-/// `+` gave way to the joins between devices (MOO-218).
+/// between them, each 24px square: collapse, save preset, load preset, and
+/// wrap in a container. The collapse `<` took the insert `+`'s place on
+/// 2026-09-24 (MOO-218, MOO-219), so the three below it kept theirs.
 const BUTTON_X: f32 = 14.0;
-const SAVE_Y: f32 = 14.0;
-const LOAD_Y: f32 = 40.0;
+const SAVE_Y: f32 = 40.0;
+const LOAD_Y: f32 = 66.0;
 
 /// The popup opens beside the rail at the load button's own height, and its
 /// list is inset by 4px with 22px rows. These are the middles of the first
 /// two entries.
-const FIRST_ENTRY: (f32, f32) = (120.0, 69.0);
-const SECOND_ENTRY: (f32, f32) = (120.0, 91.0);
+const FIRST_ENTRY: (f32, f32) = (120.0, 95.0);
+const SECOND_ENTRY: (f32, f32) = (120.0, 117.0);
 
 /// The join, and the menu it opens under the device header (28px down): rows
 /// are 22px on a 23px pitch from a 4px inset, so the first row's middle is
@@ -131,8 +131,8 @@ fn click(window: &slint::Window, at: (f32, f32)) {
 
 /// The wrap button, fourth on the rail, and the two-row menu it opens below
 /// itself (`containers/10`): 4px inset, 22px rows on a 23px pitch.
-const WRAP_Y: f32 = 66.0;
-const WRAP_ROWS_Y: [f32; 2] = [95.0, 118.0];
+const WRAP_Y: f32 = 92.0;
+const WRAP_ROWS_Y: [f32; 2] = [121.0, 144.0];
 
 /// The wrap menu reaches its callback with the kind of each row, clicked.
 /// A menu that closed itself before calling back would open, draw, and do

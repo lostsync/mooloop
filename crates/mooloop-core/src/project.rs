@@ -1923,6 +1923,7 @@ fn starter_tracks() -> Vec<crate::BusSetup> {
         wet_dry: 1.0,
         input_trim: 1.0,
         output_trim: 1.0,
+        collapsed: false,
     });
     for track in [DRUM_TRACK, BASS_TRACK] {
         tracks[track as usize]

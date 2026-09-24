@@ -29,7 +29,7 @@ import { ExportDialog } from "export-dialog.slint";
 import { MenuBar, MenuBarItem, MenuRow, MenuSeparator } from "menubar.slint";
 import { PianoGrid, NoteCell, NoteHit, GestureMod, PianoGestures, RollMetrics } from "piano-grid.slint";
 import {
-    ContainerEnclosure, DeviceFrame, DeviceHeader, DeviceJoin, DeviceOutputRail,
+    CollapsedDevice, ContainerEnclosure, DeviceFrame, DeviceHeader, DeviceJoin, DeviceOutputRail,
     DevicePageButton, DeviceRackMetrics, RackDrag, BrowserDrag
 } from "device-rack.slint";
 import { AddSourceButton, ChannelDrag, SourceKinds } from "channel-rack.slint";
@@ -410,6 +410,9 @@ struct EffectSlotRow {
     // (right after a layer's head, where a new branch is the layer face's
     // job). Rust's, because a layer may be hiding the next row (MOO-218).
     join-before: int,
+    // The device is folded to its header (MOO-219): view state, saved with
+    // the song, not an undo step.
+    collapsed: bool,
     // Layer-only: its branches, in rack order, and the rack index of the one
     // it is showing (-1 for none). S, M and each branch's meter are read from
     // the branch head's own row, `effect-slots[branch.slot]`.
@@ -1805,6 +1808,8 @@ export component MainWindow inherits Window {
     // EffectKind index, then the slot it must precede. `effect-slots.length`
     // means append; every device shell can therefore insert into the chain.
     callback add-effect-clicked(int, int);
+    // Fold or unfold the device in that row (MOO-219).
+    callback effect-collapse-toggled(int);
     // Insert a device as the first thing inside the container in this slot.
     callback add-effect-into-container(int, int);   // kind, container slot
     // A layer's list (`containers/09`): show this branch in the rack, which
@@ -4907,16 +4912,20 @@ export component MainWindow inherits Window {
                                             // own face -- it draws one past the last device
                                             // it holds -- so its frame is a rail narrower.
                                             property <bool> is-container: slot.is-container;
-                                            property <length> frame-width: self.face-width
-                                                + DeviceRackMetrics.rail-width
-                                                    * (self.is-container ? 1 : 2);
+                                            // Folded, the whole row is one rail-wide strip (MOO-219).
+                                            property <length> frame-width: slot.collapsed
+                                                ? DeviceRackMetrics.rail-width
+                                                : self.face-width
+                                                    + DeviceRackMetrics.rail-width
+                                                        * (self.is-container ? 1 : 2);
                                             // The rails the boxes ending here contribute,
                                             // innermost first, between this row and the join.
                                             property <length> tail-width:
                                                 slot.closing.length * DeviceRackMetrics.rail-width;
                                             // An empty box draws a join inside it, between its
                                             // face and its own output rail (MOO-218).
-                                            property <bool> inner-join: self.is-container && slot.children == 0;
+                                            property <bool> inner-join: self.is-container && slot.children == 0
+                                                && !slot.collapsed;
                                             property <length> inner-width:
                                                 self.inner-join ? DeviceRackMetrics.join-width : 0px;
                                             // The level of the innermost box closing here.
@@ -4994,7 +5003,8 @@ export component MainWindow inherits Window {
                                             for level in [1, 2, 3, 4] : ContainerEnclosure {
                                                 property <bool> inside: slot.depth >= level;
                                                 property <bool> is-head: slot.is-container && slot.depth == level - 1;
-                                                visible: self.inside || self.is-head;
+                                                // A folded box is its strip and nothing else.
+                                                visible: self.inside || (self.is-head && !slot.collapsed);
                                                 level: level;
                                                 head: self.is-head;
                                                 cap-right: (self.is-head && slot.children == 0)
@@ -5097,6 +5107,10 @@ export component MainWindow inherits Window {
                                                 wrap-requested(kind) => { root.wrap-effect-clicked(index, kind); }
                                                 unwrap-requested => { root.unwrap-effect-clicked(index); }
                                                 selected: slot.selected;
+                                                // Folded, the strip below stands in its place.
+                                                visible: !slot.collapsed;
+                                                collapse-enabled: true;
+                                                collapse-requested => { root.effect-collapse-toggled(index); }
                                                 duplicate-enabled: true;
                                                 duplicate-requested => { root.duplicate-effect-clicked(index); }
                                                 remove-requested => { root.remove-effect-clicked(index); }
@@ -5697,6 +5711,27 @@ export component MainWindow inherits Window {
                                                 output-trim-changed(v) => {
                                                     root.effect-output-trim-changed(container, v);
                                                 }
+                                            }
+                                            // The device folded to its header, on its side (MOO-219).
+                                            if slot.collapsed : CollapsedDevice {
+                                                x: cell.shift + (cell.dragging ? RackDrag.dx : 0px);
+                                                y: cell.dragging ? -8px : 0px;
+                                                name: slot.label;
+                                                kind: "FX / " + slot.units + "U";
+                                                bypassed: slot.bypassed;
+                                                wet-dry-enabled: !slot.is-container;
+                                                wet-dry: slot.wet-dry;
+                                                wet-dry-text: round(slot.wet-dry * 100) + "% wet";
+                                                selected: slot.selected;
+                                                contained: slot.depth > 0;
+                                                slot-index: index;
+                                                slot-count: root.effect-slots.length;
+                                                expand-requested => { root.effect-collapse-toggled(index); }
+                                                bypass-toggled => { root.effect-bypass-toggled(index); }
+                                                wet-dry-changed(v) => { root.effect-wet-dry-changed(index, v); }
+                                                remove-requested => { root.remove-effect-clicked(index); }
+                                                reorder-requested(target) => { root.reorder-effect(index, target); }
+                                                select-requested => { root.device-selected(index); }
                                             }
                                             // An empty box's own join, inside it: the one
                                             // place a device can be added *into* a container

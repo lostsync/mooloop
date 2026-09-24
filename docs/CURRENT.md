@@ -1758,6 +1758,16 @@ land on its own when it starts to matter:
   There is no `+` on a device's rail and no add slot after the chain; the
   last arrow adds at the end. A preset dragged out of the browser and dropped
   on an arrow lands there too.
+- **A device folds to its header, on its side** (MOO-219, 2026-09-24): the
+  `<` at the top of every insert's left rail, where the insert `+` was,
+  collapses it to a strip one rail wide -- `>` to open it, its colour chip,
+  its name and kind reading top to bottom, and its on/off, wet/dry and
+  remove still working at the foot. A folded device sounds exactly as it did,
+  and it drags to reorder like any row. A folded Chain or Layer hides
+  everything inside it and brings it back as it was, folds included. **The
+  fold is saved with the song and is not an undo step**; undo and redo keep
+  whatever is folded now, so no Ctrl+Z unfolds anything (whether it should
+  be saved at all is Adam's call: MOO-219).
   Appending to the end of a box is a drag rather than an insert, because the
   end of a run has to stay addressable as "after the container" -- for an
   empty box, "just inside" and "just after" are the same position, so which

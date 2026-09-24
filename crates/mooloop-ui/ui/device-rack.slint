@@ -310,9 +310,12 @@ export component DeviceOutputRail inherits Rectangle {
 
 export component DeviceFrame inherits Rectangle {
     // No `+` on the rail since MOO-218: a device is added from the join
-    // between two devices (`DeviceJoin`), which is where it lands.
+    // between two devices (`DeviceJoin`), which is where it lands. The `<`
+    // that took its place folds the device (MOO-219).
     in property <bool> removal-enabled: false;
     callback remove-requested();
+    in property <bool> collapse-enabled: false;
+    callback collapse-requested();
     // Per-device presets: the entries saved for this device's kind, offered
     // from the left rail. Generator and effect alike -- a preset's unit is a
     // device, so it is saved and loaded from the device rather than from a
@@ -413,6 +416,15 @@ export component DeviceFrame inherits Rectangle {
             width: parent.width - 2px;
             padding: 2px;
             spacing: 2px;
+            // Where the insert `+` was (Adam, 2026-09-24): fold this device to
+            // its header, on its side. An empty square on a row that cannot
+            // fold -- the generator -- so every rail's buttons line up.
+            IconButton {
+                text: "<"; size: 24px; enabled: root.collapse-enabled;
+                tooltip: "Collapse";
+                hint: root.collapse-enabled ? "Fold this device to its header" : "";
+                clicked => { root.collapse-requested(); }
+            }
             IconButton {
                 text: "⌑"; size: 24px; enabled: root.preset-enabled;
                 tooltip: "Save preset"; hint: "Save this device's settings as a preset";
@@ -593,7 +605,7 @@ export component DeviceFrame inherits Rectangle {
     // two 24px buttons from a 2px inset with 2px between them.
     preset-menu := PopupWindow {
         x: DeviceRackMetrics.rail-width;
-        y: 54px;
+        y: 80px;
         width: 220px;
         height: min(root.preset-options.length, 12) * 22px + 8px;
         close-policy: close-on-click;
@@ -815,6 +827,136 @@ export component EffectDeviceShell inherits Rectangle {
         moved => {
             RackDrag.pointer-x = self.absolute-position.x + self.mouse-x;
             RackDrag.dx = RackDrag.pointer-x - RackDrag.grab-x;
+        }
+    }
+}
+
+// A device folded to its header, turned on its side (MOO-219).
+//
+// Adam, 2026-09-24: *"let's turn that old `+` button into a `<` button that
+// collapses the device"* -- and a collapsed device is *"essentially its
+// header, rotated 90° clockwise"*. So this is the header's parts, stacked in
+// a strip one rail wide: `>` to open it again, the colour chip, the name and
+// kind reading top to bottom, and at the foot the controls that still act on
+// a folded device -- on/off, wet/dry, remove. Folding is looking, not
+// editing: the device keeps running exactly as it was.
+export component CollapsedDevice inherits Rectangle {
+    in property <string> name;
+    in property <string> kind;
+    in property <color> device-color: Theme.warning;
+    in property <bool> bypassed;
+    in property <bool> bypass-enabled: true;
+    in property <bool> wet-dry-enabled: true;
+    in property <float> wet-dry: 1.0;
+    in property <string> wet-dry-text;
+    in property <bool> removal-enabled: true;
+    in property <bool> selected;
+    in property <bool> contained;
+    in property <int> slot-index;
+    in property <int> slot-count;
+    callback expand-requested();
+    callback reorder-requested(int);
+    callback select-requested();
+    callback bypass-toggled();
+    callback wet-dry-changed(float);
+    callback remove-requested();
+
+    width: DeviceRackMetrics.rail-width;
+    height: DeviceRackMetrics.face-height;
+    background: root.contained ? transparent : Theme.surface-raised;
+    border-radius: Theme.radius-md;
+    border-width: root.selected ? Theme.stroke-emphasis : Theme.hairline;
+    border-color: root.selected ? Theme.accent : Theme.border;
+    accessible-role: groupbox;
+    accessible-label: root.name + ", collapsed";
+
+    VerticalLayout {
+        x: 1px;
+        width: parent.width - 2px;
+        padding: 2px;
+        spacing: 4px;
+        IconButton {
+            text: ">"; size: 24px;
+            tooltip: "Expand"; hint: "Show this device's face again";
+            clicked => { root.expand-requested(); }
+        }
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 8px;
+                height: 8px;
+                border-radius: Theme.radius-lg;
+                background: root.bypassed ? Theme.text-faint : root.device-color;
+            }
+        }
+        // The header's words, a quarter turn clockwise, so they read top to
+        // bottom as they read left to right in the header. Laid out as one
+        // line as long as the box is tall, then turned about its centre.
+        label-box := Rectangle {
+            vertical-stretch: 1;
+            Text {
+                width: label-box.height;
+                height: 16px;
+                x: (label-box.width - self.width) / 2;
+                y: (label-box.height - self.height) / 2;
+                text: root.name + "   " + root.kind;
+                color: root.bypassed ? Theme.text-faint : Theme.text;
+                font-size: Theme.text-lg;
+                vertical-alignment: center;
+                overflow: elide;
+                transform-rotation: 90deg;
+            }
+            // The strip's header, for the same two gestures a face's header
+            // carries: a press that stays is a selection, one that travels is
+            // a reorder (`EffectDeviceShell`'s `drag`).
+            TouchArea {
+                mouse-cursor: move;
+                pointer-event(event) => {
+                    if event.kind == PointerEventKind.down {
+                        RackDrag.source = root.slot-index;
+                        RackDrag.target = root.slot-index;
+                        RackDrag.dx = 0px;
+                        RackDrag.grab-x = self.absolute-position.x + self.mouse-x;
+                        RackDrag.pointer-x = RackDrag.grab-x;
+                        RackDrag.active = true;
+                    }
+                    if event.kind == PointerEventKind.up {
+                        if RackDrag.target != root.slot-index && RackDrag.target >= 0 {
+                            root.reorder-requested(clamp(RackDrag.target, 0, root.slot-count - 1));
+                        } else {
+                            root.select-requested();
+                        }
+                        RackDrag.end();
+                    }
+                }
+                moved => {
+                    RackDrag.pointer-x = self.absolute-position.x + self.mouse-x;
+                    RackDrag.dx = RackDrag.pointer-x - RackDrag.grab-x;
+                }
+            }
+        }
+        if root.bypass-enabled : IconButton {
+            text: root.bypassed ? "○" : "●"; size: 24px;
+            active: !root.bypassed;
+            tooltip: root.bypassed ? "Enable" : "Bypass";
+            hint: root.bypassed ? "Enable this device" : "Bypass this device";
+            clicked => { root.bypass-toggled(); }
+        }
+        if root.wet-dry-enabled : HorizontalLayout {
+            alignment: center;
+            MiniKnob {
+                diameter: 22px;
+                label: "Wet/dry";
+                value: root.wet-dry;
+                default-value: 1.0;
+                value-text: root.wet-dry-text;
+                changed(v) => { root.wet-dry-changed(v); }
+            }
+        }
+        IconButton {
+            text: "×"; size: 24px; enabled: root.removal-enabled;
+            tooltip: "Remove"; hint: "Remove this device";
+            clicked => { root.remove-requested(); }
         }
     }
 }

@@ -679,6 +679,7 @@ fn effect_slot(kind: EffectKind) -> EffectSlotRow {
         hidden: false,
         next_depth: 0,
         join_before: 0,
+        collapsed: false,
         branches: Vec::<mooloop_ui::LayerBranchRow>::new().as_slice().into(),
         selected_branch: -1,
         bracket: false,
