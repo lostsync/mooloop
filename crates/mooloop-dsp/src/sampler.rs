@@ -1329,8 +1329,12 @@ impl Sampler {
                         .stretch_bars
                         .clamp(mooloop_core::MIN_STRETCH_BARS, mooloop_core::MAX_STRETCH_BARS),
                 );
-                let step = region / (bars * f64::from(divisions));
-                let points = (region / step).floor() as usize + 1;
+                let steps = bars * f64::from(divisions);
+                let step = region / steps;
+                // Counted from the step count, not by dividing the region
+                // by the step: 44,100 / (44,100 / 16) can come out a hair
+                // under 16, and the grid would lose the region's end.
+                let points = (steps + 1.0e-9).floor() as usize + 1;
                 snap_pair(
                     points,
                     |index| (play_start + index as f64 * step).min(play_end),
@@ -4021,6 +4025,18 @@ mod tests {
             }
         }
         assert_eq!(seen.len(), 16, "a sweep crossed {} places", seen.len());
+    }
+
+    /// A region whose length doesn't divide evenly (a 44.1 kHz second on
+    /// sixteenths) still keeps its last grid point at the region's end.
+    #[test]
+    fn a_grid_on_an_uneven_region_keeps_its_end() {
+        for len in [44_100usize, 44_099, 47_999, 88_201] {
+            let params = grid_params(LoopQuantize::Sixteenth, 0.5, 1.0);
+            let (start, end) = Sampler::resolve_loop_bounds(params, len, None, None);
+            assert_eq!(end, len as f64, "{len} frames lost the region's end");
+            assert!((start - len as f64 / 2.0).abs() < 1.0e-6, "{len}: {start}");
+        }
     }
 
     /// The grid is the sample's musical length: at two bars, a quarter
