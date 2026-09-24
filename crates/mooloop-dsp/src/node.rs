@@ -37,7 +37,11 @@ use crate::event::{Event, EventList, TimedEvent};
 use crate::sampler::Sampler;
 use crate::taps::AudioTaps;
 use mooloop_core::modulation::MAX_GENERATOR_OUTLETS;
-use mooloop_core::{DeviceKind, GeneratorParams};
+use mooloop_core::{DeviceKind, GeneratorParams, PluginSlotId};
+
+/// A node built outside the engine and handed to it: a hosted plugin's
+/// processor, on its way into or out of a slot.
+pub type HostedNode = Box<dyn AudioNode + Send>;
 
 /// Control subdivisions in the largest block the engine will ever hand a
 /// node, so a per-destination curve buffer can be sized once and shared.
@@ -731,6 +735,21 @@ pub trait SourceNode: AudioNode {
     /// [`Self::as_sampler`], mutably.
     fn as_sampler_mut(&mut self) -> Option<&mut Sampler> {
         None
+    }
+
+    /// Put `node` -- a hosted plugin's processor, or `None` to pull the
+    /// running one back -- into this source, if it is the hosted source for
+    /// plugin `slot` (MOO-84). `Ok` carries the processor it displaced, which
+    /// the caller must not drop on the audio thread; `Err` hands `node`
+    /// back untouched, which is every native source's answer and a hosted
+    /// source's for another slot. Moves one box; allocates nothing.
+    fn host_processor(
+        &mut self,
+        slot: PluginSlotId,
+        node: Option<HostedNode>,
+    ) -> Result<Option<HostedNode>, Option<HostedNode>> {
+        let _ = slot;
+        Err(node)
     }
 }
 

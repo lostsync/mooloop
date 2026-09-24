@@ -115,6 +115,7 @@ Three of the eight tags were chosen rather than inherited from serde's
 | ML-P8 | `mlp8` — picked deliberately the first time, for the reason above |
 | DS-01 | `ds01` — chosen the same way and for the same reason |
 | Aux In | `aux_in` — what `rename_all` would have spelled it anyway, written out on purpose so nobody has to derive an on-disk identifier from an attribute |
+| A hosted plugin instrument | `plugin`, matching the plugin effect's tag; its `state` is only the plugin slot number (see "Hosted plugins") |
 
 `asset_mode` records the requested save policy. Each file sample also carries
 its own `embedded` flag, which means **the song owns this sample**: a
@@ -670,6 +671,15 @@ type = "plugin"
 state = 0
 ```
 
+A channel whose **source** is a plugin instrument (MOO-84) names its slot
+the same way, and its channel's `kind` is `plugin`:
+
+```toml
+[document.channels.setup.source]
+type = "plugin"
+state = 1
+```
+
 The slot itself lives in the song's `plugins` table, keyed by
 `PluginSlotId`, beside the mint the ids come from:
 
@@ -727,8 +737,10 @@ valid with it.
 
 **A missing plugin** (not installed, not found by the scan, or refusing to
 load) does not stop the song opening. Its device plays as a pass-through (an
-instrument will play as silence), and its slot, parameters, state, lanes and
-routes are kept and saved back byte for byte. A lane or route naming a plugin
+instrument plays as silence), and its slot, parameters, state, lanes and
+routes are kept and saved back byte for byte. A source naming a slot the table
+does not have is kept too, and plays silence; the integrity pass does not
+repair it. A lane or route naming a plugin
 parameter that no longer exists is kept too, and shown as missing (Adam,
 2026-09-23, MOO-74).
 
@@ -737,6 +749,8 @@ so on its own the `plugins` table would be dropped without complaint. But
 that reader also meets `type = "plugin"` on the device, which it does not
 know either, and an unknown effect tag fails the whole document. So a song
 with a plugin device in it is **refused** by an older build, not half loaded.
+A plugin source is refused the same way: `source.type = "plugin"` is an
+unknown source tag to an older reader.
 `an_unknown_effect_tag_is_refused_not_read_as_a_filter` holds the untagged
 pre-tag filter fallback (`LegacyFilterParams`, whose three original fields
 stay required) to that. A song whose table has slots but no device

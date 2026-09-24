@@ -6,7 +6,7 @@ mirror this file step-for-step the way MOO-5/16/30 do. The GitHub issue
 numbers below (`#10`, `#26`-`#30`) predate Adam's move away from GitHub
 issues; MOO-11 is the live tracking issue.
 
-**Written 2026-09-16.** Steps 01 (the spike), 02 (the neutral contract), 03 (parameters belong to an instance), 04 (the plugin rack), 05 (the scanner) and 06 (a headless CLAP effect in a chain) landed on 2026-09-23, as did MOO-56's one boxed source slot, which closes blocker 4 below. Step 07 (parameters, automation, modulation and state) landed on 2026-09-24. Adam asked for it directly:
+**Written 2026-09-16.** Steps 01 (the spike), 02 (the neutral contract), 03 (parameters belong to an instance), 04 (the plugin rack), 05 (the scanner) and 06 (a headless CLAP effect in a chain) landed on 2026-09-23, as did MOO-56's one boxed source slot, which closes blocker 4 below. Step 07 (parameters, automation, modulation and state) landed on 2026-09-24, and so did step 09 (a channel source that is a hosted plugin). Adam asked for it directly:
 *"let's go ahead and plan out how we'll add CLAP support. Later we'll add
 VST/3 and AU. instrument support as well."* `SCOPE.md` already put CLAP in
 for 0.2.0 (item 9). This plan is outside the `FOCUS.md` sequence for the same
@@ -535,7 +535,7 @@ words. **Do not reopen this as a version-bump question.**
 | 06 | A headless CLAP effect in a chain | #27 | plugin-host, session | **done 2026-09-23** (MOO-81) |
 | 07 | Parameters, automation, modulation and state round-trip | #28 | session, project | **done 2026-09-24** (MOO-82) |
 | 08 | Plugin browser, the menu row, and the face for plugins without a GUI | #28 | **UI build**, drafted with `slint-sketch` | not started |
-| 09 | A channel source that is a boxed node | #29 | core, engine, session | not started |
+| 09 | A channel source that is a boxed node | #29 | core, engine, session | **done 2026-09-24** (MOO-84) |
 | 10 | CLAP instruments | #29 | plugin-host, engine | not started |
 | 11 | Plugin GUIs in their own windows | #30 | plugin-host, **UI build** | not started |
 | 12 | VST3 | — | plugin-host | outline only |
@@ -1111,6 +1111,88 @@ range. The host rounds a stepped lane to a whole position, as CLAP says a
 stepped parameter's values are, so a lane on one of LSP's could only reach
 its first and last choice. Nothing in this step automates one; it is noted
 for step 08's face, which will show these parameters.
+
+## Step 09, recorded 2026-09-24 (MOO-84)
+
+**What was left to do.** MOO-56 had already made the strip's source one
+boxed `SourceNode` with an `InstallSource` command, so the plan's `hosted`
+field, `active_source` arms and silent-`None` dispatch had nothing to attach
+to. What the step still asked for, and what landed:
+
+- **The persisted variants.** `DeviceKind::Plugin` (`plugin`, label
+  "Plugin"), `GeneratorParams::Plugin(PluginSlotId)` and
+  `ChannelSource::Plugin(PluginSlotId)` (`source.type = "plugin"`, `state` =
+  the slot). The slot's plugin, parameters and state live in `Project.plugins`
+  as a plugin effect's do. `DeviceKind::Plugin` has no native table
+  (`descriptors()` is empty), and its default block names
+  `PluginSlotId::UNASSIGNED`.
+- **`mooloop_dsp::HostedSource`**, the `SourceNode` that wraps a node the
+  engine did not build: the slot it plays and an optional processor. Without
+  one it renders silence, which is both the moment before the rack swaps the
+  processor in and the missing-instrument placeholder. With one it clears the
+  bus and hands the processor every event the channel carries (notes, chokes,
+  parameters) at its own frame. `build_source`'s `Plugin` arm builds it
+  empty.
+- **The processor moves, not the source.** `StructuralCommand::HostSourceProcessor
+  { channel, slot, node: Option<_> }` puts a processor into the channel's
+  hosted source, or `None` pulls it out, through
+  `SourceNode::host_processor` (native sources refuse). It lands only when
+  the channel is still running the hosted source for that slot, the way
+  `ReplaceEffect` is keyed by a plugin effect's slot; otherwise the processor
+  comes straight back as `StructuralReclaim::HostedProcessor`. Moving the
+  processor rather than replacing the source keeps the channel's slot one
+  node and one kind across the swap.
+- **The rack hosts sources by the same rule** (step 06's "every live
+  instance whose processor is not out gets one"): a channel playing a slot
+  counts as naming it (`named_plugin_slots`), an install goes into its source,
+  a pull-back takes the processor out and leaves silence, and an export's
+  `host_plugins` and `live_check::play_through_executor` fill sources too.
+  `Session::set_plugin_source(channel, plugin, handle)` is the session path,
+  the counterpart of `insert_plugin_effect`: the channel changes source as a
+  source change does (a name nobody typed follows the device), the plugin is
+  minted a slot and opened, and a hosted source arrives with its processor
+  already in it, or silent with the reason kept.
+- **A strip is carried only onto its own slot.** The carry plan compares
+  projects, and two hosted sources are the same kind whatever they play, so
+  `carry_strips_from` also compares the slot.
+- **The interface**: `device_kind_to_int`/`from_int` give `Plugin` the number
+  8, after the eight, so no kind moves; `SOURCE_KINDS_IN_PICKER_ORDER` leaves
+  it out on purpose until step 08 has a browser to choose a plugin with
+  (main's condition on the ack); preset directories would be `plugin`.
+
+**How it differs from `09-a-boxed-channel-source.md`.** No ninth field and
+no `InstallSource { slot }`: MOO-56 overtook both, as the plan's 2026-09-23
+note foresaw. `SetChannelSource` still names only a kind, so a hosted source
+built from it names no slot and takes the first `Plugin` block it is sent;
+the session's own path never goes that way, it installs the finished source.
+`source_base` for a hosted source is its slot, not the kind's defaults, so
+pushing the base back names the same slot.
+
+**Not here, and where it went.** A restart or rate change pulls a sounding
+instrument's processor out with no fade (the effect swap's MOO-213 hold does
+not cover sources); a plugin source's latency is not compensated; a strip an
+install does not carry is rebuilt silent and gets its processor back a tick
+or two later, as the rack's rule does for effects, with the voices it held
+lost (as a native strip's are); a generator preset of a plugin channel would
+carry only the slot number; and the source's parameters have no address yet
+(MOO-74's `PluginParam { device }` needs a `DeviceId` for the source slot,
+which is step 10's). Step 10 (MOO-85) is next and takes the notes.
+
+**The tests.** Engine (`engine/src/plugin_source_tests.rs`, a fake
+instrument: a cosine per note id): a pattern played through the export path
+and through the executor at 512 and 64 frames is the same to the sample,
+every note starts a whole number of steps after the first and lasts its own
+length exactly, and with no processor the channel is silent; switching to the
+sampler and back, pulling the processor out, offering another slot's and
+putting one back allocate and free nothing in the callback, and each
+displaced box comes back on the reclaim ring; a hosted source is carried only
+onto its own slot. `mooloop-dsp`'s `hosted_source.rs` unit tests. Session
+(`plugin_rack.rs`): `set_plugin_source` installs the hosted source with its
+processor, the snapshot says `ChannelSource::Plugin`, a song opened from it
+has the processor swapped in by slot, a restart pulls it out and puts the
+next one back; a missing plugin makes a silent source with the reason kept.
+Project: `a_song_whose_source_is_a_plugin_round_trips` (no repairs, equal,
+the second save byte-identical).
 
 ## Found after step 07: the swap fades (MOO-213, 2026-09-24)
 

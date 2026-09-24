@@ -794,6 +794,10 @@ impl DeviceKind {
             Self::Ds01 => GeneratorParams::Ds01(crate::Ds01Params::default()),
             Self::DrumSynth => GeneratorParams::DrumSynth(DrumSynthParams::default()),
             Self::AuxIn => GeneratorParams::AuxIn(crate::AuxInParams::default()),
+            // No slot yet: a hosted source is named by the song's plugin
+            // table, and one built from its kind alone names nothing and
+            // plays silence until it is given one.
+            Self::Plugin => GeneratorParams::Plugin(crate::PluginSlotId::UNASSIGNED),
         }
     }
 
@@ -816,6 +820,11 @@ impl DeviceKind {
             // from the device's first commit: the argument that a device can
             // ship without a table has been checked twice and lost twice.
             Self::AuxIn => &crate::aux_in::DESCRIPTORS,
+            // A hosted plugin's parameters are its own, sparse and reported
+            // at runtime (`PluginSlotState::params`), and are addressed
+            // through `ParamOwner::PluginParam`, never through a native
+            // table. Empty, as the integrity pass's guard expects.
+            Self::Plugin => &[],
         }
     }
 
@@ -944,6 +953,9 @@ pub enum GeneratorParams {
     Ds01(Ds01Params),
     DrumSynth(DrumSynthParams),
     AuxIn(crate::AuxInParams),
+    /// A hosted plugin instrument, by its slot in `Project::plugins`
+    /// (MOO-84). Its parameters live in the plugin; this is only the key.
+    Plugin(crate::PluginSlotId),
 }
 
 impl GeneratorParams {
@@ -986,6 +998,7 @@ impl GeneratorParams {
             Self::Ds01(_) => DeviceKind::Ds01,
             Self::DrumSynth(_) => DeviceKind::DrumSynth,
             Self::AuxIn(_) => DeviceKind::AuxIn,
+            Self::Plugin(_) => DeviceKind::Plugin,
         }
     }
 
@@ -1115,6 +1128,7 @@ impl GeneratorParams {
             Self::MlP8(p) => crate::mlp8::get(p, id),
             Self::Ds01(p) => crate::ds01::get(p, id),
             Self::AuxIn(p) => crate::aux_in::get(p, id),
+            Self::Plugin(_) => None,
             Self::DrumSynth(p) => Some(match id {
                 DRUM_PARAM_MODE => p.mode.to_index() as f32,
                 DRUM_PARAM_KICK_CHARACTER => p.kick_character.to_index() as f32,
@@ -1322,6 +1336,7 @@ impl GeneratorParams {
                 // the caller is told what it actually got.
                 return crate::aux_in::get(p, id);
             }
+            Self::Plugin(_) => return None,
             Self::DrumSynth(p) => match id {
                 DRUM_PARAM_MODE => p.mode = DrumMode::from_index(value.round() as i32),
                 DRUM_PARAM_KICK_CHARACTER => {

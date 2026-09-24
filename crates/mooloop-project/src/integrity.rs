@@ -1758,6 +1758,10 @@ fn check_source(doctor: &mut Doctor, who: &str, source: &mut ChannelSource) {
         ChannelSource::MlP8(state) => check_mlp8(doctor, who, &mut state.params),
         ChannelSource::Ds01(state) => check_ds01(doctor, who, &mut state.params),
         ChannelSource::AuxIn(state) => check_aux_in(doctor, who, &mut state.params),
+        // Only a key into `Project::plugins`, and nothing about it can be out
+        // of range. A slot the table lacks is kept, not repaired: it plays
+        // silence, like a plugin that is not installed (MOO-84).
+        ChannelSource::Plugin(_) => {}
     }
 }
 

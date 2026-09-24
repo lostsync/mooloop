@@ -83,6 +83,16 @@ pub enum DeviceKind {
     /// to derive an on-disk identifier from an attribute.
     #[serde(rename = "aux_in")]
     AuxIn,
+    /// A hosted plugin instrument (`docs/plans/plugin-hosting/`, step 09,
+    /// MOO-84). The channel's [`crate::ChannelSource::Plugin`] names its slot
+    /// in [`crate::Project::plugins`], where the plugin and its state are
+    /// kept; this kind has no parameter table of its own, because its
+    /// parameters are the plugin's.
+    ///
+    /// Serialized as `plugin`, chosen on purpose for the reason the three
+    /// above give, and matching [`crate::EffectKind::Plugin`]'s tag.
+    #[serde(rename = "plugin")]
+    Plugin,
 }
 
 impl DeviceKind {
@@ -109,6 +119,7 @@ impl DeviceKind {
             Self::MlP8 => "ML-P8",
             Self::Ds01 => "DS-01",
             Self::AuxIn => "Aux In",
+            Self::Plugin => "Plugin",
         }
     }
 
@@ -261,6 +272,7 @@ mod tests {
             (DeviceKind::MlP8, "ML-P8"),
             (DeviceKind::Ds01, "DS-01"),
             (DeviceKind::AuxIn, "Aux In"),
+            (DeviceKind::Plugin, "Plugin"),
         ] {
             assert_eq!(kind.label(), label);
         }

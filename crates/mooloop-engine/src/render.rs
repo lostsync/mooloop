@@ -30,7 +30,8 @@ use mooloop_dsp::build_effect;
 use mooloop_dsp::{
     balance_gains, buffer_allocation_key, build_effect_at_tempo, pan_gains, AudioNode, Ds01,
     Discontinuity, DrumSynth,
-    AudioTaps, AuxIn, IntegerDelay, Event, EventList, ModulatorRack, MonoSynth, MlM1, MlP8,
+    AudioTaps, AuxIn, HostedSource, IntegerDelay, Event, EventList, ModulatorRack, MonoSynth,
+    MlM1, MlP8,
     NoteGateEvents, OutputGuard, PolySynth,
     ChannelAudioSnapshot,
     ProcessContext, SampleData, Sampler, SourceNode, SpectrumAnalyzer, StereoBus, StretchPool,
@@ -4055,6 +4056,23 @@ pub(crate) fn build_source(
             Box::new(node)
         }
         GeneratorParams::AuxIn(params) => Box::new(AuxIn::new(params, sample_rate)),
+        // Not built here and cannot be: the plugin is opened on the control
+        // thread by the session's rack, which swaps its processor into this
+        // one (`StructuralCommand::HostSourceProcessor`). Until then, and for
+        // as long as the plugin is missing, the channel plays silence
+        // (MOO-84).
+        GeneratorParams::Plugin(slot) => Box::new(HostedSource::new(slot)),
+    }
+}
+
+/// The base a strip keeps for a source that has just arrived: its kind's
+/// defaults, which is what a native node is built at, or -- for a hosted
+/// source, whose block is only the slot it plays -- the slot it names, so
+/// pushing the base back at it names the same slot rather than none.
+fn arrival_base(source: &dyn SourceNode) -> GeneratorParams {
+    match source.kind() {
+        DeviceKind::Plugin => source.generator_params(),
+        kind => kind.default_generator_params(),
     }
 }
 
@@ -4078,6 +4096,7 @@ fn saved_source_params(source: &ChannelSource) -> GeneratorParams {
         ChannelSource::MlP8(state) => GeneratorParams::MlP8(state.params),
         ChannelSource::Ds01(state) => GeneratorParams::Ds01(state.params),
         ChannelSource::AuxIn(state) => GeneratorParams::AuxIn(state.params),
+        ChannelSource::Plugin(slot) => GeneratorParams::Plugin(*slot),
     }
 }
 
@@ -4085,7 +4104,7 @@ impl ChannelStrip {
     /// A strip running `source`, which arrives at its kind's defaults.
     fn new(source: Box<dyn SourceNode + Send>, sample_rate: u32) -> Self {
         Self {
-            source_base: source.kind().default_generator_params(),
+            source_base: arrival_base(&*source),
             source,
             published_outlets: [0.0; MAX_GENERATOR_OUTLETS],
             effects: EffectChain::new(),
@@ -4113,7 +4132,7 @@ impl ChannelStrip {
         &mut self,
         source: Box<dyn SourceNode + Send>,
     ) -> Box<dyn SourceNode + Send> {
-        self.source_base = source.kind().default_generator_params();
+        self.source_base = arrival_base(&*source);
         std::mem::replace(&mut self.source, source)
     }
 
@@ -5518,6 +5537,16 @@ impl RenderState {
             if live.source.kind() != fresh.source.kind() {
                 continue;
             }
+            // A hosted source is only the slot it plays, so two of them are
+            // the same instrument only when they name the same slot: a
+            // channel moved from one plugin to another between installs
+            // would otherwise carry the first plugin into the second's place
+            // (MOO-84).
+            if live.source.kind() == DeviceKind::Plugin
+                && live.source.generator_params() != fresh.source.generator_params()
+            {
+                continue;
+            }
             std::mem::swap(live, fresh);
             // Carried although its chain changed (MOO-137): the incoming
             // chain goes onto the carried strip, and the live one stays
@@ -5942,6 +5971,23 @@ impl RenderState {
                 resource_key: key,
                 node,
                 align,
+            }));
+        }
+        // And every channel whose source is a hosted instrument (MOO-84):
+        // its processor goes into the silent source `load_project` built.
+        for (index, channel) in project.channels.iter().take(MAX_CHANNELS).enumerate() {
+            let mooloop_core::ChannelSource::Plugin(slot) = channel.setup.source else {
+                continue;
+            };
+            let Some(node) = plugins.remove(&slot) else {
+                continue;
+            };
+            // Dropped here on the control thread: a refusal, or a slot that
+            // held nothing.
+            drop(self.apply_structural(StructuralCommand::HostSourceProcessor {
+                channel: index as u8,
+                slot,
+                node: Some(node),
             }));
         }
         let hosted = latency.len();
@@ -6750,7 +6796,7 @@ impl RenderState {
                 // dropped off this thread with the rest of that storage.
                 if let Some(strip) = spare.then(|| self.strips.get_mut(channel)).flatten() {
                     std::mem::swap(&mut strip.source, &mut storage.strip.source);
-                    strip.source_base = strip.source.kind().default_generator_params();
+                    strip.source_base = arrival_base(&*strip.source);
                 }
                 let returned = if spare { Some(storage) } else { self.push_channel(storage); None };
                 // A spare slot keeps whatever chain it had until now. Clearing
@@ -6880,6 +6926,21 @@ impl RenderState {
                     None => node,
                 };
                 Some(StructuralReclaim::Source(displaced))
+            }
+            StructuralCommand::HostSourceProcessor { channel, slot, node } => {
+                // Into the hosted source for `slot`, if `channel` is still
+                // running it; otherwise the processor goes straight back,
+                // which the rack reads as not installed and retries on the
+                // song as it then stands. Either way whatever leaves is a
+                // box for the control thread to drop.
+                let returned = match self.strips.get_mut(usize::from(channel)) {
+                    Some(strip) => match strip.source.host_processor(slot, node) {
+                        Ok(displaced) => displaced,
+                        Err(refused) => refused,
+                    },
+                    None => node,
+                };
+                returned.map(StructuralReclaim::HostedProcessor)
             }
             StructuralCommand::SetCompensation { target, delay } => {
                 let slot = match target {
@@ -9785,6 +9846,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             DeviceKind::MlP8 => ProjectChannel::mlp8(0, 1),
             DeviceKind::Ds01 => ProjectChannel::ds01(0, 1),
             DeviceKind::AuxIn => ProjectChannel::aux_in(0, 1),
+            DeviceKind::Plugin => unreachable!("a hosted source is plugin_source_tests.rs's"),
         });
         project
     }

@@ -134,6 +134,16 @@ pub enum ChannelSource {
     /// nothing and is silent rather than invalid.
     #[serde(rename = "aux_in")]
     AuxIn(AuxInState),
+    /// A hosted plugin instrument, by its slot in [`Project::plugins`]
+    /// (MOO-84). The slot holds what the song knows about the plugin -- which
+    /// plugin, its parameter list and its saved state -- exactly as it does
+    /// for a plugin effect, so this carries only the key. A slot the table
+    /// does not have, or a plugin that cannot be found, plays silence and is
+    /// kept as it is (`docs/plans/plugin-hosting/00-status.md`, "Failure").
+    ///
+    /// Tagged `plugin`, matching [`crate::DeviceKind::Plugin`].
+    #[serde(rename = "plugin")]
+    Plugin(crate::PluginSlotId),
 }
 
 impl Default for ChannelSource {
@@ -153,6 +163,7 @@ impl ChannelSource {
             Self::MlP8(_) => DeviceKind::MlP8,
             Self::Ds01(_) => DeviceKind::Ds01,
             Self::AuxIn(_) => DeviceKind::AuxIn,
+            Self::Plugin(_) => DeviceKind::Plugin,
         }
     }
 

@@ -225,6 +225,9 @@ fn every_source_kind() -> Vec<DeviceKind> {
             | DeviceKind::MlP8
             | DeviceKind::Ds01
             | DeviceKind::AuxIn => {}
+            // No face of its own yet: a plugin's face is step 08's
+            // (MOO-83), which adds it here when it draws one (MOO-84).
+            DeviceKind::Plugin => {}
         }
     }
     listed.to_vec()

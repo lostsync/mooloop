@@ -566,6 +566,7 @@ impl Session {
                     GeneratorParams::MlP8(params) => ChannelSource::MlP8(MlP8State { params }),
                     GeneratorParams::Ds01(params) => ChannelSource::Ds01(Ds01State { params }),
                     GeneratorParams::AuxIn(params) => ChannelSource::AuxIn(AuxInState { params }),
+                    GeneratorParams::Plugin(slot) => ChannelSource::Plugin(slot),
                 };
                 ProjectChannel {
                     id: channel.id,
@@ -1879,6 +1880,7 @@ fn source_params(source: &ChannelSource) -> GeneratorParams {
         ChannelSource::MlP8(state) => GeneratorParams::MlP8(state.params),
         ChannelSource::Ds01(state) => GeneratorParams::Ds01(state.params),
         ChannelSource::AuxIn(state) => GeneratorParams::AuxIn(state.params),
+        ChannelSource::Plugin(slot) => GeneratorParams::Plugin(*slot),
     }
 }
 

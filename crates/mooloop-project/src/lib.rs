@@ -4036,6 +4036,38 @@ id = "default_kick"
         assert!(fs::read(&bundle).unwrap() == first, "the second save changed the file");
     }
 
+    /// A channel whose source is a plugin (MOO-84) saves as the slot it
+    /// plays, `type = "plugin"`, beside the slot's plugin, parameters and
+    /// state in the song's plugin table; it loads with no repairs, equal to
+    /// what was saved, and a second save of it is byte-identical. Nothing on
+    /// disk needs the plugin installed.
+    #[test]
+    fn a_song_whose_source_is_a_plugin_round_trips() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("plugin-source.mooloop");
+        let mut project = song_with_a_plugin();
+        let state = project.plugins.values().next().unwrap().clone();
+        let slot = project.add_plugin_slot(state);
+        let channel = &mut project.channels[0].setup;
+        channel.source = mooloop_core::ChannelSource::Plugin(slot);
+        channel.channel.kind = mooloop_core::DeviceKind::Plugin;
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+        let first = fs::read(&bundle).unwrap();
+        let manifest = String::from_utf8(first.clone()).unwrap();
+        assert!(manifest.contains("type = \"plugin\""), "the source is not tagged plugin");
+
+        let loaded = load_bundle(&bundle).unwrap();
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+        assert!(loaded.repairs.is_empty(), "{:?}", loaded.repairs);
+        let LoadedDocument::Song(loaded) = loaded.document else {
+            panic!("expected a song");
+        };
+        assert_eq!(loaded, project);
+        assert_eq!(loaded.channels[0].setup.source.kind(), mooloop_core::DeviceKind::Plugin);
+        save_song(&bundle, &loaded, AssetMode::Embedded).unwrap();
+        assert!(fs::read(&bundle).unwrap() == first, "the second save changed the file");
+    }
+
     /// A plugin parameter's lanes and routes survive a save and a load byte
     /// for byte (MOO-78, Adam's MOO-74 ruling): the device is the pass-through
     /// placeholder a missing plugin plays as, one id is in the slot's

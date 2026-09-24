@@ -195,6 +195,8 @@ mod plugin_host_tests;
 #[cfg(test)]
 mod plugin_automation_tests;
 #[cfg(test)]
+mod plugin_source_tests;
+#[cfg(test)]
 mod sampler_tests;
 #[cfg(test)]
 mod soak_tests;
@@ -325,6 +327,23 @@ pub enum StructuralCommand {
         channel: u8,
         node: Box<dyn SourceNode + Send>,
     },
+    /// Put a hosted plugin's processor into `channel`'s source, or pull the
+    /// running one out with `None` (MOO-84, `docs/plans/plugin-hosting/` step
+    /// 09). The session's rack sends it, keyed by the plugin's slot as
+    /// `ReplaceEffect` is for a plugin effect: it lands only when the channel
+    /// is still running the hosted source for `slot`
+    /// ([`mooloop_dsp::SourceNode::host_processor`]), and otherwise the
+    /// processor comes straight back. What leaves, either way, is
+    /// [`StructuralReclaim::HostedProcessor`].
+    ///
+    /// The processor moves, not the source: the channel's slot keeps the
+    /// same node and kind, so a patch or note addressed to it before and
+    /// after the swap reaches the same place.
+    HostSourceProcessor {
+        channel: u8,
+        slot: mooloop_core::PluginSlotId,
+        node: Option<mooloop_dsp::HostedNode>,
+    },
     /// Arm a take on `channel`: it waits for the next bar line, then records
     /// the channel's audio input into the take's ring (`audio-recording/03`).
     /// Structural because the ring is allocated here; a take it displaces
@@ -443,6 +462,10 @@ pub(crate) enum StructuralReclaim {
     /// sample buffers and a 1.6 MB stretch pool, so it is freed here rather
     /// than where it stopped playing.
     Source(Box<dyn SourceNode + Send>),
+    /// A hosted plugin's processor that left a channel's source, or was
+    /// refused by it ([`StructuralCommand::HostSourceProcessor`]). Dropping
+    /// it is what tells the rack its instance may build the next one.
+    HostedProcessor(mooloop_dsp::HostedNode),
     /// A complete executor displaced by a project install, and the
     /// [`CarryPlan`] that install was made under. Keeping the renderer boxed
     /// lets the realtime thread swap ownership without allocating; both are
@@ -1555,6 +1578,7 @@ impl EngineHandle {
             match reclaim {
                 StructuralReclaim::Effect(effect) => drop(effect),
                 StructuralReclaim::Source(node) => drop(node),
+                StructuralReclaim::HostedProcessor(node) => drop(node),
                 StructuralReclaim::RenderState { retired, carry } => {
                     drop(retired);
                     drop(carry);

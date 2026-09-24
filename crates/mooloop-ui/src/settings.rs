@@ -1396,6 +1396,7 @@ fn kind_slug(kind: DeviceKind) -> &'static str {
         DeviceKind::MlP8 => "mlp8",
         DeviceKind::Ds01 => "ds01",
         DeviceKind::AuxIn => "aux_in",
+        DeviceKind::Plugin => "plugin",
     }
 }
 

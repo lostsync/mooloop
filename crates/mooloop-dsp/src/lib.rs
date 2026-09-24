@@ -45,6 +45,7 @@ pub mod filter;
 pub mod harmonics;
 pub mod interpolate;
 pub mod heldnotes;
+pub mod hosted_source;
 pub mod lfo;
 pub mod modulator;
 pub mod mlm1;
@@ -73,6 +74,7 @@ mod synth_voice;
 
 pub use align::IntegerDelay;
 pub use aux_in::AuxIn;
+pub use hosted_source::HostedSource;
 pub use taps::AudioTaps;
 pub use stretch::{render_stretched, StretchPool, StretchReader, StretchRender, Stretcher};
 pub use analysis::{SpectrumAnalyzer, SPECTRUM_BINS};
@@ -96,7 +98,7 @@ pub use monosynth::MonoSynth;
 pub use mooloop_core::{BufferDuration, BufferEvent, BufferParams};
 pub use node::{
     feedback_tail_frames, AudioNode, ControlCurve, CurveKind, Discontinuity, DynamicsFrame,
-    HostedParam, ProcessContext,
+    HostedNode, HostedParam, ProcessContext,
     SourceNode, MAX_CONTROL_TICKS_PER_BLOCK, REST_EPSILON, SILENCE_PEAK,
 };
 pub use polysynth::PolySynth;

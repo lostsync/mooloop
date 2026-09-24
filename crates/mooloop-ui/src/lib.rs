@@ -3095,6 +3095,9 @@ fn device_kind_from_int(value: i32) -> DeviceKind {
         5 => DeviceKind::MlP8,
         6 => DeviceKind::Ds01,
         7 => DeviceKind::AuxIn,
+        // Appended, so no kind above moves (MOO-84). Not in the picker:
+        // see `SOURCE_KINDS_IN_PICKER_ORDER`.
+        8 => DeviceKind::Plugin,
         _ => DeviceKind::Sampler,
     }
 }
@@ -3116,6 +3119,7 @@ pub fn device_kind_to_int(kind: DeviceKind) -> i32 {
         DeviceKind::MlP8 => 5,
         DeviceKind::Ds01 => 6,
         DeviceKind::AuxIn => 7,
+        DeviceKind::Plugin => 8,
     }
 }
 
@@ -3143,6 +3147,14 @@ fn device_kind_label(kind: DeviceKind) -> &'static str {
 /// one; adding it to `mooloop-core` for one caller would be putting a UI
 /// concern in the model. Public because `tests/source_kind_menu.rs` needs the
 /// same eight kinds to hold `SourceKinds.labels` against.
+///
+/// **`DeviceKind::Plugin` (8) is deliberately not here** (MOO-84). A plugin
+/// instrument is made by choosing a plugin, and the browser that chooses one
+/// is step 08 of `docs/plans/plugin-hosting/` (MOO-83), which adds its row
+/// to the picker. A "Plugin" row before then would make a channel with an
+/// empty, silent source and no way to fill it. Until then a plugin channel
+/// comes from a song file or `Session::set_plugin_source`, and its number
+/// is appended after the eight so none of theirs moves.
 pub const SOURCE_KINDS_IN_PICKER_ORDER: [DeviceKind; 8] = [
     DeviceKind::Sampler,
     DeviceKind::DrumSynth,

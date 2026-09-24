@@ -31,16 +31,24 @@
 //! In each case the next pump tick after the lifeline is alone builds a
 //! processor and swaps it in with `ReplaceEffect`, keyed by the slot, so a
 //! swap that arrives after the device went finds nothing and does nothing.
+//!
+//! **A channel's source can be a plugin too** (step 09, MOO-84). The same
+//! rule holds, with the channel's `HostedSource` in place of the effect's
+//! placeholder: a song opening, or an install that did not carry the strip,
+//! builds it silent, and the processor goes in with
+//! `StructuralCommand::HostSourceProcessor`, keyed by the slot the same way.
+//! A pull-back takes the processor out and leaves the source silent, since an
+//! instrument's placeholder has nothing to pass through.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use mooloop_core::{
-    insert_effect, log_warn, mint_plugin_slot, EffectKind, EffectParams, EffectSlotState,
-    EffectTarget, EngineCommand, PluginParamInfo, PluginRef, PluginSlotId, PluginSlotState,
-    PluginSlots, PluginState, PluginStateText,
+    insert_effect, log_warn, mint_plugin_slot, DeviceKind, EffectKind, EffectParams,
+    EffectSlotState, EffectTarget, EngineCommand, GeneratorParams, PluginParamInfo, PluginRef,
+    PluginSlotId, PluginSlotState, PluginSlots, PluginState, PluginStateText,
 };
 use mooloop_dsp::effects::PluginPlaceholder;
-use mooloop_dsp::{AudioNode, IntegerDelay, SpectrumAnalyzer};
+use mooloop_dsp::{AudioNode, HostedSource, IntegerDelay, SpectrumAnalyzer};
 use mooloop_engine::{CommandSink, EffectSlot, StructuralCommand};
 use mooloop_plugin_host::{
     AudioConfig, HostError, HostedInstance, Lifeline, PluginOpener, PluginParamEvent, Requests,
@@ -777,18 +785,39 @@ impl crate::session::Session {
         self.plugin_rack.problem(slot)
     }
 
-    /// Every plugin slot a device on some chain names.
+    /// Every plugin slot a device on some chain names, or a channel plays
+    /// as its source.
     pub fn named_plugin_slots(&self) -> BTreeSet<PluginSlotId> {
         let channels = self.channels.iter().map(|channel| &channel.effects);
         let buses = self.buses.iter().map(|bus| &bus.effects);
-        channels
+        let effects = channels
             .chain(buses)
             .flatten()
             .filter_map(|effect| match effect.params {
                 EffectParams::Plugin(slot) => Some(slot),
                 _ => None,
+            });
+        effects.chain(self.plugin_sources().map(|(_, slot)| slot)).collect()
+    }
+
+    /// Every channel whose source is a hosted plugin, with the slot it
+    /// plays, by the channel's position (what the engine addresses).
+    fn plugin_sources(&self) -> impl Iterator<Item = (u8, PluginSlotId)> + '_ {
+        self.channels
+            .iter()
+            .enumerate()
+            .filter_map(|(index, channel)| match channel.generator_params() {
+                GeneratorParams::Plugin(slot) if slot.is_assigned() => {
+                    Some((u8::try_from(index).ok()?, slot))
+                }
+                _ => None,
             })
-            .collect()
+    }
+
+    /// The channel playing plugin `slot` as its source, if one is.
+    fn plugin_source_channel(&self, slot: PluginSlotId) -> Option<u8> {
+        self.plugin_sources()
+            .find_map(|(channel, played)| (played == slot).then_some(channel))
     }
 
     fn plugin_config(handle: &impl CommandSink) -> AudioConfig {
@@ -818,6 +847,16 @@ impl crate::session::Session {
         for event in self.plugin_rack.service(&self.plugins, &named, config) {
             match event {
                 RackEvent::Install { slot, node } => {
+                    if let Some(channel) = self.plugin_source_channel(slot) {
+                        // Refused (the channel moved on), the processor comes
+                        // back on the reclaim ring and the rack tries again.
+                        let _ = handle.send_structural(StructuralCommand::HostSourceProcessor {
+                            channel,
+                            slot,
+                            node: Some(node),
+                        });
+                        continue;
+                    }
                     let align = IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
                     // Refused or not found, the node is dropped here, which
                     // leaves the lifeline alone: the rack tries again, a
@@ -828,10 +867,7 @@ impl crate::session::Session {
                     // (MOO-212, Effects').
                     self.resize_plugin_containers(slot, handle);
                 }
-                RackEvent::PullBack { slot } => {
-                    let (placeholder, align) = self.pull_back_placeholder(slot);
-                    let _ = self.replace_plugin_processor(slot, placeholder, align, handle);
-                }
+                RackEvent::PullBack { slot } => self.pull_back(slot, handle),
                 RackEvent::Opened { slot, params } => {
                     // What the plugin reports now replaces what the song last
                     // saw, without marking the song modified: opening a song
@@ -1076,9 +1112,80 @@ impl crate::session::Session {
     /// [`Self::plugins_retired`], or its bounded wait runs out.
     pub fn close_plugins(&mut self, handle: &mut impl CommandSink) {
         for slot in self.plugin_rack.close() {
-            let (placeholder, align) = self.pull_back_placeholder(slot);
-            let _ = self.replace_plugin_processor(slot, placeholder, align, handle);
+            self.pull_back(slot, handle);
         }
+    }
+
+    /// Take plugin `slot`'s processor back from the engine: the placeholder
+    /// into its device's place, or, for a channel's source, nothing -- the
+    /// source goes silent, as a missing instrument is.
+    fn pull_back(&mut self, slot: PluginSlotId, handle: &mut impl CommandSink) {
+        if let Some(channel) = self.plugin_source_channel(slot) {
+            let _ = handle.send_structural(StructuralCommand::HostSourceProcessor {
+                channel,
+                slot,
+                node: None,
+            });
+            return;
+        }
+        let (placeholder, align) = self.pull_back_placeholder(slot);
+        let _ = self.replace_plugin_processor(slot, placeholder, align, handle);
+    }
+
+    /// Make channel `index`'s source the plugin `plugin`, open it, and
+    /// install its processor -- or a silent source, when it cannot be
+    /// opened, with the reason kept for [`Self::plugin_problem`]. Returns the
+    /// slot the song now keeps it in.
+    ///
+    /// The session path of step 09 (MOO-84), as [`Self::insert_plugin_effect`]
+    /// is step 06's: there is no window path until step 08's browser
+    /// (MOO-83). The channel's former source goes as a source change does
+    /// (`reset_channel_source`: a name nobody typed follows the device, the
+    /// sample state is cleared). A slot the previous plugin source held stays
+    /// in the song's table, unnamed, as a removed plugin effect's does.
+    pub fn set_plugin_source(
+        &mut self,
+        index: usize,
+        plugin: PluginRef,
+        handle: &mut impl CommandSink,
+    ) -> Option<PluginSlotId> {
+        let channel = u8::try_from(index).ok()?;
+        self.channels.get(index)?;
+        let slot = mint_plugin_slot(
+            &mut self.plugins,
+            &mut self.next_plugin_slot,
+            PluginSlotState::new(plugin.clone()),
+        );
+        self.reset_channel_source(index, DeviceKind::Plugin);
+        self.channels[index].set_generator(GeneratorParams::Plugin(slot));
+        let config = Self::plugin_config(handle);
+        let opened = self
+            .plugin_rack
+            .open(&plugin, &PluginState::default(), config)
+            .and_then(|instance| {
+                let params = instance.params().to_vec();
+                let node = self.plugin_rack.insert(slot, instance)?;
+                Ok((node, params))
+            });
+        let source = match opened {
+            Ok((node, params)) => {
+                if let Some(state) = self.plugins.get_mut(&slot) {
+                    state.params = params;
+                }
+                HostedSource::with_processor(slot, node)
+            }
+            Err(error) => {
+                log_warn!("plugin", "{}: {error}", plugin.name);
+                self.plugin_rack.record_problem(slot, error);
+                HostedSource::new(slot)
+            }
+        };
+        let _ = handle.send_structural(StructuralCommand::InstallSource {
+            channel,
+            node: Box::new(source),
+        });
+        self.dirty = true;
+        Some(slot)
     }
 
     /// The placeholder that pulls a running processor back, and its dry
@@ -1447,6 +1554,12 @@ pub(crate) mod tests {
         branches: Vec<(u8, usize)>,
         /// The nodes sent, kept alive the way the engine would keep them.
         nodes: Vec<Box<dyn AudioNode + Send>>,
+        /// Sources installed, as `(channel, what it plays, hosting)` (MOO-84).
+        sources: Vec<(u8, GeneratorParams, bool)>,
+        /// Processors sent into a source, as `(channel, slot, in or out)`.
+        source_swaps: Vec<(u8, PluginSlotId, bool)>,
+        /// The sources sent, kept alive with their processors.
+        source_nodes: Vec<Box<dyn mooloop_dsp::SourceNode + Send>>,
         rate: u32,
     }
 
@@ -1487,6 +1600,19 @@ pub(crate) mod tests {
                 }
                 StructuralCommand::SetBranchAlign { slot, align, .. } => {
                     self.branches.push((slot, align.map_or(0, |ring| ring.frames())));
+                }
+                StructuralCommand::InstallSource { channel, node } => {
+                    // A hosted source with a processor in it is never at
+                    // rest (the fake processor has not opted in); an empty
+                    // one always is.
+                    self.sources.push((channel, node.generator_params(), !node.is_at_rest()));
+                    self.source_nodes.push(node);
+                }
+                StructuralCommand::HostSourceProcessor { channel, slot, node } => {
+                    self.source_swaps.push((channel, slot, node.is_some()));
+                    if let Some(node) = node {
+                        self.nodes.push(node);
+                    }
                 }
                 _ => {}
             }
@@ -1794,6 +1920,77 @@ pub(crate) mod tests {
         assert_eq!(session.plugins[&slot].plugin, fake_ref());
         assert!(session.dirty);
         assert_eq!(session.channels[0].effects[0].params, EffectParams::Plugin(slot));
+    }
+
+    /// **A channel's source can be a plugin** (MOO-84). The session path
+    /// makes the channel a plugin channel, keeps the plugin in the song's
+    /// table, and installs a hosted source with the processor already in it;
+    /// the song says so, and a song opened from that snapshot has its
+    /// processor swapped into the silent source the install built -- by
+    /// `HostSourceProcessor`, keyed by the slot, not by `ReplaceEffect`.
+    #[test]
+    fn a_plugin_source_is_installed_saved_and_swapped_in_when_the_song_opens() {
+        let probe = Arc::new(FakeProbe::default());
+        let (project, effect_slot) = project_with_plugin();
+        let mut session = crate::session::Session::default();
+        session.set_plugin_opener(Box::new(FakeOpener(Arc::clone(&probe))));
+        session.replace_project(&project, &[]);
+        let mut sink = Sink::default();
+        session.service_plugins(&mut sink);
+        let slot = session.set_plugin_source(1, fake_ref(), &mut sink).expect("a channel 1");
+        assert_ne!(slot, effect_slot);
+        assert_eq!(sink.sources, [(1, GeneratorParams::Plugin(slot), true)]);
+        assert_eq!(session.channels[1].kind(), DeviceKind::Plugin);
+        assert_eq!(session.channels[1].name, "Plugin 2", "a name nobody typed follows the device");
+        assert!(session.dirty);
+        assert!(session.named_plugin_slots().contains(&slot));
+
+        let song = session.project_snapshot(120, 50);
+        assert_eq!(song.channels[1].setup.source, mooloop_core::ChannelSource::Plugin(slot));
+        assert_eq!(song.plugins[&slot].plugin, fake_ref());
+
+        // The same song opened fresh, less the plugin effect so the fake's
+        // one probe speaks for the source alone: the install built a silent
+        // source, and the rack opens the plugin and swaps it into its place.
+        let mut song = song;
+        song.channels[0].setup.effects.retain(|effect| effect.params != EffectParams::Plugin(effect_slot));
+        song.plugins.remove(&effect_slot);
+        let probe = Arc::new(FakeProbe::default());
+        let mut reopened = crate::session::Session::default();
+        reopened.set_plugin_opener(Box::new(FakeOpener(Arc::clone(&probe))));
+        reopened.replace_project(&song, &[]);
+        let mut sink = Sink::default();
+        reopened.service_plugins(&mut sink);
+        assert_eq!(probe.opens.load(Ordering::SeqCst), 1);
+        assert_eq!(sink.source_swaps, [(1, slot, true)]);
+        assert!(sink.replaced.is_empty(), "a source is not an effect");
+
+        // A restart pulls the source's processor out (silence, not a
+        // placeholder) and swaps the next one in once the first is back.
+        probe.requests.raise(Requests::RESTART);
+        reopened.service_plugins(&mut sink);
+        assert_eq!(sink.source_swaps, [(1, slot, true), (1, slot, false)]);
+        sink.nodes.clear();
+        reopened.service_plugins(&mut sink);
+        assert_eq!(sink.source_swaps.last(), Some(&(1, slot, true)));
+    }
+
+    /// A plugin source that cannot be opened is still made, silent, with the
+    /// reason kept; the channel and the song's slot are the same as if it
+    /// had opened.
+    #[test]
+    fn a_missing_plugin_source_is_installed_silent() {
+        let probe = Arc::new(FakeProbe::default());
+        probe.missing.store(true, Ordering::SeqCst);
+        let mut session = crate::session::Session::default();
+        session.set_plugin_opener(Box::new(FakeOpener(Arc::clone(&probe))));
+        session.replace_project(&project_with_plugin().0, &[]);
+        let mut sink = Sink::default();
+        let slot = session.set_plugin_source(0, fake_ref(), &mut sink).expect("a channel 0");
+        assert_eq!(sink.sources, [(0, GeneratorParams::Plugin(slot), false)]);
+        assert_eq!(session.plugin_problem(slot), Some(HostError::Missing));
+        assert_eq!(session.channels[0].kind(), DeviceKind::Plugin);
+        assert!(session.set_plugin_source(9, fake_ref(), &mut sink).is_none(), "no channel 9");
     }
 
     /// Inserting a plugin that is not installed still inserts the device,

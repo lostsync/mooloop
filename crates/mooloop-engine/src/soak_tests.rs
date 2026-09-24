@@ -75,6 +75,11 @@ fn every_source_kind() -> Vec<DeviceKind> {
             | DeviceKind::MlP8
             | DeviceKind::Ds01
             | DeviceKind::AuxIn => kinds.push(kind),
+            // Not a device the soak can build: a hosted source needs a
+            // plugin's processor, and without one it is silence. A hosted
+            // source through the executor is `plugin_source_tests.rs`, a
+            // hosted CLAP `plugin_host_tests.rs` (MOO-84).
+            DeviceKind::Plugin => {}
         }
     }
     kinds
@@ -90,6 +95,7 @@ fn channel_of(kind: DeviceKind, index: usize) -> ProjectChannel {
         DeviceKind::MlP8 => ProjectChannel::mlp8(index, 1),
         DeviceKind::Ds01 => ProjectChannel::ds01(index, 1),
         DeviceKind::AuxIn => ProjectChannel::aux_in(index, 1),
+        DeviceKind::Plugin => unreachable!("the soak builds native sources only"),
     }
 }
 

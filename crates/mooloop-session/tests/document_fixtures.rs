@@ -67,6 +67,7 @@ fn source_setup(name: &str, params: GeneratorParams) -> ChannelSetup {
         GeneratorParams::MlP8(params) => ChannelSetup::mlp8_with_params(name, params),
         GeneratorParams::Ds01(params) => ChannelSetup::ds01_with_params(name, params),
         GeneratorParams::AuxIn(params) => ChannelSetup::aux_in_with_params(name, params),
+        GeneratorParams::Plugin(_) => unreachable!("the fixtures are native sources"),
     }
 }
 

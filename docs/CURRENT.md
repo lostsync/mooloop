@@ -2247,6 +2247,21 @@ land on its own when it starts to matter:
   ("Plugin Edit"), so undoing an earlier edit no longer reopens the plugin
   without it. A saved state the plugin refuses opens it with its defaults,
   and the song keeps the refused state unchanged.
+- **A channel's instrument can be a hosted plugin** (MOO-84, plugin-hosting
+  09), with no way to choose one from the window yet: the plugin browser that
+  makes a plugin channel is step 08 (MOO-83), and a fresh Interface team takes
+  it after this push. Until then a plugin channel comes from a song file that
+  names one (`source.type = "plugin"`, `PROJECT_FORMAT.md`), or from the
+  session call `Session::set_plugin_source(channel, plugin)`, which tests and
+  the acceptance cases use. The channel is silent until the plugin opens, and
+  stays silent, keeping its slot and state, while the plugin is missing. It is
+  in an export, it survives an edit that keeps the channel, and a restart or a
+  new sample rate pulls the plugin out and puts the next processor back. Not
+  yet: a plugin channel's editor shows no face (its number is 8, after the
+  eight native kinds, and the add-channel menu does not offer it); a restart
+  cuts a sounding instrument rather than fading it; the plugin's own latency
+  is not compensated; and its parameters take no lanes or routes. Which notes
+  a plugin instrument hears, and how, is step 10 (MOO-85).
 - **Plugins are found, not yet offered** (MOO-80). At startup, on a thread of
   its own, mooloop looks for CLAP plugins in `~/.clap`, `/usr/lib/clap`,
   `/usr/lib64/clap`, `/usr/local/lib/clap` (inside a Flatpak also

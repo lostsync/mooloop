@@ -106,6 +106,9 @@ fn one_note_channel(kind: DeviceKind) -> ProjectChannel {
         // match exhaustive, which is what makes a new generator's absence
         // from the sweep a decision rather than an oversight.
         DeviceKind::AuxIn => ProjectChannel::aux_in(0, 1),
+        // A hosted plugin's level is the plugin's own, not a calibration of
+        // ours (MOO-84); nothing here builds one.
+        DeviceKind::Plugin => unreachable!("not part of the calibration sweep"),
     };
     if let Some(state) = channel.setup.sampler_state_mut() {
         state.sample = SampleReference::Builtin {

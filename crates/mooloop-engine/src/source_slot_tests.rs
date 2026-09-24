@@ -112,6 +112,8 @@ fn channel_with(index: usize, params: GeneratorParams) -> ProjectChannel {
         GeneratorParams::MlP8(params) => ProjectChannel::mlp8_with_params(index, 1, params),
         GeneratorParams::Ds01(params) => ProjectChannel::ds01_with_params(index, 1, params),
         GeneratorParams::AuxIn(params) => ProjectChannel::aux_in_with_params(index, 1, params),
+        // Not one of the eight: a hosted source is `plugin_source_tests.rs`'s.
+        GeneratorParams::Plugin(_) => unreachable!("only native kinds are built here"),
     };
     channel.setup.channel.volume = 1.0;
     // A note every eighth of a second for a second, with some overlap, so

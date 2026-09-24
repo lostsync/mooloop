@@ -14,7 +14,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use mooloop_core::{
-    EffectKind, EffectParams, EffectTarget, EngineCommand, PluginSlotId, Project, MAX_BUSES,
+    ChannelSource, EffectKind, EffectParams, EffectTarget, EngineCommand, PluginSlotId, Project, MAX_BUSES,
     MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
 };
 use mooloop_dsp::{AudioNode, IntegerDelay};
@@ -89,6 +89,22 @@ pub fn play_through_executor(
             });
             assert!(commands.push(swap).is_ok(), "the command ring has room");
         }
+    }
+    // A hosted instrument's processor goes into its channel's source the
+    // way the rack sends it (MOO-84).
+    for (index, channel) in project.channels.iter().take(MAX_CHANNELS).enumerate() {
+        let ChannelSource::Plugin(slot) = channel.setup.source else {
+            continue;
+        };
+        let Some(node) = plugins.remove(&slot) else {
+            continue;
+        };
+        let swap = RealtimeCommand::Structural(StructuralCommand::HostSourceProcessor {
+            channel: index as u8,
+            slot,
+            node: Some(node),
+        });
+        assert!(commands.push(swap).is_ok(), "the command ring has room");
     }
     assert!(commands
         .push(RealtimeCommand::Engine(EngineCommand::Play))
