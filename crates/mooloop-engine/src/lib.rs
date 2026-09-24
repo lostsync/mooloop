@@ -1769,6 +1769,12 @@ impl EngineHandle {
         self.shared.bus_meters.take_reduction(bus)
     }
 
+    /// Read and clear how much gain reduction the master bus compressor
+    /// took, in dB as a positive amount. Zero while it is out (MOO-13).
+    pub fn take_master_comp_reduction(&self) -> f32 {
+        self.shared.bus_meters.take_master_comp()
+    }
+
     /// Read and clear a device's held input/output peaks. `target` addresses
     /// channels and buses in one space: a channel is its own index, a bus is
     /// `MAX_CHANNELS + bus index`. Stage 0 is the source; effect slots follow.

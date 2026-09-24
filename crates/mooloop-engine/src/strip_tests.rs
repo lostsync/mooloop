@@ -705,3 +705,207 @@ fn every_section_starts_out_on_every_track() {
         assert_eq!(StripParams::default().get(id), Some(0.0));
     }
 }
+
+// ---------------------------------------------------------------------------
+// The master bus compressor (MOO-13, `docs/plans/master-bus-compressor/03`).
+// `mooloop_dsp::strip::bus_comp` holds its laws to the rig; these hold where
+// the engine runs it.
+// ---------------------------------------------------------------------------
+
+use mooloop_core::strip::{BusCompVoicing, MasterSectionParams, MASTER_COMP_IN};
+
+/// One channel straight to the master, loud enough to reach a bus
+/// compressor's threshold.
+fn master_project(section: MasterSectionParams) -> Project {
+    let mut channel = one_note_channel(45);
+    channel.setup.channel.bus = 0;
+    let mut project = Project {
+        channels: vec![channel],
+        ..Project::default()
+    };
+    project.buses[0].bus.strip.master = section;
+    project
+}
+
+fn section_in(voicing: BusCompVoicing) -> MasterSectionParams {
+    MasterSectionParams {
+        comp_in: true,
+        voicing,
+        threshold_db: -34.0,
+        ..MasterSectionParams::default()
+    }
+}
+
+/// **Bypass is transparent.** A section that is out, with every other value
+/// set to something violent, is the mix sample for sample.
+#[test]
+fn a_master_section_that_is_out_changes_nothing_about_the_mix() {
+    let plain = master_project(MasterSectionParams::default());
+    let loaded = master_project(MasterSectionParams {
+        comp_in: false,
+        voicing: BusCompVoicing::Tube,
+        threshold_db: -40.0,
+        makeup_db: 18.0,
+        mix: 0.3,
+        tube_time: 5,
+        ..MasterSectionParams::default()
+    });
+    let (plain_l, plain_r) = render_master(&plain, 0.5);
+    let (loaded_l, loaded_r) = render_master(&loaded, 0.5);
+    assert!(peak_of(&plain_l) > 0.01, "the comparison ran on silence");
+    assert_eq!(plain_l, loaded_l, "the left channel moved");
+    assert_eq!(plain_r, loaded_r, "the right channel moved");
+}
+
+/// Every voicing reaches the mix on the master, and only on the master: the
+/// same section on track 1's strip (which the session would refuse) runs
+/// nothing.
+#[test]
+fn the_bus_comp_runs_on_the_master_and_nowhere_else() {
+    let plain = master_project(MasterSectionParams::default());
+    let (plain_l, _) = render_master(&plain, 0.5);
+    for voicing in BusCompVoicing::ALL {
+        let (wet_l, _) = render_master(&master_project(section_in(voicing)), 0.5);
+        assert!(
+            rms_of(&wet_l) < rms_of(&plain_l) * 0.9,
+            "{voicing:?} did not compress: {} against {}",
+            rms_of(&wet_l),
+            rms_of(&plain_l)
+        );
+    }
+    let mut elsewhere = one_track_project();
+    elsewhere.buses[1].bus.strip.master = section_in(BusCompVoicing::Grip);
+    assert_eq!(
+        render_master(&elsewhere, 0.5),
+        render_master(&one_track_project(), 0.5),
+        "a section on a track that is not the master ran"
+    );
+}
+
+/// **It runs before the fader.** Halving the master fader halves the output
+/// exactly, which is only true if the compressor saw the same signal both
+/// times -- a compressor after the fader would reduce the quieter one less.
+#[test]
+fn the_bus_comp_runs_before_the_masters_fader() {
+    let full = master_project(section_in(BusCompVoicing::Grip));
+    let mut half = full.clone();
+    half.buses[0].bus.volume = 0.5;
+    let (full_l, _) = render_master(&full, 0.5);
+    let (half_l, _) = render_master(&half, 0.5);
+    let (dry_l, _) = render_master(&master_project(MasterSectionParams::default()), 0.5);
+    assert!(worst_difference(&full_l, &dry_l) > 1e-3, "nothing was compressed");
+    for (frame, (f, h)) in full_l.iter().zip(&half_l).enumerate() {
+        assert_eq!(f * 0.5, *h, "frame {frame}: the fader moved the compression");
+    }
+}
+
+/// Block boundaries do not move it: each voicing renders bit-identically at
+/// 64 and 1,024 frames a block.
+#[test]
+fn the_bus_comp_is_the_same_at_any_block_size() {
+    for voicing in BusCompVoicing::ALL {
+        let project = master_project(section_in(voicing));
+        let small = crate::render_test_support::render_master_in_blocks(&project, 0.5, 64);
+        let large = crate::render_test_support::render_master_in_blocks(&project, 0.5, 1_024);
+        assert_eq!(small, large, "{voicing:?} depends on the block size");
+    }
+}
+
+/// **The engine runs the law and nothing else.** The master with the
+/// section in is, sample for sample, `bus_comp::BusComp` run over the same
+/// master with it out -- so every measurement `mooloop_dsp::strip::bus_comp`
+/// holds against the rig holds of the mix, and nothing between the section
+/// and the fader adds anything.
+#[test]
+fn the_master_is_the_law_run_over_the_mix() {
+    let (dry_l, dry_r) = crate::render_test_support::render_mix(
+        &master_project(MasterSectionParams::default()),
+        0.5,
+    );
+    for voicing in BusCompVoicing::ALL {
+        let section = section_in(voicing);
+        let (wet_l, wet_r) = crate::render_test_support::render_mix(&master_project(section), 0.5);
+        let mut law = mooloop_dsp::strip::bus_comp::BusComp::new(section, SAMPLE_RATE);
+        let mut reduced = 0.0f32;
+        for frame in 0..dry_l.len() {
+            let (l, r) = law.process_frame(dry_l[frame], dry_r[frame]);
+            reduced = reduced.max(law.reduction_db());
+            assert_eq!(
+                (l, r),
+                (wet_l[frame], wet_r[frame]),
+                "{voicing:?} at frame {frame}: the engine is not the law"
+            );
+        }
+        assert!(reduced > 1.0, "{voicing:?} never reduced, so this proves nothing");
+    }
+}
+
+/// **Realtime and offline agree**: an export with the section in is the live
+/// render sample for sample over the bars, for every voicing.
+#[test]
+fn an_export_with_the_bus_comp_in_is_the_live_render() {
+    for voicing in BusCompVoicing::ALL {
+        let project = master_project(section_in(voicing));
+        let temp = tempfile::tempdir().expect("a temporary directory");
+        let path = temp.path().join("bus-comp.wav");
+        crate::offline::OfflineRenderer::render(
+            &project,
+            &[],
+            SAMPLE_RATE,
+            &crate::offline::ExportSpec {
+                path: path.clone(),
+                scope: crate::offline::RenderScope::Pattern { index: 0 },
+                tail_seconds: 0.0,
+                format: crate::offline::ExportFormat::Wav(crate::offline::WavEncoding::Float32),
+            },
+        )
+        .expect("the project exports");
+        let exported: Vec<f32> = hound::WavReader::open(&path)
+            .expect("the export reads back")
+            .samples::<f32>()
+            .map(|sample| sample.expect("a sample"))
+            .step_by(2)
+            .collect();
+        let frames = exported.len().min(SAMPLE_RATE as usize);
+        let live = crate::render_test_support::render_master_in_blocks(
+            &project,
+            frames as f32 / SAMPLE_RATE as f32 + 0.1,
+            256,
+        )
+        .0;
+        assert!(peak_of(&exported[..frames]) > 0.01, "the export is silent");
+        assert_eq!(exported[..frames], live[..frames], "{voicing:?}: export and live disagree");
+    }
+}
+
+/// A section switched in by command reaches the audio, publishes its
+/// reduction to the needle's cell, and keeps the master awake while it
+/// works.
+#[test]
+fn a_master_section_switched_in_by_command_compresses_and_meters() {
+    let mut project = master_project(section_in(BusCompVoicing::Punch));
+    project.buses[0].bus.strip.master.comp_in = false;
+    let meters = crate::meters::BusMeters::new();
+    let mut moved = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+    let mut control = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+    moved.attach_meters(meters.clone());
+    moved.play();
+    control.play();
+    moved.apply_command(EngineCommand::SetStripParam {
+        bus: 0,
+        param: MASTER_COMP_IN,
+        value: 1.0,
+    });
+    let (mut a, mut b) = (Vec::new(), Vec::new());
+    for _ in 0..16 {
+        moved.process_once_block(512);
+        a.extend_from_slice(&moved.master().l[..512]);
+        control.process_once_block(512);
+        b.extend_from_slice(&control.master().l[..512]);
+    }
+    assert!(worst_difference(&a, &b) > 1e-3, "switched in and nothing changed");
+    let reduction = meters.take_master_comp();
+    assert!(reduction > 1.0, "the needle's cell read {reduction} dB");
+    assert_eq!(meters.take_reduction(0), 0.0, "the strip's own lamp lit instead");
+    assert_eq!(moved.strip_is_at_rest(0), Some(false), "the master slept mid-reduction");
+}

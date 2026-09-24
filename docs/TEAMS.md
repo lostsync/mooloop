@@ -174,7 +174,8 @@ Files marked *shared* are split in the table above.
   the Preamp insert is Effects'), `output_guard.rs` (the master's non-finite
   scrub and safety limiter)
 - `engine/src/`: `meters.rs`, and the tests `console_tests.rs`,
-  `strip_tests.rs`, `gain_structure_tests.rs`, `output_guard_tests.rs`
+  `strip_tests.rs`, `gain_structure_tests.rs`, `output_guard_tests.rs`, and the
+  master bus compressor's acceptance render, `engine/examples/master_bus_comp.rs`
 - `session/src/mixer.rs`
 - `ui/src/meter.rs`; `ui/ui/`: `mixer.slint`, `strip.slint`, `meters.slint`,
   `bus-device.slint`, `gain.slint`

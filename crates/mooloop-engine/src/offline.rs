@@ -386,18 +386,37 @@ struct Rendered {
 /// Render the bars, then the tail until the project falls silent or the cap
 /// in `summary.tail_frames` runs out, handing each block to `sink`. Returns
 /// how much tail it rendered.
+///
+/// **A file starts on the bar line whatever the master's lookahead.** The
+/// safety limiter can delay everything leaving the master by a few
+/// milliseconds (MOO-169); that many frames are dropped from the head and
+/// rendered on past the bars with the transport stopped, so the file holds
+/// the same span of the song, the same length, at any lookahead. At 0 --
+/// the default -- nothing is dropped and nothing added.
 fn render_blocks(
     state: &mut RenderState,
     summary: RenderSummary,
     progress: &ExportProgress,
     mut sink: impl FnMut(&[f32], &[f32]) -> Result<(), ExportError>,
 ) -> Result<u64, ExportError> {
+    let latency = u64::from(state.output_latency_frames());
+    let mut skip = latency;
+    let mut emit = |left: &[f32], right: &[f32]| -> Result<(), ExportError> {
+        let from = skip.min(left.len() as u64) as usize;
+        skip -= from as u64;
+        if from < left.len() {
+            sink(&left[from..], &right[from..])
+        } else {
+            Ok(())
+        }
+    };
+
     state.play();
     let mut remaining = summary.base_frames;
     while remaining > 0 {
         let frames = remaining.min(OFFLINE_BLOCK_FRAMES as u64) as usize;
         state.process_once_block(frames);
-        sink(&state.master().l[..frames], &state.master().r[..frames])?;
+        emit(&state.master().l[..frames], &state.master().r[..frames])?;
         remaining -= frames as u64;
         progress.advance(frames)?;
     }
@@ -407,12 +426,22 @@ fn render_blocks(
     // `is_at_rest` asks -- and a block that was itself silent, so the file
     // does not end on the last audible block's final sample (MOO-125).
     state.pause();
+    // First the end of the bars still in the limiter's lookahead: part of
+    // the song, not of the tail.
+    let mut owed = latency;
+    while owed > 0 {
+        let frames = owed.min(OFFLINE_BLOCK_FRAMES as u64) as usize;
+        state.process_once_block(frames);
+        emit(&state.master().l[..frames], &state.master().r[..frames])?;
+        owed -= frames as u64;
+        progress.advance(frames)?;
+    }
     let mut rendered = 0u64;
     while rendered < summary.tail_frames {
         let frames = (summary.tail_frames - rendered).min(OFFLINE_BLOCK_FRAMES as u64) as usize;
         state.process_once_block(frames);
         let (left, right) = (&state.master().l[..frames], &state.master().r[..frames]);
-        sink(left, right)?;
+        emit(left, right)?;
         rendered += frames as u64;
         progress.advance(frames)?;
         let silent = left

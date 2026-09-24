@@ -21,8 +21,12 @@ Engine call sites; both need an ack on the board.
 - **The guard reads its lookahead** from the master's strip at the call site
   in `process_block_inner` (Engine's line, ack needed).
 - **Alignment.**
-  - The graph's reported latency, `CompiledLatency::total`, includes the
-    master's lookahead: it is how far behind the input the ports are.
+  - The latency is reported in frames by the two sides that know the
+    sample rate: `RenderState::output_latency_frames` on the engine's side
+    and `Session::master_lookahead_frames(rate)` on the control side. Not
+    `CompiledLatency::total`, as this step first said: that plan is compiled
+    by the session, which has no sample rate to turn milliseconds into
+    frames with, and nothing reads its total outside tests.
   - A take from the hardware input starts `input latency + lookahead` after
     its bar line. A take of a channel, a track or the master reads the mix
     before the guard, so it needs no change, and a test says so.

@@ -218,6 +218,16 @@ pub struct StripParams {
     /// strip"* -- not the device host's blend, which a strip does not have.
     pub mix: f32,
     pub makeup_db: f32,
+    /// The master's own section: the bus compressor and the safety
+    /// limiter's lookahead (MOO-13, MOO-169). Every track's strip carries
+    /// one and only the master's runs; `Session::set_strip_param` refuses
+    /// its ids anywhere else.
+    ///
+    /// Defaulted, and **not written while it is the default**, so a song
+    /// that never touched it is byte-identical to one saved before it
+    /// existed, and an old song opens with the section out and no lookahead.
+    #[serde(default, skip_serializing_if = "MasterSectionParams::is_default")]
+    pub master: MasterSectionParams,
 }
 
 /// How many frequency positions each band offers, outer bands first.
@@ -264,6 +274,7 @@ impl Default for StripParams {
             knee_db: 6.0,
             mix: 1.0,
             makeup_db: 0.0,
+            master: MasterSectionParams::default(),
         }
     }
 }
@@ -290,6 +301,9 @@ impl StripParams {
     }
 
     pub fn get(&self, id: u32) -> Option<f32> {
+        if id >= MASTER_FIRST {
+            return self.master.get(id);
+        }
         if let Some((index, field)) = strip_band_of(id) {
             let band = self.bands.get(index)?;
             return Some(match field {
@@ -324,6 +338,11 @@ impl StripParams {
     /// cannot hold different numbers: the engine publishes these back to the
     /// face, which would otherwise show a value nothing is using.
     pub fn set(&mut self, id: u32, value: f32) -> bool {
+        // The master section's ids continue this table's, and the section
+        // keeps its own ranges.
+        if id >= MASTER_FIRST {
+            return self.master.set(id, value);
+        }
         let Some(descriptor) = Self::descriptor(id) else {
             return false;
         };
@@ -736,6 +755,18 @@ pub const TUBE_TIME_POSITIONS: u8 = 6;
 /// 0.0"*; a few milliseconds is the usual span.
 pub const MAX_LOOKAHEAD_MS: f32 = 5.0;
 
+/// `ms` of lookahead at `sample_rate`, in whole frames, clamped to
+/// `0..=MAX_LOOKAHEAD_MS`. The one conversion: the guard runs it, and the
+/// take alignment and an export's trim both report it.
+pub fn lookahead_frames(ms: f32, sample_rate: u32) -> usize {
+    let ms = if ms.is_finite() {
+        ms.clamp(0.0, MAX_LOOKAHEAD_MS)
+    } else {
+        0.0
+    };
+    (ms * sample_rate as f32 / 1000.0).round() as usize
+}
+
 /// First id of the master section: the next one after the strip's own
 /// table, so the two tables are one contiguous id space and
 /// `StripSpec`'s arithmetic on position still finds each row.
@@ -1022,6 +1053,34 @@ mod master_tests {
         assert_eq!(params.lookahead_ms, MAX_LOOKAHEAD_MS);
     }
 
+    /// The saved field: a strip carrying a section round-trips through
+    /// TOML, and a strip whose section is the default writes no `master` at
+    /// all, so an untouched song is byte-identical to one from before it.
+    #[test]
+    fn the_section_is_saved_with_the_strip_and_only_when_touched() {
+        let untouched = toml::to_string(&StripParams::default()).unwrap();
+        assert!(!untouched.contains("master"), "{untouched}");
+        let mut strip = StripParams::default();
+        assert!(strip.set(MASTER_COMP_IN, 1.0));
+        assert!(strip.set(MASTER_COMP_VOICING, 1.0));
+        assert!(strip.set(MASTER_LOOKAHEAD_MS, 2.5));
+        let written = toml::to_string(&strip).unwrap();
+        assert!(written.contains("[master]"), "{written}");
+        let read: StripParams = toml::from_str(&written).unwrap();
+        assert_eq!(read, strip);
+        let old: StripParams = toml::from_str(&untouched).unwrap();
+        assert_eq!(old.master, MasterSectionParams::default());
+    }
+
+    #[test]
+    fn lookahead_frames_round_and_clamp() {
+        assert_eq!(lookahead_frames(0.0, 48_000), 0);
+        assert_eq!(lookahead_frames(1.5, 48_000), 72);
+        assert_eq!(lookahead_frames(5.0, 192_000), 960);
+        assert_eq!(lookahead_frames(50.0, 48_000), 240);
+        assert_eq!(lookahead_frames(f32::NAN, 48_000), 0);
+    }
+
     #[test]
     fn a_voicing_index_round_trips() {
         for voicing in BusCompVoicing::ALL {
@@ -1095,8 +1154,12 @@ mod tests {
         }
         assert!(!params.set(0, 1.0), "the fader's id is not a strip section");
         assert!(!params.set(1, 1.0), "the pan's id is not a strip section");
-        assert!(!params.set(STRIP_COMP_MAKEUP_DB + 1, 1.0));
-        assert!(params.get(STRIP_COMP_MAKEUP_DB + 1).is_none());
+        // The id after the strip's last is the master section's first, and
+        // the strip hands it on; past the section's last is nobody's.
+        assert!(params.set(STRIP_COMP_MAKEUP_DB + 1, 1.0));
+        assert!(params.master.comp_in);
+        assert!(!params.set(MASTER_LOOKAHEAD_MS + 1, 1.0));
+        assert!(params.get(MASTER_LOOKAHEAD_MS + 1).is_none());
     }
 
     /// A value outside a parameter's range is clamped rather than stored, and

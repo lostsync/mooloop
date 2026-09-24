@@ -267,3 +267,11 @@ In the order worth playing:
    with hysteresis, and the Compressor with its own Mix (MOO-142).
 5. **Transitions that used to click**: fader, mute, solo, bypass, preset
    loads and sampler steals (MOO-104, MOO-172). These should now be silent.
+6. **The master bus compressor, each voicing** (MOO-13, step 3). *"Turning it
+   on should feel special"* is the acceptance case and only a listen can pass
+   it. A kick, a bass line and chords a few decibels hot, rendered with the
+   section out, then Grip, Punch and Tube in, and Grip with the limiter
+   looking ahead 3 ms, to float WAVs with their reduction printed beside them:
+   `scripts/antibox --pull target/master-bus-comp cargo run -p mooloop-engine
+   --example master_bus_comp -- target/master-bus-comp`. From step 04 the
+   same is reachable on the master's rack.

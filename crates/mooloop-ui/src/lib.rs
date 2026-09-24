@@ -10811,7 +10811,17 @@ impl AppUi {
                     }
                     Some(RecordPress::Arm { channel, seat, name, clip_ticks, from_input }) => {
                         let sample_rate = guard.audio_sample_rate;
-                        let delay = if from_input { guard.input_latency_frames } else { 0 };
+                        // The driver's round trip, and the master's lookahead
+                        // (MOO-169): the player hears the master that much
+                        // late and plays that much late. A take of a channel,
+                        // a track or the master reads the mix before the
+                        // limiter and waits for neither.
+                        let delay = if from_input {
+                            guard.input_latency_frames
+                                + guard.session.master_lookahead_frames(sample_rate)
+                        } else {
+                            0
+                        };
                         match guard.takes.arm(channel, seat, &name, clip_ticks, sample_rate, delay) {
                             Ok(command) => {
                                 // The routing first, so the take reads the

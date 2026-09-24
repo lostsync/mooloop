@@ -8473,6 +8473,18 @@ impl RenderState {
             if self.strip_pin == StripPin::Tail {
                 strip.strip.process_block(&mut strip.bus, frames);
             }
+            // **The master bus compressor**, on the master alone: after its
+            // own devices, as a mix-bus compressor sits on the insert point,
+            // and before the pre-fader send and the fader, so a fade-out on
+            // the master does not ride the mix out of compression on its way
+            // down (MOO-13). Every other track's section is out, and the
+            // session refuses to switch one in.
+            if index == MASTER_BUS as usize {
+                strip.strip.process_master(&mut strip.bus, frames);
+                if let Some(frame) = strip.strip.master_frame() {
+                    self.meters.publish_master_comp(frame.reduction_db);
+                }
+            }
             let producer = EffectTarget::Bus(index as u8);
             // Mute and solo are one question here and two fields
             // everywhere else: a track silenced by someone else's solo
@@ -8569,9 +8581,14 @@ impl RenderState {
         // the mix, so a mix over 0 dBFS still lights the clip latch and says
         // that the limiter is working, rather than the limiter hiding it.
         let mut guarded = {
-            let master = &mut self.buses[MASTER_BUS as usize].bus;
+            let master = &mut self.buses[MASTER_BUS as usize];
+            // The lookahead is the master section's (MOO-169): 0 is the
+            // zero-latency guard exactly, and a change takes effect here, at
+            // the top of a block.
             self.output_guard
-                .process(&mut master.l[..frames], &mut master.r[..frames])
+                .set_lookahead_ms(master.strip.params().master.lookahead_ms);
+            self.output_guard
+                .process(&mut master.bus.l[..frames], &mut master.bus.r[..frames])
         };
         guarded.non_finite = guarded.non_finite.saturating_add(scrubbed);
         if guarded.non_finite > 0 {
@@ -8748,6 +8765,20 @@ impl RenderState {
                 .iter()
                 .all(|strip| strip.is_idle())
             && self.buses.iter().all(BusStrip::is_resting)
+            // Frames still in flight in the safety limiter's lookahead are
+            // part of the mix that has not left yet.
+            && self.output_guard.is_at_rest()
+    }
+
+    /// How far behind the timeline everything leaving the master is, in
+    /// frames: the safety limiter's lookahead (MOO-169), zero by default.
+    /// What an export trims from its head so a file starts on the bar line.
+    pub fn output_latency_frames(&self) -> u32 {
+        let lookahead = self
+            .buses
+            .get(MASTER_BUS as usize)
+            .map_or(0.0, |master| master.strip.params().master.lookahead_ms);
+        mooloop_core::strip::lookahead_frames(lookahead, self.sample_rate) as u32
     }
 
     /// Samples the output guard found NaN or infinite, and sent as silence

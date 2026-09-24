@@ -39,6 +39,11 @@ pub struct BusMeters {
     /// A strip whose compressor is out publishes nothing, so the cell falls
     /// to zero on the next read and the lamp goes dark.
     reduction: Vec<AtomicU32>,
+    /// How much reduction the master bus compressor took, held until read,
+    /// on the same terms as `reduction` (MOO-13). Its own cell because the
+    /// master has two compressors -- its strip's and this one -- and the
+    /// needle reads this one alone.
+    master_comp: AtomicU32,
     /// The hardware input's held peak, left and right (`audio-recording/01`).
     /// Here rather than in a struct of its own because it is read at the same
     /// cadence as the bus peaks, by the same pump, with the same ballistics.
@@ -581,6 +586,7 @@ impl BusMeters {
         Arc::new(Self {
             cells: (0..MAX_BUSES * 2).map(|_| AtomicU32::new(0)).collect(),
             reduction: (0..MAX_BUSES).map(|_| AtomicU32::new(0)).collect(),
+            master_comp: AtomicU32::new(0),
             input: [AtomicU32::new(0), AtomicU32::new(0)],
             output_faults: AtomicU64::new(0),
             effect_faults: AtomicU64::new(0),
@@ -648,6 +654,19 @@ impl BusMeters {
         if let Some(cell) = self.reduction.get(bus) {
             cell.fetch_max((-reduction_db).max(0.0).to_bits(), Ordering::Relaxed);
         }
+    }
+
+    /// Raise the master bus compressor's held gain reduction, given
+    /// negative or zero. Audio thread, once per block while it is in.
+    pub fn publish_master_comp(&self, reduction_db: f32) {
+        self.master_comp
+            .fetch_max((-reduction_db).max(0.0).to_bits(), Ordering::Relaxed);
+    }
+
+    /// Read and clear the master bus compressor's held gain reduction, as a
+    /// positive number of decibels. GUI thread.
+    pub fn take_master_comp(&self) -> f32 {
+        f32::from_bits(self.master_comp.swap(0, Ordering::Relaxed))
     }
 
     /// Read and clear `bus`'s held gain reduction, as a positive number of

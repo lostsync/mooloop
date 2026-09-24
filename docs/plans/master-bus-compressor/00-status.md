@@ -10,7 +10,7 @@ Linear: project [Master bus compressor](https://linear.app/mooloop/project/maste
 | --- | --- | --- | --- |
 | [01](01-the-laws.md) | The three laws, as data and as a detector | [MOO-206](https://linear.app/mooloop/issue/MOO-206) | **landed 2026-09-23** |
 | [02](02-the-lookahead.md) | The safety limiter's lookahead, 0 bit-identical | [MOO-169](https://linear.app/mooloop/issue/MOO-169) | **landed 2026-09-23** (the ring; the box is 04) |
-| [03](03-the-master-section-runs.md) | Runs on the master, saved, metered, takes and exports aligned | [MOO-207](https://linear.app/mooloop/issue/MOO-207) | not started |
+| [03](03-the-master-section-runs.md) | Runs on the master, saved, metered, takes and exports aligned | [MOO-207](https://linear.app/mooloop/issue/MOO-207) | **landed 2026-09-23** |
 | [04](04-the-face-and-the-meter.md) | The per-voicing face, the meter, the lookahead box | [MOO-208](https://linear.app/mooloop/issue/MOO-208) | not started |
 
 **The listening pass** is Adam's, and is the acceptance case for *"turning it
@@ -87,3 +87,50 @@ that goes over. Above 0, a burst train up to 25 dB over is ducked by the ramp
 on every frame, with the final clamp never needed (the test reads the gain
 each frame left under). Nothing sets it yet: step 03 reads it from the
 master's strip, and step 04 draws the box.
+
+## Step 03 — the section runs on the master, and is saved
+
+The master section is `StripParams.master`, saved with the strip and
+skipped while it is the default; `PROJECT_FORMAT.md` records it. The bus walk
+runs it on the master after the inserts and before the pre-fader send and the
+fader, and publishes its reduction to its own meter cell. The guard reads its
+lookahead from the master's strip at the top of each block.
+
+What building it found:
+
+- **The engine is the law and nothing else**, and that is the strongest pin
+  this step has: the master with the section in is, sample for sample,
+  `BusComp` run over the master with it out, for every voicing
+  (`the_master_is_the_law_run_over_the_mix`). So every measurement step 01
+  holds against the rig holds of the mix.
+- **Before the fader, exactly**: halving the master fader halves the output
+  bit for bit with the section in, which a compressor after the fader would
+  not do.
+- **`CompiledLatency::total` was the wrong place for the lookahead**, as this
+  step first said: the session compiles it with no sample rate, and nothing
+  reads its total outside tests. The latency is reported by the two sides
+  that know the rate instead, `RenderState::output_latency_frames` and
+  `Session::master_lookahead_frames`.
+- **An export trims the lookahead and is otherwise the same file.** At 3 ms
+  a mix under the ceiling exports bit-identical to the same mix at 0, the
+  same length and the same first frame, because the frames dropped from the
+  head are rendered on past the bars with the transport stopped, and the
+  tail's blocks then fall on the same output frames as at 0.
+- **MIDI capture is not compensated**, and is filed (MOO-209, Sequencing)
+  rather than half-done: it compensates no output latency at all today.
+- **The laws hold at the other sample rates.** The constants were fitted at
+  48 kHz; measured the rig's way at 44.1 and 96 kHz they land within 6% of the
+  unit, and `the_laws_hold_at_other_sample_rates` now holds that.
+
+The acceptance render is `crates/mooloop-engine/examples/master_bus_comp.rs`,
+listed in `FOCUS.md`'s listening list. On the box, 2026-09-23: the song saves
+and reopens with nothing repaired; the mix peaks at -1.4 dBFS with the
+section out (under the limiter, so that render is the mix itself); at a
+-18 dB threshold Grip reduces 5.0 dB on average (7.2 at most), Punch 4.7
+(7.2) while letting the most peak through (-3.8 dBFS against Grip's -6.5),
+and Tube 6.5 (8.8), its curve steepening as it is pushed. Grip at 3 ms of
+lookahead exports sample for sample the same file as at 0. One thing it
+showed that the tests did not: **an export's tail runs longer with the
+section in**, until the compressor has let go -- about 1.4 s here at Grip's
+0.3 s release, and to the tail cap at Auto -- because the tail waits for
+`is_at_rest`, as it does for any dynamics insert. The extra tail is silence.

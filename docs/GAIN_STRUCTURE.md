@@ -167,10 +167,22 @@ preview -- so live playback and export both pass through it. Two jobs:
   frame is only multiplied while it is not, so a mix that never goes over
   leaves bit for bit (`a_signal_under_the_ceiling_passes_bit_identical`).
   After an over it releases back to exactly unity, and is bit-transparent
-  again. No lookahead, because lookahead delays everything on the master --
-  monitoring latency and every recording's alignment -- for a stage that
-  should normally be doing nothing; the cost is that an over's first frame is
-  shaped rather than ducked ahead of time.
+  again. **No lookahead by default**, because lookahead delays everything on
+  the master -- monitoring latency and every recording's alignment -- for a
+  stage that should normally be doing nothing; the cost is that an over's
+  first frame is shaped rather than ducked ahead of time.
+- **A lookahead when asked for** (MOO-169): the master section's
+  `lookahead_ms`, 0 to 5 ms. At 0 the guard runs the zero-latency code above,
+  bit for bit. Above 0 the ports are the mix that many frames late -- a pure
+  delay under the ceiling -- and an over starts a ramp that reaches its
+  reduction by the time the over leaves, so nothing is shaped. The delay is
+  accounted for where it matters: a take from the hardware input waits for it
+  on top of the driver's round trip, and an export trims it from its head, so
+  a file starts on the bar line and has the same length at any lookahead
+  (`a_lookahead_delays_the_ports_and_the_export_starts_on_the_bar_line_anyway`).
+  MIDI note capture compensates no output latency yet, the driver's
+  included: MOO-209.
+
 
 **The master's meter reads the mix, before the guard.** A mix over 0 dBFS
 still lights the master's clip latch while nothing over 0 dBFS leaves, which
@@ -186,6 +198,22 @@ An export reports what the guard did (`RenderSummary::overs`,
 scale, but the limiter has already held the signal there, so its own count
 (`RenderSummary::clipped_samples`) is zero unless the limiter stopped doing
 its job.
+
+## The master bus compressor
+
+The master's strip carries a second compressor, the master section (MOO-13,
+`docs/plans/master-bus-compressor/`), which runs **after the master's inserts
+and before its fader**, so a fade-out on the master does not ride the mix out
+of compression on its way down. Three voicings, each a measured law with no
+programme dependence -- Grip (the SSL G bus: peak, soft knee), Punch (the
+API-2500: RMS, near-hard knee, a 3.8 ms attack floor), Tube (the Fairchild
+670: peak, its own measured curve, six coupled TIME positions) --
+`mooloop_dsp::strip::bus_comp` holds them. Out is out: a section that is out,
+whatever it is set to, leaves the mix bit for bit
+(`a_master_section_that_is_out_changes_nothing_about_the_mix`). Its gain
+reduction has its own meter cell (`BusMeters::take_master_comp`), apart from
+the strip compressor's lamp. It sits before the output guard, so it is part
+of the mix the master's meter reads.
 
 ## Fader taper
 

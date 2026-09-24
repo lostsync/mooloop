@@ -74,7 +74,7 @@
 //! caller reports it: [`OutputGuard::latency_frames`]. Changing it while the
 //! mix plays moves the output by up to 5 ms, once, as the knob moves.
 
-pub use mooloop_core::strip::MAX_LOOKAHEAD_MS;
+pub use mooloop_core::strip::{lookahead_frames, MAX_LOOKAHEAD_MS};
 
 /// The level nothing leaves the master above: 0 dBFS.
 pub const OUTPUT_CEILING: f32 = 1.0;
@@ -346,13 +346,6 @@ impl OutputGuard {
             self.head = other.head;
         }
     }
-}
-
-/// `ms` of lookahead at `sample_rate`, in whole frames, clamped to
-/// `0..=MAX_LOOKAHEAD_MS`.
-pub fn lookahead_frames(ms: f32, sample_rate: u32) -> usize {
-    let ms = if ms.is_finite() { ms.clamp(0.0, MAX_LOOKAHEAD_MS) } else { 0.0 };
-    (ms * sample_rate as f32 / 1000.0).round() as usize
 }
 
 #[cfg(test)]

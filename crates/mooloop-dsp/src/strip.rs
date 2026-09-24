@@ -40,7 +40,7 @@ use mooloop_core::strip::{
     strip_band_of, StripParams, STRIP_COMP_ATTACK_MS, STRIP_COMP_IN,
     STRIP_COMP_MAKEUP_DB, STRIP_COMP_MIX, STRIP_COMP_RATIO, STRIP_COMP_RELEASE_MS,
     STRIP_COMP_THRESHOLD_DB, STRIP_DRIVE_DB, STRIP_EQ_BANDS, STRIP_EQ_IN, STRIP_PRE_IN,
-    STRIP_VOICING,
+    STRIP_VOICING, MASTER_FIRST,
 };
 use mooloop_core::gain::{db_to_linear_unfloored, linear_to_db_unfloored};
 use mooloop_core::{db_to_linear, EqQProfile};
@@ -544,6 +544,11 @@ pub struct Strip {
     /// inside one buffer.
     detector_peak: f32,
     reduction_db: f32,
+    /// The master bus compressor. Every strip has one and only the master's
+    /// is ever switched in -- the session refuses its ids on any other track
+    /// -- and it does not run inside [`Self::process_block`]: it sits after
+    /// the track's devices, where the engine calls [`Self::process_master`].
+    bus_comp: bus_comp::BusComp,
 }
 
 impl Strip {
@@ -566,6 +571,7 @@ impl Strip {
             makeup: smoothed(db_to_linear(params.makeup_db)),
             detector_peak: 0.0,
             reduction_db: 0.0,
+            bus_comp: bus_comp::BusComp::new(params.master, sample_rate),
         };
         strip.eq.update(&params, &voicing, sample_rate);
         strip.set_detector_times();
@@ -586,6 +592,7 @@ impl Strip {
         self.set_detector_times();
         self.snap_drive();
         self.snap_comp();
+        self.bus_comp.set_params(params.master);
     }
 
     /// Put a section's smoothed values *at* its knobs rather than gliding to
@@ -627,6 +634,10 @@ impl Strip {
         // Read back rather than trusting `value`: `StripParams::set` clamps,
         // so this is the only number the model and the audio can agree on.
         let stored = self.params.get(id).unwrap_or(value);
+        if id >= MASTER_FIRST {
+            self.bus_comp.apply_param(id, stored);
+            return true;
+        }
         if strip_band_of(id).is_some() {
             // Every field a band has is a coefficient, so there is no field
             // to filter for: the bank is redesigned whichever one moved.
@@ -703,6 +714,7 @@ impl Strip {
             return;
         }
         self.sample_rate = sample_rate;
+        self.bus_comp.set_sample_rate(sample_rate);
         self.rebuild_drive();
         self.eq.update(&self.params, &self.voicing, sample_rate);
         self.set_detector_times();
@@ -725,6 +737,20 @@ impl Strip {
         self.programme.reset();
         self.reduction_db = 0.0;
         self.detector_peak = 0.0;
+        self.bus_comp.reset();
+    }
+
+    /// Run the master bus compressor over the block: after the track's own
+    /// devices and before its fader (`docs/plans/master-bus-compressor/`).
+    /// Out is out, and a strip that is not the master's is always out.
+    pub fn process_master(&mut self, bus: &mut StereoBus, frames: usize) {
+        self.bus_comp.process_block(bus, frames);
+    }
+
+    /// What the master bus compressor did in the block just rendered, or
+    /// `None` while it is out.
+    pub fn master_frame(&self) -> Option<DynamicsFrame> {
+        self.bus_comp.dynamics_frame()
     }
 
     /// What the compressor did in the block just rendered, or `None` while
@@ -746,6 +772,9 @@ impl Strip {
     /// stopped asking for, and a filter frozen with a sample in it wakes up
     /// and emits it.
     pub fn is_at_rest(&self) -> bool {
+        if !self.bus_comp.is_at_rest() {
+            return false;
+        }
         if self.params.pre_in && !(self.drive_l.is_at_rest() && self.drive_r.is_at_rest()) {
             return false;
         }

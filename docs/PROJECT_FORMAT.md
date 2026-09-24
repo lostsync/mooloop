@@ -486,6 +486,22 @@ before any of them existed still loads:
   the two mid bands share one struct, and what would let a later face offer
   the third value without a format change.
 
+  **The master's own section rides in its strip** (MOO-13, MOO-169):
+  `buses[].bus.strip.master`, a `MasterSectionParams` holding the bus
+  compressor -- `comp_in`, `voicing` (`Grip`, `Punch` or `Tube`, by name),
+  `threshold_db`, `makeup_db`, `mix`, and each voicing's own switch
+  **positions** (`grip_ratio`, `grip_attack`, `grip_release`, `punch_ratio`,
+  `punch_attack`, `punch_release`, `tube_time`) -- and the safety limiter's
+  `lookahead_ms`. A position is an index into that voicing's law table in
+  `mooloop_dsp::strip::bus_comp`, as a band's is, so a retuned law never
+  needs the file to change, and an index past a table's end clamps to its
+  last position. The struct is `serde(default)` field by field and **skipped
+  when it is the default**, so a song that never touched the section writes
+  nothing and is byte-identical to one saved before it existed; an older song
+  opens with the section out and no lookahead. Every track's strip may carry
+  one, and only the master's is run: the session refuses its ids on any other
+  track. See `docs/plans/master-bus-compressor/`.
+
   There is deliberately **no field for where the strip sits in the chain.**
   `mooloop_core::mixer::STRIP_PIN` is a constant, not a project value: the
   pinned position is a policy the application states once, and a per-track

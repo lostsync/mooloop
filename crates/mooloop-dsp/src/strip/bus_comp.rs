@@ -683,8 +683,12 @@ mod tests {
     }
 
     fn sine(db: f32, n: usize) -> f32 {
+        sine_at(RATE, db, n)
+    }
+
+    fn sine_at(rate: u32, db: f32, n: usize) -> f32 {
         db_to_linear_unfloored(db)
-            * (2.0 * core::f32::consts::PI * CARRIER_HZ * n as f32 / RATE as f32).sin()
+            * (2.0 * core::f32::consts::PI * CARRIER_HZ * n as f32 / rate as f32).sin()
     }
 
     /// The reduction after every frame of a tone at `level(n)` dB, gated by
@@ -694,10 +698,19 @@ mod tests {
         frames: usize,
         level: impl Fn(usize) -> f32,
     ) -> Vec<f32> {
-        let mut comp = BusComp::new(params, RATE);
+        trace_at(RATE, params, frames, level)
+    }
+
+    fn trace_at(
+        rate: u32,
+        params: MasterSectionParams,
+        frames: usize,
+        level: impl Fn(usize) -> f32,
+    ) -> Vec<f32> {
+        let mut comp = BusComp::new(params, rate);
         (0..frames)
             .map(|n| {
-                let x = sine(level(n), n);
+                let x = sine_at(rate, level(n), n);
                 comp.process_frame(x, x);
                 comp.reduction_db()
             })
@@ -712,10 +725,19 @@ mod tests {
         hold_s: f32,
         release_s: f32,
     ) -> (f32, f32, f32) {
-        let pre = (0.05 * RATE as f32) as usize;
-        let hold = (hold_s * RATE as f32) as usize;
-        let release = (release_s * RATE as f32) as usize;
-        let gr = trace(params, pre + hold + release, |n| {
+        measured_like_the_rig_at(RATE, params, hold_s, release_s)
+    }
+
+    fn measured_like_the_rig_at(
+        rate: u32,
+        params: MasterSectionParams,
+        hold_s: f32,
+        release_s: f32,
+    ) -> (f32, f32, f32) {
+        let pre = (0.05 * rate as f32) as usize;
+        let hold = (hold_s * rate as f32) as usize;
+        let release = (release_s * rate as f32) as usize;
+        let gr = trace_at(rate, params, pre + hold + release, |n| {
             if n >= pre && n < pre + hold {
                 LOUD_DB
             } else {
@@ -723,9 +745,9 @@ mod tests {
             }
         });
         let end = pre + hold;
-        let window = (0.02 * RATE as f32) as usize;
+        let window = (0.02 * rate as f32) as usize;
         let settled = gr[end - window..end].iter().sum::<f32>() / window as f32;
-        let ms = |frames: usize| frames as f32 * 1000.0 / RATE as f32;
+        let ms = |frames: usize| frames as f32 * 1000.0 / rate as f32;
         let attack = gr[pre..end]
             .iter()
             .position(|&g| g >= 0.632 * settled)
@@ -749,6 +771,29 @@ mod tests {
             (got - want).abs() <= tolerance,
             "{what}: measured {got:.3} ms against the unit's {want:.3} ms"
         );
+    }
+
+    /// The constants were fitted at 48 kHz; the laws are times, and hold at
+    /// the other rates the measurement kit runs at (MOO-117), within the same
+    /// tolerance.
+    #[test]
+    fn the_laws_hold_at_other_sample_rates() {
+        for rate in [44_100, 96_000] {
+            for (name, params, want) in [
+                ("Grip 3 ms", section(BusCompVoicing::Grip, |p| p.grip_attack = 3), 3.46),
+                ("Grip 30 ms", section(BusCompVoicing::Grip, |p| p.grip_attack = 5), 21.4),
+                ("Punch floor", section(BusCompVoicing::Punch, |p| p.punch_attack = 0), 3.81),
+                ("Punch 1 ms", section(BusCompVoicing::Punch, |p| p.punch_attack = 3), 12.98),
+                ("Tube 1", section(BusCompVoicing::Tube, |p| p.tube_time = 0), 1.52),
+                ("Tube 4", section(BusCompVoicing::Tube, |p| p.tube_time = 3), 7.10),
+            ] {
+                let (attack, _, _) = measured_like_the_rig_at(rate, params, 0.25, 0.01);
+                assert_near(&format!("{name} at {rate} Hz"), attack, want);
+            }
+            let params = section(BusCompVoicing::Grip, |p| p.grip_release = 2);
+            let (_, release, _) = measured_like_the_rig_at(rate, params, 0.2, 0.7);
+            assert_near(&format!("Grip 0.6 s at {rate} Hz"), release, 222.2);
+        }
     }
 
     #[test]

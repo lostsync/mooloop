@@ -365,6 +365,12 @@ impl Session {
     pub fn set_strip_param(&mut self, bus: i32, param: i32, value: f32) -> Option<EngineCommand> {
         let index = usize::try_from(bus).ok()?;
         let param = u32::try_from(param).ok()?;
+        // The master section's ids are the master's alone: every strip
+        // carries the struct, and only the master runs it, so a stale face
+        // setting one on another track would be a compressor nothing hears.
+        if param >= mooloop_core::strip::MASTER_FIRST && index != mooloop_core::MASTER_BUS as usize {
+            return None;
+        }
         let setup = self.buses.get_mut(index)?;
         if !setup.bus.strip.set(param, value) {
             return None;
@@ -373,6 +379,17 @@ impl Session {
             bus: index as u8,
             param,
             value: setup.bus.strip.get(param)?,
+        })
+    }
+
+    /// How far the master's safety limiter delays everything leaving it, in
+    /// frames at `sample_rate` (MOO-169). What a take from the hardware input
+    /// waits for on top of the driver's round trip: the player hears the
+    /// master this much late and plays this much late.
+    pub fn master_lookahead_frames(&self, sample_rate: u32) -> u32 {
+        self.buses.get(mooloop_core::MASTER_BUS as usize).map_or(0, |master| {
+            mooloop_core::strip::lookahead_frames(master.bus.strip.master.lookahead_ms, sample_rate)
+                as u32
         })
     }
 
@@ -515,6 +532,31 @@ mod tests {
         assert!(session.set_strip_param(9_999, ratio as i32, 4.0).is_none());
         assert!(session.set_strip_param(1, -1, 4.0).is_none());
         assert!(session.strip_params(9_999).is_none());
+    }
+
+    /// The master section is the master's: its ids reach the master's strip
+    /// and are refused on any other track, and its lookahead is reported in
+    /// frames for a take to wait on.
+    #[test]
+    fn the_master_section_is_the_masters_alone() {
+        use mooloop_core::strip::{MASTER_COMP_IN, MASTER_LOOKAHEAD_MS};
+        let mut session = Session::default();
+        session.ensure_tracks(2);
+        assert!(session.set_strip_param(1, MASTER_COMP_IN as i32, 1.0).is_none());
+        assert!(!session.buses[1].bus.strip.master.comp_in);
+        assert!(matches!(
+            session.set_strip_param(MASTER_BUS as i32, MASTER_COMP_IN as i32, 1.0),
+            Some(EngineCommand::SetStripParam { bus: 0, value, .. }) if value == 1.0
+        ));
+        assert!(session.buses[0].bus.strip.master.comp_in);
+
+        assert_eq!(session.master_lookahead_frames(48_000), 0);
+        assert!(matches!(
+            session.set_strip_param(MASTER_BUS as i32, MASTER_LOOKAHEAD_MS as i32, 9.0),
+            Some(EngineCommand::SetStripParam { value, .. }) if value == 5.0
+        ));
+        assert_eq!(session.master_lookahead_frames(48_000), 240);
+        assert_eq!(session.master_lookahead_frames(44_100), 221);
     }
 
     /// Polarity is a track's own switch, the master included -- which is
