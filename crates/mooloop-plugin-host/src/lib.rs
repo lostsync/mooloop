@@ -24,7 +24,8 @@ pub mod instance;
 pub mod scan;
 
 pub use instance::{
-    AudioConfig, HostError, HostedInstance, Lifeline, PluginOpener, RequestFlags, Requests,
+    AudioConfig, HostError, HostedInstance, Lifeline, PluginOpener, PluginParamEvent, RequestFlags,
+    Requests,
 };
 
 use std::ffi::CStr;

@@ -2115,11 +2115,23 @@ land on its own when it starts to matter:
   running, state and all. A new sample rate, or a restart the plugin asks
   for, rebuilds its processor. On quit, mooloop waits up to two seconds for
   every plugin's processor to come back from the audio thread before it
-  destroys the plugin. The plugin's own parameters are not yet automatable,
-  modulatable or shown (step 07), and its GUI does not open (step 11). The
-  song captures its state when it is saved through the session's
-  `capture_plugin_states`, and the window's Save does not call that yet
-  (step 07).
+  destroys the plugin. Its GUI does not open (step 11).
+- **A hosted plugin's parameters take lanes and routes** (MOO-82,
+  plugin-hosting 07), though nothing in the window draws them until step 08
+  gives the plugin a face: a lane or route reaches a plugin parameter today
+  from a song that names one, or through the session
+  (`crates/mooloop-session/examples/clap_automation_case.rs`). A lane sets
+  the parameter at every 32-frame control tick, in an export and live alike;
+  a route is an offset over the plugin's own value (CLAP's parameter
+  modulation), gone when the route goes. Only a parameter the plugin marks
+  automatable takes a new lane, and only a continuous one it marks
+  modulatable takes a route. A lane or route whose parameter the plugin no
+  longer lists is kept and drives nothing. **Save asks every plugin for its
+  state.** A change the plugin makes itself -- a gesture, values it moves, a
+  `mark_dirty` -- is read off it, never sent back, and is one undo step
+  ("Plugin Edit"), so undoing an earlier edit no longer reopens the plugin
+  without it. A saved state the plugin refuses opens it with its defaults,
+  and the song keeps the refused state unchanged.
 - **Plugins are found, not yet offered** (MOO-80). At startup, on a thread of
   its own, mooloop looks for CLAP plugins in `~/.clap`, `/usr/lib/clap`,
   `/usr/lib64/clap`, `/usr/local/lib/clap` (inside a Flatpak also

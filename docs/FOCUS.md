@@ -327,3 +327,28 @@ In the order worth playing:
    `wet.wav`, and `missing.wav` should be `dry.wav`. The binary prints what it
    measured. In the app, open `clap-case/clap-case.mooloop`: the flanger is
    on channel 1, and it plays live on JACK at any buffer size.
+8. **A CLAP filter's cutoff automated on a drum loop** (MOO-82,
+   plugin-hosting 07): LSP's filter on the hats of a two-bar loop, its
+   cutoff lane falling across the loop, saved, reopened, exported, and played
+   through the executor the way a callback plays it. Build on the box, run
+   on the laptop:
+
+   ```sh
+   scripts/antibox --no-incremental --pull bin/clap_automation_case sh -c \
+     'cargo build -p mooloop-session --example clap_automation_case && mkdir -p bin && cp "$CARGO_TARGET_DIR/debug/examples/clap_automation_case" bin/'
+   bin/clap_automation_case --plugin /usr/lib64/clap/lsp-plugins.clap \
+     --id in.lsp-plug.filter_stereo --out clap-automation
+   ```
+
+   Listen to `clap-automation/wet.wav` against `flat.wav` (the same song
+   with the lane held at its start): the hats should darken across the two
+   bars and snap back bright at the loop point, under an untouched kick and
+   snare. `reopened.wav` should be
+   `wet.wav` and `missing.wav` `dry.wav`. On 2026-09-24 it passed all six
+   measurements: the twelve hats on the filter's channel came out darker hat
+   by hat against the flat lane (high-pass energy 1.000, 0.397, 0.172,
+   0.069 ... 0.000); the executor at 64 and at 512 frames matched the export
+   to below the smallest normal float (MOO-223 is the subnormal rest); and it
+   reopened present identically and missing as the dry loop, its slot and
+   lanes kept. `live-64.wav` is what the executor played. In the app, open
+   `clap-automation/clap-automation.mooloop` and play it on JACK.

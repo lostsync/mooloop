@@ -177,6 +177,7 @@ impl CurveFrame {
         (0..self.count).map(|index| ControlCurve {
             id: self.ids[index],
             values: &self.ticks[index][..self.lens[index]],
+            kind: crate::node::CurveKind::Value,
         })
     }
 }
@@ -390,7 +391,7 @@ mod tests {
         let mut frame = CurveFrame::empty();
         let curves: Vec<ControlCurve<'_>> = rows
             .iter()
-            .map(|&(id, values)| ControlCurve { id, values })
+            .map(|&(id, values)| ControlCurve { id, values, kind: crate::node::CurveKind::Value })
             .collect();
         frame.capture(&curves);
         frame

@@ -1526,7 +1526,8 @@ impl AudioNode for Sampler {
                 Event::PitchBend { semitones } => {
                     self.bend = f64::from(crate::synth_voice::bend_ratio(semitones));
                 }
-                Event::SourceRouteAmount { .. }
+                Event::ParamMod { .. }
+                | Event::SourceRouteAmount { .. }
                 | Event::Buffer(_)
                 | Event::BufferRelease
                 | Event::BufferScrub { .. } => {}

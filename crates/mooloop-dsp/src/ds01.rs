@@ -1817,7 +1817,7 @@ impl Ds01 {
                 // `matrix_param(row, MATRIX_OFFSET_AMOUNT)`, so an amount
                 // arrives as a `ParamValue` like any other knob and this
                 // reaches nothing here.
-                Event::SourceRouteAmount { .. } => {}
+                Event::SourceRouteAmount { .. } | Event::ParamMod { .. } => {}
                 Event::PitchBend { semitones } => {
                     self.bend = crate::synth_voice::bend_ratio(semitones);
                 }

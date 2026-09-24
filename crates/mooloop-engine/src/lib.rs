@@ -149,6 +149,12 @@ mod executor;
 mod handoff;
 #[cfg(not(target_os = "macos"))]
 mod jack_driver;
+// Test support, not API: the executor without a driver, for a check outside
+// this crate that holds an export against playback (MOO-82). Only this
+// crate's tests and the `test-support` feature compile it.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod live_check;
 pub mod load;
 mod meters;
 mod null_driver;
@@ -184,6 +190,8 @@ mod idle_skip_tests;
 mod output_guard_tests;
 #[cfg(test)]
 mod plugin_host_tests;
+#[cfg(test)]
+mod plugin_automation_tests;
 #[cfg(test)]
 mod soak_tests;
 #[cfg(test)]

@@ -576,7 +576,7 @@ mod tests {
 
         let mut via_curves = EqEffect::new(EqParams::default(), sr);
         let values = [6.0f32, 9.0, 9.0, 9.0];
-        let curves = [ControlCurve { id: gain_id, values: &values }];
+        let curves = [ControlCurve { id: gain_id, values: &values, kind: crate::node::CurveKind::Value }];
         via_curves.apply_curves(&curves, CONTROL_RATE_FRAMES, &mut EventList::empty());
         let mut bus_curves = signal(frames);
         via_curves.process(&ctx_for(sr, frames), &mut bus_curves, &EventList::empty(), None);

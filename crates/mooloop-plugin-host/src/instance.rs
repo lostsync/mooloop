@@ -75,6 +75,18 @@ impl RequestFlags {
     }
 }
 
+/// One of the plugin's own parameter changes, as its processor reported
+/// it: a GUI drag, a preset it loaded itself, or a value it moved on its
+/// own. Read on the control thread ([`HostedInstance::drain_param_events`]).
+/// These update what the session knows and never send anything back to the
+/// plugin, which is what keeps them from looping (MOO-82).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PluginParamEvent {
+    Value { id: u32, value: f64 },
+    GestureBegin { id: u32 },
+    GestureEnd { id: u32 },
+}
+
 /// Why a plugin could not do what it was asked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostError {
@@ -155,6 +167,25 @@ pub trait HostedInstance {
 
     /// Read the parameter list again, for [`Requests::PARAMS_RESCAN`].
     fn refresh_params(&mut self) {}
+
+    /// The value parameter `id` holds now, in the plugin's plain units, or
+    /// `None` when the plugin cannot say.
+    fn param_value(&mut self, id: u32) -> Option<f64> {
+        let _ = id;
+        None
+    }
+
+    /// Hand every parameter change the plugin reported since the last call
+    /// to `sink`, oldest first.
+    fn drain_param_events(&mut self, sink: &mut dyn FnMut(PluginParamEvent)) {
+        let _ = sink;
+    }
+
+    /// How many of the plugin's own parameter changes its processor had no
+    /// room to report. A number that grows is a lost gesture, not a guess.
+    fn dropped_param_events(&self) -> u64 {
+        0
+    }
 
     /// Whether the running processor has given up on the plugin: it
     /// reported an error, produced a non-finite sample or panicked, and

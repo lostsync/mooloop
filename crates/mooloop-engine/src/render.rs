@@ -35,7 +35,8 @@ use mooloop_dsp::{
     ChannelAudioSnapshot,
     ProcessContext, SampleData, Sampler, SourceNode, SpectrumAnalyzer, StereoBus, StretchPool,
     TimedEvent,
-    CONTROL_RATE_FRAMES, ControlCurve, MAX_BLOCK_SIZE, MAX_CONTROL_TICKS_PER_BLOCK, SILENCE_PEAK,
+    CONTROL_RATE_FRAMES, ControlCurve, CurveKind, MAX_BLOCK_SIZE, MAX_CONTROL_TICKS_PER_BLOCK,
+    SILENCE_PEAK,
 };
 use mooloop_dsp::interpolate::{Region, SincTable};
 use mooloop_dsp::smooth::Smoothed;
@@ -850,6 +851,12 @@ struct CurvePool<const N: usize> {
     /// which is what lets [`Self::fill`] hand out the right-length slice
     /// without the caller re-deriving the same tick count a second time.
     active_ticks: usize,
+    /// Rows from here on are offsets rather than values
+    /// ([`CurveKind::Offset`]). Only a hosted plugin's routes write one
+    /// (MOO-82), after all of its lanes' value rows, so one boundary says
+    /// which is which where a kind per row would cost every pool a byte a
+    /// row. `usize::MAX` -- none -- everywhere else.
+    first_offset: usize,
 }
 
 impl<const N: usize> CurvePool<N> {
@@ -859,6 +866,7 @@ impl<const N: usize> CurvePool<N> {
             ticks: [[0.0; MAX_CONTROL_TICKS_PER_BLOCK]; N],
             count: 0,
             active_ticks: 0,
+            first_offset: usize::MAX,
         }
     }
 
@@ -868,6 +876,7 @@ impl<const N: usize> CurvePool<N> {
     /// be handed to a node as though it were this block's data.
     fn clear(&mut self, ticks: usize) {
         self.count = 0;
+        self.first_offset = usize::MAX;
         self.active_ticks = ticks.min(MAX_CONTROL_TICKS_PER_BLOCK);
     }
 
@@ -885,6 +894,12 @@ impl<const N: usize> CurvePool<N> {
         Some(&mut self.ticks[index])
     }
 
+    /// Every row begun from now on is an offset. Called once, after the
+    /// last value row.
+    fn begin_offsets(&mut self) {
+        self.first_offset = self.count;
+    }
+
     /// Write this pool's curves into `buf`, each trimmed to the ticks
     /// [`Self::clear`] recorded, and return how many rows were written.
     /// `buf` is caller-owned (a small on-stack array of `ControlCurve`,
@@ -893,13 +908,20 @@ impl<const N: usize> CurvePool<N> {
     fn fill<'a>(&'a self, buf: &mut [ControlCurve<'a>]) -> usize {
         let count = self.count.min(buf.len());
         let active_ticks = self.active_ticks;
-        for (slot, (&id, ticks)) in buf[..count]
+        for (index, (slot, (&id, ticks))) in buf[..count]
             .iter_mut()
             .zip(self.ids.iter().zip(self.ticks.iter()))
+            .enumerate()
         {
+            let kind = if index >= self.first_offset {
+                CurveKind::Offset
+            } else {
+                CurveKind::Value
+            };
             *slot = ControlCurve {
                 id,
                 values: &ticks[..active_ticks],
+                kind,
             };
         }
         count
@@ -2136,6 +2158,11 @@ impl EffectChain {
             .unwrap_or(0);
         self.curve_scratch.clear(ticks);
 
+        if kind == mooloop_core::EffectKind::Plugin {
+            self.plugin_curves(slot, scope, device, modulation, automation, ticks);
+            return ticks;
+        }
+
         for descriptor in kind.descriptors() {
             let destination = ParamAddr::effect(scope, device, descriptor.id);
             // The destination's own declaration decides whether modulation is
@@ -2183,6 +2210,113 @@ impl EffectChain {
             }
         }
         ticks
+    }
+
+    /// The hosted-plugin branch of [`Self::control_events_for_slot`]
+    /// (MOO-82, `docs/plans/plugin-hosting/07-parameters-and-state.md`).
+    ///
+    /// A plugin has no descriptor table to walk, and may have thousands of
+    /// parameters, so this walks only the addresses that a route in the
+    /// channel's rack or a lane under the playhead names on this device --
+    /// the shape MOO-195 wants for every device, taken here for the one kind
+    /// that cannot do without it. Each id is resolved against the running
+    /// processor's own list ([`AudioNode::hosted_param`]). An id the plugin
+    /// does not have -- it is missing and the placeholder runs, or a rescan
+    /// took the id away -- drives nothing, and its lane or route is kept as
+    /// it is (Adam, 2026-09-23, MOO-74: never dropped).
+    ///
+    /// A lane writes the parameter's **value**, in the plugin's plain units.
+    /// A route writes an **offset** row: the plugin owns the value -- its
+    /// own GUI may move it under a route -- so the route rides over whatever
+    /// the plugin holds, as CLAP's parameter modulation, rather than over a
+    /// base this side would have to keep in step with the plugin. That is
+    /// `docs/MODULATION.md`'s base-plus-offset rule, with the base kept by
+    /// the plugin. The processor zeroes an offset whose route has gone.
+    fn plugin_curves(
+        &mut self,
+        slot: usize,
+        scope: EffectTarget,
+        device: mooloop_core::DeviceId,
+        modulation: Option<&ModulationBlock<'_>>,
+        automation: Option<&AutomationBlock<'_>>,
+        ticks: usize,
+    ) {
+        let Some(node) = self.nodes[slot].as_deref() else {
+            return;
+        };
+        let owner = ParamOwner::PluginParam { device };
+        // Every id something names on this device, once each. A fixed array:
+        // this is the audio thread, and the pool below holds no more rows.
+        let mut ids = [0u32; MAX_EFFECT_CURVE_DESTINATIONS];
+        let mut count = 0usize;
+        let mut overflow = 0u64;
+        {
+            let mut note = |address: ParamAddr| {
+                if address.scope != scope || address.owner != owner || ids[..count].contains(&address.param) {
+                    return;
+                }
+                if count == ids.len() {
+                    overflow += 1;
+                    return;
+                }
+                ids[count] = address.param;
+                count += 1;
+            };
+            if let Some(modulation) = modulation {
+                modulation.rack.destinations().for_each(&mut note);
+            }
+            if let Some(automation) = automation {
+                automation
+                    .sequencer
+                    .visit_automation_targets_at(automation.start_tick, &mut note);
+            }
+        }
+        self.curve_refusals += overflow;
+
+        // Values first, then offsets: the pool marks one boundary between
+        // them rather than a kind per row.
+        for &id in &ids[..count] {
+            let Some(param) = node.hosted_param(id) else {
+                continue;
+            };
+            let destination = ParamAddr::plugin_param(scope, device, id);
+            let lane = automation
+                .filter(|_| param.automatable)
+                .and_then(|automation| Some((automation, automation.curve_for(destination)?)));
+            if let Some((automation, curve)) = lane {
+                let Some(row) = self.curve_scratch.begin(id) else {
+                    self.curve_refusals += 1;
+                    continue;
+                };
+                let mut last = 0.0;
+                for (tick, cell) in row.iter_mut().enumerate().take(ticks) {
+                    last = automation.value_at(&curve, tick).unwrap_or(last);
+                    *cell = param.plain(last);
+                }
+            }
+        }
+        self.curve_scratch.begin_offsets();
+        for &id in &ids[..count] {
+            let Some(param) = node.hosted_param(id) else {
+                continue;
+            };
+            let destination = ParamAddr::plugin_param(scope, device, id);
+            let policy =
+                ModDestinationDescriptor::for_plugin_param(id, param.steps.is_some(), param.modulatable);
+            let routed = modulation.filter(|modulation| modulation.rack.modulates(destination, &policy));
+            if let Some(modulation) = routed {
+                let Some(row) = self.curve_scratch.begin(id) else {
+                    self.curve_refusals += 1;
+                    continue;
+                };
+                for (tick, cell) in row.iter_mut().enumerate().take(ticks) {
+                    let offset = modulation
+                        .rack
+                        .offset_for(destination, modulation.sources(tick), &policy);
+                    *cell = param.plain_offset(offset);
+                }
+            }
+        }
     }
 
     fn queue_buffer(&mut self, slot: usize, event: mooloop_core::BufferEvent) {
@@ -6084,6 +6218,26 @@ impl RenderState {
     /// neither a lane nor a route is about to resolve that destination -- the
     /// last row of `control_events_for_slot`'s precedence table.
     fn set_effect_param(&mut self, target: EffectTarget, slot: u8, id: u32, value: f32) {
+        // A hosted plugin keeps its own values, so there is no base to store
+        // here: the value goes to the plugin, in its plain units, unless a
+        // lane is writing that parameter. A route does not hold it back,
+        // because a route on a plugin parameter is an offset over whatever
+        // the plugin holds (`EffectChain::plugin_curves`, MOO-82).
+        if let Some(device) = self
+            .chain(target)
+            .and_then(|chain| chain.slot(slot as usize))
+            .filter(|state| state.kind == Some(mooloop_core::EffectKind::Plugin))
+            .map(|state| state.device)
+        {
+            let destination = ParamAddr::plugin_param(target, device, id);
+            let lane = AutomationCurve::at(&self.sequencer, destination, self.transport.position_ticks);
+            if lane.is_none() {
+                if let Some(chain) = self.chain_mut(target) {
+                    chain.queue_param(slot as usize, id, value);
+                }
+            }
+            return;
+        }
         let Some(value) = self
             .chain_mut(target)
             .and_then(|chain| chain.set_base_param(slot as usize, id, value))
@@ -16961,7 +17115,11 @@ mod footprint {
         // 6,624 less again.
         //
         // And by 8 with it for MOO-176: the chain's unpublished fault count.
-        assert_eq!(per_live, 142_800);
+        //
+        // And by 8 for MOO-82: the boundary in `SourceCurvePool` past which
+        // rows are offsets, a hosted plugin's routes. One `usize` rather than
+        // a kind per row, which would have been 92 here.
+        assert_eq!(per_live, 142_808);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved

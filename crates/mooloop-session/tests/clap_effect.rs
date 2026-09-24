@@ -217,7 +217,7 @@ fn a_clap_effect_is_inserted_saved_reopened_present_and_missing_and_exported() {
         .load_state(&gain_state(-6.0))
         .expect("the state loads");
     let params = &session.plugins[&slot].params;
-    assert_eq!(params.iter().map(|p| p.id).collect::<Vec<_>>(), [10, 20, 30], "its parameters are recorded");
+    assert_eq!(params.iter().map(|p| p.id).collect::<Vec<_>>(), [10, 20, 30, test_plugin::PARAM_NUDGE], "its parameters are recorded");
 
     let dry = render(&dry_song, BTreeMap::new(), dir.path(), "dry.wav");
     let wet = export(&mut session, dir.path(), "wet.wav");

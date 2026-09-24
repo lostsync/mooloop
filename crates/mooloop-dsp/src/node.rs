@@ -66,6 +66,55 @@ pub struct ControlCurve<'a> {
     /// `Event::ParamValue { id, .. }` would have carried.
     pub id: u32,
     pub values: &'a [f32],
+    /// Whether `values` are the parameter's value or an offset over it.
+    /// Native destinations only ever get [`CurveKind::Value`].
+    pub kind: CurveKind,
+}
+
+/// What a [`ControlCurve`]'s values are.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CurveKind {
+    /// The destination's value, in its natural units: what
+    /// `Event::ParamValue` carries.
+    #[default]
+    Value,
+    /// An offset in the destination's plain units over the value its owner
+    /// holds: what `Event::ParamMod` carries. Only a hosted plugin's
+    /// parameter is driven this way, because only there does the value
+    /// belong to someone else (MOO-82).
+    Offset,
+}
+
+/// One of a hosted plugin's parameters as its processor describes it to the
+/// engine's control pass, which has no `&'static` descriptor for it: enough
+/// to turn a lane's or a route's normalized value into the plugin's plain
+/// units, and to know which of the two it takes (MOO-82).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HostedParam {
+    pub min: f64,
+    pub max: f64,
+    /// `Some(n)` for a parameter with `n` discrete positions.
+    pub steps: Option<u16>,
+    /// Whether a lane may drive it.
+    pub automatable: bool,
+    /// Whether a route may offset it.
+    pub modulatable: bool,
+}
+
+impl HostedParam {
+    /// The plain value at `normalized` (`0..=1`) of the range: linear, as
+    /// the plan has every plugin parameter, and rounded to a whole position
+    /// for a stepped one.
+    pub fn plain(&self, normalized: f32) -> f32 {
+        let value = self.min + f64::from(normalized.clamp(0.0, 1.0)) * (self.max - self.min);
+        let value = if self.steps.is_some() { value.round() } else { value };
+        value as f32
+    }
+
+    /// A normalized offset as a plain one: the same fraction of the range.
+    pub fn plain_offset(&self, normalized: f32) -> f32 {
+        (f64::from(normalized) * (self.max - self.min)) as f32
+    }
 }
 
 /// Per-block context handed to every `AudioNode::process` call. Valid only
@@ -301,6 +350,15 @@ pub trait AudioNode {
         self.latency_frames()
     }
 
+    /// A hosted plugin's parameter `id`, for the control pass to drive it
+    /// by, or `None` when this node has no such parameter. Every native node
+    /// answers `None`: their ranges are in their kind's descriptor table.
+    /// Called on the audio thread, so it must not allocate or lock.
+    fn hosted_param(&self, id: u32) -> Option<HostedParam> {
+        let _ = id;
+        None
+    }
+
     /// Number of times a retained-audio read head has been overtaken by its
     /// writer and force-returned to live. Only the buffer device reports a
     /// nonzero value; the host publishes it as display telemetry so forced
@@ -514,10 +572,14 @@ pub trait AudioNode {
                     continue;
                 }
                 let offset = (tick * tick_frames) as u32;
-                if !fallback.push_ordered(TimedEvent {
-                    offset,
-                    event: Event::ParamValue { id: curve.id, value },
-                }) {
+                let event = match curve.kind {
+                    CurveKind::Value => Event::ParamValue { id: curve.id, value },
+                    CurveKind::Offset => Event::ParamMod {
+                        id: curve.id,
+                        amount: value,
+                    },
+                };
+                if !fallback.push_ordered(TimedEvent { offset, event }) {
                     refused += 1;
                 }
             }
@@ -952,7 +1014,7 @@ mod tests {
     fn the_default_apply_curves_reconstructs_the_events_a_caller_would_have_pushed() {
         for (name, mut node) in generators() {
             let values = [1.0f32, -1.0, 0.5];
-            let curves = [ControlCurve { id: 7, values: &values }];
+            let curves = [ControlCurve { id: 7, values: &values, kind: CurveKind::Value }];
             let mut fallback = EventList::empty();
             node.apply_curves(&curves, 32, &mut fallback);
 
@@ -971,6 +1033,52 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// An offset curve -- a route on a hosted plugin's parameter (MOO-82) --
+    /// comes out of the default as `Event::ParamMod` at the same ticks a
+    /// value curve would, and a value curve beside it is untouched.
+    #[test]
+    fn the_default_apply_curves_turns_an_offset_curve_into_param_mods() {
+        let (_, mut node) = generators().into_iter().next().expect("a generator");
+        let (lane, offsets) = ([0.25f32, 0.5], [-3.0f32, 3.0]);
+        let curves = [
+            ControlCurve { id: 4_000_000_000, values: &lane, kind: CurveKind::Value },
+            ControlCurve { id: 4_000_000_000, values: &offsets, kind: CurveKind::Offset },
+        ];
+        let mut fallback = EventList::empty();
+        assert_eq!(node.apply_curves(&curves, 32, &mut fallback), 0);
+        let events: Vec<TimedEvent> = fallback.iter().copied().collect();
+        assert_eq!(
+            events,
+            [
+                TimedEvent { offset: 0, event: Event::ParamValue { id: 4_000_000_000, value: 0.25 } },
+                TimedEvent { offset: 0, event: Event::ParamMod { id: 4_000_000_000, amount: -3.0 } },
+                TimedEvent { offset: 32, event: Event::ParamValue { id: 4_000_000_000, value: 0.5 } },
+                TimedEvent { offset: 32, event: Event::ParamMod { id: 4_000_000_000, amount: 3.0 } },
+            ]
+        );
+    }
+
+    /// A plugin parameter's normalized value is linear across its range,
+    /// a stepped one lands on a whole position, and an offset is the same
+    /// fraction of the range.
+    #[test]
+    fn a_hosted_parameter_converts_normalized_values_to_its_plain_units() {
+        let cutoff = HostedParam {
+            min: 10.0,
+            max: 20_010.0,
+            steps: None,
+            automatable: true,
+            modulatable: true,
+        };
+        assert_eq!(cutoff.plain(0.0), 10.0);
+        assert_eq!(cutoff.plain(0.5), 10_010.0);
+        assert_eq!(cutoff.plain(2.0), 20_010.0, "clamped into the range");
+        assert_eq!(cutoff.plain_offset(-0.25), -5_000.0);
+        let mode = HostedParam { min: 0.0, max: 3.0, steps: Some(4), ..cutoff };
+        assert_eq!(mode.plain(0.4), 1.0);
+        assert_eq!(mode.plain(0.6), 2.0);
     }
 
     /// MOO-73: sixteen routes and eight lanes on one generator at 512
@@ -992,6 +1100,7 @@ mod tests {
             .map(|(d, values)| ControlCurve {
                 id: d as u32,
                 values,
+                kind: CurveKind::Value,
             })
             .collect();
 
@@ -1070,7 +1179,7 @@ mod tests {
         }
         let mut node = Records { captured: Vec::new() };
         let values = [2.0f32, 3.0];
-        let curves = [ControlCurve { id: 11, values: &values }];
+        let curves = [ControlCurve { id: 11, values: &values, kind: CurveKind::Value }];
         let mut fallback = EventList::empty();
         node.apply_curves(&curves, 32, &mut fallback);
         assert!(fallback.is_empty(), "an override must not also get the default's events");

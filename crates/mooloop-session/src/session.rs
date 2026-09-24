@@ -1639,10 +1639,11 @@ impl Session {
         let Some(source_slot) = self.modulation_armed_slot.get() else {
             return ArmedRoute::Unchanged;
         };
-        let Some((_, descriptor)) = self.channel_modulation_destination(destination) else {
+        // Native or a hosted plugin's parameter (MOO-82): the same question
+        // the engine's control pass asks, from one place.
+        let Some(policy) = self.modulation_policy(destination) else {
             return ArmedRoute::Unchanged;
         };
-        let policy = ModDestinationDescriptor::for_param(descriptor);
         if !policy.allowed {
             return ArmedRoute::Unchanged;
         }

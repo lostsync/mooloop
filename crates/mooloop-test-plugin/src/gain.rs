@@ -9,6 +9,14 @@
 //!   host for a restart, as CLAP requires.
 //! - `fail` ([`PARAM_FAIL`]): stepped off/on. While on, `process` returns an
 //!   error.
+//! - `nudge` ([`PARAM_NUDGE`], id `4_000_000_000`): 0..1. Raised through 0.5,
+//!   it makes the plugin move its **own** gain up [`NUDGE_DB`], reported to
+//!   the host as a gesture (begin, value, end) at that frame -- what a
+//!   plugin's GUI does. Its id is above `i32::MAX` on purpose (MOO-82).
+//!
+//! The gain also takes CLAP parameter modulation: a `ParamMod` on `gain` is
+//! an offset in dB over the gain's value, clamped with it into the range,
+//! and it holds until the next one. `get_value` reports the value without it.
 
 use crate::gui::{TestGui, impl_test_gui};
 use crate::{AtomicF64, HostServices};
@@ -23,6 +31,7 @@ use clack_extensions::params::{
     PluginMainThreadParams, PluginParams,
 };
 use clack_extensions::state::{PluginState, PluginStateImpl};
+use clack_plugin::events::event_types::{ParamGestureBeginEvent, ParamGestureEndEvent, ParamValueEvent};
 use clack_plugin::events::spaces::CoreEventSpace;
 use clack_plugin::prelude::*;
 use clack_plugin::stream::{InputStream, OutputStream};
@@ -37,6 +46,11 @@ pub const PARAM_GAIN: u32 = 10;
 pub const PARAM_LATENCY: u32 = 20;
 /// The fail parameter's id: 0 off, 1 on.
 pub const PARAM_FAIL: u32 = 30;
+/// The nudge parameter's id, above `i32::MAX`: a host that squeezes a
+/// parameter id through an `i32` loses this one.
+pub const PARAM_NUDGE: u32 = 4_000_000_000;
+/// How far one nudge moves the plugin's own gain, in dB.
+pub const NUDGE_DB: f64 = 1.0;
 
 /// Lowest gain, in dB.
 pub const GAIN_DB_MIN: f64 = -60.0;
@@ -75,6 +89,11 @@ impl<const GUI: bool> Plugin for GainPlugin<GUI> {
 pub struct GainShared<'a> {
     services: HostServices<'a>,
     gain_db: AtomicF64,
+    /// The host's modulation offset on the gain, in dB.
+    gain_mod_db: AtomicF64,
+    nudge: AtomicF64,
+    /// A nudge arrived and the gain has not moved for it yet.
+    nudge_pending: AtomicBool,
     latency_step: AtomicU32,
     fail: AtomicBool,
     /// Whether an audio processor exists; a latency change only needs a
@@ -89,6 +108,9 @@ impl<'a> GainShared<'a> {
         Ok(Self {
             services: HostServices::new(host),
             gain_db: AtomicF64::new(GAIN_DB_DEFAULT),
+            gain_mod_db: AtomicF64::new(0.0),
+            nudge: AtomicF64::new(0.0),
+            nudge_pending: AtomicBool::new(false),
             latency_step: AtomicU32::new(0),
             fail: AtomicBool::new(false),
             active: AtomicBool::new(false),
@@ -104,8 +126,20 @@ impl<'a> GainShared<'a> {
             PARAM_GAIN => self.gain_db.store(value.clamp(GAIN_DB_MIN, GAIN_DB_MAX)),
             PARAM_LATENCY => self.set_latency_step(value.round() as i64),
             PARAM_FAIL => self.fail.store(value >= 0.5, Ordering::Relaxed),
+            PARAM_NUDGE => {
+                let value = value.clamp(0.0, 1.0);
+                if self.nudge.load() < 0.5 && value >= 0.5 {
+                    self.nudge_pending.store(true, Ordering::Relaxed);
+                }
+                self.nudge.store(value);
+            }
             _ => {}
         }
+    }
+
+    /// The gain the audio hears: the value and the host's offset over it.
+    fn heard_gain_db(&self) -> f64 {
+        (self.gain_db.load() + self.gain_mod_db.load()).clamp(GAIN_DB_MIN, GAIN_DB_MAX)
     }
 
     fn set_latency_step(&self, step: i64) {
@@ -123,16 +157,39 @@ impl<'a> GainShared<'a> {
             PARAM_GAIN => Some(self.gain_db.load()),
             PARAM_LATENCY => Some(f64::from(self.latency_step.load(Ordering::Relaxed))),
             PARAM_FAIL => Some(if self.fail.load(Ordering::Relaxed) { 1.0 } else { 0.0 }),
+            PARAM_NUDGE => Some(self.nudge.load()),
             _ => None,
         }
     }
 
     fn handle_event(&self, event: &UnknownEvent) {
-        if let Some(CoreEventSpace::ParamValue(event)) = event.as_core_event() {
-            if let Some(id) = event.param_id() {
-                self.set_param(id.get(), event.value());
+        match event.as_core_event() {
+            Some(CoreEventSpace::ParamValue(event)) => {
+                if let Some(id) = event.param_id() {
+                    self.set_param(id.get(), event.value());
+                }
             }
+            Some(CoreEventSpace::ParamMod(event))
+                if event.param_id().map(ClapId::get) == Some(PARAM_GAIN) && event.amount().is_finite() =>
+            {
+                self.gain_mod_db.store(event.amount());
+            }
+            _ => {}
         }
+    }
+
+    /// Carry out a pending nudge: move the gain and tell the host, as a
+    /// gesture at `time`.
+    fn nudge_now(&self, time: u32, output: &mut OutputEvents) {
+        if !self.nudge_pending.swap(false, Ordering::Relaxed) {
+            return;
+        }
+        let gain = (self.gain_db.load() + NUDGE_DB).clamp(GAIN_DB_MIN, GAIN_DB_MAX);
+        self.gain_db.store(gain);
+        let id = ClapId::new(PARAM_GAIN);
+        let _ = output.try_push(ParamGestureBeginEvent::new(time, id));
+        let _ = output.try_push(ParamValueEvent::new(time, id, Pckn::match_all(), gain));
+        let _ = output.try_push(ParamGestureEndEvent::new(time, id));
     }
 }
 
@@ -235,10 +292,12 @@ impl<'a> PluginAudioProcessor<'a, GainShared<'a>, GainMain<'a>> for GainProcesso
             for event in batch.events() {
                 self.shared.handle_event(event);
             }
+            self.shared
+                .nudge_now(batch.first_sample() as u32, &mut *events.output);
             if self.shared.fail.load(Ordering::Relaxed) {
                 return Err(PluginError::Message("gain: the fail parameter is on"));
             }
-            let gain = db_to_gain(self.shared.gain_db.load()) as f32;
+            let gain = db_to_gain(self.shared.heard_gain_db()) as f32;
             for buffer in buffers.iter_mut().flatten() {
                 for sample in &mut buffer[batch.sample_bounds()] {
                     *sample *= gain;
@@ -291,7 +350,7 @@ impl PluginLatencyImpl for GainMain<'_> {
 
 impl PluginMainThreadParams for GainMain<'_> {
     fn count(&self) -> u32 {
-        3
+        4
     }
 
     fn get_info(&self, index: u32, info: &mut ParamInfoWriter) {
@@ -317,6 +376,7 @@ impl PluginMainThreadParams for GainMain<'_> {
                 0.0,
             ),
             2 => (PARAM_FAIL, stepped, b"Fail", 0.0, 1.0, 0.0),
+            3 => (PARAM_NUDGE, ParamInfoFlags::IS_AUTOMATABLE, b"Nudge", 0.0, 1.0, 0.0),
             _ => return,
         };
         info.set(&ParamInfo {
@@ -348,6 +408,7 @@ impl PluginMainThreadParams for GainMain<'_> {
                 write!(writer, "{} frames", LATENCY_STEPS[step])
             }
             PARAM_FAIL => writer.write_str(if value >= 0.5 { "on" } else { "off" }),
+            PARAM_NUDGE => write!(writer, "{value:.2}"),
             _ => Err(std::fmt::Error),
         }
     }

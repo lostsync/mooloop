@@ -286,6 +286,23 @@ impl ModDestinationDescriptor {
         }
     }
 
+    /// The policy for a hosted plugin's parameter `param`, which has no
+    /// `&'static` descriptor to read one from (MOO-82). The same rule as
+    /// [`Self::for_param`], stated in the plugin's own terms: a stepped
+    /// parameter refuses modulation, and so does one the plugin does not
+    /// mark modulatable. The engine's control pass and the session's route
+    /// arming both ask here, so they cannot disagree about a route.
+    pub const fn for_plugin_param(param: u32, stepped: bool, modulatable: bool) -> Self {
+        Self {
+            param,
+            allowed: modulatable && !stepped,
+            interpretation: ModInterpretation::NormalizedRange,
+            default_polarity: ModPolarity::Bipolar,
+            depth_limit: (-1.0, 1.0),
+            smoothing: None,
+        }
+    }
+
     /// Depth clamped into this destination's declared limit.
     pub fn clamp_depth(&self, depth: f32) -> f32 {
         depth.clamp(self.depth_limit.0, self.depth_limit.1)
@@ -389,6 +406,20 @@ mod tests {
 
     fn descriptor(kind: EffectKind, id: u32) -> ParamDescriptor {
         *kind.descriptor(id).unwrap()
+    }
+
+    /// A plugin parameter follows the native rule in its own terms: only a
+    /// continuous, modulatable one takes a route, at full signed depth.
+    #[test]
+    fn a_plugin_parameter_takes_a_route_only_when_continuous_and_modulatable() {
+        let id = 4_000_000_000;
+        let open = ModDestinationDescriptor::for_plugin_param(id, false, true);
+        assert!(open.allowed);
+        assert_eq!(open.param, id);
+        assert_eq!(open.depth_limit, (-1.0, 1.0));
+        assert_eq!(open.interpretation, ModInterpretation::NormalizedRange);
+        assert!(!ModDestinationDescriptor::for_plugin_param(id, true, true).allowed);
+        assert!(!ModDestinationDescriptor::for_plugin_param(id, false, false).allowed);
     }
 
     /// Continuous parameters accept full-range normalized modulation;

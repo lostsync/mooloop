@@ -704,6 +704,52 @@ impl Sequencer {
     /// wins here rather than the two summing into something neither drew.
     /// In song mode, layered placements resolve the same way notes do, except
     /// that only one can supply a value: the latest-starting cover wins.
+    pub fn visit_automation_targets_at(&self, song_tick: f64, mut visit: impl FnMut(ParamAddr)) {
+        match self.playback_mode {
+            PlaybackMode::Pattern => {
+                let Some(pattern) = self.patterns.get(self.current) else {
+                    return;
+                };
+                for channel in (0..self.active_channels).filter_map(|channel| pattern.channel(channel)) {
+                    for lane in channel.lanes().iter().filter(|lane| !lane.is_empty()) {
+                        visit(lane.target);
+                    }
+                }
+            }
+            PlaybackMode::Song => {
+                let position = wrap_tick(song_tick, self.song_length_ticks());
+                let hi = self
+                    .playlist_by_start
+                    .partition_point(|item| f64::from(item.start_tick) <= position);
+                let lo_tick = (position - f64::from(MAX_PATTERN_TICKS)).max(0.0);
+                let lo = self
+                    .playlist_by_start
+                    .partition_point(|item| f64::from(item.start_tick) < lo_tick);
+                for placement in &self.playlist_by_start[lo..hi] {
+                    let pattern_index = placement.pattern as usize;
+                    if pattern_index >= self.active_patterns {
+                        continue;
+                    }
+                    let pattern = &self.patterns[pattern_index];
+                    let start = placement.start_tick;
+                    if position < start as f64
+                        || position >= start.saturating_add(pattern.length_ticks()) as f64
+                    {
+                        continue;
+                    }
+                    for channel in (0..self.active_channels).filter_map(|channel| pattern.channel(channel)) {
+                        for lane in channel.lanes().iter().filter(|lane| !lane.is_empty()) {
+                            visit(lane.target);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The lane that drives `target` at `song_tick`, with the pattern-local
+    /// tick and the pattern's length. [`Self::visit_automation_targets_at`]
+    /// is the same search asked the other way round.
     pub fn automation_lane_at(
         &self,
         target: ParamAddr,

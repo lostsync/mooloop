@@ -2562,7 +2562,10 @@ impl MlP8 {
                     self.set_route_amount(route, amount)
                 }
                 Event::PitchBend { semitones } => self.bend = bend_ratio(semitones),
-                Event::Buffer(_) | Event::BufferRelease | Event::BufferScrub { .. } => {}
+                Event::ParamMod { .. }
+                | Event::Buffer(_)
+                | Event::BufferRelease
+                | Event::BufferScrub { .. } => {}
             }
             pos = off;
         }

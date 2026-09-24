@@ -46,3 +46,6 @@ tempfile = "3"
 # (`tests/clap_effect.rs`, MOO-81): naming it builds its cdylib next to the
 # test binary, where the test loads it by path.
 mooloop-test-plugin = { path = "../mooloop-test-plugin" }
+# The executor without a driver, for the plugin automation case's playback
+# against its export (`examples/clap_automation_case.rs`, MOO-82).
+mooloop-engine = { workspace = true, features = ["test-support"] }

@@ -6,7 +6,7 @@
 //!
 //! | id | what |
 //! | --- | --- |
-//! | [`GAIN_ID`] | stereo gain effect; `gain` (dB), `latency` (stepped), `fail` |
+//! | [`GAIN_ID`] | stereo gain effect; `gain` (dB, modulatable), `latency` (stepped), `fail`, `nudge` (moves its own gain) |
 //! | [`GAIN_GUI_ID`] | the same, declaring the `gui` extension |
 //! | [`SINE_ID`] | one sine voice per note id, with a release tail |
 //! | [`SINE_GUI_ID`] | the same, declaring the `gui` extension |
@@ -15,7 +15,8 @@
 //! no GUI at all (Airwindows is the named case) is a path the host has to
 //! handle from the start, not an afterthought.
 //!
-//! Parameter ids are deliberately sparse (10, 20, 30) so that nothing written
+//! Parameter ids are deliberately sparse (10, 20, 30, and 4 000 000 000,
+//! which no `i32` holds) so that nothing written
 //! against this plugin can confuse a parameter's id with its position in the
 //! plugin's list (`AGENTS.md`, "Parameter identity across the session
 //! boundary").
@@ -39,8 +40,8 @@ mod gui;
 mod sine;
 
 pub use gain::{
-    GAIN_DB_DEFAULT, GAIN_DB_MAX, GAIN_DB_MIN, LATENCY_STEPS, PARAM_FAIL, PARAM_GAIN,
-    PARAM_LATENCY, STATE_MAGIC,
+    GAIN_DB_DEFAULT, GAIN_DB_MAX, GAIN_DB_MIN, LATENCY_STEPS, NUDGE_DB, PARAM_FAIL, PARAM_GAIN,
+    PARAM_LATENCY, PARAM_NUDGE, STATE_MAGIC,
 };
 pub use gui::{GUI_DEFAULT_SIZE, GUI_MIN_SIZE};
 pub use sine::{RELEASE_SECONDS, SINE_AMPLITUDE};

@@ -380,6 +380,22 @@ values directly — the user's knob and the LFO would fight, and turning a
 modulated knob would snap it back. The UI needs both numbers anyway to draw a
 knob with a modulation arc.
 
+**A hosted plugin's parameter is the one exception to who holds the base**
+(MOO-82, 2026-09-24). The plugin owns its values -- its own GUI moves them,
+its presets load them -- so the engine keeps no base for it. A lane still
+supplies the value, sent to the plugin in its plain units
+(`Event::ParamValue`). A route is sent as an **offset** over whatever the
+plugin holds (`Event::ParamMod`, CLAP's non-destructive parameter
+modulation), so the rule is the same -- base plus offset, and they never
+fight -- with the base kept by the plugin instead of the engine. The offset
+is the route's normalized sum times the parameter's range, and the processor
+sets it back to zero when the route goes, because CLAP's modulation holds
+until it is changed. Whether a route may drive a plugin parameter is
+`ModDestinationDescriptor::for_plugin_param`: continuous and marked
+modulatable by the plugin. The engine finds a plugin's driven parameters by
+walking the routes and lanes that name the device, not a descriptor table it
+does not have (`EffectChain::plugin_curves`; MOO-195 generalizes the walk).
+
 ### Control rate, not audio rate
 
 Modulation is evaluated on a fixed subdivision of the block (32 or 64 frames),

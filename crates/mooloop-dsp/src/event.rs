@@ -34,6 +34,19 @@ pub enum Event {
         id: u32,
         value: f32,
     },
+    /// A non-destructive offset on a hosted plugin's parameter `id`, in the
+    /// parameter's own plain units, over whatever value the plugin holds
+    /// for it -- CLAP's parameter modulation (MOO-82). It holds until the
+    /// next one; `0.0` is no offset.
+    ///
+    /// Separate from [`Self::ParamValue`] because a route on a plugin
+    /// parameter has no base to add itself to on this side: the plugin owns
+    /// its value, and its own GUI may move it under the route. Native nodes
+    /// never receive one and ignore it.
+    ParamMod {
+        id: u32,
+        amount: f32,
+    },
     /// A depth inside one of the generator's own modulation routes, by the
     /// route's durable id.
     ///
@@ -181,6 +194,7 @@ fn event_sort_key(event: &TimedEvent) -> (u32, u8) {
         Event::NoteOff { .. } | Event::Choke => 0,
         Event::ParamValue { .. }
         | Event::SourceRouteAmount { .. }
+        | Event::ParamMod { .. }
         | Event::Buffer(_)
         | Event::BufferRelease
         | Event::BufferScrub { .. }

@@ -51,7 +51,7 @@ use crate::{
 /// The test plugin's library, next to this test binary: cargo builds it
 /// there because this crate names `mooloop-test-plugin` as a
 /// dev-dependency (the same arrangement as the host crate's spike).
-fn test_plugin_path() -> PathBuf {
+pub(crate) fn test_plugin_path() -> PathBuf {
     let exe = std::env::current_exe().expect("the test binary has a path");
     let deps = exe.parent().expect("the test binary is in a directory");
     let name = format!(
@@ -68,7 +68,7 @@ fn test_plugin_path() -> PathBuf {
     panic!("{name} is not next to {}", exe.display());
 }
 
-fn gain_ref() -> PluginRef {
+pub(crate) fn gain_ref() -> PluginRef {
     PluginRef {
         format: PluginFormat::Clap,
         id: test_plugin::GAIN_ID.to_owned(),
@@ -80,7 +80,7 @@ fn gain_ref() -> PluginRef {
 
 /// The test gain's own saved state: `gain_db`, and `latency_step` into
 /// `LATENCY_STEPS`.
-fn gain_state(gain_db: f64, latency_step: u32) -> PluginState {
+pub(crate) fn gain_state(gain_db: f64, latency_step: u32) -> PluginState {
     let mut data = test_plugin::STATE_MAGIC.to_vec();
     data.extend_from_slice(&gain_db.to_le_bytes());
     data.extend_from_slice(&latency_step.to_le_bytes());
@@ -93,7 +93,7 @@ fn gain_state(gain_db: f64, latency_step: u32) -> PluginState {
     }
 }
 
-fn open_gain(gain_db: f64, latency_step: u32) -> ClapInstance {
+pub(crate) fn open_gain(gain_db: f64, latency_step: u32) -> ClapInstance {
     ClapInstance::open(
         &test_plugin_path(),
         &gain_ref(),
@@ -109,7 +109,7 @@ fn open_gain(gain_db: f64, latency_step: u32) -> ClapInstance {
 /// A drum loop on `channels` drum-synth channels, four hits a bar, with the
 /// test gain on each channel in `hosted`. Returns the song and the plugin
 /// slot of each hosted channel, in order.
-fn drum_loop(channels: usize, hosted: &[usize]) -> (Project, Vec<PluginSlotId>) {
+pub(crate) fn drum_loop(channels: usize, hosted: &[usize]) -> (Project, Vec<PluginSlotId>) {
     let mut project = Project::default();
     project.channels.clear();
     project.pattern_lengths[0] = 16;
@@ -213,7 +213,7 @@ fn replace(target: EffectTarget, row: u8, slot: PluginSlotId, node: Box<dyn Audi
     })
 }
 
-fn read_wav(path: &std::path::Path) -> Vec<f32> {
+pub(crate) fn read_wav(path: &std::path::Path) -> Vec<f32> {
     hound::WavReader::open(path)
         .expect("the export is a WAV")
         .into_samples::<f32>()
@@ -301,7 +301,7 @@ fn the_test_plugin_renders_the_same_offline_as_through_the_executor() {
     assert_eq!(third.misbehaviour(), 0, "no call on the wrong thread");
 }
 
-fn worst_difference(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) fn worst_difference(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).fold(0.0f32, |worst, (x, y)| worst.max((x - y).abs()))
 }
 

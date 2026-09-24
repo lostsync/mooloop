@@ -6,7 +6,7 @@ mirror this file step-for-step the way MOO-5/16/30 do. The GitHub issue
 numbers below (`#10`, `#26`-`#30`) predate Adam's move away from GitHub
 issues; MOO-11 is the live tracking issue.
 
-**Written 2026-09-16.** Steps 01 (the spike), 02 (the neutral contract), 03 (parameters belong to an instance), 04 (the plugin rack), 05 (the scanner) and 06 (a headless CLAP effect in a chain) landed on 2026-09-23, and so did MOO-56's one boxed source slot, which closes blocker 4 below. Adam asked for it directly:
+**Written 2026-09-16.** Steps 01 (the spike), 02 (the neutral contract), 03 (parameters belong to an instance), 04 (the plugin rack), 05 (the scanner) and 06 (a headless CLAP effect in a chain) landed on 2026-09-23, as did MOO-56's one boxed source slot, which closes blocker 4 below. Step 07 (parameters, automation, modulation and state) landed on 2026-09-24. Adam asked for it directly:
 *"let's go ahead and plan out how we'll add CLAP support. Later we'll add
 VST/3 and AU. instrument support as well."* `SCOPE.md` already put CLAP in
 for 0.2.0 (item 9). This plan is outside the `FOCUS.md` sequence for the same
@@ -533,7 +533,7 @@ words. **Do not reopen this as a version-bump question.**
 | 04 | `PluginRack`, main-thread requests, latency known at runtime | #26 | engine, session | **done 2026-09-23** (MOO-79) |
 | 05 | The scanner, out of process, with its cache | #27 | plugin-host, app, settings | **done 2026-09-23** (MOO-80) |
 | 06 | A headless CLAP effect in a chain | #27 | plugin-host, session | **done 2026-09-23** (MOO-81) |
-| 07 | Parameters, automation, modulation and state round-trip | #28 | session, project | not started |
+| 07 | Parameters, automation, modulation and state round-trip | #28 | session, project | **done 2026-09-24** (MOO-82) |
 | 08 | Plugin browser, the menu row, and the face for plugins without a GUI | #28 | **UI build**, drafted with `slint-sketch` | not started |
 | 09 | A channel source that is a boxed node | #29 | core, engine, session | not started |
 | 10 | CLAP instruments | #29 | plugin-host, engine | not started |
@@ -962,6 +962,151 @@ the session, export twice, save, reopen present (same export), reopen missing
 (placeholder within 1.5e-8, slot kept byte for byte). The rack
 (`plugin_rack.rs`): the one rule, restart, rate change, missing then found,
 the zombie, insert, export instances, and quit.
+
+## Step 07, recorded 2026-09-24 (MOO-82)
+
+**What landed.** A hosted plugin's parameters are driven by lanes and routes,
+live and in an export, at the control rate; the window's Save asks every
+plugin for its state; the plugin's own parameter changes are read; and a
+plugin's own edit is an undo step.
+
+- **The control pass walks what is driven, for a plugin.**
+  `EffectChain::control_events_for_slot` (`engine/src/render.rs`) has a
+  plugin branch, `plugin_curves`. It collects the ids that a route in the
+  channel's rack or a lane under the playhead names on this device
+  (`ModRack::destinations`, the new `Sequencer::visit_automation_targets_at`),
+  once each, into a fixed array, and resolves each against the running
+  processor's own list (`AudioNode::hosted_param`, answered by `ClapProcessor`
+  from a table sorted at activation). That is MOO-195's shape for the one kind
+  that cannot do without it; the native branch is unchanged, and MOO-195 can
+  fold it in without undoing anything. An id the plugin does not have (it is
+  missing, or a rescan took it) drives nothing, and its lane or route is kept.
+- **A lane writes the value; a route writes an offset.** A lane's normalized
+  value becomes the plugin's plain units (linear, a stepped parameter on a
+  whole position: `HostedParam::plain`) and reaches the plugin as
+  `Event::ParamValue`, which the adapter turns into a CLAP param-value event
+  at the same frame. A route is an **offset**, `Event::ParamMod`, turned into
+  CLAP's parameter modulation: the plugin owns its value, and its own GUI may
+  move it under the route, so the route rides over whatever the plugin holds
+  rather than over a base this side would have to keep in step. The
+  processor zeroes an offset whose route has gone (CLAP's modulation holds
+  until changed). `ControlCurve` gained a `kind` (`Value`, `Offset`) and the
+  default `apply_curves` emits `ParamMod` for an offset row; natives only
+  ever get `Value` rows. The policy is one function both sides ask:
+  `ModDestinationDescriptor::for_plugin_param` (continuous and modulatable).
+- **A knob edit is the ordinary `SetEffectParam`**, carrying the plugin's id
+  and plain value; `RenderState::set_effect_param` queues it for a plugin
+  device unless a lane is writing that parameter (a route does not hold it
+  back: it is an offset). `Session::set_plugin_param(row, index, normalized)`
+  is the face's path, by **dense index**; `plugin_param_id` /
+  `plugin_param_index` are the only conversions, and an id never crosses as
+  an `i32` (`session/src/plugin_params.rs`). The test plugin's `Nudge` has id
+  `4_000_000_000` and goes through the knob path, a route's policy and a
+  lane's address and back whole.
+- **The plugin's own changes are read.** `HostedInstance` gained
+  `param_value`, `drain_param_events` and `dropped_param_events`
+  (`PluginParamEvent` moved to `instance.rs`). The rack keeps each live
+  plugin's values by dense index, read from the plugin when it opens or
+  rescans and updated from its reports each tick. Nothing it reports is sent
+  back to it.
+- **A plugin's own edit is one undo step** (the orchestrator's condition).
+  A gesture that ends, a run of lone values gone quiet for half a second, a
+  `mark_dirty`, or a value the session sent it, marks the slot edited. The
+  pump then takes a snapshot, calls `Session::capture_plugin_edits`, and
+  records the two as "Plugin Edit". Why it must be a step: undo installs a
+  whole snapshot and a snapshot carries each plugin's state, so an edit
+  captured with no step of its own would be reverted by undoing an *earlier*
+  edit. `a_plugins_own_edit_is_one_undo_step_and_survives_an_unrelated_undo`
+  pins it: nudge, an unrelated edit and its undo keep the same instance
+  still nudged, and undoing the plugin's step reopens it at its old gain.
+  MOO-81's `StateDirty` path, which captured and dirtied with no step, is
+  gone into this one.
+- **Save captures every plugin.** The window's Save calls
+  `capture_plugin_states` before it snapshots. A plugin that fails to save
+  keeps its last good state.
+- **A refused state opens with the defaults and is kept.** The rack tries the
+  saved state, and when the plugin refuses it opens it with none; the song
+  keeps the refused bytes (no capture overwrites them) until the plugin is
+  edited, and the device reports why. Added and removed ids since the song
+  was saved are logged when it opens.
+- **The adapter cuts a block at every parameter change.** Found with the
+  LSP filter: it reads its parameters once per process call, so with its
+  cutoff automated the export at 512 frames and playback at 64 differed by
+  0.017 while the test plugin, which applies each event at its frame, was
+  bit-identical. `ClapProcessor::process` now makes one call per piece
+  between parameter events. The engine's control ticks sit on a 32-frame
+  grid every block size shares, so the pieces are the same whatever the
+  callback, and a block with nothing moving is still one call. CLAP allows a
+  host to split a block, and a plugin that is sample-accurate hears the same
+  thing either way. That took the difference to 0.00037. The rest was sleep:
+  between hats the plugin's input is silent, the engine skipped it, the
+  skipped blocks' values never reached it, and it woke gliding from a stale
+  cutoff after a sleep whose length depends on the block size. A processor
+  that carried a parameter change in its last block is now never at rest
+  (`ClapProcessor::driven`), so a lane or route keeps its plugin awake. What
+  remains differs only in subnormals: the executor flushes them and an export
+  does not (MOO-223, Engine).
+- **Offline == realtime.** `mooloop_engine::live_check::play_through_executor`
+  (the `test-support` feature, `#[doc(hidden)]`; not API) plays a song
+  through the real executor with no driver, swapping processors in down the
+  command ring as the rack does live.
+
+**How it differs from `07-parameters-and-state.md`.**
+
+- **A route is not base-plus-offset on this side.** The step said values
+  travel in plain units and "automation and modulation need no
+  plugin-specific code". A lane does travel that way. A route cannot: the
+  base is the plugin's, so it travels as CLAP's non-destructive modulation.
+- **No gesture wrapping of a UI drag yet.** Step 08 draws the face, and a
+  drag's begin and end belong to it; `set_plugin_param` is the value half.
+- **The full ring is a logged number, not `DeviceTelemetry`.** The count
+  lives with the instance on the control thread
+  (`HostedInstance::dropped_param_events`), where the rack reads it each
+  tick and logs each growth; routing it through the audio thread's telemetry
+  would copy a number the control thread already has.
+- **Hidden parameters** are refused by `set_plugin_param`; a route or lane
+  on one is not refused, because only a face hides.
+- **Presets are not here.** The plugin device preset (`effect-plugin`
+  envelope) is Effects' and Document's, filed as MOO-222.
+- **The Slint half of the four-billion id** is step 08's: this step pins the
+  session side of it, where the index is made and turned back.
+- **Save during an open gesture** captures the state mid-gesture; the step
+  the pump records when it closes then holds the rest. Not worth a flush.
+
+**The tests.** Engine (`engine/src/plugin_automation_tests.rs`): a lane on
+the test gain lands on every control tick (each tick's gain checked against
+the lane at its first frame) and the executor at 64 and 512 frames is the
+export to the sample; an LFO route offsets the plugin's own -6 dB, holds per
+tick, goes both ways, and plays the same live; an offset whose route went is
+zeroed; the plugin's own gesture comes back on its ring and a full ring is
+counted. Session (`session/tests/plugin_params.rs`): the undo case above; a
+knob edit sends the id and closes as one edit when quiet; a refused state
+plays the defaults and is kept; an automated plugin saves, reopens, goes
+missing, is saved, comes back, and exports the same file. `plugin_params.rs`
+unit tests: the id above `i32::MAX` through the knob and route paths; lanes
+only on automatable parameters the song knows.
+
+**The real plugin** (`examples/clap_automation_case.rs`, run on the laptop
+against `/usr/lib64/clap/lsp-plugins.clap`, `in.lsp-plug.filter_stereo`,
+its `Frequency` lane falling from 0.9 to 0.3 of its range across a two-bar
+loop, on the hats' channel): all six measurements passed on 2026-09-24.
+- Each of the twelve identical hats was darker than the last against the
+  same song with the lane held flat (high-pass energy ratio 1.000, 0.397,
+  0.172, 0.069, 0.006 ... 0.000).
+- Deterministic, and saved and reopened with no repairs, lanes and slot
+  intact.
+- Reopened present: an identical export. Reopened missing: the dry loop
+  within 1.5e-8, slot and lanes kept.
+- The executor at 64 and at 512 frames against the export: equal to below
+  the smallest normal float, which took the two adapter changes above
+  (0.017, then 0.00037, then subnormals only; MOO-223).
+
+LSP reports its stepped parameters (filter type, slope) with a range of
+0..1 and two positions, and names every position by `value_to_text` on that
+range. The host rounds a stepped lane to a whole position, as CLAP says a
+stepped parameter's values are, so a lane on one of LSP's could only reach
+its first and last choice. Nothing in this step automates one; it is noted
+for step 08's face, which will show these parameters.
 
 ## The test plugins
 

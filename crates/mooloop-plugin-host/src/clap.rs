@@ -48,7 +48,7 @@ use clack_extensions::params::{
 use clack_extensions::state::{HostState, HostStateImpl, PluginState as ClapStateExt};
 use clack_extensions::tail::PluginTail;
 use clack_extensions::thread_check::{HostThreadCheck, HostThreadCheckImpl};
-use clack_host::events::event_types::{ParamValueEvent, TransportEvent, TransportFlags};
+use clack_host::events::event_types::{ParamModEvent, ParamValueEvent, TransportEvent, TransportFlags};
 use clack_host::events::io::{OutputEventBuffer, TryPushError};
 use clack_host::events::spaces::CoreEventSpace;
 use clack_host::events::EventFlags;
@@ -56,8 +56,9 @@ use clack_host::prelude::*;
 use clack_host::utils::{BeatTime, SecondsTime};
 use mooloop_core::{PluginParamInfo, PluginRef, PluginState, PluginStateChunk};
 use mooloop_dsp::node::{Discontinuity, SILENCE_PEAK};
-use mooloop_dsp::{AudioNode, Event, EventList, ProcessContext, StereoBus, MAX_BLOCK_SIZE};
+use mooloop_dsp::{AudioNode, Event, EventList, HostedParam, ProcessContext, StereoBus, MAX_BLOCK_SIZE};
 
+pub use crate::instance::PluginParamEvent;
 use crate::instance::{AudioConfig, HostError, HostedInstance, Lifeline, PluginOpener};
 use crate::scan::PluginCache;
 use crate::{RequestFlags, Requests};
@@ -70,6 +71,10 @@ pub const STATE_TAG: &str = "clap";
 /// own event list holds 256 (`mooloop_dsp::EventList`), and only its
 /// `ParamValue`s cross, so this is never the limit.
 const EVENTS_IN: usize = 256;
+
+/// How many parameters a processor tracks as offset by a route at once:
+/// a channel's whole route table.
+const MODULATED: usize = mooloop_core::MAX_MOD_ROUTES_PER_CHANNEL;
 
 /// How many of the plugin's own parameter changes and gestures wait for the
 /// control thread (step 07 reads them). A plugin that sends more between two
@@ -185,14 +190,6 @@ impl HostParamsImplMainThread for ClapMainThread {
     fn clear(&self, _param_id: ClapId, _flags: ParamClearFlags) {}
 }
 
-/// One of the plugin's own parameter changes, as its processor reported it.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PluginParamEvent {
-    Value { id: u32, value: f64 },
-    GestureBegin { id: u32 },
-    GestureEnd { id: u32 },
-}
-
 /// What the processor and the instance both see.
 #[derive(Debug, Default)]
 struct ProcessorFlags {
@@ -300,22 +297,6 @@ impl ClapInstance {
                 })
             })
             .collect()
-    }
-
-    /// Hand every parameter event the plugin reported to `sink`, oldest
-    /// first. Step 07 is what reads these.
-    pub fn drain_param_events(&mut self, mut sink: impl FnMut(PluginParamEvent)) {
-        if let Some(events) = self.events_out.as_mut() {
-            while let Ok(event) = events.pop() {
-                sink(event);
-            }
-        }
-    }
-
-    /// How many of the plugin's own parameter events the current processor
-    /// had no room for. Visible so a lost gesture is a number, not a guess.
-    pub fn dropped_param_events(&self) -> u64 {
-        self.flags.dropped_events.load(Ordering::Relaxed)
     }
 
     /// How many times the plugin reported the host misbehaving.
@@ -449,6 +430,30 @@ impl HostedInstance for ClapInstance {
         self.params = self.read_params();
     }
 
+    fn param_value(&mut self, id: u32) -> Option<f64> {
+        let params = self
+            .instance
+            .plugin_shared_handle()
+            .get_extension::<PluginParams>()?;
+        params.get_value(&self.instance.plugin_handle(), ClapId::new(id))
+    }
+
+    /// Every parameter event the running processor's plugin reported, oldest
+    /// first, off the bounded ring the processor fills (step 06).
+    fn drain_param_events(&mut self, sink: &mut dyn FnMut(PluginParamEvent)) {
+        if let Some(events) = self.events_out.as_mut() {
+            while let Ok(event) = events.pop() {
+                sink(event);
+            }
+        }
+    }
+
+    /// Counted by the processor as it had no room, and read here. It starts
+    /// again at zero with each processor.
+    fn dropped_param_events(&self) -> u64 {
+        self.flags.dropped_events.load(Ordering::Relaxed)
+    }
+
     fn failed(&self) -> bool {
         self.flags.failed.load(Ordering::Relaxed)
     }
@@ -489,7 +494,29 @@ impl HostedInstance for ClapInstance {
         let (producer, consumer) = rtrb::RingBuffer::new(EVENTS_OUT);
         self.events_out = Some(consumer);
         let frames = max_frames.max(1) as usize;
+        let mut params: Vec<(u32, HostedParam)> = self
+            .params
+            .iter()
+            .map(|info| {
+                (
+                    info.id,
+                    HostedParam {
+                        min: info.min,
+                        max: info.max,
+                        steps: info.stepped,
+                        automatable: info.automatable,
+                        modulatable: info.modulatable,
+                    },
+                )
+            })
+            .collect();
+        params.sort_by_key(|&(id, _)| id);
+        params.dedup_by_key(|&mut (id, _)| id);
         Ok(Box::new(ClapProcessor {
+            params: params.into_boxed_slice(),
+            modulated: [0; MODULATED],
+            modulated_count: 0,
+            driven: false,
             processor: Some(PluginAudioProcessor::from(stopped)),
             tail,
             tail_frames: 0,
@@ -512,6 +539,22 @@ impl HostedInstance for ClapInstance {
 
 /// A hosted CLAP plugin's audio-thread half.
 pub struct ClapProcessor {
+    /// The plugin's parameters as it listed them when this processor was
+    /// built, sorted by id, for [`AudioNode::hosted_param`]. A plugin's list
+    /// can only change its ranges across a restart, which builds a new
+    /// processor, so this never goes stale while it runs.
+    params: Box<[(u32, HostedParam)]>,
+    /// Ids carrying a nonzero offset from a route as of the last block, so
+    /// that an offset whose route has gone is set back to zero: CLAP's
+    /// parameter modulation holds until it is changed.
+    modulated: [u32; MODULATED],
+    modulated_count: usize,
+    /// The last block this processor ran carried a parameter change: a lane
+    /// or a route is moving the plugin. A driven plugin is never at rest,
+    /// because the blocks the host skipped would never deliver their values,
+    /// and a plugin that glides between values would wake somewhere that
+    /// depends on how long it slept, which depends on the callback's size.
+    driven: bool,
     processor: Option<PluginAudioProcessor<ClapHost>>,
     tail: Option<PluginTail>,
     tail_frames: u32,
@@ -614,6 +657,9 @@ impl AudioNode for ClapProcessor {
     /// The plugin's own tail, as it last reported it; `u32::MAX` for one
     /// that reports none, so the host never sleeps it on a guess.
     fn tail_frames(&self) -> u32 {
+        if self.driven {
+            return u32::MAX;
+        }
         if self.tail.is_some() {
             self.tail_frames
         } else {
@@ -625,11 +671,19 @@ impl AudioNode for ClapProcessor {
     /// "continue if not quiet" over a block that was quiet in and out. A
     /// failed plugin is a pass-through, which is always at rest.
     fn is_at_rest(&self) -> bool {
-        self.at_rest || self.flags.failed.load(Ordering::Relaxed)
+        self.flags.failed.load(Ordering::Relaxed) || (self.at_rest && !self.driven)
     }
 
     fn latency_frames(&self) -> u32 {
         self.latency
+    }
+
+    /// From the table built at activation: a binary search, no allocation.
+    fn hosted_param(&self, id: u32) -> Option<HostedParam> {
+        self.params
+            .binary_search_by_key(&id, |&(id, _)| id)
+            .ok()
+            .map(|index| self.params[index].1)
     }
 
     /// A block the host skipped because the plugin was asleep still passes:
@@ -678,65 +732,157 @@ impl AudioNode for ClapProcessor {
         self.in_r[..frames].copy_from_slice(&bus.r[..frames]);
         let input_peak = peak(&self.in_l[..frames]).max(peak(&self.in_r[..frames]));
 
-        // In order already (the engine sorts its list), so the buffer is
-        // never sorted here: `EventBuffer::sort` allocates.
-        self.events.clear();
-        let mut pushed = 0;
+        // A route that was offsetting a parameter last block and names it no
+        // more leaves the plugin's offset where it was, because CLAP's
+        // modulation holds until it is changed: set it back to zero first,
+        // at the block's first frame, ahead of everything that follows.
+        let mut still = [0u32; MODULATED];
+        let mut still_count = 0;
         for timed in events_in.iter() {
-            let Event::ParamValue { id, value } = timed.event else {
-                continue;
-            };
-            if timed.offset as usize >= frames || pushed == EVENTS_IN {
-                continue;
+            if let Event::ParamMod { id, .. } = timed.event {
+                if !still[..still_count].contains(&id) && still_count < MODULATED {
+                    still[still_count] = id;
+                    still_count += 1;
+                }
             }
-            self.events.push(&ParamValueEvent::new(
-                timed.offset,
-                ClapId::new(id),
-                Pckn::match_all(),
-                f64::from(value),
-            ));
-            pushed += 1;
         }
-
-        let transport = Self::transport(ctx);
-        let (in_l, in_r) = (&mut self.in_l[..frames], &mut self.in_r[..frames]);
-        let (out_l, out_r) = (&mut self.out_l[..frames], &mut self.out_r[..frames]);
-        let inputs = self.inputs.with_input_buffers([AudioPortBuffer {
-            latency: 0,
-            channels: AudioPortBufferType::f32_input_only(
-                [InputChannel::variable(in_l), InputChannel::variable(in_r)].into_iter(),
-            ),
-        }]);
-        let mut outputs = self.outputs.with_output_buffers([AudioPortBuffer {
-            latency: 0,
-            channels: AudioPortBufferType::f32_output_only([out_l, out_r].into_iter()),
-        }]);
-        let mut out = ParamOut {
-            ring: &mut self.events_out,
-            dropped: &self.flags.dropped_events,
-        };
-        let events = &self.events;
-        let steady_time = self.steady_time;
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            started.process(
-                &inputs,
-                &mut outputs,
-                &events.as_input(),
-                &mut OutputEvents::from_buffer(&mut out),
-                Some(steady_time),
-                Some(&transport),
-            )
-        }));
-        self.steady_time = self.steady_time.wrapping_add(frames as u64);
-        let status = match result {
-            Ok(Ok(status)) => status,
-            // The plugin said it failed, or panicked inside Rust code: pass
-            // the block through untouched and every block after it.
-            Ok(Err(_)) | Err(_) => {
-                self.fail();
-                return;
+        let mut resets = [0u32; MODULATED];
+        let mut reset_count = 0;
+        for &id in &self.modulated[..self.modulated_count] {
+            if !still[..still_count].contains(&id) {
+                resets[reset_count] = id;
+                reset_count += 1;
             }
+        }
+        self.modulated[..still_count].copy_from_slice(&still[..still_count]);
+        self.modulated_count = still_count;
+
+        // **The block is cut at every frame a parameter changes on**, and
+        // each piece is its own process call. CLAP lets a plugin apply its
+        // events at their frames, and many read them once a call instead
+        // (LSP's do): cut this way, such a plugin hears each value from its
+        // own frame, so what it plays no longer depends on the callback's
+        // size, and an export at 512 frames matches playback at 64 (MOO-82).
+        // The engine's control ticks fall on a grid every block size shares,
+        // so the pieces are the same pieces whatever the block. A block with
+        // no changes past its first frame is one call, as before.
+        self.driven = reset_count > 0
+            || events_in
+                .iter()
+                .any(|timed| matches!(timed.event, Event::ParamValue { .. } | Event::ParamMod { .. }));
+        let mut cuts = [0u32; EVENTS_IN + 1];
+        let mut cut_count = 1;
+        for timed in events_in.iter() {
+            let is_param = matches!(timed.event, Event::ParamValue { .. } | Event::ParamMod { .. });
+            if is_param
+                && (timed.offset as usize) < frames
+                && timed.offset > cuts[cut_count - 1]
+                && cut_count < cuts.len()
+            {
+                cuts[cut_count] = timed.offset;
+                cut_count += 1;
+            }
+        }
+        let ticks_per_frame = if ctx.sample_rate == 0 {
+            0.0
+        } else {
+            ctx.bpm * f64::from(mooloop_core::time::DEFAULT_PPQ) / 60.0 / f64::from(ctx.sample_rate)
         };
+
+        let mut status = ProcessStatus::Continue;
+        // Events are in order, so each piece's start where the last ended.
+        let mut next_event = 0;
+        for piece in 0..cut_count {
+            let start = cuts[piece] as usize;
+            let end = if piece + 1 < cut_count {
+                cuts[piece + 1] as usize
+            } else {
+                frames
+            };
+            // In order already (the engine sorts its list), so the buffer is
+            // never sorted here: `EventBuffer::sort` allocates.
+            self.events.clear();
+            let mut pushed = 0;
+            if piece == 0 {
+                for &id in &resets[..reset_count] {
+                    self.events.push(&ParamModEvent::new(0, ClapId::new(id), Pckn::match_all(), 0.0));
+                    pushed += 1;
+                }
+            }
+            for timed in events_in.iter().skip(next_event) {
+                let offset = timed.offset as usize;
+                if offset >= end {
+                    break;
+                }
+                next_event += 1;
+                if offset < start || pushed == EVENTS_IN {
+                    continue;
+                }
+                let at = (offset - start) as u32;
+                match timed.event {
+                    Event::ParamValue { id, value } => self.events.push(&ParamValueEvent::new(
+                        at,
+                        ClapId::new(id),
+                        Pckn::match_all(),
+                        f64::from(value),
+                    )),
+                    Event::ParamMod { id, amount } => self.events.push(&ParamModEvent::new(
+                        at,
+                        ClapId::new(id),
+                        Pckn::match_all(),
+                        f64::from(amount),
+                    )),
+                    _ => continue,
+                }
+                pushed += 1;
+            }
+
+            let piece_ctx = ProcessContext {
+                frames: end - start,
+                position_ticks: ctx.position_ticks + start as f64 * ticks_per_frame,
+                position_frames: ctx.position_frames + start as u64,
+                ..*ctx
+            };
+            let transport = Self::transport(&piece_ctx);
+            let (in_l, in_r) = (&mut self.in_l[start..end], &mut self.in_r[start..end]);
+            let (out_l, out_r) = (&mut self.out_l[start..end], &mut self.out_r[start..end]);
+            let inputs = self.inputs.with_input_buffers([AudioPortBuffer {
+                latency: 0,
+                channels: AudioPortBufferType::f32_input_only(
+                    [InputChannel::variable(in_l), InputChannel::variable(in_r)].into_iter(),
+                ),
+            }]);
+            let mut outputs = self.outputs.with_output_buffers([AudioPortBuffer {
+                latency: 0,
+                channels: AudioPortBufferType::f32_output_only([out_l, out_r].into_iter()),
+            }]);
+            let mut out = ParamOut {
+                ring: &mut self.events_out,
+                dropped: &self.flags.dropped_events,
+            };
+            let events = &self.events;
+            let steady_time = self.steady_time;
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                started.process(
+                    &inputs,
+                    &mut outputs,
+                    &events.as_input(),
+                    &mut OutputEvents::from_buffer(&mut out),
+                    Some(steady_time),
+                    Some(&transport),
+                )
+            }));
+            self.steady_time = self.steady_time.wrapping_add((end - start) as u64);
+            status = match result {
+                Ok(Ok(status)) => status,
+                // The plugin said it failed, or panicked inside Rust code:
+                // pass the block through untouched and every block after it.
+                Ok(Err(_)) | Err(_) => {
+                    self.fail();
+                    return;
+                }
+            };
+        }
         let (out_l, out_r) = (&self.out_l[..frames], &self.out_r[..frames]);
         if out_l.iter().chain(out_r).any(|sample| !sample.is_finite()) {
             self.fail();

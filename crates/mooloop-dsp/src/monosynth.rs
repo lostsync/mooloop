@@ -353,7 +353,8 @@ impl AudioNode for MonoSynth {
                 Event::Choke => self.release_all(),
                 Event::ParamValue { id, value } => self.apply_param(id, value),
                 Event::PitchBend { semitones } => self.bend = bend_ratio(semitones),
-                Event::SourceRouteAmount { .. }
+                Event::ParamMod { .. }
+                | Event::SourceRouteAmount { .. }
                 | Event::Buffer(_)
                 | Event::BufferRelease
                 | Event::BufferScrub { .. } => {}

@@ -49,6 +49,7 @@ impl Session {
     /// diverged; it was simply silent.
     pub fn open_automation_lane_at(&mut self, target: ParamAddr) -> Option<EngineCommand> {
         let (pattern, channel) = (self.current_pattern, self.selected);
+        let lane_allowed = self.lane_allowed(target);
         if let Some(lanes) = self
             .channels
             .get_mut(channel)
@@ -56,6 +57,13 @@ impl Session {
         {
             if !lanes.iter().any(|lane| lane.target == target) {
                 if lanes.len() >= MAX_AUTOMATION_LANES_PER_CHANNEL {
+                    return None;
+                }
+                // A plugin parameter the plugin will not let be automated,
+                // or one the song does not know, gets no new lane. One that
+                // already exists is reopened whatever became of its
+                // parameter: it is kept and reads as missing (MOO-74).
+                if !lane_allowed {
                     return None;
                 }
                 lanes.push(AutomationLane::new(target));

@@ -459,7 +459,8 @@ impl AudioNode for DrumSynth {
                 Event::PitchBend { semitones } => {
                     self.bend = crate::synth_voice::bend_ratio(semitones);
                 }
-                Event::SourceRouteAmount { .. }
+                Event::ParamMod { .. }
+                | Event::SourceRouteAmount { .. }
                 | Event::Buffer(_)
                 | Event::BufferRelease
                 | Event::BufferScrub { .. } => {}

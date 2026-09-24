@@ -95,7 +95,8 @@ pub use mlp8::MlP8;
 pub use monosynth::MonoSynth;
 pub use mooloop_core::{BufferDuration, BufferEvent, BufferParams};
 pub use node::{
-    feedback_tail_frames, AudioNode, ControlCurve, Discontinuity, DynamicsFrame, ProcessContext,
+    feedback_tail_frames, AudioNode, ControlCurve, CurveKind, Discontinuity, DynamicsFrame,
+    HostedParam, ProcessContext,
     SourceNode, MAX_CONTROL_TICKS_PER_BLOCK, REST_EPSILON, SILENCE_PEAK,
 };
 pub use polysynth::PolySynth;

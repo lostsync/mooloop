@@ -77,6 +77,7 @@ ids (C2, P4, …) are the report's.
 | `core/src/structure.rs` | Document | Engine | Rack and container editing, with nothing realtime in it |
 | The effect host: `EffectChain`/`EffectSlot` (bypass, wet/dry, trims, sleep, container scheduling) | Effects | Engine | It decides most of what is heard at a transition (E2) |
 | A hosted plugin's processor in a chain: built by the rack and swapped into its device's placeholder by `ReplaceEffect` keyed by the plugin's slot | Engine, with Effects owning the `EffectChain` it lands in, unchanged | nobody | MOO-81. The chain hosts it like any node (`replace_if_kind`, `build_effect`'s `PluginPlaceholder`). A plugin inside a container is sized as zero latency until MOO-212 |
+| A hosted plugin's parameter driven by a lane or a route: which ids are driven, their conversion to the plugin's units, and the offset a route sends | Control, with Engine owning the adapter that turns `ParamValue`/`ParamMod` into CLAP events | nobody | MOO-82. `EffectChain::plugin_curves` (in Effects' `EffectChain`) walks the routes and lanes naming the device and resolves each id with `AudioNode::hosted_param`; a lane is a value, a route an offset (`Event::ParamMod`), because the plugin holds the base. A plugin's own edits are undo steps, recorded by the pump around `Session::capture_plugin_edits` |
 | Output-stage declicking: fader, mute, solo, polarity | Mixer | between Engine and Mixer | M2 fell between the two |
 | The session reconcilers, the channel output verbs, `STRIP_DESCRIPTORS`, `pan_gains`/`balance_gains`, `ui/src/meter.rs` | Mixer | Session, core, dsp, Interface | Mixer state kept outside the mixer |
 | The browser preview voice | Instruments | nobody | It plays files at the wrong pitch (I2) |
@@ -106,7 +107,7 @@ lines. Until then, this table is the boundary.
 
 | File | Default owner | Except |
 | --- | --- | --- |
-| `engine/src/render.rs` | Engine: `RenderState`, `process_block_inner`, `apply_command`, install, takes, the discontinuity fan-out, the tests | **Effects:** `EffectChain`, `EffectSlot`, `ContainerScratch`, `PendingEffectParams`, `ReclaimedEffect`. **Mixer:** `SendBank`, `OutputStage`, `BusStrip`, `AudioTapBank`, `mix_into`, the bus walk. **Sequencing:** `release_all_voices`, `inject_choke_events`, `HeldKeys`, `Audition`, `RecordingNote`, the transport and sequencer arms. **Control:** `apply_midi`, `AutomationBlock`, `AutomationCurve`, `AutomationPosition`, `ModulationBlock`, the modulator ticks. **Instruments:** `PreviewVoice`, `RetiredPreviews`, `render_preview`, and each source's arm in `build_source` (the one match over the native kinds since MOO-56; `ChannelStrip` and its one `source` slot are Engine's). |
+| `engine/src/render.rs` | Engine: `RenderState`, `process_block_inner`, `apply_command`, install, takes, the discontinuity fan-out, the tests | **Effects:** `EffectChain`, `EffectSlot`, `ContainerScratch`, `PendingEffectParams`, `ReclaimedEffect`. **Mixer:** `SendBank`, `OutputStage`, `BusStrip`, `AudioTapBank`, `mix_into`, the bus walk. **Sequencing:** `release_all_voices`, `inject_choke_events`, `HeldKeys`, `Audition`, `RecordingNote`, the transport and sequencer arms. **Control:** `apply_midi`, `AutomationBlock`, `AutomationCurve`, `AutomationPosition`, `ModulationBlock`, the modulator ticks, and `EffectChain::plugin_curves` (a hosted plugin's lanes and routes, MOO-82). **Instruments:** `PreviewVoice`, `RetiredPreviews`, `render_preview`, and each source's arm in `build_source` (the one match over the native kinds since MOO-56; `ChannelStrip` and its one `source` slot are Engine's). |
 | `ui/src/lib.rs` | Interface: `AppUi::new` as a shell, the pump, the `wire_*!` macros as a framework | **Each feature team:** the wiring for its own faces and views inside `AppUi::new`. **Document:** the document lifecycle, and tempo, swing and embed. **Control:** the pump's control drain. **Engine:** hosted plugins' wiring (MOO-81): the opener set in `AppUi::new`, the export's plugin processors, and `AppUi::retire_plugins` with the pump's branch that waits for them at quit. |
 | `ui/ui/main.slint` | Interface | **Sequencing:** the step grid and the playlist, both inline. **Each device team:** its entries in the DEVICES block. |
 | `ui/src/settings.rs` | Interface | **Platform:** the XDG paths and the settings-load policy, and `PluginSettings`/`plugin_cache_path` (the scanner's, MOO-80). |
@@ -132,7 +133,8 @@ Files marked *shared* are split in the table above.
   MOO-113; a failure in a device it drives is that device's team's),
   `source_slot_tests.rs` (the one boxed source slot, MOO-56),
   `plugin_host_tests.rs` (a hosted CLAP effect through the executor and the
-  export, MOO-81), and
+  export, MOO-81), `live_check.rs` (the executor with no driver, behind the
+  `test-support` feature: test support, not API, MOO-82), and
   `continuity_tests.rs` (the "control changes are
   continuous" family, MOO-104, whose cases each team adds for its own
   transitions)
@@ -243,7 +245,10 @@ Files marked *shared* are split in the table above.
   `stepped_round_trip_tests.rs`
 - `dsp/src/modulator.rs`
 - `session/src/`: `automation.rs`, `modulation.rs`, `midi.rs` (*shared*),
-  `values.rs`
+  `values.rs`, `plugin_params.rs` (a hosted plugin's parameters by address
+  and by dense index, and the one conversion between them, MOO-82)
+- `engine/src/plugin_automation_tests.rs` (lanes and routes on a hosted
+  plugin's parameters, offline and live) and `session/tests/plugin_params.rs`
 - `ui/ui/`: `modulation-shelf.slint`, `modulation-device.slint`
 - `ui/tests/`: `shelf_agreement.rs`, `midi_learn_gesture.rs`,
   `slint_face_agreement.rs`, `knob_value_text.rs`

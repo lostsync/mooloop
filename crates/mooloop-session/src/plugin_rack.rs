@@ -43,7 +43,7 @@ use mooloop_dsp::effects::PluginPlaceholder;
 use mooloop_dsp::{AudioNode, IntegerDelay, SpectrumAnalyzer};
 use mooloop_engine::{CommandSink, EffectSlot, StructuralCommand};
 use mooloop_plugin_host::{
-    AudioConfig, HostError, HostedInstance, Lifeline, PluginOpener, Requests,
+    AudioConfig, HostError, HostedInstance, Lifeline, PluginOpener, PluginParamEvent, Requests,
 };
 
 use crate::effects::EffectInserted;
@@ -70,6 +70,64 @@ const MAX_ATTEMPTS: u8 = 3;
 /// which resets [`MAX_ATTEMPTS`]. About 400 ms at the 8 ms pump.
 const SETTLED_TICKS: u32 = 50;
 
+/// Quiet ticks after the last of a run of the plugin's own changes that
+/// came with no gesture around them, before the run counts as one edit.
+/// About half a second at the 8 ms pump: the pause a mapped controller's
+/// moves are cut into undo steps by (`CONTROLLER_IDLE` in the interface).
+pub const EDIT_QUIET_TICKS: u32 = 60;
+
+/// Where the plugin's own editing stands, for one undo step per gesture
+/// (MOO-82).
+#[derive(Debug, Default)]
+struct EditRun {
+    /// Parameters the plugin has a gesture open on.
+    open: Vec<u32>,
+    /// Something changed that is not in the song yet.
+    pending: bool,
+    /// Pump ticks since the last change arrived.
+    quiet: u32,
+}
+
+impl EditRun {
+    /// Take one of the plugin's reports. Returns whether it closes an edit
+    /// at once: the end of its last open gesture.
+    fn take(&mut self, event: PluginParamEvent) -> bool {
+        self.quiet = 0;
+        match event {
+            PluginParamEvent::GestureBegin { id } => {
+                if !self.open.contains(&id) {
+                    self.open.push(id);
+                }
+                false
+            }
+            PluginParamEvent::GestureEnd { id } => {
+                self.open.retain(|&open| open != id);
+                self.pending = true;
+                self.open.is_empty()
+            }
+            PluginParamEvent::Value { .. } => {
+                self.pending = true;
+                false
+            }
+        }
+    }
+
+    /// One pump tick has passed. Returns whether a run of changes with no
+    /// gesture open has now been quiet long enough to be one edit.
+    fn tick(&mut self) -> bool {
+        if !self.pending || !self.open.is_empty() {
+            return false;
+        }
+        self.quiet = self.quiet.saturating_add(1);
+        self.quiet >= EDIT_QUIET_TICKS
+    }
+
+    fn finish(&mut self) {
+        self.pending = false;
+        self.quiet = 0;
+    }
+}
+
 struct RackEntry {
     instance: Box<dyn HostedInstance>,
     lifeline: Lifeline,
@@ -82,10 +140,22 @@ struct RackEntry {
     attempts: u8,
     /// Ticks the current processor has been out.
     out_ticks: u32,
+    /// Each parameter's current value in the plugin's plain units, by its
+    /// dense index in `instance.params()` (step 03): what a knob draws and
+    /// what a route's depth is shown against. Read from the plugin when the
+    /// instance is made and whenever its list changes, and kept up to date
+    /// from the plugin's own reports and the session's edits.
+    values: Vec<f64>,
+    /// The plugin's own editing, cut into undo steps.
+    edits: EditRun,
+    /// [`HostedInstance::dropped_param_events`] when it was last read, so a
+    /// growing count is logged once per growth.
+    dropped_seen: u64,
 }
 
 impl RackEntry {
-    fn new(instance: Box<dyn HostedInstance>, lifeline: Lifeline) -> Self {
+    fn new(mut instance: Box<dyn HostedInstance>, lifeline: Lifeline) -> Self {
+        let values = read_values(instance.as_mut());
         Self {
             instance,
             lifeline,
@@ -93,8 +163,67 @@ impl RackEntry {
             pulled: false,
             attempts: 0,
             out_ticks: 0,
+            values,
+            edits: EditRun::default(),
+            dropped_seen: 0,
         }
     }
+
+    /// Take the plugin's own reports since the last tick into `values`.
+    /// Returns whether an edit finished: a gesture ended, or a run of lone
+    /// values has gone quiet. Nothing here sends anything to the plugin:
+    /// what it reports about itself never comes back to it as a command.
+    fn drain(&mut self, slot: PluginSlotId) -> bool {
+        let Self {
+            instance,
+            values,
+            edits,
+            ..
+        } = self;
+        let ids: Vec<u32> = instance.params().iter().map(|param| param.id).collect();
+        let mut finished = false;
+        instance.drain_param_events(&mut |event| {
+            if let PluginParamEvent::Value { id, value } = event {
+                if let Some(stored) = ids
+                    .iter()
+                    .position(|&known| known == id)
+                    .and_then(|index| values.get_mut(index))
+                {
+                    *stored = value;
+                }
+            }
+            finished |= edits.take(event);
+        });
+        finished |= edits.tick();
+        let dropped = instance.dropped_param_events();
+        if dropped != self.dropped_seen {
+            if dropped > self.dropped_seen {
+                log_warn!(
+                    "plugin",
+                    "slot {}: {} of the plugin's own parameter changes were lost (its ring was full)",
+                    slot.0,
+                    dropped - self.dropped_seen
+                );
+            }
+            self.dropped_seen = dropped;
+        }
+        if finished {
+            self.edits.finish();
+        }
+        finished
+    }
+}
+
+/// Every parameter's value as the plugin holds it now, by dense index.
+fn read_values(instance: &mut dyn HostedInstance) -> Vec<f64> {
+    let ids: Vec<(u32, f64)> = instance
+        .params()
+        .iter()
+        .map(|param| (param.id, param.default))
+        .collect();
+    ids.into_iter()
+        .map(|(id, default)| instance.param_value(id).unwrap_or(default))
+        .collect()
 }
 
 /// Whether two songs' records of one slot name the same plugin in the same
@@ -139,8 +268,6 @@ pub enum RackEvent {
         slot: PluginSlotId,
         params: Vec<PluginParamInfo>,
     },
-    /// The plugin changed its own state: the song is modified.
-    StateDirty { slot: PluginSlotId },
     /// The plugin could not be opened, or could not build a processor.
     Failed { slot: PluginSlotId, error: HostError },
 }
@@ -155,7 +282,6 @@ impl std::fmt::Debug for RackEvent {
             Self::ParamsRescanned { slot, params } => {
                 write!(f, "ParamsRescanned({}, {} params)", slot.0, params.len())
             }
-            Self::StateDirty { slot } => write!(f, "StateDirty({})", slot.0),
             Self::Failed { slot, error } => write!(f, "Failed({}, {error})", slot.0),
         }
     }
@@ -172,6 +298,15 @@ pub struct PluginRack {
     opener: Option<Box<dyn PluginOpener>>,
     /// The configuration processors are built for, as of the last tick.
     config: Option<AudioConfig>,
+    /// Slots whose plugin finished an edit of its own that the song does not
+    /// have yet: for the pump to record as one undo step around
+    /// `Session::capture_plugin_edits` (MOO-82).
+    edited: BTreeSet<PluginSlotId>,
+    /// Slots whose saved state the plugin refused when the song opened. The
+    /// plugin runs with its defaults, and the song keeps the refused state
+    /// byte for byte until the plugin is edited: capturing it here would
+    /// write the defaults over the only copy of what was saved.
+    refused_state: BTreeSet<PluginSlotId>,
 }
 
 impl std::fmt::Debug for PluginRack {
@@ -180,6 +315,8 @@ impl std::fmt::Debug for PluginRack {
             .field("live", &self.entries.keys().map(|slot| slot.0).collect::<Vec<_>>())
             .field("dying", &self.graveyard.len())
             .field("problems", &self.problems.keys().map(|slot| slot.0).collect::<Vec<_>>())
+            .field("edited", &self.edited.iter().map(|slot| slot.0).collect::<Vec<_>>())
+            .field("refused_state", &self.refused_state.iter().map(|slot| slot.0).collect::<Vec<_>>())
             .finish()
     }
 }
@@ -253,6 +390,47 @@ impl PluginRack {
         self.entries.get_mut(&slot).map(|entry| entry.instance.as_mut())
     }
 
+    /// Parameter `index`'s current value in the plugin's plain units, by
+    /// its dense index in the live instance's list.
+    pub fn param_value(&self, slot: PluginSlotId, index: usize) -> Option<f64> {
+        self.entries.get(&slot)?.values.get(index).copied()
+    }
+
+    /// Record a value the session sent to parameter `index` of `slot`, and
+    /// count it as an edit of the plugin's state, closed when the edits go
+    /// quiet: the plugin holds the value, so the song only has it once the
+    /// state is captured after the value has reached it.
+    pub fn note_param_sent(&mut self, slot: PluginSlotId, index: usize, value: f64) {
+        if let Some(entry) = self.entries.get_mut(&slot) {
+            if let Some(stored) = entry.values.get_mut(index) {
+                *stored = value;
+            }
+            entry.edits.pending = true;
+            entry.edits.quiet = 0;
+        }
+    }
+
+    /// Whether a plugin has finished an edit the song does not have yet.
+    pub fn has_edits(&self) -> bool {
+        !self.edited.is_empty()
+    }
+
+    /// The slots with a finished edit, emptied.
+    pub fn take_edits(&mut self) -> BTreeSet<PluginSlotId> {
+        std::mem::take(&mut self.edited)
+    }
+
+    /// Whether the song keeps a saved state the plugin in `slot` refused.
+    pub fn refused_state(&self, slot: PluginSlotId) -> bool {
+        self.refused_state.contains(&slot)
+    }
+
+    /// The plugin in `slot` was edited: the state it holds now is the one
+    /// the song should keep, even over one it once refused.
+    pub fn accept_state(&mut self, slot: PluginSlotId) {
+        self.refused_state.remove(&slot);
+    }
+
     /// Every live slot.
     pub fn live_slots(&self) -> impl Iterator<Item = PluginSlotId> + '_ {
         self.entries.keys().copied()
@@ -272,6 +450,11 @@ impl PluginRack {
         if let Some(problem) = self.problems.get(&slot) {
             return Some(problem.error.clone());
         }
+        if self.refused_state.contains(&slot) {
+            return Some(HostError::Plugin(
+                "it refused its saved state, so it plays with its defaults; the song keeps the saved state".into(),
+            ));
+        }
         self.instance(slot)
             .filter(|instance| instance.failed())
             .map(|_| HostError::Plugin("it failed while processing and is passed through".into()))
@@ -289,6 +472,8 @@ impl PluginRack {
     /// whether a live entry was there.
     pub fn remove(&mut self, slot: PluginSlotId) -> bool {
         self.problems.remove(&slot);
+        self.edited.remove(&slot);
+        self.refused_state.remove(&slot);
         match self.entries.remove(&slot) {
             Some(entry) => {
                 self.graveyard.push((entry.instance, entry.lifeline));
@@ -302,6 +487,8 @@ impl PluginRack {
     /// processors are still out, for the caller to pull back.
     pub fn close(&mut self) -> Vec<PluginSlotId> {
         self.problems.clear();
+        self.edited.clear();
+        self.refused_state.clear();
         let mut out = Vec::new();
         for (slot, entry) in std::mem::take(&mut self.entries) {
             if !entry.lifeline.is_alone() {
@@ -429,7 +616,24 @@ impl PluginRack {
                 {
                     continue;
                 }
-                match opener.open(&state.plugin, &state.state.0, config) {
+                // A plugin that refuses the state the song saved for it opens
+                // with its defaults instead, rather than not at all
+                // (`07-parameters-and-state.md`, "Load"): tried again with no
+                // state, and the song's copy is left as it is.
+                let opened = opener.open(&state.plugin, &state.state.0, config).or_else(|error| {
+                    if state.state.0.is_empty() {
+                        return Err(error);
+                    }
+                    let fresh = opener.open(&state.plugin, &PluginState::default(), config)?;
+                    log_warn!(
+                        "plugin",
+                        "{} refused its saved state ({error}); it plays with its defaults and the song keeps the state",
+                        state.plugin.name
+                    );
+                    self.refused_state.insert(slot);
+                    Ok(fresh)
+                });
+                match opened {
                     Ok(instance) => {
                         self.problems.remove(&slot);
                         events.push(RackEvent::Opened {
@@ -466,13 +670,23 @@ impl PluginRack {
             }
             if requests.has(Requests::PARAMS_RESCAN) {
                 entry.instance.refresh_params();
+                entry.values = read_values(entry.instance.as_mut());
                 events.push(RackEvent::ParamsRescanned {
                     slot,
                     params: entry.instance.params().to_vec(),
                 });
             }
-            if requests.has(Requests::STATE_DIRTY) {
-                events.push(RackEvent::StateDirty { slot });
+            // The plugin's own edits: a gesture that ended, a quiet run of
+            // lone values, or a `mark_dirty` with no report beside it (a
+            // plugin that changed something it has no parameter for). Each
+            // is one undo step, recorded by the pump around capturing it.
+            let mut finished = entry.drain(slot);
+            if requests.has(Requests::STATE_DIRTY) && entry.edits.open.is_empty() {
+                entry.edits.finish();
+                finished = true;
+            }
+            if finished {
+                self.edited.insert(slot);
             }
 
             if !entry.lifeline.is_alone() {
@@ -520,6 +734,22 @@ impl PluginRack {
             }
         }
         events
+    }
+}
+
+/// Log the parameter ids a plugin's list gained or lost since the song last
+/// saw it. Nothing is done to a lane or route whose id went: it is kept, and
+/// found again if the id comes back.
+fn log_param_changes(name: &str, was: &[PluginParamInfo], now: &[PluginParamInfo]) {
+    let ids = |params: &[PluginParamInfo]| params.iter().map(|param| param.id).collect::<BTreeSet<u32>>();
+    let (was, now) = (ids(was), ids(now));
+    let added: Vec<u32> = now.difference(&was).copied().collect();
+    let removed: Vec<u32> = was.difference(&now).copied().collect();
+    if !added.is_empty() || !removed.is_empty() {
+        log_warn!(
+            "plugin",
+            "{name}'s parameters changed since the song was saved: added {added:?}, removed {removed:?}"
+        );
     }
 }
 
@@ -602,9 +832,12 @@ impl crate::session::Session {
                 RackEvent::Opened { slot, params } => {
                     // What the plugin reports now replaces what the song last
                     // saw, without marking the song modified: opening a song
-                    // is not an edit.
+                    // is not an edit. The ids that came or went are logged; a
+                    // lane or route on one that went is kept and reads as
+                    // missing (step 03's rule).
                     if let Some(state) = self.plugins.get_mut(&slot) {
                         if !params.is_empty() && state.params != params {
+                            log_param_changes(&state.plugin.name, &state.params, &params);
                             state.params = params;
                         }
                     }
@@ -621,10 +854,6 @@ impl crate::session::Session {
                             self.dirty = true;
                         }
                     }
-                }
-                RackEvent::StateDirty { slot } => {
-                    self.capture_plugin_state(slot);
-                    self.dirty = true;
                 }
                 RackEvent::Failed { slot, error } => {
                     let name = self
@@ -721,9 +950,47 @@ impl crate::session::Session {
         })
     }
 
+    /// Whether a plugin finished an edit of its own that the song does not
+    /// have yet. The pump asks once a tick, and when it is so takes a
+    /// snapshot, calls [`Self::capture_plugin_edits`], and records the two
+    /// as one undo step (MOO-82).
+    pub fn plugin_edits_pending(&self) -> bool {
+        self.plugin_rack.has_edits()
+    }
+
+    /// Capture the state of every plugin that finished an edit of its own
+    /// -- a gesture in its GUI, a quiet run of values it moved itself, or a
+    /// value the session sent it -- into the song. Returns whether the song
+    /// changed, and marks it modified when it did.
+    ///
+    /// **Why this is its own undo step.** Undo installs a whole snapshot,
+    /// and a snapshot carries each plugin's state. A plugin edit that went
+    /// into the song without a step of its own would sit inside whichever
+    /// step came next, and undoing an *earlier* one would install that
+    /// step's older state, reopening the plugin without the edit. As its own
+    /// step, an undo takes the plugin's edit back first, and an unrelated
+    /// edit's undo leaves it alone: the snapshot either side of that one
+    /// carries the same state, so the instance is kept.
+    pub fn capture_plugin_edits(&mut self) -> bool {
+        let mut changed = false;
+        for slot in self.plugin_rack.take_edits() {
+            self.plugin_rack.accept_state(slot);
+            changed |= self.capture_plugin_state(slot);
+        }
+        if changed {
+            self.dirty = true;
+        }
+        changed
+    }
+
     /// Save the plugin in `slot`'s state into the song, if it is hosted.
-    /// Returns whether the song's copy changed.
+    /// Returns whether the song's copy changed. A state the plugin refused
+    /// on opening is kept as the song has it, and a plugin that fails to
+    /// save keeps its last good state: neither is ever overwritten by less.
     fn capture_plugin_state(&mut self, slot: PluginSlotId) -> bool {
+        if self.plugin_rack.refused_state(slot) {
+            return false;
+        }
         let Some(instance) = self.plugin_rack.instance_mut(slot) else {
             return false;
         };
@@ -1108,8 +1375,12 @@ pub(crate) mod tests {
         probe.requests.raise(Requests::RESTART | Requests::PARAMS_RESCAN | Requests::STATE_DIRTY);
         assert_eq!(
             names(&rack.service(&slots, &named, config())),
-            ["ParamsRescanned(1, 0 params)", "StateDirty(1)", "PullBack(1)"]
+            ["ParamsRescanned(1, 0 params)", "PullBack(1)"]
         );
+        // `mark_dirty` is a finished edit for the pump to record (MOO-82),
+        // not an event the session acts on by itself.
+        assert!(rack.has_edits());
+        assert_eq!(rack.take_edits(), BTreeSet::from([slot]));
         assert!(rack.service(&slots, &named, config()).is_empty(), "one pull-back, not one a tick");
         assert_eq!(probe.builds.load(Ordering::SeqCst), 1, "nothing built while the first is out");
 

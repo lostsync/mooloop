@@ -6927,6 +6927,12 @@ impl AppUi {
                 // with the pattern list, and a save that skipped that step was
                 // one of the ways a song reached disk in a shape it could not
                 // be read back from.
+                //
+                // Every hosted plugin is asked for its state first: the song
+                // holds what each plugin last reported, and a plugin whose
+                // change never marked it dirty would otherwise be saved as
+                // it was (MOO-82).
+                st.borrow_mut().session.capture_plugin_states();
                 let project = project_snapshot(&st.borrow(), &window).project;
                 let revision = st.borrow().session.revision;
                 let mode = if window.get_embed_assets() {
@@ -16588,6 +16594,27 @@ impl AppUi {
                 // compensation sync, so a latency change is in this tick's
                 // plan.
                 st.borrow_mut().session.service_plugins(&mut handle);
+                // A plugin's own edit -- a gesture in its GUI, values it moved
+                // itself, a value a knob sent it -- is one undo step, taken
+                // around capturing its state into the song. Without the
+                // step, undoing an earlier edit would install an older
+                // state and reopen the plugin without it (MOO-82).
+                if st.borrow().session.plugin_edits_pending() {
+                    if let Some(window) = weak.upgrade() {
+                        let before = project_snapshot(&st.borrow(), &window);
+                        if st.borrow_mut().session.capture_plugin_edits() {
+                            record_project_history_as(
+                                &commands,
+                                before,
+                                &st,
+                                &window,
+                                "Plugin Edit",
+                                None,
+                            );
+                            st.borrow().update_document_title(&window);
+                        }
+                    }
+                }
                 st.borrow_mut().session.sync_compensation(&mut handle);
                 // Beside it and for the same reasons: an edge's fate is a
                 // property of every channel at once, so deriving and diffing

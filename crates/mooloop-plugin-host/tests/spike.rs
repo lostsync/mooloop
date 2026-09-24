@@ -240,7 +240,7 @@ fn four_parameters_describe_themselves_and_print_their_values() {
     let handle = instance.plugin_handle();
 
     let count = params.count(&handle);
-    assert_eq!(count, 3);
+    assert_eq!(count, 4);
     let mut infos = Vec::new();
     for index in 0..count {
         let mut buffer = ParamInfoBuffer::new();
@@ -260,6 +260,7 @@ fn four_parameters_describe_themselves_and_print_their_values() {
             (test_plugin::PARAM_GAIN, "Gain".into(), test_plugin::GAIN_DB_MIN, test_plugin::GAIN_DB_MAX, 0.0, false),
             (test_plugin::PARAM_LATENCY, "Latency".into(), 0.0, 2.0, 0.0, true),
             (test_plugin::PARAM_FAIL, "Fail".into(), 0.0, 1.0, 0.0, true),
+            (test_plugin::PARAM_NUDGE, "Nudge".into(), 0.0, 1.0, 0.0, false),
         ]
     );
 

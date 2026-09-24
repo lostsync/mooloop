@@ -13,6 +13,12 @@ arc-swap = "1"
 hound = "3"
 mp3lame-encoder = "0.2.4"
 
+[features]
+# Test support, not API: `live_check::play_through_executor`, the executor
+# with no driver, for a check outside this crate that holds an export against
+# playback (MOO-82). Only examples and tests enable it.
+test-support = []
+
 # The platform picks the audio driver at compile time: JACK, and pipewire-jack
 # behind it, everywhere but macOS; Core Audio through cpal on macOS, with MIDI
 # input from Core MIDI through midir. JACK carries its own MIDI.

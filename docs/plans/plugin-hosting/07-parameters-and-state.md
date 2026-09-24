@@ -1,5 +1,10 @@
 # 07 — Parameters, automation, modulation and state round-trip (#28)
 
+**Landed 2026-09-24 (MOO-82).** `00-status.md`, "Step 07, recorded", says
+what was built and where it differs from what follows: above all, a route
+on a plugin parameter is sent as CLAP's parameter modulation, an offset over
+the plugin's own value, and presets went to MOO-222.
+
 This step turns the headless effect from step 06 into a device that a song
 can depend on.
 
