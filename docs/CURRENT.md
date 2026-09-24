@@ -2003,7 +2003,9 @@ land on its own when it starts to matter:
   modulation destinations offset from, which resolved from hardcoded unity and
   centre before them -- so a Velocity route on Pan now swings around wherever
   the patch put the device, and Spread widens around that rather than around
-  the middle.
+  the middle. Volume is one-pole smoothed over 5 ms like the device's other
+  levels, so modulating it (a kick-gated envelope pumping a pad) or dragging
+  it glides instead of stepping once per 32-frame control tick (MOO-214).
 - The ML-P8 allocates its eight physical voices as *groups*. Unison at 1x, 2x,
   4x and 8x spends the pool rather than growing it, leaving 8, 4, 2 and 1 notes
   of polyphony; a note allocates a complete group and steals complete older

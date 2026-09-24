@@ -1682,6 +1682,13 @@ pub struct MlP8 {
     was_playing: bool,
     /// The keyboard's bend as a frequency ratio, `1.0` at rest (MOO-128).
     bend: f32,
+    /// The device's Volume, smoothed (MOO-214). It is the base every voice's
+    /// `VCA_LEVEL` route offsets from, and it multiplies every sample, so
+    /// reading the knob raw made each control tick a step in the output
+    /// gain: an envelope modulating Volume zippered at the control rate.
+    /// One per device, advanced once a frame whether or not a voice is
+    /// sounding, and it starts at the patch's value so nothing fades in.
+    master_volume: Smoothed,
 }
 
 impl MlP8 {
@@ -1700,6 +1707,11 @@ impl MlP8 {
             chorus: Chorus::new(params.chorus, sample_rate),
             was_playing: false,
             bend: 1.0,
+            master_volume: Smoothed::new(
+                params.master_volume.clamp(0.0, 1.0),
+                PARAM_SMOOTH_S,
+                sample_rate,
+            ),
         };
         synth.routes.compile(&synth.params.routes);
         synth.apply_params_to_voices();
@@ -1805,6 +1817,8 @@ impl MlP8 {
         self.triggered = false;
         self.lfo.reset();
         self.chorus.reset(self.params.chorus, self.sample_rate);
+        let volume = self.params.master_volume.clamp(0.0, 1.0);
+        self.master_volume.reset_to(volume);
         self.routes.compile(&self.params.routes);
         self.apply_params_to_voices();
     }
@@ -2080,6 +2094,7 @@ impl MlP8 {
             wet,
             chorus,
             bend,
+            master_volume: volume,
             ..
         } = self;
         let params = *params;
@@ -2091,7 +2106,10 @@ impl MlP8 {
         let publishing = !ports.is_empty();
         let mut prepared = Prepared::new(&params, sr, routes, demand);
         prepared.bend = *bend;
-        let master_volume = params.master_volume.clamp(0.0, 1.0);
+        // Smoothed, not read raw: see the field (MOO-214). A settled smoother
+        // returns its target exactly, so an unmoving Volume renders what the
+        // raw read did, bit for bit.
+        volume.set_target(params.master_volume.clamp(0.0, 1.0));
         // With the chorus off the voices go straight onto the channel bus and
         // the finisher costs nothing at all — not a copy, not a delay line
         // write, not a branch in the sample loop. That is what "OFF is a true
@@ -2138,6 +2156,7 @@ impl MlP8 {
             // where the transport says it should be rather than where the last
             // note left it.
             let lfo_value = lfo.next_sample(&params.lfo, bpm, sr);
+            let master_volume = volume.advance();
 
             for voice in voices.iter_mut() {
                 if !voice.active {
@@ -2605,13 +2624,26 @@ impl AudioNode for MlP8 {
     /// The instrument's own LFO is advanced once per sample whether or not
     /// anything is sounding — that is written into `render_chunk` as the
     /// reason it sits outside the voice loop — so it is advanced the same way
-    /// here. Nothing else in the device runs on the clock: an inactive voice
-    /// touches none of its own state, and the chorus is only ever frozen
-    /// while it is off, which is when its line is cleared and its processor
-    /// genuinely does not run.
+    /// here. So does the smoothed Volume (MOO-214), so a glide that was still
+    /// moving when the last voice ended arrives where it would have. Nothing
+    /// else in the device runs on the clock: an inactive voice touches none
+    /// of its own state, and the chorus is only ever frozen while it is off,
+    /// which is when its line is cleared and its processor genuinely does not
+    /// run.
+    ///
+    /// The Volume is walked a sample at a time, as `render_chunk` walks it,
+    /// so the two paths agree to the bit; once it has settled, the walk stops.
     fn skip_block(&mut self, ctx: &ProcessContext) {
         self.lfo
             .skip(&self.params.lfo, ctx.bpm, ctx.sample_rate, ctx.frames);
+        self.master_volume
+            .set_target(self.params.master_volume.clamp(0.0, 1.0));
+        for _ in 0..ctx.frames {
+            if self.master_volume.is_settled() {
+                break;
+            }
+            self.master_volume.advance();
+        }
     }
 
     fn process(
@@ -4530,6 +4562,107 @@ mod tests {
         );
         let voice = synth.voices.iter().find(|v| v.gate).unwrap();
         assert!((voice.spread_pan + 0.8).abs() < 1.0e-6);
+    }
+
+    /// MOO-214: Volume is the base of every voice's `VCA_LEVEL` and
+    /// multiplies every sample, so modulation reaching it one control tick at
+    /// a time (32 frames, as `AudioNode::apply_curves` delivers it) was a
+    /// staircase in the output gain -- a zipper at the control rate. An
+    /// envelope pulling Volume from 1 to 0 over 200 ms, delivered the way the
+    /// engine delivers it, has to come out as a glide.
+    ///
+    /// Measured as the gain itself: the ducked render divided by an
+    /// identical render left at full Volume, sample by sample, wherever the
+    /// reference is loud enough for the ratio to mean something. Unsmoothed,
+    /// each tick is a 1/300 step landing on one sample. Smoothed, no sample
+    /// moves by more than a few times the ramp's own slope.
+    #[test]
+    fn a_modulated_volume_glides_rather_than_stepping_at_the_control_rate() {
+        const BLOCK: usize = 512;
+        const TICK: usize = 32;
+        const RAMP_START: usize = 4 * BLOCK;
+        const RAMP_FRAMES: usize = 9_600; // 200 ms at 48 kHz
+        const TOTAL: usize = 32 * BLOCK;
+        let params = sine_bed();
+
+        let run = |ramped: bool| -> Vec<f32> {
+            let mut synth = MlP8::new(params, SR);
+            let mut out = Vec::with_capacity(TOTAL);
+            for block in 0..TOTAL / BLOCK {
+                let mut events = EventList::empty();
+                if block == 0 {
+                    events.push(note_on(0, 1, 60));
+                }
+                if ramped {
+                    for tick in (0..BLOCK).step_by(TICK) {
+                        let frame = block * BLOCK + tick;
+                        let t = frame.saturating_sub(RAMP_START) as f32 / RAMP_FRAMES as f32;
+                        events.push(TimedEvent {
+                            offset: tick as u32,
+                            event: Event::ParamValue {
+                                id: mooloop_core::mlp8::PARAM_MASTER_VOLUME,
+                                value: (1.0 - t).clamp(0.0, 1.0),
+                            },
+                        });
+                    }
+                }
+                let mut bus = StereoBus::with_capacity(BLOCK);
+                synth.process(&ctx(BLOCK), &mut bus, &events, None);
+                out.extend_from_slice(&bus.l[..BLOCK]);
+            }
+            out
+        };
+        let reference = run(false);
+        let ducked = run(true);
+
+        let peak = reference[RAMP_START..]
+            .iter()
+            .fold(0.0_f32, |a, s| a.max(s.abs()));
+        assert!(peak > 0.05, "the bed was silent");
+        let floor = peak * 0.2;
+        let slope = 1.0 / RAMP_FRAMES as f32;
+        let mut worst = 0.0_f32;
+        let mut previous: Option<f32> = None;
+        let mut measured = 0;
+        for frame in RAMP_START - BLOCK..RAMP_START + RAMP_FRAMES {
+            if reference[frame].abs() < floor {
+                previous = None;
+                continue;
+            }
+            let gain = ducked[frame] / reference[frame];
+            if let Some(last) = previous {
+                worst = worst.max((gain - last).abs());
+                measured += 1;
+            }
+            previous = Some(gain);
+        }
+        assert!(measured > RAMP_FRAMES / 4, "only {measured} pairs measured");
+        assert!(
+            worst < slope * 4.0,
+            "the gain stepped by {worst} in one sample; the ramp moves {slope} a sample"
+        );
+        // And it still arrives: silent a few smoother time constants after
+        // the ramp has ended (it trails the ramp by about one, 5 ms).
+        let tail = &ducked[RAMP_START + RAMP_FRAMES + 8 * BLOCK..];
+        assert!(
+            tail.iter().all(|s| s.abs() < 1.0e-4),
+            "Volume 0 still sounded"
+        );
+    }
+
+    /// A Volume that does not move renders exactly what the raw read did: a
+    /// patch saved at half Volume starts there rather than fading in from
+    /// the smoother's rest, sample for sample (MOO-214).
+    #[test]
+    fn a_steady_volume_is_exact_from_the_first_sample() {
+        let params = sine_bed();
+        let unity = render_chord(params, &[48, 60], 4096);
+        let mut halved = params;
+        halved.master_volume = 0.5;
+        let quieter = render_chord(halved, &[48, 60], 4096);
+        for (frame, (loud, soft)) in unity.iter().zip(&quieter).enumerate() {
+            assert_eq!(*soft, loud * 0.5, "frame {frame} was not exactly half");
+        }
     }
 
     /// Choke and transport stop reach whole groups by construction, and a

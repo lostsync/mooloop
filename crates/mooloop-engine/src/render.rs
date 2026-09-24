@@ -16901,7 +16901,11 @@ mod footprint {
         //
         // Grew by 8 with MOO-128: the device's bend ratio (an `f32`, padded),
         // which it multiplies into every oscillator's pitch.
-        assert_eq!(size_of::<MlP8>(), 6_152);
+        //
+        // Grew by 8 with MOO-214: the device's Volume is a `Smoothed` (12
+        // bytes, 4 of them landing in the bend's padding), because read raw
+        // it stepped once per control tick and zippered under modulation.
+        assert_eq!(size_of::<MlP8>(), 6_160);
         // DS-01 is 6,832, and almost all of it is the eight-voice pool: a
         // voice carries six tone oscillators for its partial bank, an FM
         // modulator, four noise generators' worth of state, a state-variable

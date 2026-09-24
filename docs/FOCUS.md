@@ -352,3 +352,17 @@ In the order worth playing:
    reopened present identically and missing as the dry loop, its slot and
    lanes kept. `live-64.wav` is what the executor played. In the app, open
    `clap-automation/clap-automation.mooloop` and play it on JACK.
+8. **ML-P8's Volume under modulation** (MOO-214). A held chord of sines,
+   its Volume pumped by a quarter-note LFO. It should duck smoothly, with
+   no buzz on the duck:
+
+   ```sh
+   scripts/antibox --no-incremental --pull target/mlp8-volume-pump \
+     cargo run -p mooloop-engine --example mlp8_volume_pump -- target/mlp8-volume-pump
+   ```
+
+   Play `pump.wav`, and `steady.wav` for the same chord unpumped. The
+   binary prints the zipper lines beside each tone: 67 dB under it before
+   the fix and 100 dB under after. Then do the real case, an Envelope gated
+   by the kick and routed to ML-P8's Volume with negative depth, at an
+   Attack well under 500 ms.
