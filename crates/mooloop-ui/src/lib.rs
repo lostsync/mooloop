@@ -20,6 +20,9 @@ mod controlled_faces_tests;
 mod rack_fold_tests;
 #[cfg(test)]
 mod rack_join_tests;
+mod plugin_ui;
+#[cfg(test)]
+mod plugin_ui_tests;
 #[cfg(test)]
 mod window_probe;
 mod meter;
@@ -1411,6 +1414,8 @@ fn notes_have_focus(window: &MainWindow) -> bool {
 const BROWSER_FOLDER: i32 = 0;
 const BROWSER_SAMPLE: i32 = 1;
 const BROWSER_GROUP: i32 = 2;
+/// An installed plugin, on the PLUGINS tab (MOO-83). Its `path` is its id.
+const BROWSER_PLUGIN: i32 = 4;
 
 fn browser_row_at(st: &Rc<RefCell<UiState>>, index: i32) -> Option<BrowserRow> {
     let index = usize::try_from(index).ok()?;
@@ -1558,6 +1563,12 @@ fn browser_activate_focused(st: &Rc<RefCell<UiState>>, window: &MainWindow) -> b
         browser_clamp_focus(st, window);
     } else if row.kind == BROWSER_SAMPLE {
         window.invoke_browser_row_previewed(row.path.clone());
+    } else if row.kind == BROWSER_PLUGIN {
+        // A plugin goes where a double-click puts it (MOO-83).
+        if !row.loadable {
+            return false;
+        }
+        window.invoke_browser_plugin_added(row.path.clone(), -1);
     } else if row.loadable {
         window.invoke_browser_preset_loaded(row.path.clone());
     } else {
@@ -1574,6 +1585,11 @@ fn browser_load_focused(st: &Rc<RefCell<UiState>>, window: &MainWindow) -> bool 
     };
     if row.kind == BROWSER_SAMPLE {
         window.invoke_browser_sample_loaded(row.path.clone());
+    } else if row.kind == BROWSER_PLUGIN {
+        if !row.loadable {
+            return false;
+        }
+        window.invoke_browser_plugin_added(row.path.clone(), -1);
     } else if !browser_row_expands(&row) && row.loadable {
         window.invoke_browser_preset_loaded(row.path.clone());
     } else {
@@ -1675,6 +1691,31 @@ fn record_project_history_as(
         });
     }
     sync_command_availability(window, &commands.borrow());
+}
+
+/// The pump's plugin-edit step, once a tick.
+///
+/// A plugin's own edit -- a gesture in its GUI, values it moved itself, a
+/// value a knob sent it -- is one undo step, taken around capturing its state
+/// into the song. Without the step, undoing an earlier edit would install an
+/// older state and reopen the plugin without it (MOO-82).
+///
+/// Not while a gesture is open: a drag on a plugin face's knob is one step
+/// however long it pauses in the middle, and it is recorded here once the
+/// plugin has gone quiet after the release (MOO-83).
+fn record_finished_plugin_edits(
+    st: &Rc<RefCell<UiState>>,
+    commands: &Rc<RefCell<CommandState>>,
+    window: &MainWindow,
+) {
+    if !st.borrow().session.plugin_edits_pending() || st.borrow().session.gesture_open() {
+        return;
+    }
+    let before = project_snapshot(&st.borrow(), window);
+    if st.borrow_mut().session.capture_plugin_edits() {
+        record_project_history_as(commands, before, st, window, "Plugin Edit", None);
+        st.borrow().update_document_title(window);
+    }
 }
 
 /// Start collecting a stream of pump-side edits into one undo entry.
@@ -3043,6 +3084,12 @@ fn effect_slot_row(
         next_depth: view.next_depth,
         join_before: view.join_before,
         collapsed: slot.collapsed,
+        // Filled by `PluginFaces::fill_row`, which has the session this has
+        // not: the plugin's name, list and whether it is running.
+        is_plugin: false,
+        plugin_name: Default::default(),
+        plugin_status: Default::default(),
+        plugin_params: Default::default(),
         branches,
         selected_branch: view.selected_branch,
         bracket: view.bracket,
@@ -4166,6 +4213,18 @@ struct UiState {
     /// opened rather than held live. Presets change on disk only when this
     /// application writes one, and it rescans then too.
     preset_catalog: Vec<PresetGroup>,
+    /// What the plugin scanner's cache lists, behind the PLUGINS tab
+    /// (MOO-83). Read from the cache file when the tab is opened, which is
+    /// how a scan that finished after startup reaches the window.
+    plugin_catalog: plugin_ui::PluginCatalog,
+    /// The cache file the PLUGINS tab reads: the scanner's, except in a test.
+    plugin_cache_path: PathBuf,
+    /// Where the insert menu's "Plugin…" aimed the next plugin picked in the
+    /// browser: the row it lands before. Taken by the next insert.
+    plugin_insert_before: Option<usize>,
+    /// The plugin faces' parameter models and value texts, kept across
+    /// republishes so a knob is updated rather than rebuilt.
+    plugin_faces: plugin_ui::PluginFaces,
     /// Raised whenever the effect rack is re-synced, so the pump knows the
     /// engine's spectrum subscriptions may be pointing at the wrong slots.
     ///
@@ -4202,12 +4261,14 @@ struct UiState {
     audio_sample_rate: u32,
 }
 
-/// The browser panel's two halves.
+/// The browser panel's three tabs, numbered as `browser-tab` numbers them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 enum BrowserTab {
     #[default]
     Samples,
     Presets,
+    /// What the plugin scanner found (MOO-83).
+    Plugins,
 }
 
 impl UiState {
@@ -4317,6 +4378,10 @@ impl UiState {
             browser_tab: BrowserTab::default(),
             browser_filter: String::new(),
             preset_catalog: Vec::new(),
+            plugin_catalog: plugin_ui::PluginCatalog::default(),
+            plugin_cache_path: plugin_cache_path(),
+            plugin_insert_before: None,
+            plugin_faces: plugin_ui::PluginFaces::default(),
             effect_spectra_stale: std::cell::Cell::new(false),
             layer_selection: HashMap::new(),
             bus_meters_stale: false,
@@ -4790,6 +4855,25 @@ impl UiState {
         )
     }
 
+    /// Show the browser's `tab`, with its catalogue read afresh.
+    ///
+    /// Rescanned on entry rather than kept live. A watcher over four
+    /// directory trees would be the only way to be sure, and the only writer
+    /// that matters is this application saving a preset -- which lands here
+    /// too, by way of the tab being re-entered. The plugin list is the
+    /// scanner's cache file, which the startup scan rewrites on its own
+    /// thread; re-reading it here is how that scan reaches the window.
+    fn enter_browser_tab(&mut self, tab: BrowserTab) {
+        self.browser_tab = tab;
+        match tab {
+            BrowserTab::Presets => self.preset_catalog = scan_preset_catalog(),
+            BrowserTab::Plugins => {
+                self.plugin_catalog = plugin_ui::PluginCatalog::load(&self.plugin_cache_path);
+            }
+            BrowserTab::Samples => {}
+        }
+    }
+
     /// Re-draws one device-rack row from the slot behind it.
     fn refresh_effect_row(&self, slot: usize) {
         let Some(chain) = self.session.effect_chain() else {
@@ -4800,22 +4884,21 @@ impl UiState {
             let view = self
                 .rack_view(self.session.effect_target, chain)
                 .swap_remove(slot);
-            self.effect_slot_model.set_row_data(
-                slot,
-                effect_slot_row(
-                    effect,
-                    &self.session.effect_presets,
-                    self.session
-                        .effect_preset_name(self.session.effect_target, effect.id),
-                    RackPlacement {
-                        depth,
-                        view,
-                        selected: self.session.selected_device_slot() == Some(slot),
-                        wrap_enabled: wrap_enabled_at(chain, slot),
-                    },
-                    self.audio_sample_rate,
-                ),
+            let mut row = effect_slot_row(
+                effect,
+                &self.session.effect_presets,
+                self.session
+                    .effect_preset_name(self.session.effect_target, effect.id),
+                RackPlacement {
+                    depth,
+                    view,
+                    selected: self.session.selected_device_slot() == Some(slot),
+                    wrap_enabled: wrap_enabled_at(chain, slot),
+                },
+                self.audio_sample_rate,
             );
+            self.plugin_faces.fill_row(&self.session, effect, &mut row);
+            self.effect_slot_model.set_row_data(slot, row);
             // A branch head's name is its layer's list entry, so the layer's
             // row moves with it. Its S, M and meter are read live from this
             // row and need nothing.
@@ -5114,6 +5197,7 @@ impl UiState {
                                     row.modulation_route_counts = counts.as_slice().into();
                                 }
                             }
+                            self.plugin_faces.fill_row(&self.session, effect, &mut row);
                             row
                         })
                         .collect()
@@ -5129,7 +5213,7 @@ impl UiState {
                             .iter()
                             .enumerate()
                             .map(|(slot, effect)| {
-                                effect_slot_row(
+                                let mut row = effect_slot_row(
                                     effect,
                                     &self.session.effect_presets,
                                     self.session.effect_preset_name(target, effect.id),
@@ -5140,7 +5224,9 @@ impl UiState {
                                         wrap_enabled: wrap_enabled_at(effects, slot),
                                     },
                                     self.audio_sample_rate,
-                                )
+                                );
+                                self.plugin_faces.fill_row(&self.session, effect, &mut row);
+                                row
                             })
                             .collect()
                     })
@@ -12074,6 +12160,10 @@ impl AppUi {
         // primitives it has: a structural install/remove at the vacant tail,
         // and a pointer-rotating move. The engine runs the same table over
         // its own routes and lanes for the same command.
+        //
+        // Hosted plugins first: the browser's PLUGINS tab, the insert
+        // menu's "Plugin…" row and the plugin face (MOO-83).
+        plugin_ui::wire(&window, &state, &command_state, &cmd_tx, &structural_tx);
         {
             let tx = cmd_tx.clone();
             let stx = structural_tx.clone();
@@ -15601,19 +15691,11 @@ impl AppUi {
             let st = state.clone();
             window.on_browser_tab_changed(move |tab| {
                 let mut st = st.borrow_mut();
-                st.browser_tab = if tab == 1 {
-                    BrowserTab::Presets
-                } else {
-                    BrowserTab::Samples
-                };
-                // Rescanned on entry rather than kept live. A watcher over
-                // four directory trees would be the only way to be sure, and
-                // the only writer that matters is this application saving a
-                // preset -- which lands here too, by way of the tab being
-                // re-entered.
-                if st.browser_tab == BrowserTab::Presets {
-                    st.preset_catalog = scan_preset_catalog();
-                }
+                st.enter_browser_tab(match tab {
+                    1 => BrowserTab::Presets,
+                    2 => BrowserTab::Plugins,
+                    _ => BrowserTab::Samples,
+                });
                 refresh_browser(&st);
             });
         }
@@ -17094,27 +17176,12 @@ impl AppUi {
                 // compensation sync, so a latency change is in this tick's
                 // plan.
                 st.borrow_mut().session.service_plugins(&mut handle);
-                // A plugin's own edit -- a gesture in its GUI, values it moved
-                // itself, a value a knob sent it -- is one undo step, taken
-                // around capturing its state into the song. Without the
-                // step, undoing an earlier edit would install an older
-                // state and reopen the plugin without it (MOO-82).
-                if st.borrow().session.plugin_edits_pending() {
-                    if let Some(window) = weak.upgrade() {
-                        let before = project_snapshot(&st.borrow(), &window);
-                        if st.borrow_mut().session.capture_plugin_edits() {
-                            record_project_history_as(
-                                &commands,
-                                before,
-                                &st,
-                                &window,
-                                "Plugin Edit",
-                                None,
-                            );
-                            st.borrow().update_document_title(&window);
-                        }
-                    }
+                if let Some(window) = weak.upgrade() {
+                    record_finished_plugin_edits(&st, &commands, &window);
                 }
+                // Every plugin face follows its plugin: the values it reports
+                // or was sent, their text, and whether it is running (MOO-83).
+                st.borrow_mut().refresh_plugin_faces();
                 st.borrow_mut().session.sync_compensation(&mut handle);
                 // Beside it and for the same reasons: an edge's fate is a
                 // property of every channel at once, so deriving and diffing
@@ -19889,6 +19956,11 @@ fn copied_message(rows: usize) -> String {
 ///
 /// One row model serves both tabs, so this is also what switches them.
 fn refresh_browser(st: &UiState) {
+    if st.browser_tab == BrowserTab::Plugins {
+        st.browser_rows
+            .set_vec(plugin_ui::plugin_rows(&st.plugin_catalog, &st.browser_filter));
+        return;
+    }
     if st.browser_tab == BrowserTab::Presets {
         let channel_kind = st.session.channels.get(st.session.selected).map(|c| c.kind());
         st.browser_rows.set_vec(build_preset_rows(

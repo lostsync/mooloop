@@ -6,7 +6,7 @@ mirror this file step-for-step the way MOO-5/16/30 do. The GitHub issue
 numbers below (`#10`, `#26`-`#30`) predate Adam's move away from GitHub
 issues; MOO-11 is the live tracking issue.
 
-**Written 2026-09-16.** Steps 01 (the spike), 02 (the neutral contract), 03 (parameters belong to an instance), 04 (the plugin rack), 05 (the scanner) and 06 (a headless CLAP effect in a chain) landed on 2026-09-23, as did MOO-56's one boxed source slot, which closes blocker 4 below. Step 07 (parameters, automation, modulation and state) landed on 2026-09-24, and so did step 09 (a channel source that is a hosted plugin). Adam asked for it directly:
+**Written 2026-09-16.** Steps 01 (the spike), 02 (the neutral contract), 03 (parameters belong to an instance), 04 (the plugin rack), 05 (the scanner) and 06 (a headless CLAP effect in a chain) landed on 2026-09-23, as did MOO-56's one boxed source slot, which closes blocker 4 below. Step 07 (parameters, automation, modulation and state) landed on 2026-09-24, and so did steps 08 (the plugin browser, the menu row and the generic face) and 09 (a channel source that is a hosted plugin). Adam asked for it directly:
 *"let's go ahead and plan out how we'll add CLAP support. Later we'll add
 VST/3 and AU. instrument support as well."* `SCOPE.md` already put CLAP in
 for 0.2.0 (item 9). This plan is outside the `FOCUS.md` sequence for the same
@@ -534,7 +534,7 @@ words. **Do not reopen this as a version-bump question.**
 | 05 | The scanner, out of process, with its cache | #27 | plugin-host, app, settings | **done 2026-09-23** (MOO-80) |
 | 06 | A headless CLAP effect in a chain | #27 | plugin-host, session | **done 2026-09-23** (MOO-81) |
 | 07 | Parameters, automation, modulation and state round-trip | #28 | session, project | **done 2026-09-24** (MOO-82) |
-| 08 | Plugin browser, the menu row, and the face for plugins without a GUI | #28 | **UI build**, drafted with `slint-sketch` | not started |
+| 08 | Plugin browser, the menu row, and the face for plugins without a GUI | #28 | **UI build**, drafted with `slint-sketch` | **done 2026-09-24** (MOO-83; remainder MOO-228, MOO-229) |
 | 09 | A channel source that is a boxed node | #29 | core, engine, session | **done 2026-09-24** (MOO-84) |
 | 10 | CLAP instruments | #29 | plugin-host, engine | not started |
 | 11 | Plugin GUIs in their own windows | #30 | plugin-host, **UI build** | not started |
@@ -1225,6 +1225,64 @@ continuity family's bound of 0.008. Now:
 
 Pinned by `continuity_tests::swapping_a_hosted_plugin_for_its_placeholder_and_back_is_continuous`
 and `swapping_a_latent_hosted_plugin_…` (64 frames).
+
+## Step 08, recorded 2026-09-24 (MOO-83)
+
+**What landed.** A plugin goes in a chain from the window. The join's menu
+ends in **Plugin…** (a `PluginTypeRow`, not an `EffectTypeRow`: it inserts
+no kind of its own, and `effect_preset_menu.rs` counts `EffectTypeRow`s as
+kinds), which opens the browser's third tab, PLUGINS, aimed at that join.
+The tab lists the scanner's cache, re-read whenever the tab opens (that is
+how a scan finishing after startup reaches the window), one row per plugin
+id, the copy `PluginCache::resolve` would open. A double-click, Enter or a
+drop calls `Session::insert_plugin_effect` through a small `CommandSink`
+over the window's two command queues (`plugin_ui::QueuedSink`), and it is
+one undo step. The face, `plugin-device.slint`, draws every parameter the
+plugin does not hide as the shared knob, with the plugin's own text; it is
+drawn by a predicate (`slot.is-plugin`), like a container, because its
+parameters are not a kind's table. A missing or failed plugin keeps its face
+from the list the song remembers, greyed, with the reason as a badge.
+
+**How it differs from `08-the-plugin-face.md`.**
+
+- **The face pages rather than pins.** Every visible parameter, in the
+  plugin's order: up to six on one unit, twelve a page on two, with `<` `>`.
+  Pinning, the sidebar list and the module grouping are MOO-229, with the
+  Preferences page and the rescan actions.
+- **Every parameter is a knob.** A stepped one snaps to its positions. The
+  segmented selector for eight or fewer positions is MOO-229, and LSP's
+  stepped parameters need care there: they report two positions on 0..1 and
+  name more (step 07 above).
+- **No modulation ring, and no naming a parameter from its knob** for a lane,
+  a route or MIDI learn; nor the missing-parameter drawing in the lane menu
+  and on the shelf. MOO-228.
+- **The drag's undo is the pump's step, held for the gesture.** Step 07 left
+  "a drag's begin and end belong to the face". The shared knob already
+  brackets every drag, wheel notch, reset and typed value with
+  `Gesture.begin()`/`end()`, so the pump's "Plugin Edit" capture now waits
+  while a gesture is open (`record_finished_plugin_edits`). A drag that
+  pauses past the rack's quiet time is still one step. No CLAP gesture
+  event is sent to the plugin: CLAP's gesture events are the plugin's to
+  report, not the host's to send.
+- **A face follows the plugin every pump tick** (`refresh_plugin_faces`):
+  each slot keeps one parameter model for its life, updated row by row, and
+  the plugin is asked for a value's text only when the value moved. A
+  republished model would rebuild the knobs and drop a drag.
+- **Instruments stay out.** An instrument is listed, greyed ("not yet a
+  channel source"); step 09 (MOO-84) had not landed when this did.
+
+**The tests.** `ui/src/plugin_ui_tests.rs`, in the real window through
+`window_probe.rs`, with the handlers `AppUi::new` wires (`plugin_ui::wire`)
+and the in-repo test gain found through a scanner cache: the join's
+"Plugin…", the tab's rows (the instrument and a crashed file greyed with
+their reasons), a click that only selects and a double-click that inserts;
+the face's Gain knob reading the plugin's "0.0 dB"; a wheel turn inside a
+gesture recorded as one "Plugin Edit" only after the gesture closes, however
+long it waited; the command carrying the plugin's id; then saved, reopened
+with the same gain on the face, and exported at that gain against the dry
+loop. A missing plugin's face says so and its knob sends nothing.
+`ui/tests/plugin_formats_stay_out.rs` holds the window to the neutral types,
+now that `mooloop-ui` depends on the host crate.
 
 ## The test plugins
 

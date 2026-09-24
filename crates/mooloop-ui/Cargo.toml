@@ -24,6 +24,9 @@ mockup = []
 mooloop-core = { workspace = true }
 mooloop-dsp = { workspace = true }
 mooloop-engine = { workspace = true }
+# The browser's PLUGINS tab reads the scanner's cache (MOO-83). Only its
+# neutral types: `tests/plugin_formats_stay_out.rs` holds this crate to it.
+mooloop-plugin-host = { workspace = true }
 mooloop-project = { workspace = true }
 mooloop-session = { workspace = true }
 slint = { workspace = true }
@@ -56,3 +59,6 @@ i-slint-backend-testing = { version = "1.17", features = ["renderer-software"] }
 # `ItemRc`; the search API that would hide it needs element debug info CI
 # does not build. Already in the graph through `slint`, at the same version.
 i-slint-core = "=1.17.1"
+# The plugin browser's window test puts the in-repo CLAP test double in a
+# chain; naming it here is what makes cargo build its cdylib first.
+mooloop-test-plugin = { path = "../mooloop-test-plugin" }

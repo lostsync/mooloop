@@ -58,6 +58,8 @@ import { BusDeviceFace, BusFaderRow, StripRackRow } from "bus-device.slint";
 import { StripMeters, StripRow, StripSpec } from "strip.slint";
 import { MasterCompFace, MasterRow, MasterSection, MasterSpec } from "master-comp.slint";
 import { BusCompDeviceFace } from "bus-comp-device.slint";
+import { PluginDeviceFace, PluginParamRow } from "plugin-device.slint";
+export { PluginParamRow }
 // The master bus compressor's row and ids, set from Rust (MOO-13).
 export { MasterSection, MasterSpec }
 export { StripMeters }
@@ -196,7 +198,9 @@ struct PlaylistClip {
 // expanded folder immediately following their parent.
 struct BrowserRow {
     depth: int,
-    // 0 = folder, 1 = sample file, 2 = preset group, 3 = preset.
+    // 0 = folder, 1 = sample file, 2 = preset group, 3 = preset,
+    // 4 = installed plugin (MOO-83; `loadable` false for one that cannot be
+    // put in a chain, with the reason in `detail`, and `path` its id).
     //
     // One model serves both tabs. A group behaves like a folder (it expands)
     // and a preset behaves like a sample (it is the leaf you act on), so the
@@ -413,6 +417,15 @@ struct EffectSlotRow {
     // The device is folded to its header (MOO-219): view state, saved with
     // the song, not an undo step.
     collapsed: bool,
+    // A hosted plugin (MOO-83), drawn by `PluginDeviceFace` from the list the
+    // plugin reported rather than from a kind's descriptor table: its name,
+    // why it is not playing (empty when it is), and its visible parameters,
+    // each carrying its dense index back. A predicate for `is-container`'s
+    // reason: the markup asks what a row is, not what number its kind has.
+    is-plugin: bool,
+    plugin-name: string,
+    plugin-status: string,
+    plugin-params: [PluginParamRow],
     // Layer-only: its branches, in rack order, and the rack index of the one
     // it is showing (-1 for none). S, M and each branch's meter are read from
     // the branch head's own row, `effect-slots[branch.slot]`.
@@ -1833,6 +1846,17 @@ export component MainWindow inherits Window {
     // slot, descriptor index within the kind, normalized 0..1. One callback
     // covers every parameter of every effect kind.
     callback effect-param-changed(int, int, float);
+    // A hosted plugin's parameter (MOO-83): slot, the parameter's *dense
+    // index* in the plugin's list (never its id, which can pass `i32::MAX`),
+    // normalized 0..1.
+    callback plugin-param-changed(int, int, float);
+    // The insert menu's "Plugin…" row: open the browser's PLUGINS tab, aimed
+    // at the row a plugin picked there should land before.
+    callback add-plugin-requested(int);
+    // A plugin from the browser: its id, and the row it lands before, or -1
+    // for where a double-click puts it (after the selected device, else at
+    // the end of the chain, unless the menu row aimed it somewhere).
+    callback browser-plugin-added(string, int);
     callback delay-tempo-sync-changed(int, bool);
     callback modulation-tempo-sync-changed(int, bool);
     callback modulation-rate-division-changed(int, int);
@@ -4889,6 +4913,7 @@ export component MainWindow inherits Window {
                                         DeviceJoin {
                                             drop-before: 0;
                                             kind-selected(kind) => { root.add-effect-clicked(kind, 0); }
+                                            plugin-requested => { root.add-plugin-requested(0); }
                                         }
 
                                         // The strip's own row, pinned. When
@@ -5620,6 +5645,28 @@ export component MainWindow inherits Window {
                                                     reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     select-requested => { root.device-selected(index); }
                                                 }
+                                                // A hosted plugin with no GUI of its own (MOO-83):
+                                                // drawn by a predicate, like a container, because
+                                                // its parameters are the plugin's list rather than
+                                                // a kind's descriptor table. Edits go back by the
+                                                // parameter's dense index, never its id.
+                                                if slot.is-plugin : PluginDeviceFace {
+                                                    x: DeviceRackMetrics.rail-width;
+                                                    y: 0px;
+                                                    width: parent.content-width;
+                                                    height: parent.height;
+                                                    slot-index: index;
+                                                    slot-count: root.effect-slots.length;
+                                                    bypassed: slot.bypassed;
+                                                    preset-name: slot.preset-name;
+                                                    units: slot.units;
+                                                    plugin-name: slot.plugin-name;
+                                                    status: slot.plugin-status;
+                                                    params: slot.plugin-params;
+                                                    param-changed(p, v) => { root.plugin-param-changed(index, p, v); }
+                                                    reorder-requested(target) => { root.reorder-effect(index, target); }
+                                                    select-requested => { root.device-selected(index); }
+                                                }
                                                 if slot.is-layer : LayerDeviceFace {
                                                     x: DeviceRackMetrics.rail-width;
                                                     y: 0px;
@@ -5753,6 +5800,7 @@ export component MainWindow inherits Window {
                                                 enabled: slot.join-before >= 0;
                                                 drop-before: slot.join-before;
                                                 kind-selected(kind) => { root.add-effect-clicked(kind, slot.join-before); }
+                                                plugin-requested => { root.add-plugin-requested(slot.join-before); }
                                             }
                                         }
 
@@ -7309,7 +7357,7 @@ export component MainWindow inherits Window {
                                 // 24px header beside 18px squares, and a
                                 // button's minimum height is larger than the
                                 // bar they live in.
-                                for tab[i] in ["SAMPLES", "PRESETS"] : Rectangle {
+                                for tab[i] in ["SAMPLES", "PRESETS", "PLUGINS"] : Rectangle {
                                     width: browser-tab-label.preferred-width + 10px;
                                     border-radius: Theme.radius-sm;
                                     background: root.browser-tab == i
@@ -7405,7 +7453,8 @@ export component MainWindow inherits Window {
                                 y: 3px;
                                 width: parent.width - 12px;
                                 text: root.browser-filter;
-                                placeholder: root.browser-tab == 0 ? "Filter samples" : "Filter presets";
+                                placeholder: root.browser-tab == 0 ? "Filter samples"
+                                    : root.browser-tab == 2 ? "Filter plugins" : "Filter presets";
                                 edited(value) => {
                                     root.browser-filter = value;
                                     root.browser-filter-changed(value);
@@ -7417,6 +7466,8 @@ export component MainWindow inherits Window {
                             text: root.browser-filter != "" ? "Nothing matches"
                                 : root.browser-tab == 0
                                 ? "Click + to add a folder of samples"
+                                : root.browser-tab == 2
+                                ? "No plugins found yet. Plugins are scanned at startup."
                                 : "No presets saved yet";
                             color: Theme.text-faint;
                             font-size: Theme.text-md;
@@ -7481,7 +7532,7 @@ export component MainWindow inherits Window {
                                             // preset is a leaf like a sample.
                                             text: (row.kind == 0 || row.kind == 2)
                                                 ? (row.expanded ? "▾" : "▸")
-                                                : row.kind == 1 ? "♪" : "◈";
+                                                : row.kind == 1 ? "♪" : row.kind == 4 ? "◇" : "◈";
                                             color: (row.kind == 0 || row.kind == 2)
                                                 ? Theme.text-muted
                                                 : row.loadable ? Theme.accent : Theme.text-faint;
@@ -7536,12 +7587,14 @@ export component MainWindow inherits Window {
                                         double-clicked => {
                                             if (row.kind == 1) {
                                                 root.browser-sample-loaded(row.path);
+                                            } else if (row.kind == 4 && row.loadable) {
+                                                root.browser-plugin-added(row.path, -1);
                                             } else if (row.kind == 3 && row.loadable) {
                                                 root.browser-preset-loaded(row.path);
                                             }
                                         }
                                         moved => {
-                                            if (!self.pressed || row.kind != 3 || !row.loadable) { return; }
+                                            if (!self.pressed || (row.kind != 3 && row.kind != 4) || !row.loadable) { return; }
                                             let x = self.absolute-position.x + self.mouse-x;
                                             let y = self.absolute-position.y + self.mouse-y;
                                             if (!BrowserDrag.active
@@ -7564,7 +7617,15 @@ export component MainWindow inherits Window {
                                                     // (MOO-218). Anywhere else on the rack: the
                                                     // same load a double-click does.
                                                     if (BrowserDrag.active && e.kind == PointerEventKind.up) {
-                                                        if (BrowserDrag.target-before >= 0) {
+                                                        if (row.kind == 4) {
+                                                            // A plugin: before that join's
+                                                            // row, or where a double-click
+                                                            // puts one (MOO-83).
+                                                            if (BrowserDrag.target-before >= 0 || BrowserDrag.over-rack) {
+                                                                root.browser-plugin-added(BrowserDrag.path,
+                                                                    BrowserDrag.target-before);
+                                                            }
+                                                        } else if (BrowserDrag.target-before >= 0) {
                                                             root.browser-preset-dropped(BrowserDrag.path,
                                                                 BrowserDrag.target-before);
                                                         } else if (BrowserDrag.over-rack) {

@@ -88,6 +88,7 @@ ids (C2, P4, …) are the report's.
 | The equal-power crossfade law, `smooth::equal_power` | Foundations, called by Effects (Buffer's jumps, the effect host's wet/dry and Mix), `DelayLine`'s read head and Instruments (the sampler's loop seam) | four inline copies | MOO-43. One law, so a change to how a crossfade sounds is made once |
 | A pattern written from a sampler's slices (`Session::write_slice_pattern`) | Instruments, writing Sequencing's pattern through its public paths only (`UpsertNote`/`RemoveNote`, `set_pattern_length`, the channel's note ids) | nobody | MOO-46. Instruments knows what the slices are; Sequencing owns what a pattern is, and nothing of it changed |
 | Who writes a control's value: `controlled` on every shared value control (`controls.slint`, `toolbar.slint`) | Interface, with each face's team owning the republish its controls wait for | each face, knob by knob | MOO-220. A control reports and never writes, unless its caller says `controlled: false` over a plain property Rust sets directly. A face that binds a control to a model row or an expression must republish that row on the edit, and must not write the property itself. `controlled_faces_tests.rs` turns every slider in the window and holds each to the document |
+| A hosted plugin in the window: the browser's PLUGINS tab, the insert menu's "Plugin…", and the face of a plugin with no GUI (`ui/src/plugin_ui.rs`, `ui/ui/plugin-device.slint`) | Interface, with Engine owning the session verbs it calls (`insert_plugin_effect`, `plugin_problem`, the rack's values and `value_text`) and Control owning `set_plugin_param` | nobody | MOO-83. The window reads only the host's neutral types (`PluginCache`, `ScannedPlugin`, `HostError`; `ui/tests/plugin_formats_stay_out.rs`). A face parameter crosses into Slint as its dense index, never its id. A knob's value is the plugin's, republished every pump tick into the slot's own model in place (a new model would rebuild a knob mid-drag); its undo step is the pump's "Plugin Edit", held while a gesture is open |
 | A control naming its parameter to Rust: `ControlRequest` (`controls.slint`) and `name_if_asked` in the three `*_modulation_edit_started` handlers | Interface, with Control owning what learn and automate do with the address | nobody | MOO-143. A control sets `ControlRequest.naming`, fires its own `modulation-edit-started`, and clears the flag **in the same Slint function**; Rust notes the address in `UiState.named_param` and returns before learn or a gesture; the menu request that follows takes it. Rust never sets or clears `naming`. A face handler that does more than forward the callback must ignore it while `naming` is set |
 
 ## Work that crosses teams
@@ -293,13 +294,16 @@ Files marked *shared* are split in the table above.
   `device-concepts.slint`, `device-drag-harness.slint`,
   `save-error-dialog.slint`, `question-dialog.slint`, `takes-dialog.slint`,
   `mockup.slint`, `mockup-catalog.slint`,
-  `mockup-tool.slint`
+  `mockup-tool.slint`, `plugin-device.slint` (the face of a hosted plugin
+  with no GUI, MOO-83)
+- `ui/src/plugin_ui.rs` and its tests (the plugin browser, menu row and face)
 - `ui/tests/`: `menubar.rs`, `question_dialog.rs`, `panes.rs`, `pane_drag.rs`, `first_click.rs`,
   `name_field.rs`, `picker_chip.rs`, `color_picker.rs`, `sidebar.rs`,
   `browser.rs`, `gesture_bracket.rs`, `rack_keyboard.rs`,
   `save_error_snapshot.rs`, `status_notice.rs`, `knob_typed_entry.rs`,
   `preferences_appearance_snapshot.rs`,
-  `preferences_shortcuts_snapshot.rs`, `preferences_developer_snapshot.rs`
+  `preferences_shortcuts_snapshot.rs`, `preferences_developer_snapshot.rs`,
+  `plugin_formats_stay_out.rs`
 
 `device-rack.slint` and `device-displays.slint` are the shell and the display
 canvas every device face is drawn in. They are Interface's; the faces inside

@@ -434,8 +434,9 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   which is a dockable-pane system: an always-visible docked status bar
   carrying hover hints and the panel toggles, a draggable splitter that
   resizes and collapses the lower editor dock, and a right-hand browser
-  sidebar on a resize grip. The sidebar browser has two tabs over one row
-  model, SAMPLES and PRESETS. **Samples**: persisted locations added through
+  sidebar on a resize grip. The sidebar browser has three tabs over one row
+  model, SAMPLES, PRESETS and PLUGINS (the last is under hosted plugins,
+  below). **Samples**: persisted locations added through
   a folder picker and removed from a right-click, a tree flattened to one row
   per visible entry, filtering to playable formats, an autoplay arm and a
   preview-gain trim feeding a dedicated engine preview voice -- a preview the
@@ -2200,14 +2201,42 @@ land on its own when it starts to matter:
   copy rather than combing against an early one. A resend at the same length
   keeps the ring that is playing, so it is silent; a real change of latency
   jumps, as any latency change does.
-- **A CLAP effect plays in a chain, headless** (MOO-81, plugin-hosting 06).
-  **Nothing in the window inserts one yet**: the browser, the insert-menu row
-  and the plugin's face are step 08. Today a plugin reaches a song in two
-  ways. One is a song that already names it: a `plugin` effect device whose
-  slot is in the song's `plugins` table (`PROJECT_FORMAT.md`, "Hosted
-  plugins"), opened from disk or the command line. The other is the
-  session's `Session::insert_plugin_effect`, which tests and
-  `crates/mooloop-session/examples/clap_effect_case.rs` call. mooloop finds the
+- **A CLAP effect goes in a chain from the window** (MOO-83,
+  plugin-hosting 08). The join's menu ends in **Plugin…**, which opens the
+  browser's third tab, **PLUGINS**, aimed at that join. The tab lists what
+  the scanner found (`<config>/plugins.toml`, re-read whenever the tab is
+  opened, which is how a scan that finished after startup shows up), one row
+  per plugin with its vendor, filtered like the presets by name, vendor or
+  what the row says. A plugin that cannot go in a chain is greyed with the
+  reason: an instrument (channel sources are step 09), one that is not
+  stereo in and stereo out, one the factory could not create; so is each
+  file that failed to scan, with why. A double-click, Enter or a drop puts
+  the plugin in the chain: a drop before the join it lands on, otherwise
+  before the join the menu was opened from, otherwise after the selected
+  device (and the run a selected container holds), otherwise at the end.
+  Adding it is one undo step ("Plugin added").
+- **A plugin with no GUI has a face** (MOO-83): its parameters, in the
+  plugin's order and under its own names, as the knobs every native device
+  uses, with the plugin's own text for each value ("7.2 dB"). One unit wide
+  for up to six parameters, two units and pages of twelve beyond that, with
+  `<` `>` between pages. A stepped parameter's knob lands only on its
+  positions. The knobs follow the song: undo, a lane, a preset and the
+  plugin's own edits all move them. A turn or a drag is one undo step
+  ("Plugin Edit"), recorded once the plugin has gone quiet after the release,
+  however long the drag paused. A **missing** plugin keeps its face, drawn
+  from the parameter list the song remembers, greyed, with a badge saying it
+  is missing and plays dry; a plugin that failed says why. Not yet on the
+  face: the modulation ring and naming a parameter for a lane or a route
+  from its knob (a lane or route on a plugin parameter is still made from a
+  song or the session), a pinned subset with a sidebar list for a plugin
+  with hundreds of parameters, and a segmented selector for a stepped
+  parameter.
+- **A CLAP effect plays in a chain** (MOO-81, plugin-hosting 06). Besides
+  the window (above), a plugin reaches a song from a song that already
+  names it: a `plugin` effect device whose slot is in the song's `plugins`
+  table (`PROJECT_FORMAT.md`, "Hosted plugins"), opened from disk or the
+  command line. `Session::insert_plugin_effect` is the one path the window,
+  the tests and `crates/mooloop-session/examples/clap_effect_case.rs` share. mooloop finds the
   plugin by its id in the scanner's cache (`<config>/plugins.toml`, below),
   rereading the cache when a scan rewrites it. It loads the plugin with its
   saved state and activates it at the engine's rate. On the next pump tick it
@@ -2232,9 +2261,9 @@ land on its own when it starts to matter:
   every plugin's processor to come back from the audio thread before it
   destroys the plugin. Its GUI does not open (step 11).
 - **A hosted plugin's parameters take lanes and routes** (MOO-82,
-  plugin-hosting 07), though nothing in the window draws them until step 08
-  gives the plugin a face: a lane or route reaches a plugin parameter today
-  from a song that names one, or through the session
+  plugin-hosting 07). The face's knobs set them (above), but a lane or route
+  reaches a plugin parameter only from a song that names one, or through the
+  session (MOO-228 draws it on the face)
   (`crates/mooloop-session/examples/clap_automation_case.rs`). A lane sets
   the parameter at every 32-frame control tick, in an export and live alike;
   a route is an offset over the plugin's own value (CLAP's parameter
@@ -2262,7 +2291,7 @@ land on its own when it starts to matter:
   cuts a sounding instrument rather than fading it; the plugin's own latency
   is not compensated; and its parameters take no lanes or routes. Which notes
   a plugin instrument hears, and how, is step 10 (MOO-85).
-- **Plugins are found, not yet offered** (MOO-80). At startup, on a thread of
+- **Plugins are found at startup** (MOO-80). At startup, on a thread of
   its own, mooloop looks for CLAP plugins in `~/.clap`, `/usr/lib/clap`,
   `/usr/lib64/clap`, `/usr/local/lib/clap` (inside a Flatpak also
   `/app/extensions/Plugins/clap`; on macOS the two
@@ -2274,8 +2303,9 @@ land on its own when it starts to matter:
   that failed and why (`load`, `incompatible`, `crashed`, `timed-out`, ...), is
   kept in `<config>/plugins.toml`; an unchanged file is never scanned again,
   failed or not. `scan-on-startup = false` turns the startup scan off. The log
-  says what the scan found. A song's plugins are found through it (above);
-  the browser and the insert menu that offer them are step 08.
+  says what the scan found. A song's plugins are found through it, and the
+  browser's PLUGINS tab lists it (above). There is no Preferences page for
+  plugins or rescan button yet (MOO-229).
 
 ### Buffers And Rendering
 

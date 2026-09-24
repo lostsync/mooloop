@@ -472,3 +472,18 @@ In the order worth playing:
     ignores rotation, so it has only been seen unrotated. The desktop app
     renders with femtovg, which rotates. Also fold a Chain holding a folded
     device, open it again, and check the inner fold is still folded.
+17. **A CLAP filter put in a chain from the window** (MOO-83,
+    plugin-hosting 08: lane 2's acceptance case). In the app, open a drum
+    loop, hover the arrow after its last device, pick **Plugin…**, type
+    `filter` in the PLUGINS tab and double-click LSP's *Filter x2 Stereo*
+    (`/usr/lib64/clap/lsp-plugins.clap`). Its face shows its parameters by
+    their own names, a page at a time; turn the frequency (a page or two in)
+    while the loop plays, undo it, redo it, then save, reopen and export.
+    The export should sound like the last thing heard, and the reopened face
+    should say what it said. Also try the rack with the plugin uninstalled
+    or renamed: its face should stay, greyed, saying it is missing, and the
+    loop play dry. The measured version runs the in-repo test gain through
+    the same window handlers, saves, reopens and exports, and holds the
+    export's level to the knob's gain within 0.1%:
+    `scripts/antibox --no-incremental cargo test -p mooloop-ui --lib plugin_ui`.
+    The face has only been seen with the software renderer (`slint-sketch`).

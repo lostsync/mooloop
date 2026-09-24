@@ -202,11 +202,20 @@ component EffectTypeRow inherits Rectangle {
 // a row of the insert menu, and wrapping inserts nothing of its own kind.
 component WrapKindRow inherits EffectTypeRow {}
 
+// The insert menu's way to a hosted plugin (MOO-83). Its own name for the
+// same reason as `WrapKindRow`: it inserts no kind of its own. It opens the
+// browser's PLUGINS tab aimed at the join it was picked from, and the plugin
+// is chosen there, filtered by name, from however many are installed.
+component PluginTypeRow inherits EffectTypeRow {}
+
 // The effect-type list every "add a device" trigger opens -- the joins
 // between devices (MOO-218). Kept as one component so the catalog is edited
 // in a single place.
 component EffectTypeMenu inherits VerticalLayout {
     callback kind-selected(int);
+    // Where a plugin can land, the last row opens the plugin browser.
+    in property <bool> plugin-enabled: true;
+    callback plugin-requested();
     padding: 4px;
     spacing: 1px;
     EffectTypeRow { text: "Filter"; tooltip: "Insert a low/high-pass filter"; selected => { root.kind-selected(0); } }
@@ -231,6 +240,11 @@ component EffectTypeMenu inherits VerticalLayout {
     // them (`docs/plans/archive/containers/07`).
     EffectTypeRow { text: "Chain"; tooltip: "Insert a container to hold and blend a run of devices"; selected => { root.kind-selected(13); } }
     EffectTypeRow { text: "Layer"; tooltip: "Insert a container whose devices run side by side and are summed"; selected => { root.kind-selected(14); } }
+    if root.plugin-enabled : PluginTypeRow {
+        text: "Plugin…";
+        tooltip: "Insert a CLAP effect: pick it in the browser's Plugins tab";
+        selected => { root.plugin-requested(); }
+    }
 }
 
 // A device's output rail: remove, unwrap, and the outgoing meter and trim.
@@ -977,6 +991,9 @@ export component DeviceJoin inherits Rectangle {
     // *into* rather than before anything).
     in property <int> drop-before: -1;
     callback kind-selected(int);
+    // The menu's "Plugin…" row (MOO-83): offered where the join inserts
+    // before a row, which is where a plugin from the browser can land.
+    callback plugin-requested();
 
     // A preset from the browser is over this join: the drop lands here.
     property <bool> drop-hot: BrowserDrag.active && root.enabled && root.drop-before >= 0
@@ -1048,8 +1065,13 @@ export component DeviceJoin inherits Rectangle {
             border-color: Theme.border;
             border-radius: Theme.radius-md;
             menu-content := EffectTypeMenu {
+                plugin-enabled: root.drop-before >= 0;
                 kind-selected(kind) => {
                     root.kind-selected(kind);
+                    insert-menu.close();
+                }
+                plugin-requested => {
+                    root.plugin-requested();
                     insert-menu.close();
                 }
             }
