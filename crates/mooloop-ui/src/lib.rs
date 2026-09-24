@@ -13627,6 +13627,47 @@ impl AppUi {
             }
         }
         {
+            // The break back as notes (MOO-46): one undo step, whichever way.
+            let st = state.clone();
+            let history_state = state.clone();
+            let commands = command_state.clone();
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            window.on_slices_to_pattern(move |replace, grid| {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                let grid = grid.then_some(mooloop_core::TICKS_PER_STEP);
+                {
+                    let mut st = st.borrow_mut();
+                    let Some((sends, write)) = st.session.write_slice_pattern(grid, replace) else {
+                        window.set_status_message("No slices to write".into());
+                        return;
+                    };
+                    for command in sends {
+                        let _ = tx.send(command);
+                    }
+                    let pattern = st.session.current_pattern;
+                    st.show_pattern(pattern);
+                    window.set_pattern_length(st.session.pattern_lengths[pattern] as i32);
+                    st.refresh_note_editor(&window);
+                    st.sync_playlist(&window);
+                    let mut status = format!("Wrote {} notes", write.notes);
+                    if write.replaced > 0 {
+                        status += &format!(", replacing {}", write.replaced);
+                    }
+                    if let Some(steps) = write.grew_to {
+                        status += &format!("; the pattern is now {steps} steps");
+                    }
+                    let left = write.unreachable + write.dropped;
+                    if left > 0 {
+                        status += &format!("; {left} slices had no room and were left out");
+                    }
+                    window.set_status_message(status.into());
+                }
+                record_project_history(&commands, before, &history_state, &window, "Pattern from slices");
+            });
+        }
+        {
             let st = state.clone();
             let history_state = state.clone();
             let commands = command_state.clone();

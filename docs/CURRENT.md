@@ -1013,6 +1013,17 @@ boundary.
   just before its attack. Detected markers are ordinary markers. Whether
   a marker was placed by hand is saved, and every marker in an older song
   counts as hand-placed.
+- **A sliced break becomes a pattern** (MOO-46, 2026-09-24). PATTERN, in
+  Slice mode, writes one note per slice into the channel's current
+  pattern, at the tick the slice falls on in the break. The break is the
+  playback region, `Bars` long. Each note is the base note plus the
+  slice's position, the same mapping the keyboard plays, and lasts until
+  the next slice. Placement keeps the break's own timing unless 1/16 is
+  lit. REPLACE clears the channel's notes in that pattern first, and ADD
+  writes beside them. A pattern shorter than the break grows to hold it.
+  Either is one undo step. Slices past MIDI 127, or past the longest a
+  pattern can be, are left out and counted in the status bar. The notes
+  are ordinary pattern data from then on.
 - Sampler voice allocation is fixed-capacity and deterministic: restart reuses
   the oldest matching pitch, layer mode overlaps notes, and overflow steals
   a releasing voice before a held one, the oldest of either. The sampler, the

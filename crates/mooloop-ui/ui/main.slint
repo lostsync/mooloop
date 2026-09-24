@@ -2152,6 +2152,7 @@ export component MainWindow inherits Window {
     callback slices-detect(float, float);
     callback slices-accept(int);
     callback slices-cancel();
+    callback slices-to-pattern(bool, bool);
     callback slice-drag-started();
     callback slice-drag-finished();
     callback commit-clicked();
@@ -4412,6 +4413,7 @@ export component MainWindow inherits Window {
                                                 slices-detect(sensitivity, spacing) => { root.slices-detect(sensitivity, spacing); }
                                                 slices-accept(how) => { root.slices-accept(how); }
                                                 slices-cancel() => { root.slices-cancel(); }
+                                                slices-to-pattern(replace, grid) => { root.slices-to-pattern(replace, grid); }
                                                 slice-drag-started() => { root.slice-drag-started(); }
                                                 slice-drag-finished() => { root.slice-drag-finished(); }
                                                 commit-clicked() => { root.commit-clicked(); }

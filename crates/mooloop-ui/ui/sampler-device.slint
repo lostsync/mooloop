@@ -266,6 +266,11 @@ export component SamplerDeviceFace inherits Rectangle {
     in property <[float]> slice-preview-markers;
     in-out property <float> slice-sensitivity: 0.5;
     in-out property <float> slice-spacing-ms: 50;
+    // Writing the slices into the pattern (MOO-46). The choice is the
+    // face's until it is made: whether the notes land on the step grid, and
+    // whether they replace this channel's notes or join them.
+    in-out property <bool> slice-pattern-open;
+    in-out property <bool> slice-pattern-grid;
     // Whether the published buffer is a committed render, what it was baked
     // at, and whether the project has since moved off the tempo it was fitted
     // to. Stale is shown, never acted on: re-baking a loop underneath someone
@@ -391,6 +396,7 @@ export component SamplerDeviceFace inherits Rectangle {
     callback slices-detect(float, float);
     callback slices-accept(int);
     callback slices-cancel();
+    callback slices-to-pattern(bool, bool);
     // Bracket a marker drag so the history collapses its frames into one
     // undo entry, the way the piano roll's gestures already do.
     callback slice-drag-started();
@@ -708,6 +714,13 @@ export component SamplerDeviceFace inherits Rectangle {
                                 if (root.loop-end > root.end-pos) { root.loop-end = root.end-pos; root.loop-end-changed(root.loop-end); }
                             }
                         }
+                        // The break back as notes: one per slice, where it
+                        // falls, into this channel's current pattern.
+                        if root.play-mode == 1 && !root.slice-preview && !root.slice-pattern-open : ToolButton {
+                            text: "PATTERN"; min-width: 58px; max-width: 58px; min-height: 20px;
+                            tooltip: "Pattern from slices"; hint: "Write a note for each slice where it falls, into this channel's pattern";
+                            clicked => { root.slice-pattern-open = true; }
+                        }
                     }
                     // The slice row takes the loop row's place rather than
                     // adding one: the face is a fixed 3U, a third row falls
@@ -781,7 +794,30 @@ export component SamplerDeviceFace inherits Rectangle {
                             clicked => { root.slices-cancel(); }
                         }
                     }
-                    if root.play-mode == 1 && !root.slice-preview : HorizontalLayout {
+                    if root.play-mode == 1 && root.slice-pattern-open : HorizontalLayout {
+                        spacing: 4px;
+                        ToggleButton {
+                            text: "1/16"; min-width: 40px; max-width: 40px; max-height: 20px;
+                            tooltip: "Quantize"; hint: "Put each note on the nearest sixteenth; off keeps the break's own timing";
+                            checked <=> root.slice-pattern-grid;
+                        }
+                        ToolButton {
+                            text: "REPLACE"; min-width: 56px; max-width: 56px; min-height: 20px;
+                            tooltip: "Replace"; hint: "Clear this channel's notes in the pattern, then write the slices";
+                            clicked => { root.slice-pattern-open = false; root.slices-to-pattern(true, root.slice-pattern-grid); }
+                        }
+                        ToolButton {
+                            text: "ADD"; min-width: 40px; max-width: 40px; min-height: 20px;
+                            tooltip: "Add"; hint: "Write the slices beside this channel's notes in the pattern";
+                            clicked => { root.slice-pattern-open = false; root.slices-to-pattern(false, root.slice-pattern-grid); }
+                        }
+                        ToolButton {
+                            text: "CANCEL"; min-width: 50px; max-width: 50px; min-height: 20px;
+                            tooltip: "Cancel"; hint: "Write nothing";
+                            clicked => { root.slice-pattern-open = false; }
+                        }
+                    }
+                    if root.play-mode == 1 && !root.slice-preview && !root.slice-pattern-open : HorizontalLayout {
                         spacing: 4px;
                         StepperField {
                             label: "BASE"; value <=> root.slice-base-note;

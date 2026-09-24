@@ -15,7 +15,8 @@ use mooloop_dsp::sample_analysis::{
 };
 use mooloop_dsp::SampleData;
 use mooloop_core::{
-    EngineCommand, SampleCommit, SamplerParams, SliceMap, SliceMarker, StretchMode, MAX_SLICES,
+    EngineCommand, NoteEvent, NoteId, SampleCommit, SamplerParams, SliceMap, SliceMarker,
+    StretchMode, MAX_PATTERN_STEPS, MAX_SLICES, TICKS_PER_BAR, TICKS_PER_STEP,
     MAX_STRETCH_BARS, MAX_STRETCH_RATIO, MIN_STRETCH_BARS, MIN_STRETCH_RATIO,
 };
 
@@ -244,6 +245,189 @@ pub fn typed_bars(
     let bar = mooloop_core::frames_per_bar(sample.sample_rate, f64::from(value)) / rate;
     let bars = ((end - start) / rate / bar) as f32;
     Some(bars.clamp(MIN_STRETCH_BARS, MAX_STRETCH_BARS))
+}
+
+/// The notes that play a sliced break back as it was cut (MOO-46).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SlicePattern {
+    /// One note per reachable slice, in slice order, ids from `first_id`.
+    pub notes: Vec<NoteEvent>,
+    /// The pattern length, in steps, that holds every note.
+    pub steps: u32,
+    /// Slices whose note would be past 127, left out and counted here.
+    pub unreachable: usize,
+}
+
+/// Where each slice starts, as a note on the tick it falls on (MOO-46).
+///
+/// The playback region is the break, and it lasts `stretch_bars` bars, the
+/// musical length fit-to-tempo already uses. So the notes land where the
+/// break's own hits land when it plays at the project's tempo. Slice `i` is
+/// note `slice_base_note + i`, the mapping the sampler plays, which gives one
+/// addressing scheme, not two. Each note lasts until the next slice starts,
+/// and the last one until the break ends.
+///
+/// `grid` is a quantize step in ticks, or `None` to keep each hit where it
+/// really falls, which is most of a break's character. Quantizing can put
+/// two slices on one tick. Both are kept, and the earlier one lasts a tick
+/// rather than vanishing.
+pub fn slice_pattern(
+    params: &SamplerParams,
+    slices: &SliceMap,
+    sample_len: usize,
+    grid: Option<u32>,
+    first_id: NoteId,
+) -> SlicePattern {
+    let (start, end) = mooloop_dsp::Sampler::resolve_playback_bounds(*params, sample_len, None);
+    let region = (end - start).max(1.0);
+    let bars = f64::from(params.stretch_bars.clamp(MIN_STRETCH_BARS, MAX_STRETCH_BARS));
+    let ticks_per_bar = f64::from(TICKS_PER_BAR);
+    let break_ticks = (bars * ticks_per_bar).round().max(1.0) as u32;
+    let tick_of = |frame: f64| {
+        let tick = ((frame - start) / region * bars * ticks_per_bar).round().max(0.0) as u32;
+        match grid {
+            Some(step) if step > 0 => ((tick + step / 2) / step) * step,
+            _ => tick,
+        }
+        .min(break_ticks.saturating_sub(1))
+    };
+    // Slices that begin inside the region, in order, with the note each
+    // plays. A marker before the region start plays nothing there.
+    let base = u32::from(params.slice_base_note.min(127));
+    let mut starts = Vec::new();
+    let mut unreachable = 0;
+    for (index, marker) in slices.markers().iter().enumerate() {
+        let frame = f64::from(marker.frame);
+        if frame < start || frame >= end {
+            continue;
+        }
+        let note = base + index as u32;
+        if note > 127 {
+            unreachable += 1;
+            continue;
+        }
+        starts.push((tick_of(frame), note as u8));
+    }
+    let mut notes = Vec::with_capacity(starts.len());
+    for (n, &(tick, note)) in starts.iter().enumerate() {
+        let next = starts.get(n + 1).map_or(break_ticks, |&(next, _)| next);
+        let length = next.saturating_sub(tick).max(1);
+        notes.push(NoteEvent::new(first_id + n as NoteId, tick, length, note, 100));
+    }
+    let steps = break_ticks.div_ceil(TICKS_PER_STEP);
+    SlicePattern {
+        notes,
+        steps,
+        unreachable,
+    }
+}
+
+/// What writing a slice pattern did (MOO-46), for the status bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SliceWrite {
+    /// Notes written.
+    pub notes: usize,
+    /// Notes the channel's pattern already held and the write removed.
+    pub replaced: usize,
+    /// Slices with no note to play them (past MIDI 127), left out.
+    pub unreachable: usize,
+    /// Slices past the pattern's longest length, or past its note limit,
+    /// left out.
+    pub dropped: usize,
+    /// The pattern length the write left, in steps, if it grew it.
+    pub grew_to: Option<usize>,
+}
+
+impl Session {
+    /// Writes the selected sampler's slices into the current pattern as
+    /// notes, one per slice, where each falls in the break (MOO-46).
+    ///
+    /// `replace` clears this channel's notes in the pattern first; otherwise
+    /// the slices are added beside them. A pattern shorter than the break
+    /// grows to hold it, up to the longest a pattern can be. The notes are
+    /// ordinary pattern data from then on, not linked to the slice table.
+    /// Returns the engine commands to send and what was done; `None` when
+    /// the channel has no slices to write. The caller records one undo
+    /// step.
+    pub fn write_slice_pattern(
+        &mut self,
+        grid: Option<u32>,
+        replace: bool,
+    ) -> Option<(Vec<EngineCommand>, SliceWrite)> {
+        let selected = self.selected;
+        let pattern = self.current_pattern;
+        let channel = self.channels.get(selected)?;
+        if channel.slices.is_empty() {
+            return None;
+        }
+        let len = channel.published_sample()?.frames.len();
+        let written = slice_pattern(
+            &channel.sampler_params(),
+            &channel.slices,
+            len,
+            grid,
+            channel.next_note_id,
+        );
+        let mut commands = Vec::new();
+        // The pattern grows to hold the break, never past its longest.
+        let steps = (written.steps as usize).min(usize::from(MAX_PATTERN_STEPS));
+        let grew_to = if steps > self.pattern_lengths[pattern] {
+            self.set_pattern_length(steps as i32).map(|change| {
+                commands.push(EngineCommand::SetPatternLength {
+                    pattern: change.pattern as u8,
+                    length_steps: change.length as u16,
+                });
+                change.length
+            })
+        } else {
+            None
+        };
+        let length_ticks = self.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
+        let channel = &mut self.channels[selected];
+        let mut replaced = 0;
+        if replace {
+            for note in channel.notes[pattern].drain(..) {
+                commands.push(EngineCommand::RemoveNote {
+                    pattern: pattern as u8,
+                    channel: selected as u8,
+                    id: note.id,
+                });
+                replaced += 1;
+            }
+        }
+        let mut notes = 0;
+        let mut dropped = 0;
+        for note in written.notes {
+            if note.start_tick >= length_ticks || !channel.has_room_for(pattern, 1) {
+                dropped += 1;
+                continue;
+            }
+            let note = NoteEvent {
+                duration_ticks: note.duration_ticks.min(length_ticks - note.start_tick),
+                ..note
+            };
+            channel.next_note_id = channel.next_note_id.max(note.id).wrapping_add(1).max(1);
+            channel.notes[pattern].push(note);
+            commands.push(EngineCommand::UpsertNote {
+                pattern: pattern as u8,
+                channel: selected as u8,
+                note,
+            });
+            notes += 1;
+        }
+        channel.notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
+        self.mark_dirty();
+        Some((
+            commands,
+            SliceWrite {
+                notes,
+                replaced,
+                unreachable: written.unreachable,
+                dropped,
+                grew_to,
+            },
+        ))
+    }
 }
 
 /// One of the four draggable positions on the waveform.
@@ -699,6 +883,107 @@ mod tests {
         assert_eq!(typed_bars(&params, Some(sample.as_ref()), None, "4"), Some(4.0));
         assert_eq!(typed_bars(&params, None, None, "120 bpm"), None, "no audio to measure");
         assert_eq!(typed_bars(&params, Some(sample.as_ref()), None, "fast"), None);
+    }
+
+    /// A two-bar break sliced into eight: its notes land where each slice
+    /// starts, as the base note plus the slice's position, each lasting to
+    /// the next, and the pattern that holds them is the break's two bars
+    /// (MOO-46).
+    #[test]
+    fn a_sliced_break_becomes_one_note_per_slice_where_it_falls() {
+        let params = SamplerParams {
+            play_mode: mooloop_core::PlayMode::Slice,
+            stretch_bars: 2.0,
+            ..SamplerParams::default()
+        };
+        let mut map = SliceMap::new();
+        map.divide_evenly(8, 0, 96_000);
+        let written = slice_pattern(&params, &map, 96_000, None, 10);
+        let bar_ticks = TICKS_PER_BAR;
+        assert_eq!(written.steps, 2 * mooloop_core::STEPS_PER_BAR);
+        assert_eq!(written.unreachable, 0);
+        assert_eq!(written.notes.len(), 8);
+        for (n, note) in written.notes.iter().enumerate() {
+            assert_eq!(note.id, 10 + n as NoteId);
+            assert_eq!(note.start_tick, n as u32 * bar_ticks / 4);
+            assert_eq!(note.duration_ticks, bar_ticks / 4);
+            assert_eq!(note.note, mooloop_core::DEFAULT_SLICE_BASE_NOTE + n as u8);
+        }
+    }
+
+    /// Unquantized, a hit off the grid stays off it; on a sixteenth grid it
+    /// moves to the nearest sixteenth. Two slices landing on one tick both
+    /// keep a note, and the earlier lasts a tick.
+    #[test]
+    fn a_break_off_the_grid_stays_off_it_unless_asked() {
+        let params = SamplerParams {
+            stretch_bars: 1.0,
+            ..SamplerParams::default()
+        };
+        let mut map = SliceMap::new();
+        // One bar of 48,000 frames is 384 ticks, 125 frames a tick.
+        for frame in [0u32, 6_100, 6_130, 24_000] {
+            map.add(frame);
+        }
+        let free = slice_pattern(&params, &map, 48_000, None, 1);
+        let starts: Vec<u32> = free.notes.iter().map(|note| note.start_tick).collect();
+        assert_eq!(starts, [0, 49, 49, 192]);
+        assert_eq!(free.notes[1].duration_ticks, 1, "a slice on the same tick lasts one");
+        let gridded = slice_pattern(&params, &map, 48_000, Some(TICKS_PER_STEP), 1);
+        let starts: Vec<u32> = gridded.notes.iter().map(|note| note.start_tick).collect();
+        assert_eq!(starts, [0, 48, 48, 192]);
+    }
+
+    /// A slice whose note would be past 127 has no note to play it: it is
+    /// left out and counted, not wrapped or clamped onto another slice.
+    #[test]
+    fn slices_past_the_note_range_are_counted_not_played() {
+        let params = SamplerParams {
+            slice_base_note: 120,
+            ..SamplerParams::default()
+        };
+        let mut map = SliceMap::new();
+        map.divide_evenly(12, 0, 48_000);
+        let written = slice_pattern(&params, &map, 48_000, None, 1);
+        assert_eq!(written.notes.len(), 8, "notes 120 to 127");
+        assert_eq!(written.unreachable, 4);
+        assert!(written.notes.iter().all(|note| note.note <= 127));
+    }
+
+    /// Writing replaces this channel's notes in the pattern when asked and
+    /// adds beside them otherwise, grows a short pattern to the break, and
+    /// hands back the commands that tell the engine.
+    #[test]
+    fn writing_a_slice_pattern_replaces_or_adds_and_grows_the_pattern() {
+        let mut session = session_with_audio();
+        if let Some(params) = session.channels[0].sampler_params_mut() {
+            params.play_mode = mooloop_core::PlayMode::Slice;
+            params.stretch_bars = 2.0;
+        }
+        session.divide_slices(4, false).expect("audio");
+        session.pattern_lengths[0] = 16;
+        session.channels[0].create_note(0, 0, 24, 60).expect("room");
+
+        let (commands, write) = session.write_slice_pattern(None, false).expect("slices");
+        assert_eq!(write.notes, 4);
+        assert_eq!(write.replaced, 0);
+        assert_eq!(write.grew_to, Some(32), "two bars is 32 steps");
+        assert_eq!(session.pattern_lengths[0], 32);
+        assert_eq!(session.channels[0].notes[0].len(), 5, "added beside the old note");
+        assert!(matches!(commands[0], EngineCommand::SetPatternLength { length_steps: 32, .. }));
+
+        let (commands, write) = session.write_slice_pattern(None, true).expect("slices");
+        assert_eq!(write.replaced, 5);
+        assert_eq!(write.notes, 4);
+        assert_eq!(session.channels[0].notes[0].len(), 4);
+        let removes = commands
+            .iter()
+            .filter(|command| matches!(command, EngineCommand::RemoveNote { .. }))
+            .count();
+        assert_eq!(removes, 5);
+        let ids: std::collections::BTreeSet<NoteId> =
+            session.channels[0].notes[0].iter().map(|note| note.id).collect();
+        assert_eq!(ids.len(), 4, "note ids stay unique");
     }
 
     /// Turning SYNC off freezes the ratio it was running into the knob

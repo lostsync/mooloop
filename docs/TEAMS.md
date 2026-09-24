@@ -83,6 +83,8 @@ ids (C2, P4, …) are the report's.
 | The browser preview voice | Instruments | nobody | It plays files at the wrong pitch (I2) |
 | `interpolate.rs`, `heldnotes.rs`, `synth_voice.rs` | Instruments | Foundations | Only instruments use them |
 | The saturation stages; one voice-filter block and one glide block | Foundations | device-local copies | Five and four copies today (F7) |
+| The equal-power crossfade law, `smooth::equal_power` | Foundations, called by Effects (Buffer's jumps, the effect host's wet/dry and Mix), `DelayLine`'s read head and Instruments (the sampler's loop seam) | four inline copies | MOO-43. One law, so a change to how a crossfade sounds is made once |
+| A pattern written from a sampler's slices (`Session::write_slice_pattern`) | Instruments, writing Sequencing's pattern through its public paths only (`UpsertNote`/`RemoveNote`, `set_pattern_length`, the channel's note ids) | nobody | MOO-46. Instruments knows what the slices are; Sequencing owns what a pattern is, and nothing of it changed |
 | A control naming its parameter to Rust: `ControlRequest` (`controls.slint`) and `name_if_asked` in the three `*_modulation_edit_started` handlers | Interface, with Control owning what learn and automate do with the address | nobody | MOO-143. A control sets `ControlRequest.naming`, fires its own `modulation-edit-started`, and clears the flag **in the same Slint function**; Rust notes the address in `UiState.named_param` and returns before learn or a gesture; the menu request that follows takes it. Rust never sets or clears `naming`. A face handler that does more than forward the callback must ignore it while `naming` is set |
 
 ## Work that crosses teams
@@ -202,7 +204,8 @@ Files marked *shared* are split in the table above.
 - `core/src/`: `sampler.rs`, `synth.rs`, `generator.rs`, `ds01.rs`,
   `ds01_factory.rs`, `mlm1.rs`, `mlm1_factory.rs`, `mlp8.rs`,
   `mlp8_factory.rs`, `aux_in.rs`, `input.rs`
-- `session/src/`: `audio_file.rs`, `sample.rs`, `sampler.rs`
+- `session/src/`: `audio_file.rs`, `sample.rs`, `sampler.rs`, and the listening
+  render `session/examples/slice_pattern_case.rs` (MOO-46)
 - `engine/src/ds01_tests.rs`, and the listening renders
   `engine/examples/mlp8_volume_pump.rs` (MOO-214),
   `engine/examples/sampler_loop_seam.rs` (MOO-43),

@@ -425,3 +425,19 @@ In the order worth playing:
     snares. Play `chop.wav`: every slice should start on its hit, with no
     flam and no pre-echo. Then, in the app, DETECT a real break, move a
     marker by hand, and REPLACE. The moved marker should stay.
+13. **A sliced break played back from its pattern** (MOO-46). The same kind
+    of two-bar break is sliced by detection, and PATTERN's function writes a
+    note per slice. It renders once as written and once with neighbouring
+    slices swapped:
+
+    ```sh
+    scripts/antibox --no-incremental --pull target/slice-pattern \
+      cargo run -p mooloop-session --example slice_pattern_case -- target/slice-pattern
+    ```
+
+    The binary compares the pattern's render with the break. Their 10 ms
+    energy envelopes correlate at 0.997, and every note lands within 2 ms
+    of its slice; a note starts on a whole tick, which at 120 BPM is 5.2 ms.
+    Play `pattern.wav` against `break.wav`, which should be the same loop,
+    and `reordered.wav`, which is the chop. Then, in the app, slice a real
+    break, press PATTERN, then REPLACE, and move a few notes in the roll.
