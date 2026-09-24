@@ -1755,6 +1755,16 @@ A push to close the open Linear issues, run as parallel teams, came with an inst
 
 The wording in every document that tracked them says *treated as done on his instruction*, never *heard*, because the difference matters later. `FOCUS.md`'s list of passes on record as actually heard still ends at `incremental-structure/` on Sep 18. If something in recording, undo, the strip or the EQ sounds wrong next month, that list is where to look for what was ever listened to, and these four are not on it.
 
+## Sep 23–24 (the FOCUS push) — a sequence finished in a night, and none of it heard
+
+`FOCUS.md` was rewritten on the evening of Sep 23 with three steps: finish the layer device, make a plugin audible, and build the master bus compressor. Adam then asked for all of it through team orchestration (`/goal`). Four team agents did the work, at most three at a time, each in an isolated worktree, and all their builds went through the box. Effects built the layer device (`4ca4c4bf`, `590e0f67`). Platform built the plugin scanner (`cae78bd5`). Realtime Engine put a CLAP effect in a chain (`47669d11`). Mixer & Routing built the compressor (`d49401e0` to `1bbf3c12`). All three plans that were finished are now archived.
+
+What made it work was the contract board from the Sep 22 push, used from the start rather than added halfway. Every step crossed team lines. The layer's Level/Mute/Solo touched Control's id freeze and Document's format. The scanner touched Interface's settings. The compressor touched all three. Each crossing was announced before it landed, and the orchestrator acked it for the owning team when that team wasn't running. Two acks changed the work rather than rubber-stamping it. The plugin step wanted to file its app wiring as a handoff; without that wiring, a saved CLAP effect would have loaded in the real application as a silent placeholder, so it was done in the same change. The compressor's lookahead raised whether recorded MIDI is compensated. It turned out none of the output latency is, not even the driver's, so it became MOO-209 instead of half a fix.
+
+A usage limit stopped both of the last two teams mid-verification at 02:00. Their work survived because each had committed before waiting on the box. They resumed from their own transcripts, rebased, and landed.
+
+Nothing in this sequence has been heard. The layer's parallel compression, the three compressor voicings and the LSP flanger were each rendered offline and measured against their claims. That is all an agent can do. They are items 1, 6 and 7 on `FOCUS.md`'s listening list, and the list of passes actually heard still ends on Sep 18.
+
 ## Open threads
 
 Refreshed 2026-09-02, with the September documentation audit's threads merged in on 2026-09-04 and Adam's 2026-09-05 list merged in after that. Four of the six threads listed here in August are closed: modulation drives things now, the buffer device exists, undo and clipboard are real, and the convolution reverb that needed an IR loader was replaced outright by an FDN hall — so `StereoIr` is no longer the boundary anything is waiting on.

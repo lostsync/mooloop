@@ -1,11 +1,12 @@
 # Focus
 
-Status: active working sequence, **rewritten 2026-09-23**. The previous
-version was written 2026-09-21 and ran out within two days. By 2026-09-23
-containers 07 and 08 had landed, `audio-recording/` was archived, and almost
-all of the teams report's polish backlog (`reports/teams-2026-09-22.md`) had
-closed in one day, about eighty issues, alongside plugin-hosting 01-04.
-**The sequence below starts from that tree.**
+Status: **sequence complete 2026-09-24; the next one is Adam's call.** The
+2026-09-23 sequence below (the layer device, a plugin you can hear, the
+master bus compressor) landed in full overnight, worked by teams (see
+`JOURNAL.md`), and every step's plan is archived or has moved past it. What
+it leaves is listening, not construction. **Do not start new sequence work
+from this document until it is rewritten** with the choice under "The next
+sequence" below.
 
 `archive/ROADMAP.md` orders the whole product by dependency, and `SCOPE.md`
 says what 0.2.0 is. This document is narrower: it names the active sequence
@@ -38,80 +39,43 @@ Two siblings, kept because they outlived the plans they came from:
   durability, export parity, and almost none of it is a new sound. The
   sequence below opens with two things you can hear.
 
-## The sequence
+## The sequence, 2026-09-23: done
 
-### 1. The layer device, finished — `containers/` steps 09 and 10 (MOO-71, MOO-72)
+All three steps are on `main`, each rendered and measured, **none heard**.
+Their listening passes are items 1, 6 and 7 of "Listening is a step" below.
 
-**Landed 2026-09-23** (MOO-71, MOO-72) and archived with its plan
-(`docs/plans/archive/containers/`). What is left of it is the listening pass,
-first in the list below.
+1. **The layer device**: `containers/` 09 and 10 (MOO-71 `4ca4c4bf`, MOO-72
+   `590e0f67`), built as Bitwig's FX Layer on Adam's answer: a branch list
+   with S, M, a meter and `+`, the picked branch's chain to the right, per
+   branch Level/Mute/Solo, wrap-as-layer, remove-a-branch, and a bank of
+   three layer presets. Plan archived. Left in its Linear project: MOO-210
+   (a container's output trim is inert) and MOO-160 (deferred).
+2. **A plugin you can hear**: `plugin-hosting/` 05 and 06 (MOO-80
+   `cae78bd5`, MOO-81 `47669d11`). The scanner runs each library in a child
+   process and caches the result; a CLAP effect plays in a chain, saves,
+   reopens with and without the plugin, and exports. Nothing in the window
+   inserts a plugin until step 08. Filed on the way: MOO-212 (a plugin in a
+   container), MOO-213 (the placeholder/plugin swap has no fade, Triage).
+3. **The master bus compressor** (MOO-13, MOO-169; `d49401e0`, `5ef812e0`,
+   `25a58a12`, `1bbf3c12`): Grip, Punch and Tube fitted to the measured
+   units, per-voicing faces, a needle meter, and the limiter's lookahead
+   knob (default 0, bit-identical there). Plan archived. Filed: MOO-209
+   (recorded MIDI is compensated for no output latency at all).
 
-07 and 08 landed 2026-09-23: a layer is a device, it is in the insert menu,
-it splits its input across its branches, aligns them and sums them. What it
-lacks is a face and the gestures.
+## The next sequence
 
-**09 is unblocked.** Adam answered it on 2026-09-23, choosing none of 09's
-three options: *"like container, but with a list (of the layers). pretty much
-just copy bitwig"*, with `reference/img/bitwig-fxlayer.png` as the mock-up.
-Bitwig's FX Layer is one rack unit tall. Its face is a **list of branches**,
-each row with a name, **S**, **M** and a level meter, a `+` under the list,
-and Gain and Mix beside it. **The selected branch's chain continues to the
-right in the rack**, under a coloured bracket. So nothing grows vertically,
-and every branch stays visible at a glance.
+Not chosen. The candidates this document already named, in the order it
+named them:
 
-- **Rewrite 09's work order around that before building it.** Its three
-  height options are now moot. What it adds that 08 didn't build is
-  **per-branch solo, mute and level**: a branch gain before the sum, a mute,
-  and solo within the layer. Those are engine parameters with ids, undo and
-  persistence, not drawing.
-- **10 folds into it naturally.** The list's `+` is "add a branch", and a
-  row's context menu is "remove". Wrap-as-layer and the layer preset are
-  still 10's.
-- **The case to play** is the one the device exists for: a drum loop into a
-  clean branch and a Drive → Bitcrush branch, mix swept. That is parallel
-  compression. It has never been heard (08's pass was closed unheard), so
-  play it before starting as well as at the end.
-- **`scripts/dupe-audit popup-close-order`** before any menu is written. A
-  wrap-kind menu is the fifth place that trap would be found.
-
-### 2. A plugin you can hear — `plugin-hosting/` steps 05 and 06 (MOO-80, MOO-81)
-
-01-04 and MOO-56 landed 2026-09-23: clack-host runs a CLAP plugin, a plugin
-parameter has its own owner, a missing plugin is kept, and a plugin rack
-holds each instance until its processor is gone. None of it can be heard yet,
-because nothing finds a plugin on disk and nothing puts one in a chain.
-
-- **05, the scanner**, runs out of process from the first version. That is
-  Adam's answer 4, and it is not negotiable: a plugin that crashes while
-  being scanned must not crash mooloop. **Landed 2026-09-23 (MOO-80)**; it
-  has nothing to listen to, and `plugin-hosting/00-status.md` has what it
-  found.
-- **06, a headless CLAP effect in a chain**, is the step with a sound. Its
-  case: a real third-party CLAP effect on a drum loop, saved, reopened with
-  the plugin present and with it missing, and exported. **Landed 2026-09-23
-  (MOO-81)**, rendered and measured but not heard; it is item 7 of the
-  listening list below. Nothing in the window inserts a plugin until 08.
-- 07 onward (parameters and automation, the face, the boxed source,
-  instruments, GUI windows) are the rest of the plan. They are next after 06
-  unless this document is rewritten first.
-
-### 3. The master bus compressor (MOO-13)
-
-Every question in front of it was answered on 2026-09-23, the three voicings
-are measured (`SCOPE.md` §2.1), and it is the most audible 0.2.0 item left.
-**The face is per voicing**: SSL and API get attack and release, and vari-mu
-swaps them for its six-position TIME selector. The safety limiter's new
-**lookahead control** (MOO-169: default 0, a small knob or number box on the
-master's face) lands in the same face, so build them together. *"Turning it
-on should feel special"* is a listening pass, and it is the acceptance case.
-
-**Built 2026-09-23** (`plans/archive/master-bus-compressor/`): three measured
-voicings on the master after its inserts and before its fader, a needle
-meter, and the lookahead knob beside the master's clip lamp. What is left is
-the listening pass, item 6 of "Listening is a step" below.
-
-After it, **sampler key zones** (MOO-14) are the next largest 0.2.0 item, and
-unblocked. Rewrite this document before choosing between them and the rest.
+- **Plugin hosting 07 onward** (parameters and automation, then 08, the
+  face and the browser that finally puts a plugin in a chain from the
+  window). The previous version said 07+ were next after 06 "unless this
+  document is rewritten first".
+- **Sampler key zones** (MOO-14), "the next largest 0.2.0 item, and
+  unblocked": zones for 0.2.0, with room for velocity layers.
+- **The listening passes themselves**, before any of it. Seven are queued
+  and three of them are this sequence's acceptance cases. Nothing since
+  2026-09-18 has been heard.
 
 ## Answered 2026-09-23, now construction
 
@@ -150,6 +114,8 @@ is short:
   bevel, Platinum and Impulse, and stopped where the step says to look before
   converting the rest of the controls. It needs a look, not a paragraph.
 - **The listening passes** below, which nobody has taken since 2026-09-18.
+- **The next sequence** (above): plugin hosting 07+, key zones, or
+  listening first.
 
 MOO-159 (the tracker) keeps its label, because "not now" defers the question
 rather than answering it.
