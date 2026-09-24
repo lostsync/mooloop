@@ -469,6 +469,62 @@ export component NameField inherits Rectangle {
     Tooltip { text: @markdown("\{root.tooltip}"); }
 }
 
+// A search box: a placeholder while empty, Escape to clear it and leave. Not
+// a `NameField`, whose editing session is an undo gesture -- typing a filter
+// edits nothing (MOO-9).
+export component SearchField inherits Rectangle {
+    in property <string> text;
+    in property <string> placeholder: "Filter";
+    in property <string> tooltip: root.placeholder;
+    callback edited(string);
+
+    height: 20px;
+    border-radius: Theme.radius-md;
+    background: search-input.has-focus ? Theme.surface : Theme.surface-raised;
+    border-width: Theme.hairline;
+    border-color: search-input.has-focus ? Theme.focus : Theme.border;
+    accessible-role: text-input;
+    accessible-label: root.tooltip;
+    accessible-value: search-input.text;
+
+    // Driven by the app through `changed`, never bound: typing into a
+    // `TextInput` replaces a binding on its `text` (see `NameField`).
+    changed text => {
+        if (search-input.text != root.text) { search-input.text = root.text; }
+    }
+
+    if search-input.text == "" && !search-input.has-focus : Text {
+        x: 6px;
+        height: 100%;
+        text: root.placeholder;
+        color: Theme.text-faint;
+        font-size: Theme.text-md;
+        vertical-alignment: center;
+    }
+    search-input := TextInput {
+        x: 6px;
+        width: parent.width - 12px;
+        height: 100%;
+        text: root.text;
+        color: Theme.text;
+        font-size: Theme.text-md;
+        vertical-alignment: center;
+        single-line: true;
+        edited => { root.edited(self.text); }
+        accepted => { self.clear-focus(); }
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                self.text = "";
+                root.edited("");
+                self.clear-focus();
+                return EventResult.accept;
+            }
+            return EventResult.reject;
+        }
+    }
+    Tooltip { text: @markdown("\{root.tooltip}"); }
+}
+
 // Tool-mode button. Latched state is a filled accent so the active tool is
 // unmistakable - getting this wrong means dragging the wrong edit across a row.
 export component ToolModeButton inherits Rectangle {

@@ -75,6 +75,30 @@ export global RackDrag {
     }
 }
 
+// A preset carried out of the browser (MOO-9): *"dragging to the rack places
+// it."* The browser row holds the grab -- a `TouchArea` keeps the pointer it
+// was pressed with -- so it publishes the pointer here in window coordinates,
+// and whatever can take the drop answers from its own bounds, the way a rack
+// row answers `RackDrag`.
+export global BrowserDrag {
+    in-out property <bool> active: false;
+    // The preset's path, handed back to Rust verbatim, and its name for the
+    // label that follows the pointer.
+    in-out property <string> path;
+    in-out property <string> name;
+    in-out property <length> pointer-x: 0px;
+    in-out property <length> pointer-y: 0px;
+    // Set by the rack while the pointer is over it.
+    in-out property <bool> over-rack: false;
+
+    public function end() {
+        active = false;
+        over-rack = false;
+        path = "";
+        name = "";
+    }
+}
+
 // One nesting level of a container's box, drawn behind a row's face.
 //
 // This is the container's *own chrome, extended* -- the same surface, border

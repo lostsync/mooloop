@@ -11,6 +11,8 @@ mod channel_colors;
 mod gestures;
 mod layer_view;
 #[cfg(test)]
+mod browser_panel_tests;
+#[cfg(test)]
 mod channel_sidebar_tests;
 #[cfg(test)]
 mod controlled_faces_tests;
@@ -96,7 +98,9 @@ use mooloop_project::{
     AssetMode, AssetWarning, Issue, LoadReport, LoadedDocument, PresetInfo, PresetKind,
     PresetSummary,
 };
-use mooloop_session::browser::{browser_display_name, has_playable_descendant, scan_browser_dir};
+use mooloop_session::browser::{
+    browser_display_name, has_playable_descendant, is_playable_sample, scan_browser_dir,
+};
 use mooloop_session::channel::{
     apply_sample_references, copied_channel_name, ChannelClipboard, ChannelState,
 };
@@ -1523,8 +1527,10 @@ fn browser_step_horizontally(
     }
 }
 
-/// Enter. The same three answers the row's own click gives, so a row does
-/// not mean one thing to the pointer and another to the keyboard.
+/// Enter. A folder opens, a sample plays, and a preset loads -- the answers
+/// a folder's click, a sample's click and a preset's *double*-click give
+/// (MOO-9: a single click only selects a preset), so a row does not mean one
+/// thing to the pointer and another to the keyboard.
 fn browser_activate_focused(st: &Rc<RefCell<UiState>>, window: &MainWindow) -> bool {
     let Some(row) = browser_row_at(st, window.get_browser_focus_index()) else {
         return false;
@@ -4111,6 +4117,9 @@ struct UiState {
     /// state: it is not a fact about the song, so it has no business in a
     /// project file or in undo.
     browser_tab: BrowserTab,
+    /// What the browser's filter field holds (MOO-9). Empty shows the tree
+    /// as expanded; anything else shows only what matches, in both tabs.
+    browser_filter: String,
     /// The preset catalogue behind the PRESETS tab, rescanned when the tab is
     /// opened rather than held live. Presets change on disk only when this
     /// application writes one, and it rescans then too.
@@ -4264,6 +4273,7 @@ impl UiState {
             mixer_strip_model,
             browser_rows: browser_row_model,
             browser_tab: BrowserTab::default(),
+            browser_filter: String::new(),
             preset_catalog: Vec::new(),
             effect_spectra_stale: std::cell::Cell::new(false),
             layer_selection: HashMap::new(),
@@ -15627,8 +15637,23 @@ impl AppUi {
                             "channel preset",
                         );
                     }
-                    // An effect preset *adds* a device. See `PresetSlot`.
+                    // Adam's rule for a double-click, Enter or a drop onto
+                    // the rack (MOO-9, 2026-09-23): *"if an instance of that
+                    // device is the currently selected device, double
+                    // clicking should load that preset into that device.
+                    // otherwise, it should add a new instance of the device
+                    // to the end of the selected chain."* The load into the
+                    // selected device is the rail's own preset menu, so it
+                    // goes through that handler rather than a second copy.
                     PresetSlot::Effect(kind) => {
+                        let into = {
+                            let st = st.borrow();
+                            preset_load_target(&st.session, kind, &path)
+                        };
+                        if let Some((slot, index)) = into {
+                            window.invoke_effect_preset_selected(slot as i32, index as i32);
+                            return;
+                        }
                         let landed = append_effect_preset(&st, &window, &path, kind, &name);
                         if let Some((before, after)) = landed {
                             if queue_project_edit(
@@ -15643,6 +15668,49 @@ impl AppUi {
                         }
                     }
                 }
+            });
+        }
+        {
+            // The preset row's "Add as New Device": the append half of the
+            // rule above, asked for by name, whatever is selected.
+            let st = state.clone();
+            let edit_tx = project_edit_tx.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_browser_preset_appended(move |path| {
+                let Some(window) = weak.upgrade() else { return };
+                let path = PathBuf::from(path.to_string());
+                let Some((kind, name)) = ({
+                    let st = st.borrow();
+                    st.preset_catalog.iter().find_map(|group| {
+                        let PresetSlot::Effect(kind) = group.slot else {
+                            return None;
+                        };
+                        let preset = group.presets.iter().find(|preset| preset.path == path)?;
+                        Some((kind, preset.name.clone()))
+                    })
+                }) else {
+                    return;
+                };
+                if let Some((before, after)) = append_effect_preset(&st, &window, &path, kind, &name) {
+                    if queue_project_edit(&edit_tx, before, after, "Effect preset added") {
+                        commands.borrow_mut().project_edit_pending = true;
+                        sync_command_availability(&window, &commands.borrow());
+                    }
+                }
+            });
+        }
+        {
+            // The filter field (MOO-9). Looking, not editing: nothing here
+            // reaches the document or the engine.
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_browser_filter_changed(move |text| {
+                let Some(window) = weak.upgrade() else { return };
+                let mut st = st.borrow_mut();
+                st.browser_filter = text.to_string();
+                window.set_browser_focus_index(-1);
+                refresh_browser(&st);
             });
         }
         {
@@ -18771,7 +18839,14 @@ fn spawn_browser_sample_load(
 /// Flattens the browser's folder hierarchy into visible rows: each location
 /// that can play something, then recursively the children of every expanded
 /// folder. Folders whose whole subtree is unplayable are hidden.
-fn build_browser_rows(locations: &[PathBuf], expanded: &HashSet<PathBuf>) -> Vec<BrowserRow> {
+fn build_browser_rows(
+    locations: &[PathBuf],
+    expanded: &HashSet<PathBuf>,
+    filter: &str,
+) -> Vec<BrowserRow> {
+    if !filter.trim().is_empty() {
+        return filtered_sample_rows(locations, filter);
+    }
     let mut rows = Vec::new();
     for location in locations {
         if has_playable_descendant(location, 0) {
@@ -18796,6 +18871,7 @@ fn push_browser_rows(
         expanded: is_expanded,
         detail: Default::default(),
         loadable: true,
+        effect: false,
     });
     if !is_expanded {
         return;
@@ -18823,9 +18899,107 @@ fn push_browser_rows(
                 expanded: false,
                 detail: Default::default(),
                 loadable: true,
+                effect: false,
             });
         }
     }
+}
+
+/// Where a double-clicked effect preset loads *into*, when it does: the
+/// selected device, when it is the preset's own kind, as the slot and the
+/// preset's index in that kind's rail menu (`effect_presets_of_kind`), which
+/// is what `effect-preset-selected` takes. `None` means add a new device.
+fn preset_load_target(session: &Session, kind: EffectKind, path: &Path) -> Option<(usize, usize)> {
+    let slot = session.selected_device_slot()?;
+    if session.effect_chain()?.get(slot)?.kind() != kind {
+        return None;
+    }
+    let index = effect_presets_of_kind(&session.effect_presets, kind)
+        .position(|preset| preset.path == path)?;
+    Some((slot, index))
+}
+
+/// Whether `text` answers the browser's `filter` (MOO-9): every word of the
+/// filter, case-insensitively, somewhere in it. Words rather than the whole
+/// string, so "warm pad" finds "Pad -- Warm Strings" as a musician expects.
+fn browser_filter_matches(filter: &str, text: &str) -> bool {
+    let text = text.to_lowercase();
+    filter
+        .split_whitespace()
+        .all(|word| text.contains(&word.to_lowercase()))
+}
+
+/// How far a filtered sample search walks, and how much it returns. The walk
+/// is on the UI thread, like the tree's own expansion, so it is bounded
+/// rather than exhaustive: a filter that finds five hundred files has said
+/// enough, and a library of twenty thousand entries is searched in about the
+/// time a keystroke takes.
+const FILTER_WALK_LIMIT: usize = 20_000;
+const FILTER_RESULT_LIMIT: usize = 500;
+
+/// The sample tab under a filter: each location that holds a match, and the
+/// matching files under it -- flat, with the folder they sit in as their
+/// detail, because a filter is a search and a search reads as a list.
+fn filtered_sample_rows(locations: &[PathBuf], filter: &str) -> Vec<BrowserRow> {
+    let mut rows = Vec::new();
+    let mut walked = 0usize;
+    let mut found = 0usize;
+    for location in locations {
+        let mut matches: Vec<PathBuf> = Vec::new();
+        let mut pending = vec![(location.clone(), 0usize)];
+        while let Some((dir, depth)) = pending.pop() {
+            for (is_dir, child) in scan_browser_dir(&dir) {
+                walked += 1;
+                if walked > FILTER_WALK_LIMIT || found >= FILTER_RESULT_LIMIT {
+                    break;
+                }
+                if is_dir {
+                    // The same guard `has_playable_descendant` has against a
+                    // symlink cycle.
+                    if depth < 16 {
+                        pending.push((child, depth + 1));
+                    }
+                } else if is_playable_sample(&child)
+                    && browser_filter_matches(filter, &browser_display_name(&child))
+                {
+                    matches.push(child);
+                    found += 1;
+                }
+            }
+        }
+        if matches.is_empty() {
+            continue;
+        }
+        matches.sort();
+        rows.push(BrowserRow {
+            depth: 0,
+            kind: 0,
+            name: browser_display_name(location).into(),
+            path: location.to_string_lossy().to_string().into(),
+            expanded: true,
+            detail: matches.len().to_string().into(),
+            loadable: true,
+            effect: false,
+        });
+        for file in matches {
+            let folder = file
+                .parent()
+                .and_then(|parent| parent.strip_prefix(location).ok())
+                .map(|relative| relative.to_string_lossy().to_string())
+                .unwrap_or_default();
+            rows.push(BrowserRow {
+                depth: 1,
+                kind: 1,
+                name: browser_display_name(&file).into(),
+                path: file.to_string_lossy().to_string().into(),
+                expanded: false,
+                detail: folder.into(),
+                loadable: true,
+                effect: false,
+            });
+        }
+    }
+    rows
 }
 
 /// What loading a preset from the browser lands on.
@@ -18945,22 +19119,49 @@ fn preset_detail(summary: &PresetSummary, group_label: &str) -> String {
 /// whether a *generator* row is loadable -- see [`PresetSlot::Effect`] for
 /// why an effect row is always offered. An unloadable row is still drawn,
 /// because a browser you cannot look through is a menu.
+///
+/// Under a `filter` (MOO-9) a group is shown open with only the presets that
+/// match -- by name, category, tags or the group's own label -- and a group
+/// with none is not shown at all.
 fn build_preset_rows(
     groups: &[PresetGroup],
     expanded: &HashSet<PathBuf>,
     channel_kind: Option<DeviceKind>,
+    filter: &str,
 ) -> Vec<BrowserRow> {
+    let filtering = !filter.trim().is_empty();
     let mut rows = Vec::new();
     for group in groups {
-        let is_expanded = expanded.contains(&group.dir);
+        let presets: Vec<&PresetSummary> = group
+            .presets
+            .iter()
+            .filter(|preset| {
+                !filtering
+                    || browser_filter_matches(
+                        filter,
+                        &format!(
+                            "{} {} {} {}",
+                            preset.name,
+                            preset.category,
+                            preset.tags.join(" "),
+                            group.label
+                        ),
+                    )
+            })
+            .collect();
+        if filtering && presets.is_empty() {
+            continue;
+        }
+        let is_expanded = filtering || expanded.contains(&group.dir);
         rows.push(BrowserRow {
             depth: 0,
             kind: 2,
             name: group.label.as_str().into(),
             path: group.dir.to_string_lossy().to_string().into(),
             expanded: is_expanded,
-            detail: group.presets.len().to_string().into(),
+            detail: presets.len().to_string().into(),
             loadable: true,
+            effect: false,
         });
         if !is_expanded {
             continue;
@@ -18969,7 +19170,8 @@ fn build_preset_rows(
             PresetSlot::Generator(kind) => channel_kind == Some(kind),
             PresetSlot::Channel | PresetSlot::Effect(_) => true,
         };
-        for preset in &group.presets {
+        let effect = matches!(group.slot, PresetSlot::Effect(_));
+        for preset in presets {
             rows.push(BrowserRow {
                 depth: 1,
                 kind: 3,
@@ -18978,6 +19180,7 @@ fn build_preset_rows(
                 expanded: false,
                 detail: preset_detail(preset, &group.label).into(),
                 loadable,
+                effect,
             });
         }
     }
@@ -19528,12 +19731,14 @@ fn refresh_browser(st: &UiState) {
             &st.preset_catalog,
             &st.session.browser_expanded,
             channel_kind,
+            &st.browser_filter,
         ));
         return;
     }
     st.browser_rows.set_vec(build_browser_rows(
         &st.session.browser_locations,
         &st.session.browser_expanded,
+        &st.browser_filter,
     ));
 }
 
@@ -19570,11 +19775,10 @@ mod browser_keyboard_tests {
     /// Walking onto a sample plays it; walking onto anything else does not
     /// do that row's click.
     ///
-    /// The second half is the one worth pinning. A preset row's click
-    /// *loads* the preset into the selected channel, so an arrow walk that
-    /// did what a click does would install a device per keypress on the way
-    /// down the PRESETS tab -- and the tab shares this model and this
-    /// keyboard with the samples.
+    /// The second half is the one worth pinning. A preset row's double-click
+    /// and Enter *load* the preset, so an arrow walk that did what they do
+    /// would install a device per keypress on the way down the PRESETS tab
+    /// -- and the tab shares this model and this keyboard with the samples.
     #[test]
     fn the_arrows_audition_a_sample_and_nothing_else() {
         assert!(browser_row_auditions(BROWSER_SAMPLE));
@@ -19632,13 +19836,13 @@ mod preset_browser_tests {
             vec![summary("Slapback", "Factory", &[])],
         )];
 
-        let collapsed = build_preset_rows(&groups, &HashSet::new(), None);
+        let collapsed = build_preset_rows(&groups, &HashSet::new(), None, "");
         assert_eq!(collapsed.len(), 1, "a collapsed group is one row");
         assert_eq!(collapsed[0].kind, 2);
         assert_eq!(collapsed[0].detail, "1", "a group shows what it holds");
 
         let expanded = HashSet::from([PathBuf::from("/presets/Delay")]);
-        let open = build_preset_rows(&groups, &expanded, None);
+        let open = build_preset_rows(&groups, &expanded, None, "");
         assert_eq!(open.len(), 2);
         assert_eq!(open[1].kind, 3);
         assert_eq!(open[1].name, "Slapback");
@@ -19656,7 +19860,7 @@ mod preset_browser_tests {
         let expanded = HashSet::from([PathBuf::from("/presets/Delay")]);
 
         for channel in [None, Some(DeviceKind::Sampler), Some(DeviceKind::Ds01)] {
-            let rows = build_preset_rows(&groups, &expanded, channel);
+            let rows = build_preset_rows(&groups, &expanded, channel, "");
             assert!(rows[1].loadable, "an effect preset appends, so it always fits");
         }
     }
@@ -19672,13 +19876,13 @@ mod preset_browser_tests {
         )];
         let expanded = HashSet::from([PathBuf::from("/presets/DS-01")]);
 
-        let matching = build_preset_rows(&groups, &expanded, Some(DeviceKind::Ds01));
+        let matching = build_preset_rows(&groups, &expanded, Some(DeviceKind::Ds01), "");
         assert!(matching[1].loadable);
 
-        let mismatched = build_preset_rows(&groups, &expanded, Some(DeviceKind::MlP8));
+        let mismatched = build_preset_rows(&groups, &expanded, Some(DeviceKind::MlP8), "");
         assert!(!mismatched[1].loadable, "a DS-01 patch does not fit an ML-P8");
 
-        let empty = build_preset_rows(&groups, &expanded, None);
+        let empty = build_preset_rows(&groups, &expanded, None, "");
         assert!(!empty[1].loadable, "and fits nothing at all with no channel");
     }
 
@@ -19712,7 +19916,7 @@ mod preset_browser_tests {
     fn an_empty_group_contributes_only_its_own_row() {
         let groups = vec![group("Reverb", PresetSlot::Effect(EffectKind::Reverb), vec![])];
         let expanded = HashSet::from([PathBuf::from("/presets/Reverb")]);
-        let rows = build_preset_rows(&groups, &expanded, None);
+        let rows = build_preset_rows(&groups, &expanded, None, "");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].detail, "0");
     }
@@ -20155,7 +20359,7 @@ mod tests {
         std::fs::write(root.join("Deep/Nested/hit.wav"), b"x").unwrap();
         std::fs::write(root.join("silent/readme.txt"), b"x").unwrap();
 
-        let rows = build_browser_rows(&[root.to_path_buf()], &HashSet::from([root.to_path_buf()]));
+        let rows = build_browser_rows(&[root.to_path_buf()], &HashSet::from([root.to_path_buf()]), "");
         let names: Vec<String> = rows.iter().map(|row| row.name.to_string()).collect();
         // The collapsed root hides its children, so expansion is required to
         // prove `Deep` survives (via audio two levels down) while `Empty` and
@@ -20166,7 +20370,7 @@ mod tests {
         // nothing at all.
         let bare = tempfile::tempdir().unwrap();
         std::fs::write(bare.path().join("notes.txt"), b"x").unwrap();
-        assert!(build_browser_rows(&[bare.path().to_path_buf()], &HashSet::new()).is_empty());
+        assert!(build_browser_rows(&[bare.path().to_path_buf()], &HashSet::new(), "").is_empty());
 
         // The playable predicate is the single switch new formats flip.
         assert!(is_playable_sample(Path::new("a.WAV")));
@@ -20190,7 +20394,7 @@ mod tests {
         let expanded: HashSet<PathBuf> = [root.to_path_buf(), root.join("Drums")]
             .into_iter()
             .collect();
-        let rows = build_browser_rows(&[root.to_path_buf()], &expanded);
+        let rows = build_browser_rows(&[root.to_path_buf()], &expanded, "");
 
         let summary: Vec<(usize, i32, bool, String)> = rows
             .iter()
@@ -20231,7 +20435,7 @@ mod tests {
         );
 
         // Collapsed locations list as a single row with no children.
-        let rows = build_browser_rows(&[root.to_path_buf()], &HashSet::new());
+        let rows = build_browser_rows(&[root.to_path_buf()], &HashSet::new(), "");
         assert_eq!(rows.len(), 1);
         assert!(!rows[0].expanded);
     }

@@ -32,6 +32,7 @@ fn row(depth: i32, kind: i32, name: &str, path: &str, expanded: bool) -> Browser
         expanded,
         detail: Default::default(),
         loadable: true,
+        effect: false,
     }
 }
 
@@ -214,8 +215,11 @@ fn right_clicking_a_preset_group_does_not_remove_a_location() {
     );
 }
 
+/// A click only selects a preset; the second click of a double-click loads
+/// it (MOO-9, Adam 2026-09-23: *"click 1 time is just going to select it.
+/// double click will actually load it."*).
 #[test]
-fn clicking_a_preset_loads_it() {
+fn clicking_a_preset_selects_it_and_a_double_click_loads_it() {
     let ui = harness();
     ui.set_sidebar_visible(true);
     ui.set_browser_tab(1);
@@ -235,15 +239,21 @@ fn clicking_a_preset_loads_it() {
     let row_y = find_row_y_at(&ui, &rest, PRESET_ROW_X);
     let at = LogicalPosition::new(PRESET_ROW_X, row_y);
 
-    ui.window().dispatch_event(WindowEvent::PointerPressed {
-        position: at,
-        button: PointerEventButton::Left,
-    });
-    ui.window().dispatch_event(WindowEvent::PointerReleased {
-        position: at,
-        button: PointerEventButton::Left,
-    });
+    let press = || {
+        ui.window().dispatch_event(WindowEvent::PointerPressed {
+            position: at,
+            button: PointerEventButton::Left,
+        });
+        ui.window().dispatch_event(WindowEvent::PointerReleased {
+            position: at,
+            button: PointerEventButton::Left,
+        });
+    };
 
+    press();
+    assert!(loaded.borrow().is_empty(), "a single click loaded the preset");
+    assert_eq!(ui.get_browser_focus_index(), 0, "the click selected the row");
+    press();
     assert_eq!(
         *loaded.borrow(),
         vec!["/presets/effects/delay/Slapback.mooloop-effect".to_string()]
@@ -270,18 +280,22 @@ fn an_unloadable_preset_does_not_load_when_clicked() {
     let row_y = find_row_y_at(&ui, &rest, PRESET_ROW_X);
     let at = LogicalPosition::new(PRESET_ROW_X, row_y);
 
-    ui.window().dispatch_event(WindowEvent::PointerPressed {
-        position: at,
-        button: PointerEventButton::Left,
-    });
-    ui.window().dispatch_event(WindowEvent::PointerReleased {
-        position: at,
-        button: PointerEventButton::Left,
-    });
+    // Twice: a double-click is what loads a preset now (MOO-9), so a single
+    // click proving nothing would be this test passing by not asking.
+    for _ in 0..2 {
+        ui.window().dispatch_event(WindowEvent::PointerPressed {
+            position: at,
+            button: PointerEventButton::Left,
+        });
+        ui.window().dispatch_event(WindowEvent::PointerReleased {
+            position: at,
+            button: PointerEventButton::Left,
+        });
+    }
 
     assert!(
         loaded.borrow().is_empty(),
-        "a greyed preset must not load when it is clicked"
+        "a greyed preset must not load when it is double-clicked"
     );
 }
 

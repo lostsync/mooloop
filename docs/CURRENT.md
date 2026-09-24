@@ -452,17 +452,25 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   scanned on entry to the tab and grouped — Channels, then one group per
   device kind, then one per effect kind, empty groups omitted — each group
   expanding to its presets with a count beside it, and a preset's category
-  and tags shown when they say something its group does not. Clicking a
-  preset loads it. A channel preset replaces the selected channel and a
+  and tags shown when they say something its group does not. **A click
+  selects a preset; a double-click, Enter or a drop onto the rack loads it**
+  (MOO-9, 2026-09-24), and a right-click offers Load and, for an effect
+  preset, Add as New Device. A **filter** field above both tabs narrows the
+  tree by words: presets by name, category, tags and group, opening every
+  group that has a match; samples by file name, searched through every folder
+  under every location rather than only the open ones (bounded, on the UI
+  thread), listed with the folder each sits in. A channel preset replaces the selected channel and a
   generator preset replaces its source device, which is why a generator
   preset is offered only on a channel already holding that kind and is drawn
   greyed otherwise. **An effect preset appends a device to the end of the
   selected channel's chain rather than replacing one**, so it is always
-  loadable; the rack row's own rail is still where a preset replaces what is
-  already in a row. **Every preset load is one undoable edit**, effect,
+  loadable -- unless the selected device is that preset's kind, when it loads
+  into that device instead, which is Adam's rule for the double-click; the
+  rack row's own rail is still where a preset replaces what is already in
+  any row. **Every preset load is one undoable edit**, effect,
   channel and generator alike, and so is a kit load; none of them stops the
   song, because each edits the song that is playing rather than opening
-  another (MOO-95). Neither tab can be driven from the keyboard.
+  another (MOO-95).
 - A two-pane Preferences dialog with General, Audio, MIDI, Appearance, and
   Shortcuts pages; General persists developer mode and reveals the presently
   empty Developer page. The MIDI page lists the inputs the driver is offering,

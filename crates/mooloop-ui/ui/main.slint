@@ -10,7 +10,7 @@ import {
     ToggleButton, ToolButton, TransportButton, ValueScale, ChannelMuteSolo, TrimKnob
 } from "controls.slint";
 import {
-    BeatLamps, MenuField, NameField, PositionReadout, StepperField, TempoField,
+    BeatLamps, MenuField, NameField, PositionReadout, SearchField, StepperField, TempoField,
     ToolbarLabel, ToolbarRule, ToolIcons, ToolModeButton
 } from "toolbar.slint";
 import { MasterMeter, MeterPrefs } from "meters.slint";
@@ -30,7 +30,7 @@ import { MenuBar, MenuBarItem, MenuRow, MenuSeparator } from "menubar.slint";
 import { PianoGrid, NoteCell, NoteHit, GestureMod, PianoGestures, RollMetrics } from "piano-grid.slint";
 import {
     ContainerEnclosure, DeviceAddSlot, DeviceFrame, DeviceHeader, DeviceJoin, DeviceOutputRail,
-    DevicePageButton, DeviceRackMetrics, RackDrag
+    DevicePageButton, DeviceRackMetrics, RackDrag, BrowserDrag
 } from "device-rack.slint";
 import { AddSourceButton, ChannelDrag, SourceKinds } from "channel-rack.slint";
 import { ChannelSidebar } from "channel-sidebar.slint";
@@ -215,6 +215,9 @@ struct BrowserRow {
     // generator preset whose device is not the selected channel's; an effect
     // preset is always loadable because loading one *adds* a device.
     loadable: bool,
+    // An effect preset: one that can be added as a new device whatever is
+    // selected, which the row's menu offers (MOO-9).
+    effect: bool,
 }
 
 // One effect slot in the selected channel's chain, in signal order.
@@ -1725,6 +1728,11 @@ export component MainWindow inherits Window {
     in-out property <int> browser-tab;
     callback browser-tab-changed(int);
     callback browser-preset-loaded(string);
+    // Always a new device, from the preset row's menu (MOO-9).
+    callback browser-preset-appended(string);
+    // The browser's filter field, both tabs (MOO-9).
+    in-out property <string> browser-filter;
+    callback browser-filter-changed(string);
     callback device-selected(int);
     // The generator at the head of the chain, selected or unselected by
     // clicking its header. Separate from `device-selected` because a
@@ -4210,6 +4218,15 @@ export component MainWindow inherits Window {
 
                             device-chain-scroll := ScrollView {
                                 vertical-stretch: 1;
+                                // A preset dragged out of the browser lands here
+                                // (MOO-9): the scroll answers from its own bounds
+                                // whether the pointer is over it.
+                                property <bool> drop-hot: BrowserDrag.active
+                                    && BrowserDrag.pointer-x >= self.absolute-position.x
+                                    && BrowserDrag.pointer-x < self.absolute-position.x + self.width
+                                    && BrowserDrag.pointer-y >= self.absolute-position.y
+                                    && BrowserDrag.pointer-y < self.absolute-position.y + self.height;
+                                changed drop-hot => { BrowserDrag.over-rack = self.drop-hot; }
                                 // Sized from the rack row's own intrinsic width, not
                                 // a constant: the chain grows as devices are added,
                                 // and faces are width-quantized in rack units, so a
@@ -4227,6 +4244,9 @@ export component MainWindow inherits Window {
                                     height: max(device-chain-scroll.visible-height,
                                         DeviceRackMetrics.rack-height);
                                     background: Theme.panel;
+                                    // Where a dragged preset would land, lit.
+                                    border-width: device-chain-scroll.drop-hot ? 2px : 0px;
+                                    border-color: Theme.accent;
 
                                     // Centred in whatever the scroll shows rather
                                     // than pinned to its top: the shelf used to
@@ -7291,8 +7311,28 @@ export component MainWindow inherits Window {
                             }
                         }
 
+                        // The filter (MOO-9). One field for both tabs: it
+                        // narrows whichever tree is showing, by name --
+                        // and for a preset by its category, tags and group.
+                        Rectangle {
+                            height: 26px;
+                            background: Theme.panel;
+                            browser-filter-field := SearchField {
+                                x: 6px;
+                                y: 3px;
+                                width: parent.width - 12px;
+                                text: root.browser-filter;
+                                placeholder: root.browser-tab == 0 ? "Filter samples" : "Filter presets";
+                                edited(value) => {
+                                    root.browser-filter = value;
+                                    root.browser-filter-changed(value);
+                                }
+                            }
+                        }
+
                         if root.browser-rows.length == 0 : Text {
-                            text: root.browser-tab == 0
+                            text: root.browser-filter != "" ? "Nothing matches"
+                                : root.browser-tab == 0
                                 ? "Click + to add a folder of samples"
                                 : "No presets saved yet";
                             color: Theme.text-faint;
@@ -7329,6 +7369,10 @@ export component MainWindow inherits Window {
                                 spacing: 0px;
                                 for row[index] in root.browser-rows : Rectangle {
                                     height: browser-scroll.ROW;
+                                    accessible-role: list-item;
+                                    accessible-label: row.name;
+                                    accessible-item-selectable: true;
+                                    accessible-item-selected: index == root.browser-focus-index;
                                     // The keyboard's row reads as selected
                                     // even when the pointer is elsewhere;
                                     // hover still lights whatever is under
@@ -7385,6 +7429,11 @@ export component MainWindow inherits Window {
                                     }
                                     browser-row-touch := TouchArea {
                                         mouse-cursor: pointer;
+                                        // Where a left press landed, in window
+                                        // coordinates, so a drag is told from a
+                                        // click by how far it has gone.
+                                        property <length> press-x;
+                                        property <length> press-y;
                                         clicked => {
                                             // A click is also where the
                                             // keyboard now is, so the arrows
@@ -7392,15 +7441,56 @@ export component MainWindow inherits Window {
                                             // just pressed.
                                             root.focused-surface = "browser";
                                             root.browser-focus-index = index;
+                                            // A preset is only *selected* by a
+                                            // click (Adam, MOO-9): loading one is
+                                            // a double-click, Enter, or a drag.
                                             if (row.kind == 0 || row.kind == 2) {
                                                 root.browser-row-toggled(row.path);
                                             } else if (row.kind == 1) {
                                                 root.browser-row-previewed(row.path);
-                                            } else if (row.loadable) {
+                                            }
+                                        }
+                                        double-clicked => {
+                                            if (row.kind == 1) {
+                                                root.browser-sample-loaded(row.path);
+                                            } else if (row.kind == 3 && row.loadable) {
                                                 root.browser-preset-loaded(row.path);
                                             }
                                         }
+                                        moved => {
+                                            if (!self.pressed || row.kind != 3 || !row.loadable) { return; }
+                                            let x = self.absolute-position.x + self.mouse-x;
+                                            let y = self.absolute-position.y + self.mouse-y;
+                                            if (!BrowserDrag.active
+                                                    && abs(x - self.press-x) + abs(y - self.press-y) > 6px) {
+                                                BrowserDrag.path = row.path;
+                                                BrowserDrag.name = row.name;
+                                                BrowserDrag.active = true;
+                                            }
+                                            BrowserDrag.pointer-x = x;
+                                            BrowserDrag.pointer-y = y;
+                                        }
                                         pointer-event(e) => {
+                                            if (e.button == PointerEventButton.left) {
+                                                if (e.kind == PointerEventKind.down) {
+                                                    self.press-x = self.absolute-position.x + self.mouse-x;
+                                                    self.press-y = self.absolute-position.y + self.mouse-y;
+                                                } else if (e.kind == PointerEventKind.up
+                                                        || e.kind == PointerEventKind.cancel) {
+                                                    // Dropped on the rack: the same load a
+                                                    // double-click does.
+                                                    if (BrowserDrag.active && BrowserDrag.over-rack
+                                                            && e.kind == PointerEventKind.up) {
+                                                        root.browser-preset-loaded(BrowserDrag.path);
+                                                    }
+                                                    BrowserDrag.end();
+                                                }
+                                            }
+                                            if (e.kind == PointerEventKind.down
+                                                    && e.button == PointerEventButton.right && row.kind == 3) {
+                                                root.browser-focus-index = index;
+                                                browser-preset-context-menu.show();
+                                            }
                                             if (e.kind == PointerEventKind.down
                                                     && e.button == PointerEventButton.right) {
                                                 // Only a sample *location* can
@@ -7414,6 +7504,29 @@ export component MainWindow inherits Window {
                                                 } else if (row.kind == 1) {
                                                     browser-sample-context-menu.show();
                                                 }
+                                            }
+                                        }
+                                    }
+
+                                    // A preset's menu (Adam, MOO-9: *"right clicking a
+                                    // preset should have a meaningful menu"*): load it
+                                    // by the double-click rule, or always as a new
+                                    // device. Callback first, close after.
+                                    browser-preset-context-menu := PopupWindow {
+                                        x: 0px;
+                                        y: parent.height + 2px;
+                                        width: 190px;
+                                        height: browser-preset-context-frame.preferred-height;
+                                        close-policy: close-on-click;
+                                        browser-preset-context-frame := Rectangle {
+                                            background: Theme.surface;
+                                            border-width: Theme.hairline;
+                                            border-color: Theme.border;
+                                            border-radius: Theme.radius-md;
+                                            VerticalLayout {
+                                                padding: 4px;
+                                                MenuRow { text: "Load"; enabled: row.loadable; selected => { root.browser-preset-loaded(row.path); } }
+                                                if row.effect : MenuRow { text: "Add as New Device"; selected => { root.browser-preset-appended(row.path); } }
                                             }
                                         }
                                     }
@@ -7743,6 +7856,27 @@ export component MainWindow inherits Window {
                 }
             }
 
+        }
+    }
+
+    // The preset a browser drag is carrying, beside the pointer (MOO-9).
+    // Above everything but the dialogs, and never in the way of the drop:
+    // it sits below and right of the hot spot.
+    if BrowserDrag.active : Rectangle {
+        x: BrowserDrag.pointer-x + 12px;
+        y: BrowserDrag.pointer-y + 12px;
+        width: browser-drag-label.preferred-width + 12px;
+        height: 20px;
+        border-radius: Theme.radius-md;
+        background: BrowserDrag.over-rack ? Theme.accent-active : Theme.surface-raised;
+        border-width: Theme.hairline;
+        border-color: Theme.border;
+        browser-drag-label := Text {
+            x: 6px;
+            text: BrowserDrag.name;
+            color: Theme.text;
+            font-size: Theme.text-md;
+            vertical-alignment: center;
         }
     }
 
