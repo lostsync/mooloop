@@ -99,6 +99,11 @@ swaps them for its six-position TIME selector. The safety limiter's new
 master's face) lands in the same face, so build them together. *"Turning it
 on should feel special"* is a listening pass, and it is the acceptance case.
 
+**Built 2026-09-23** (`plans/archive/master-bus-compressor/`): three measured
+voicings on the master after its inserts and before its fader, a needle
+meter, and the lookahead knob beside the master's clip lamp. What is left is
+the listening pass, item 6 of "Listening is a step" below.
+
 After it, **sampler key zones** (MOO-14) are the next largest 0.2.0 item, and
 unblocked. Rewrite this document before choosing between them and the rest.
 

@@ -30,7 +30,7 @@ mod mockup_ui {
     include!(concat!(env!("OUT_DIR"), "/mockup-tool.rs"));
 }
 
-use meter::MeterBallistics;
+use meter::{MeterBallistics, ReductionBallistics};
 use mooloop_core::gain::{linear_to_db, MIN_DB as METER_FLOOR_DB};
 use mooloop_core::log::Level;
 use mooloop_core::strip::{
@@ -38,6 +38,12 @@ use mooloop_core::strip::{
     STRIP_BAND_STRIDE, STRIP_COMP_ATTACK_MS, STRIP_COMP_IN, STRIP_COMP_KNEE_DB, STRIP_COMP_MAKEUP_DB, STRIP_COMP_MIX, STRIP_COMP_RATIO,
     STRIP_COMP_RELEASE_MS, STRIP_COMP_THRESHOLD_DB, STRIP_DRIVE_DB, STRIP_EQ_BANDS, STRIP_EQ_IN,
     STRIP_FIRST, STRIP_PRE_IN, STRIP_VOICING,
+};
+use mooloop_core::strip::{
+    BusCompVoicing, MasterSectionParams, MASTER_COMP_IN, MASTER_COMP_MAKEUP_DB, MASTER_COMP_MIX,
+    MASTER_COMP_THRESHOLD_DB, MASTER_COMP_VOICING, MASTER_GRIP_ATTACK, MASTER_GRIP_RATIO,
+    MASTER_GRIP_RELEASE, MASTER_LOOKAHEAD_MS, MASTER_PUNCH_ATTACK, MASTER_PUNCH_RATIO,
+    MASTER_PUNCH_RELEASE, MASTER_TUBE_TIME,
 };
 use mooloop_core::{log_debug, log_error, log_info, log_warn};
 use mooloop_core::{
@@ -471,8 +477,11 @@ where
 /// test that notices afterwards.
 pub fn install_strip_spec(window: &MainWindow) {
     let spec = window.global::<StripSpec>();
+    // The master section's rows continue the strip's, so `StripSpec.spec(id)`
+    // finds them by the same arithmetic (MOO-13).
     let params: Vec<StripParamSpec> = StripParams::descriptors()
         .iter()
+        .chain(MasterSectionParams::descriptors())
         .map(|descriptor| StripParamSpec {
             id: descriptor.id as i32,
             name: descriptor.name.into(),
@@ -527,6 +536,89 @@ pub fn install_strip_spec(window: &MainWindow) {
     // The pin, which both the rack's drawing and the engine's block loop
     // read from `mooloop_core::mixer::STRIP_PIN`.
     window.set_strip_pin_head(mooloop_core::mixer::STRIP_PIN == mooloop_core::mixer::StripPin::Head);
+    install_master_spec(window);
+}
+
+/// A measured time as the status bar says it.
+fn measured_time(ms: f32) -> String {
+    if ms >= 1_000.0 {
+        format!("{:.1} s", ms / 1_000.0)
+    } else if ms >= 10.0 {
+        format!("{ms:.0} ms")
+    } else {
+        format!("{ms:.2} ms")
+    }
+}
+
+/// The master bus compressor's ids, and the words its switches are printed
+/// with (MOO-13). The ids from `mooloop_core::strip`, the markings and the
+/// measured times from `mooloop_dsp::strip::bus_comp`'s law table, so the
+/// face spells none of them.
+pub fn install_master_spec(window: &MainWindow) {
+    use mooloop_dsp::strip::bus_comp::{
+        Timing, GRIP_ATTACKS, GRIP_RATIOS, GRIP_RELEASES, PUNCH_ATTACKS, PUNCH_RATIOS,
+        PUNCH_RELEASES, TUBE_TIMES,
+    };
+    fn words(items: impl Iterator<Item = String>) -> slint::ModelRc<slint::SharedString> {
+        let items: Vec<slint::SharedString> = items.map(Into::into).collect();
+        items.as_slice().into()
+    }
+    let markings = |table: &[Timing]| words(table.iter().map(|t| t.marking.to_string()));
+    let measured = |table: &[Timing]| {
+        words(table.iter().map(|t| format!("63% in {}", measured_time(t.measured_t63_ms))))
+    };
+    let spec = window.global::<MasterSpec>();
+    spec.set_comp_in(MASTER_COMP_IN as i32);
+    spec.set_voicing(MASTER_COMP_VOICING as i32);
+    spec.set_threshold_db(MASTER_COMP_THRESHOLD_DB as i32);
+    spec.set_makeup_db(MASTER_COMP_MAKEUP_DB as i32);
+    spec.set_mix(MASTER_COMP_MIX as i32);
+    spec.set_grip_ratio(MASTER_GRIP_RATIO as i32);
+    spec.set_grip_attack(MASTER_GRIP_ATTACK as i32);
+    spec.set_grip_release(MASTER_GRIP_RELEASE as i32);
+    spec.set_punch_ratio(MASTER_PUNCH_RATIO as i32);
+    spec.set_punch_attack(MASTER_PUNCH_ATTACK as i32);
+    spec.set_punch_release(MASTER_PUNCH_RELEASE as i32);
+    spec.set_tube_time(MASTER_TUBE_TIME as i32);
+    spec.set_lookahead_ms(MASTER_LOOKAHEAD_MS as i32);
+    spec.set_voicings(words(BusCompVoicing::ALL.iter().map(|v| v.label().to_string())));
+    spec.set_grip_ratios(words(GRIP_RATIOS.iter().map(|r| r.marking.to_string())));
+    spec.set_punch_ratios(words(PUNCH_RATIOS.iter().map(|r| r.marking.to_string())));
+    spec.set_grip_attacks(markings(&GRIP_ATTACKS));
+    spec.set_grip_releases(markings(&GRIP_RELEASES));
+    spec.set_punch_attacks(markings(&PUNCH_ATTACKS));
+    spec.set_punch_releases(markings(&PUNCH_RELEASES));
+    spec.set_grip_attack_measured(measured(&GRIP_ATTACKS));
+    spec.set_grip_release_measured(measured(&GRIP_RELEASES));
+    spec.set_punch_attack_measured(measured(&PUNCH_ATTACKS));
+    spec.set_punch_release_measured(measured(&PUNCH_RELEASES));
+    spec.set_tube_times(words(TUBE_TIMES.iter().map(|t| t.marking.to_string())));
+    spec.set_tube_time_measured(words(TUBE_TIMES.iter().map(|t| {
+        format!(
+            "attack 63% in {}, release in {}",
+            measured_time(t.attack.measured_t63_ms),
+            measured_time(t.release.measured_t63_ms)
+        )
+    })));
+}
+
+/// The master section as its face takes it.
+pub fn master_row(params: &MasterSectionParams) -> MasterRow {
+    MasterRow {
+        comp_in: params.comp_in,
+        voicing: params.voicing.to_index(),
+        threshold_db: params.threshold_db,
+        makeup_db: params.makeup_db,
+        mix: params.mix,
+        grip_ratio: i32::from(params.grip_ratio),
+        grip_attack: i32::from(params.grip_attack),
+        grip_release: i32::from(params.grip_release),
+        punch_ratio: i32::from(params.punch_ratio),
+        punch_attack: i32::from(params.punch_attack),
+        punch_release: i32::from(params.punch_release),
+        tube_time: i32::from(params.tube_time),
+        lookahead_ms: params.lookahead_ms,
+    }
 }
 
 fn apply_theme(window: &MainWindow, palette: ThemePalette) {
@@ -5897,6 +5989,11 @@ impl UiState {
             setup.bus.color.map(|color| color.to_hex()).unwrap_or_default().into(),
         );
         window.set_editing_bus_strip(strip_row(&setup.bus.strip, self.audio_sample_rate));
+        if index == MASTER_BUS as usize {
+            window
+                .global::<MasterSection>()
+                .set_row(master_row(&setup.bus.strip.master));
+        }
         window.set_editing_bus_can_remove(self.session.can_remove_track(index));
         window.set_editing_bus_can_move_left(self.session.can_move_track(index, -1));
         window.set_editing_bus_can_move_right(self.session.can_move_track(index, 1));
@@ -15362,6 +15459,8 @@ impl AppUi {
         let mut input_meter = (MeterBallistics::default(), MeterBallistics::default());
         let mut bus_meters: Vec<(MeterBallistics, MeterBallistics)> =
             (0..MAX_BUSES).map(|_| Default::default()).collect();
+        // The master bus compressor's needle (MOO-13).
+        let mut master_needle = ReductionBallistics::default();
         let mut last_meter_update = std::time::Instant::now();
         // The audio callback's own health, read once a second rather than
         // once a frame: every field is a count over a window, so polling it
@@ -16792,6 +16891,17 @@ impl AppUi {
                 // different rate from its neighbour would be the thing this
                 // whole indirection exists to prevent.
                 let falloff = meter::falloff_db_per_second(w.global::<MeterPrefs>().get_falloff());
+                // The master bus compressor's needle: drained every tick for
+                // the reason the strips' lamps are, drawn only on the rack.
+                {
+                    let (needle, held) =
+                        master_needle.update(handle.take_master_comp_reduction(), elapsed);
+                    if showing_device_rack {
+                        let section = w.global::<MasterSection>();
+                        section.set_reduction_db(needle);
+                        section.set_held_reduction_db(held);
+                    }
+                }
                 // The hardware input's meter, beside the AUDIO row. Read every
                 // tick so the cell does not hold a peak from before the row was
                 // shown; one reading, the louder side, because the row is one

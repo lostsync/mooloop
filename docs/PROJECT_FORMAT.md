@@ -500,7 +500,7 @@ before any of them existed still loads:
   nothing and is byte-identical to one saved before it existed; an older song
   opens with the section out and no lookahead. Every track's strip may carry
   one, and only the master's is run: the session refuses its ids on any other
-  track. See `docs/plans/master-bus-compressor/`.
+  track. See `docs/plans/archive/master-bus-compressor/`.
 
   There is deliberately **no field for where the strip sits in the chain.**
   `mooloop_core::mixer::STRIP_PIN` is a constant, not a project value: the

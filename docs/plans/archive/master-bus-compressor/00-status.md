@@ -9,9 +9,9 @@ Linear: project [Master bus compressor](https://linear.app/mooloop/project/maste
 | Step | What | Issue | State |
 | --- | --- | --- | --- |
 | [01](01-the-laws.md) | The three laws, as data and as a detector | [MOO-206](https://linear.app/mooloop/issue/MOO-206) | **landed 2026-09-23** |
-| [02](02-the-lookahead.md) | The safety limiter's lookahead, 0 bit-identical | [MOO-169](https://linear.app/mooloop/issue/MOO-169) | **landed 2026-09-23** (the ring; the box is 04) |
+| [02](02-the-lookahead.md) | The safety limiter's lookahead, 0 bit-identical | [MOO-169](https://linear.app/mooloop/issue/MOO-169) | **landed 2026-09-23** |
 | [03](03-the-master-section-runs.md) | Runs on the master, saved, metered, takes and exports aligned | [MOO-207](https://linear.app/mooloop/issue/MOO-207) | **landed 2026-09-23** |
-| [04](04-the-face-and-the-meter.md) | The per-voicing face, the meter, the lookahead box | [MOO-208](https://linear.app/mooloop/issue/MOO-208) | not started |
+| [04](04-the-face-and-the-meter.md) | The per-voicing face, the meter, the lookahead box | [MOO-208](https://linear.app/mooloop/issue/MOO-208) | **landed 2026-09-23** |
 
 **The listening pass** is Adam's, and is the acceptance case for *"turning it
 on should feel special"*. Nothing in this plan claims it. Step 03 adds the
@@ -134,3 +134,33 @@ showed that the tests did not: **an export's tail runs longer with the
 section in**, until the compressor has let go -- about 1.4 s here at Grip's
 0.3 s release, and to the tail cap at Auto -- because the tail waits for
 `is_at_rest`, as it does for any dynamics insert. The extra tail is silence.
+
+## Step 04 — the face, the needle and the lookahead knob
+
+`crates/mooloop-ui/ui/master-comp.slint`: `MasterCompFace`, three rack units
+in the master's rack between its inserts and its fader, lit in the master's
+warning colour and outlined when the section is in. Grip and Punch draw
+ratio, attack and release, each a stepped knob reading its unit's marking,
+with the measured time in the status bar; Tube draws its six-position TIME
+in their place. The needle is a VU-style arc, square-root scaled to 20 dB,
+with a held mark (`meter::ReductionBallistics`: instant rise, 300 ms fall,
+1.5 s hold). The lookahead is a small knob on the master's Out face beside
+its clip lamp. The crossing added two globals and one rack row, and no
+`MainWindow` property or callback: every control goes through the existing
+`bus-strip-param`, so undo is the strip's own.
+
+What building it found:
+
+- **A selector bank that holds its own selection is the wrong control for a
+  value undo can move.** `SelectorBank` writes its `selected-index` on a
+  click, which replaces the binding to the row; after that an undo that moved
+  the voicing would move the audio and not the face. The voicing is three
+  plain buttons reading the row.
+- **Every range is the descriptor's**, reached through `StripSpec.spec(id)`:
+  the master's rows continue the strip's in `StripSpec.params`, so the face
+  needed no second spec table, and `strip_face.rs` holds that the markup
+  states no bound of its own and that every word on a switch is the law
+  table's.
+
+**The listening pass is Adam's** (`FOCUS.md`, "Listening is a step", item 6).
+Nothing here claims that turning it on feels special.

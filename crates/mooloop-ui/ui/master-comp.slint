@@ -1,0 +1,451 @@
+import { Theme } from "theme.slint";
+import { GainMath } from "gain.slint";
+import { MiniKnob, ToolButton } from "controls.slint";
+import { DeviceHeader, DeviceRackMetrics } from "device-rack.slint";
+import { StripSpec } from "strip.slint";
+
+// The master bus compressor's face (MOO-13, `docs/plans/archive/master-bus-compressor/`).
+//
+// Adam, 2026-09-14: *"it needs to be more prominently displayed in the rack,
+// with a nice meter, and it should be running its own algos."* And on
+// 2026-09-23: **the face is per voicing** -- Grip and Punch draw ratio,
+// attack and release; Tube swaps all three for the 670's six-position TIME.
+// Each voicing keeps its own positions (`MasterSectionParams`), so switching
+// is swapping a unit in the rack, and no knob ever shows a range its voicing
+// does not have.
+//
+// It is drawn where the engine runs it: after the master's inserts, before
+// its fader. It is the master's own section, not an insert, so it has no
+// rails -- the same absence that says "pinned" on the strip's row.
+
+// The section as the face takes it: positions for the stepped controls,
+// natural units for the rest.
+export struct MasterRow {
+    comp-in: bool,
+    voicing: int,
+    threshold-db: float,
+    makeup-db: float,
+    mix: float,
+    grip-ratio: int,
+    grip-attack: int,
+    grip-release: int,
+    punch-ratio: int,
+    punch-attack: int,
+    punch-release: int,
+    tube-time: int,
+    lookahead-ms: float,
+}
+
+// Ids and the words a unit's switches are printed with, from Rust: the ids
+// from `mooloop_core::strip`, the markings and the measured times from
+// `mooloop_dsp::strip::bus_comp`'s law table. Nothing here is spelled twice.
+export global MasterSpec {
+    in-out property <int> comp-in;
+    in-out property <int> voicing;
+    in-out property <int> threshold-db;
+    in-out property <int> makeup-db;
+    in-out property <int> mix;
+    in-out property <int> grip-ratio;
+    in-out property <int> grip-attack;
+    in-out property <int> grip-release;
+    in-out property <int> punch-ratio;
+    in-out property <int> punch-attack;
+    in-out property <int> punch-release;
+    in-out property <int> tube-time;
+    in-out property <int> lookahead-ms;
+    in-out property <[string]> voicings;
+    in-out property <[string]> grip-ratios;
+    in-out property <[string]> grip-attacks;
+    in-out property <[string]> grip-releases;
+    in-out property <[string]> punch-ratios;
+    in-out property <[string]> punch-attacks;
+    in-out property <[string]> punch-releases;
+    in-out property <[string]> tube-times;
+    // The rig's measured time behind each marking, for the status bar:
+    // "63% in 114 ms".
+    in-out property <[string]> grip-attack-measured;
+    in-out property <[string]> grip-release-measured;
+    in-out property <[string]> punch-attack-measured;
+    in-out property <[string]> punch-release-measured;
+    in-out property <[string]> tube-time-measured;
+
+    /// The word at a position, clamped as the law table clamps a position.
+    public pure function word(words: [string], at: int) -> string {
+        return words.length == 0 ? "" : words[clamp(at, 0, words.length - 1)];
+    }
+}
+
+// What the section is doing, set by the pump: the master's row, and the
+// gain reduction through `ReductionBallistics` so the needle moves like the
+// meter on the unit rather than flickering with each block.
+export global MasterSection {
+    in-out property <MasterRow> row;
+    in-out property <float> reduction-db;
+    in-out property <float> held-reduction-db;
+}
+
+// One control of the section: its range, name and steps from the
+// descriptor table, its reading from the caller (a stepped control reads
+// its marking, not its position).
+component MasterKnob inherits VerticalLayout {
+    in property <int> param;
+    in property <float> natural;
+    in property <string> readout;
+    in property <string> hint;
+    in property <length> size: 30px;
+    in property <bool> enabled: true;
+    callback changed(float);
+
+    spacing: 2px;
+    alignment: center;
+
+    HorizontalLayout {
+        alignment: center;
+        MiniKnob {
+            diameter: root.size;
+            label: StripSpec.spec(root.param).name;
+            hint: root.hint;
+            minimum: StripSpec.spec(root.param).minimum;
+            maximum: StripSpec.spec(root.param).maximum;
+            default-value: StripSpec.spec(root.param).default-value;
+            step: StripSpec.spec(root.param).steps > 0 ? 1 : 0;
+            travel: StripSpec.spec(root.param).steps > 0
+                ? StripSpec.spec(root.param).steps * 14px : 150px;
+            value: root.natural;
+            controlled: true;
+            enabled: root.enabled;
+            value-text: root.readout;
+            fill: Theme.warning;
+            changed(v) => { root.changed(v); }
+        }
+    }
+    Text {
+        text: StripSpec.spec(root.param).name;
+        color: root.enabled ? Theme.text-muted : Theme.text-faint;
+        font-size: Theme.text-sm;
+        horizontal-alignment: center;
+    }
+    Text {
+        text: root.readout;
+        color: root.enabled ? Theme.text : Theme.text-faint;
+        font-size: Theme.text-sm;
+        horizontal-alignment: center;
+    }
+}
+
+// The needle.
+//
+// A gain-reduction meter the way the units draw one: an arc, the needle at
+// rest on 0 at the right and swinging left as the reduction deepens, so it
+// can never be read as a level. The scale is square-root, like a VU's: the
+// first few decibels -- where a bus compressor spends its life -- take half
+// the arc. Full scale is 20 dB.
+export component ReductionNeedle inherits Rectangle {
+    in property <float> reduction-db;
+    in property <float> held-db;
+    in property <bool> active: true;
+
+    // 0..1 along the arc, from 0 dB at the right to 20 dB at the left.
+    pure function travel(db: float) -> float {
+        return sqrt(clamp(db, 0, 20) / 20);
+    }
+    // The arc spans 100 degrees, centred on straight up.
+    pure function angle(db: float) -> angle {
+        return (50 - 100 * root.travel(db)) * 1deg;
+    }
+
+    private property <length> cx: self.width / 2;
+    private property <length> cy: self.height - 14px;
+    private property <length> radius: min(self.width / 2 - 10px, self.height - 30px);
+
+    background: Theme.background;
+    border-radius: Theme.radius-md;
+    border-width: Theme.hairline;
+    border-color: Theme.border;
+    clip: true;
+
+    // The scale: an arc, and a tick with its number at each reading worth
+    // naming.
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: self.width / 1px;
+        viewbox-height: self.height / 1px;
+        stroke: Theme.text-faint;
+        stroke-width: 1.5px;
+        commands: "M " + ((root.cx + root.radius * sin(-50deg)) / 1px) + " "
+            + ((root.cy - root.radius * cos(-50deg)) / 1px)
+            + " A " + (root.radius / 1px) + " " + (root.radius / 1px) + " 0 0 1 "
+            + ((root.cx + root.radius * sin(50deg)) / 1px) + " "
+            + ((root.cy - root.radius * cos(50deg)) / 1px);
+    }
+    for db in [0, 1, 2, 3, 5, 7, 10, 15, 20] : Rectangle {
+        property <angle> at: root.angle(db);
+        x: root.cx + (root.radius + 9px) * sin(self.at) - self.width / 2;
+        y: root.cy - (root.radius + 9px) * cos(self.at) - self.height / 2;
+        width: 18px;
+        height: 10px;
+        Text {
+            text: db;
+            color: Theme.text-muted;
+            font-size: 8px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    // The held peak, a short mark on the arc.
+    if root.active && root.held-db > 0.05 : Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: self.width / 1px;
+        viewbox-height: self.height / 1px;
+        stroke: Theme.warning;
+        stroke-width: 3px;
+        property <angle> at: root.angle(root.held-db);
+        commands: "M " + ((root.cx + (root.radius - 8px) * sin(self.at)) / 1px) + " "
+            + ((root.cy - (root.radius - 8px) * cos(self.at)) / 1px) + " L "
+            + ((root.cx + root.radius * sin(self.at)) / 1px) + " "
+            + ((root.cy - root.radius * cos(self.at)) / 1px);
+    }
+    // The needle itself.
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: self.width / 1px;
+        viewbox-height: self.height / 1px;
+        stroke: root.active ? Theme.text : Theme.text-faint;
+        stroke-width: 2px;
+        property <angle> at: root.angle(root.active ? root.reduction-db : 0);
+        commands: "M " + (root.cx / 1px) + " " + (root.cy / 1px) + " L "
+            + ((root.cx + (root.radius - 2px) * sin(self.at)) / 1px) + " "
+            + ((root.cy - (root.radius - 2px) * cos(self.at)) / 1px);
+    }
+    Rectangle {
+        x: root.cx - 4px;
+        y: root.cy - 4px;
+        width: 8px;
+        height: 8px;
+        border-radius: 4px;
+        background: Theme.text-muted;
+    }
+    Text {
+        x: 8px;
+        y: root.height - self.height - 4px;
+        text: "GR";
+        color: Theme.text-muted;
+        font-size: Theme.text-sm;
+    }
+    Text {
+        x: root.width - self.width - 8px;
+        y: root.height - self.height - 4px;
+        text: root.active ? GainMath.format-plain-db(root.reduction-db) + " dB" : "out";
+        color: root.active ? Theme.text : Theme.text-faint;
+        font-size: Theme.text-sm;
+    }
+}
+
+export component MasterCompFace inherits Rectangle {
+    in property <MasterRow> section;
+    in property <float> reduction-db;
+    in property <float> held-reduction-db;
+    in property <bool> muted;
+    callback moved(int, float);
+
+    private property <bool> on: root.section.comp-in;
+    private property <bool> tube: root.section.voicing == 2;
+    private property <bool> punch: root.section.voicing == 1;
+
+    width: DeviceRackMetrics.unit-width * 3 + DeviceRackMetrics.half-gap * 2;
+    height: DeviceRackMetrics.face-height;
+    background: Theme.surface;
+    border-width: root.on ? 2px : Theme.hairline;
+    border-color: root.on ? Theme.warning : Theme.border;
+    border-radius: Theme.radius-md;
+
+    HorizontalLayout {
+        x: 8px;
+        y: DeviceRackMetrics.header-height + 8px;
+        width: parent.width - 16px;
+        height: parent.height - DeviceRackMetrics.header-height - 16px;
+        spacing: 10px;
+
+        VerticalLayout {
+            width: 250px;
+            spacing: 6px;
+            ReductionNeedle {
+                vertical-stretch: 1;
+                reduction-db: root.reduction-db;
+                held-db: root.held-reduction-db;
+                active: root.on;
+            }
+            HorizontalLayout {
+                spacing: 6px;
+                height: 26px;
+                ToolButton {
+                    text: root.on ? "IN" : "OUT";
+                    tooltip: root.on ? "In" : "Out";
+                    hint: "Run the master bus compressor. Out is out: the mix is not touched.";
+                    active: root.on;
+                    min-width: 44px;
+                    max-width: 44px;
+                    clicked => { root.moved(MasterSpec.comp-in, root.on ? 0 : 1); }
+                }
+                // Buttons that read the row rather than a bank that holds its
+                // own selection: a bank's click overwrites the binding, and
+                // an undo that moved the voicing would then not move it.
+                HorizontalLayout {
+                    spacing: 1px;
+                    for label[i] in MasterSpec.voicings : ToolButton {
+                        text: label;
+                        tooltip: label;
+                        hint: "Grip is the SSL bus compressor's law, Punch the API-2500's, "
+                            + "Tube the Fairchild 670's. Each keeps its own settings.";
+                        active: root.section.voicing == i;
+                        min-width: 60px;
+                        max-width: 60px;
+                        clicked => { root.moved(MasterSpec.voicing, i); }
+                    }
+                }
+            }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 8px;
+            alignment: center;
+            HorizontalLayout {
+                spacing: 24px;
+                alignment: center;
+                MasterKnob {
+                    param: MasterSpec.threshold-db;
+                    natural: root.section.threshold-db;
+                    size: 50px;
+                    enabled: root.on;
+                    readout: GainMath.format-plain-db(root.section.threshold-db) + " dB";
+                    hint: "Threshold: where the compressor starts working.";
+                    changed(v) => { root.moved(self.param, v); }
+                }
+                if !root.tube : MasterKnob {
+                    param: root.punch ? MasterSpec.punch-ratio : MasterSpec.grip-ratio;
+                    natural: root.punch ? root.section.punch-ratio : root.section.grip-ratio;
+                    size: 50px;
+                    enabled: root.on;
+                    readout: MasterSpec.word(
+                        root.punch ? MasterSpec.punch-ratios : MasterSpec.grip-ratios,
+                        root.punch ? root.section.punch-ratio : root.section.grip-ratio);
+                    hint: "Ratio, as the unit's switch reads it; it delivers what it says.";
+                    changed(v) => { root.moved(self.param, v); }
+                }
+                if root.tube : MasterKnob {
+                    param: MasterSpec.tube-time;
+                    natural: root.section.tube-time;
+                    size: 50px;
+                    enabled: root.on;
+                    readout: MasterSpec.word(MasterSpec.tube-times, root.section.tube-time);
+                    hint: "Time constant: the 670's six coupled attack and release positions, "
+                        + MasterSpec.word(MasterSpec.tube-time-measured, root.section.tube-time)
+                        + ". Five and six release in two stages.";
+                    changed(v) => { root.moved(self.param, v); }
+                }
+                MasterKnob {
+                    param: MasterSpec.makeup-db;
+                    natural: root.section.makeup-db;
+                    size: 50px;
+                    enabled: root.on;
+                    readout: GainMath.format-db(root.section.makeup-db);
+                    hint: "Makeup gain after the compressor.";
+                    changed(v) => { root.moved(self.param, v); }
+                }
+            }
+            HorizontalLayout {
+                spacing: 24px;
+                alignment: center;
+                if !root.tube : MasterKnob {
+                    param: root.punch ? MasterSpec.punch-attack : MasterSpec.grip-attack;
+                    natural: root.punch ? root.section.punch-attack : root.section.grip-attack;
+                    size: 38px;
+                    enabled: root.on;
+                    readout: MasterSpec.word(
+                        root.punch ? MasterSpec.punch-attacks : MasterSpec.grip-attacks,
+                        root.punch ? root.section.punch-attack : root.section.grip-attack);
+                    hint: "Attack, as the unit marks it; it measures "
+                        + MasterSpec.word(
+                            root.punch ? MasterSpec.punch-attack-measured
+                                : MasterSpec.grip-attack-measured,
+                            root.punch ? root.section.punch-attack : root.section.grip-attack)
+                        + ".";
+                    changed(v) => { root.moved(self.param, v); }
+                }
+                if !root.tube : MasterKnob {
+                    param: root.punch ? MasterSpec.punch-release : MasterSpec.grip-release;
+                    natural: root.punch ? root.section.punch-release : root.section.grip-release;
+                    size: 38px;
+                    enabled: root.on;
+                    readout: MasterSpec.word(
+                        root.punch ? MasterSpec.punch-releases : MasterSpec.grip-releases,
+                        root.punch ? root.section.punch-release : root.section.grip-release);
+                    hint: "Release, as the unit marks it; it measures "
+                        + MasterSpec.word(
+                            root.punch ? MasterSpec.punch-release-measured
+                                : MasterSpec.grip-release-measured,
+                            root.punch ? root.section.punch-release : root.section.grip-release)
+                        + ".";
+                    changed(v) => { root.moved(self.param, v); }
+                }
+                MasterKnob {
+                    param: MasterSpec.mix;
+                    natural: root.section.mix;
+                    size: 38px;
+                    enabled: root.on;
+                    readout: round(root.section.mix * 100) + "%";
+                    hint: "Wet/dry: a parallel balance. At zero this is the mix as it arrived, "
+                        + "exactly.";
+                    changed(v) => { root.moved(self.param, v); }
+                }
+            }
+        }
+    }
+
+    DeviceHeader {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        name: "Bus comp";
+        kind: "MASTER / 3U";
+        role: "COMP";
+        device-color: Theme.warning;
+        enabled: root.on && !root.muted;
+    }
+}
+
+// The safety limiter's lookahead, for the master's Out face (MOO-169):
+// Adam's *"a small knob or scrollable number box"*, default 0.
+export component LookaheadKnob inherits VerticalLayout {
+    in property <float> lookahead-ms;
+    callback changed(float);
+
+    spacing: 1px;
+    alignment: center;
+    HorizontalLayout {
+        alignment: center;
+        MiniKnob {
+            diameter: 20px;
+            label: "Lookahead";
+            hint: "The safety limiter's lookahead. Above zero it turns an over down before "
+                + "it arrives, and delays everything leaving the master by this much.";
+            minimum: StripSpec.spec(MasterSpec.lookahead-ms).minimum;
+            maximum: StripSpec.spec(MasterSpec.lookahead-ms).maximum;
+            default-value: StripSpec.spec(MasterSpec.lookahead-ms).default-value;
+            value: root.lookahead-ms;
+            controlled: true;
+            value-text: GainMath.format-plain-db(root.lookahead-ms) + " ms";
+            changed(v) => { root.changed(v); }
+        }
+    }
+    Text {
+        text: "LA";
+        color: Theme.text-muted;
+        font-size: Theme.text-sm;
+        horizontal-alignment: center;
+    }
+}

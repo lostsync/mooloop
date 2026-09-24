@@ -707,7 +707,7 @@ fn every_section_starts_out_on_every_track() {
 }
 
 // ---------------------------------------------------------------------------
-// The master bus compressor (MOO-13, `docs/plans/master-bus-compressor/03`).
+// The master bus compressor (MOO-13, `docs/plans/archive/master-bus-compressor/03`).
 // `mooloop_dsp::strip::bus_comp` holds its laws to the rig; these hold where
 // the engine runs it.
 // ---------------------------------------------------------------------------

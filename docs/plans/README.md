@@ -103,14 +103,17 @@ in three places, all of them making the work smaller: four shared widgets
 rather than nine, because the other five are built from those four. Linear
 MOO-50, which predates the plan by three weeks and asked for exactly it.
 
-`master-bus-compressor/` was added 2026-09-23 as `FOCUS.md` step 3, the day
-Adam answered its two questions: the face is per voicing (vari-mu swaps attack
-and release for a six-position TIME), and the safety limiter gets a lookahead
-knob defaulting to 0. Four steps: the three laws as data (Grip for the SSL
-G bus, Punch for the API-2500, Tube for the Fairchild 670, fitted to the
-rig's own measurements), the lookahead, the section running and saved on the
-master's strip, and its face and needle meter. Its `00-status.md` records
-what fitting the laws found before any of it was built.
+`master-bus-compressor/` **was added and finished 2026-09-23, and is in
+`archive/`.** It was `FOCUS.md` step 3, written the day Adam answered its two
+questions: the face is per voicing (vari-mu swaps attack and release for a
+six-position TIME), and the safety limiter gets a lookahead knob defaulting
+to 0. Four steps: the three laws as data (Grip for the SSL G bus, Punch for
+the API-2500, Tube for the Fairchild 670, fitted to the rig's own
+measurements), the lookahead, the section running and saved on the master's
+strip, and its face and needle meter. Its `00-status.md` records what fitting
+the laws found, and that the engine's master is the law run over the mix
+sample for sample. **Nobody has listened to it**: "turning it on should feel
+special" is Adam's pass, `FOCUS.md` item 6 of "Listening is a step".
 
 `plugin-hosting/` was added 2026-09-16 and is **not started, outside the
 `FOCUS.md` sequence**, because Adam asked for it directly: CLAP effects and

@@ -158,7 +158,7 @@ fn the_master_meter_reads_the_mix_and_the_ports_read_the_ceiling() {
 }
 
 // ---------------------------------------------------------------------------
-// The safety limiter's lookahead (MOO-169, `docs/plans/master-bus-compressor/`).
+// The safety limiter's lookahead (MOO-169, `docs/plans/archive/master-bus-compressor/`).
 // ---------------------------------------------------------------------------
 
 use crate::render_test_support::{render_master_in_blocks, render_mix};

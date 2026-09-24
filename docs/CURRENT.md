@@ -714,10 +714,10 @@ selected source (sampler / drum synth / DS-01 / v1 mono / ML-M1 / ML-P8 / poly /
                                                            v
                                                 master bus (bus 0)
                                                            |
-                                            master effect chain -> gain/pan
+                                            master effect chain -> master bus compressor -> gain/pan
                                                            |
                                                            v
-                               output guard: NaN/Inf -> silence, 0 dBFS limiter
+                               output guard: NaN/Inf -> silence, 0 dBFS limiter (lookahead 0-5 ms)
                                                            |
                                                            v
                                   driver output (JACK ports or a Core Audio device)
@@ -731,6 +731,23 @@ output at 0 dBFS. It is bit-transparent to a mix that stays under 0 dBFS.
 The master's meter reads the mix *before* the guard, so a mix that is over
 still lights the clip latch, and a non-finite sample reads as an infinite
 peak rather than as silence.
+
+**The master bus compressor** (MOO-13, `docs/GAIN_STRUCTURE.md`) is the
+master's own section, drawn in the master's device rack between its inserts
+and its fader, where it runs. Three voicings, each a measured unit's law:
+**Grip** (the SSL G bus), **Punch** (the API-2500) and **Tube** (the
+Fairchild 670). Grip and Punch show ratio, attack and release, each a switch
+reading the unit's own markings; Tube shows the 670's six-position TIME
+instead. Threshold, makeup and wet/dry are shared, and each voicing keeps its
+own settings when another is picked. A needle meter reads its gain reduction,
+with a held mark. Out, it leaves the mix bit for bit. It is saved with the
+master's strip.
+
+**The safety limiter's lookahead** (MOO-169) is a small knob on the master's
+Out face, beside its clip lamp: 0 ms by default, which is the zero-latency
+limiter exactly, up to 5 ms. Above 0 everything leaving the master is that
+much later; a take from the hardware input waits for it, and an export trims
+it, so a file still starts on the bar line.
 
 **Inside the graph** (MOO-176), the effect host checks each device's input in
 the peak fold it already takes for the meters. A block carrying a NaN or an

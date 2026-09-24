@@ -34,6 +34,7 @@ use slint::{ComponentHandle, Model};
 mod common;
 
 const STRIP_SLINT: &str = include_str!("../ui/strip.slint");
+const MASTER_SLINT: &str = include_str!("../ui/master-comp.slint");
 const DISPLAYS_SLINT: &str = include_str!("../ui/device-displays.slint");
 
 fn headless() -> MainWindow {
@@ -98,13 +99,19 @@ fn the_faces_table_is_the_engines_table() {
     }
     assert_eq!(spec.get_band_stride(), STRIP_BAND_STRIDE as i32);
 
+    // The master section's rows continue the strip's, found by the same
+    // arithmetic on the id (MOO-13).
     let params = spec.get_params();
+    let descriptors: Vec<_> = StripParams::descriptors()
+        .iter()
+        .chain(mooloop_core::strip::MasterSectionParams::descriptors())
+        .collect();
     assert_eq!(
         params.row_count(),
-        StripParams::descriptors().len(),
+        descriptors.len(),
         "the face was handed a different number of parameters than the strip has"
     );
-    for (index, descriptor) in StripParams::descriptors().iter().enumerate() {
+    for (index, descriptor) in descriptors.iter().enumerate() {
         let row = params.row_data(index).unwrap();
         assert_eq!(row.id, descriptor.id as i32, "{}", descriptor.name);
         assert_eq!(row.name.as_str(), descriptor.name);
@@ -312,5 +319,157 @@ fn the_eq_says_which_way_it_reads() {
     assert!(
         STRIP_SLINT.contains("left to right and top to bottom"),
         "strip.slint no longer says which order its four bands are in"
+    );
+}
+
+/// **The master bus compressor's face reads the engine's tables** (MOO-13):
+/// every id it addresses is `mooloop_core::strip`'s, every word on a switch
+/// is the law table's marking, and its markup declares no range of its own.
+#[test]
+fn the_master_face_reads_the_law_table() {
+    use mooloop_core::strip::{
+        MASTER_COMP_IN, MASTER_COMP_MAKEUP_DB, MASTER_COMP_MIX, MASTER_COMP_THRESHOLD_DB,
+        MASTER_COMP_VOICING, MASTER_GRIP_ATTACK, MASTER_GRIP_RATIO, MASTER_GRIP_RELEASE,
+        MASTER_LOOKAHEAD_MS, MASTER_PUNCH_ATTACK, MASTER_PUNCH_RATIO, MASTER_PUNCH_RELEASE,
+        MASTER_TUBE_TIME,
+    };
+    use mooloop_dsp::strip::bus_comp::{
+        Ratio, Timing, GRIP_ATTACKS, GRIP_RATIOS, GRIP_RELEASES, PUNCH_ATTACKS, PUNCH_RATIOS,
+        PUNCH_RELEASES, TUBE_TIMES,
+    };
+    let ui = headless();
+    install_strip_spec(&ui);
+    let spec = ui.global::<mooloop_ui::MasterSpec>();
+    for (property, id) in [
+        (spec.get_comp_in(), MASTER_COMP_IN),
+        (spec.get_voicing(), MASTER_COMP_VOICING),
+        (spec.get_threshold_db(), MASTER_COMP_THRESHOLD_DB),
+        (spec.get_makeup_db(), MASTER_COMP_MAKEUP_DB),
+        (spec.get_mix(), MASTER_COMP_MIX),
+        (spec.get_grip_ratio(), MASTER_GRIP_RATIO),
+        (spec.get_grip_attack(), MASTER_GRIP_ATTACK),
+        (spec.get_grip_release(), MASTER_GRIP_RELEASE),
+        (spec.get_punch_ratio(), MASTER_PUNCH_RATIO),
+        (spec.get_punch_attack(), MASTER_PUNCH_ATTACK),
+        (spec.get_punch_release(), MASTER_PUNCH_RELEASE),
+        (spec.get_tube_time(), MASTER_TUBE_TIME),
+        (spec.get_lookahead_ms(), MASTER_LOOKAHEAD_MS),
+    ] {
+        assert_eq!(property, id as i32, "the master face addresses a different id");
+    }
+    let words = |model: slint::ModelRc<slint::SharedString>| -> Vec<String> {
+        model.iter().map(|word| word.to_string()).collect()
+    };
+    let markings = |table: &[Timing]| -> Vec<String> {
+        table.iter().map(|timing| timing.marking.to_string()).collect()
+    };
+    let ratios = |table: &[Ratio]| -> Vec<String> {
+        table.iter().map(|ratio| ratio.marking.to_string()).collect()
+    };
+    assert_eq!(words(spec.get_grip_attacks()), markings(&GRIP_ATTACKS));
+    assert_eq!(words(spec.get_grip_releases()), markings(&GRIP_RELEASES));
+    assert_eq!(words(spec.get_punch_attacks()), markings(&PUNCH_ATTACKS));
+    assert_eq!(words(spec.get_punch_releases()), markings(&PUNCH_RELEASES));
+    assert_eq!(words(spec.get_grip_ratios()), ratios(&GRIP_RATIOS));
+    assert_eq!(words(spec.get_punch_ratios()), ratios(&PUNCH_RATIOS));
+    assert_eq!(
+        words(spec.get_tube_times()),
+        TUBE_TIMES.iter().map(|time| time.marking.to_string()).collect::<Vec<_>>()
+    );
+    assert_eq!(words(spec.get_voicings()), ["GRIP", "PUNCH", "TUBE"]);
+    // One measured time behind every marking, for the status bar.
+    assert_eq!(spec.get_grip_attack_measured().row_count(), GRIP_ATTACKS.len());
+    assert_eq!(spec.get_tube_time_measured().row_count(), TUBE_TIMES.len());
+
+    // And the markup declares no bound: every one goes through the spec.
+    let code: String = MASTER_SLINT
+        .lines()
+        .map(|line| line.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let bound: Vec<&str> = code
+        .split(['{', '}', ';'])
+        .map(str::trim)
+        .filter(|statement| {
+            ["minimum:", "maximum:", "default-value:"]
+                .iter()
+                .any(|name| statement.starts_with(name))
+                && !statement.contains("StripSpec.spec(")
+        })
+        .collect();
+    assert!(bound.is_empty(), "master-comp.slint declares its own bounds: {bound:?}");
+}
+
+slint::slint! {
+    import { MasterCompFace, MasterSpec } from "../ui/master-comp.slint";
+    export { MasterSpec }
+
+    export component MasterHarness inherits Window {
+        width: 700px;
+        height: 280px;
+        in property <int> voicing;
+        callback moved(int, float);
+
+        MasterCompFace {
+            x: 0px;
+            y: 0px;
+            section: { comp-in: false, voicing: root.voicing, threshold-db: -16, mix: 1 };
+            moved(id, value) => { root.moved(id, value); }
+        }
+    }
+}
+
+/// **Something presses the buttons** (`AGENTS.md`, *Duplication*). Real
+/// pointer events on the face's In switch and on a voicing reach its
+/// `moved` callback with the ids `MasterSpec` was handed, which is the
+/// callback `main.slint` forwards to `bus-strip-param`.
+///
+/// The coordinates are the face's own layout: the left column is 250px wide
+/// under a 28px header and 8px padding, and its bottom row -- In, then the
+/// three voicings at 60px each -- is 26px tall at the bottom of the face.
+#[test]
+fn the_master_face_s_switches_reach_the_callback() {
+    use slint::platform::{PointerEventButton, WindowEvent};
+    use slint::LogicalPosition;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    common::install_testing_backend();
+    let ui = MasterHarness::new().unwrap();
+    let spec = ui.global::<MasterSpec>();
+    spec.set_comp_in(mooloop_core::strip::MASTER_COMP_IN as i32);
+    spec.set_voicing(mooloop_core::strip::MASTER_COMP_VOICING as i32);
+    let words: Vec<slint::SharedString> = ["GRIP", "PUNCH", "TUBE"].map(Into::into).to_vec();
+    spec.set_voicings(words.as_slice().into());
+
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    ui.on_moved({
+        let seen = seen.clone();
+        move |id, value| seen.borrow_mut().push((id, value))
+    });
+    let click = |x: f32, y: f32| {
+        let position = LogicalPosition::new(x, y);
+        let window = ui.window();
+        window.dispatch_event(WindowEvent::PointerMoved { position });
+        window.dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        });
+        window.dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
+    };
+    // The row's vertical centre: 268 tall, 8px padding, 26px row.
+    let row = 268.0 - 8.0 - 13.0;
+    click(30.0, row);
+    click(58.0 + 2.0 * 61.0 + 30.0, row);
+    assert_eq!(
+        *seen.borrow(),
+        vec![
+            (mooloop_core::strip::MASTER_COMP_IN as i32, 1.0),
+            (mooloop_core::strip::MASTER_COMP_VOICING as i32, 2.0),
+        ],
+        "the In switch and the Tube button did not reach the callback"
     );
 }

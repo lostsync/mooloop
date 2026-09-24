@@ -741,7 +741,7 @@ impl Strip {
     }
 
     /// Run the master bus compressor over the block: after the track's own
-    /// devices and before its fader (`docs/plans/master-bus-compressor/`).
+    /// devices and before its fader (`docs/plans/archive/master-bus-compressor/`).
     /// Out is out, and a strip that is not the master's is always out.
     pub fn process_master(&mut self, bus: &mut StereoBus, frames: usize) {
         self.bus_comp.process_block(bus, frames);

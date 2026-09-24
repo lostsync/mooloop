@@ -202,7 +202,7 @@ its job.
 ## The master bus compressor
 
 The master's strip carries a second compressor, the master section (MOO-13,
-`docs/plans/master-bus-compressor/`), which runs **after the master's inserts
+`docs/plans/archive/master-bus-compressor/`), which runs **after the master's inserts
 and before its fader**, so a fade-out on the master does not ride the mix out
 of compression on its way down. Three voicings, each a measured law with no
 programme dependence -- Grip (the SSL G bus: peak, soft knee), Punch (the

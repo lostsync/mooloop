@@ -1,5 +1,5 @@
 //! The master bus compressor's acceptance render (MOO-13,
-//! `docs/plans/master-bus-compressor/03-the-master-section-runs.md`).
+//! `docs/plans/archive/master-bus-compressor/03-the-master-section-runs.md`).
 //!
 //! Builds a small mix with the real `mooloop_core` types -- a kick, a bass
 //! line and chords, summed a few decibels hot at the master -- saves it with

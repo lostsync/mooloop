@@ -34,6 +34,54 @@ pub(crate) fn falloff_options() -> Vec<String> {
         .collect()
 }
 
+/// How fast the master bus compressor's needle falls back, as a time
+/// constant: about a VU's 300 ms, so it reads like the meter on the unit
+/// rather than flickering with each block. It rises at once, because a
+/// reduction the needle only shows later is one that was never seen.
+const NEEDLE_FALL_SECONDS: f32 = 0.3;
+/// How long the needle's peak mark holds the deepest reduction.
+const NEEDLE_HOLD_SECONDS: f32 = 1.5;
+
+/// The master bus compressor's gain-reduction needle (MOO-13): a reduction
+/// in dB, positive, with an instant rise, a VU-like fall and a held mark.
+#[derive(Debug, Default)]
+pub(crate) struct ReductionBallistics {
+    value_db: f32,
+    held_db: f32,
+    hold_remaining: f32,
+}
+
+impl ReductionBallistics {
+    /// Take one tick's deepest reduction and `elapsed` seconds since the
+    /// last, and return where the needle and its mark now sit.
+    pub(crate) fn update(&mut self, reduction_db: f32, elapsed: f32) -> (f32, f32) {
+        let reduction_db = if reduction_db.is_finite() { reduction_db.max(0.0) } else { 0.0 };
+        let elapsed = elapsed.max(0.0);
+        if reduction_db >= self.value_db {
+            self.value_db = reduction_db;
+        } else {
+            let keep = (-elapsed / NEEDLE_FALL_SECONDS).exp();
+            self.value_db = reduction_db + (self.value_db - reduction_db) * keep;
+            if self.value_db < 0.01 {
+                self.value_db = reduction_db;
+            }
+        }
+        if reduction_db >= self.held_db {
+            self.held_db = reduction_db;
+            self.hold_remaining = NEEDLE_HOLD_SECONDS;
+        } else {
+            self.hold_remaining -= elapsed;
+            if self.hold_remaining <= 0.0 {
+                // The hold has run out, however long the tick that ran it
+                // out was: the mark goes back to riding the needle.
+                self.hold_remaining = 0.0;
+                self.held_db = self.value_db;
+            }
+        }
+        (self.value_db, self.held_db)
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct MeterReading {
     pub level_db: f32,
@@ -145,6 +193,19 @@ mod tests {
 
     /// The latch outlives everything except a reset, which is what a strip
     /// showing a different track needs.
+    #[test]
+    fn the_needle_rises_at_once_falls_like_a_vu_and_holds_its_mark() {
+        let mut needle = ReductionBallistics::default();
+        assert_eq!(needle.update(6.0, 0.016), (6.0, 6.0));
+        let (value, held) = needle.update(0.0, 0.3);
+        assert!((value - 6.0 / std::f32::consts::E).abs() < 0.01, "fell to {value}");
+        assert_eq!(held, 6.0, "the mark let go inside its hold");
+        let (value, held) = needle.update(0.0, 2.0);
+        assert!(value < 0.1, "still reading {value} after two seconds");
+        assert!(held < 6.0, "the mark outlived its hold");
+        assert_eq!(needle.update(f32::NAN, 0.016).0, 0.0);
+    }
+
     #[test]
     fn a_reset_meter_has_forgotten_the_clip_and_the_hold() {
         let mut meter = MeterBallistics::default();

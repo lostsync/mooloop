@@ -1,7 +1,7 @@
 //! The master bus compressor: three measured laws, and the one detector that
 //! runs whichever the voicing selects.
 //!
-//! `docs/plans/master-bus-compressor/` is the work order (MOO-13), and
+//! `docs/plans/archive/master-bus-compressor/` is the work order (MOO-13), and
 //! `docs/SCOPE.md` §2.1 is why it is not the channel strip's compressor with
 //! new numbers. The reference run (`spikes/preamp-measure/RESULTS.md` §4)
 //! split nine compressors cleanly on one axis: the opto and FET units hold

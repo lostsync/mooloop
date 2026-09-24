@@ -178,7 +178,7 @@ Files marked *shared* are split in the table above.
   master bus compressor's acceptance render, `engine/examples/master_bus_comp.rs`
 - `session/src/mixer.rs`
 - `ui/src/meter.rs`; `ui/ui/`: `mixer.slint`, `strip.slint`, `meters.slint`,
-  `bus-device.slint`, `gain.slint`
+  `bus-device.slint`, `gain.slint`, `master-comp.slint` (the master bus compressor's face)
 - `ui/tests/`: `mixer_snapshot.rs`, `strip_face.rs`, `fader_taper.rs`,
   `gain_slint_agreement.rs`, `meter_threshold.rs`, `track_reorder.rs`
 - `spikes/preamp-measure/`

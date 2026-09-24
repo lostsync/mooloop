@@ -56,6 +56,9 @@ import { MixerMetrics, MixerPane, MixerSendRow, MixerStripRow, BusPicker } from 
 export { MixerMetrics }
 import { BusDeviceFace, BusFaderRow, StripRackRow } from "bus-device.slint";
 import { StripMeters, StripRow, StripSpec } from "strip.slint";
+import { MasterCompFace, MasterSection, MasterSpec } from "master-comp.slint";
+// The master bus compressor's row and ids, set from Rust (MOO-13).
+export { MasterSection, MasterSpec }
 export { StripMeters }
 // Re-exported so Rust can reach them: a global is visible to the generated
 // code only from the entry file, and `install_strip_spec` fills the first
@@ -5542,9 +5545,25 @@ export component MainWindow inherits Window {
                                         // generator has -- the start of a
                                         // channel's path, and the wrong end of
                                         // a track's.
+                                        // **The master bus compressor**, where the
+                                        // engine runs it: after the master's own
+                                        // devices, before its fader. The master's
+                                        // section rather than an insert, so it has
+                                        // no rails and cannot be moved (MOO-13).
+                                        if root.editing-bus && root.editing-bus-is-master : MasterCompFace {
+                                            section: MasterSection.row;
+                                            reduction-db: MasterSection.reduction-db;
+                                            held-reduction-db: MasterSection.held-reduction-db;
+                                            muted: root.editing-bus-muted;
+                                            moved(id, v) => { root.bus-strip-param(root.editing-bus-index, id, v); }
+                                        }
                                         if root.editing-bus : BusFaderRow {
                                             name: root.editing-bus-name;
                                             is-master: root.editing-bus-is-master;
+                                            lookahead-ms: MasterSection.row.lookahead-ms;
+                                            lookahead-changed(v) => {
+                                                root.bus-strip-param(root.editing-bus-index, MasterSpec.lookahead-ms, v);
+                                            }
                                             volume: root.editing-bus-volume;
                                             pan: root.editing-bus-pan;
                                             muted: root.editing-bus-muted;

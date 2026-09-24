@@ -10,6 +10,7 @@ import { DeviceHeader, DeviceRackMetrics } from "device-rack.slint";
 // outgoing ones, and they live in the channel sidebar now.
 import { BusPicker } from "mixer.slint";
 import { StripRow, StripSections } from "strip.slint";
+import { LookaheadKnob } from "master-comp.slint";
 
 // The track's channel strip as a row in its own device rack.
 //
@@ -406,6 +407,11 @@ export component BusFaderRow inherits Rectangle {
     in property <float> held-left-db: GainMath.min-db;
     in property <float> held-right-db: GainMath.min-db;
     in property <bool> clipping;
+    /// The safety limiter's lookahead, drawn on the master's Out face only:
+    /// the limiter runs after the fader, beside the clip lamp it guards
+    /// (MOO-169).
+    in property <float> lookahead-ms;
+    callback lookahead-changed(float);
     callback clip-reset();
     callback volume-changed(float);
     callback pan-changed(float);
@@ -452,6 +458,10 @@ export component BusFaderRow inherits Rectangle {
             if !root.is-master : SoloButton {
                 soloed: root.solo;
                 clicked => { root.solo-toggled(); }
+            }
+            if root.is-master : LookaheadKnob {
+                lookahead-ms: root.lookahead-ms;
+                changed(v) => { root.lookahead-changed(v); }
             }
         }
         HorizontalLayout {

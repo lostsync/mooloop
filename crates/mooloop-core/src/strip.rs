@@ -685,7 +685,7 @@ static DESCRIPTORS: [ParamDescriptor; 4 + STRIP_EQ_BANDS * 4 + 8] = [
 // The master section
 // ---------------------------------------------------------------------------
 
-/// The master bus compressor's three voicings (`docs/plans/master-bus-compressor/`,
+/// The master bus compressor's three voicings (`docs/plans/archive/master-bus-compressor/`,
 /// MOO-13).
 ///
 /// **A voicing is a law, not a set of values** -- the channel strip's rule --
