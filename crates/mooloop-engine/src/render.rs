@@ -1022,6 +1022,55 @@ struct AutomationBlock<'a> {
     start_tick: f64,
     ticks_per_sample: f64,
     ticks: usize,
+    /// What the lanes under the playhead address, gathered once for the block.
+    targets: LaneTargets,
+}
+
+/// How many lane targets one block keeps a list of. Past this the list gives
+/// up and every question goes to the sequencer, as it did before there was a
+/// list: slower, never wrong.
+const MAX_LANES_UNDER_PLAYHEAD: usize = 64;
+
+/// Every destination a lane under the playhead addresses this block, each
+/// once (MOO-195).
+///
+/// **Why it exists.** Whether any lane is under the playhead is one question
+/// for the whole song, so a single lane on one Buffer made every device on
+/// every channel and bus ask [`Sequencer::automation_lane_at`] about every
+/// parameter it has -- and in song mode each of those asks walks every
+/// covering placement and every channel's lanes. On `sad_house2` that was
+/// about 200 µs a 128-frame block while one automation clip played, for a
+/// lane on a device none of those parameters belonged to. The walk is done
+/// once here instead, and a device asks this list what is driven on it.
+struct LaneTargets {
+    targets: [Option<ParamAddr>; MAX_LANES_UNDER_PLAYHEAD],
+    len: usize,
+    /// False when more lanes were under the playhead than the list holds.
+    complete: bool,
+}
+
+impl LaneTargets {
+    fn under(sequencer: &Sequencer, song_tick: f64) -> Self {
+        let mut list = Self {
+            targets: [None; MAX_LANES_UNDER_PLAYHEAD],
+            len: 0,
+            complete: true,
+        };
+        sequencer.visit_automation_targets_at(song_tick, |target| {
+            // Layered placements can name one destination twice; it is still
+            // one destination.
+            if !list.complete || list.targets[..list.len].contains(&Some(target)) {
+                return;
+            }
+            if list.len == MAX_LANES_UNDER_PLAYHEAD {
+                list.complete = false;
+                return;
+            }
+            list.targets[list.len] = Some(target);
+            list.len += 1;
+        });
+        list
+    }
 }
 
 /// One destination's lane, already resolved to the pattern driving it.
@@ -1050,7 +1099,28 @@ impl<'a> AutomationCurve<'a> {
 
 impl<'a> AutomationBlock<'a> {
     fn curve_for(&self, destination: ParamAddr) -> Option<AutomationCurve<'a>> {
+        // Nothing under the playhead names it, so the sequencer's search could
+        // only arrive at `None`.
+        let listed = &self.targets.targets[..self.targets.len];
+        if self.targets.complete && !listed.contains(&Some(destination)) {
+            return None;
+        }
         AutomationCurve::at(self.sequencer, destination, self.start_tick)
+    }
+
+    /// Every destination a lane under the playhead addresses. A destination
+    /// may be visited more than once when the list overflowed and this falls
+    /// back to the sequencer's own walk.
+    fn visit_targets(&self, mut visit: impl FnMut(ParamAddr)) {
+        if self.targets.complete {
+            self.targets.targets[..self.targets.len]
+                .iter()
+                .flatten()
+                .for_each(|target| visit(*target));
+        } else {
+            self.sequencer
+                .visit_automation_targets_at(self.start_tick, visit);
+        }
     }
 
     /// Normalized value at control tick `tick`. The pattern wraps underneath a
@@ -2175,10 +2245,9 @@ impl EffectChain {
         // `a_slot_that_stops_being_driven_does_not_replay_a_stale_curve`.
         self.curve_scratch.clear(0);
         // No route in the channel's rack and no lane under the playhead means
-        // every descriptor below can only reach its `continue`. Both are facts
-        // about the channel, not the descriptor, and this runs once per effect
-        // slot per block over everything the effect declares -- so asking here
-        // is one question in place of a hundred and something.
+        // nothing below can be driven. Both are facts about the channel, not
+        // the device, so they are asked once, before `driven_positions` looks
+        // for what on this device is.
         if !modulation.is_some_and(|modulation| modulation.rack.has_routes())
             && automation.is_none()
         {
@@ -2208,7 +2277,17 @@ impl EffectChain {
             return ticks;
         }
 
-        for descriptor in kind.descriptors() {
+        let table = kind.descriptors();
+        let mut positions = [0usize; MAX_EFFECT_CURVE_DESTINATIONS];
+        let driven = driven_positions(
+            table,
+            scope,
+            ParamOwner::Effect { device },
+            modulation.map(|modulation| modulation.rack),
+            automation,
+            &mut positions,
+        );
+        for descriptor in positions[..driven].iter().map(|&position| &table[position]) {
             let destination = ParamAddr::effect(scope, device, descriptor.id);
             // The destination's own declaration decides whether modulation is
             // legal here at all -- a stepped mode selector refuses it, so an
@@ -2311,9 +2390,7 @@ impl EffectChain {
                 modulation.rack.destinations().for_each(&mut note);
             }
             if let Some(automation) = automation {
-                automation
-                    .sequencer
-                    .visit_automation_targets_at(automation.start_tick, &mut note);
+                automation.visit_targets(&mut note);
             }
         }
         self.curve_refusals += overflow;
@@ -3298,6 +3375,56 @@ struct StripSegments {
 ///
 /// Returns `None` when nothing drives either parameter, so the overwhelmingly
 /// common still-fader case stays one pass over the block.
+/// Where in `table` each parameter of `owner` that a route or a lane names
+/// sits, each once and in table order, written into `positions`; returns how
+/// many.
+///
+/// **The control pass's list of what is driven** (MOO-195). It used to walk
+/// the whole table and ask the rack and the sequencer about every entry,
+/// which on a song with one lane anywhere was every parameter of every
+/// device, every block. This starts from the other end -- at most sixteen
+/// routes and the lanes under the playhead -- so its cost is what is driven,
+/// not the size of the device. Table order, so the rows come out in the order
+/// the whole-table walk produced them and nothing downstream can tell the two
+/// apart.
+///
+/// Whether each position is actually driven -- a route the destination's
+/// policy refuses is listed here, and drives nothing -- is still the caller's
+/// question, asked exactly as before. `N` is the caller's curve pool, which
+/// is never smaller than any table it serves, so a table position always has
+/// room.
+fn driven_positions<const N: usize>(
+    table: &[mooloop_core::ParamDescriptor],
+    scope: EffectTarget,
+    owner: ParamOwner,
+    rack: Option<&ModRack>,
+    automation: Option<&AutomationBlock<'_>>,
+    positions: &mut [usize; N],
+) -> usize {
+    let mut count = 0;
+    let mut note = |address: ParamAddr| {
+        if address.scope != scope || address.owner != owner {
+            return;
+        }
+        let Some(position) = table.iter().position(|descriptor| descriptor.id == address.param)
+        else {
+            return;
+        };
+        if count < N && !positions[..count].contains(&position) {
+            positions[count] = position;
+            count += 1;
+        }
+    };
+    if let Some(rack) = rack {
+        rack.destinations().for_each(&mut note);
+    }
+    if let Some(automation) = automation {
+        automation.visit_targets(&mut note);
+    }
+    positions[..count].sort_unstable();
+    count
+}
+
 fn resolve_strip_segments(
     base_gain: f32,
     base_pan: f32,
@@ -8349,15 +8476,17 @@ impl RenderState {
         //
         // It *is* conditional on a lane existing, which is a different claim
         // and costs nothing to make: with none under the playhead every
-        // `curve_for` below can only answer `None`, and each of those answers
-        // is a walk over every active channel. Asking once here instead of
-        // once per descriptor per channel is the whole of the saving.
+        // `curve_for` below can only answer `None`. With one there, the lanes'
+        // targets are gathered once, here, so a device asks a short list what
+        // is driven on it rather than the sequencer about everything it has
+        // (MOO-195).
         let automation = (frames > 0 && self.sequencer.has_automation_at(start_tick)).then(|| {
             AutomationBlock {
                 sequencer: &self.sequencer,
                 start_tick,
                 ticks_per_sample,
                 ticks: frames.div_ceil(CONTROL_RATE_FRAMES),
+                targets: LaneTargets::under(&self.sequencer, start_tick),
             }
         });
         // Only the buses that may hold something. A song uses one or two of
@@ -8527,7 +8656,19 @@ impl RenderState {
                 // maximal block with even one automated parameter and a
                 // played note could make the note lose the race.
                 self.source_curves[index].clear(resolved_ticks);
-                for descriptor in base.kind().descriptors() {
+                // Only what a route or a lane names, not the whole table
+                // (MOO-195): see `driven_positions`.
+                let table = base.kind().descriptors();
+                let mut positions = [0usize; MAX_SOURCE_CURVE_DESTINATIONS];
+                let driven = driven_positions(
+                    table,
+                    scope,
+                    ParamOwner::Source,
+                    Some(modulation.rack),
+                    automation.as_ref(),
+                    &mut positions,
+                );
+                for descriptor in positions[..driven].iter().map(|&position| &table[position]) {
                     let destination = ParamAddr {
                         scope,
                         owner: ParamOwner::Source,
@@ -13022,6 +13163,59 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 .unwrap()
                 .get(mooloop_core::FILTER_PARAM_CUTOFF_HZ),
             Some(1_000.0),
+        );
+    }
+
+    /// More lanes under the playhead than a block's list of them holds
+    /// (MOO-195). The list gives up rather than truncating, and the lane past
+    /// its end -- the last one the walk would reach -- still drives its
+    /// parameter.
+    #[test]
+    fn a_lane_past_the_end_of_the_blocks_list_still_resolves() {
+        let fillers = MAX_LANES_UNDER_PLAYHEAD / MAX_AUTOMATION_LANES_PER_CHANNEL;
+        let mut project = synth_project(filter_channel(1_000.0));
+        for index in 1..=fillers + 1 {
+            project.channels.push(ProjectChannel::sampler(index, 1));
+        }
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        let mut lane = |channel: usize, target: ParamAddr| {
+            render.apply_command(EngineCommand::UpsertAutomationPoint {
+                pattern: 0,
+                channel: channel as u8,
+                target,
+                point: mooloop_core::AutomationPoint::new(1, 0, 1.0),
+            });
+        };
+        // Enough lanes to fill the list, on a device nobody has. A lane lives
+        // in whichever clip drew it, and the walk goes in channel order, so
+        // these are all met before the cutoff's.
+        for channel in 1..=fillers {
+            for param in 0..MAX_AUTOMATION_LANES_PER_CHANNEL {
+                let address = ParamAddr::effect(
+                    EffectTarget::Channel(0),
+                    mooloop_core::DeviceId(99),
+                    (channel * MAX_AUTOMATION_LANES_PER_CHANNEL + param) as u32,
+                );
+                lane(channel, address);
+            }
+        }
+        lane(fillers + 1, CUTOFF);
+        assert!(
+            !LaneTargets::under(&render.sequencer, 0.0).complete,
+            "the list held every lane, so this is not testing its overflow"
+        );
+
+        render.play();
+        render.process_block(128);
+
+        let top = mooloop_core::EffectKind::Filter
+            .descriptor(mooloop_core::FILTER_PARAM_CUTOFF_HZ)
+            .expect("cutoff is a described parameter")
+            .max;
+        let events = cutoff_events(&render);
+        assert!(
+            !events.is_empty() && events.iter().all(|(_, value)| (value - top).abs() < 1.0),
+            "the cutoff's lane stopped driving it once the list overflowed: {events:?}"
         );
     }
 
