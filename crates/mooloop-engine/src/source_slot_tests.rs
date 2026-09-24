@@ -214,9 +214,18 @@ fn rms(audio: &(Vec<f32>, Vec<f32>)) -> f64 {
 /// switched)`, which the slot reproduces; see the module comment for the
 /// one ninth-digit exception and why it is the correction rather than the
 /// regression.
+///
+/// DrumSynth's values moved with MOO-211 (0.029_344_743 and 0.024_621_880
+/// before): the one-second timeline is 187 whole 256-frame blocks plus a
+/// 128-frame tail, so the last span of *both* renders ends exactly on tick
+/// 192 -- where the pattern's fourth note starts -- and the closing span
+/// used to steal that note and clamp it to the render's final frame, one
+/// sample before the note's own onset. The note now belongs to the block
+/// after the render, so its first frame is not in the file, and both RMS
+/// values are lower by that frame.
 const BEFORE: [(DeviceKind, f64, f64); 8] = [
     (DeviceKind::Sampler, 0.002_547_445, 0.026_572_627),
-    (DeviceKind::DrumSynth, 0.029_344_743, 0.024_621_880),
+    (DeviceKind::DrumSynth, 0.029_343_523, 0.024_621_377),
     (DeviceKind::MonoSynth, 0.049_565_657, 0.010_736_454),
     (DeviceKind::PolySynth, 0.035_469_519, 0.010_738_889),
     (DeviceKind::MlM1, 0.065_406_552, 0.014_437_033),

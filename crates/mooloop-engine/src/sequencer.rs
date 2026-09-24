@@ -44,6 +44,28 @@ impl FrameWindow {
 /// (`reports/fable-2026-09-22.md`, finding 1, Plan A).
 const MAX_PATTERN_TICKS: u32 = MAX_PATTERN_STEPS as u32 * TICKS_PER_STEP;
 
+/// Ticks of slack in the comparisons that decide which span owns an event
+/// edge, and in the cycle search that finds an edge's first occurrence.
+///
+/// The transport's position is an accumulated float -- `advance_looped` adds
+/// `frames * ticks_per_sample` per block -- so a span boundary that
+/// mathematically sits exactly on a note's tick arrives an ulp to one side
+/// of it. Without slack the closing span then owns the note and clamps it to
+/// its last frame, one sample early, by however the transport's span was cut
+/// into blocks: playback at 64-frame callbacks and an export at 512-frame
+/// ones disagreed at every note sitting on a 64-frame boundary (MOO-211).
+/// With slack a boundary tick is owned by the span that starts there -- its
+/// offset rounds to 0 -- whichever way the accumulated float fell, and both
+/// partitions place the note on the same frame.
+///
+/// Twelve orders of magnitude above the drift (hundreds of block additions
+/// add up to ~1e-13 ticks) and far below one frame at any tempo --
+/// `ticks_per_sample` is ~0.004 at 120 BPM and 48 kHz -- so it can only
+/// settle an ulp-scale disagreement, never move a real edge, which is at
+/// least a whole tick away. The same scale as the nudge in
+/// `Transport::advance_looped`'s `frames_until`.
+const EDGE_NUDGE_TICKS: f64 = 1.0e-6;
+
 pub struct Sequencer {
     patterns: Vec<Pattern>,
     active_patterns: usize,
@@ -929,7 +951,13 @@ impl Sequencer {
         event_list: &mut EventList,
     ) {
         let tick = f64::from(edge_tick);
-        if tick < start_tick || tick >= end_tick {
+        // Nudged on both sides: an event sitting exactly on this span's end
+        // belongs to the next one even when the accumulated float puts the
+        // boundary an ulp above it, and an event an ulp below this span's
+        // start -- the next span's own opening tick -- still starts here, at
+        // offset 0. A bare comparison hands the note to whichever span the
+        // drift favoured, and the loser clamps it a frame early (MOO-211).
+        if tick < start_tick - EDGE_NUDGE_TICKS || tick >= end_tick - EDGE_NUDGE_TICKS {
             return;
         }
         let offset = ((tick - start_tick) / ticks_per_sample).round() as i64;
@@ -1339,12 +1367,20 @@ impl Sequencer {
     ) {
         let period = f64::from(period_ticks);
         let edge = f64::from(edge_tick);
-        let mut cycle = ((start_tick - edge) / period).ceil() as i64;
+        // Nudged below as well as above: a span whose accumulated start sits
+        // an ulp past an occurrence must still count it as this pass's first
+        // candidate -- a bare `ceil` would answer the next cycle and skip
+        // it, while the span before declines the note for sitting at its own
+        // end, and the occurrence is scheduled by nobody (MOO-211).
+        let mut cycle = ((start_tick - edge - EDGE_NUDGE_TICKS) / period).ceil() as i64;
         cycle = cycle.max(0);
         let mut absolute_tick = edge + cycle as f64 * period;
 
-        while absolute_tick < end_tick {
-            if absolute_tick >= start_tick {
+        // An occurrence exactly at this span's end belongs to the next one,
+        // whose opening tick it is; the nudge is what makes "exactly"
+        // survive the accumulated float on either side.
+        while absolute_tick < end_tick - EDGE_NUDGE_TICKS {
+            if absolute_tick >= start_tick - EDGE_NUDGE_TICKS {
                 let offset = window.offset_for(absolute_tick - start_tick, ticks_per_sample);
                 let instance = (cycle as u64)
                     .wrapping_mul(instance_stride)
@@ -2192,6 +2228,104 @@ mod tests {
                         dump(&sequencer)
                     );
                 }
+            }
+        }
+    }
+
+    /// MOO-211. A note's frame must not depend on how the transport's span
+    /// was cut into blocks: one song through the realtime path in 64-frame
+    /// callbacks and through the export path in 512-frame blocks has to come
+    /// out identical. The step-4 hit sits on tick 96, which is frame 24 000
+    /// -- exactly the 375th 64-frame boundary, and mid-block at 512 -- so
+    /// the accumulated float `end_tick` of the closing span decides which
+    /// block schedules the note, and the loser clamps it to its last frame,
+    /// one sample early. The transport is advanced through the same
+    /// `advance_looped` accumulation on both sides here, so only the
+    /// scheduling's ownership of a boundary tick can differ.
+    #[test]
+    fn playback_at_64_and_an_export_at_512_place_notes_on_the_same_frame() {
+        use mooloop_core::{MonoSynthParams, OscParams, OscWave, ProjectChannel};
+
+        let mut params = MonoSynthParams {
+            attack: 0.001,
+            decay: 0.12,
+            sustain: 0.0,
+            release: 0.05,
+            filter_cutoff: 1.0,
+            drive: 0.0,
+            ..MonoSynthParams::default()
+        };
+        params.osc = [
+            OscParams {
+                wave: OscWave::Sine,
+                level: 1.0,
+                ..OscParams::default()
+            },
+            OscParams::default(),
+            OscParams::default(),
+        ];
+        let mut channel = ProjectChannel::mono_synth_with_params(0, 1, params);
+        channel.setup.channel.volume = 1.0;
+        // Hits on steps 0, 4, 8, 12 -- ticks 0, 96, 192, 288. Tick 96 is
+        // frame 24 000 at this tempo and rate, and steps 4 and 12 land
+        // exactly on 64-frame block boundaries while missing every 512 one.
+        for (id, step) in [(1u32, 0u32), (2, 4), (3, 8), (4, 12)] {
+            channel.notes[0].push(NoteEvent::new(
+                id,
+                step * TICKS_PER_STEP,
+                TICKS_PER_STEP,
+                60,
+                127,
+            ));
+        }
+        let project = Project {
+            channels: vec![channel],
+            pattern_lengths: vec![DEFAULT_STEPS],
+            ..Project::default()
+        };
+
+        let render_at = |block: usize, looping: bool| {
+            let mut render = crate::render::RenderState::from_project(48_000, &project, &[]);
+            render.play();
+            let mut left = Vec::new();
+            let mut right = Vec::new();
+            let mut remaining = 96_000;
+            while remaining > 0 {
+                let frames = remaining.min(block);
+                let _report = if looping {
+                    render.process_block(frames)
+                } else {
+                    render.process_once_block(frames)
+                };
+                let master = render.master();
+                left.extend_from_slice(&master.l[..frames]);
+                right.extend_from_slice(&master.r[..frames]);
+                remaining -= frames;
+            }
+            (left, right)
+        };
+
+        let (live_l, live_r) = render_at(64, true);
+        let (export_l, export_r) = render_at(512, false);
+
+        assert_eq!(live_l.len(), export_l.len());
+        assert_eq!(live_r.len(), export_r.len());
+        for (side, live, export) in [("left", &live_l, &export_l), ("right", &live_r, &export_r)] {
+            let first = live
+                .iter()
+                .zip(export.iter())
+                .position(|(a, b)| a != b);
+            if let Some(frame) = first {
+                let live_hit = live.iter().enumerate().find(|(i, s)| {
+                    *i >= frame && s.abs() > 0.001
+                });
+                panic!(
+                    "{side} first differs at frame {frame} (live {}, export {}); \
+                     the next live onset after it is at frame {:?}",
+                    live[frame],
+                    export[frame],
+                    live_hit.map(|(i, _)| i),
+                );
             }
         }
     }
