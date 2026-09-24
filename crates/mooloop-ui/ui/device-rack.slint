@@ -94,7 +94,7 @@ export global RackDrag {
 //
 // Each row draws its own slice and the caps close themselves: a row is the
 // box's *head* when it is the container, and its right edge when the row
-// after it is shallower. `docs/plans/containers/04` argued for stripes over a
+// after it is shallower. `docs/plans/archive/containers/04` argued for stripes over a
 // frame because "the rack is a horizontal sheet that wraps" -- it does not.
 // `rack-row` is one `HorizontalLayout` in a horizontally scrolling viewport,
 // so a run is always contiguous and a box is always one box.
@@ -166,6 +166,11 @@ component EffectTypeRow inherits Rectangle {
     }
 }
 
+// A row of the wrap menu. Its own name, though it is an `EffectTypeRow`,
+// because `effect_preset_menu.rs` reads every `EffectTypeRow` in this file as
+// a row of the insert menu, and wrapping inserts nothing of its own kind.
+component WrapKindRow inherits EffectTypeRow {}
+
 // The effect-type list shared by every "insert effect" trigger (the rail
 // `+` on each device, and the end-of-chain add slot). Kept as one
 // component so the catalog is edited in a single place.
@@ -191,7 +196,7 @@ component EffectTypeMenu inherits VerticalLayout {
     // kind of thing, and in the list at all because inserting one is how a
     // chain that has no devices yet gets its first box. A chain runs what it
     // holds in order; a layer runs each device it holds side by side and sums
-    // them (`docs/plans/containers/07`).
+    // them (`docs/plans/archive/containers/07`).
     EffectTypeRow { text: "Chain"; tooltip: "Insert a container to hold and blend a run of devices"; selected => { root.kind-selected(13); } }
     EffectTypeRow { text: "Layer"; tooltip: "Insert a container whose devices run side by side and are summed"; selected => { root.kind-selected(14); } }
 }
@@ -335,7 +340,9 @@ export component DeviceFrame inherits Rectangle {
     in property <int> container-children: 0;
     in property <bool> wrap-enabled: false;
     in property <bool> unwrap-enabled: false;
-    callback wrap-requested();
+    // The kind of box to wrap in, as `effect_kind_index` numbers it: the
+    // wrap menu offers a Chain and a Layer (`containers/10`).
+    callback wrap-requested(int);
     callback unwrap-requested();
     // The device the keyboard's copy/cut/paste/duplicate act on. Drawn as the
     // frame's own border rather than as an overlay: the border is already
@@ -419,7 +426,38 @@ export component DeviceFrame inherits Rectangle {
             IconButton {
                 text: "❏"; size: 24px; enabled: root.wrap-enabled;
                 tooltip: "Wrap"; hint: "Wrap this device in a container";
-                clicked => { root.wrap-requested(); }
+                clicked => { wrap-menu.show(); }
+
+                // Which box to wrap in (`containers/10`). Callback first, close
+                // after: closing tears the row down, and a handler written
+                // after `close()` never lands (`dupe-audit popup-close-order`).
+                wrap-menu := PopupWindow {
+                    x: 0px;
+                    y: parent.height + 2px;
+                    width: wrap-content.preferred-width;
+                    height: wrap-content.preferred-height;
+                    close-policy: close-on-click;
+                    Rectangle {
+                        background: Theme.surface;
+                        border-width: Theme.hairline;
+                        border-color: Theme.border;
+                        border-radius: Theme.radius-md;
+                        wrap-content := VerticalLayout {
+                            padding: 4px;
+                            spacing: 1px;
+                            WrapKindRow {
+                                text: "Chain";
+                                tooltip: "Wrap in a container that runs what it holds in order";
+                                selected => { root.wrap-requested(13); wrap-menu.close(); }
+                            }
+                            WrapKindRow {
+                                text: "Layer";
+                                tooltip: "Wrap in a layer: this becomes its first branch";
+                                selected => { root.wrap-requested(14); wrap-menu.close(); }
+                            }
+                        }
+                    }
+                }
             }
             // Fifth, under wrap, for the reason wrap is fourth: the preset
             // rail test drives this column by computed coordinates, so new

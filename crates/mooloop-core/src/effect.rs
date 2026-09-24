@@ -32,7 +32,7 @@ pub enum EffectKind {
     #[serde(rename = "preamp")]
     Preamp,
     /// A container: a device that holds an ordered run of the devices after
-    /// it. See `docs/plans/containers/02-the-container-is-a-device.md`.
+    /// it. See `docs/plans/archive/containers/02-the-container-is-a-device.md`.
     Chain,
     /// A container whose direct children are **parallel branches**, summed.
     ///
@@ -44,7 +44,7 @@ pub enum EffectKind {
     /// Each branch starts from the layer's input, the shorter ones are held
     /// back to meet the longest, and the branches sum at unity before the
     /// layer's mix blends the result against its dry copy
-    /// (`docs/plans/containers/08-the-chain-splits-and-sums.md`). A layer of
+    /// (`docs/plans/archive/containers/08-the-chain-splits-and-sums.md`). A layer of
     /// one branch is a chain, sample for sample.
     Layer,
     /// A hosted plugin (`docs/plans/plugin-hosting/`). Its parameters,
@@ -63,7 +63,7 @@ pub enum EffectKind {
 /// Both kinds hold the same thing -- `ContainerParams`, a child count and a
 /// mix -- and store it the same way. What differs is what the renderer does
 /// with the span, and what the latency walk and the rack's drawing say about
-/// it, which are the three readers `docs/plans/containers/07` names.
+/// it, which are the three readers `docs/plans/archive/containers/07` names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ContainerFlow {
     /// Each row into the next, in rack order: a `Chain`. The rows' latencies
@@ -131,7 +131,7 @@ impl EffectKind {
             // A container declares nothing of its own. Its children are rows
             // of the same chain, so `chain_latency` already counts them; a
             // sum here would count them twice. See question 4 in
-            // `docs/plans/containers/README.md`.
+            // `docs/plans/archive/containers/README.md`.
             | Self::Chain
             | Self::Layer => 0,
             // A plugin's latency is known only after its instance activates,
@@ -149,7 +149,7 @@ impl EffectKind {
     /// spelled `== EffectKind::Chain` at each of its call sites, which is the
     /// same shape as the params-level test below and drifts for the same
     /// reason: a second container kind was arriving
-    /// (`docs/plans/containers/07-a-branch-is-a-run.md`) and every site that
+    /// (`docs/plans/archive/containers/07-a-branch-is-a-run.md`) and every site that
     /// named `Chain` by hand was a site that would keep meaning "a serial
     /// container" when it meant "a container".
     ///
@@ -3002,7 +3002,7 @@ pub const MOD_TIME_DIVISION_TOP: f32 = crate::ModTimeDivision::ALL.len() as f32 
 /// in here would break all three at once -- and it is what makes "the rack
 /// cannot tell the difference between a container and a leaf device"
 /// structurally true rather than an invariant somebody has to maintain.
-/// `docs/plans/containers/02-the-container-is-a-device.md` states the two
+/// `docs/plans/archive/containers/02-the-container-is-a-device.md` states the two
 /// invariants the representation has to hold.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 // Every field falls back to `Default` when a saved table lacks it (MOO-197).
@@ -3020,7 +3020,7 @@ pub struct ContainerParams {
     /// Linear gain on the run's output, before the Mix blend: for a layer the
     /// sum of its branches (Bitwig's Gain), for a chain its run, which in a
     /// branch whose Mix is 1.0 is the branch's fader. See
-    /// `docs/plans/containers/09-the-rack-draws-branches.md`.
+    /// `docs/plans/archive/containers/09-the-rack-draws-branches.md`.
     #[serde(default = "default_container_level")]
     pub level: f32,
     /// Whether this container, as a branch of a layer, is left out of the
@@ -3060,7 +3060,7 @@ impl Default for ContainerParams {
 /// on the chain, and they carry no identities -- the ids are stripped on the
 /// way out and minted fresh on the way in, because identity belongs to the
 /// chain a device is on rather than to the patch. See
-/// `docs/plans/containers/05-a-container-is-a-preset.md`.
+/// `docs/plans/archive/containers/05-a-container-is-a-preset.md`.
 ///
 /// **The modulation that drives the run is deliberately not here.** A route's
 /// source is a module in the *channel's* rack, not in the container, so a run
@@ -3204,7 +3204,7 @@ impl EffectParams {
     /// is where the span primitives live — and a value written down that many
     /// times is this codebase's characteristic fault waiting for a second
     /// writer. The second writer is `EffectKind::Layer`
-    /// (`docs/plans/containers/07-a-branch-is-a-run.md`): every one of those
+    /// (`docs/plans/archive/containers/07-a-branch-is-a-run.md`): every one of those
     /// sites would have had to grow an arm, and the ones that did not would
     /// have gone on quietly treating a layer as an ordinary device whose
     /// children are loose rows of the chain.

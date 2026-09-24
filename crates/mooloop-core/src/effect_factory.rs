@@ -749,6 +749,133 @@ fn buffer() -> Vec<EffectFactoryPatch> {
     ]
 }
 
+/// One factory run: a container and everything in it, as a container preset
+/// (`EffectRun`) carries it. The layer's bank is runs rather than rows,
+/// because a layer's sound is its branches (`docs/plans/archive/containers/10`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EffectFactoryRun {
+    pub name: &'static str,
+    pub category: &'static str,
+    pub tags: &'static [&'static str],
+    pub description: &'static str,
+    pub run: crate::EffectRun,
+}
+
+/// The run bank for `kind`: the presets whose head is a container of that
+/// kind. Only the layer has one. A chain's sound is whatever it holds, and a
+/// bank of chains would be a bank of other devices' presets in a box.
+pub fn runs(kind: EffectKind) -> Vec<EffectFactoryRun> {
+    match kind {
+        EffectKind::Layer => layer_runs(),
+        _ => Vec::new(),
+    }
+}
+
+/// `[Layer, Chain, .., Chain, ..]`: a layer whose branches are chains, each
+/// holding the devices in its list. A chain per branch because a branch's
+/// Level, Mute and Solo are a container's (`containers/09`).
+fn layer_of(mix: f32, gain: f32, branches: &[(f32, Vec<EffectSlotState>)]) -> crate::EffectRun {
+    let mut effects = Vec::new();
+    let mut layer = EffectSlotState::of_kind(EffectKind::Layer);
+    layer.params.set(crate::CONTAINER_PARAM_MIX, mix);
+    layer.params.set(crate::CONTAINER_PARAM_LEVEL, gain);
+    effects.push(layer);
+    for (level, devices) in branches {
+        let mut chain = EffectSlotState::of_kind(EffectKind::Chain);
+        chain.params.set_container_children(devices.len() as u8);
+        chain.params.set(crate::CONTAINER_PARAM_LEVEL, *level);
+        effects.push(chain);
+        effects.extend(devices.iter().copied());
+    }
+    let children = (effects.len() - 1) as u8;
+    effects[0].params.set_container_children(children);
+    crate::EffectRun { effects }
+}
+
+fn layer_runs() -> Vec<EffectFactoryRun> {
+    let compressor = |threshold_db: f32, ratio: f32, attack_ms: f32, release_ms: f32, makeup_db: f32| {
+        let mut effect = EffectSlotState::of_kind(EffectKind::Compressor);
+        if let EffectParams::Compressor(p) = &mut effect.params {
+            p.threshold_db = threshold_db;
+            p.ratio = ratio;
+            p.attack_ms = attack_ms;
+            p.release_ms = release_ms;
+            p.makeup_db = makeup_db;
+        }
+        effect
+    };
+    let filter = |mode: FilterMode, cutoff_hz: f32| {
+        let mut effect = EffectSlotState::of_kind(EffectKind::Filter);
+        if let EffectParams::Filter(p) = &mut effect.params {
+            p.mode = mode;
+            p.cutoff_hz = cutoff_hz;
+            p.resonance = 0.1;
+        }
+        effect
+    };
+    let drive = |amount: f32| {
+        let mut effect = EffectSlotState::of_kind(EffectKind::Drive);
+        if let EffectParams::Drive(p) = &mut effect.params {
+            p.drive = amount;
+        }
+        effect
+    };
+    let crush = |bits: f32, downsample: f32| {
+        let mut effect = EffectSlotState::of_kind(EffectKind::Bitcrush);
+        if let EffectParams::Bitcrush(p) = &mut effect.params {
+            p.bits = bits;
+            p.downsample = downsample;
+        }
+        effect
+    };
+    let unity = 1.0;
+    vec![
+        EffectFactoryRun {
+            name: "Parallel Drum Compression",
+            category: CATEGORY,
+            tags: &["drums", "parallel", "punch"],
+            description: "The dry kit beside a crushed, pumping copy of itself; Mix to taste.",
+            run: layer_of(
+                1.0,
+                unity,
+                &[
+                    (unity, Vec::new()),
+                    (0.7, vec![compressor(-32.0, 10.0, 1.0, 80.0, 12.0)]),
+                ],
+            ),
+        },
+        EffectFactoryRun {
+            name: "Clean and Distorted",
+            category: CATEGORY,
+            tags: &["drive", "parallel", "grit"],
+            description: "The clean signal beside a driven, bit-crushed copy, so the grit sits under the transients.",
+            run: layer_of(
+                1.0,
+                unity,
+                &[
+                    (unity, Vec::new()),
+                    (0.6, vec![drive(8.0), crush(6.0, 4.0)]),
+                ],
+            ),
+        },
+        EffectFactoryRun {
+            name: "Three-Way Split",
+            category: CATEGORY,
+            tags: &["crossover", "multiband", "split"],
+            description: "Lows, mids and highs on their own branches: put a device on one band and leave the rest.",
+            run: layer_of(
+                1.0,
+                unity,
+                &[
+                    (unity, vec![filter(FilterMode::LowPass, 250.0)]),
+                    (unity, vec![filter(FilterMode::BandPass, 1_200.0)]),
+                    (unity, vec![filter(FilterMode::HighPass, 4_000.0)]),
+                ],
+            ),
+        },
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -800,6 +927,50 @@ mod tests {
                     "{} is the default {kind:?}",
                     patch.name
                 );
+            }
+        }
+    }
+
+    /// The layer's bank is runs, and every one is a well-formed layer of
+    /// chain branches: a branch's switches are a container's
+    /// (`containers/09`), so a factory branch that was a bare device would
+    /// ship without them.
+    #[test]
+    fn the_layer_bank_is_layers_of_chain_branches() {
+        let bank = runs(EffectKind::Layer);
+        assert!(bank.len() >= 3, "the plan asks for three or four");
+        let mut names = HashSet::new();
+        for patch in &bank {
+            assert!(names.insert(patch.name), "two {}", patch.name);
+            let effects = &patch.run.effects;
+            assert_eq!(effects[0].kind(), EffectKind::Layer, "{} is headed by a layer", patch.name);
+            assert_eq!(crate::span_problem(effects), None, "{} is malformed", patch.name);
+            assert_eq!(
+                crate::span_of(effects, 0).end,
+                effects.len(),
+                "{} holds rows outside its layer",
+                patch.name
+            );
+            let branches: Vec<usize> = crate::layer_branches(effects, 0).collect();
+            assert!(branches.len() >= 2, "{} has one branch", patch.name);
+            for branch in branches {
+                assert_eq!(effects[branch].kind(), EffectKind::Chain, "{}: a bare branch", patch.name);
+            }
+            for effect in effects {
+                for descriptor in effect.kind().descriptors() {
+                    let Some(value) = effect.params.get(descriptor.id) else { continue };
+                    assert!(
+                        value >= descriptor.min && value <= descriptor.max,
+                        "{}: {} is {value}",
+                        patch.name,
+                        descriptor.name
+                    );
+                }
+            }
+        }
+        for kind in EffectKind::ALL {
+            if kind != EffectKind::Layer {
+                assert!(runs(kind).is_empty(), "{kind:?} grew a run bank");
             }
         }
     }

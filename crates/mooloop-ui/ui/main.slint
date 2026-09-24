@@ -348,7 +348,7 @@ struct EffectSlotRow {
     // Container-only: how many of the rows after this one are inside it, and
     // how deeply this row is nested. `children` is structure rather than a
     // parameter, which is why it is not one of the `pN` fields. The frame the
-    // pair is really for is step 04 of `docs/plans/containers/`; `depth` is
+    // pair is really for is step 04 of `docs/plans/archive/containers/`; `depth` is
     // carried now so the row model and the face contract cross `main.slint`
     // once rather than twice.
     children: int,
@@ -1784,7 +1784,7 @@ export component MainWindow inherits Window {
     // Wrap the device in `slot` -- and its run, when it is already a
     // container -- in a new container. Unwrap takes a container out and
     // leaves what was inside it where it is.
-    callback wrap-effect-clicked(int);              // slot
+    callback wrap-effect-clicked(int, int);         // slot, kind to wrap in
     callback unwrap-effect-clicked(int);            // slot
     callback effect-bypass-toggled(int);            // slot
     // Slot, then an index into that row's preset-options.
@@ -4941,7 +4941,7 @@ export component MainWindow inherits Window {
                                                 // blend.
                                                 wrap-enabled: slot.wrap-enabled;
                                                 unwrap-enabled: slot.is-container;
-                                                wrap-requested => { root.wrap-effect-clicked(index); }
+                                                wrap-requested(kind) => { root.wrap-effect-clicked(index, kind); }
                                                 unwrap-requested => { root.unwrap-effect-clicked(index); }
                                                 selected: slot.selected;
                                                 duplicate-enabled: true;
@@ -5479,6 +5479,9 @@ export component MainWindow inherits Window {
                                                             root.effect-param-changed(branch.slot, 2,
                                                                 root.effect-slots[branch.slot].p2 >= 0.5 ? 0.0 : 1.0);
                                                         }
+                                                        // The whole branch, head and run, as one
+                                                        // removal: what the rail's remove does.
+                                                        remove-requested => { root.remove-effect-clicked(branch.slot); }
                                                         solo-toggled => {
                                                             root.effect-param-changed(branch.slot, 3,
                                                                 root.effect-slots[branch.slot].p3 >= 0.5 ? 0.0 : 1.0);

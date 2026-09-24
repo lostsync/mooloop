@@ -47,6 +47,7 @@ slint::slint! {
         callback preset-selected(int);
         callback save-requested();
         callback kind-selected(int);
+        callback wrapped(int);
 
         DeviceFrame {
             x: 0px; y: 0px;
@@ -56,6 +57,8 @@ slint::slint! {
             preset-selected(i) => { root.preset-selected(i); }
             save-preset-requested => { root.save-requested(); }
             effect-kind-selected(k) => { root.kind-selected(k); }
+            wrap-enabled: true;
+            wrap-requested(k) => { root.wrapped(k); }
         }
     }
 }
@@ -114,6 +117,35 @@ fn click(window: &slint::Window, at: (f32, f32)) {
         position,
         button: PointerEventButton::Left,
     });
+}
+
+/// The wrap button, fourth on the rail, and the two-row menu it opens below
+/// itself (`containers/10`): 4px inset, 22px rows on a 23px pitch.
+const WRAP_Y: f32 = 92.0;
+const WRAP_ROWS_Y: [f32; 2] = [121.0, 144.0];
+
+/// The wrap menu reaches its callback with the kind of each row, clicked.
+/// A menu that closed itself before calling back would open, draw, and do
+/// nothing -- `dupe-audit popup-close-order` is the search for that, and
+/// this is the press.
+#[test]
+fn the_wrap_menu_reports_the_kind_each_row_offers() {
+    let ui = harness();
+    let seen: Rc<RefCell<Vec<i32>>> = Rc::new(RefCell::new(Vec::new()));
+    let log = seen.clone();
+    ui.on_wrapped(move |kind| log.borrow_mut().push(kind));
+    for row_y in WRAP_ROWS_Y {
+        click(ui.window(), (BUTTON_X, WRAP_Y));
+        click(ui.window(), (MENU_X, row_y));
+    }
+    assert_eq!(
+        *seen.borrow(),
+        [
+            effect_kind_index(EffectKind::Chain),
+            effect_kind_index(EffectKind::Layer)
+        ],
+        "the wrap menu's rows did not report Chain then Layer"
+    );
 }
 
 #[test]
@@ -309,7 +341,10 @@ fn the_menu_and_the_faces_cover_every_kind() {
 fn menu_indices() -> Vec<i32> {
     DEVICE_RACK_SLINT
         .lines()
-        .filter(|line| line.contains("EffectTypeRow {"))
+        // A row is an element that *starts* its line. The wrap menu's
+        // `WrapKindRow` is declared as inheriting `EffectTypeRow`, and that
+        // declaration is not a row of the insert menu (`containers/10`).
+        .filter(|line| line.trim_start().starts_with("EffectTypeRow {"))
         .map(|line| {
             let call = line
                 .split_once("kind-selected(")

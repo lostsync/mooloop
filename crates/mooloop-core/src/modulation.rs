@@ -3140,7 +3140,7 @@ param = 8
         // `ParamOwner::Effect` stopped naming a `u8` slot and started naming
         // a `DeviceId`, which has to be a `u32` because identity is monotonic
         // and never reused and a 256-slot chain would exhaust a byte
-        // (`docs/plans/containers/01-a-device-is-an-identity.md`).
+        // (`docs/plans/archive/containers/01-a-device-is-an-identity.md`).
         //
         // It is paid once per stored route -- 64 bytes per channel's rack,
         // 16 KiB across the reserved channel count -- and, crucially, not on

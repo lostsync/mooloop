@@ -596,14 +596,19 @@ A container also saves as a preset of its own: an `effect_run` document
 holding the container and everything inside it, in rack order, with
 `contains = ["effect_params", "effect_run"]`. The entry is **added** rather
 than replacing `effect_params`, so a reader that predates run presets refuses
-the bundle instead of loading its first device and dropping the box. Device
+the bundle instead of loading its first device and dropping the box. The
+head may be any container: since `containers/10` (2026-09-23) a layer saves
+this way too, its branches and all, and the bundle lists under its head's
+kind, so a layer's preset is offered on a layer's rail and a chain's on a
+chain's. Nothing in the document changed for that; a chain-headed bundle
+written before reads exactly as it did. Device
 ids are stripped on save and minted fresh on load, because identity belongs to
 the chain a device is on rather than to the patch. **A kit or channel document
 carries no channel identity at all** -- both hold `ChannelSetup`, which is a
 channel's devices rather than the channel -- so there is nothing to strip, and
 loading a kit entry onto a seat the song does not have yet mints one for it. The modulation that drives
 a run is not carried — a route's source is a module in the channel's rack, not
-in the container — and `docs/plans/containers/00-status.md` records why that
+in the container — and `docs/plans/archive/containers/00-status.md` records why that
 is a deferred decision rather than an omission.
 
 ## Hosted plugins

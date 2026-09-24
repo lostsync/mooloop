@@ -14313,7 +14313,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 mooloop_core::EffectKind::Chain | mooloop_core::EffectKind::Layer => {
                     // A container is transparent by construction and stays
                     // that way: its mix belongs to the chain host, not to the
-                    // node in the slot. `docs/plans/containers/03` gives the
+                    // node in the slot. `docs/plans/archive/containers/03` gives the
                     // host that dry path, and this arm is where a container
                     // that started processing audio itself would be caught.
                 }
@@ -16614,10 +16614,10 @@ mod footprint {
         // the pointer that would otherwise have reserved it.
         //
         // It grew by eight when the slot started carrying its device's
-        // durable `DeviceId` (`docs/plans/containers/01`) -- four for the id
+        // durable `DeviceId` (`docs/plans/archive/containers/01`) -- four for the id
         // and four of padding -- and by eight more for a container's span and
         // the pointer to the ring that delays its dry copy
-        // (`docs/plans/containers/03`). The span is a byte and falls in
+        // (`docs/plans/archive/containers/03`). The span is a byte and falls in
         // padding; the eight is the `Option<Box<IntegerDelay>>`, and it is
         // `None` on every leaf.
         //
@@ -16629,7 +16629,7 @@ mod footprint {
         // work exists to avoid.
         //
         // Eight more for the ring that holds a layer's shorter branch back to
-        // meet its longest (`docs/plans/containers/08`), on the branch head's
+        // meet its longest (`docs/plans/archive/containers/08`), on the branch head's
         // slot for the same reason: `None` everywhere but a branch that
         // declares less than its siblings.
         //
@@ -16898,7 +16898,7 @@ mod footprint {
         // has no identity the rack could mint for it.
         //
         // And another sixteen for the third instance of that same trade
-        // (`docs/plans/containers/01`): `ParamOwner::Effect` stopped naming a
+        // (`docs/plans/archive/containers/01`): `ParamOwner::Effect` stopped naming a
         // `u8` slot and started naming a `u32` `DeviceId`, so a route's
         // destination no longer moves when the rack is reordered. Four bytes
         // an address, 64 a channel's rack, 16 KiB across the reserved count.

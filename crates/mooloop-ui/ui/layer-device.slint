@@ -6,7 +6,7 @@ import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 // One branch of a layer, as the layer's face lists it. `slot` is the rack
 // index of the branch's head -- the number every callback about the branch
 // wants -- and not the row's position in the list, which is the `lvl`/`level`
-// trap `docs/plans/containers/09` warns about.
+// trap `docs/plans/archive/containers/09` warns about.
 export struct LayerBranchRow {
     slot: int,
     // The branch's preset name if it has one, otherwise the first device
@@ -31,6 +31,8 @@ export component LayerBranchListRow inherits Rectangle {
     callback select-requested();
     callback mute-toggled();
     callback solo-toggled();
+    // The row's menu: take the branch and everything in it out of the layer.
+    callback remove-requested();
 
     height: 22px;
     border-radius: Theme.radius-sm;
@@ -48,6 +50,52 @@ export component LayerBranchListRow inherits Rectangle {
     pick := TouchArea {
         mouse-cursor: pointer;
         clicked => { root.select-requested(); }
+        // A right press opens the row's menu: the branch's own commands,
+        // beside the row that owns them.
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.right) {
+                branch-menu.show();
+            }
+        }
+    }
+
+    branch-menu := PopupWindow {
+        x: 0px;
+        y: parent.height;
+        width: 140px;
+        height: menu-frame.preferred-height;
+        close-policy: close-on-click;
+        menu-frame := Rectangle {
+            background: Theme.surface;
+            border-width: Theme.hairline;
+            border-color: Theme.border;
+            border-radius: Theme.radius-md;
+            VerticalLayout {
+                padding: 4px;
+                Rectangle {
+                    height: 22px;
+                    border-radius: Theme.radius-md;
+                    background: remove-touch.has-hover ? Theme.surface-active : transparent;
+                    Text {
+                        x: 10px;
+                        text: "Remove branch";
+                        color: Theme.text;
+                        font-size: Theme.text-xl;
+                        vertical-alignment: center;
+                    }
+                    remove-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        // The callback first and the close after: closing
+                        // tears this row down, and a handler written after
+                        // `close()` never lands (`dupe-audit popup-close-order`).
+                        clicked => {
+                            root.remove-requested();
+                            branch-menu.close();
+                        }
+                    }
+                }
+            }
+        }
     }
 
     HorizontalLayout {
@@ -93,7 +141,7 @@ export component LayerBranchListRow inherits Rectangle {
     }
 }
 
-// The layer's face (`docs/plans/containers/09`, after Bitwig's FX Layer):
+// The layer's face (`docs/plans/archive/containers/09`, after Bitwig's FX Layer):
 // the list of its branches with `+` under it, and Gain and Mix beside it.
 // The rows are the caller's children, because each reads its branch head's
 // row out of the rack model, which a face cannot see.

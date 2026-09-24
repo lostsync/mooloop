@@ -2803,7 +2803,7 @@ struct RackPlacement {
     depth: i32,
     /// What the rack draws of this row beyond the row itself: whether a
     /// layer is hiding it, which boxes close at it, and a layer's branch
-    /// list (`docs/plans/containers/09`).
+    /// list (`docs/plans/archive/containers/09`).
     view: layer_view::RowView,
     selected: bool,
     /// Whether wrapping this row would leave every container inside
@@ -4809,7 +4809,7 @@ impl UiState {
     /// Every container, every time, rather than a diff. A chain holds a
     /// handful of boxes and this runs on a hand gesture, so the cost is
     /// nothing and the alternative -- working out which spans an edit moved --
-    /// is exactly the class of bookkeeping `docs/plans/containers/01` deleted.
+    /// is exactly the class of bookkeeping `docs/plans/archive/containers/01` deleted.
     ///
     /// A span is structure, not a control: it has no descriptor id and cannot
     /// arrive on the value ring, because a curve drawn on it would reshape
@@ -6610,14 +6610,22 @@ impl AppUi {
         {
             log_warn!("app", "could not write the ML-P8 factory bank: {error}");
         }
-        // The effect banks, one directory a kind, on the same terms.
+        // The effect banks, one directory a kind, on the same terms -- and
+        // beside each, its bank of container runs, which only the layer has
+        // (`containers/10`), under a marker of its own.
         for kind in EffectKind::ALL {
-            if let Err(error) =
-                mooloop_project::seed_effect_bank(&settings::effect_presets_dir(kind), kind)
-            {
+            let dir = settings::effect_presets_dir(kind);
+            if let Err(error) = mooloop_project::seed_effect_bank(&dir, kind) {
                 log_warn!(
                     "app",
                     "could not write the {} factory bank: {error}",
+                    kind.label()
+                );
+            }
+            if let Err(error) = mooloop_project::seed_effect_run_bank(&dir, kind) {
+                log_warn!(
+                    "app",
+                    "could not write the {} factory run bank: {error}",
                     kind.label()
                 );
             }
@@ -7918,7 +7926,13 @@ impl AppUi {
                         match action_id {
                             "device.bypass" => window.invoke_effect_bypass_toggled(slot),
                             "device.remove" => window.invoke_remove_effect_clicked(slot),
-                            "device.wrap" => window.invoke_wrap_effect_clicked(slot),
+                            // The shortcut wraps in a Chain, as it always
+                            // has; the rail's menu is where a Layer is
+                            // chosen (`containers/10`).
+                            "device.wrap" => window.invoke_wrap_effect_clicked(
+                                slot,
+                                effect_kind_index(EffectKind::Chain),
+                            ),
                             _ => window.invoke_save_effect_preset_requested(slot),
                         }
                     }
@@ -12055,7 +12069,7 @@ impl AppUi {
             });
         }
 
-        // A layer's list (`docs/plans/containers/09`). Choosing the branch
+        // A layer's list (`docs/plans/archive/containers/09`). Choosing the branch
         // the rack shows is looking, not editing: it redraws the rack and
         // sends the engine nothing, and it is not in undo.
         {
@@ -12177,9 +12191,15 @@ impl AppUi {
             let st = state.clone();
             let commands = command_state.clone();
             let weak = window.as_weak();
-            window.on_wrap_effect_clicked(move |slot| {
+            window.on_wrap_effect_clicked(move |slot, kind_index| {
                 let Some(window) = weak.upgrade() else { return };
                 let Ok(slot) = usize::try_from(slot) else {
+                    return;
+                };
+                // The wrap menu's choice (`containers/10`): a Chain is one
+                // row, a Layer is two -- a layer round a chain round the run
+                // -- and both are one gesture and one undo step.
+                let Some(kind) = effect_kind_from_index(kind_index) else {
                     return;
                 };
                 let before = project_snapshot(&st.borrow(), &window);
@@ -12189,36 +12209,20 @@ impl AppUi {
                         Some(effects) => mooloop_core::run_of(effects, slot),
                         None => return,
                     };
-                    let Some(added) = st.session.wrap_effects_in_container(run) else {
+                    let Some(added) = st.session.wrap_effects_in(run, kind) else {
                         return;
                     };
                     st.sync_effects();
                     st.refresh_automation(&window);
                     st.refresh_modulation(&window);
-                    // Installed at the tail and moved into place, exactly as
-                    // an inserted device is: the rows it now encloses do not
-                    // move, so nothing else has to be told they were wrapped.
+                    // Each installed at the tail and moved into place, exactly
+                    // as an inserted device is, in the order they were made:
+                    // the rows they now enclose do not move, so nothing else
+                    // has to be told they were wrapped.
                     let bpm = window.get_bpm() as f64;
-                    let node = build_effect_at_tempo(added.params, sample_rate, bpm);
-                    let align = IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
-                    stx.send(StructuralCommand::InstallEffect {
-                        target: added.target,
-                        slot: added.tail as u8,
-                        kind: added.kind,
-                        resource_key: None,
-                        node,
-                        align,
-                        analyzer: Box::new(SpectrumAnalyzer::new()),
-                        state: Box::new(EffectSlot::for_device(added.device)),
-                    });
-                    if added.slot != added.tail {
-                        let _ = tx.send(EngineCommand::MoveEffect {
-                            target: added.target,
-                            from: added.tail as u8,
-                            to: added.slot as u8,
-                        });
+                    for added in &added {
+                        st.install_added_effect(added, bpm, sample_rate, &tx, &stx);
                     }
-                    st.publish_container_spans(added.target, &stx);
                 }
                 record_project_history(&commands, before, &st, &window, "Devices wrapped");
             });

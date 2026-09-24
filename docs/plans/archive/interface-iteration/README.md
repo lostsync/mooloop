@@ -80,7 +80,7 @@ says is wrong with it.
   `ENHANCEMENTS.md` states the question and why base16 and pywal answer it.
   Step 03 adds a *channel* colour, which is content in the project file and
   independent of the palette question; it must not be allowed to decide it.
-- **Layers.** `docs/plans/containers/06-layers-and-selectors.md` prices them
+- **Layers.** `docs/plans/archive/containers/06-layers-and-selectors.md` prices them
   and defers them to Adam after living with chain containers. Step 02 makes
   containers easier to move around, which is more time living with them, not
   a reason to revisit.

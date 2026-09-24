@@ -26,7 +26,7 @@ pub struct CommandState {
     /// It does **not** carry the modulation routes or automation lanes that
     /// drove the original: a route's source is a module in the *channel's*
     /// rack, so it cannot follow a device onto another channel. That is the
-    /// question `docs/plans/containers/` reserved rather than answered, and
+    /// question `docs/plans/archive/containers/` reserved rather than answered, and
     /// this inherits its answer instead of making a second one.
     pub device_clipboard: Option<mooloop_core::EffectRun>,
     /// Notes cut or copied from the roll, kept relative to the earliest one

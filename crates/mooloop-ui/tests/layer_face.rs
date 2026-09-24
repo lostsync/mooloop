@@ -1,5 +1,5 @@
 //! The layer's branch list, driven by real pointer events
-//! (`docs/plans/containers/09`).
+//! (`docs/plans/archive/containers/09`).
 //!
 //! What matters about the list is that a press on a row reaches the callback
 //! carrying the **branch head's rack index** -- `branch.slot` -- and not the
@@ -29,6 +29,7 @@ slint::slint! {
         callback muted(int);
         callback soloed(int);
         callback added();
+        callback removed(int);
 
         LayerDeviceFace {
             x: 0px; y: 0px;
@@ -42,6 +43,7 @@ slint::slint! {
                 select-requested => { root.selected(branch.slot); }
                 mute-toggled => { root.muted(branch.slot); }
                 solo-toggled => { root.soloed(branch.slot); }
+                remove-requested => { root.removed(branch.slot); }
             }
         }
     }
@@ -55,6 +57,8 @@ const FIRST_ROW: (f32, f32) = (40.0, 48.0);
 const SECOND_ROW: (f32, f32) = (40.0, 71.0);
 const SECOND_SOLO: (f32, f32) = (111.0, 71.0);
 const SECOND_MUTE: (f32, f32) = (131.0, 71.0);
+/// The second row's menu opens under it: 4px inset, one 22px row.
+const SECOND_ROW_REMOVE: (f32, f32) = (60.0, 97.0);
 /// Under the two rows: 3px of padding above an 18px button.
 const PLUS: (f32, f32) = (79.0, 95.0);
 
@@ -118,4 +122,30 @@ fn the_plus_under_the_list_asks_for_a_branch() {
     ui.on_added(move || *count.borrow_mut() += 1);
     click(ui.window(), PLUS);
     assert_eq!(*asked.borrow(), 1);
+}
+
+/// A right press on a row opens its menu, and *Remove branch* names the
+/// branch head -- so the removal takes the head and its whole run, which is
+/// what `remove_effect` does with a container (`containers/10`).
+#[test]
+fn a_rows_menu_removes_that_branch() {
+    let ui = harness();
+    let removed: Rc<RefCell<Vec<i32>>> = Rc::default();
+    let selected: Rc<RefCell<Vec<i32>>> = Rc::default();
+    let (r, s) = (removed.clone(), selected.clone());
+    ui.on_removed(move |slot| r.borrow_mut().push(slot));
+    ui.on_selected(move |slot| s.borrow_mut().push(slot));
+    let position = LogicalPosition::new(SECOND_ROW.0, SECOND_ROW.1);
+    ui.window().dispatch_event(WindowEvent::PointerMoved { position });
+    ui.window().dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: PointerEventButton::Right,
+    });
+    ui.window().dispatch_event(WindowEvent::PointerReleased {
+        position,
+        button: PointerEventButton::Right,
+    });
+    click(ui.window(), SECOND_ROW_REMOVE);
+    assert_eq!(*removed.borrow(), [7], "the menu removed the wrong branch, or none");
+    assert!(selected.borrow().is_empty(), "a right press selected the row");
 }

@@ -888,7 +888,7 @@ pub fn clamp_bus(bus: u8) -> u8 {
 /// is zero, and so a flat sum already counted them exactly once.
 ///
 /// That holds precisely as long as every row is in **series**. A layer
-/// (`docs/plans/containers/07-a-branch-is-a-run.md`) splits its input across
+/// (`docs/plans/archive/containers/07-a-branch-is-a-run.md`) splits its input across
 /// its direct children and sums what comes back, so the frames a signal
 /// spends inside one is its *longest* branch, not the total of all of them --
 /// and a flat sum would over-declare by the difference. Over-declaring is not
@@ -984,7 +984,7 @@ fn latency_of_run(
 /// container's *own* declared latency, which is zero: the mixer's plan walks
 /// the whole chain and already counts these rows, so declaring the run here
 /// too would compensate the channel twice. See question 4 in
-/// `docs/plans/containers/README.md`.
+/// `docs/plans/archive/containers/README.md`.
 ///
 /// For a layer it is the **longest branch**, which is both what its dry copy
 /// waits for and what every shorter branch is delayed up to.
@@ -1014,7 +1014,7 @@ fn run_latency_with(
 ///
 /// Without it a branch holding a Drive and a clean branch beside it sum 15
 /// frames apart, which is a comb filter across the whole spectrum
-/// (`docs/plans/containers/08-the-chain-splits-and-sums.md`).
+/// (`docs/plans/archive/containers/08-the-chain-splits-and-sums.md`).
 pub fn branch_alignment(effects: &[EffectSlotState], layer: usize, branch: usize) -> u32 {
     let is_layer = effects
         .get(layer)

@@ -42,6 +42,10 @@ Two siblings, kept because they outlived the plans they came from:
 
 ### 1. The layer device, finished — `containers/` steps 09 and 10 (MOO-71, MOO-72)
 
+**Landed 2026-09-23** (MOO-71, MOO-72) and archived with its plan
+(`docs/plans/archive/containers/`). What is left of it is the listening pass,
+first in the list below.
+
 07 and 08 landed 2026-09-23: a layer is a device, it is in the insert menu,
 it splits its input across its branches, aligns them and sums them. What it
 lacks is a face and the gestures.

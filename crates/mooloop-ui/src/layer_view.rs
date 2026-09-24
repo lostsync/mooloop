@@ -1,5 +1,5 @@
 //! What the rack draws of a chain that holds layers
-//! (`docs/plans/containers/09-the-rack-draws-branches.md`).
+//! (`docs/plans/archive/containers/09-the-rack-draws-branches.md`).
 //!
 //! A layer shows one branch at a time in the rack, the way Bitwig's FX Layer
 //! does: its face lists every branch, and only the **selected** branch's rows

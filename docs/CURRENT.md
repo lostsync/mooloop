@@ -1707,7 +1707,7 @@ land on its own when it starts to matter:
   and everything in it, from the same rail every other device's presets live
   on. The modulation driving a run does not travel with it, because a route's
   source lives in the channel's rack rather than in the container; see
-  `docs/plans/containers/00-status.md`.
+  `docs/plans/archive/containers/00-status.md`.
 - A second container kind, **Layer**, sits under Chain in the insert menu and
   saves and reloads as its own kind. It holds a run, nests, wraps, bypasses
   and mixes as a chain does, but **it splits its input across its direct
@@ -1729,9 +1729,18 @@ land on its own when it starts to matter:
   the branch's fader. Mute takes a branch out of the sum and Solo keeps only
   the soloed branches of that one layer; both ramp, and both are undoable
   and saved. A device sitting directly inside a layer, not in a chain, is a
-  branch with no S or M. The wrap button still always makes a Chain, and a
-  layer's preset carries only its own row, not what it holds
-  (`containers/10`).
+  branch with no S or M.
+- **Making and emptying a layer** (`containers/10`). The rail's wrap button
+  opens a menu, **Chain** or **Layer**. Wrapping in a layer makes a layer of
+  one branch, a Chain holding what was wrapped, so the branch has its S, M
+  and Level from the start. A right-click on a branch in the list offers
+  **Remove branch**, which takes the branch and everything in it. The last
+  branch can go too, leaving an empty layer that passes its input. Each of
+  these is one undo step.
+- **A layer saves as a preset**, the box and every branch in it, and lists
+  on the layer's own preset rail. It ships with a bank of three: Parallel
+  Drum Compression, Clean and Distorted, and Three-Way Split (a low-pass, a
+  band-pass and a high-pass on three branches).
 - `ParamAddr` addresses parameters owned by a source, a rack device, a
   modulator slot, or the strip, within its channel-or-bus scope. A rack device
   is named by a durable `DeviceId` minted when it is inserted, so reordering,
@@ -2230,7 +2239,7 @@ land on its own when it starts to matter:
   clipboard outlives New Song and Open Song.
   **The clipboard does not carry modulation routes or automation lanes**: a
   route's source is a module in the channel's own rack, so it cannot follow a
-  device to another channel. That is the question `docs/plans/containers/`
+  device to another channel. That is the question `docs/plans/archive/containers/`
   reserved rather than answered, and this inherits its answer.
 - A canonical action registry drives the menu bar and rebindable shortcuts.
   Note multi-selection supports Select All and bulk deletion. **Undo covers

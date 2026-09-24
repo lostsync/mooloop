@@ -1,5 +1,7 @@
 # 10 — The gestures, and a layer is a preset
 
+> **Landed 2026-09-23 (MOO-72).** What the doing found is in `00-status.md`.
+
 The step that makes a layer reachable without a debug control, and the one
 that closes the plan.
 
@@ -91,7 +93,7 @@ its range from the controls — means three or four, not a curated bank:
 
 `06` says it closes when `00-status.md` records that chain containers have
 been lived in and Adam has ruled on layers either way. He ruled. When `10`
-lands, move `docs/plans/containers/` to `archive/` — an active directory
+lands, move `docs/plans/archive/containers/` to `archive/` — an active directory
 should always hold live work.
 
 **Selectors stay unbuilt.** `06` prices a selector as nearly free once layers

@@ -1,6 +1,6 @@
 # 02 — A device can be copied
 
-This is the step that spends `docs/plans/containers/` step 01. A rack device
+This is the step that spends `docs/plans/archive/containers/` step 01. A rack device
 became a durable identity on 2026-09-06, `SlotRemap` was deleted outright, and
 the status document's headline is that **reordering, inserting and deleting
 rack rows rewrite no address anywhere**. Nothing has used that yet. Copying a
@@ -68,7 +68,7 @@ the structural-addressing work.
 
 A device pasted onto a *different* channel cannot bring its modulation with
 it. This is not a new limitation and it must not be re-solved here: it is
-precisely the one thing `docs/plans/containers/` recorded as **blocked rather
+precisely the one thing `docs/plans/archive/containers/` recorded as **blocked rather
 than done** — a container preset cannot carry the modulation that drives it,
 because a route's source lives in the channel's rack, and fixing it means
 deciding whether a modulator can live in a container, which the containers

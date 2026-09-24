@@ -21,7 +21,7 @@
 //! what modulator sources needed "because a route names a source *from
 //! elsewhere*", and that nothing outside a chain names an effect slot except
 //! through `ParamAddr`, which travelled through here. That was true, and what
-//! stopped it being true is `docs/plans/containers/`: once a chain can hold a
+//! stopped it being true is `docs/plans/archive/containers/`: once a chain can hold a
 //! device that *contains* other devices, an edit inside one box renumbers
 //! everything after it at every enclosing level, and a permutation would have
 //! to be computed and run on every drag in both directions. An id is not
@@ -536,7 +536,7 @@ pub fn insert_into_container(
 /// minting it an identity. Returns where it landed.
 ///
 /// [`insert_into_container`]'s sibling at the other end of the run, for the
-/// layer's list (`docs/plans/containers/09`): its `+` adds a branch after
+/// layer's list (`docs/plans/archive/containers/09`): its `+` adds a branch after
 /// the ones already there, the order the list reads in. The position is one
 /// past the box's run, which for an index alone would also mean "the next
 /// device after the box" -- so, as there, the operation names the box rather

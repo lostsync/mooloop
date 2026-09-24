@@ -302,7 +302,7 @@ out matches the face but silently deletes any lane already drawn on one
 engine read it means a slot with no node has to carry a resolved parameter,
 which today every device receives as a `ParamValue` event and a container has
 nothing to hand one to. That is question 4 in
-`docs/plans/containers/README.md`. Found 2026-09-13.
+`docs/plans/archive/containers/README.md`. Found 2026-09-13.
 
 **Input trim and output trim on a container row are inert.** Both are read
 only inside the leaf branch, past the container's `continue`, and both are
@@ -699,7 +699,7 @@ So the options are: give `Doctor` a tolerated severity -- an issue worth
 telling the user about that stops nothing, which the report, the status bar
 count and `Diagnosis::blocking` all have to learn; or accept that the format
 does not check depth and say so, which `structure.rs`, `CAPACITY_POLICY.md`
-and `docs/plans/containers/02-...md` now do rather than claiming otherwise.
+and `docs/plans/archive/containers/02-...md` now do rather than claiming otherwise.
 Found 2026-09-13, gesture half fixed 2026-09-14.
 
 **`MAX_AUTOMATION_LANES_PER_CHANNEL` is 8, and raising it is not free.** The

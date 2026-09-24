@@ -267,7 +267,7 @@ impl Session {
     }
 
     /// Adds an empty branch at the end of the layer in `slot`: what the
-    /// layer list's `+` does (`docs/plans/containers/09`).
+    /// layer list's `+` does (`docs/plans/archive/containers/09`).
     ///
     /// The branch is a Chain, because a branch's Level, Mute and Solo are a
     /// container's parameters -- a leaf directly inside a layer has none --
@@ -323,6 +323,87 @@ impl Session {
             kind: EffectKind::Chain,
             params: inserted.params,
         })
+    }
+
+    /// Wraps `run` in a new container of `kind`, which is what the rail's
+    /// wrap menu offers (`docs/plans/archive/containers/10`). Returns the rows it
+    /// inserted, in the order the engine has to mirror them.
+    ///
+    /// A Chain is one row, [`Self::wrap_effects_in_container`]. A **Layer**
+    /// is made with one branch that already has its controls: a branch's
+    /// Level, Mute and Solo are a container's (`containers/09`), so the run
+    /// goes into a Chain first and the Chain into the Layer -- two rows, one
+    /// gesture. When the run already *is* one Chain, it becomes the branch as
+    /// it stands. When the nesting cap leaves room for one box and not two,
+    /// the Layer goes straight round the run, whose devices are then branches
+    /// with no switches of their own -- legal, and still a layer.
+    pub fn wrap_effects_in(
+        &mut self,
+        run: std::ops::Range<usize>,
+        kind: EffectKind,
+    ) -> Option<Vec<EffectInserted>> {
+        if kind == EffectKind::Chain {
+            return self.wrap_effects_in_container(run).map(|inserted| vec![inserted]);
+        }
+        if kind.container_flow() != Some(mooloop_core::ContainerFlow::Parallel) {
+            return None;
+        }
+        let target = self.effect_target;
+        let (effects, next_id) = self.effect_chain_parts_mut()?;
+        let already_a_chain = !run.is_empty()
+            && effects
+                .get(run.start)
+                .is_some_and(|effect| effect.kind() == EffectKind::Chain)
+            && mooloop_core::run_of(effects, run.start) == run;
+        // Rehearsed on a copy, so a refusal half way leaves the chain as it
+        // was rather than holding a Chain nobody asked for.
+        let mut trial = effects.clone();
+        let mut trial_next = *next_id;
+        let two_rows = !already_a_chain
+            && mooloop_core::wrap_in_container(
+                &mut trial,
+                &mut trial_next,
+                run.clone(),
+                EffectSlotState::of_kind(EffectKind::Chain),
+            )
+            .and_then(|chain| {
+                let branch = mooloop_core::run_of(&trial, chain);
+                mooloop_core::wrap_in_container(
+                    &mut trial,
+                    &mut trial_next,
+                    branch,
+                    EffectSlotState::of_kind(EffectKind::Layer),
+                )
+            })
+            .is_some();
+        let mut inserted = Vec::new();
+        let mut layer_run = run;
+        if two_rows {
+            let tail = effects.len();
+            let chain = EffectSlotState::of_kind(EffectKind::Chain);
+            let slot = mooloop_core::wrap_in_container(effects, next_id, layer_run.clone(), chain)?;
+            inserted.push(EffectInserted {
+                target,
+                slot,
+                tail,
+                device: effects[slot].id,
+                kind: EffectKind::Chain,
+                params: effects[slot].params,
+            });
+            layer_run = mooloop_core::run_of(effects, slot);
+        }
+        let tail = effects.len();
+        let layer = EffectSlotState::of_kind(EffectKind::Layer);
+        let slot = mooloop_core::wrap_in_container(effects, next_id, layer_run, layer)?;
+        inserted.push(EffectInserted {
+            target,
+            slot,
+            tail,
+            device: effects[slot].id,
+            kind: EffectKind::Layer,
+            params: effects[slot].params,
+        });
+        Some(inserted)
     }
 
     /// Takes the container in `slot` out of the chain, leaving its children
@@ -1820,6 +1901,79 @@ mod tests {
 
     /// nesting reachable from a single button rather than needing a selection
     /// model to exist first.
+    /// Removing a branch from a layer's list takes the branch head and its
+    /// whole run -- nothing is left orphaned or re-parented into a sibling --
+    /// and the last branch can go too, leaving an empty layer
+    /// (`containers/10`).
+    #[test]
+    fn removing_a_branch_takes_its_whole_run() {
+        let mut session = Session::default();
+        session.insert_effect_at(EffectKind::Layer, usize::MAX).expect("room");
+        session.insert_effect_at(EffectKind::Delay, usize::MAX).expect("room");
+        let first = session.add_layer_branch(0).expect("a branch").slot;
+        session
+            .insert_effect_into_container(EffectKind::Drive, first)
+            .expect("a drive in it");
+        session
+            .insert_effect_into_container(EffectKind::Filter, first)
+            .expect("a filter in it");
+        let second = session.add_layer_branch(0).expect("a second branch").slot;
+        // [Layer, Chain, Filter, Drive, Chain, Delay]
+        assert_eq!(second, 4);
+        let removed = session.remove_effect_at(first).expect("removed");
+        assert_eq!(removed.devices.len(), 3, "the head and both devices in it");
+        assert_eq!(
+            kinds(&session),
+            [EffectKind::Layer, EffectKind::Chain, EffectKind::Delay]
+        );
+        assert_eq!(depths(&session), [0, 1, 0], "the Delay stayed outside");
+        assert_eq!(mooloop_core::span_problem(&session.channels[0].effects), None);
+        // The last branch.
+        session.remove_effect_at(1).expect("removed");
+        assert_eq!(kinds(&session), [EffectKind::Layer, EffectKind::Delay]);
+        assert_eq!(
+            session.channels[0].effects[0].params.container_children(),
+            Some(0),
+            "an empty layer, which is legal"
+        );
+    }
+
+    /// Wrapping as a layer makes a layer of one Chain branch around the run,
+    /// two rows reported in the order the engine mirrors them; a run that is
+    /// already one Chain becomes the branch as it stands.
+    #[test]
+    fn wrapping_as_a_layer_makes_one_chain_branch() {
+        let mut session = Session::default();
+        for kind in [EffectKind::Drive, EffectKind::Filter] {
+            session.insert_effect_at(kind, usize::MAX).expect("room");
+        }
+        let added = session.wrap_effects_in(0..2, EffectKind::Layer).expect("wrapped");
+        assert_eq!(
+            added.iter().map(|added| added.kind).collect::<Vec<_>>(),
+            [EffectKind::Chain, EffectKind::Layer]
+        );
+        assert_eq!(
+            kinds(&session),
+            [
+                EffectKind::Layer,
+                EffectKind::Chain,
+                EffectKind::Drive,
+                EffectKind::Filter
+            ]
+        );
+        assert_eq!(depths(&session), [0, 1, 2, 2]);
+        // Wrapping the chain itself as a layer adds only the layer.
+        let mut session = Session::default();
+        session.insert_effect_at(EffectKind::Drive, usize::MAX).expect("room");
+        session.wrap_effects_in_container(0..1).expect("a chain");
+        let added = session.wrap_effects_in(0..2, EffectKind::Layer).expect("wrapped");
+        assert_eq!(added.len(), 1);
+        assert_eq!(
+            kinds(&session),
+            [EffectKind::Layer, EffectKind::Chain, EffectKind::Drive]
+        );
+    }
+
     #[test]
     fn a_layers_plus_adds_an_empty_chain_as_its_last_branch() {
         let mut session = Session::default();

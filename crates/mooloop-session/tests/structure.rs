@@ -4,7 +4,7 @@
 //! lanes named their destination by slot and their channel by index, so any
 //! structural edit re-aimed them at whatever slid into the seat.
 //!
-//! Since `docs/plans/containers/01`, a route and a lane name a `DeviceId`,
+//! Since `docs/plans/archive/containers/01`, a route and a lane name a `DeviceId`,
 //! so a reorder or an insert is not an event either of them can observe.
 //! These tests therefore assert something stronger than "the permutation ran
 //! correctly": that the addresses **do not change at all**, which is the only

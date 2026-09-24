@@ -23,8 +23,8 @@ use mooloop_core::{
 };
 
 use crate::{
-    sanitize_preset_name, save_channel_preset, save_effect_preset, save_generator_preset, AssetMode,
-    Error, PresetInfo,
+    sanitize_preset_name, save_channel_preset, save_effect_preset, save_effect_run_preset,
+    save_generator_preset, AssetMode, Error, PresetInfo,
 };
 
 /// Written once the bank has been seeded. Its presence — not the presence of
@@ -117,6 +117,54 @@ pub fn seed_effect_bank(dir: &Path, kind: EffectKind) -> Result<usize, Error> {
         save_effect_preset(
             &path,
             &patch.effect,
+            PresetInfo {
+                name: patch.name.to_string(),
+                category: patch.category.to_string(),
+                tags: patch.tags.iter().map(|tag| (*tag).to_string()).collect(),
+            },
+            AssetMode::Embedded,
+        )?;
+        written += 1;
+    }
+
+    fs::write(&marker, b"")?;
+    Ok(written)
+}
+
+/// The marker for a kind's *run* bank, beside the row bank's own. Separate on
+/// purpose: every machine that has run mooloop since the layer existed seeded
+/// its empty row bank and wrote `.factory-v1` in `presets/effects/layer/`, so
+/// a bank of layer runs guarded by that marker would never be written
+/// (`docs/plans/archive/containers/10`).
+const EFFECT_RUN_MARKER_FILE: &str = ".factory-runs-v1";
+
+/// Seeds the factory *run* bank for `kind` -- container presets, the box and
+/// everything in it -- into `dir`, that kind's own preset directory. The
+/// same contract as [`seed_effect_bank`]: once, marker-guarded, never over a
+/// preset of the same name, the marker last.
+///
+/// Returns how many bundles were written.
+pub fn seed_effect_run_bank(dir: &Path, kind: EffectKind) -> Result<usize, Error> {
+    let bank = effect_factory::runs(kind);
+    if bank.is_empty() {
+        return Ok(0);
+    }
+    let marker = dir.join(EFFECT_RUN_MARKER_FILE);
+    if marker.exists() {
+        return Ok(0);
+    }
+    fs::create_dir_all(dir)?;
+
+    let mut written = 0;
+    for patch in bank {
+        let stem = sanitize_preset_name(patch.name);
+        let path = dir.join(format!("{stem}.{EFFECT_BUNDLE_EXTENSION}"));
+        if path.exists() {
+            continue;
+        }
+        save_effect_run_preset(
+            &path,
+            &patch.run,
             PresetInfo {
                 name: patch.name.to_string(),
                 category: patch.category.to_string(),
@@ -592,6 +640,42 @@ mod tests {
 
             assert_eq!(seed_effect_bank(&dir, kind).unwrap(), 0, "{kind:?} re-seeded");
         }
+    }
+
+    /// The layer's run bank is written beside a row bank that was seeded
+    /// empty and marked, which is what every existing install has, and it
+    /// lists under the layer and loads back as the same run.
+    #[test]
+    fn the_layer_run_bank_seeds_past_the_row_banks_marker() {
+        let temp = tempdir().unwrap();
+        let dir = temp.path().join("layer");
+        assert_eq!(seed_effect_bank(&dir, EffectKind::Layer).unwrap(), 0);
+        assert!(dir.join(EFFECT_MARKER_FILE).exists(), "the premise: the row bank marked it");
+        let bank = mooloop_core::effect_factory::runs(EffectKind::Layer);
+        assert!(bank.len() >= 3);
+        assert_eq!(seed_effect_run_bank(&dir, EffectKind::Layer).unwrap(), bank.len());
+        let listed = list_presets(&dir);
+        assert_eq!(listed.len(), bank.len());
+        for summary in &listed {
+            assert_eq!(summary.kind, PresetKind::Effect(EffectKind::Layer));
+        }
+        for patch in bank {
+            let summary = listed
+                .iter()
+                .find(|found| found.name == patch.name)
+                .unwrap_or_else(|| panic!("{} is missing", patch.name));
+            let report = load_bundle(&summary.path).unwrap();
+            assert!(report.repairs.is_empty(), "{} needed repairs", patch.name);
+            let LoadedDocument::EffectRun(run) = report.document else {
+                panic!("{} did not load as a run", patch.name);
+            };
+            assert_eq!(*run, patch.run, "{} changed on disk", patch.name);
+        }
+        assert_eq!(seed_effect_run_bank(&dir, EffectKind::Layer).unwrap(), 0, "re-seeded");
+        // A kind with no run bank writes nothing and no marker.
+        let chain = temp.path().join("chain");
+        assert_eq!(seed_effect_run_bank(&chain, EffectKind::Chain).unwrap(), 0);
+        assert!(!chain.join(EFFECT_RUN_MARKER_FILE).exists());
     }
 
     #[test]

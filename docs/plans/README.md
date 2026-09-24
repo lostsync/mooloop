@@ -318,9 +318,10 @@ is worth reading before either.
 
 ## Active
 
-| Plan | State |
-| --- | --- |
-| `containers/` | **Steps 01-05 landed 2026-09-06/07. Step 06 decided 2026-09-18: Adam wants a layer device, and the work order is steps 07-10, written 2026-09-21 — ordered next by Adam the same day.** 07 is one container predicate (the `EffectParams::Chain(_)` test is written 33 times), latency as a tree rather than a sum, and `EffectKind::Layer` landing silent; 08 is the engine's split and sum, which is the "parallel routing inside a chain" `FOCUS.md` has parked since it was written; 09 is the drawing and is **deliberately blocked on a mock-up from Adam**, because the container's enclosure was drawn three times without one; 10 is the gestures and a preset with branches, and closes the plan. Selectors stay unbuilt, priced. **06 was wrong about one thing and it is the thing that made a layer look unaffordable:** the span representation *can* express parallel branches — a branch is a direct child's run. |
+`containers/`, the one row this table held, finished and was archived on
+2026-09-23. The plans in progress are the projects in Linear, and
+`docs/FOCUS.md` names their order. The paragraphs above say how each got
+there.
 
 ## Queued, not started
 
@@ -341,7 +342,18 @@ writing steps would presume the answer.
 reading before reopening the area it covers, because several record *why* a
 tempting change was rejected:
 
-`edit-loop/` and `egui-view-layer/` are the newest, both archived
+`containers/` is the newest, **finished and archived 2026-09-23** when its
+steps 09 and 10 landed (MOO-71, MOO-72). A layer is drawn the way Adam asked,
+after Bitwig's FX Layer: a one-unit face lists its branches with S, M, a
+meter and a `+`, and the rack shows the selected branch under a bracket. A
+branch's Level, Mute and Solo are descriptors on every container, so a Chain
+is the unit of a branch. Wrap offers Chain or Layer, a branch row removes
+its branch, and a layer saves as a preset with a factory bank of three.
+Nobody has listened to it yet. It is first on `FOCUS.md`'s list. Selectors
+stay unbuilt and priced (step 06). A modulator inside a container is still
+Adam's open question (MOO-160).
+
+`edit-loop/` and `egui-view-layer/` were the newest before it, both archived
 2026-09-22 on Adam's ruling on `edit-loop/04` (MOO-146): *"we can archive. i
 think QT would be better than egui if we do switch toolkits."* `edit-loop/`
 found that six of every ten working hours went on `cargo`, and fixed the Rust

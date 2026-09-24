@@ -77,7 +77,7 @@ pub use mlp8::{
     MlP8Unison, SubOctave, SubSource, SubWave, SyncSource, MLP8_MAX_ROUTES, MLP8_MOD_DESTS,
     MLP8_ROUTE_PARAM_AMOUNT, MLP8_VOICES,
 };
-pub use effect_factory::EffectFactoryPatch;
+pub use effect_factory::{EffectFactoryPatch, EffectFactoryRun};
 pub use plugin::{
     mint_plugin_slot, PluginFormat, PluginParamInfo, PluginRef, PluginSlotId, PluginSlotState, PluginSlots,
     PluginState, PluginStateChunk, PluginStateText,

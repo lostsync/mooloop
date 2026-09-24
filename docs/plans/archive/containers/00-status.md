@@ -1,5 +1,7 @@
 # Containers plan status
 
+**Finished 2026-09-23 and archived**, when steps 09 and 10 landed.
+
 **Step 06 decided 2026-09-18: build a layer device** (Adam: *"i do want a
 layer device"*). **The work order was written 2026-09-21 as steps 07-10** and
 Adam ordered it next the same day. Steps 01-05 are unchanged.
@@ -11,7 +13,7 @@ Linear: project [Containers and the layer device](https://linear.app/mooloop/pro
 | [07](07-a-branch-is-a-run.md) | One container predicate, latency as a tree, `EffectKind::Layer` landing silent | [MOO-69](https://linear.app/mooloop/issue/MOO-69) | **landed 2026-09-22** — see below |
 | [08](08-the-chain-splits-and-sums.md) | Branch buffers, alignment, the sum — the engine | [MOO-70](https://linear.app/mooloop/issue/MOO-70) | **landed 2026-09-23** — see below |
 | [09](09-the-rack-draws-branches.md) | Per-branch Level, Mute and Solo in the engine, the list face, and the selected branch drawn to the right. **Rewritten 2026-09-23** around Adam's answer (Bitwig's FX Layer) | [MOO-71](https://linear.app/mooloop/issue/MOO-71) | **landed 2026-09-23** — see below |
-| [10](10-the-gestures-and-the-preset.md) | Wrap-as-layer, add/remove a branch, a preset with branches | [MOO-72](https://linear.app/mooloop/issue/MOO-72) | not started |
+| [10](10-the-gestures-and-the-preset.md) | Wrap-as-layer, add/remove a branch, a preset with branches | [MOO-72](https://linear.app/mooloop/issue/MOO-72) | **landed 2026-09-23** — see below. **The plan is finished and archived.** |
 
 **09's answer, 2026-09-23.** Adam chose none of 09's three height options:
 *"like container, but with a list (of the layers). pretty much just copy
@@ -32,6 +34,63 @@ selection. No second representation, no new field on `EffectSlotState`. What
 does change, and 02 recorded the opposite in good faith, is that
 **`chain_latency` stops being a sum** — the time a signal spends inside a
 layer is its longest branch, not the total of all of them.
+
+## Step 10 — the gestures, and a layer is a preset
+
+Landed 2026-09-23. **A layer can be made, filled, emptied and saved from the
+rack**, and the plan is finished.
+
+### Where it went
+
+- **Wrap offers a choice.** The rail's wrap button opens a two-row menu,
+  Chain or Layer (`DeviceFrame::wrap-requested(kind)`). Wrapping in a layer
+  makes a layer of one branch that already has its switches: the run goes
+  into a Chain and the Chain into the Layer, two rows installed in turn and
+  one undo step (`Session::wrap_effects_in`). A run that already is one Chain
+  becomes the branch as it stands. When the nesting cap leaves room for one
+  box and not two, the Layer goes straight round the run.
+- **A branch row has a menu.** A right press on a list row offers *Remove
+  branch*, which takes the head and its whole run as one removal and one undo
+  step. The last branch can go too, leaving an empty layer.
+- **A layer is a preset.** A run preset headed by any container is saved,
+  listed and loaded under its head's kind, so a layer's preset lists on the
+  layer's rail. Before this the save, the listing and the preset capture all
+  asked `== Chain`.
+- **A bank of three**, as runs (`effect_factory::runs`): parallel drum
+  compression, clean and distorted, and a three-way filter split, every
+  branch a Chain. It is seeded by `seed_effect_run_bank` under its own marker,
+  `.factory-runs-v1`. Every install since 07 had already written the layer's
+  empty row bank and its `.factory-v1`, so a bank behind that marker would
+  never have been written.
+
+### Acceptance
+
+- `wrapping_as_a_layer_makes_one_chain_branch` and
+  `removing_a_branch_takes_its_whole_run` (`session/src/effects.rs`): the two
+  rows a layer wrap makes and the order the engine mirrors them in, and a
+  removal that takes the head and its run, down to an empty layer.
+- `the_wrap_menu_reports_the_kind_each_row_offers`
+  (`ui/tests/effect_preset_menu.rs`) and `a_rows_menu_removes_that_branch`
+  (`ui/tests/layer_face.rs`) click the two new menus and require the
+  callback to land with the right kind and the branch head's rack index.
+  `popup-close-order` reads the five leads it read before; neither menu is
+  among them.
+- `the_layer_bank_is_layers_of_chain_branches` (`core/src/effect_factory.rs`)
+  and `the_layer_run_bank_seeds_past_the_row_banks_marker`
+  (`project/src/factory.rs`): three well-formed layers whose every branch is
+  a Chain, written past the marker every install already has, listed on the
+  layer's rail and read back unchanged with no repairs.
+- Every gesture records one undo step through `record_project_history`, and
+  `unrecorded-edit` reads the one pre-existing lead it read before (the
+  plugin pump, not this plan).
+
+### What is not done
+
+- Nobody has listened to it (`FOCUS.md`, first on the list).
+- MOO-210 (a container's output trim is inert) is open.
+- A device dropped between two branches is a leaf branch with no S or M.
+  Wrapping it in a chain as it lands is the fix, if that matters in use.
+- **Selectors stay unbuilt.** `06` prices one as nearly free once layers exist, and that is still not a reason to build one.
 
 ## Step 09 — the rack draws branches
 
@@ -612,7 +671,7 @@ of them turned out to already work:
 
 ### Bars, not a box — and then a box after all
 
-`docs/plans/containers/04` asked for a frame around the run. It shipped as one
+`docs/plans/archive/containers/04` asked for a frame around the run. It shipped as one
 accent bar per enclosing container across the top of each row instead, and the
 reason given was the rack's own shape: that it is a horizontal sheet which
 *wraps*, so a run could begin on one line and end on the next, and a rectangle

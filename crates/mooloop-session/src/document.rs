@@ -6,7 +6,7 @@
 use crate::audio_file;
 use crate::session::{PresetSaveTarget, Session};
 use mooloop_core::{
-    log_error, log_warn, ChannelSetup, EffectKind, EffectSlotState, Project, SampleReference,
+    log_error, log_warn, ChannelSetup, EffectSlotState, Project, SampleReference,
 };
 use mooloop_dsp::SampleData;
 use mooloop_engine::{ExportFormat, Mp3Bitrate, RenderScope, WavEncoding};
@@ -551,7 +551,7 @@ impl Session {
             PresetSaveTarget::Effect {
                 target: chain,
                 device,
-            } if effect.is_some_and(|effect| effect.kind() == EffectKind::Chain) => {
+            } if effect.is_some_and(|effect| effect.kind().is_container()) => {
                 let chain = self.effect_chain_of(self.chain_target(chain)?)?;
                 let slot = mooloop_core::device_slot(chain, device)?;
                 Some(mooloop_core::EffectRun {

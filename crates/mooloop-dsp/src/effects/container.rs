@@ -6,7 +6,7 @@
 //! container's work -- keeping a copy of its input and crossfading it back in
 //! at the end of the run -- belongs to the host, beside the per-slot dry
 //! path, and `EffectChain::close_run` is where it happens
-//! (`docs/plans/containers/03-the-chain-mixes.md`).
+//! (`docs/plans/archive/containers/03-the-chain-mixes.md`).
 //!
 //! What this exists for is that the engine's chain is an array of nodes
 //! indexed by position, and a container takes one of those positions. Giving
@@ -55,7 +55,7 @@ impl AudioNode for ContainerEffect {
     /// Zero, and it stayed zero when the mix arrived: a container's
     /// declared latency is not the sum of its children's, because those
     /// children are rows of the same chain and `chain_latency` already counts
-    /// them. See question 4 in `docs/plans/containers/README.md`.
+    /// them. See question 4 in `docs/plans/archive/containers/README.md`.
     fn latency_frames(&self) -> u32 {
         0
     }

@@ -32,7 +32,8 @@ fn forget_audio_input(setup: &mut mooloop_core::ChannelSetup) {
 mod io_cost;
 
 pub use factory::{
-    rescope_modulation, seed_ds01_bank, seed_effect_bank, seed_mlm1_bank, seed_mlp8_bank,
+    rescope_modulation, seed_ds01_bank, seed_effect_bank, seed_effect_run_bank, seed_mlm1_bank,
+    seed_mlp8_bank,
 };
 pub use integrity::{Diagnosis, Issue, Remedy};
 
@@ -514,7 +515,7 @@ pub fn save_effect_run_preset(
     if run.effects.is_empty() {
         return Err(Error::Invalid("an effect run preset holds no devices".into()));
     }
-    if run.effects[0].kind() != EffectKind::Chain {
+    if !run.effects[0].kind().is_container() {
         return Err(Error::Invalid(
             "an effect run preset must start with the container".into(),
         ));
@@ -1428,12 +1429,13 @@ fn summarize_preset(path: &Path) -> Option<PresetSummary> {
             validate_contains(&header.contains, EFFECT_RUN_PRESET_CONTAINS).ok()?;
             let envelope: Envelope<EffectRun> = toml::from_str(&manifest).ok()?;
             // A run preset belongs to the container it starts with, so it
-            // lists on that container's rail beside any other Chain preset.
+            // lists on that container's rail -- a chain's beside the chain's
+            // presets, a layer's beside the layer's (`containers/10`).
             // Nothing else can be at the head of a well-formed run, and a
             // bundle whose head is something else is left out rather than
             // offered and then refused.
-            (envelope.document.effects.first()?.kind() == EffectKind::Chain)
-                .then_some(PresetKind::Effect(EffectKind::Chain))?
+            let head = envelope.document.effects.first()?.kind();
+            head.is_container().then_some(PresetKind::Effect(head))?
         }
         _ => return None,
     };
