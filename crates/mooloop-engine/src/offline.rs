@@ -8,8 +8,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use mooloop_core::{PlaybackMode, Project};
-use mooloop_dsp::{SampleData, MAX_BLOCK_SIZE};
+use std::collections::BTreeMap;
+
+use mooloop_core::{PlaybackMode, PluginSlotId, Project};
+use mooloop_dsp::{AudioNode, SampleData, MAX_BLOCK_SIZE};
 use mp3lame_encoder::{Bitrate, Builder, DualPcm, FlushGap, Quality};
 
 use crate::render::RenderState;
@@ -224,6 +226,35 @@ impl OfflineRenderer {
         spec: &ExportSpec,
         progress: &ExportProgress,
     ) -> Result<RenderSummary, ExportError> {
+        Self::render_with_plugins(
+            project,
+            samples,
+            realtime_sample_rate,
+            spec,
+            progress,
+            BTreeMap::new(),
+        )
+    }
+
+    /// [`Self::render_with_progress`] with a processor for each hosted
+    /// plugin the song names, by its slot (MOO-81). A plugin device with no
+    /// processor here renders as its placeholder, a pass-through, which is
+    /// what playback plays for a missing plugin too.
+    ///
+    /// The processors must have been built for `realtime_sample_rate` and
+    /// for blocks of up to `mooloop_dsp::MAX_BLOCK_SIZE`. The live song's
+    /// are in the engine, so an export's come from second instances
+    /// (`Session::export_plugin_processors`). Each is swapped into its
+    /// device and the compensation is derived from their latencies, the
+    /// way the session's plan does it for playback.
+    pub fn render_with_plugins(
+        project: &Project,
+        samples: &[Option<Arc<SampleData>>],
+        realtime_sample_rate: u32,
+        spec: &ExportSpec,
+        progress: &ExportProgress,
+        plugins: BTreeMap<PluginSlotId, Box<dyn AudioNode + Send>>,
+    ) -> Result<RenderSummary, ExportError> {
         if !spec.tail_seconds.is_finite() || !(0.0..=30.0).contains(&spec.tail_seconds) {
             return Err(ExportError::Invalid(
                 "tail duration must be between 0 and 30 seconds".into(),
@@ -249,6 +280,7 @@ impl OfflineRenderer {
         }
 
         let mut state = RenderState::from_project(sample_rate, &render_project, samples);
+        state.host_plugins(&render_project, plugins);
         let base_ticks = match spec.scope {
             RenderScope::Pattern { index } => state
                 .pattern_length_ticks(index)

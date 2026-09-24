@@ -183,6 +183,8 @@ mod idle_skip_tests;
 #[cfg(test)]
 mod output_guard_tests;
 #[cfg(test)]
+mod plugin_host_tests;
+#[cfg(test)]
 mod soak_tests;
 #[cfg(test)]
 mod source_slot_tests;

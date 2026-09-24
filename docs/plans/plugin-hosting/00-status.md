@@ -6,7 +6,7 @@ mirror this file step-for-step the way MOO-5/16/30 do. The GitHub issue
 numbers below (`#10`, `#26`-`#30`) predate Adam's move away from GitHub
 issues; MOO-11 is the live tracking issue.
 
-**Written 2026-09-16.** Steps 01 (the spike), 02 (the neutral contract), 03 (parameters belong to an instance), 04 (the plugin rack) and 05 (the scanner) landed on 2026-09-23, and so did MOO-56's one boxed source slot, which closes blocker 4 below. Adam asked for it directly:
+**Written 2026-09-16.** Steps 01 (the spike), 02 (the neutral contract), 03 (parameters belong to an instance), 04 (the plugin rack), 05 (the scanner) and 06 (a headless CLAP effect in a chain) landed on 2026-09-23, and so did MOO-56's one boxed source slot, which closes blocker 4 below. Adam asked for it directly:
 *"let's go ahead and plan out how we'll add CLAP support. Later we'll add
 VST/3 and AU. instrument support as well."* `SCOPE.md` already put CLAP in
 for 0.2.0 (item 9). This plan is outside the `FOCUS.md` sequence for the same
@@ -434,6 +434,11 @@ this plan.
    `plans/archive/channel-identity/` step 05, which **must land before step 06
    here**.
 
+   **Closed 2026-09-23 by step 06 (MOO-81).** The carry plan keeps an
+   unchanged plugin device's processor across the install, and
+   `PluginRack::retire_except` now keeps its instance with it, where
+   `replace_project` used to retire every instance. See "Step 06, recorded".
+
 ## Three things the tree already gives, and two it does not
 
 From `reports/fable-2026-09-17.md`, "Architecture: what will fight the next
@@ -527,7 +532,7 @@ words. **Do not reopen this as a version-bump question.**
 | 03 | Parameters belong to an instance | #26 | core, session | **done 2026-09-23** (MOO-78) |
 | 04 | `PluginRack`, main-thread requests, latency known at runtime | #26 | engine, session | **done 2026-09-23** (MOO-79) |
 | 05 | The scanner, out of process, with its cache | #27 | plugin-host, app, settings | **done 2026-09-23** (MOO-80) |
-| 06 | A headless CLAP effect in a chain | #27 | plugin-host, session | not started |
+| 06 | A headless CLAP effect in a chain | #27 | plugin-host, session | **done 2026-09-23** (MOO-81) |
 | 07 | Parameters, automation, modulation and state round-trip | #28 | session, project | not started |
 | 08 | Plugin browser, the menu row, and the face for plugins without a GUI | #28 | **UI build**, drafted with `slint-sketch` | not started |
 | 09 | A channel source that is a boxed node | #29 | core, engine, session | not started |
@@ -840,6 +845,123 @@ directory empty.
 
 **Adam's plugin folders.** See the MOO-80 closing comment for the scan of
 `/usr/lib64/clap` on his laptop.
+
+## Step 06, recorded 2026-09-23 (MOO-81)
+
+**What landed.** `mooloop_plugin_host::clap`: `ClapInstance` (the
+`HostedInstance` for a CLAP plugin), `ClapProcessor` (its `AudioNode`), and
+`ClapOpener`, which finds a `PluginRef` in the scanner's cache and rereads the
+cache whenever a scan rewrites it. `PluginOpener` is the neutral trait
+behind it, so the rack's tests use a fake. The rack (`session/src/plugin_rack.rs`)
+now hosts what a song names. `Session::service_plugins` opens every slot a
+device names that has no instance. It swaps a processor into every plugin
+device that lacks one, with `ReplaceEffect` keyed by the slot, and pulls a
+stale one back first. `Session::insert_plugin_effect` is the session path:
+mint a slot, insert the device, open the plugin, and install its processor,
+or the placeholder and the reason. An export renders hosted plugins
+(`OfflineRenderer::render_with_plugins`, fed by
+`Session::export_plugin_processors`). The app sets the CLAP opener at startup,
+exports with plugins, and waits for the rack at quit (`AppUi::retire_plugins`).
+
+**The one rule the rack runs on.** CLAP allows **one processor per
+instance**: `activate` hands it out and `deactivate` wants it back. Step 04's
+`HostedInstance::restart` assumed the new processor could be built while the
+old one ran, and CLAP cannot do that, so `restart` is gone. What replaces it
+is one rule: *every live instance whose processor is not out gets one, on the
+next tick after its lifeline is alone.* That covers four cases:
+- a song opening, where the install built placeholders;
+- an install the carry plan did not carry, where the old processor comes
+  back with the retired generation;
+- a restart, where the rack swaps the placeholder in to pull the processor
+  back;
+- a new sample rate, which is a restart for every plugin.
+
+A processor the engine keeps refusing is rebuilt at most three times in a row
+(`MAX_ATTEMPTS`), so a disagreement between document and engine cannot turn
+into an activate-deactivate every 8 ms.
+
+**How it differs from `06-a-headless-clap-effect.md`.**
+
+- **Blocker 7 was half-solved already, and `replace_project` undid the
+  other half.** The carry plan (MOO-137) moves a plugin device's live
+  processor across a structural install when its row is unchanged. But
+  `Session::replace_project`, which every paste, move, delete and undo goes
+  through, closed the whole rack, so the carried processor's instance was
+  marked dying. That left a processor running with no instance that could
+  restart it or report its latency. `PluginRack::retire_except` keeps an
+  instance when the incoming song records the same plugin in the same state
+  in its slot, which a structural edit always does because it snapshots the
+  session. It retires the rest. The parameter list and the pinned ids don't
+  count, since they are what the song remembers *about* the plugin. `a_structural_install_keeps_the_hosted_plugin_live` pins it.
+  An install that does rebuild the device, say an undo of its bypass, goes
+  through the one rule above: the placeholder plays for a tick or two, then
+  the processor is swapped back, with its state (the instance never went).
+- **The engine's own latency reads were not changed for live playback.** The
+  engine installs placeholders and compensates as if every plugin were zero,
+  and the session's `sync_compensation` corrects it per target on the next
+  tick, as step 04 left it. An export never runs a pump, so
+  `RenderState::host_plugins` swaps the processors in and re-derives the plan
+  with their latencies (`install_compensation_with`). The container case,
+  where a plugin inside a Chain or a Layer has its dry ring and branch
+  alignment sized for zero latency, is **not** fixed. It is Effects' code, and
+  it is filed as MOO-212.
+- **Buffers are copied, never passed in place.** `clack-host` takes input and
+  output as separate `&mut` slices, so in place would need aliasing. Two
+  stereo copies of at most `MAX_BLOCK_SIZE` frames per block are the price.
+  Scratch is allocated at activation. The event buffer is filled in order and
+  never sorted (`EventBuffer::sort` allocates). The plugin's own parameter
+  output goes into an `rtrb` ring of 1024; overflow is counted
+  (`ClapInstance::dropped_param_events`), and step 07 reads it.
+- **Ports: exactly one stereo input and one stereo output.** "Main input and
+  output stereo" alone would admit a sidechain port, and CLAP expects a
+  buffer for every declared port. Sidechains are in the plan's "Deliberately
+  not", so any extra port is refused as `Incompatible`. The scan cache
+  already says so without loading anything (`audio-inputs = [2]`).
+- **Activation uses `mooloop_dsp::MAX_BLOCK_SIZE` (8192) as the maximum
+  block,** not the driver's. The executor never hands a node more than that,
+  and it holds across a buffer-size change with no reactivation.
+- **One CLAP threading deviation, and it is written down.** `stop_processing`
+  belongs on the audio thread, but a processor leaving a chain gets no more
+  calls there. So `deactivate` stops it on the main thread, which is what
+  `clack-host` does for a processor that was dropped while started.
+- **An export uses second instances.** The live processors are the engine's,
+  and one instance cannot have two. `Session::export_plugin_processors`
+  captures each live plugin's state, opens a second instance with it on the
+  control thread, builds its processor, and leaves the instance in the rack's
+  graveyard until the export drops the processor.
+- **The quit wait re-enters the event loop.** The pump owns the
+  `EngineHandle`, so once the window has gone `AppUi::run` sets a deadline
+  (2 s) and runs `slint::run_event_loop_until_quit` again. The pump then only
+  pulls processors back, polls, and collects, and quits when the rack is
+  empty. An instance still held at the deadline is leaked, never dropped
+  under a processor that may be running.
+- **Not here: saving captures state only when the plugin says it changed.**
+  A plugin's `state.mark_dirty` captures its state into the song. The
+  window's Save does not ask every plugin (`Session::capture_plugin_states`
+  exists, and exports use it). Nothing in the app can change a plugin's state
+  before step 07 gives it parameters, so this is step 07's.
+
+**Found and filed.** MOO-211 (Sequencing): the same song through the executor
+at 64 frames and through the export path at 512 frames landed some notes one
+frame apart, with no plugin involved. It was fixed the same day (`184d0de3`),
+and the step's parity test now holds a 64-frame callback against the
+512-frame export directly. MOO-212 (Effects): the container case above.
+
+**The tests.** Engine (`engine/src/plugin_host_tests.rs`, with the in-repo
+test plugin):
+- export == executor at 512 frames and at 64, to the sample;
+- the export is deterministic, and differs from the song with the plugin
+  missing;
+- a 64-frame plugin latency comes out as the whole mix 64 frames late in an
+  export;
+- 64 channels, each with the test gain, and a processor swapped mid-run,
+  allocate and free nothing per block at 64 and 1024 frames.
+
+Session (`session/tests/clap_effect.rs`): the case, headless. Insert through
+the session, export twice, save, reopen present (same export), reopen missing
+(placeholder within 1.5e-8, slot kept byte for byte). The rack
+(`plugin_rack.rs`): the one rule, restart, rate change, missing then found,
+the zombie, insert, export instances, and quit.
 
 ## The test plugins
 

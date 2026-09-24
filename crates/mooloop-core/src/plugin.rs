@@ -281,6 +281,28 @@ impl PluginSlotState {
 /// The hosted plugins of one song, by slot.
 pub type PluginSlots = BTreeMap<PluginSlotId, PluginSlotState>;
 
+/// Add `slot` to `plugins` under a fresh id from the mint `next`, and
+/// return it. The one mint for a song's plugin slots: the project's
+/// ([`crate::Project::add_plugin_slot`]) and the live session's both call it.
+/// Ids are never reused, and the mint skips any id already in the table, so
+/// a counter that was lost or hand-edited below its table cannot hand out a
+/// slot that is taken.
+pub fn mint_plugin_slot(
+    plugins: &mut PluginSlots,
+    next: &mut u32,
+    slot: PluginSlotState,
+) -> PluginSlotId {
+    let mut candidate = *next;
+    if let Some(highest) = plugins.keys().next_back() {
+        candidate = candidate.max(highest.0.saturating_add(1));
+    }
+    let id = PluginSlotId(candidate);
+    debug_assert!(id.is_assigned(), "the plugin slot mint ran out");
+    *next = candidate.saturating_add(1);
+    plugins.insert(id, slot);
+    id
+}
+
 /// `serde(with)` for a [`PluginSlots`] table: the slot ids written as the
 /// table's string keys and parsed back.
 ///

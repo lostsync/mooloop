@@ -76,6 +76,7 @@ ids (C2, P4, …) are the report's.
 | Tempo, swing and the embed flag | Document | Slint window properties | Every snapshot reads `window.get_bpm()`, so the document had two owners |
 | `core/src/structure.rs` | Document | Engine | Rack and container editing, with nothing realtime in it |
 | The effect host: `EffectChain`/`EffectSlot` (bypass, wet/dry, trims, sleep, container scheduling) | Effects | Engine | It decides most of what is heard at a transition (E2) |
+| A hosted plugin's processor in a chain: built by the rack and swapped into its device's placeholder by `ReplaceEffect` keyed by the plugin's slot | Engine, with Effects owning the `EffectChain` it lands in, unchanged | nobody | MOO-81. The chain hosts it like any node (`replace_if_kind`, `build_effect`'s `PluginPlaceholder`). A plugin inside a container is sized as zero latency until MOO-212 |
 | Output-stage declicking: fader, mute, solo, polarity | Mixer | between Engine and Mixer | M2 fell between the two |
 | The session reconcilers, the channel output verbs, `STRIP_DESCRIPTORS`, `pan_gains`/`balance_gains`, `ui/src/meter.rs` | Mixer | Session, core, dsp, Interface | Mixer state kept outside the mixer |
 | The browser preview voice | Instruments | nobody | It plays files at the wrong pitch (I2) |
@@ -106,7 +107,7 @@ lines. Until then, this table is the boundary.
 | File | Default owner | Except |
 | --- | --- | --- |
 | `engine/src/render.rs` | Engine: `RenderState`, `process_block_inner`, `apply_command`, install, takes, the discontinuity fan-out, the tests | **Effects:** `EffectChain`, `EffectSlot`, `ContainerScratch`, `PendingEffectParams`, `ReclaimedEffect`. **Mixer:** `SendBank`, `OutputStage`, `BusStrip`, `AudioTapBank`, `mix_into`, the bus walk. **Sequencing:** `release_all_voices`, `inject_choke_events`, `HeldKeys`, `Audition`, `RecordingNote`, the transport and sequencer arms. **Control:** `apply_midi`, `AutomationBlock`, `AutomationCurve`, `AutomationPosition`, `ModulationBlock`, the modulator ticks. **Instruments:** `PreviewVoice`, `RetiredPreviews`, `render_preview`, and each source's arm in `build_source` (the one match over the native kinds since MOO-56; `ChannelStrip` and its one `source` slot are Engine's). |
-| `ui/src/lib.rs` | Interface: `AppUi::new` as a shell, the pump, the `wire_*!` macros as a framework | **Each feature team:** the wiring for its own faces and views inside `AppUi::new`. **Document:** the document lifecycle, and tempo, swing and embed. **Control:** the pump's control drain. |
+| `ui/src/lib.rs` | Interface: `AppUi::new` as a shell, the pump, the `wire_*!` macros as a framework | **Each feature team:** the wiring for its own faces and views inside `AppUi::new`. **Document:** the document lifecycle, and tempo, swing and embed. **Control:** the pump's control drain. **Engine:** hosted plugins' wiring (MOO-81): the opener set in `AppUi::new`, the export's plugin processors, and `AppUi::retire_plugins` with the pump's branch that waits for them at quit. |
 | `ui/ui/main.slint` | Interface | **Sequencing:** the step grid and the playlist, both inline. **Each device team:** its entries in the DEVICES block. |
 | `ui/src/settings.rs` | Interface | **Platform:** the XDG paths and the settings-load policy, and `PluginSettings`/`plugin_cache_path` (the scanner's, MOO-80). |
 | `ui/ui/device-rack.slint` | Interface: the shell every face is drawn in (`DeviceFrame`, `DeviceHeader`, `EffectDeviceShell`, the rails) | **Effects:** `ContainerEnclosure` and the container drawing, which the layer device's branches extend. |
@@ -129,7 +130,9 @@ Files marked *shared* are split in the table above.
   tests `render_test_support.rs`, `idle_skip_tests.rs`, `audio_edge_tests.rs`,
   `take_tests.rs`, `soak_tests.rs` (every device kind through the executor,
   MOO-113; a failure in a device it drives is that device's team's),
-  `source_slot_tests.rs` (the one boxed source slot, MOO-56), and
+  `source_slot_tests.rs` (the one boxed source slot, MOO-56),
+  `plugin_host_tests.rs` (a hosted CLAP effect through the executor and the
+  export, MOO-81), and
   `continuity_tests.rs` (the "control changes are
   continuous" family, MOO-104, whose cases each team adds for its own
   transitions)
@@ -142,8 +145,13 @@ Files marked *shared* are split in the table above.
   and `dsp/src/effects/plugin_placeholder.rs` (a plugin device with no
   plugin running in it)
 - `session/src/plugin_rack.rs`: the control thread's hosted plugins
-  (`PluginRack`, `Session::service_plugins`, `Session::device_latency`),
-  in a Document-owned directory by agreement with Document & Session
+  (`PluginRack`, `Session::service_plugins`, `Session::device_latency`,
+  `insert_plugin_effect`, `export_plugin_processors`, `close_plugins`),
+  in a Document-owned directory by agreement with Document & Session; and
+  step 06's case, `session/tests/clap_effect.rs` and
+  `session/examples/clap_effect_case.rs`
+- `plugin-host/src/clap.rs`: the CLAP adapter (`ClapInstance`,
+  `ClapProcessor`, `ClapOpener`), MOO-81
 - `dsp/src/`: `node.rs` (*shared*), `event.rs`, `bus.rs` (*shared*), `taps.rs`
   — the `AudioNode` contract and what flows through it
 - `core/src/bridge.rs`

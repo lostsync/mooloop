@@ -2072,19 +2072,45 @@ land on its own when it starts to matter:
   to live on — that and the tap points below pre-fader are stage 2 of the send
   work. A send has a level and a tap, and no pan and no wet/dry split of its
   own. There are no sidechains, external inputs, or per-track stem export.
-- Latency compensation is the mixer's own, not a hosted plugin's. `AudioNode`
+- Latency compensation covers every device, native or hosted. `AudioNode`
   reports integer processing latency and `EffectKind` declares it without
   being built; the drive is the only kind that costs anything, at the measured
   15 frames of its complete 2x interpolate/decimate path, and it also delays
   its internal dry path by the same amount so its own wet/dry control cannot
   mix time-misaligned signals. Channels with unequal effect latency no longer
-  comb-filter when they meet at a bus -- see the mixer entry above. Nothing
-  hosts a plugin yet. A song can already name one: a `plugin` effect device
-  whose slot is in the song's `plugins` table (`PROJECT_FORMAT.md`, "Hosted
-  plugins"). Such a song loads, plays that device as a pass-through, and saves
-  it back unchanged, lanes and routes on its parameters included. The session
-  reads a hosted plugin's latency at runtime rather than from its kind, but
-  nothing inserts one until step 06 of `docs/plans/plugin-hosting/`.
+  comb-filter when they meet at a bus -- see the mixer entry above. A hosted
+  plugin's latency is its own, read once it is active: the compensation plan
+  asks the plugin for it, live and in an export (MOO-81). A plugin *inside a
+  container* is still sized as zero latency there (MOO-212).
+- **A CLAP effect plays in a chain, headless** (MOO-81, plugin-hosting 06).
+  **Nothing in the window inserts one yet**: the browser, the insert-menu row
+  and the plugin's face are step 08. Today a plugin reaches a song in two
+  ways. One is a song that already names it: a `plugin` effect device whose
+  slot is in the song's `plugins` table (`PROJECT_FORMAT.md`, "Hosted
+  plugins"), opened from disk or the command line. The other is the
+  session's `Session::insert_plugin_effect`, which tests and
+  `crates/mooloop-session/examples/clap_effect_case.rs` call. mooloop finds the
+  plugin by its id in the scanner's cache (`<config>/plugins.toml`, below),
+  rereading the cache when a scan rewrites it. It loads the plugin with its
+  saved state and activates it at the engine's rate. On the next pump tick it
+  swaps the plugin's processor into the device, which played as a
+  pass-through until then. Only a plugin with one stereo input and one stereo
+  output is hosted. Anything else is refused as incompatible, and so is a
+  sidechain. The plugin is heard live, and **it is in an export**: the export
+  renders with second instances opened from the live ones' state. A plugin
+  that reports an error or a non-finite sample, or panics, is passed through
+  from that block on. A song whose plugin is **missing** opens, plays that
+  device as a pass-through, and saves it back unchanged, lanes and routes on
+  its parameters included. It is tried again when a scan finds new plugins.
+  A structural edit (paste, move, delete, undo) keeps a hosted plugin
+  running, state and all. A new sample rate, or a restart the plugin asks
+  for, rebuilds its processor. On quit, mooloop waits up to two seconds for
+  every plugin's processor to come back from the audio thread before it
+  destroys the plugin. The plugin's own parameters are not yet automatable,
+  modulatable or shown (step 07), and its GUI does not open (step 11). The
+  song captures its state when it is saved through the session's
+  `capture_plugin_states`, and the window's Save does not call that yet
+  (step 07).
 - **Plugins are found, not yet offered** (MOO-80). At startup, on a thread of
   its own, mooloop looks for CLAP plugins in `~/.clap`, `/usr/lib/clap`,
   `/usr/lib64/clap`, `/usr/local/lib/clap` (inside a Flatpak also
@@ -2097,8 +2123,8 @@ land on its own when it starts to matter:
   that failed and why (`load`, `incompatible`, `crashed`, `timed-out`, ...), is
   kept in `<config>/plugins.toml`; an unchanged file is never scanned again,
   failed or not. `scan-on-startup = false` turns the startup scan off. The log
-  says what the scan found. Nothing reads the cache yet: the browser and the
-  insert menu are step 08, and a plugin in a chain is step 06.
+  says what the scan found. A song's plugins are found through it (above);
+  the browser and the insert menu that offer them are step 08.
 
 ### Buffers And Rendering
 

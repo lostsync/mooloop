@@ -962,15 +962,7 @@ impl Project {
     /// counter was lost or hand-edited below its table cannot hand out a
     /// slot that is taken.
     pub fn add_plugin_slot(&mut self, slot: crate::PluginSlotState) -> crate::PluginSlotId {
-        let mut next = self.next_plugin_slot;
-        if let Some(highest) = self.plugins.keys().next_back() {
-            next = next.max(highest.0.saturating_add(1));
-        }
-        let id = crate::PluginSlotId(next);
-        debug_assert!(id.is_assigned(), "the plugin slot mint ran out");
-        self.next_plugin_slot = next.saturating_add(1);
-        self.plugins.insert(id, slot);
-        id
+        crate::plugin::mint_plugin_slot(&mut self.plugins, &mut self.next_plugin_slot, slot)
     }
 }
 

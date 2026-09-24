@@ -1,4 +1,5 @@
-//! The control thread's hosted plugins (`docs/plans/plugin-hosting/04-the-plugin-rack.md`).
+//! The control thread's hosted plugins (`docs/plans/plugin-hosting/04-the-plugin-rack.md`,
+//! `06-a-headless-clap-effect.md`).
 //!
 //! Once a processor is installed, nothing on the control thread can reach
 //! it: the node belongs to the audio thread. The rack is what the control
@@ -7,40 +8,127 @@
 //! its latency has somewhere to be read from, and its instance is dropped
 //! only after its processor is (blocker 5).
 //!
-//! **Teardown order is the whole point.** Removing a plugin marks its entry
-//! *dying*; the entry is dropped by [`PluginRack::collect`] only once every
-//! processor tied to its [`Lifeline`] has been dropped. Processors are only
-//! ever dropped on the control thread -- `EngineHandle::poll` drains the
+//! **Teardown order is the whole point.** Removing a plugin moves its entry
+//! to the graveyard; the entry is dropped by [`PluginRack::collect`] only once
+//! every processor tied to its [`Lifeline`] has been dropped. Processors are
+//! only ever dropped on the control thread -- `EngineHandle::poll` drains the
 //! reclaim ring, and a retired project goes the same way -- so the instance
 //! never outlives-by-accident or dies-before its processor, and neither is
 //! ever freed in the callback.
+//!
+//! **Every live instance whose processor is not out gets one** (step 06).
+//! That one rule covers every way a processor goes missing, because a plugin
+//! format may allow only one processor per instance (CLAP does) and so a new
+//! one can only be built once the old one is back:
+//!
+//! - a song opens, or an install rebuilds a chain the carry plan (MOO-137)
+//!   did not carry: the chain holds `build_effect`'s placeholder, and the
+//!   old processor comes back with the retired generation;
+//! - the plugin asks for a restart, or the sample rate changes: the rack
+//!   pulls the processor back by swapping the placeholder into its slot;
+//! - the instance is new: the opener made it and nothing was built yet.
+//!
+//! In each case the next pump tick after the lifeline is alone builds a
+//! processor and swaps it in with `ReplaceEffect`, keyed by the slot, so a
+//! swap that arrives after the device went finds nothing and does nothing.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use mooloop_core::{
-    log_warn, EffectKind, EffectParams, EffectSlotState, EffectTarget, PluginParamInfo,
-    PluginSlotId,
+    insert_effect, log_warn, mint_plugin_slot, EffectKind, EffectParams, EffectSlotState,
+    EffectTarget, EngineCommand, PluginParamInfo, PluginRef, PluginSlotId, PluginSlotState,
+    PluginSlots, PluginState, PluginStateText,
 };
-use mooloop_dsp::AudioNode;
-use mooloop_engine::{CommandSink, StructuralCommand};
-use mooloop_plugin_host::{HostError, HostedInstance, Lifeline, Requests};
+use mooloop_dsp::effects::PluginPlaceholder;
+use mooloop_dsp::{AudioNode, IntegerDelay, SpectrumAnalyzer};
+use mooloop_engine::{CommandSink, EffectSlot, StructuralCommand};
+use mooloop_plugin_host::{
+    AudioConfig, HostError, HostedInstance, Lifeline, PluginOpener, Requests,
+};
+
+use crate::effects::EffectInserted;
+
+/// The largest block a hosted processor is activated for: the most frames
+/// the executor ever hands a node (`mooloop_dsp::MAX_BLOCK_SIZE`).
+pub const PLUGIN_MAX_FRAMES: u32 = mooloop_plugin_host::clap::MAX_FRAMES;
+
+/// The app's opener: CLAP plugins found through the scanner's cache at
+/// `cache_path` (`<config>/plugins.toml`), read again whenever a scan
+/// rewrites it, so a song opened before the startup scan finishes finds its
+/// plugins once it has.
+pub fn clap_opener(cache_path: std::path::PathBuf) -> Box<dyn PluginOpener> {
+    Box::new(mooloop_plugin_host::clap::ClapOpener::new(cache_path))
+}
+
+/// How many times in a row the rack builds a processor that never stays
+/// out before it stops trying. A processor that is refused by the engine
+/// comes straight back, and without a limit that would be an activate and
+/// a deactivate every pump tick.
+const MAX_ATTEMPTS: u8 = 3;
+
+/// Ticks a processor has to stay out before it counts as having arrived,
+/// which resets [`MAX_ATTEMPTS`]. About 400 ms at the 8 ms pump.
+const SETTLED_TICKS: u32 = 50;
 
 struct RackEntry {
     instance: Box<dyn HostedInstance>,
     lifeline: Lifeline,
-    /// Removed from the song and waiting for its processors to come back.
-    /// A dying entry's requests are drained and ignored: a restart that
-    /// arrives after its slot was removed must not reinstall anything.
-    dying: bool,
+    /// The processor that is out is stale -- a restart or a new rate -- and
+    /// has to come back so a new one can be built.
+    rebuild: bool,
+    /// A pull-back was already sent for the stale processor.
+    pulled: bool,
+    /// Processors built in a row that did not stay out.
+    attempts: u8,
+    /// Ticks the current processor has been out.
+    out_ticks: u32,
+}
+
+impl RackEntry {
+    fn new(instance: Box<dyn HostedInstance>, lifeline: Lifeline) -> Self {
+        Self {
+            instance,
+            lifeline,
+            rebuild: false,
+            pulled: false,
+            attempts: 0,
+            out_ticks: 0,
+        }
+    }
+}
+
+/// Whether two songs' records of one slot name the same plugin in the same
+/// state: an instance made for one serves the other.
+fn same_plugin(was: Option<&PluginSlotState>, now: Option<&PluginSlotState>) -> bool {
+    match (was, now) {
+        (Some(was), Some(now)) => was.plugin == now.plugin && was.state == now.state,
+        _ => false,
+    }
+}
+
+/// A slot that could not be hosted, and the opener's generation when it
+/// was tried: it is tried again when the generation moves.
+struct Problem {
+    error: HostError,
+    generation: u64,
 }
 
 /// What the rack's owner has to act on after [`PluginRack::service`].
 pub enum RackEvent {
-    /// The plugin restarted and built a new processor, to be swapped into
-    /// its device's slot (`StructuralCommand::ReplaceEffect`).
-    Restarted {
+    /// A new processor for the plugin in `slot`, to be swapped into its
+    /// device's placeholder (`StructuralCommand::ReplaceEffect`).
+    Install {
         slot: PluginSlotId,
         node: Box<dyn AudioNode + Send>,
+    },
+    /// The processor out for `slot` is stale: swap the placeholder in so it
+    /// comes back and a new one can be built.
+    PullBack { slot: PluginSlotId },
+    /// The opener made an instance for `slot`, and this is its parameter
+    /// list.
+    Opened {
+        slot: PluginSlotId,
+        params: Vec<PluginParamInfo>,
     },
     /// The plugin's latency changed: compensation has to be derived again.
     LatencyChanged { slot: PluginSlotId },
@@ -53,14 +141,16 @@ pub enum RackEvent {
     },
     /// The plugin changed its own state: the song is modified.
     StateDirty { slot: PluginSlotId },
-    /// A request the plugin could not carry out.
+    /// The plugin could not be opened, or could not build a processor.
     Failed { slot: PluginSlotId, error: HostError },
 }
 
 impl std::fmt::Debug for RackEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Restarted { slot, .. } => write!(f, "Restarted({})", slot.0),
+            Self::Install { slot, .. } => write!(f, "Install({})", slot.0),
+            Self::PullBack { slot } => write!(f, "PullBack({})", slot.0),
+            Self::Opened { slot, params } => write!(f, "Opened({}, {} params)", slot.0, params.len()),
             Self::LatencyChanged { slot } => write!(f, "LatencyChanged({})", slot.0),
             Self::ParamsRescanned { slot, params } => {
                 write!(f, "ParamsRescanned({}, {} params)", slot.0, params.len())
@@ -75,12 +165,21 @@ impl std::fmt::Debug for RackEvent {
 #[derive(Default)]
 pub struct PluginRack {
     entries: BTreeMap<PluginSlotId, RackEntry>,
+    /// Removed from the song, or built for an export, and waiting for their
+    /// processors to come back.
+    graveyard: Vec<(Box<dyn HostedInstance>, Lifeline)>,
+    problems: BTreeMap<PluginSlotId, Problem>,
+    opener: Option<Box<dyn PluginOpener>>,
+    /// The configuration processors are built for, as of the last tick.
+    config: Option<AudioConfig>,
 }
 
 impl std::fmt::Debug for PluginRack {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_map()
-            .entries(self.entries.iter().map(|(slot, entry)| (slot.0, entry.dying)))
+        f.debug_struct("PluginRack")
+            .field("live", &self.entries.keys().map(|slot| slot.0).collect::<Vec<_>>())
+            .field("dying", &self.graveyard.len())
+            .field("problems", &self.problems.keys().map(|slot| slot.0).collect::<Vec<_>>())
             .finish()
     }
 }
@@ -88,6 +187,32 @@ impl std::fmt::Debug for PluginRack {
 impl PluginRack {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// What finds and opens the plugins a song names. The app's is
+    /// [`mooloop_plugin_host::clap::ClapOpener`] over the scanner's cache.
+    pub fn set_opener(&mut self, opener: Box<dyn PluginOpener>) {
+        self.opener = Some(opener);
+        // Everything that failed is worth trying again with a new opener.
+        self.problems.clear();
+    }
+
+    pub fn has_opener(&self) -> bool {
+        self.opener.is_some()
+    }
+
+    /// Open `plugin` through the opener, outside the rack: for a caller that
+    /// holds the instance itself (an export).
+    pub fn open(
+        &mut self,
+        plugin: &PluginRef,
+        state: &PluginState,
+        config: AudioConfig,
+    ) -> Result<Box<dyn HostedInstance>, HostError> {
+        match self.opener.as_mut() {
+            Some(opener) => opener.open(plugin, state, config),
+            None => Err(HostError::Missing),
+        }
     }
 
     /// Take `instance` in as `slot` and build the processor to install.
@@ -106,23 +231,31 @@ impl PluginRack {
         }
         let lifeline = Lifeline::new();
         let node = instance.build_processor(lifeline.tie())?;
-        self.entries.insert(
-            slot,
-            RackEntry {
-                instance,
-                lifeline,
-                dying: false,
-            },
-        );
+        self.problems.remove(&slot);
+        self.entries.insert(slot, RackEntry::new(instance, lifeline));
         Ok(node)
+    }
+
+    /// Keep `instance` and its `lifeline` until every processor tied to it
+    /// is gone, as for a removed entry. For processors built outside the
+    /// song's chains: an export's.
+    pub fn bury(&mut self, instance: Box<dyn HostedInstance>, lifeline: Lifeline) {
+        self.graveyard.push((instance, lifeline));
     }
 
     /// The live instance in `slot`, if there is one.
     pub fn instance(&self, slot: PluginSlotId) -> Option<&dyn HostedInstance> {
-        self.entries
-            .get(&slot)
-            .filter(|entry| !entry.dying)
-            .map(|entry| entry.instance.as_ref())
+        self.entries.get(&slot).map(|entry| entry.instance.as_ref())
+    }
+
+    /// The live instance in `slot`, mutably.
+    pub fn instance_mut(&mut self, slot: PluginSlotId) -> Option<&mut (dyn HostedInstance + 'static)> {
+        self.entries.get_mut(&slot).map(|entry| entry.instance.as_mut())
+    }
+
+    /// Every live slot.
+    pub fn live_slots(&self) -> impl Iterator<Item = PluginSlotId> + '_ {
+        self.entries.keys().copied()
     }
 
     /// The latency the plugin in `slot` reports now, or `None` when no live
@@ -132,77 +265,207 @@ impl PluginRack {
         self.instance(slot).map(|instance| instance.latency_frames())
     }
 
-    /// Mark `slot` as removed. The caller sends the device's removal; the
-    /// instance stays until [`Self::collect`] sees its processors gone.
-    /// Returns whether a live entry was there.
+    /// Why `slot` is not hosted, or why its plugin stopped: the opener could
+    /// not find or open it, it could not build a processor, or its
+    /// processor gave up on it.
+    pub fn problem(&self, slot: PluginSlotId) -> Option<HostError> {
+        if let Some(problem) = self.problems.get(&slot) {
+            return Some(problem.error.clone());
+        }
+        self.instance(slot)
+            .filter(|instance| instance.failed())
+            .map(|_| HostError::Plugin("it failed while processing and is passed through".into()))
+    }
+
+    /// Record that `slot` could not be hosted, until the opener's catalogue
+    /// changes.
+    pub fn record_problem(&mut self, slot: PluginSlotId, error: HostError) {
+        let generation = self.opener.as_mut().map_or(0, |opener| opener.refresh());
+        self.problems.insert(slot, Problem { error, generation });
+    }
+
+    /// Retire `slot`. The caller sends the device's removal; the instance
+    /// stays until [`Self::collect`] sees its processors gone. Returns
+    /// whether a live entry was there.
     pub fn remove(&mut self, slot: PluginSlotId) -> bool {
-        match self.entries.get_mut(&slot) {
-            Some(entry) if !entry.dying => {
-                entry.dying = true;
+        self.problems.remove(&slot);
+        match self.entries.remove(&slot) {
+            Some(entry) => {
+                self.graveyard.push((entry.instance, entry.lifeline));
                 true
             }
-            _ => false,
+            None => false,
         }
     }
 
-    /// Mark every entry as removed: the song is closing or being replaced.
-    pub fn close(&mut self) {
-        for entry in self.entries.values_mut() {
-            entry.dying = true;
+    /// Retire every entry: the song is closing. Returns the slots whose
+    /// processors are still out, for the caller to pull back.
+    pub fn close(&mut self) -> Vec<PluginSlotId> {
+        self.problems.clear();
+        let mut out = Vec::new();
+        for (slot, entry) in std::mem::take(&mut self.entries) {
+            if !entry.lifeline.is_alone() {
+                out.push(slot);
+            }
+            self.graveyard.push((entry.instance, entry.lifeline));
         }
+        out
     }
 
-    /// Drop every dying entry whose processors have all been dropped, and
-    /// return how many were. Run after `EngineHandle::poll` has drained the
-    /// reclaim ring, which is where a processor is dropped.
+    /// What an install does to the rack: keep every instance whose slot the
+    /// incoming song records as the same plugin in the same state as the
+    /// outgoing one did, and retire the rest. The parameter list and the
+    /// pinned ids are what the song remembers *about* the plugin, and an
+    /// instance does not change when they do.
+    ///
+    /// A structural edit (paste, move, delete, undo) installs a snapshot of
+    /// the session, so its slots are the session's own and every instance
+    /// is kept -- and the carry plan keeps its processor running, which is
+    /// why retiring it here left a processor whose instance could no longer
+    /// restart or report its latency. Opening another song retires
+    /// everything, unless a slot of it is identical in every field.
+    pub fn retire_except(&mut self, outgoing: &PluginSlots, incoming: &PluginSlots) {
+        let retired: Vec<PluginSlotId> = self
+            .entries
+            .keys()
+            .copied()
+            .filter(|slot| !same_plugin(outgoing.get(slot), incoming.get(slot)))
+            .collect();
+        for slot in retired {
+            self.remove(slot);
+        }
+        self.problems
+            .retain(|slot, _| same_plugin(outgoing.get(slot), incoming.get(slot)));
+    }
+
+    /// Drop every retired instance whose processors have all been dropped,
+    /// and return how many were. Run after `EngineHandle::poll` has drained
+    /// the reclaim ring, which is where a processor is dropped.
     pub fn collect(&mut self) -> usize {
-        let before = self.entries.len();
-        self.entries
-            .retain(|_, entry| !(entry.dying && entry.lifeline.is_alone()));
-        before - self.entries.len()
+        let before = self.graveyard.len();
+        self.graveyard.retain(|(_, lifeline)| !lifeline.is_alone());
+        before - self.graveyard.len()
     }
 
-    /// Entries still held, dying ones included.
+    /// Entries still held, retired ones included.
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.entries.len() + self.graveyard.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.is_empty() && self.graveyard.is_empty()
     }
 
     /// Entries removed from the song whose processors have not come back
     /// yet. A song close waits on this reaching zero, with a bounded timeout.
     pub fn dying(&self) -> usize {
-        self.entries.values().filter(|entry| entry.dying).count()
+        self.graveyard.len()
     }
 
-    /// Drain every plugin's requests and carry out the ones that are the
-    /// rack's to carry out, once a pump tick. The rest come back as events
-    /// for the owner. A dying entry's requests are drained and ignored.
-    pub fn service(&mut self) -> Vec<RackEvent> {
+    /// Give up on every instance still held, without dropping it: for the
+    /// end of a quit whose bounded wait ran out. An instance dropped while
+    /// its processor may still be running on the audio thread is the one
+    /// thing worse than a leak at exit.
+    pub fn leak_remaining(&mut self) -> usize {
+        let count = self.len();
+        for (_, entry) in std::mem::take(&mut self.entries) {
+            std::mem::forget(entry);
+        }
+        for held in std::mem::take(&mut self.graveyard) {
+            std::mem::forget(held);
+        }
+        count
+    }
+
+    /// The rack's once-a-tick upkeep. `slots` is the song's plugin table,
+    /// `named` the slots a device on some chain names, and `config` what the
+    /// engine runs at now.
+    ///
+    /// Drops retired instances whose processors came back; opens the slots
+    /// a device names that have no instance; carries out what each plugin
+    /// asked for; pulls back stale processors; and builds a processor for
+    /// every live instance a device names whose processor is not out.
+    /// Everything that needs the engine comes back as a [`RackEvent`].
+    pub fn service(
+        &mut self,
+        slots: &PluginSlots,
+        named: &BTreeSet<PluginSlotId>,
+        config: AudioConfig,
+    ) -> Vec<RackEvent> {
         let mut events = Vec::new();
+        self.collect();
+        // A retired instance's requests are drained and ignored: a restart
+        // that arrives after its slot was removed must not reinstall
+        // anything, or fire later.
+        for (instance, _) in &self.graveyard {
+            let _ = instance.take_requests();
+        }
+
+        // A new rate, or a new block ceiling: every processor out is stale.
+        if self.config != Some(config) {
+            if self.config.is_some() {
+                for entry in self.entries.values_mut() {
+                    entry.instance.set_audio_config(config);
+                    entry.rebuild = true;
+                }
+            }
+            self.config = Some(config);
+        }
+
+        // Open what the song names and nothing hosts.
+        if let Some(opener) = self.opener.as_mut() {
+            let generation = opener.refresh();
+            for &slot in named {
+                if self.entries.contains_key(&slot) {
+                    continue;
+                }
+                let Some(state) = slots.get(&slot) else {
+                    continue;
+                };
+                if self
+                    .problems
+                    .get(&slot)
+                    .is_some_and(|problem| problem.generation == generation)
+                {
+                    continue;
+                }
+                match opener.open(&state.plugin, &state.state.0, config) {
+                    Ok(instance) => {
+                        self.problems.remove(&slot);
+                        events.push(RackEvent::Opened {
+                            slot,
+                            params: instance.params().to_vec(),
+                        });
+                        self.entries
+                            .insert(slot, RackEntry::new(instance, Lifeline::new()));
+                    }
+                    Err(error) => {
+                        self.problems.insert(
+                            slot,
+                            Problem {
+                                error: error.clone(),
+                                generation,
+                            },
+                        );
+                        events.push(RackEvent::Failed { slot, error });
+                    }
+                }
+            }
+        }
+
         for (&slot, entry) in &mut self.entries {
             let requests: Requests = entry.instance.take_requests();
-            if requests.is_empty() || entry.dying {
-                continue;
-            }
             if requests.has(Requests::CALLBACK) {
                 entry.instance.on_main_thread();
             }
             if requests.has(Requests::RESTART) {
-                match entry.instance.restart(entry.lifeline.tie()) {
-                    Ok(node) => events.push(RackEvent::Restarted { slot, node }),
-                    Err(error) => events.push(RackEvent::Failed { slot, error }),
-                }
+                entry.rebuild = true;
             }
-            // A restart can change the latency whether or not the plugin
-            // said so separately, so both ask for the plan to be derived
-            // again.
-            if requests.has(Requests::LATENCY_CHANGED) || requests.has(Requests::RESTART) {
+            if requests.has(Requests::LATENCY_CHANGED) {
                 events.push(RackEvent::LatencyChanged { slot });
             }
             if requests.has(Requests::PARAMS_RESCAN) {
+                entry.instance.refresh_params();
                 events.push(RackEvent::ParamsRescanned {
                     slot,
                     params: entry.instance.params().to_vec(),
@@ -210,6 +473,50 @@ impl PluginRack {
             }
             if requests.has(Requests::STATE_DIRTY) {
                 events.push(RackEvent::StateDirty { slot });
+            }
+
+            if !entry.lifeline.is_alone() {
+                entry.out_ticks = entry.out_ticks.saturating_add(1);
+                if entry.out_ticks >= SETTLED_TICKS {
+                    entry.attempts = 0;
+                }
+                if entry.rebuild && !entry.pulled {
+                    entry.pulled = true;
+                    events.push(RackEvent::PullBack { slot });
+                }
+                continue;
+            }
+            entry.out_ticks = 0;
+            entry.pulled = false;
+            if !named.contains(&slot) || entry.attempts >= MAX_ATTEMPTS {
+                continue;
+            }
+            entry.attempts += 1;
+            match entry.instance.build_processor(entry.lifeline.tie()) {
+                Ok(node) => {
+                    entry.rebuild = false;
+                    events.push(RackEvent::Install { slot, node });
+                    // Activation is when a plugin's latency is known.
+                    events.push(RackEvent::LatencyChanged { slot });
+                }
+                Err(error) => {
+                    entry.attempts = MAX_ATTEMPTS;
+                    events.push(RackEvent::Failed { slot, error });
+                }
+            }
+        }
+        for event in &events {
+            if let RackEvent::Failed { slot, error } = event {
+                if self.entries.contains_key(slot) {
+                    let generation = self.opener.as_mut().map_or(0, |opener| opener.refresh());
+                    self.problems.insert(
+                        *slot,
+                        Problem {
+                            error: error.clone(),
+                            generation,
+                        },
+                    );
+                }
             }
         }
         events
@@ -229,8 +536,42 @@ impl crate::session::Session {
         }
     }
 
+    /// What finds and opens the plugins this session's songs name: the app
+    /// sets the CLAP opener over the scanner's cache once, at startup.
+    pub fn set_plugin_opener(&mut self, opener: Box<dyn PluginOpener>) {
+        self.plugin_rack.set_opener(opener);
+    }
+
+    /// Why the plugin in `slot` is not heard, if it is not.
+    pub fn plugin_problem(&self, slot: PluginSlotId) -> Option<HostError> {
+        self.plugin_rack.problem(slot)
+    }
+
+    /// Every plugin slot a device on some chain names.
+    pub fn named_plugin_slots(&self) -> BTreeSet<PluginSlotId> {
+        let channels = self.channels.iter().map(|channel| &channel.effects);
+        let buses = self.buses.iter().map(|bus| &bus.effects);
+        channels
+            .chain(buses)
+            .flatten()
+            .filter_map(|effect| match effect.params {
+                EffectParams::Plugin(slot) => Some(slot),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn plugin_config(handle: &impl CommandSink) -> AudioConfig {
+        AudioConfig {
+            sample_rate: handle.sample_rate(),
+            max_frames: PLUGIN_MAX_FRAMES,
+        }
+    }
+
     /// The pump's once-a-tick plugin upkeep: drop instances whose processors
-    /// have come back, then act on what the plugins asked for.
+    /// have come back, open what the song names, act on what the plugins
+    /// asked for, and swap a processor into every plugin device that lacks
+    /// one.
     ///
     /// Run after `EngineHandle::poll`, which is where a reclaimed processor
     /// is dropped. A latency change needs nothing here:
@@ -239,15 +580,33 @@ impl crate::session::Session {
     pub fn service_plugins(&mut self, handle: &mut impl CommandSink) {
         // Every 8 ms tick, so a song with no plugin in it pays one branch:
         // no walk, no allocation, no lock.
-        if self.plugin_rack.is_empty() {
+        if self.plugin_rack.is_empty() && self.plugins.is_empty() {
             return;
         }
-        self.plugin_rack.collect();
-        for event in self.plugin_rack.service() {
+        let named = self.named_plugin_slots();
+        let config = Self::plugin_config(handle);
+        for event in self.plugin_rack.service(&self.plugins, &named, config) {
             match event {
-                RackEvent::Restarted { slot, node } => {
-                    if !self.replace_plugin_processor(slot, node, handle) {
-                        log_warn!("plugin", "slot {}: the restarted plugin could not be swapped in", slot.0);
+                RackEvent::Install { slot, node } => {
+                    let align = IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
+                    // Refused or not found, the node is dropped here, which
+                    // leaves the lifeline alone: the rack tries again, a
+                    // bounded number of times.
+                    let _ = self.replace_plugin_processor(slot, node, align, handle);
+                }
+                RackEvent::PullBack { slot } => {
+                    let placeholder: Box<dyn AudioNode + Send> =
+                        Box::new(PluginPlaceholder::new(slot));
+                    let _ = self.replace_plugin_processor(slot, placeholder, None, handle);
+                }
+                RackEvent::Opened { slot, params } => {
+                    // What the plugin reports now replaces what the song last
+                    // saw, without marking the song modified: opening a song
+                    // is not an edit.
+                    if let Some(state) = self.plugins.get_mut(&slot) {
+                        if !params.is_empty() && state.params != params {
+                            state.params = params;
+                        }
                     }
                 }
                 RackEvent::LatencyChanged { .. } => {}
@@ -263,12 +622,209 @@ impl crate::session::Session {
                         }
                     }
                 }
-                RackEvent::StateDirty { .. } => self.dirty = true,
+                RackEvent::StateDirty { slot } => {
+                    self.capture_plugin_state(slot);
+                    self.dirty = true;
+                }
                 RackEvent::Failed { slot, error } => {
-                    log_warn!("plugin", "slot {}: {error}", slot.0);
+                    let name = self
+                        .plugins
+                        .get(&slot)
+                        .map_or_else(|| format!("slot {}", slot.0), |state| state.plugin.name.clone());
+                    log_warn!("plugin", "{name}: {error}");
                 }
             }
         }
+    }
+
+    /// Insert the plugin `plugin` as a new device before `insert_before` on
+    /// the chain the rack is pointed at, open it, and install its processor
+    /// -- or the placeholder, when it cannot be opened, with the reason kept
+    /// for [`Self::plugin_problem`].
+    ///
+    /// The session path of step 06: there is no menu row for it until step
+    /// 08. Mirrors the native insert (`Session::insert_effect_at` and the
+    /// interface's `install_added_effect`): installed at the chain's tail
+    /// and moved into place. It does not publish container spans, so it is
+    /// for a position outside any container.
+    pub fn insert_plugin_effect(
+        &mut self,
+        plugin: PluginRef,
+        insert_before: usize,
+        handle: &mut impl CommandSink,
+    ) -> Option<EffectInserted> {
+        let target = self.effect_target;
+        let slot = mint_plugin_slot(
+            &mut self.plugins,
+            &mut self.next_plugin_slot,
+            PluginSlotState::new(plugin.clone()),
+        );
+        let mut effect = EffectSlotState::of_kind(EffectKind::Plugin);
+        effect.params = EffectParams::Plugin(slot);
+        let inserted = self.effect_chain_parts_mut().and_then(|(effects, next_id)| {
+            let tail = effects.len();
+            let row = insert_effect(effects, next_id, insert_before, effect)?;
+            Some((tail, row, effects[row].id))
+        });
+        let Some((tail, row, device)) = inserted else {
+            self.plugins.remove(&slot);
+            return None;
+        };
+        let config = Self::plugin_config(handle);
+        let opened = self
+            .plugin_rack
+            .open(&plugin, &PluginState::default(), config)
+            .and_then(|instance| {
+                let params = instance.params().to_vec();
+                let node = self.plugin_rack.insert(slot, instance)?;
+                Ok((node, params))
+            });
+        let node: Box<dyn AudioNode + Send> = match opened {
+            Ok((node, params)) => {
+                if let Some(state) = self.plugins.get_mut(&slot) {
+                    state.params = params;
+                }
+                node
+            }
+            Err(error) => {
+                log_warn!("plugin", "{}: {error}", plugin.name);
+                self.plugin_rack.record_problem(slot, error);
+                Box::new(PluginPlaceholder::new(slot))
+            }
+        };
+        let align = IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
+        let _ = handle.send_structural(StructuralCommand::InstallEffect {
+            target,
+            slot: tail as u8,
+            kind: EffectKind::Plugin,
+            resource_key: Some(u64::from(slot.0)),
+            node,
+            align,
+            analyzer: Box::new(SpectrumAnalyzer::new()),
+            state: Box::new(EffectSlot::for_device(device)),
+        });
+        if row != tail {
+            let _ = handle.send(EngineCommand::MoveEffect {
+                target,
+                from: tail as u8,
+                to: row as u8,
+            });
+        }
+        self.dirty = true;
+        Some(EffectInserted {
+            target,
+            slot: row,
+            tail,
+            device,
+            kind: EffectKind::Plugin,
+            params: EffectParams::Plugin(slot),
+        })
+    }
+
+    /// Save the plugin in `slot`'s state into the song, if it is hosted.
+    /// Returns whether the song's copy changed.
+    fn capture_plugin_state(&mut self, slot: PluginSlotId) -> bool {
+        let Some(instance) = self.plugin_rack.instance_mut(slot) else {
+            return false;
+        };
+        let state = match instance.save_state() {
+            Ok(state) => state,
+            Err(error) => {
+                log_warn!("plugin", "slot {}: {error}", slot.0);
+                return false;
+            }
+        };
+        match self.plugins.get_mut(&slot) {
+            Some(saved) if saved.state.0 != state => {
+                saved.state = PluginStateText(state);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Save every hosted plugin's state into the song, for a save or an
+    /// export: what the plugin holds now, not what it held when the song
+    /// last asked. A plugin that is not hosted keeps the state the song
+    /// already has, byte for byte. Returns whether any copy changed.
+    pub fn capture_plugin_states(&mut self) -> bool {
+        let slots: Vec<PluginSlotId> = self.plugin_rack.live_slots().collect();
+        let mut changed = false;
+        for slot in slots {
+            changed |= self.capture_plugin_state(slot);
+        }
+        changed
+    }
+
+    /// A processor of every plugin the song names, for an export to render
+    /// with (`OfflineRenderer::render_with_plugins`) at `sample_rate`.
+    ///
+    /// The live instances' processors are in the engine, and a plugin may
+    /// have one processor per instance, so each of these is a **second
+    /// instance**, opened here on the control thread with the live one's
+    /// state. The instances wait in the rack's graveyard and go once the
+    /// export has dropped their processors. A plugin that cannot be opened
+    /// is left out, and the export plays its placeholder, as playback does.
+    pub fn export_plugin_processors(
+        &mut self,
+        sample_rate: u32,
+    ) -> BTreeMap<PluginSlotId, Box<dyn AudioNode + Send>> {
+        self.capture_plugin_states();
+        let config = AudioConfig {
+            sample_rate,
+            max_frames: PLUGIN_MAX_FRAMES,
+        };
+        let mut processors = BTreeMap::new();
+        for slot in self.named_plugin_slots() {
+            let Some(state) = self.plugins.get(&slot) else {
+                continue;
+            };
+            let (plugin, saved) = (state.plugin.clone(), state.state.0.clone());
+            let built = self.plugin_rack.open(&plugin, &saved, config).and_then(|mut instance| {
+                let lifeline = Lifeline::new();
+                let node = instance.build_processor(lifeline.tie())?;
+                Ok((instance, lifeline, node))
+            });
+            match built {
+                Ok((instance, lifeline, node)) => {
+                    self.plugin_rack.bury(instance, lifeline);
+                    processors.insert(slot, node);
+                }
+                Err(error) => {
+                    log_warn!("export", "{} is exported as a pass-through: {error}", plugin.name);
+                }
+            }
+        }
+        processors
+    }
+
+    /// Begin retiring every hosted plugin, for a quit: every processor out
+    /// is pulled back by swapping the placeholder in. The caller then polls
+    /// the engine and calls [`Self::collect_plugins`] until
+    /// [`Self::plugins_retired`], or its bounded wait runs out.
+    pub fn close_plugins(&mut self, handle: &mut impl CommandSink) {
+        for slot in self.plugin_rack.close() {
+            let placeholder: Box<dyn AudioNode + Send> = Box::new(PluginPlaceholder::new(slot));
+            let _ = self.replace_plugin_processor(slot, placeholder, None, handle);
+        }
+    }
+
+    /// Drop the retired instances whose processors have come back.
+    pub fn collect_plugins(&mut self) -> usize {
+        self.plugin_rack.collect()
+    }
+
+    /// Whether every hosted plugin has been retired and dropped.
+    pub fn plugins_retired(&self) -> bool {
+        self.plugin_rack.is_empty()
+    }
+
+    /// The end of a quit whose bounded wait ran out: give up on the
+    /// instances still held without dropping them, and return how many.
+    /// Dropping one whose processor may still be running on the audio
+    /// thread is worse than leaking it at exit.
+    pub fn leak_plugins(&mut self) -> usize {
+        self.plugin_rack.leak_remaining()
     }
 
     /// Swap `node` into the device that runs plugin `slot`, wherever it is.
@@ -281,6 +837,7 @@ impl crate::session::Session {
         &mut self,
         slot: PluginSlotId,
         node: Box<dyn AudioNode + Send>,
+        align: Option<Box<IntegerDelay>>,
         handle: &mut impl CommandSink,
     ) -> bool {
         let wanted = EffectParams::Plugin(slot);
@@ -313,14 +870,14 @@ impl crate::session::Session {
             expected_resource_key: key,
             resource_key: key,
             node,
-            align: None,
+            align,
         })
     }
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
     use std::sync::Arc;
 
     use mooloop_core::{PluginFormat, PluginRef, PluginState};
@@ -334,15 +891,23 @@ pub(crate) mod tests {
     pub(crate) struct FakeProbe {
         pub requests: RequestFlags,
         pub latency: AtomicU32,
-        pub restarts: AtomicUsize,
+        pub builds: AtomicUsize,
+        pub opens: AtomicUsize,
         pub instances_dropped: AtomicUsize,
         pub processors_dropped: AtomicUsize,
+        /// The opener refuses while this is set.
+        pub missing: AtomicBool,
+        /// The opener's catalogue generation.
+        pub generation: AtomicU64,
+        /// The rate the last processor was built for.
+        pub built_rate: AtomicU32,
     }
 
     /// The rack's test double: a plugin with no library behind it.
     pub(crate) struct FakeInstance {
         plugin: PluginRef,
         params: Vec<PluginParamInfo>,
+        config: AudioConfig,
         probe: Arc<FakeProbe>,
     }
 
@@ -361,6 +926,10 @@ pub(crate) mod tests {
             Box::new(Self {
                 plugin: fake_ref(),
                 params: Vec::new(),
+                config: AudioConfig {
+                    sample_rate: 48_000,
+                    max_frames: PLUGIN_MAX_FRAMES,
+                },
                 probe,
             })
         }
@@ -410,26 +979,63 @@ pub(crate) mod tests {
         fn load_state(&mut self, _state: &PluginState) -> Result<(), HostError> {
             Ok(())
         }
-        fn value_text(&self, _id: u32, _value: f64) -> Option<String> {
+        fn value_text(&mut self, _id: u32, _value: f64) -> Option<String> {
             None
         }
         fn take_requests(&self) -> Requests {
             self.probe.requests.take()
         }
         fn on_main_thread(&mut self) {}
+        fn set_audio_config(&mut self, config: AudioConfig) {
+            self.config = config;
+        }
         fn build_processor(
             &mut self,
             lifeline: Lifeline,
         ) -> Result<Box<dyn AudioNode + Send>, HostError> {
+            self.probe.builds.fetch_add(1, Ordering::SeqCst);
+            self.probe.built_rate.store(self.config.sample_rate, Ordering::SeqCst);
             Ok(Box::new(FakeProcessor {
                 _lifeline: lifeline,
                 probe: Arc::clone(&self.probe),
             }))
         }
-        fn restart(&mut self, lifeline: Lifeline) -> Result<Box<dyn AudioNode + Send>, HostError> {
-            self.probe.restarts.fetch_add(1, Ordering::SeqCst);
-            self.build_processor(lifeline)
+    }
+
+    /// Opens a [`FakeInstance`] for anything, unless the probe says the
+    /// plugin is missing.
+    pub(crate) struct FakeOpener(pub Arc<FakeProbe>);
+
+    impl PluginOpener for FakeOpener {
+        fn open(
+            &mut self,
+            _plugin: &PluginRef,
+            _state: &PluginState,
+            config: AudioConfig,
+        ) -> Result<Box<dyn HostedInstance>, HostError> {
+            self.0.opens.fetch_add(1, Ordering::SeqCst);
+            if self.0.missing.load(Ordering::SeqCst) {
+                return Err(HostError::Missing);
+            }
+            let mut instance = FakeInstance::new(Arc::clone(&self.0));
+            instance.config = config;
+            Ok(instance)
         }
+
+        fn refresh(&mut self) -> u64 {
+            self.0.generation.load(Ordering::SeqCst)
+        }
+    }
+
+    fn config() -> AudioConfig {
+        AudioConfig {
+            sample_rate: 48_000,
+            max_frames: PLUGIN_MAX_FRAMES,
+        }
+    }
+
+    fn names(events: &[RackEvent]) -> Vec<String> {
+        events.iter().map(|event| format!("{event:?}")).collect()
     }
 
     /// Blocker 5's order: the instance outlives its processor, and is
@@ -454,15 +1060,15 @@ pub(crate) mod tests {
         assert!(rack.is_empty());
     }
 
-    /// A song closing marks everything dying, and nothing is dropped until
-    /// the processors are.
+    /// A song closing retires everything, says which processors are still
+    /// out, and drops nothing until they are back.
     #[test]
     fn closing_waits_for_every_processor() {
         let probe = Arc::new(FakeProbe::default());
         let mut rack = PluginRack::new();
         let first = rack.insert(PluginSlotId(0), FakeInstance::new(Arc::clone(&probe))).unwrap();
         let second = rack.insert(PluginSlotId(1), FakeInstance::new(Arc::clone(&probe))).unwrap();
-        rack.close();
+        assert_eq!(rack.close(), [PluginSlotId(0), PluginSlotId(1)]);
         assert_eq!(rack.dying(), 2);
         drop(first);
         assert_eq!(rack.collect(), 1);
@@ -471,8 +1077,8 @@ pub(crate) mod tests {
         assert_eq!(probe.instances_dropped.load(Ordering::SeqCst), 2);
     }
 
-    /// Step 04's third test: a restart the plugin asked for after its slot
-    /// was removed builds nothing and reinstalls nothing.
+    /// A restart the plugin asked for after its slot was removed builds
+    /// nothing and reinstalls nothing, and is not left to fire later.
     #[test]
     fn a_restart_requested_after_removal_does_nothing() {
         let probe = Arc::new(FakeProbe::default());
@@ -481,62 +1087,108 @@ pub(crate) mod tests {
         let _processor = rack.insert(slot, FakeInstance::new(Arc::clone(&probe))).unwrap();
         rack.remove(slot);
         probe.requests.raise(Requests::RESTART | Requests::LATENCY_CHANGED);
-        assert!(rack.service().is_empty());
-        assert_eq!(probe.restarts.load(Ordering::SeqCst), 0);
-        assert!(probe.requests.take().is_empty(), "the request was drained, not left to fire later");
+        let named = BTreeSet::from([slot]);
+        assert!(rack.service(&PluginSlots::new(), &named, config()).is_empty());
+        assert_eq!(probe.builds.load(Ordering::SeqCst), 1, "only the first build");
+        assert!(probe.requests.take().is_empty(), "the request was drained");
     }
 
+    /// CLAP allows one processor per instance: a restart pulls the running
+    /// one back, and the next is built only once it has been dropped.
     #[test]
-    fn requests_become_events_and_a_restart_builds_a_tied_processor() {
+    fn a_restart_pulls_the_processor_back_and_builds_the_next_once_it_is_gone() {
         let probe = Arc::new(FakeProbe::default());
         let mut rack = PluginRack::new();
         let slot = PluginSlotId(1);
+        let named = BTreeSet::from([slot]);
+        let slots = PluginSlots::new();
         let first = rack.insert(slot, FakeInstance::new(Arc::clone(&probe))).unwrap();
-        assert_eq!(rack.latency_frames(slot), Some(0));
+        assert!(rack.service(&slots, &named, config()).is_empty(), "the first is out and current");
 
-        probe.latency.store(512, Ordering::SeqCst);
         probe.requests.raise(Requests::RESTART | Requests::PARAMS_RESCAN | Requests::STATE_DIRTY);
-        let mut events = rack.service();
-        let names: Vec<String> = events.iter().map(|event| format!("{event:?}")).collect();
         assert_eq!(
-            names,
-            ["Restarted(1)", "LatencyChanged(1)", "ParamsRescanned(1, 0 params)", "StateDirty(1)"]
+            names(&rack.service(&slots, &named, config())),
+            ["ParamsRescanned(1, 0 params)", "StateDirty(1)", "PullBack(1)"]
         );
-        assert_eq!(rack.latency_frames(slot), Some(512));
+        assert!(rack.service(&slots, &named, config()).is_empty(), "one pull-back, not one a tick");
+        assert_eq!(probe.builds.load(Ordering::SeqCst), 1, "nothing built while the first is out");
 
-        // The restarted processor is tied too: removing the slot waits for
-        // both the old and the new one to be dropped.
-        let RackEvent::Restarted { node, .. } = events.remove(0) else {
-            panic!("the first event is the restart");
-        };
-        rack.remove(slot);
         drop(first);
-        assert_eq!(rack.collect(), 0, "the restarted processor is still out");
+        let mut events = rack.service(&slots, &named, config());
+        assert_eq!(names(&events), ["Install(1)", "LatencyChanged(1)"]);
+        assert_eq!(probe.builds.load(Ordering::SeqCst), 2);
+        let RackEvent::Install { node, .. } = events.remove(0) else {
+            panic!("the first event is the install");
+        };
+        // The new processor is tied too.
+        rack.remove(slot);
+        assert_eq!(rack.collect(), 0);
         drop(node);
         assert_eq!(rack.collect(), 1);
+    }
+
+    /// A processor the engine keeps refusing is not rebuilt every tick.
+    #[test]
+    fn a_processor_that_never_arrives_is_built_a_bounded_number_of_times() {
+        let probe = Arc::new(FakeProbe::default());
+        let mut rack = PluginRack::new();
+        rack.set_opener(Box::new(FakeOpener(Arc::clone(&probe))));
+        let slot = PluginSlotId(0);
+        let mut slots = PluginSlots::new();
+        slots.insert(slot, PluginSlotState::new(fake_ref()));
+        let named = BTreeSet::from([slot]);
+        for _ in 0..20 {
+            // Every node dropped on the spot, as a refused send would be.
+            drop(rack.service(&slots, &named, config()));
+        }
+        assert_eq!(probe.opens.load(Ordering::SeqCst), 1);
+        assert_eq!(probe.builds.load(Ordering::SeqCst), usize::from(MAX_ATTEMPTS));
     }
 
     /// Records what the session sends, and takes everything.
     #[derive(Default)]
     struct Sink {
         replaced: Vec<(EffectTarget, u8, u64)>,
+        installed: Vec<(EffectTarget, u8, EffectKind, Option<u64>)>,
+        moved: Vec<(u8, u8)>,
+        /// The nodes sent, kept alive the way the engine would keep them.
+        nodes: Vec<Box<dyn AudioNode + Send>>,
+        rate: u32,
     }
 
     impl CommandSink for Sink {
-        fn send(&mut self, _cmd: mooloop_core::EngineCommand) -> bool {
+        fn send(&mut self, cmd: mooloop_core::EngineCommand) -> bool {
+            if let mooloop_core::EngineCommand::MoveEffect { from, to, .. } = cmd {
+                self.moved.push((from, to));
+            }
             true
         }
         fn send_structural(&mut self, cmd: StructuralCommand) -> bool {
-            if let StructuralCommand::ReplaceEffect {
-                target,
-                slot,
-                expected_kind,
-                resource_key,
-                ..
-            } = cmd
-            {
-                assert_eq!(expected_kind, EffectKind::Plugin);
-                self.replaced.push((target, slot, resource_key));
+            match cmd {
+                StructuralCommand::ReplaceEffect {
+                    target,
+                    slot,
+                    expected_kind,
+                    resource_key,
+                    node,
+                    ..
+                } => {
+                    assert_eq!(expected_kind, EffectKind::Plugin);
+                    self.replaced.push((target, slot, resource_key));
+                    self.nodes.push(node);
+                }
+                StructuralCommand::InstallEffect {
+                    target,
+                    slot,
+                    kind,
+                    resource_key,
+                    node,
+                    ..
+                } => {
+                    self.installed.push((target, slot, kind, resource_key));
+                    self.nodes.push(node);
+                }
+                _ => {}
             }
             true
         }
@@ -548,13 +1200,17 @@ pub(crate) mod tests {
             true
         }
         fn sample_rate(&self) -> u32 {
-            48_000
+            if self.rate == 0 {
+                48_000
+            } else {
+                self.rate
+            }
         }
     }
 
-    /// Two channels, a plugin device second on channel 0, hosted by a fake.
-    fn session_hosting(probe: &Arc<FakeProbe>) -> (crate::session::Session, PluginSlotId, Box<dyn AudioNode + Send>) {
-        use mooloop_core::{ChannelId, EffectSlotState, PluginSlotState, Project, ProjectChannel};
+    /// Two channels, a plugin device second on channel 0.
+    fn project_with_plugin() -> (mooloop_core::Project, PluginSlotId) {
+        use mooloop_core::{ChannelId, Project, ProjectChannel};
         let mut project = Project {
             channels: vec![
                 ProjectChannel::sampler(0, 1).with_id(ChannelId(0)),
@@ -570,6 +1226,14 @@ pub(crate) mod tests {
         let mut device = EffectSlotState::of_kind(EffectKind::Plugin);
         device.params = EffectParams::Plugin(slot);
         project.channels[0].setup.push_effect(device);
+        (project, slot)
+    }
+
+    /// [`project_with_plugin`], installed, and hosted by a fake.
+    fn session_hosting(
+        probe: &Arc<FakeProbe>,
+    ) -> (crate::session::Session, PluginSlotId, Box<dyn AudioNode + Send>) {
+        let (project, slot) = project_with_plugin();
         let mut session = crate::session::Session::default();
         session.replace_project(&project, &[]);
         let processor = session
@@ -601,18 +1265,25 @@ pub(crate) mod tests {
         assert_eq!(session.latency_plan().channel(1), 0);
     }
 
-    /// A restart swaps the new processor in by the plugin's slot, wherever
-    /// its device sits, and marks nothing dirty; a rescan that changes the
-    /// list replaces the song's copy and does.
+    /// A restart pulls the processor back and swaps the next one in by the
+    /// plugin's slot, wherever its device sits, marking nothing dirty; a
+    /// rescan that changes the list replaces the song's copy and does.
     #[test]
     fn a_restart_is_swapped_in_by_slot_and_a_rescan_updates_the_song() {
         let probe = Arc::new(FakeProbe::default());
-        let (mut session, slot, _processor) = session_hosting(&probe);
+        let (mut session, slot, processor) = session_hosting(&probe);
         session.dirty = false;
         let mut sink = Sink::default();
         probe.requests.raise(Requests::RESTART);
         session.service_plugins(&mut sink);
-        assert_eq!(sink.replaced, [(EffectTarget::Channel(0), 1, u64::from(slot.0))]);
+        let key = u64::from(slot.0);
+        assert_eq!(sink.replaced, [(EffectTarget::Channel(0), 1, key)], "the pull-back");
+        // The engine hands the old processor back and `poll` drops it.
+        drop(processor);
+        session.service_plugins(&mut sink);
+        assert_eq!(sink.replaced.len(), 2, "the new processor, by the same slot");
+        assert_eq!(sink.replaced[1], (EffectTarget::Channel(0), 1, key));
+        assert_eq!(probe.builds.load(Ordering::SeqCst), 2);
         assert!(!session.dirty);
 
         probe.requests.raise(Requests::PARAMS_RESCAN);
@@ -636,8 +1307,25 @@ pub(crate) mod tests {
         assert!(session.dirty);
     }
 
-    /// Installing a song closes the rack: every instance is dying and goes
-    /// once its processor has come back.
+    /// **The zombie.** Every structural edit reinstalls the song from a
+    /// snapshot of the session, and the carry plan keeps the plugin's
+    /// processor running across it; the instance has to stay live with it,
+    /// or nothing can restart it or read its latency again.
+    #[test]
+    fn a_structural_install_keeps_the_hosted_plugin_live() {
+        let probe = Arc::new(FakeProbe::default());
+        let (mut session, slot, _processor) = session_hosting(&probe);
+        probe.latency.store(64, Ordering::SeqCst);
+        let snapshot = session.project_snapshot(120, 0);
+        session.replace_project(&snapshot, &[]);
+        assert_eq!(session.plugin_rack.dying(), 0, "nothing retired");
+        assert_eq!(session.plugin_rack.latency_frames(slot), Some(64));
+        assert_eq!(session.latency_plan().channel(1), 64);
+        assert_eq!(probe.instances_dropped.load(Ordering::SeqCst), 0);
+    }
+
+    /// Installing another song retires every hosted plugin: every instance
+    /// goes once its processor has come back.
     #[test]
     fn a_song_install_retires_every_hosted_plugin() {
         let probe = Arc::new(FakeProbe::default());
@@ -657,5 +1345,160 @@ pub(crate) mod tests {
         let _first = rack.insert(PluginSlotId(0), FakeInstance::new(Arc::clone(&probe))).unwrap();
         assert!(rack.insert(PluginSlotId(0), FakeInstance::new(Arc::clone(&probe))).is_err());
         assert_eq!(rack.len(), 1);
+    }
+
+    /// A song that opens with a plugin device gets the plugin: the opener
+    /// makes the instance, and the next tick swaps its processor into the
+    /// placeholder the install built.
+    #[test]
+    fn a_song_that_names_a_plugin_is_opened_and_its_processor_swapped_in() {
+        let probe = Arc::new(FakeProbe::default());
+        let (project, slot) = project_with_plugin();
+        let mut session = crate::session::Session::default();
+        session.set_plugin_opener(Box::new(FakeOpener(Arc::clone(&probe))));
+        session.replace_project(&project, &[]);
+        let mut sink = Sink::default();
+        session.service_plugins(&mut sink);
+        assert_eq!(probe.opens.load(Ordering::SeqCst), 1);
+        assert_eq!(sink.replaced, [(EffectTarget::Channel(0), 1, u64::from(slot.0))]);
+        assert!(session.plugin_problem(slot).is_none());
+        session.service_plugins(&mut sink);
+        assert_eq!(sink.replaced.len(), 1, "once, while the processor stays out");
+        assert!(!session.dirty, "opening a song is not an edit");
+    }
+
+    /// A plugin that is not installed stays the placeholder, says why, and
+    /// is asked for again only when the opener's catalogue changes -- a scan
+    /// finishing after the song opened, say.
+    #[test]
+    fn a_missing_plugin_is_tried_again_only_when_the_catalogue_changes() {
+        let probe = Arc::new(FakeProbe::default());
+        probe.missing.store(true, Ordering::SeqCst);
+        let (project, slot) = project_with_plugin();
+        let mut session = crate::session::Session::default();
+        session.set_plugin_opener(Box::new(FakeOpener(Arc::clone(&probe))));
+        session.replace_project(&project, &[]);
+        let mut sink = Sink::default();
+        for _ in 0..5 {
+            session.service_plugins(&mut sink);
+        }
+        assert_eq!(probe.opens.load(Ordering::SeqCst), 1);
+        assert_eq!(session.plugin_problem(slot), Some(HostError::Missing));
+        assert!(sink.replaced.is_empty(), "the placeholder stays");
+
+        probe.missing.store(false, Ordering::SeqCst);
+        probe.generation.store(1, Ordering::SeqCst);
+        session.service_plugins(&mut sink);
+        assert_eq!(probe.opens.load(Ordering::SeqCst), 2);
+        assert_eq!(sink.replaced.len(), 1, "found, and swapped in");
+        assert!(session.plugin_problem(slot).is_none());
+    }
+
+    /// A new sample rate pulls every processor back and builds the next one
+    /// at the new rate.
+    #[test]
+    fn a_new_sample_rate_rebuilds_every_processor_at_it() {
+        let probe = Arc::new(FakeProbe::default());
+        let (project, _slot) = project_with_plugin();
+        let mut session = crate::session::Session::default();
+        session.set_plugin_opener(Box::new(FakeOpener(Arc::clone(&probe))));
+        session.replace_project(&project, &[]);
+        let mut sink = Sink::default();
+        session.service_plugins(&mut sink);
+        assert_eq!(probe.built_rate.load(Ordering::SeqCst), 48_000);
+
+        sink.rate = 96_000;
+        session.service_plugins(&mut sink);
+        assert_eq!(sink.replaced.len(), 2, "the pull-back");
+        // The engine hands back the 48 kHz processor (and the placeholder
+        // that replaced it is what the chain holds).
+        sink.nodes.clear();
+        session.service_plugins(&mut sink);
+        assert_eq!(sink.replaced.len(), 3);
+        assert_eq!(probe.built_rate.load(Ordering::SeqCst), 96_000);
+    }
+
+    /// The session path: a plugin inserted by its reference is installed
+    /// at the chain's tail as a real processor and moved into place.
+    #[test]
+    fn inserting_a_plugin_installs_its_processor_where_it_was_asked() {
+        let probe = Arc::new(FakeProbe::default());
+        let (project, _) = project_with_plugin();
+        let mut session = crate::session::Session::default();
+        session.set_plugin_opener(Box::new(FakeOpener(Arc::clone(&probe))));
+        session.replace_project(&project, &[]);
+        let mut sink = Sink::default();
+        let inserted = session.insert_plugin_effect(fake_ref(), 0, &mut sink).expect("inserted");
+        let EffectParams::Plugin(slot) = inserted.params else {
+            panic!("a plugin device");
+        };
+        assert_eq!(inserted.slot, 0);
+        assert_eq!(
+            sink.installed,
+            [(EffectTarget::Channel(0), 2, EffectKind::Plugin, Some(u64::from(slot.0)))]
+        );
+        assert_eq!(sink.moved, [(2, 0)]);
+        assert_eq!(probe.builds.load(Ordering::SeqCst), 1);
+        assert!(session.plugin_rack.instance(slot).is_some());
+        assert_eq!(session.plugins[&slot].plugin, fake_ref());
+        assert!(session.dirty);
+        assert_eq!(session.channels[0].effects[0].params, EffectParams::Plugin(slot));
+    }
+
+    /// Inserting a plugin that is not installed still inserts the device,
+    /// as the placeholder, and keeps the reason.
+    #[test]
+    fn inserting_a_missing_plugin_inserts_its_placeholder() {
+        let probe = Arc::new(FakeProbe::default());
+        probe.missing.store(true, Ordering::SeqCst);
+        let mut session = crate::session::Session::default();
+        session.set_plugin_opener(Box::new(FakeOpener(Arc::clone(&probe))));
+        session.replace_project(&project_with_plugin().0, &[]);
+        let mut sink = Sink::default();
+        let inserted = session.insert_plugin_effect(fake_ref(), 9, &mut sink).expect("inserted");
+        let EffectParams::Plugin(slot) = inserted.params else {
+            panic!("a plugin device");
+        };
+        assert_eq!(sink.installed.len(), 1);
+        assert!(sink.moved.is_empty(), "appended, so nothing to move");
+        assert_eq!(session.plugin_problem(slot), Some(HostError::Missing));
+        assert_eq!(probe.builds.load(Ordering::SeqCst), 0);
+    }
+
+    /// Quit: every processor is pulled back, and the rack empties once the
+    /// engine has handed them back.
+    #[test]
+    fn closing_the_plugins_pulls_every_processor_back() {
+        let probe = Arc::new(FakeProbe::default());
+        let (mut session, slot, processor) = session_hosting(&probe);
+        let mut sink = Sink::default();
+        session.close_plugins(&mut sink);
+        assert_eq!(sink.replaced, [(EffectTarget::Channel(0), 1, u64::from(slot.0))]);
+        assert!(!session.plugins_retired());
+        drop(processor);
+        session.collect_plugins();
+        assert!(session.plugins_retired());
+    }
+
+    /// An export gets its own processors, from second instances, which go
+    /// once the export has dropped them.
+    #[test]
+    fn an_export_gets_processors_of_its_own() {
+        let probe = Arc::new(FakeProbe::default());
+        let (project, slot) = project_with_plugin();
+        let mut session = crate::session::Session::default();
+        session.set_plugin_opener(Box::new(FakeOpener(Arc::clone(&probe))));
+        session.replace_project(&project, &[]);
+        let mut sink = Sink::default();
+        session.service_plugins(&mut sink);
+        let processors = session.export_plugin_processors(44_100);
+        assert_eq!(processors.keys().copied().collect::<Vec<_>>(), [slot]);
+        assert_eq!(probe.opens.load(Ordering::SeqCst), 2, "a second instance");
+        assert_eq!(probe.built_rate.load(Ordering::SeqCst), 44_100);
+        assert_eq!(session.plugin_rack.dying(), 1);
+        drop(processors);
+        session.collect_plugins();
+        assert_eq!(session.plugin_rack.dying(), 0);
+        assert!(session.plugin_rack.instance(slot).is_some(), "the live one stays");
     }
 }

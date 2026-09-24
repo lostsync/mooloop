@@ -79,7 +79,7 @@ pub use mlp8::{
 };
 pub use effect_factory::EffectFactoryPatch;
 pub use plugin::{
-    PluginFormat, PluginParamInfo, PluginRef, PluginSlotId, PluginSlotState, PluginSlots,
+    mint_plugin_slot, PluginFormat, PluginParamInfo, PluginRef, PluginSlotId, PluginSlotState, PluginSlots,
     PluginState, PluginStateChunk, PluginStateText,
 };
 pub use mlm1_factory::FactoryPatch;

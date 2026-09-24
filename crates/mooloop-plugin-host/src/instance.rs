@@ -36,8 +36,8 @@ pub struct Requests(pub u32);
 impl Requests {
     /// CLAP `request_callback`: run [`HostedInstance::on_main_thread`].
     pub const CALLBACK: u32 = 1 << 0;
-    /// CLAP `request_restart`: deactivate, reactivate, and swap in a new
-    /// processor ([`HostedInstance::restart`]).
+    /// CLAP `request_restart`: pull the processor back, deactivate,
+    /// reactivate, and swap in a new one ([`HostedInstance::build_processor`]).
     pub const RESTART: u32 = 1 << 1;
     /// CLAP `latency.changed`: compensation has to be derived again.
     pub const LATENCY_CHANGED: u32 = 1 << 2;
@@ -127,7 +127,7 @@ impl Lifeline {
 ///
 /// Every method runs on the control thread. Nothing here may be called from
 /// the audio thread, and nothing it returns is shared with it except the
-/// processor [`Self::build_processor`] and [`Self::restart`] hand over.
+/// processor [`Self::build_processor`] hands over.
 pub trait HostedInstance {
     /// What the song remembers this plugin as.
     fn plugin(&self) -> &PluginRef;
@@ -144,7 +144,7 @@ pub trait HostedInstance {
     fn load_state(&mut self, state: &PluginState) -> Result<(), HostError>;
 
     /// The plugin's own text for `value` of parameter `id`, if it has any.
-    fn value_text(&self, id: u32, value: f64) -> Option<String>;
+    fn value_text(&mut self, id: u32, value: f64) -> Option<String>;
 
     /// Drain the requests raised since the last call.
     fn take_requests(&self) -> Requests;
@@ -153,13 +153,61 @@ pub trait HostedInstance {
     /// [`Requests::CALLBACK`].
     fn on_main_thread(&mut self);
 
-    /// A processor for the audio thread, tied to `lifeline`.
-    fn build_processor(&mut self, lifeline: Lifeline) -> Result<Box<dyn AudioNode + Send>, HostError>;
+    /// Read the parameter list again, for [`Requests::PARAMS_RESCAN`].
+    fn refresh_params(&mut self) {}
 
-    /// Deactivate, reactivate and build a new processor, tied to `lifeline`,
-    /// for [`Requests::RESTART`]. The old processor is still running on the
-    /// audio thread when this returns; the caller swaps the new one in.
-    fn restart(&mut self, lifeline: Lifeline) -> Result<Box<dyn AudioNode + Send>, HostError>;
+    /// Whether the running processor has given up on the plugin: it
+    /// reported an error, produced a non-finite sample or panicked, and
+    /// passes audio through from then on. A new processor starts clean.
+    fn failed(&self) -> bool {
+        false
+    }
+
+    /// The rate and block ceiling the next processor is built for. The one
+    /// that is out keeps its own until it comes back.
+    fn set_audio_config(&mut self, config: AudioConfig) {
+        let _ = config;
+    }
+
+    /// A processor for the audio thread, tied to `lifeline`.
+    ///
+    /// **One at a time.** A plugin format may allow only one processor per
+    /// instance (CLAP does), so this may refuse while an earlier processor
+    /// is still out; the rack only asks once the lifeline is alone. It is
+    /// also how a restart happens: pull the old processor back, then build.
+    fn build_processor(&mut self, lifeline: Lifeline) -> Result<Box<dyn AudioNode + Send>, HostError>;
+}
+
+/// The audio configuration a processor is built for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AudioConfig {
+    pub sample_rate: u32,
+    /// The largest block the processor will ever be handed.
+    pub max_frames: u32,
+}
+
+/// Finds and opens a plugin a song names (step 06).
+///
+/// The app's is the CLAP opener over the scanner's cache
+/// (`crate::clap::ClapOpener`); a test hands the rack whatever it likes.
+pub trait PluginOpener {
+    /// Create `plugin`, with `state` loaded into it, ready to build a
+    /// processor for `config`. [`HostError::Missing`] when it is not
+    /// installed.
+    fn open(
+        &mut self,
+        plugin: &PluginRef,
+        state: &PluginState,
+        config: AudioConfig,
+    ) -> Result<Box<dyn HostedInstance>, HostError>;
+
+    /// A number that grows whenever what this opener can find may have
+    /// changed (a rescan wrote the cache). A slot that failed to open is
+    /// tried again when it moves. Called once a pump tick, so it must be
+    /// cheap.
+    fn refresh(&mut self) -> u64 {
+        0
+    }
 }
 
 #[cfg(test)]

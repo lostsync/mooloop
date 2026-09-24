@@ -1566,14 +1566,15 @@ impl Session {
         self.playlist = project.playlist.clone();
         self.loop_range = project.loop_range;
         self.control_map = project.control_map.clone();
-        self.plugins = project.plugins.clone();
+        let outgoing_plugins = std::mem::replace(&mut self.plugins, project.plugins.clone());
         self.next_plugin_slot = project.next_plugin_slot;
-        // An install rebuilds every chain from the document, so no hosted
-        // processor survives it: the retired project carries them back to
-        // `EngineHandle::poll`, and the instances go once they have
-        // (`PluginRack::collect`). Re-hosting a song's plugins on install is
-        // step 06 of `docs/plans/plugin-hosting/`.
-        self.plugin_rack.close();
+        // A structural edit installs a snapshot of this session, and the
+        // carry plan keeps each unchanged plugin device's processor running
+        // across it, so its instance stays live with it; any other is
+        // retired, and goes once its processor has come back through
+        // `EngineHandle::poll` (`PluginRack::retire_except`, MOO-81).
+        // `Self::service_plugins` opens and swaps in whatever is missing.
+        self.plugin_rack.retire_except(&outgoing_plugins, &self.plugins);
         // A load may have moved every bound parameter, so every control has
         // to catch its value again rather than snapping it back to wherever
         // the knob was left. The caller re-resolves the ports, which it can

@@ -12,7 +12,7 @@ use mooloop_core::{
     ModRack, MonoSynthParams, MlM1Params, MlP8Params, ParamAddr, ParamOwner, PolySynthParams,
     Project,
     SamplerParams, SendTap,
-    chain_latency, clamp_bus, compensable_send_edges, compile_latency,
+    clamp_bus, compensable_send_edges, compile_latency,
     sends_are_compensable, DEFAULT_STEPS, MAX_CONTAINER_DEPTH, MAX_SAMPLER_VOICES, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN,
     MAX_AUTOMATION_LANES_PER_CHANNEL, MAX_MODULATORS_PER_CHANNEL, STRIP_DESCRIPTORS,
     STRIP_PARAM_VOLUME,
@@ -5519,6 +5519,84 @@ impl RenderState {
         *self.audio = AudioTapBank::new(project.audio_graph());
     }
 
+    /// Swap hosted plugins' processors into a state [`Self::load_project`]
+    /// built from `project`, which holds a placeholder for every plugin
+    /// device (`build_effect` cannot build a plugin), and re-derive the
+    /// compensation with the processors' own latencies.
+    ///
+    /// For a state that never runs a pump: an export, whose processors the
+    /// caller opened from the live song's plugins
+    /// (`Session::export_plugin_processors`). Live playback reaches the same
+    /// place a tick at a time -- `ReplaceEffect` per plugin from the session's
+    /// rack, `SetCompensation` from its latency plan -- and this is that
+    /// sequence done once, on the control thread, before the first block.
+    ///
+    /// A processor whose slot no device names is dropped here. Returns how
+    /// many were swapped in.
+    pub(crate) fn host_plugins(
+        &mut self,
+        project: &Project,
+        mut plugins: std::collections::BTreeMap<
+            mooloop_core::PluginSlotId,
+            Box<dyn AudioNode + Send>,
+        >,
+    ) -> usize {
+        if plugins.is_empty() {
+            return 0;
+        }
+        let mut latency = std::collections::BTreeMap::new();
+        let channels = project
+            .channels
+            .iter()
+            .take(MAX_CHANNELS)
+            .enumerate()
+            .map(|(index, channel)| (EffectTarget::Channel(index as u8), &channel.setup.effects));
+        let buses = project
+            .buses
+            .iter()
+            .take(MAX_BUSES)
+            .enumerate()
+            .map(|(index, bus)| (EffectTarget::Bus(index as u8), &bus.effects));
+        let mut swaps = Vec::new();
+        for (target, effects) in channels.chain(buses) {
+            for (row, effect) in effects.iter().take(MAX_EFFECTS_PER_CHANNEL).enumerate() {
+                if let mooloop_core::EffectParams::Plugin(slot) = effect.params {
+                    swaps.push((target, row as u8, slot));
+                }
+            }
+        }
+        for (target, row, slot) in swaps {
+            let Some(node) = plugins.remove(&slot) else {
+                continue;
+            };
+            latency.insert(slot, node.latency_frames());
+            let align = IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
+            let key = u64::from(slot.0);
+            // Dropped here, on the control thread, like everything else an
+            // install displaces: the placeholder.
+            drop(self.apply_structural(StructuralCommand::ReplaceEffect {
+                target,
+                slot: row,
+                expected_kind: mooloop_core::EffectKind::Plugin,
+                expected_resource_key: key,
+                resource_key: key,
+                node,
+                align,
+            }));
+        }
+        let hosted = latency.len();
+        if hosted > 0 {
+            self.install_compensation_with(project, &|effect| match effect.params {
+                mooloop_core::EffectParams::Plugin(slot) => latency.get(&slot).copied().unwrap_or(0),
+                _ => effect.kind().latency_frames(),
+            });
+            // The sends were rebuilt with the plan, so they start at the
+            // document's levels as `load_project` left everything else.
+            self.settle_mixer();
+        }
+        hosted
+    }
+
     /// Jump every output stage, polarity and send level to where it is
     /// aimed, skipping the ramps MOO-107 put on them.
     ///
@@ -5615,15 +5693,28 @@ impl RenderState {
     /// Allocates, and is allowed to: `load_project` runs on the control thread
     /// while a state is being prepared, never from the callback.
     fn install_compensation(&mut self, project: &Project) {
+        self.install_compensation_with(project, &|effect| effect.kind().latency_frames());
+    }
+
+    /// [`Self::install_compensation`] with each device's own latency
+    /// supplied by `own`: the kind's for a native device, and for a hosted
+    /// plugin the processor's, which only exists once it is activated
+    /// (`mooloop_core::chain_latency_with`, the lookup the session's
+    /// `latency_plan` makes).
+    fn install_compensation_with(
+        &mut self,
+        project: &Project,
+        own: &dyn Fn(&mooloop_core::EffectSlotState) -> u32,
+    ) {
         let mut channel_latency = [0u32; MAX_CHANNELS];
         let mut channel_bus = [MASTER_BUS; MAX_CHANNELS];
         for (index, channel) in project.channels.iter().take(MAX_CHANNELS).enumerate() {
-            channel_latency[index] = chain_latency(&channel.setup.effects);
+            channel_latency[index] = mooloop_core::chain_latency_with(&channel.setup.effects, own);
             channel_bus[index] = channel.setup.channel.bus;
         }
         let mut bus_latency = [0u32; MAX_BUSES];
         for (index, bus) in project.buses.iter().take(MAX_BUSES).enumerate() {
-            bus_latency[index] = chain_latency(&bus.effects);
+            bus_latency[index] = mooloop_core::chain_latency_with(&bus.effects, own);
         }
         // Why a non-sorting bank has no sends is written once, in
         // `mooloop_core::mixer`, because `Session::latency_plan` has to make
@@ -13746,7 +13837,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         let edges = compensable_send_edges(buses);
         let mut bus_latency = [0u32; MAX_BUSES];
         for (index, setup) in buses.iter().take(MAX_BUSES).enumerate() {
-            bus_latency[index] = chain_latency(&setup.effects);
+            bus_latency[index] = mooloop_core::chain_latency(&setup.effects);
         }
         let plan = compile_latency(&graph, &[], &[], &bus_latency, &edges);
         let specs: Vec<SendSpec> = buses

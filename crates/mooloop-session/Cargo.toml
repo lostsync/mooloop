@@ -42,3 +42,7 @@ rustix = { version = "1", features = ["fs"] }
 
 [dev-dependencies]
 tempfile = "3"
+# The in-repo CLAP test plugin, for the plugin-hosting case
+# (`tests/clap_effect.rs`, MOO-81): naming it builds its cdylib next to the
+# test binary, where the test loads it by path.
+mooloop-test-plugin = { path = "../mooloop-test-plugin" }

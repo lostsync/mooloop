@@ -84,7 +84,9 @@ because nothing finds a plugin on disk and nothing puts one in a chain.
   found.
 - **06, a headless CLAP effect in a chain**, is the step with a sound. Its
   case: a real third-party CLAP effect on a drum loop, saved, reopened with
-  the plugin present and with it missing, and exported.
+  the plugin present and with it missing, and exported. **Landed 2026-09-23
+  (MOO-81)**, rendered and measured but not heard; it is item 7 of the
+  listening list below. Nothing in the window inserts a plugin until 08.
 - 07 onward (parameters and automation, the face, the boxed source,
   instruments, GUI windows) are the rest of the plan. They are next after 06
   unless this document is rewritten first.
@@ -286,3 +288,25 @@ In the order worth playing:
    `scripts/antibox --pull target/master-bus-comp cargo run -p mooloop-engine
    --example master_bus_comp -- target/master-bus-comp`. From step 04 the
    same is reachable on the master's rack.
+7. **A CLAP effect on a drum loop** (step 2's case, MOO-81): LSP's flanger
+   on a two-bar drum-synth loop, exported, and the same song reopened with the
+   plugin present and with it missing. Build the case and run it on the
+   laptop, which has the LSP plugins:
+
+   ```sh
+   scripts/antibox --no-incremental --pull bin/clap_effect_case sh -c \
+     'cargo build -p mooloop-session --example clap_effect_case && mkdir -p bin && cp "$CARGO_TARGET_DIR/debug/examples/clap_effect_case" bin/'
+   bin/clap_effect_case --plugin /usr/lib64/clap/lsp-plugins.clap \
+     --id in.lsp-plug.flanger_stereo --out clap-case
+   ```
+
+   Run it again with `--id in.lsp-plug.filter_stereo --out clap-case-filter`
+   for the host's own check. On 2026-09-23 the filter passed all six
+   measurements, and its 64-, 333- and 512-frame renders were bit-identical.
+   The flanger passed five: it moves its LFO once a block, so its output
+   depends on the block size by its own design, not the host's.
+
+   Listen to `clap-case/dry.wav` against `wet.wav`. `reopened.wav` should be
+   `wet.wav`, and `missing.wav` should be `dry.wav`. The binary prints what it
+   measured. In the app, open `clap-case/clap-case.mooloop`: the flanger is
+   on channel 1, and it plays live on JACK at any buffer size.

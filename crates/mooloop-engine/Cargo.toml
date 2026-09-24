@@ -36,5 +36,12 @@ libc = "0.2"
 # depends only on `mooloop-core`, so this is a dev-only leaf rather than a
 # cycle.
 mooloop-project = { workspace = true }
+# A hosted CLAP effect in the engine (`src/plugin_host_tests.rs`, MOO-81):
+# the host crate's adapter over the in-repo test plugin. Naming the test
+# plugin is what makes cargo build its cdylib next to the test binary, where
+# the tests load it by path. The host crate depends on core and dsp only, so
+# neither is a cycle.
+mooloop-plugin-host = { workspace = true }
+mooloop-test-plugin = { path = "../mooloop-test-plugin" }
 tempfile = "3"
 toml = { workspace = true }

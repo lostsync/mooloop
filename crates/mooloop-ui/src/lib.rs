@@ -2570,6 +2570,9 @@ pub struct AppUi {
     /// Finished by [`Self::run`] once the event loop has stopped (MOO-103).
     autosave: Rc<RefCell<Option<Autosave>>>,
     quit_discards: Rc<Cell<bool>>,
+    /// Until when the pump waits for the hosted plugins to retire, once
+    /// [`Self::run`]'s window has gone (MOO-81).
+    plugins_closing: Rc<Cell<Option<std::time::Instant>>>,
 }
 
 /// Push a resolved marker back onto the face. The Slint side moves the marker
@@ -6693,6 +6696,12 @@ impl AppUi {
             let mut st = state.borrow_mut();
             st.audio_input_label = handle.audio_input_label();
             st.input_latency_frames = handle.input_latency_frames();
+            // Hosted plugins are found through the scanner's cache (MOO-81).
+            // The opener rereads it when the startup scan rewrites it, so a
+            // song opened before the scan has finished finds its plugins as
+            // soon as it has.
+            st.session
+                .set_plugin_opener(mooloop_session::plugin_rack::clap_opener(plugin_cache_path()));
         }
         let starter = Project::starter_kit(fresh_starter_seed());
         let starter_samples = vec![None; starter.channels.len()];
@@ -6720,6 +6729,9 @@ impl AppUi {
         // Set when Quit or the window's close button arrives during a save,
         // and read by the pump once the operation has reported (MOO-92).
         let quit_after_document = Rc::new(Cell::new(false));
+        // Set by `AppUi::run` once the window has gone, while the hosted
+        // plugins retire (MOO-81): until when the pump waits for them.
+        let plugins_closing: Rc<Cell<Option<std::time::Instant>>> = Rc::new(Cell::new(None));
         // The in-app question and what it is asking (MOO-91).
         let question: Rc<RefCell<Option<Question>>> = Rc::new(RefCell::new(None));
         // Set by Reconnect in the audio question, read by the pump, which is
@@ -7387,6 +7399,15 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else {
                     return;
                 };
+                // Hosted plugins render in the export too (MOO-81). Their
+                // live processors are the engine's, so the export gets
+                // processors of second instances, opened here on the
+                // control thread with the live ones' state -- which is also
+                // captured into the song first, so the request carries it.
+                let plugins = st
+                    .borrow_mut()
+                    .session
+                    .export_plugin_processors(export_sample_rate);
                 let request = st.borrow().session.export_request(
                     window.get_bpm(),
                     window.get_swing_percent(),
@@ -7417,12 +7438,13 @@ impl AppUi {
                         tail_seconds: tail as f32,
                         format: request.format,
                     };
-                    match OfflineRenderer::render_with_progress(
+                    match OfflineRenderer::render_with_plugins(
                         &request.project,
                         &request.samples,
                         export_sample_rate,
                         &spec,
                         &progress,
+                        plugins,
                     ) {
                         Ok(summary) => DocumentResult::Exported { path, summary },
                         Err(ExportError::Cancelled) => DocumentResult::Cancelled,
@@ -15503,10 +15525,43 @@ impl AppUi {
         // loudest block forever and shows it for one tick the moment the rack
         // is turned back to it.
         let mut last_device_target: Option<usize> = None;
+        let plugins_closing_in = plugins_closing.clone();
+        let mut plugins_close_sent = false;
         pump.start(
             TimerMode::Repeated,
             std::time::Duration::from_millis(PUMP_INTERVAL_MS),
             move || {
+                // Quitting with hosted plugins (MOO-81): the window has gone
+                // and `AppUi::run` is waiting here for every plugin to
+                // retire. Pull each processor back, let the engine hand them
+                // over, and drop each instance once its processor is gone.
+                // Nothing else runs; the song is closing.
+                if let Some(deadline) = plugins_closing_in.get() {
+                    let mut st = st.borrow_mut();
+                    if !plugins_close_sent {
+                        st.session.close_plugins(&mut handle);
+                        plugins_close_sent = true;
+                    }
+                    while handle.poll().is_some() {}
+                    st.session.collect_plugins();
+                    if st.session.plugins_retired() {
+                        log_info!("plugins", "every hosted plugin retired");
+                    } else if std::time::Instant::now() >= deadline {
+                        // Never drop an instance whose processor may still
+                        // be running: leak it instead, and let the process
+                        // end take it.
+                        let left = st.session.leak_plugins();
+                        log_warn!(
+                            "plugins",
+                            "{left} hosted plugins did not retire in time and were left to the exit"
+                        );
+                    } else {
+                        return;
+                    }
+                    plugins_closing_in.set(None);
+                    slint::quit_event_loop().ok();
+                    return;
+                }
                 // A logout, a `kill` or Ctrl+C: leave the way Quit does, but
                 // with no dialog, because nobody is there to answer one.
                 // `main` finishes the takes after the loop. Unsaved changes
@@ -17439,6 +17494,7 @@ impl AppUi {
             document_tx: open_tx,
             autosave,
             quit_discards,
+            plugins_closing,
         })
     }
 
@@ -17449,7 +17505,27 @@ impl AppUi {
     pub fn run(&self) -> Result<(), slint::PlatformError> {
         let ran = self.window.run();
         self.finish_autosave();
+        self.retire_plugins();
         ran
+    }
+
+    /// Wait, a bounded time, for every hosted plugin to retire before the
+    /// engine and the session are dropped (MOO-81): a plugin instance must
+    /// never be destroyed while its processor may still be running on the
+    /// audio thread. The window has gone; the event loop runs once more so
+    /// the pump can pull each processor back through the engine, and it
+    /// quits as soon as the rack is empty. A plugin that has not come back
+    /// by the deadline is leaked rather than dropped.
+    fn retire_plugins(&self) {
+        if self.state.borrow().session.plugins_retired() {
+            return;
+        }
+        self.plugins_closing
+            .set(Some(std::time::Instant::now() + PLUGIN_RETIRE_WAIT));
+        if let Err(error) = slint::run_event_loop_until_quit() {
+            log_warn!("plugins", "could not wait for the hosted plugins to retire: {error}");
+            self.state.borrow_mut().session.leak_plugins();
+        }
     }
 
     /// Stops the autosave writer once the loop is over (MOO-103). What it
@@ -17517,6 +17593,11 @@ impl AppUi {
         }
     }
 }
+
+/// How long a quit waits for the hosted plugins to retire
+/// ([`AppUi::retire_plugins`]). A processor comes back in a block or two;
+/// this is for an engine that is not running at all.
+const PLUGIN_RETIRE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Opens the drag-and-drop UI mockup tool as a standalone window, shown
 /// alongside the main app rather than blocking it. Same component and same
