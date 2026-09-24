@@ -6,7 +6,7 @@ mirror this file step-for-step the way MOO-5/16/30 do. The GitHub issue
 numbers below (`#10`, `#26`-`#30`) predate Adam's move away from GitHub
 issues; MOO-11 is the live tracking issue.
 
-**Written 2026-09-16.** Steps 01 (the spike), 02 (the neutral contract), 03 (parameters belong to an instance) and 04 (the plugin rack) landed on 2026-09-23, and so did MOO-56's one boxed source slot, which closes blocker 4 below. Adam asked for it directly:
+**Written 2026-09-16.** Steps 01 (the spike), 02 (the neutral contract), 03 (parameters belong to an instance), 04 (the plugin rack) and 05 (the scanner) landed on 2026-09-23, and so did MOO-56's one boxed source slot, which closes blocker 4 below. Adam asked for it directly:
 *"let's go ahead and plan out how we'll add CLAP support. Later we'll add
 VST/3 and AU. instrument support as well."* `SCOPE.md` already put CLAP in
 for 0.2.0 (item 9). This plan is outside the `FOCUS.md` sequence for the same
@@ -526,7 +526,7 @@ words. **Do not reopen this as a version-bump question.**
 | 02 | The neutral contract: types, `Project.plugins`, TOML state, a fake plugin end to end | #26 | core, project | **done 2026-09-23** (MOO-77) |
 | 03 | Parameters belong to an instance | #26 | core, session | **done 2026-09-23** (MOO-78) |
 | 04 | `PluginRack`, main-thread requests, latency known at runtime | #26 | engine, session | **done 2026-09-23** (MOO-79) |
-| 05 | The scanner, out of process, with its cache | #27 | plugin-host, app, settings | not started |
+| 05 | The scanner, out of process, with its cache | #27 | plugin-host, app, settings | **done 2026-09-23** (MOO-80) |
 | 06 | A headless CLAP effect in a chain | #27 | plugin-host, session | not started |
 | 07 | Parameters, automation, modulation and state round-trip | #28 | session, project | not started |
 | 08 | Plugin browser, the menu row, and the face for plugins without a GUI | #28 | **UI build**, drafted with `slint-sketch` | not started |
@@ -772,6 +772,74 @@ the session names the host crate, never `clack`.
   the audio thread, because nothing reaches the audio thread except a
   processor. Step 06's real processor is where that check has something to
   catch.
+
+## Step 05, recorded 2026-09-23 (MOO-80)
+
+**What landed.** `mooloop_plugin_host::scan`. Every new or changed `*.clap`
+on the search paths is loaded only in a child process, the shipped binary
+itself run as `mooloop --scan-plugin <path> --deadline-ms <n>`, which
+`crates/mooloop-app/src/main.rs` checks for **before logging**, so the child
+writes no log, reads no settings, and opens no audio client and no window.
+The child prints one JSON `ChildReport` between two marker lines, because a
+plugin may print to stdout while it loads. The parent (`scan::scan`, blocking,
+run by the app on a `plugin-scan` thread after the window is built) kills a
+child at `scan-timeout-s` (default 10) and records each file in
+`PluginCache`, `<config>/plugins.toml`, keyed by canonical path with mtime and
+size. **A failure is cached like a success**, so a plugin that crashes or
+hangs costs one child per change of the file, not one per startup.
+`UiSettings.plugins` (`extra-paths`, `scan-timeout-s`, `scan-on-startup`)
+exists; its Preferences page is step 08. The contract step 06 reads
+(`PluginCache::load`, `plugins()`, `resolve(&PluginRef)`, `ScannedPlugin`) was
+announced on the push's contract board before landing.
+
+**The test that pins answer 4.** `plugin-host/tests/scan.rs`,
+`a_crashing_or_hanging_plugin_costs_one_child_and_is_never_relaunched`: the
+test plugin copied as `…crashes-on-scan.clap` aborts inside its entry's
+`init`, and as `…hangs-on-scan.clap` never returns from it
+(`mooloop_test_plugin::CRASHES_ON_SCAN`, `HANGS_ON_SCAN`). Both are scanned,
+with a good copy, a zero-byte file and a shell script, and the test process
+survives to find four plugins, `crashed`, `timed-out` and two `load`
+failures, reload them from disk, and launch **zero** children on the second
+scan. `app/tests/scan_child.rs` runs the real `mooloop` binary as the child
+with every directory it could write to pointed at an empty scratch
+directory, no display and no JACK, and asserts it answers and leaves the
+directory empty.
+
+**How it differs from `05-the-scanner.md`.**
+
+- **A shell script that sleeps does not hang a scan.** The step's test asked
+  for one as the timed-out case, but `dlopen` refuses a text file at once, so
+  it is a `load` failure. The hang has to happen inside a real library's
+  initialiser, which is why the test plugin grew the two names above.
+- **Failure kinds are six, not one `Failed`:** `launch`, `load`,
+  `incompatible` (another CLAP version, no plugin factory, or a factory that
+  lists nothing), `crashed`, `timed-out` and `bad-output`. That is #27's
+  "distinguish scan failure, incompatible plugin, load failure". A plugin the
+  factory lists but cannot create is kept with its `error` set rather than
+  failing the file.
+- **The child creates each plugin once, never activates it,** to read what
+  only an instance says: audio port channel counts, note ports and whether it
+  has a GUI. Step 06's stereo-in/stereo-out check can read `audio-inputs` and
+  `audio-outputs` without loading anything.
+- **The child never unloads the library.** The entry is leaked and the
+  process exits, so a plugin that crashes in `deinit` does not turn a good
+  report into a failed scan. It has its own deadline (twice the timeout plus
+  five seconds), so a hung child outlives a parent that quits mid-scan by
+  seconds, not forever.
+- **`resolve` returns the `ScannedPlugin`, not a `PathBuf`;** its `path` is
+  the file. The newest version wins by the numbers in the version string,
+  then search-path order, and differing copies are logged.
+- **Not here: progress in the window.** Nothing in the window reads the cache
+  until step 08, so the scan reports to the log, not through
+  `slint::invoke_from_event_loop`. Step 08 adds the progress and the
+  "rescan all" button (`PluginCache::clear_failures` exists for it).
+- **The test-only child.** A test in the plugin-host crate cannot launch
+  `mooloop`, so the crate has a `mooloop-scan-child` binary that calls the
+  same `run_child_from_args`. It is never packaged; the packages carry
+  `mooloop`, which is the child.
+
+**Adam's plugin folders.** See the MOO-80 closing comment for the scan of
+`/usr/lib64/clap` on his laptop.
 
 ## The test plugins
 

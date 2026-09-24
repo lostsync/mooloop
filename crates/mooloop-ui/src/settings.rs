@@ -882,6 +882,39 @@ pub(crate) struct MidiSettings {
     pub learn_binds_port: bool,
 }
 
+/// How plugins are found (`docs/plans/plugin-hosting/05-the-scanner.md`,
+/// MOO-80). The folders CLAP names are always searched
+/// (`mooloop_plugin_host::scan::default_search_paths`); these are the ones
+/// the user adds after them. The Preferences page for it is step 08.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct PluginSettings {
+    #[serde(default)]
+    pub extra_paths: Vec<PathBuf>,
+    /// How long one plugin file may take to scan before its scan process is
+    /// killed and the file recorded as timed out.
+    #[serde(default = "default_scan_timeout_s")]
+    pub scan_timeout_s: u32,
+    /// Whether mooloop looks for new or changed plugin files when it starts.
+    /// Unchanged files are never scanned twice either way.
+    #[serde(default = "default_true")]
+    pub scan_on_startup: bool,
+}
+
+fn default_scan_timeout_s() -> u32 {
+    10
+}
+
+impl Default for PluginSettings {
+    fn default() -> Self {
+        Self {
+            extra_paths: Vec::new(),
+            scan_timeout_s: default_scan_timeout_s(),
+            scan_on_startup: true,
+        }
+    }
+}
+
 /// Where the panes were left.
 ///
 /// UI state rather than project state, which is the whole reason it is here
@@ -1058,6 +1091,8 @@ pub(crate) struct UiSettings {
     #[serde(default)]
     pub midi: MidiSettings,
     #[serde(default)]
+    pub plugins: PluginSettings,
+    #[serde(default)]
     pub layout: LayoutSettings,
 }
 
@@ -1072,6 +1107,7 @@ impl Default for UiSettings {
             gestures: GestureSettings::default(),
             browser: BrowserSettings::default(),
             midi: MidiSettings::default(),
+            plugins: PluginSettings::default(),
             layout: LayoutSettings::default(),
         }
     }
@@ -1177,6 +1213,14 @@ fn migrate_user_schemes(appearance: &mut AppearanceSettings) {
 
 fn settings_path() -> PathBuf {
     config_dir().join("settings.toml")
+}
+
+/// The plugin scan cache, `<config>/plugins.toml`
+/// (`mooloop_plugin_host::scan::PluginCache`, MOO-80). Beside the settings
+/// rather than in the state directory: losing it costs a rescan, but it is
+/// what a saved song's plugin is found through, not a record of a run.
+pub(crate) fn plugin_cache_path() -> PathBuf {
+    config_dir().join("plugins.toml")
 }
 
 /// Directory presets and prefs both live under: `$MOOLOOP_CONFIG_DIR`, or
@@ -1936,6 +1980,12 @@ mod tests {
             // section is never written at all.
             midi: MidiSettings {
                 learn_binds_port: true,
+            },
+            // Every field off its default, for the same reason.
+            plugins: PluginSettings {
+                extra_paths: vec![PathBuf::from("/opt/clap")],
+                scan_timeout_s: 30,
+                scan_on_startup: false,
             },
             // Deliberately not the default arrangement, and deliberately one
             // that `sanitized()` must leave alone: the mixer in the dock and

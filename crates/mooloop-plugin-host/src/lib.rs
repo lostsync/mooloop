@@ -9,7 +9,8 @@
 //! (`tests/spike.rs`) drive against the in-repo test plugin. It is a host in
 //! the CLAP sense -- the callbacks a plugin may make, and the extensions it
 //! may ask the host for -- and deliberately nothing more. The instance
-//! wrapper, the rack and the audio node come in steps 04 and 06.
+//! wrapper, the rack and the audio node come in steps 04 and 06. [`scan`] is
+//! step 05's scanner, which loads each library only in a child process.
 //!
 //! The one `unsafe` block is [`load_entry`]: loading a shared library runs
 //! its initialisers, which no Rust type can vouch for. Everything the spike
@@ -18,6 +19,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod instance;
+pub mod scan;
 
 pub use instance::{HostError, HostedInstance, Lifeline, RequestFlags, Requests};
 

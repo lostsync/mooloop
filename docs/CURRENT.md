@@ -2057,6 +2057,20 @@ land on its own when it starts to matter:
   it back unchanged, lanes and routes on its parameters included. The session
   reads a hosted plugin's latency at runtime rather than from its kind, but
   nothing inserts one until step 06 of `docs/plans/plugin-hosting/`.
+- **Plugins are found, not yet offered** (MOO-80). At startup, on a thread of
+  its own, mooloop looks for CLAP plugins in `~/.clap`, `/usr/lib/clap`,
+  `/usr/lib64/clap`, `/usr/local/lib/clap` (inside a Flatpak also
+  `/app/extensions/Plugins/clap`; on macOS the two
+  `Library/Audio/Plug-Ins/CLAP` folders), then `CLAP_PATH`, then the
+  `[plugins] extra-paths` in `settings.toml`. Each new or changed `.clap` is
+  loaded only in a child process, `mooloop --scan-plugin <path>`, killed after
+  `scan-timeout-s` (default 10), so a plugin that crashes or hangs while being
+  scanned costs that child and nothing else. What was found, and every file
+  that failed and why (`load`, `incompatible`, `crashed`, `timed-out`, ...), is
+  kept in `<config>/plugins.toml`; an unchanged file is never scanned again,
+  failed or not. `scan-on-startup = false` turns the startup scan off. The log
+  says what the scan found. Nothing reads the cache yet: the browser and the
+  insert menu are step 08, and a plugin in a chain is step 06.
 
 ### Buffers And Rendering
 

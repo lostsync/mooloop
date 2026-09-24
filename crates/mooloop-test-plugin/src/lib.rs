@@ -54,6 +54,13 @@ pub const SINE_ID: &str = "mooloop.test.sine";
 /// The sine instrument, declaring the `gui` extension.
 pub const SINE_GUI_ID: &str = "mooloop.test.sine.gui";
 
+/// A copy of this library whose file name ends in this aborts the process
+/// as its entry initialises.
+pub const CRASHES_ON_SCAN: &str = "crashes-on-scan.clap";
+/// A copy of this library whose file name ends in this never returns from
+/// its entry's initialisation.
+pub const HANGS_ON_SCAN: &str = "hangs-on-scan.clap";
+
 /// The vendor every descriptor reports.
 pub const VENDOR: &str = "mooloop";
 
@@ -63,7 +70,20 @@ pub struct TestEntry {
 }
 
 impl Entry for TestEntry {
-    fn new(_bundle_path: Option<&CStr>) -> Result<Self, EntryLoadError> {
+    fn new(bundle_path: Option<&CStr>) -> Result<Self, EntryLoadError> {
+        // The scanner's misbehaving plugins (MOO-80): the same library,
+        // copied under a name that makes it crash or hang while it loads, so
+        // a test can prove that doing either in the scan child costs mooloop
+        // nothing. No other name changes anything.
+        let path = bundle_path.map(CStr::to_bytes).unwrap_or_default();
+        if path.ends_with(CRASHES_ON_SCAN.as_bytes()) {
+            std::process::abort();
+        }
+        if path.ends_with(HANGS_ON_SCAN.as_bytes()) {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+            }
+        }
         Ok(Self {
             factory: PluginFactoryWrapper::new(TestFactory::new()),
         })

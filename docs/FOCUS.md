@@ -79,7 +79,9 @@ because nothing finds a plugin on disk and nothing puts one in a chain.
 
 - **05, the scanner**, runs out of process from the first version. That is
   Adam's answer 4, and it is not negotiable: a plugin that crashes while
-  being scanned must not crash mooloop.
+  being scanned must not crash mooloop. **Landed 2026-09-23 (MOO-80)**; it
+  has nothing to listen to, and `plugin-hosting/00-status.md` has what it
+  found.
 - **06, a headless CLAP effect in a chain**, is the step with a sound. Its
   case: a real third-party CLAP effect on a drum loop, saved, reopened with
   the plugin present and with it missing, and exported.

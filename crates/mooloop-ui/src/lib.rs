@@ -3228,6 +3228,19 @@ pub fn saved_audio_config() -> mooloop_engine::AudioConfig {
     UiSettings::load_or_default().audio.engine_config()
 }
 
+pub use settings::PluginSettings;
+
+/// What the user saved about finding plugins, for the binary's startup scan
+/// (MOO-80).
+pub fn saved_plugin_settings() -> PluginSettings {
+    UiSettings::load_or_default().plugins
+}
+
+/// Where the plugin scan cache lives: `<config>/plugins.toml`.
+pub fn plugin_cache_path() -> std::path::PathBuf {
+    settings::plugin_cache_path()
+}
+
 /// Brings up diagnostic logging for the run and says what build is running.
 ///
 /// The console threshold comes from `MOOLOOP_LOG` (`error`, `warn`, `info`, or

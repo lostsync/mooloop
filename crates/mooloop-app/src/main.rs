@@ -5,6 +5,14 @@ use mooloop_core::{log_error, log_info, log_warn};
 use mooloop_engine::{AudioState, CommandSink};
 
 fn main() {
+    // Before anything else, logging included: `mooloop --scan-plugin <path>`
+    // is the plugin scanner's child (MOO-80), and it must load that one file
+    // and nothing more -- no log file, no settings, no audio client, no
+    // window. A plugin that crashes or hangs then takes down only this
+    // process, never the mooloop that launched it.
+    if let Some(status) = mooloop_plugin_host::scan::run_child_from_args() {
+        std::process::exit(status);
+    }
     // First, so that everything below is on the record.
     mooloop_ui::start_logging();
     if let Err(e) = run() {
@@ -38,6 +46,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // The handle owns the audio driver and moves into the interface, which
     // drops it -- stopping the driver -- when `app` goes at the end of `run`.
     let app = mooloop_ui::AppUi::new(handle)?;
+    start_plugin_scan();
     if let Some(song) = song {
         app.open_song_at_start(song);
     }
@@ -51,4 +60,54 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     app.finish_takes();
     ran?;
     Ok(())
+}
+
+/// Bring the plugin cache up to date on a thread of its own (MOO-80): every
+/// new or changed `.clap` on the search paths is scanned in a child process,
+/// one at a time, and the cache is written when the scan ends. Unchanged
+/// files, failed ones included, launch nothing, so after the first run this
+/// is a directory walk.
+///
+/// Nothing waits for it. If mooloop quits mid-scan the thread goes with the
+/// process, the cache keeps what the previous scan wrote, and a child that is
+/// still running ends at its own deadline.
+fn start_plugin_scan() {
+    let settings = mooloop_ui::saved_plugin_settings();
+    if !settings.scan_on_startup {
+        log_info!("plugins", "not scanning for plugins at startup (turned off in settings)");
+        return;
+    }
+    let timeout = std::time::Duration::from_secs(u64::from(settings.scan_timeout_s.max(1)));
+    let config = match mooloop_plugin_host::scan::ScanConfig::new(settings.extra_paths, timeout) {
+        Ok(config) => config,
+        Err(e) => {
+            log_warn!("plugins", "cannot scan for plugins: no path to this binary ({e})");
+            return;
+        }
+    };
+    let spawned = std::thread::Builder::new()
+        .name("plugin-scan".into())
+        .spawn(move || {
+            let path = mooloop_ui::plugin_cache_path();
+            let mut cache = mooloop_plugin_host::scan::PluginCache::load(&path);
+            let summary = mooloop_plugin_host::scan::scan(&config, &mut cache, |_, _, _| {});
+            if summary.launched > 0 || summary.removed > 0 {
+                if let Err(e) = cache.save(&path) {
+                    log_warn!("plugins", "could not write {}: {e}", path.display());
+                }
+            }
+            log_info!(
+                "plugins",
+                "{} plugin files: {} scanned, {} unchanged, {} gone; {} plugins, {} files failed",
+                summary.candidates,
+                summary.launched,
+                summary.reused,
+                summary.removed,
+                summary.plugins,
+                summary.failed
+            );
+        });
+    if let Err(e) = spawned {
+        log_warn!("plugins", "could not start the plugin scan: {e}");
+    }
 }

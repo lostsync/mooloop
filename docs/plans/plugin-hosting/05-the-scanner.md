@@ -59,8 +59,9 @@ preferences page itself is part of step 08.
 
 ## Done when
 
-- [ ] #27: "scan results persist/cache without rescanning on every
+- [x] #27: "scan results persist/cache without rescanning on every
       startup" and "distinguish scan failure, incompatible plugin, load
-      failure."
-- [ ] A scan of Adam's real plugin folders completes, and the cache is read
-      back and checked by eye.
+      failure." (MOO-80; `00-status.md`, "Step 05, recorded", has what
+      differs from this file.)
+- [x] A scan of Adam's real plugin folders completes. Read back by an
+      agent, not by eye: see the MOO-80 closing comment.

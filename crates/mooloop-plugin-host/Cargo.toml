@@ -12,6 +12,11 @@ authors.workspace = true
 [dependencies]
 mooloop-core = { workspace = true }
 mooloop-dsp = { workspace = true }
+# The scanner (`src/scan.rs`, MOO-80): the child's JSON report and the TOML
+# cache.
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
 clack-host = "0.2"
 clack-extensions = { version = "0.2", features = [
     "clack-host",
@@ -26,8 +31,16 @@ clack-extensions = { version = "0.2", features = [
     "thread-check",
 ] }
 
+# The scan child the scanner's own tests launch (`tests/scan.rs`). The app
+# launches itself instead (`mooloop --scan-plugin`), so this binary is never
+# packaged; it exists because a test in this crate cannot launch `mooloop`.
+[[bin]]
+name = "mooloop-scan-child"
+path = "src/bin/mooloop-scan-child.rs"
+
 [dev-dependencies]
 # Named only so cargo builds the test plugin's cdylib before this crate's
 # tests run; the tests load it by path and never link it. See that crate's
 # `[lib]` table.
 mooloop-test-plugin = { path = "../mooloop-test-plugin" }
+tempfile = "3"

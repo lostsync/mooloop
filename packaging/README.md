@@ -25,3 +25,12 @@ the binary loads with dlopen -- libjack, EGL/GL, xkbcommon, Wayland and the
 X11 client libraries -- are invisible to `$auto` and to generate-rpm's
 automatic requires, so they are named by hand in
 `crates/mooloop-app/Cargo.toml`.
+
+**The plugin scanner needs nothing packaged.** Its child process is the same
+`mooloop` binary run as `mooloop --scan-plugin <path>` (MOO-80,
+`crates/mooloop-plugin-host/src/scan.rs`), found through
+`std::env::current_exe()`, so every package that carries `mooloop` carries
+the scanner: `/usr/bin/mooloop` in the deb and rpm, the AppImage's mounted
+`usr/bin/mooloop` while it runs, and `Contents/MacOS/mooloop` in the macOS
+bundle. `mooloop-scan-child` in the plugin-host crate is a test double for
+that crate's own tests and is never shipped.

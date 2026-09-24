@@ -19,6 +19,16 @@ mooloop-core = { workspace = true }
 mooloop-dsp = { workspace = true }
 mooloop-engine = { workspace = true }
 mooloop-ui = { workspace = true }
+# The plugin scanner: `mooloop --scan-plugin <path>` is its child, and the
+# startup scan is its parent (MOO-80). The child is this same binary, so every
+# package below ships it with nothing added.
+mooloop-plugin-host = { workspace = true }
+
+[dev-dependencies]
+# `tests/scan_child.rs` scans the test plugin with the real `mooloop` binary;
+# naming it here is what makes cargo build its cdylib next to the test.
+mooloop-test-plugin = { path = "../mooloop-test-plugin" }
+tempfile = "3"
 
 # Packaged by .github/workflows/release.yml via `cargo deb`. $auto finds the
 # shared libraries the binary links (fontconfig, ALSA, ...), and only those.

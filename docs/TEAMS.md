@@ -108,7 +108,7 @@ lines. Until then, this table is the boundary.
 | `engine/src/render.rs` | Engine: `RenderState`, `process_block_inner`, `apply_command`, install, takes, the discontinuity fan-out, the tests | **Effects:** `EffectChain`, `EffectSlot`, `ContainerScratch`, `PendingEffectParams`, `ReclaimedEffect`. **Mixer:** `SendBank`, `OutputStage`, `BusStrip`, `AudioTapBank`, `mix_into`, the bus walk. **Sequencing:** `release_all_voices`, `inject_choke_events`, `HeldKeys`, `Audition`, `RecordingNote`, the transport and sequencer arms. **Control:** `apply_midi`, `AutomationBlock`, `AutomationCurve`, `AutomationPosition`, `ModulationBlock`, the modulator ticks. **Instruments:** `PreviewVoice`, `RetiredPreviews`, `render_preview`, and each source's arm in `build_source` (the one match over the native kinds since MOO-56; `ChannelStrip` and its one `source` slot are Engine's). |
 | `ui/src/lib.rs` | Interface: `AppUi::new` as a shell, the pump, the `wire_*!` macros as a framework | **Each feature team:** the wiring for its own faces and views inside `AppUi::new`. **Document:** the document lifecycle, and tempo, swing and embed. **Control:** the pump's control drain. |
 | `ui/ui/main.slint` | Interface | **Sequencing:** the step grid and the playlist, both inline. **Each device team:** its entries in the DEVICES block. |
-| `ui/src/settings.rs` | Interface | **Platform:** the XDG paths and the settings-load policy. |
+| `ui/src/settings.rs` | Interface | **Platform:** the XDG paths and the settings-load policy, and `PluginSettings`/`plugin_cache_path` (the scanner's, MOO-80). |
 | `ui/ui/device-rack.slint` | Interface: the shell every face is drawn in (`DeviceFrame`, `DeviceHeader`, `EffectDeviceShell`, the rails) | **Effects:** `ContainerEnclosure` and the container drawing, which the layer device's branches extend. |
 | `engine/src/sequencer.rs` | Sequencing | **Control:** the automation functions (`automation_lane_at`, `has_automation_at`, `open_automation_lane` and the rest). |
 | `core/src/modulation.rs` | Control | **Mixer:** `STRIP_DESCRIPTORS`. |
@@ -289,7 +289,12 @@ them belong to the device teams, and the container drawing in
 - The tooling configuration: `.mcp.json`, `.codegraph/`, `.cursor/`,
   `.claude/`, `package.json`, `package-lock.json`, `.gitignore`
 - Plugin scanning, plugin paths, and packaging the plugin host
-  (`docs/plans/plugin-hosting/` step 05, MOO-80)
+  (`docs/plans/plugin-hosting/` step 05, MOO-80): `plugin-host/src/scan.rs`,
+  `plugin-host/src/bin/mooloop-scan-child.rs` and `plugin-host/tests/scan.rs`,
+  in Engine's crate by agreement, and `app/tests/scan_child.rs`. The test
+  plugin's two misbehaving names (`CRASHES_ON_SCAN`, `HANGS_ON_SCAN` in
+  `mooloop-test-plugin`) are there for these tests. In `ui/src/settings.rs`,
+  `PluginSettings` and `plugin_cache_path`
 
 ## In Claude Code
 

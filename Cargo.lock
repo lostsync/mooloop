@@ -3261,7 +3261,10 @@ dependencies = [
  "mooloop-core",
  "mooloop-dsp",
  "mooloop-engine",
+ "mooloop-plugin-host",
+ "mooloop-test-plugin",
  "mooloop-ui",
+ "tempfile",
 ]
 
 [[package]]
@@ -3309,6 +3312,10 @@ dependencies = [
  "mooloop-core",
  "mooloop-dsp",
  "mooloop-test-plugin",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
 ]
 
 [[package]]
