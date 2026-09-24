@@ -107,7 +107,8 @@ MOO-50, which predates the plan by three weeks and asked for exactly it.
 `archive/`.** It was `FOCUS.md` step 3, written the day Adam answered its two
 questions: the face is per voicing (vari-mu swaps attack and release for a
 six-position TIME), and the safety limiter gets a lookahead knob defaulting
-to 0. Four steps: the three laws as data (Grip for the SSL G bus, Punch for
+to 0 (removed the next day, MOO-217: the master's limiter has no lookahead
+and no knob). Four steps: the three laws as data (Grip for the SSL G bus, Punch for
 the API-2500, Tube for the Fairchild 670, fitted to the rig's own
 measurements), the lookahead, the section running and saved on the master's
 strip, and its face and needle meter. Its `00-status.md` records what fitting

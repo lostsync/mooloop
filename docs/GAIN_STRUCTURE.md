@@ -167,21 +167,13 @@ preview -- so live playback and export both pass through it. Two jobs:
   frame is only multiplied while it is not, so a mix that never goes over
   leaves bit for bit (`a_signal_under_the_ceiling_passes_bit_identical`).
   After an over it releases back to exactly unity, and is bit-transparent
-  again. **No lookahead by default**, because lookahead delays everything on
-  the master -- monitoring latency and every recording's alignment -- for a
-  stage that should normally be doing nothing; the cost is that an over's
-  first frame is shaped rather than ducked ahead of time.
-- **A lookahead when asked for** (MOO-169): the master section's
-  `lookahead_ms`, 0 to 5 ms. At 0 the guard runs the zero-latency code above,
-  bit for bit. Above 0 the ports are the mix that many frames late -- a pure
-  delay under the ceiling -- and an over starts a ramp that reaches its
-  reduction by the time the over leaves, so nothing is shaped. The delay is
-  accounted for where it matters: a take from the hardware input waits for it
-  on top of the driver's round trip, and an export trims it from its head, so
-  a file starts on the bar line and has the same length at any lookahead
-  (`a_lookahead_delays_the_ports_and_the_export_starts_on_the_bar_line_anyway`).
-  MIDI note capture compensates no output latency yet, the driver's
-  included: MOO-209.
+  again. **No lookahead, and no knob** (MOO-217, reversing MOO-169's
+  one-day knob), because lookahead delays everything on the master --
+  monitoring latency and every recording's alignment -- for a stage that
+  should normally be doing nothing; the cost is that an over's first frame
+  is shaped rather than ducked ahead of time. Nothing on the master is late,
+  so an export starts on the bar line as rendered
+  (`the_live_and_exported_paths_start_on_the_bar_line`).
 
 
 **The master's meter reads the mix, before the guard.** A mix over 0 dBFS

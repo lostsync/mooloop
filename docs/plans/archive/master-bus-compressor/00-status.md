@@ -164,3 +164,14 @@ What building it found:
 
 **The listening pass is Adam's** (`FOCUS.md`, "Listening is a step", item 6).
 Nothing here claims that turning it on feels special.
+
+## After the plan: the lookahead is gone (MOO-217, 2026-09-24)
+
+Adam, 2026-09-24: the MOO-169 answer was to a different question (he had the
+Limiter insert in mind, not the master's safety stage), and the master's
+limiter wants **no lookahead and no knob**. Step 02's ring, step 03's take
+delay and export head-trim, and step 04's knob were removed. Id 56 is
+retired, not reused; a song saved with `lookahead_ms` opens at no lookahead
+with nothing repaired (`output_guard_tests.rs`,
+`a_song_saved_with_a_lookahead_opens_without_one_and_sounds_the_same`). The
+compressor and the zero-latency limiter are unchanged.

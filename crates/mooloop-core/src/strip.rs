@@ -218,14 +218,14 @@ pub struct StripParams {
     /// strip"* -- not the device host's blend, which a strip does not have.
     pub mix: f32,
     pub makeup_db: f32,
-    /// The master's own section: the bus compressor and the safety
-    /// limiter's lookahead (MOO-13, MOO-169). Every track's strip carries
+    /// The master's own section: the bus compressor (MOO-13). Every track's
+    /// strip carries
     /// one and only the master's runs; `Session::set_strip_param` refuses
     /// its ids anywhere else.
     ///
     /// Defaulted, and **not written while it is the default**, so a song
     /// that never touched it is byte-identical to one saved before it
-    /// existed, and an old song opens with the section out and no lookahead.
+    /// existed, and an old song opens with the section out.
     #[serde(default, skip_serializing_if = "MasterSectionParams::is_default")]
     pub master: MasterSectionParams,
 }
@@ -750,23 +750,6 @@ pub const PUNCH_ATTACK_POSITIONS: u8 = 7;
 pub const PUNCH_RELEASE_POSITIONS: u8 = 6;
 pub const TUBE_TIME_POSITIONS: u8 = 6;
 
-/// The longest lookahead the master's safety limiter offers, in
-/// milliseconds. Adam, 2026-09-23 (MOO-169): *"make it a knob, defaults to
-/// 0.0"*; a few milliseconds is the usual span.
-pub const MAX_LOOKAHEAD_MS: f32 = 5.0;
-
-/// `ms` of lookahead at `sample_rate`, in whole frames, clamped to
-/// `0..=MAX_LOOKAHEAD_MS`. The one conversion: the guard runs it, and the
-/// take alignment and an export's trim both report it.
-pub fn lookahead_frames(ms: f32, sample_rate: u32) -> usize {
-    let ms = if ms.is_finite() {
-        ms.clamp(0.0, MAX_LOOKAHEAD_MS)
-    } else {
-        0.0
-    };
-    (ms * sample_rate as f32 / 1000.0).round() as usize
-}
-
 /// First id of the master section: the next one after the strip's own
 /// table, so the two tables are one contiguous id space and
 /// `StripSpec`'s arithmetic on position still finds each row.
@@ -783,10 +766,15 @@ pub const MASTER_PUNCH_RATIO: u32 = MASTER_FIRST + 8;
 pub const MASTER_PUNCH_ATTACK: u32 = MASTER_FIRST + 9;
 pub const MASTER_PUNCH_RELEASE: u32 = MASTER_FIRST + 10;
 pub const MASTER_TUBE_TIME: u32 = MASTER_FIRST + 11;
+/// **Retired 2026-09-24 (MOO-217). Spent; never reuse it.** It was the
+/// safety limiter's lookahead, a knob for one day (MOO-169). Adam: *"we
+/// dont need a knob tho"* -- the limiter has no lookahead now, and this id
+/// addresses nothing. A song saved in between carries `lookahead_ms` in its
+/// section, which loads as an unknown key and is ignored. A new master
+/// parameter takes 57 or later.
 pub const MASTER_LOOKAHEAD_MS: u32 = MASTER_FIRST + 12;
 
-/// The master's own section: the bus compressor and the safety limiter's
-/// lookahead.
+/// The master's own section: the bus compressor.
 ///
 /// **Each voicing keeps its own controls.** Grip's ratio, attack and release
 /// are separate fields from Punch's, and Tube has one TIME instead of either
@@ -800,8 +788,8 @@ pub const MASTER_LOOKAHEAD_MS: u32 = MASTER_FIRST + 12;
 /// is worth belongs to the law table.
 ///
 /// Every track's strip will carry one, and only the master's runs; the
-/// default is out, with the lookahead at 0, which is the master exactly as
-/// it was before this existed.
+/// default is out, which is the master exactly as it was before this
+/// existed.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct MasterSectionParams {
@@ -818,11 +806,6 @@ pub struct MasterSectionParams {
     pub punch_attack: u8,
     pub punch_release: u8,
     pub tube_time: u8,
-    /// The safety limiter's lookahead, `0..=MAX_LOOKAHEAD_MS`. Not the
-    /// compressor's: it is kept here because it is the other control the
-    /// master's own face carries, and because the master's strip is the one
-    /// saved thing that belongs to the master alone.
-    pub lookahead_ms: f32,
 }
 
 impl Default for MasterSectionParams {
@@ -843,7 +826,6 @@ impl Default for MasterSectionParams {
             punch_attack: position(MASTER_PUNCH_ATTACK),
             punch_release: position(MASTER_PUNCH_RELEASE),
             tube_time: position(MASTER_TUBE_TIME),
-            lookahead_ms: 0.0,
         }
     }
 }
@@ -878,7 +860,6 @@ impl MasterSectionParams {
             MASTER_PUNCH_ATTACK => f32::from(self.punch_attack),
             MASTER_PUNCH_RELEASE => f32::from(self.punch_release),
             MASTER_TUBE_TIME => f32::from(self.tube_time),
-            MASTER_LOOKAHEAD_MS => self.lookahead_ms,
             _ => return None,
         })
     }
@@ -909,7 +890,6 @@ impl MasterSectionParams {
             MASTER_PUNCH_ATTACK => self.punch_attack = position,
             MASTER_PUNCH_RELEASE => self.punch_release = position,
             MASTER_TUBE_TIME => self.tube_time = position,
-            MASTER_LOOKAHEAD_MS => self.lookahead_ms = value,
             _ => return false,
         }
         true
@@ -936,7 +916,9 @@ const fn stepped(id: u32, name: &'static str, positions: u8, default: u8) -> Par
 /// engineer reaches for first -- Grip at 4:1, 10 ms, 0.3 s; Punch at 4:1,
 /// 3 ms, 0.2 s; Tube at position 2 -- so switching the section in does
 /// something musical before anything is turned.
-static MASTER_DESCRIPTORS: [ParamDescriptor; 13] = [
+///
+/// Id 56 ([`MASTER_LOOKAHEAD_MS`]) is retired and has no row.
+static MASTER_DESCRIPTORS: [ParamDescriptor; 12] = [
     stepped(MASTER_COMP_IN, "Comp In", 2, 0),
     stepped(MASTER_COMP_VOICING, "Voicing", 3, 0),
     ParamDescriptor {
@@ -973,15 +955,6 @@ static MASTER_DESCRIPTORS: [ParamDescriptor; 13] = [
     stepped(MASTER_PUNCH_ATTACK, "Attack", PUNCH_ATTACK_POSITIONS, 4),
     stepped(MASTER_PUNCH_RELEASE, "Release", PUNCH_RELEASE_POSITIONS, 2),
     stepped(MASTER_TUBE_TIME, "Time", TUBE_TIME_POSITIONS, 1),
-    ParamDescriptor {
-        id: MASTER_LOOKAHEAD_MS,
-        name: "Lookahead",
-        unit: "ms",
-        min: 0.0,
-        max: MAX_LOOKAHEAD_MS,
-        curve: ParamCurve::Linear,
-        default: 0.0,
-    },
 ];
 
 #[cfg(test)]
@@ -998,7 +971,6 @@ mod master_tests {
             assert_eq!(held, descriptor.default, "{} ({})", descriptor.name, descriptor.id);
         }
         assert!(!params.comp_in, "the section arrives out");
-        assert_eq!(params.lookahead_ms, 0.0, "the limiter arrives with no lookahead");
         assert!(params.is_default());
     }
 
@@ -1024,6 +996,39 @@ mod master_tests {
         assert_eq!(MASTER_LOOKAHEAD_MS, 56);
     }
 
+    /// Id 56 is spent (MOO-217): no descriptor answers to it, it neither
+    /// reads nor writes, and nothing after it has moved down into it.
+    #[test]
+    fn the_retired_lookahead_id_addresses_nothing() {
+        assert!(MasterSectionParams::descriptor(MASTER_LOOKAHEAD_MS).is_none());
+        assert_eq!(
+            MasterSectionParams::descriptors().last().map(|d| d.id),
+            Some(MASTER_TUBE_TIME),
+            "a new master parameter takes 57, not the retired 56"
+        );
+        let mut params = MasterSectionParams::default();
+        assert!(!params.set(MASTER_LOOKAHEAD_MS, 2.5));
+        assert!(params.get(MASTER_LOOKAHEAD_MS).is_none());
+        assert!(params.is_default(), "a retired id changed the section");
+        let mut strip = StripParams::default();
+        assert!(!strip.set(MASTER_LOOKAHEAD_MS, 2.5));
+        assert!(strip.get(MASTER_LOOKAHEAD_MS).is_none());
+    }
+
+    /// A section saved in the day the knob existed still loads, at no
+    /// lookahead: the key is unknown now and ignored, with everything beside
+    /// it read as written.
+    #[test]
+    fn a_section_saved_with_a_lookahead_loads_without_it() {
+        let saved = "comp_in = true\nvoicing = \"Punch\"\nthreshold_db = -20.0\nlookahead_ms = 2.5\n";
+        let loaded: MasterSectionParams = toml::from_str(saved).expect("the old key is refused");
+        assert!(loaded.comp_in);
+        assert_eq!(loaded.voicing, BusCompVoicing::Punch);
+        assert_eq!(loaded.threshold_db, -20.0);
+        let written = toml::to_string(&loaded).unwrap();
+        assert!(!written.contains("lookahead"), "{written}");
+    }
+
     #[test]
     fn every_master_parameter_round_trips_and_strangers_are_refused() {
         let mut params = MasterSectionParams::default();
@@ -1032,8 +1037,8 @@ mod master_tests {
             assert_eq!(params.get(descriptor.id), Some(descriptor.max), "{}", descriptor.name);
         }
         assert!(!params.set(STRIP_COMP_MAKEUP_DB, 1.0));
-        assert!(!params.set(MASTER_LOOKAHEAD_MS + 1, 1.0));
-        assert!(params.get(MASTER_LOOKAHEAD_MS + 1).is_none());
+        assert!(!params.set(MASTER_TUBE_TIME + 1, 1.0));
+        assert!(params.get(MASTER_TUBE_TIME + 1).is_none());
     }
 
     /// A stepped control holds exactly its switch's positions: one past the
@@ -1049,8 +1054,6 @@ mod master_tests {
         assert_eq!(params.tube_time, 1);
         params.set(MASTER_COMP_VOICING, 9.0);
         assert_eq!(params.voicing, BusCompVoicing::Tube);
-        params.set(MASTER_LOOKAHEAD_MS, 60.0);
-        assert_eq!(params.lookahead_ms, MAX_LOOKAHEAD_MS);
     }
 
     /// The saved field: a strip carrying a section round-trips through
@@ -1063,22 +1066,13 @@ mod master_tests {
         let mut strip = StripParams::default();
         assert!(strip.set(MASTER_COMP_IN, 1.0));
         assert!(strip.set(MASTER_COMP_VOICING, 1.0));
-        assert!(strip.set(MASTER_LOOKAHEAD_MS, 2.5));
+        assert!(strip.set(MASTER_COMP_THRESHOLD_DB, -12.0));
         let written = toml::to_string(&strip).unwrap();
         assert!(written.contains("[master]"), "{written}");
         let read: StripParams = toml::from_str(&written).unwrap();
         assert_eq!(read, strip);
         let old: StripParams = toml::from_str(&untouched).unwrap();
         assert_eq!(old.master, MasterSectionParams::default());
-    }
-
-    #[test]
-    fn lookahead_frames_round_and_clamp() {
-        assert_eq!(lookahead_frames(0.0, 48_000), 0);
-        assert_eq!(lookahead_frames(1.5, 48_000), 72);
-        assert_eq!(lookahead_frames(5.0, 192_000), 960);
-        assert_eq!(lookahead_frames(50.0, 48_000), 240);
-        assert_eq!(lookahead_frames(f32::NAN, 48_000), 0);
     }
 
     #[test]
@@ -1158,8 +1152,8 @@ mod tests {
         // the strip hands it on; past the section's last is nobody's.
         assert!(params.set(STRIP_COMP_MAKEUP_DB + 1, 1.0));
         assert!(params.master.comp_in);
-        assert!(!params.set(MASTER_LOOKAHEAD_MS + 1, 1.0));
-        assert!(params.get(MASTER_LOOKAHEAD_MS + 1).is_none());
+        assert!(!params.set(MASTER_TUBE_TIME + 1, 1.0));
+        assert!(params.get(MASTER_TUBE_TIME + 1).is_none());
     }
 
     /// A value outside a parameter's range is clamped rather than stored, and

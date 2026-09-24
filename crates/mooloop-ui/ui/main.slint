@@ -5781,10 +5781,6 @@ export component MainWindow inherits Window {
                                         if root.editing-bus : BusFaderRow {
                                             name: root.editing-bus-name;
                                             is-master: root.editing-bus-is-master;
-                                            lookahead-ms: MasterSection.row.lookahead-ms;
-                                            lookahead-changed(v) => {
-                                                root.bus-strip-param(root.editing-bus-index, MasterSpec.lookahead-ms, v);
-                                            }
                                             volume: root.editing-bus-volume;
                                             pan: root.editing-bus-pan;
                                             muted: root.editing-bus-muted;

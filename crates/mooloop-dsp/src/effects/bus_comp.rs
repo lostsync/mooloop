@@ -40,8 +40,8 @@ impl RangeProcessor for BusCompEffect {
     }
 
     fn apply_param(&mut self, id: u32, value: f32) {
-        // An id past the table would land on the master's Lookahead, or on
-        // nothing; the section refuses the second and the first is not ours.
+        // An id past the table would land on the master's retired 56, or
+        // on nothing; the section refuses both.
         if id < mooloop_core::BUS_COMP_PARAM_COUNT {
             self.comp.apply_param(bus_comp_master_id(id), value);
         }

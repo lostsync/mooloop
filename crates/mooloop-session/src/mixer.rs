@@ -382,17 +382,6 @@ impl Session {
         })
     }
 
-    /// How far the master's safety limiter delays everything leaving it, in
-    /// frames at `sample_rate` (MOO-169). What a take from the hardware input
-    /// waits for on top of the driver's round trip: the player hears the
-    /// master this much late and plays this much late.
-    pub fn master_lookahead_frames(&self, sample_rate: u32) -> u32 {
-        self.buses.get(mooloop_core::MASTER_BUS as usize).map_or(0, |master| {
-            mooloop_core::strip::lookahead_frames(master.bus.strip.master.lookahead_ms, sample_rate)
-                as u32
-        })
-    }
-
     /// A track's strip, for the faces to draw. Three of them draw it and
     /// none of them may be the only way to reach a parameter, so they all
     /// read the same struct.
@@ -535,8 +524,8 @@ mod tests {
     }
 
     /// The master section is the master's: its ids reach the master's strip
-    /// and are refused on any other track, and its lookahead is reported in
-    /// frames for a take to wait on.
+    /// and are refused on any other track, and the retired lookahead id
+    /// (MOO-217) is refused on the master too.
     #[test]
     fn the_master_section_is_the_masters_alone() {
         use mooloop_core::strip::{MASTER_COMP_IN, MASTER_LOOKAHEAD_MS};
@@ -550,13 +539,11 @@ mod tests {
         ));
         assert!(session.buses[0].bus.strip.master.comp_in);
 
-        assert_eq!(session.master_lookahead_frames(48_000), 0);
-        assert!(matches!(
-            session.set_strip_param(MASTER_BUS as i32, MASTER_LOOKAHEAD_MS as i32, 9.0),
-            Some(EngineCommand::SetStripParam { value, .. }) if value == 5.0
-        ));
-        assert_eq!(session.master_lookahead_frames(48_000), 240);
-        assert_eq!(session.master_lookahead_frames(44_100), 221);
+        let before = session.buses[0].bus.strip;
+        assert!(session
+            .set_strip_param(MASTER_BUS as i32, MASTER_LOOKAHEAD_MS as i32, 2.5)
+            .is_none());
+        assert_eq!(session.buses[0].bus.strip, before, "a retired id moved the master");
     }
 
     /// Polarity is a track's own switch, the master included -- which is

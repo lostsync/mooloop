@@ -330,8 +330,7 @@ fn the_master_face_reads_the_law_table() {
     use mooloop_core::strip::{
         MASTER_COMP_IN, MASTER_COMP_MAKEUP_DB, MASTER_COMP_MIX, MASTER_COMP_THRESHOLD_DB,
         MASTER_COMP_VOICING, MASTER_GRIP_ATTACK, MASTER_GRIP_RATIO, MASTER_GRIP_RELEASE,
-        MASTER_LOOKAHEAD_MS, MASTER_PUNCH_ATTACK, MASTER_PUNCH_RATIO, MASTER_PUNCH_RELEASE,
-        MASTER_TUBE_TIME,
+        MASTER_PUNCH_ATTACK, MASTER_PUNCH_RATIO, MASTER_PUNCH_RELEASE, MASTER_TUBE_TIME,
     };
     use mooloop_dsp::strip::bus_comp::{
         Ratio, Timing, GRIP_ATTACKS, GRIP_RATIOS, GRIP_RELEASES, PUNCH_ATTACKS, PUNCH_RATIOS,
@@ -353,7 +352,6 @@ fn the_master_face_reads_the_law_table() {
         (spec.get_punch_attack(), MASTER_PUNCH_ATTACK),
         (spec.get_punch_release(), MASTER_PUNCH_RELEASE),
         (spec.get_tube_time(), MASTER_TUBE_TIME),
-        (spec.get_lookahead_ms(), MASTER_LOOKAHEAD_MS),
     ] {
         assert_eq!(property, id as i32, "the master face addresses a different id");
     }

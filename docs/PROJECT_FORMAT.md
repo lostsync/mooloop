@@ -512,20 +512,23 @@ before any of them existed still loads:
   the two mid bands share one struct, and what would let a later face offer
   the third value without a format change.
 
-  **The master's own section rides in its strip** (MOO-13, MOO-169):
+  **The master's own section rides in its strip** (MOO-13):
   `buses[].bus.strip.master`, a `MasterSectionParams` holding the bus
   compressor -- `comp_in`, `voicing` (`Grip`, `Punch` or `Tube`, by name),
   `threshold_db`, `makeup_db`, `mix`, and each voicing's own switch
   **positions** (`grip_ratio`, `grip_attack`, `grip_release`, `punch_ratio`,
-  `punch_attack`, `punch_release`, `tube_time`) -- and the safety limiter's
-  `lookahead_ms`. A position is an index into that voicing's law table in
+  `punch_attack`, `punch_release`, `tube_time`). A position is an index into that voicing's law table in
   `mooloop_dsp::strip::bus_comp`, as a band's is, so a retuned law never
   needs the file to change, and an index past a table's end clamps to its
   last position. The struct is `serde(default)` field by field and **skipped
   when it is the default**, so a song that never touched the section writes
   nothing and is byte-identical to one saved before it existed; an older song
-  opens with the section out and no lookahead. Every track's strip may carry
-  one, and only the master's is run: the session refuses its ids on any other
+  opens with the section out. **`lookahead_ms` is ignored**: songs saved on
+  2026-09-23/24 may carry it (the safety limiter's lookahead knob, MOO-169),
+  and since MOO-217 the limiter has no lookahead, so the key is read as
+  unknown and dropped, with no repair, and the song plays as if it were 0.
+  It is not written back. Its parameter id, 56, is retired. Every track's
+  strip may carry one, and only the master's is run: the session refuses its ids on any other
   track. See `docs/plans/archive/master-bus-compressor/`.
 
   **The same compressor as an insert** (MOO-216) is an ordinary effect row,
@@ -533,7 +536,7 @@ before any of them existed still loads:
   section's compressor fields under the same names and meanings -- `voicing`
   by name, `threshold_db`, `makeup_db`, `mix`, and the seven switch
   **positions** -- with no `comp_in` (the row's `bypassed` is its in/out) and
-  no `lookahead_ms` (the limiter's, not the compressor's). `serde(default)`
+  no `lookahead_ms` (that was the limiter's, and is gone). `serde(default)`
   field by field, the defaults being the master section's. Its parameter
   ids, which automation lanes and modulation routes store, are the master
   section's ids 45..=55 moved down to 0..=10 and frozen with the rest

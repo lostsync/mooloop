@@ -46,35 +46,18 @@
 //! - **A final clamp** at the ceiling, because `x * (ceiling / x)` in floating
 //!   point may land an ulp above it.
 //!
-//! No lookahead is the default, and a decision with a cost -- an over's
-//! leading edge is clipped for the one frame it takes the gain to arrive --
-//! taken because a lookahead limiter delays *everything* on the master, which
-//! moves monitoring latency and every recording's alignment for a stage that
-//! should normally be doing nothing at all.
+//! # No lookahead, and no knob
 //!
-//! # Lookahead, when asked for
+//! A decision with a cost -- an over's leading edge is shaped for the one
+//! frame it takes the gain to arrive -- taken because a lookahead limiter
+//! delays *everything* on the master, which moves monitoring latency and
+//! every recording's alignment for a stage that should normally be doing
+//! nothing at all. The ceiling is guaranteed without it.
 //!
-//! Adam, 2026-09-23 (MOO-169): *"make it a knob, defaults to 0.0"*.
-//! [`OutputGuard::set_lookahead_ms`] takes up to [`MAX_LOOKAHEAD_MS`].
-//!
-//! - **At 0 the guard runs exactly the code above**, not a delay of length
-//!   zero: the same branch, so every guarantee MOO-93 pinned stands as it
-//!   was.
-//! - **Above 0** the output is the input `L` frames late, and the detector
-//!   reads the frame arriving. An over starts a *linear ramp* of the
-//!   reduction that reaches what that frame needs by the time the frame
-//!   leaves, so its leading edge is turned down rather than shaped. The ramp
-//!   runs at the steeper of the slope it is on and the one the new over
-//!   needs -- which is what keeps every earlier over in the window covered --
-//!   and the hold counts from when the over *leaves*. The final clamp stays,
-//!   as a backstop against rounding.
-//! - Below the ceiling it is a pure delay, bit for bit.
-//!
-//! The delay costs `L` frames on everything leaving the master, so the
-//! caller reports it: [`OutputGuard::latency_frames`]. Changing it while the
-//! mix plays moves the output by up to 5 ms, once, as the knob moves.
-
-pub use mooloop_core::strip::{lookahead_frames, MAX_LOOKAHEAD_MS};
+//! A lookahead knob existed for a day (MOO-169) and was removed (MOO-217,
+//! Adam 2026-09-24: *"we dont need a knob tho"*). If a listening test ever
+//! finds the one-frame edge audible, a fixed sub-millisecond lookahead with
+//! no knob is the thing to revisit, not a setting.
 
 /// The level nothing leaves the master above: 0 dBFS.
 pub const OUTPUT_CEILING: f32 = 1.0;
@@ -121,18 +104,6 @@ pub struct OutputGuard {
     hold_frames: u32,
     /// What the reduction is multiplied by per frame of release.
     release: f32,
-    sample_rate: u32,
-    /// The lookahead in frames. Zero runs the zero-latency path.
-    lookahead: usize,
-    /// The frames in flight, `lookahead` of them in use. Allocated for
-    /// [`MAX_LOOKAHEAD_MS`] when the guard is built, so setting a lookahead
-    /// never allocates.
-    ring: Vec<[f32; 2]>,
-    /// The slot the next frame is written to, and the oldest one read.
-    head: usize,
-    /// Where the lookahead's ramp is heading, and how far it moves a frame.
-    target: f32,
-    step: f32,
 }
 
 impl OutputGuard {
@@ -144,44 +115,13 @@ impl OutputGuard {
             hold_left: 0,
             hold_frames: (HOLD_SECONDS * rate).round() as u32,
             release: (-1.0 / (RELEASE_SECONDS * rate)).exp(),
-            sample_rate: sample_rate.max(1),
-            lookahead: 0,
-            ring: vec![[0.0; 2]; lookahead_frames(MAX_LOOKAHEAD_MS, sample_rate).max(1)],
-            head: 0,
-            target: 0.0,
-            step: 0.0,
         }
     }
 
-    /// Look ahead by `ms` milliseconds, `0..=MAX_LOOKAHEAD_MS`. Zero is the
-    /// zero-latency guard exactly. A change empties the frames in flight, so
-    /// the output moves by the difference, once.
-    pub fn set_lookahead_ms(&mut self, ms: f32) {
-        let frames = lookahead_frames(ms, self.sample_rate).min(self.ring.len());
-        if frames == self.lookahead {
-            return;
-        }
-        self.lookahead = frames;
-        self.ring.fill([0.0; 2]);
-        self.head = 0;
-        self.target = self.reduction;
-        self.step = 0.0;
-    }
-
-    /// How far behind its input the guard's output is, in frames: what the
-    /// master's lookahead adds to everything leaving it.
-    pub fn latency_frames(&self) -> u32 {
-        self.lookahead as u32
-    }
-
-    /// Whether the guard holds nothing: no reduction, and no frame in flight
-    /// that is not silence. What an export's tail waits for, so a lookahead
-    /// does not cut the last few milliseconds off a file.
+    /// Whether the limiter is at rest: no reduction held or releasing. What
+    /// an export's tail waits for alongside the rest of the project.
     pub fn is_at_rest(&self) -> bool {
         self.reduction == 0.0
-            && self.ring[..self.lookahead]
-                .iter()
-                .all(|frame| frame[0] == 0.0 && frame[1] == 0.0)
     }
 
     /// A guard that scrubs and never limits.
@@ -214,9 +154,6 @@ impl OutputGuard {
 
     /// Scrub and limit one block in place.
     pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) -> GuardReport {
-        if self.lookahead > 0 {
-            return self.process_ahead(left, right);
-        }
         let mut report = GuardReport::default();
         for (l, r) in left.iter_mut().zip(right.iter_mut()) {
             let mut a = *l;
@@ -258,71 +195,6 @@ impl OutputGuard {
         report
     }
 
-    /// The lookahead path: detect on the frame arriving, emit the one
-    /// `lookahead` frames behind it. See the module documentation.
-    fn process_ahead(&mut self, left: &mut [f32], right: &mut [f32]) -> GuardReport {
-        let mut report = GuardReport::default();
-        let window = self.lookahead;
-        let span = window as f32;
-        let ceiling = self.ceiling;
-        for (l, r) in left.iter_mut().zip(right.iter_mut()) {
-            let mut a = *l;
-            let mut b = *r;
-            if !a.is_finite() {
-                a = 0.0;
-                report.non_finite = report.non_finite.saturating_add(1);
-            }
-            if !b.is_finite() {
-                b = 0.0;
-                report.non_finite = report.non_finite.saturating_add(1);
-            }
-            let peak = a.abs().max(b.abs());
-            if peak > ceiling {
-                let over = u32::from(a.abs() > ceiling) + u32::from(b.abs() > ceiling);
-                report.overs = report.overs.saturating_add(over);
-                let needed = 1.0 - ceiling / peak;
-                if needed > self.target {
-                    // Arrive by the time this frame leaves, and never slower
-                    // than the ramp already running, which is covering an
-                    // earlier over that leaves sooner.
-                    self.step = self.step.max((needed - self.reduction) / span);
-                    self.target = needed;
-                }
-                // The hold starts when the over leaves, `window` from now.
-                self.hold_left = self.hold_frames.saturating_add(window as u32);
-            }
-            if self.reduction < self.target {
-                self.reduction = (self.reduction + self.step).min(self.target);
-                if self.reduction >= self.target {
-                    self.step = 0.0;
-                }
-            }
-            if self.hold_left > 0 {
-                self.hold_left -= 1;
-            } else if self.reduction > 0.0 && self.reduction >= self.target {
-                self.reduction *= self.release;
-                if self.reduction < AT_REST {
-                    self.reduction = 0.0;
-                }
-                self.target = self.reduction;
-            }
-            let [mut x, mut y] = self.ring[self.head];
-            self.ring[self.head] = [a, b];
-            self.head += 1;
-            if self.head == window {
-                self.head = 0;
-            }
-            if self.reduction > 0.0 {
-                let gain = 1.0 - self.reduction;
-                x = (x * gain).clamp(-ceiling, ceiling);
-                y = (y * gain).clamp(-ceiling, ceiling);
-            }
-            *l = x;
-            *r = y;
-        }
-        report
-    }
-
     /// The gain the limiter is applying now: exactly 1.0 at rest.
     pub fn gain(&self) -> f32 {
         1.0 - self.reduction
@@ -332,19 +204,9 @@ impl OutputGuard {
     /// it still holds -- but keep this one's timing, which belongs to this
     /// one's sample rate. What a renderer replacing a running one calls, so a
     /// swap in the middle of an over does not jump the level back to unity.
-    ///
-    /// The frames in flight come too when both look ahead by the same
-    /// amount, so a swap neither drops nor repeats a few milliseconds of the
-    /// mix.
     pub fn adopt(&mut self, other: &OutputGuard) {
         self.reduction = other.reduction;
         self.hold_left = other.hold_left.min(self.hold_frames);
-        self.target = other.target;
-        self.step = other.step;
-        if self.lookahead == other.lookahead && self.ring.len() == other.ring.len() {
-            self.ring.copy_from_slice(&other.ring);
-            self.head = other.head;
-        }
     }
 }
 
@@ -475,158 +337,6 @@ mod tests {
         let report = guard.process(&mut left, &mut right);
         assert_eq!(report, GuardReport { non_finite: 1, overs: 0 });
         assert_eq!((left, right), (vec![8.0, 0.0, -3.0], vec![0.5, 0.5, 0.5]));
-    }
-
-    /// MOO-169's promise: a lookahead of 0 is today's guard, bit for bit,
-    /// including one that was set to look ahead and set back.
-    #[test]
-    fn a_lookahead_of_zero_is_the_zero_latency_guard_exactly() {
-        let mut fresh = OutputGuard::new(RATE);
-        let mut round_trip = OutputGuard::new(RATE);
-        round_trip.set_lookahead_ms(3.0);
-        assert_eq!(round_trip.latency_frames(), 144);
-        round_trip.set_lookahead_ms(0.0);
-        assert_eq!(round_trip.latency_frames(), 0);
-        let mut a = (sine(3.0, 110.0, RATE as usize), sine(0.7, 440.0, RATE as usize));
-        let mut b = a.clone();
-        let report_a = run(&mut fresh, &mut a.0, &mut a.1);
-        let report_b = run(&mut round_trip, &mut b.0, &mut b.1);
-        assert_eq!(report_a, report_b);
-        assert!(report_a.overs > 0, "the signal never went over, so this proves nothing");
-        for (frame, (x, y)) in a.0.iter().zip(&b.0).enumerate() {
-            assert_eq!(x.to_bits(), y.to_bits(), "left differs at {frame}");
-        }
-        for (frame, (x, y)) in a.1.iter().zip(&b.1).enumerate() {
-            assert_eq!(x.to_bits(), y.to_bits(), "right differs at {frame}");
-        }
-    }
-
-    /// Under the ceiling, a lookahead is a delay and nothing else.
-    #[test]
-    fn under_the_ceiling_a_lookahead_is_a_pure_delay() {
-        let mut guard = OutputGuard::new(RATE);
-        guard.set_lookahead_ms(1.5);
-        let delay = guard.latency_frames() as usize;
-        assert_eq!(delay, 72);
-        let input_l = sine(0.99, 110.0, 8_192);
-        let input_r = sine(0.5, 3_000.0, 8_192);
-        let (mut left, mut right) = (input_l.clone(), input_r.clone());
-        let report = run(&mut guard, &mut left, &mut right);
-        assert_eq!(report, GuardReport::default());
-        assert!(left[..delay].iter().chain(&right[..delay]).all(|&s| s == 0.0));
-        for frame in delay..8_192 {
-            assert_eq!(left[frame].to_bits(), input_l[frame - delay].to_bits(), "left {frame}");
-            assert_eq!(right[frame].to_bits(), input_r[frame - delay].to_bits(), "right {frame}");
-        }
-        assert!(!guard.is_at_rest(), "frames still in flight");
-        let (mut l, mut r) = (vec![0.0f32; delay], vec![0.0f32; delay]);
-        guard.process(&mut l, &mut r);
-        assert!(guard.is_at_rest());
-    }
-
-    /// The point of looking ahead: the ramp arrives before the over does, so
-    /// nothing leaves above the ceiling and the final clamp does not have to
-    /// do the limiting. Bursts of every height, including one far over.
-    #[test]
-    fn a_lookahead_turns_an_over_down_before_it_arrives() {
-        let mut guard = OutputGuard::new(RATE);
-        guard.set_lookahead_ms(1.5);
-        let delay = guard.latency_frames() as usize;
-        let frames = RATE as usize;
-        let mut input = vec![0.0f32; frames];
-        for (index, sample) in input.iter_mut().enumerate() {
-            // A quiet tone, with a hard transient every 100 ms growing from
-            // 1 dB to 30 dB over.
-            let burst = index % 4_800;
-            let height = 1.12 * (1.0 + (index / 4_800) as f32 * 1.6);
-            let t = index as f32 / RATE as f32;
-            *sample = 0.3 * (2.0 * core::f32::consts::PI * 220.0 * t).sin();
-            if burst < 48 {
-                *sample = height * if burst % 2 == 0 { 1.0 } else { -1.0 };
-            }
-        }
-        // A frame at a time, so the gain each frame left under can be read
-        // and the clamp's help ruled out: the source times that gain must
-        // already be at or under the ceiling.
-        let mut overs = 0;
-        for frame in 0..frames {
-            let (mut l, mut r) = ([input[frame]], [input[frame]]);
-            overs += guard.process(&mut l, &mut r).overs;
-            assert!(l[0].abs() <= OUTPUT_CEILING, "{} left the master at {frame}", l[0]);
-            if frame >= delay {
-                let source = input[frame - delay];
-                let ducked = (source * guard.gain()).abs();
-                assert!(
-                    ducked <= OUTPUT_CEILING * (1.0 + 1e-5),
-                    "frame {frame} needed the clamp: {source} under a gain of {}",
-                    guard.gain()
-                );
-            }
-        }
-        assert!(overs > 0);
-    }
-
-    /// With no lookahead the first frame of an over is shaped by the clamp;
-    /// with one, the frame before it is already turned down.
-    #[test]
-    fn a_lookahead_ducks_the_frames_before_an_over() {
-        let mut ahead = OutputGuard::new(RATE);
-        ahead.set_lookahead_ms(1.0);
-        let delay = ahead.latency_frames() as usize;
-        let mut left = vec![0.5f32; 400];
-        left[200] = 4.0;
-        let mut right = left.clone();
-        ahead.process(&mut left, &mut right);
-        // The over leaves at 200 + delay; the frame just before it is
-        // already quieter than 0.5, which zero latency cannot do.
-        assert!(left[199 + delay] < 0.5, "nothing was turned down ahead of the over");
-        assert!((left[200 + delay] - 1.0).abs() < 1e-5, "the over left at {}", left[200 + delay]);
-    }
-
-    #[test]
-    fn a_lookahead_still_scrubs_and_links() {
-        let mut guard = OutputGuard::new(RATE);
-        guard.set_lookahead_ms(0.5);
-        let delay = guard.latency_frames() as usize;
-        let mut left = vec![f32::NAN; 1];
-        left.extend(vec![4.0f32; 200]);
-        let mut right = vec![0.5f32; 201];
-        let report = guard.process(&mut left, &mut right);
-        assert_eq!(report.non_finite, 1);
-        assert_eq!(left[delay], 0.0, "the NaN reached the ring");
-        let last = 200;
-        assert!((left[last] - 1.0).abs() < 1e-5);
-        assert!((right[last] - 0.125).abs() < 1e-5, "right is {}", right[last]);
-    }
-
-    #[test]
-    fn a_lookahead_is_clamped_to_its_range_and_counted_in_frames() {
-        assert_eq!(lookahead_frames(0.0, 48_000), 0);
-        assert_eq!(lookahead_frames(1.5, 48_000), 72);
-        assert_eq!(lookahead_frames(5.0, 192_000), 960);
-        assert_eq!(lookahead_frames(50.0, 48_000), 240);
-        assert_eq!(lookahead_frames(f32::NAN, 48_000), 0);
-        let mut guard = OutputGuard::new(44_100);
-        guard.set_lookahead_ms(5.0);
-        assert_eq!(guard.latency_frames(), 221, "5 ms at 44.1 kHz rounds to 220.5 -> 221");
-    }
-
-    #[test]
-    fn a_replacement_guard_with_the_same_lookahead_keeps_the_frames_in_flight() {
-        let mut running = OutputGuard::new(RATE);
-        running.set_lookahead_ms(1.0);
-        let mut left: Vec<f32> = (0..30).map(|n| n as f32 / 100.0).collect();
-        let mut right = left.clone();
-        running.process(&mut left, &mut right);
-        let mut fresh = OutputGuard::new(RATE);
-        fresh.set_lookahead_ms(1.0);
-        fresh.adopt(&running);
-        let (mut a, mut b) = (vec![0.0f32; 48], vec![0.0f32; 48]);
-        let (mut c, mut d) = (vec![0.0f32; 48], vec![0.0f32; 48]);
-        running.process(&mut a, &mut b);
-        fresh.process(&mut c, &mut d);
-        assert_eq!(a, c);
-        assert!(a.iter().any(|&s| s != 0.0), "nothing was in flight");
     }
 
     #[test]

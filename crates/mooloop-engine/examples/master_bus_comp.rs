@@ -4,8 +4,8 @@
 //! Builds a small mix with the real `mooloop_core` types -- a kick, a bass
 //! line and chords, summed a few decibels hot at the master -- saves it with
 //! `mooloop_project::save_song`, checks `load_bundle` repairs nothing, and
-//! renders it offline five times: the section out, each voicing in, and Grip
-//! again with the safety limiter looking ahead 3 ms. Each is a float WAV, and
+//! renders it offline four times: the section out and each voicing in. The
+//! safety limiter has no lookahead (MOO-217). Each is a float WAV, and
 //! each is measured against the one with the section out, which is the same
 //! mix bit for bit before the compressor.
 //!
@@ -151,7 +151,6 @@ fn main() {
         rms_db(&dry),
         dry.len()
     );
-    let mut grip_at_zero = Vec::new();
     for (name, voicing) in [
         ("grip", BusCompVoicing::Grip),
         ("punch", BusCompVoicing::Punch),
@@ -167,26 +166,5 @@ fn main() {
             peak_db(&wet),
             rms_db(&wet),
         );
-        if voicing == BusCompVoicing::Grip {
-            grip_at_zero = wet;
-        }
     }
-    let ahead = with_section(
-        base.clone(),
-        MasterSectionParams {
-            lookahead_ms: 3.0,
-            ..section(BusCompVoicing::Grip)
-        },
-    );
-    let wet = render(&ahead, &dir.join("grip-lookahead-3ms.wav"));
-    println!(
-        "grip, 3 ms lookahead: {} frames against {} at 0 ms, {}",
-        wet.len(),
-        grip_at_zero.len(),
-        if wet == grip_at_zero {
-            "sample for sample the same file"
-        } else {
-            "and the files differ"
-        }
-    );
 }

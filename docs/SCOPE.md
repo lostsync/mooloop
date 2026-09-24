@@ -189,8 +189,8 @@ compressor is a musical device; a safety limiter is engineering. Both are in
 for 0.2; they are separate rows. The safety limiter **landed 2026-09-22**
 (MOO-93): `mooloop_dsp::output_guard`, the last stage of every block live and
 exported, zero latency, ceiling 0 dBFS, bit-transparent below it
-(`docs/GAIN_STRUCTURE.md`, "The output guard"). Whether it should look ahead is
-open: MOO-169.
+(`docs/GAIN_STRUCTURE.md`, "The output guard"). It does not look ahead, and
+has no knob for it (MOO-217, 2026-09-24, which reverses MOO-169).
 
 ### 2.2 Item 14 — sampler key zones
 
@@ -250,7 +250,7 @@ thirteen sit downstream of, or that the definition in §1 forces.
   judgement, each held out of `archive/` by housekeeping rather than by work.
   Free, and it changes what the board looks like.
 - **A safety limiter on the master output** — see item 13. Landed 2026-09-22
-  (MOO-93); the lookahead question is MOO-169.
+  (MOO-93); no lookahead (MOO-217).
 - ~~**The Buffer's tempo-change bug** (§7).~~ Fixed 2026-09-23 (MOO-137):
   a resized ring takes over the history.
 - **74 loose ends** in `LOOSE_ENDS.md`, across 12 groups. Not all are 0.2
@@ -276,7 +276,7 @@ addition:
 - **Item 13 grows.** It is no longer "a compressor exists" — it is a master bus
   compressor with its own laws, its own meter and its own presence (§2.1),
   *plus* a separate master **safety limiter** (landed 2026-09-22, MOO-93)
-  and a lookahead decision (open: MOO-169).
+  and a lookahead decision (none, MOO-217).
 - **Item 11 is a listening session**, booked like one — not a plan directory.
 - **Item 14 joins**: sampler key zones (§2.2), Adam's addition on 2026-09-14.
 - **Sampler v2 joins, 2026-09-18.** Adam: *"i think i do want v2 in 0.2.0."*

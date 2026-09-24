@@ -9287,14 +9287,9 @@ impl RenderState {
         // the mix, so a mix over 0 dBFS still lights the clip latch and says
         // that the limiter is working, rather than the limiter hiding it.
         let mut guarded = {
-            let master = &mut self.buses[MASTER_BUS as usize];
-            // The lookahead is the master section's (MOO-169): 0 is the
-            // zero-latency guard exactly, and a change takes effect here, at
-            // the top of a block.
+            let master = &mut self.buses[MASTER_BUS as usize].bus;
             self.output_guard
-                .set_lookahead_ms(master.strip.params().master.lookahead_ms);
-            self.output_guard
-                .process(&mut master.bus.l[..frames], &mut master.bus.r[..frames])
+                .process(&mut master.l[..frames], &mut master.r[..frames])
         };
         guarded.non_finite = guarded.non_finite.saturating_add(scrubbed);
         if guarded.non_finite > 0 {
@@ -9471,20 +9466,9 @@ impl RenderState {
                 .iter()
                 .all(|strip| strip.is_idle())
             && self.buses.iter().all(BusStrip::is_resting)
-            // Frames still in flight in the safety limiter's lookahead are
-            // part of the mix that has not left yet.
+            // The safety limiter still releasing is part of the mix that
+            // has not settled yet.
             && self.output_guard.is_at_rest()
-    }
-
-    /// How far behind the timeline everything leaving the master is, in
-    /// frames: the safety limiter's lookahead (MOO-169), zero by default.
-    /// What an export trims from its head so a file starts on the bar line.
-    pub fn output_latency_frames(&self) -> u32 {
-        let lookahead = self
-            .buses
-            .get(MASTER_BUS as usize)
-            .map_or(0.0, |master| master.strip.params().master.lookahead_ms);
-        mooloop_core::strip::lookahead_frames(lookahead, self.sample_rate) as u32
     }
 
     /// Samples the output guard found NaN or infinite, and sent as silence

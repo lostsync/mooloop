@@ -40,7 +40,6 @@ export struct MasterRow {
     punch-attack: int,
     punch-release: int,
     tube-time: int,
-    lookahead-ms: float,
 }
 
 // Ids and the words a unit's switches are printed with, from Rust: the ids
@@ -59,7 +58,6 @@ export global MasterSpec {
     in-out property <int> punch-attack;
     in-out property <int> punch-release;
     in-out property <int> tube-time;
-    in-out property <int> lookahead-ms;
     in-out property <[string]> voicings;
     in-out property <[string]> grip-ratios;
     in-out property <[string]> grip-attacks;
@@ -549,37 +547,5 @@ export component MasterCompFace inherits Rectangle {
         role: "COMP";
         device-color: Theme.warning;
         enabled: root.on && !root.muted;
-    }
-}
-
-// The safety limiter's lookahead, for the master's Out face (MOO-169):
-// Adam's *"a small knob or scrollable number box"*, default 0.
-export component LookaheadKnob inherits VerticalLayout {
-    in property <float> lookahead-ms;
-    callback changed(float);
-
-    spacing: 1px;
-    alignment: center;
-    HorizontalLayout {
-        alignment: center;
-        MiniKnob {
-            diameter: 20px;
-            label: "Lookahead";
-            hint: "The safety limiter's lookahead. Above zero it turns an over down before "
-                + "it arrives, and delays everything leaving the master by this much.";
-            minimum: StripSpec.spec(MasterSpec.lookahead-ms).minimum;
-            maximum: StripSpec.spec(MasterSpec.lookahead-ms).maximum;
-            default-value: StripSpec.spec(MasterSpec.lookahead-ms).default-value;
-            value: root.lookahead-ms;
-            controlled: true;
-            value-text: GainMath.format-plain-db(root.lookahead-ms) + " ms";
-            changed(v) => { root.changed(v); }
-        }
-    }
-    Text {
-        text: "LA";
-        color: Theme.text-muted;
-        font-size: Theme.text-sm;
-        horizontal-alignment: center;
     }
 }

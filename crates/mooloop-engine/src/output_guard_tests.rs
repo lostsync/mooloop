@@ -158,16 +158,20 @@ fn the_master_meter_reads_the_mix_and_the_ports_read_the_ceiling() {
 }
 
 // ---------------------------------------------------------------------------
-// The safety limiter's lookahead (MOO-169, `docs/plans/archive/master-bus-compressor/`).
+// No lookahead (MOO-217, `docs/plans/archive/master-bus-compressor/`).
+//
+// The safety limiter looked ahead on a knob for a day (MOO-169) and does not
+// any more. A song saved in between still opens, at no lookahead, and plays
+// exactly as one that never had it.
 // ---------------------------------------------------------------------------
 
 use crate::render_test_support::{render_master_in_blocks, render_mix};
-use mooloop_core::strip::MasterSectionParams;
+use mooloop_core::strip::{BusCompVoicing, MasterSectionParams};
 
-/// A held chord well under the ceiling, with the master looking ahead by
-/// `lookahead_ms`. A synth rather than a sampler, so every path -- the test
+/// A held chord well under the ceiling, through a master whose section is
+/// `section`. A synth rather than a sampler, so every path -- the test
 /// helpers, the offline renderer -- builds it with no sample data at all.
-fn quiet_project(lookahead_ms: f32) -> Project {
+fn quiet_project(section: MasterSectionParams) -> Project {
     let mut channel = ProjectChannel::poly_synth(0, 1);
     channel.setup.channel.volume = 1.0;
     for pitch in [57, 60, 64] {
@@ -177,10 +181,7 @@ fn quiet_project(lookahead_ms: f32) -> Project {
         channels: vec![channel],
         ..Project::default()
     };
-    project.buses[MASTER_BUS as usize].bus.strip.master = MasterSectionParams {
-        lookahead_ms,
-        ..MasterSectionParams::default()
-    };
+    project.buses[MASTER_BUS as usize].bus.strip.master = section;
     project
 }
 
@@ -222,16 +223,12 @@ fn live(project: &Project, frames: usize, block: usize) -> Vec<f32> {
     out
 }
 
-/// **At 0 nothing moves**, live or exported: under the ceiling the ports are
-/// the mix bit for bit, and the export -- its first frame, its length and
-/// every sample of its bars -- is the live render bit for bit.
+/// **Nothing on the master is late**, live or exported: under the ceiling
+/// the ports are the mix bit for bit, and the export -- its first frame, its
+/// length and every sample of its bars -- is the live render bit for bit.
 #[test]
-fn a_lookahead_of_zero_leaves_the_live_and_exported_paths_as_they_were() {
-    let project = quiet_project(0.0);
-    assert_eq!(
-        RenderState::from_project(SAMPLE_RATE, &project, &[]).output_latency_frames(),
-        0
-    );
+fn the_live_and_exported_paths_start_on_the_bar_line() {
+    let project = quiet_project(MasterSectionParams::default());
     let (limited_l, limited_r) = render_master_in_blocks(&project, 0.5, 1_024);
     let (mix_l, mix_r) = render_mix(&project, 0.5);
     assert!(limited_l.iter().any(|s| s.abs() > 0.01), "the comparison ran on silence");
@@ -240,7 +237,7 @@ fn a_lookahead_of_zero_leaves_the_live_and_exported_paths_as_they_were() {
     assert_eq!(limited_r, mix_r, "the guard touched a mix under the ceiling");
 
     let temp = tempfile::tempdir().expect("a temporary directory");
-    let exported = export(&project, "zero.wav", temp.path());
+    let exported = export(&project, "now.wav", temp.path());
     // The bars, which is where the two paths are meant to agree: past them
     // an export pauses into its tail while this live render goes on
     // looping the pattern.
@@ -251,31 +248,55 @@ fn a_lookahead_of_zero_leaves_the_live_and_exported_paths_as_they_were() {
     assert_eq!(exported[..bars * 2], played[..], "the export is not the live render");
 }
 
-/// Above 0 the ports are the mix `L` frames late, bit for bit under the
-/// ceiling -- and an export trims those frames back off, so it is the same
-/// file, frame for frame and length for length, as one at 0.
+/// **A song saved with the knob turned up opens at no lookahead** (MOO-217):
+/// no error, no repair, the rest of the section as it was saved, and it
+/// plays and exports sample for sample as the same song saved without it.
 #[test]
-fn a_lookahead_delays_the_ports_and_the_export_starts_on_the_bar_line_anyway() {
-    let zero = quiet_project(0.0);
-    let ahead = quiet_project(3.0);
-    let delay =
-        RenderState::from_project(SAMPLE_RATE, &ahead, &[]).output_latency_frames() as usize;
-    assert_eq!(delay, 144);
+fn a_song_saved_with_a_lookahead_opens_without_one_and_sounds_the_same() {
+    // The compressor in, so the section is not the default and the song
+    // writes it down.
+    let project = quiet_project(MasterSectionParams {
+        comp_in: true,
+        voicing: BusCompVoicing::Punch,
+        ..MasterSectionParams::default()
+    });
+    let temp = tempfile::tempdir().expect("a temporary directory");
+    let path = temp.path().join("looked-ahead.mooloop");
+    mooloop_project::save_song(&path, &project, mooloop_project::AssetMode::Referenced)
+        .expect("the song saves");
+
+    // What the day-old build wrote: the same section with `lookahead_ms` in
+    // it. Written into the file by hand, since nothing can write it now.
+    let written = std::fs::read_to_string(&path).expect("the song reads");
+    let mut edited = String::new();
+    let mut found = false;
+    for line in written.lines() {
+        edited.push_str(line);
+        edited.push('\n');
+        if line.trim_start().starts_with('[') && line.trim_end().ends_with("strip.master]") {
+            edited.push_str("lookahead_ms = 2.5\n");
+            found = true;
+        }
+    }
+    assert!(found, "the song has no master section to carry it:\n{written}");
+    std::fs::write(&path, edited).expect("the edited song writes");
+
+    let report = mooloop_project::load_bundle(&path).expect("a song with a lookahead opens");
+    assert!(report.repairs.is_empty(), "it needed repairs: {:?}", report.repairs);
+    assert!(report.warnings.is_empty(), "it warned: {:?}", report.warnings);
+    let mooloop_project::LoadedDocument::Song(loaded) = report.document else {
+        panic!("a song opened as something else");
+    };
+    let section = loaded.buses[MASTER_BUS as usize].bus.strip.master;
+    assert_eq!(section, project.buses[MASTER_BUS as usize].bus.strip.master);
 
     let frames = SAMPLE_RATE as usize / 2;
-    let now = live(&zero, frames, 256);
-    let late = live(&ahead, frames, 256);
-    assert!(now.iter().any(|s| s.abs() > 0.01), "the comparison ran on silence");
-    assert!(late[..delay * 2].iter().all(|&s| s == 0.0), "the ports did not wait");
+    let want = live(&project, frames, 256);
+    assert!(want.iter().any(|s| s.abs() > 0.01), "the comparison ran on silence");
+    assert_eq!(live(&loaded, frames, 256), want, "the ports moved");
     assert_eq!(
-        late[delay * 2..],
-        now[..(frames - delay) * 2],
-        "the lookahead changed the audio"
+        export(&loaded, "loaded.wav", temp.path()),
+        export(&project, "saved.wav", temp.path()),
+        "the export moved"
     );
-
-    let temp = tempfile::tempdir().expect("a temporary directory");
-    let at_zero = export(&zero, "zero.wav", temp.path());
-    let at_three = export(&ahead, "three.wav", temp.path());
-    assert_eq!(at_three.len(), at_zero.len(), "the lookahead changed the export's length");
-    assert_eq!(at_three, at_zero, "the export does not start on the bar line");
 }

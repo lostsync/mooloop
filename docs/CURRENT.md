@@ -731,7 +731,7 @@ selected source (sampler / drum synth / DS-01 / v1 mono / ML-M1 / ML-P8 / poly /
                                             master effect chain -> master bus compressor -> gain/pan
                                                            |
                                                            v
-                               output guard: NaN/Inf -> silence, 0 dBFS limiter (lookahead 0-5 ms)
+                               output guard: NaN/Inf -> silence, 0 dBFS limiter (no lookahead)
                                                            |
                                                            v
                                   driver output (JACK ports or a Core Audio device)
@@ -768,11 +768,11 @@ and takes modulation, it reports no latency, and it ships a factory bank of
 six (two per voicing). At the end of the master's chain it renders the same
 as the master's section at the same settings, sample for sample.
 
-**The safety limiter's lookahead** (MOO-169) is a small knob on the master's
-Out face, beside its clip lamp: 0 ms by default, which is the zero-latency
-limiter exactly, up to 5 ms. Above 0 everything leaving the master is that
-much later; a take from the hardware input waits for it, and an export trims
-it, so a file still starts on the bar line.
+**The safety limiter has no lookahead and no knob** (MOO-217). The
+lookahead knob that sat on the master's Out face for a day (MOO-169) is gone:
+nothing leaving the master is late, so monitoring, takes and exports carry no
+extra delay for it. A song saved with the knob turned up opens at no
+lookahead, with nothing to repair.
 
 **Inside the graph** (MOO-176), the effect host checks each device's input in
 the peak fold it already takes for the meters. A block carrying a NaN or an

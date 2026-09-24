@@ -54,7 +54,7 @@ use mooloop_core::strip::{
 use mooloop_core::strip::{
     BusCompVoicing, MasterSectionParams, MASTER_COMP_IN, MASTER_COMP_MAKEUP_DB, MASTER_COMP_MIX,
     MASTER_COMP_THRESHOLD_DB, MASTER_COMP_VOICING, MASTER_GRIP_ATTACK, MASTER_GRIP_RATIO,
-    MASTER_GRIP_RELEASE, MASTER_LOOKAHEAD_MS, MASTER_PUNCH_ATTACK, MASTER_PUNCH_RATIO,
+    MASTER_GRIP_RELEASE, MASTER_PUNCH_ATTACK, MASTER_PUNCH_RATIO,
     MASTER_PUNCH_RELEASE, MASTER_TUBE_TIME,
 };
 use mooloop_core::{log_debug, log_error, log_info, log_warn};
@@ -596,7 +596,6 @@ pub fn install_master_spec(window: &MainWindow) {
     spec.set_punch_attack(MASTER_PUNCH_ATTACK as i32);
     spec.set_punch_release(MASTER_PUNCH_RELEASE as i32);
     spec.set_tube_time(MASTER_TUBE_TIME as i32);
-    spec.set_lookahead_ms(MASTER_LOOKAHEAD_MS as i32);
     spec.set_voicings(words(BusCompVoicing::ALL.iter().map(|v| v.label().to_string())));
     spec.set_grip_ratios(words(GRIP_RATIOS.iter().map(|r| r.marking.to_string())));
     spec.set_punch_ratios(words(PUNCH_RATIOS.iter().map(|r| r.marking.to_string())));
@@ -623,7 +622,7 @@ pub fn install_master_spec(window: &MainWindow) {
 /// id and a natural value in, this kind's **descriptor position** and a
 /// normalized value out -- what `effect-param-changed` takes (`AGENTS.md`,
 /// *Parameter identity across the session boundary*). `None` for an id the
-/// insert does not have, which is the master's Comp In and Lookahead.
+/// insert does not have, which is the master's Comp In.
 ///
 /// The one place the two id spaces meet on the UI side, and it goes through
 /// `bus_comp_master_id` and the table rather than an offset of its own.
@@ -649,7 +648,6 @@ pub fn master_row(params: &MasterSectionParams) -> MasterRow {
         punch_attack: i32::from(params.punch_attack),
         punch_release: i32::from(params.punch_release),
         tube_time: i32::from(params.tube_time),
-        lookahead_ms: params.lookahead_ms,
     }
 }
 
@@ -11118,17 +11116,7 @@ impl AppUi {
                     }
                     Some(RecordPress::Arm { channel, seat, name, clip_ticks, from_input }) => {
                         let sample_rate = guard.audio_sample_rate;
-                        // The driver's round trip, and the master's lookahead
-                        // (MOO-169): the player hears the master that much
-                        // late and plays that much late. A take of a channel,
-                        // a track or the master reads the mix before the
-                        // limiter and waits for neither.
-                        let delay = if from_input {
-                            guard.input_latency_frames
-                                + guard.session.master_lookahead_frames(sample_rate)
-                        } else {
-                            0
-                        };
+                        let delay = if from_input { guard.input_latency_frames } else { 0 };
                         match guard.takes.arm(channel, seat, &name, clip_ticks, sample_rate, delay) {
                             Ok(command) => {
                                 // The routing first, so the take reads the

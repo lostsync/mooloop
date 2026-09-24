@@ -307,8 +307,9 @@ In the order worth playing:
 6. **The master bus compressor, each voicing** (MOO-13, step 3). *"Turning it
    on should feel special"* is the acceptance case and only a listen can pass
    it. A kick, a bass line and chords a few decibels hot, rendered with the
-   section out, then Grip, Punch and Tube in (the limiter-lookahead render
-   goes when MOO-217 removes the lookahead), to float WAVs with their reduction printed beside them:
+   section out, then Grip, Punch and Tube in (the safety limiter has no
+   lookahead since MOO-217, so there is no lookahead render), to float WAVs
+   with their reduction printed beside them:
    `scripts/antibox --pull target/master-bus-comp cargo run -p mooloop-engine
    --example master_bus_comp -- target/master-bus-comp`. From step 04 the
    same is reachable on the master's rack.

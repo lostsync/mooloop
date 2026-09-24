@@ -1573,8 +1573,8 @@ impl Default for PreampParams {
 /// each is its master twin minus [`crate::strip::MASTER_COMP_VOICING`], and
 /// the insert runs the master's own `BusComp` by adding it back
 /// ([`bus_comp_master_id`]). The master's Comp In has no twin, because an
-/// insert's in/out is its rail's bypass, and neither has its Lookahead,
-/// which is the safety limiter's and not the compressor's.
+/// insert's in/out is its rail's bypass. The master's retired id 56
+/// (MOO-217) was the safety limiter's lookahead, never the compressor's.
 pub const BUS_COMP_PARAM_VOICING: u32 = 0;
 pub const BUS_COMP_PARAM_THRESHOLD_DB: u32 = 1;
 pub const BUS_COMP_PARAM_MAKEUP_DB: u32 = 2;
@@ -1678,7 +1678,6 @@ impl BusCompParams {
             punch_attack: self.punch_attack,
             punch_release: self.punch_release,
             tube_time: self.tube_time,
-            ..crate::strip::MasterSectionParams::default()
         }
     }
 
