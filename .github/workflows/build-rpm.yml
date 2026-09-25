@@ -62,8 +62,24 @@ jobs:
       - name: Install cargo-generate-rpm
         run: cargo install cargo-generate-rpm --locked
 
+      # x86-64-v2, as release.yml builds it (MOO-263; packaging/README.md).
+      # This replaces the empty workflow RUSTFLAGS, and so the committed
+      # config's mold flag, which the runner cannot use anyway.
       - name: Build release binary
+        env:
+          RUSTFLAGS: "-C target-cpu=x86-64-v2"
         run: cargo build --locked --release -p mooloop-app --bin mooloop
+
+      # Baseline holds 3 round instructions, v2 1,423 (MOO-263; release.yml).
+      - name: The binary was built for x86-64-v2
+        run: |
+          set -eu
+          count=$(objdump -d --no-show-raw-insn target/release/mooloop | grep -cE '\sround(ss|sd|ps|pd)\s' || true)
+          echo "SSE4.1 round instructions: $count"
+          if [ "$count" -lt 100 ]; then
+            echo "The binary has only $count SSE4.1 round instructions: it was not built with target-cpu=x86-64-v2." >&2
+            exit 1
+          fi
 
       # Everything, as release.yml does; this build publishes no symbols.
       - name: Strip the distributable binary

@@ -1087,7 +1087,11 @@ publishing, from **Run workflow** (`workflow_dispatch`), which is how to check a
 workflow change before tagging.
 The release workflow does the distribution build against Ubuntu 20.04 for a
 glibc 2.31 baseline; the local release build is a useful check, not a
-substitute for those artifacts.
+substitute for those artifacts. Since 2026-09-25 (MOO-263, Adam: "we can do
+v2, totally") the Linux release binary is built for **x86-64-v2** (SSE4.2 and
+POPCNT: Intel from about 2009, AMD from about 2011), and only it: tests, CI and
+every dev or box build stay at baseline x86-64. `packaging/README.md` has the
+ruling, the reason, and how to build a v2 binary locally.
 
 For just an RPM from the current pushed branch, without a release or tag:
 

@@ -157,13 +157,37 @@ jobs:
       - name: Install cargo-deb and cargo-generate-rpm
         run: cargo install --locked cargo-deb cargo-generate-rpm
 
+      # x86-64-v2 (SSE4.2, POPCNT), Adam's ruling of 2026-09-25 on MOO-263:
+      # without SSE4.1, `floor`, `trunc`, `fract` and `rem_euclid` are libm
+      # calls in every per-sample loop; with it they are one `roundss`. Only
+      # this binary gets it. `verify` above, ci.yml and every dev build stay
+      # at baseline x86-64, so a test cannot lean on an instruction the
+      # baseline lacks. Setting RUSTFLAGS here replaces the empty workflow
+      # value, and with it .cargo/config.toml's mold flag, which the runner
+      # has no mold for anyway. packaging/README.md has the ruling.
       - name: Build the release binary
+        env:
+          RUSTFLAGS: "-C target-cpu=x86-64-v2"
         run: |
           set -euo pipefail
           cargo build --locked --release -p mooloop-app --bin mooloop
           VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)
           test -n "$VERSION"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      # Measured on the build box (MOO-263): a baseline `mooloop` holds 3
+      # SSE4.1 round instructions (source untraced; likely a dependency's
+      # runtime-dispatched SIMD path),
+      # a v2 one 1,423. Under 100 means the flag above was lost.
+      - name: The binary was built for x86-64-v2
+        run: |
+          set -euo pipefail
+          count=$(objdump -d --no-show-raw-insn target/release/mooloop | grep -cE '\sround(ss|sd|ps|pd)\s' || true)
+          echo "SSE4.1 round instructions: $count"
+          if [ "$count" -lt 100 ]; then
+            echo "The release binary has only $count SSE4.1 round instructions: it was not built with target-cpu=x86-64-v2." >&2
+            exit 1
+          fi
 
       - name: Verify glibc compatibility baseline
         run: |
