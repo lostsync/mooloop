@@ -1,12 +1,11 @@
 # Focus
 
-Status: **the 2026-09-24 sequence is chosen and queued; not started.** Adam
-picked it on 2026-09-24: the sidebars, CLAP hosting, and the sampler's loop
-story, with a handful of fixes and interface tweaks alongside. Every item is
-a Linear issue in **Todo**, 22 of them, in the three lanes below. A new
-session starts the work. The 2026-09-23 sequence (the layer device, a plugin
-you can hear, the master bus compressor) landed in full and its record is in
-`JOURNAL.md` and each step's archived plan.
+Status: **the 2026-09-24 sequence is done (2026-09-25); the next one is
+Adam's call.** All twenty issues in its three lanes landed over a day and a
+night of team orchestration. MOO-219 waits on Adam, and none of it has been
+heard. **Do not start new sequence work from this document until it is
+rewritten** with the choice under "The next sequence" below. The record is
+in `JOURNAL.md`, each plan's `00-status.md`, and the issues.
 
 `archive/ROADMAP.md` orders the whole product by dependency, and `SCOPE.md`
 says what 0.2.0 is. This document is narrower: it names the active sequence
@@ -41,88 +40,57 @@ Two siblings, kept because they outlived the plans they came from:
   moves straight to new loop gestures, and lane 2 ends with a plugin put in
   a chain from the window.
 
-## The sequence, 2026-09-24
+## The sequence, 2026-09-24: done
 
-Three lanes, one team each: at most three at once, each in its own
-worktree, every build on antibox (`docs/OPERATIONS.md`). Work each lane top
-to bottom; an item lower in a lane may start early only if the one above it
-is blocked. **Linear is the state**: the issue's status, and its comments for
-any ruling made since it was written.
+Every item is on `main` and closed, except MOO-219, which is In Review for
+Adam. Listening and looking are items 5 and 8-18 of "Listening is a step"
+below.
 
-**Lane 1: interface, and the fixes Adam hits every day** (Interface, with
-Mixer and Engine for the last two)
+- **Lane 1, interface and daily fixes:** knobs follow their parameter
+  (MOO-220), the left sidebar (MOO-8), browser search/select/load (MOO-9),
+  add a device from the arrow between devices (MOO-218), fold a device to
+  its header (MOO-219: needs one look in the running app, and Adam's answer
+  on whether folds are saved), no master lookahead (MOO-217), and a true
+  "realtime" readout (MOO-215).
+- **Lane 2, CLAP hosting:** plugin parameters, automation, modulation and
+  state (MOO-82), no click when a plugin swaps (MOO-213), plugin latency
+  inside containers (MOO-212), the plugin browser, the insert row and a face
+  for plugins with no GUI, so a plugin goes in a chain from the window
+  (MOO-83), and the stretch items, a plugin as a channel's instrument
+  playing its notes (MOO-84, MOO-85, MOO-232). No installed plugin makes a
+  sound from notes alone, so the instrument case uses the test sine; Surge
+  XT or Dexed would be the real one.
+- **Lane 3, the sampler's loop story:** ML-P8 Volume smoothing (MOO-214),
+  loop crossfade (MOO-43), SYNC off freezes the ratio (MOO-39), loop grid
+  (MOO-47), transient slicing (MOO-44), a pattern from slices (MOO-46), and
+  Bus Comp as an insert (MOO-216).
 
-1. **MOO-220**, a knob stops following its parameter once dragged. The EQ's
-   knobs keep the last band's values when a new point is picked, and undo,
-   presets and MIDI are hidden the same way on any touched knob. First,
-   because it is a bug met every session and the fix (controlled by default,
-   plus an all-faces test) touches the shared controls every later step uses.
-2. **MOO-8**, the left sidebar: an action and a shortcut, and mute/solo,
-   volume and pan in both the sidebar and the rack row.
-3. **MOO-9**, the browser sidebars: search and filter, click auditions a
-   preset, double-click or Enter loads it, drag places it.
-4. **MOO-218**, add a device from the `→` between two devices; the rail `+`
-   and the end slot go.
-5. **MOO-219**, a device collapses to its header turned on its side, from a
-   `<` where the rail `+` was. After MOO-218 or with it, never before.
-6. **MOO-217**, remove the master safety limiter's lookahead knob (reverses
-   MOO-169; no lookahead at all).
-7. **MOO-215**, the load readout says "not realtime" while the callback
-   thread is SCHED_FIFO.
+**Rulings made 2026-09-24**, still in force: MOO-43 is crossfade only; the
+master's safety limiter has no lookahead; the master keeps its built-in Bus
+Comp and the insert runs the same DSP; a plugin's role (effect or
+instrument) comes from its own CLAP features, and its ports decide only what
+can be wired.
 
-**Lane 2: CLAP hosting** (`docs/plans/plugin-hosting/`; Parameters & Control,
-Engine, Effects, Interface)
+## The next sequence
 
-1. **MOO-82**, step 07: a plugin's parameters, automation, modulation and
-   state round-trip.
-2. **MOO-213**, the placeholder/plugin swap has no fade. Triage first: write
-   the continuity test and see whether it fails.
-3. **MOO-212**, a plugin inside a container gets its alignment sized for zero
-   latency.
-4. **MOO-83**, step 08: the plugin browser, the menu row, and the face for
-   plugins with no GUI. This is the step that puts a plugin in a chain from
-   the window, so it is the lane's audible acceptance case.
-5. **Stretch: MOO-84 and MOO-85**, steps 09 and 10, CLAP instruments.
+Not chosen. What the day left, filed, for Adam to pick from:
 
-**Lane 3: the sampler's loop story, then the Bus Comp** (Instruments,
-Effects)
-
-1. **MOO-214**, ML-P8's Volume is not smoothed and zippers under modulation.
-   Small, and Adam hit it in a real tune.
-2. **MOO-43**, click-free loop seams by **crossfade** (0 ms default,
-   bit-identical there).
-3. **MOO-39**, tempo fit's leftovers; turning SYNC off **freezes** the
-   derived ratio.
-4. **MOO-47**, loop bounds quantized to divisions and slice markers.
-5. **MOO-44**, transient detection and automatic slice markers.
-6. **MOO-46**, a sequencer pattern from slice markers.
-7. **MOO-216**, the bus comp as an insert device too, and "Bus Comp"
-   everywhere the user sees it.
-
-**Left in Backlog on purpose:** key zones and multisample (MOO-14, MOO-40,
-MOO-41) and legato (MOO-45). They are the sampler's instrument side, not its
-loop side, and a day of their own.
-
-**Rulings made 2026-09-24**, on the issues:
-
-- MOO-43 is **crossfade only**. This supersedes the 2026-09-23 answer below
-  ("a crossfade *and* zero-crossing snap"); a snap is not part of it.
-- MOO-39: SYNC off freezes the ratio, as answered on 2026-09-23.
-- MOO-217: the master's safety limiter has no lookahead and no knob.
-- MOO-216: the master keeps its built-in section; the insert runs the same
-  DSP; the name is "Bus Comp".
-- MOO-219: nested devices collapse, and a collapsed container hides its
-  contents. Whether the fold is saved with the song is still Adam's call; the
-  issue recommends saving it without an undo step.
-
-## The last sequence, 2026-09-23: done
-
-The layer device (MOO-71, MOO-72), a CLAP effect in a chain with its scanner
-(MOO-80, MOO-81), and the master bus compressor (MOO-13, MOO-169, MOO-208).
-All landed, none heard; their listening passes are items 1, 6 and 7 of
-"Listening is a step" below. Left over: MOO-210 (a container's output trim is
-inert), MOO-160 (deferred), MOO-209 (recorded MIDI compensated for no output
-latency).
+- **Left in Backlog on purpose:** key zones and multisample (MOO-14, MOO-40,
+  MOO-41) and legato (MOO-45), the sampler's instrument side.
+- **Plugin hosting's rest:** a plugin face's modulation ring and parameter
+  naming (MOO-228), pinned parameters and a Plugins preferences page
+  (MOO-229), plugin presets (MOO-222), an instrument's parameters (need a
+  source-slot id, MOO-74's open point), an instrument restart fades (MOO-230),
+  GUI windows (step 11), VST3 and AU.
+- **The browser:** auditioning a device preset on click (MOO-227), rename by
+  double-click (MOO-224), spring-loaded preset drag (MOO-225).
+- **Correctness, small:** the host leaks the dry signal at -147 dB at full
+  wet (MOO-226), exports keep subnormals playback flushes (MOO-223), ML-P8
+  Pan/Spread may step like Volume did (MOO-221, Triage), recorded MIDI is
+  compensated for no output latency (MOO-209), a container's output trim is
+  inert (MOO-210), and a timing-flaky test on macOS CI (MOO-231).
+- **The listening passes themselves**, before any of it: eighteen are
+  queued and nothing since 2026-09-18 has been heard.
 
 ## Answered 2026-09-23, now construction
 
@@ -162,8 +130,10 @@ is short:
   bevel, Platinum and Impulse, and stopped where the step says to look before
   converting the rest of the controls. It needs a look, not a paragraph.
 - **The listening passes** below, which nobody has taken since 2026-09-18.
-- **Whether a collapsed device stays collapsed when the song reopens**
-  (MOO-219).
+- **MOO-219:** whether a collapsed device stays collapsed when the song
+  reopens, and one look at the folded strip's rotated label in the running
+  app (the test renderer ignores rotation).
+- **The next sequence** (above).
 
 MOO-159 (the tracker) keeps its label, because "not now" defers the question
 rather than answering it.

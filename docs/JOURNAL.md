@@ -1771,6 +1771,20 @@ Adam: *"when you pick a new point in the EQ, the knobs all stay on the last poin
 
 So `controlled` is the default now on every shared value control (MOO-220), and `controlled: false` is the exception a caller has to state. The test that holds it walks the item tree for every `slider` in the real window, turns each one a notch, puts the document back underneath it, and reads the readout. On the unfixed tree it named five controls on the EQ alone, including both trims, which nobody had reported. The lesson is the Sep 4 one again, one level up: that entry's own test was right about the face it tested, and the prose that generalised from it was never tested at all.
 
+## Sep 24–25 (the three-lane push) — twenty issues, nine teams, one ruling reversed twice
+
+Adam queued twenty issues in `FOCUS.md`'s three lanes, then asked for them through team orchestration again. Nine team agents worked them, at most three at a time: Interface twice, Engine three times, Parameters & Control, Instruments, Effects and Mixer. Every issue landed, and all but MOO-219 are closed. MOO-219 waits on Adam for one look and one answer.
+
+Three things are worth keeping from how it went.
+
+**The orchestrator's rulings needed correcting too.** A plugin instrument's port rule went through three versions in an hour. The first said "no audio input", and that refused every LSP instrument. The second said "an effect has no note input", and that would have refused vocoders. The third came from the plugin's own CLAP features, which is what the format provides for exactly this. Each correction came from a team reporting what the tree actually held, not from the orchestrator thinking harder. The same happened when `plugin_ui.rs` turned out to hold a copy of the rule: a team noticed the copy, and the fix was to call the rule, not to keep the copy in step.
+
+**Infrastructure set the pace again.** The auto-mode classifier refused the first pushes as "Out-of-Place Publication". Adam switched modes and then added an allow rule, and the teams kept stacking verified commits meanwhile, so nothing was lost. The build box reached 95% full mid-afternoon. It was brought back to 51% by landing work and removing each finished worktree with its cache, including one from another session's already-landed fix. A usage limit stopped two teams at once; both had committed, and both resumed.
+
+**Tests that look at pixels, and tests that look at time, broke for reasons that had nothing to do with the change.** A browser test found preset rows by scanning a fixed column, and a third tab covered it. The null driver's drop test asserted one second of wall-clock time, and failed on a loaded macOS runner (MOO-231). `window_probe.rs`, added today, finds things in the real window by their role, and is the better foundation for the next such test.
+
+None of it has been heard. `FOCUS.md` lists eighteen passes.
+
 ## Open threads
 
 Refreshed 2026-09-02, with the September documentation audit's threads merged in on 2026-09-04 and Adam's 2026-09-05 list merged in after that. Four of the six threads listed here in August are closed: modulation drives things now, the buffer device exists, undo and clipboard are real, and the convolution reverb that needed an IR loader was replaced outright by an FDN hall — so `StereoIr` is no longer the boundary anything is waiting on.
