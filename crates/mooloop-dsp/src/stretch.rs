@@ -60,7 +60,7 @@
 //! with a trustworthy onset table and destructive with a bad one — up to 255
 //! cents on a held bass note — so it waits for the detector in #33.
 
-use crate::interpolate::{Region, SincTable, MAX_HALF_TAPS};
+use crate::interpolate::{Region, RegionEdge, SincTable, MAX_HALF_TAPS};
 use mooloop_core::{
     StretchMode, MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO, MIN_STRETCH_GRAIN, MIN_STRETCH_RATIO,
 };
@@ -155,6 +155,83 @@ fn capacity_frames(sample_rate: u32) -> usize {
     window_frames(StretchMode::Music, sample_rate, 0).max(GRAIN_MAX_FRAMES as usize)
 }
 
+/// How often, in output frames, [`Stretcher::next_frame`] pays down the
+/// next hop's search. A power of two, so the check is a mask. At 16 a
+/// 128-frame block pays eight shares, and a Music hop of 512 frames is split
+/// into 32.
+const PACE: usize = 16;
+
+/// Candidates scored together. The same sums in the same order per
+/// candidate as one at a time, so the choice is bit for bit the same, but
+/// eight independent chains instead of one dependent chain, which the
+/// compiler turns into vector adds.
+const LANES: usize = 8;
+
+/// The next hop's splice search, begun as soon as this hop is laid down and
+/// paid for a share at a time while this hop drains (MOO-248).
+///
+/// Everything the search reads is known the moment a hop is chosen: where
+/// the next one nominally starts (the analysis pointer has already moved)
+/// and what it must continue (the chosen segment's natural continuation).
+/// Doing it all at the hop boundary put a whole search in whichever
+/// callback the boundary fell in, and voices started together fell in the
+/// same one. The plan records what it was begun from, and the boundary uses
+/// it only if all of that still holds; otherwise it searches from scratch
+/// there, as before, so a plan can never change what is chosen.
+#[derive(Clone, Copy)]
+struct Plan {
+    live: bool,
+    mode: StretchMode,
+    window: usize,
+    nominal: i64,
+    nat_start: i64,
+    region_start: u64,
+    region_end: u64,
+    edge: RegionEdge,
+    frames_ptr: usize,
+    frames_len: usize,
+    nat_done: usize,
+    buf_done: usize,
+    next_candidate: usize,
+    best_offset: usize,
+    best_score: f32,
+    units_total: usize,
+    units_done: usize,
+}
+
+impl Plan {
+    fn idle() -> Self {
+        Self {
+            live: false,
+            mode: StretchMode::Music,
+            window: 0,
+            nominal: 0,
+            nat_start: 0,
+            region_start: 0,
+            region_end: 0,
+            edge: RegionEdge::Silent,
+            frames_ptr: 0,
+            frames_len: 0,
+            nat_done: 0,
+            buf_done: 0,
+            next_candidate: 0,
+            best_offset: 0,
+            best_score: f32::NEG_INFINITY,
+            units_total: 0,
+            units_done: 0,
+        }
+    }
+
+    /// Whether this plan was begun on the same sample and region.
+    fn reads(&self, frames: &[[f32; 2]], region: Region) -> bool {
+        self.frames_ptr == frames.as_ptr() as usize
+            && self.frames_len == frames.len()
+            && self.region_start == region.start.to_bits()
+            && self.region_end == region.end.to_bits()
+            && self.edge == region.edge
+    }
+}
+
 /// One voice's stretcher. All state is allocated in [`Stretcher::new`]; every
 /// other method on this type is allocation- and drop-free, which is what lets
 /// it live on the audio thread.
@@ -197,6 +274,10 @@ pub struct Stretcher {
     prev_chosen: i64,
     ratio: f64,
     first_frame: bool,
+    plan: Plan,
+    /// Whether the search is spread over the hop. Off only in tests and
+    /// the cost measurement, to compare against the search at the boundary.
+    spread: bool,
 }
 
 impl Stretcher {
@@ -226,6 +307,8 @@ impl Stretcher {
             prev_chosen: 0,
             ratio: 1.0,
             first_frame: true,
+            plan: Plan::idle(),
+            spread: true,
         };
         stretcher.apply_geometry(mode, GRAIN_DEFAULT_FRAMES);
         stretcher
@@ -322,6 +405,15 @@ impl Stretcher {
         self.overlap = window - self.hop;
         self.search = if searches(mode) { self.hop } else { 0 };
         self.pending = None;
+        self.plan.live = false;
+    }
+
+    /// Search each hop whole at its boundary, as before MOO-248, instead of
+    /// spreading it. For comparisons only; the output is the same.
+    #[cfg(test)]
+    pub(crate) fn set_spread(&mut self, spread: bool) {
+        self.spread = spread;
+        self.plan.live = false;
     }
 
     /// Output frames per input frame. `1.5` is longer and slower.
@@ -357,6 +449,7 @@ impl Stretcher {
         self.analysis_pos = start_frame;
         self.prev_chosen = start_frame as i64;
         self.first_frame = true;
+        self.plan.live = false;
     }
 
     /// Where the analysis pointer currently sits, in input frames. This is
@@ -372,7 +465,8 @@ impl Stretcher {
     /// per-frame — envelopes, the filter, and the shaper all advance around
     /// this call. Output is identical regardless of how the caller groups its
     /// pulls, because a whole overlap-add hop is computed at once and then
-    /// drained; block size cannot change the arithmetic.
+    /// drained, and the next hop's search is paid for by frame count, not by
+    /// call; block size cannot change the arithmetic.
     pub fn next_frame(&mut self, frames: &[[f32; 2]], region: Region) -> [f32; 2] {
         if frames.is_empty() {
             return [0.0, 0.0];
@@ -382,6 +476,18 @@ impl Stretcher {
         }
         let frame = self.ready[self.ready_pos];
         self.ready_pos += 1;
+        if self.plan.live && self.ready_pos & (PACE - 1) == 0 {
+            if self.plan.reads(frames, region) {
+                // Due by the hop's last frame, in proportion to how much of
+                // the hop has been drained.
+                let due = self.plan.units_total * self.ready_pos / self.ready_len;
+                self.advance_plan(frames, region, due);
+            } else {
+                // The sample or region moved under the plan: the boundary
+                // searches from scratch, as it always did.
+                self.plan.live = false;
+            }
+        }
         frame
     }
 
@@ -398,6 +504,116 @@ impl Stretcher {
     fn mid_at(frames: &[[f32; 2]], region: Region, index: i64) -> f32 {
         let frame = Self::frame_at(frames, region, index);
         0.5 * (frame[0] + frame[1])
+    }
+
+    /// `out[k] = mid_at(at + k)`, read straight from the slice when the run
+    /// is wholly inside the region's plain span, which is the usual case.
+    fn fill_mid(out: &mut [f32], frames: &[[f32; 2]], region: Region, at: i64) {
+        let (lo, hi) = region.plain_span(frames.len());
+        if at >= lo && at + out.len() as i64 <= hi {
+            let from = at as usize;
+            let count = out.len();
+            for (slot, frame) in out.iter_mut().zip(&frames[from..from + count]) {
+                *slot = 0.5 * (frame[0] + frame[1]);
+            }
+        } else {
+            for (offset, slot) in out.iter_mut().enumerate() {
+                *slot = Self::mid_at(frames, region, at + offset as i64);
+            }
+        }
+    }
+
+    /// Begin the search for a hop that nominally starts at `nominal` and
+    /// must continue the material at `nat_start`, under the active geometry.
+    fn begin_plan(&mut self, frames: &[[f32; 2]], region: Region, nominal: i64, nat_start: i64) {
+        let overlap = self.overlap;
+        let candidates = 2 * self.search + 1;
+        let per_candidate = overlap.div_ceil(self.corr_decim.max(1));
+        self.plan = Plan {
+            live: true,
+            mode: self.mode,
+            window: self.window,
+            nominal,
+            nat_start,
+            region_start: region.start.to_bits(),
+            region_end: region.end.to_bits(),
+            edge: region.edge,
+            frames_ptr: frames.as_ptr() as usize,
+            frames_len: frames.len(),
+            nat_done: 0,
+            buf_done: 0,
+            next_candidate: 0,
+            best_offset: 0,
+            best_score: f32::NEG_INFINITY,
+            // One unit per frame read and one per multiply-add pair, which
+            // is close enough to proportional for pacing.
+            units_total: overlap + (candidates + overlap) + candidates * per_candidate,
+            units_done: 0,
+        };
+    }
+
+    /// Whether the live plan is the search the boundary is about to need.
+    fn plan_fits(&self, frames: &[[f32; 2]], region: Region, nominal: i64, nat_start: i64) -> bool {
+        self.plan.live
+            && self.plan.mode == self.mode
+            && self.plan.window == self.window
+            && self.plan.nominal == nominal
+            && self.plan.nat_start == nat_start
+            && self.plan.reads(frames, region)
+    }
+
+    /// Do the plan's work until `due` units are done, or all of it. Reads
+    /// the natural continuation, then the candidates, then scores them in
+    /// order, keeping the first best exactly as a single pass would.
+    fn advance_plan(&mut self, frames: &[[f32; 2]], region: Region, due: usize) {
+        let overlap = self.overlap;
+        let span = 2 * self.search + overlap + 1;
+        let last = 2 * self.search;
+        let per_candidate = overlap.div_ceil(self.corr_decim.max(1));
+        while self.plan.units_done < due {
+            let budget = due - self.plan.units_done;
+            if self.plan.nat_done < overlap {
+                let from = self.plan.nat_done;
+                let count = (overlap - from).min(budget);
+                let at = self.plan.nat_start + from as i64;
+                Self::fill_mid(&mut self.nat[from..from + count], frames, region, at);
+                self.plan.nat_done += count;
+                self.plan.units_done += count;
+            } else if self.plan.buf_done < span {
+                let from = self.plan.buf_done;
+                let count = (span - from).min(budget);
+                let at = self.plan.nominal - self.search as i64 + from as i64;
+                Self::fill_mid(&mut self.search_buf[from..from + count], frames, region, at);
+                self.plan.buf_done += count;
+                self.plan.units_done += count;
+            } else if self.plan.next_candidate <= last {
+                let first = self.plan.next_candidate;
+                let scored = if first + LANES - 1 <= last {
+                    let scores = self.score_lanes(first);
+                    for (lane, score) in scores.into_iter().enumerate() {
+                        self.keep_if_best(first + lane, score);
+                    }
+                    LANES
+                } else {
+                    let score = self.score(first);
+                    self.keep_if_best(first, score);
+                    1
+                };
+                self.plan.next_candidate += scored;
+                self.plan.units_done += scored * per_candidate;
+            } else {
+                self.plan.units_done = self.plan.units_total;
+                break;
+            }
+        }
+    }
+
+    #[inline]
+    fn keep_if_best(&mut self, candidate: usize, score: f32) {
+        if score > self.plan.best_score {
+            self.plan.best_score = score;
+            self.plan.best_offset = candidate;
+        }
     }
 
     /// Hann weight at `offset` within a window of `window` frames, read from
@@ -453,29 +669,31 @@ impl Stretcher {
             // What the previous segment was about to become, had it kept
             // playing. The best candidate is the one that continues this.
             let nat_start = self.prev_chosen + hop as i64;
-            for offset in 0..overlap {
-                self.nat[offset] =
-                    Self::mid_at(frames, region, nat_start + offset as i64);
+            if !self.plan_fits(frames, region, nominal, nat_start) {
+                self.begin_plan(frames, region, nominal, nat_start);
             }
-            let base = nominal - search;
-            let span = 2 * self.search + overlap + 1;
-            for offset in 0..span {
-                self.search_buf[offset] =
-                    Self::mid_at(frames, region, base + offset as i64);
-            }
-            base + self.best_offset() as i64
+            // Whatever the drained hop left unpaid, or the whole search.
+            self.advance_plan(frames, region, usize::MAX);
+            nominal - search + self.plan.best_offset as i64
         };
+        self.plan.live = false;
 
         // Lay the window down into the accumulator ring. The first hop skips
         // the rising half so a one-shot's initial transient is played at full
         // amplitude rather than faded in from nothing.
+        let (lo, hi) = region.plain_span(frames.len());
+        let plain = chosen >= lo && chosen + window as i64 <= hi;
         for offset in 0..window {
             let weight = if self.first_frame && offset < overlap {
                 1.0
             } else {
                 self.window_weight(offset, window)
             };
-            let frame = Self::frame_at(frames, region, chosen + offset as i64);
+            let frame = if plain {
+                frames[chosen as usize + offset]
+            } else {
+                Self::frame_at(frames, region, chosen + offset as i64)
+            };
             let slot = wrap_index(self.head + offset, window);
             self.acc[slot][0] += weight * frame[0];
             self.acc[slot][1] += weight * frame[1];
@@ -496,38 +714,69 @@ impl Stretcher {
         self.prev_chosen = chosen;
         // Fractional, so duration error never accumulates.
         self.analysis_pos += hop as f64 / self.ratio;
+
+        // Begin the next hop's search now, from what the next boundary will
+        // compute: the same wrap of the same pointer in the same region. A
+        // queued geometry change will change the search, so it waits.
+        if self.spread && searches(self.mode) && self.pending.is_none() {
+            let mut pos = self.analysis_pos;
+            let mut prev = self.prev_chosen;
+            if let Some(span) = region_span(region) {
+                while pos >= region.end {
+                    pos -= span;
+                    prev -= span as i64;
+                }
+            }
+            self.begin_plan(frames, region, pos.round() as i64, prev + self.hop as i64);
+        }
     }
 
-    /// Index into `search_buf` of the candidate whose leading `overlap` frames
-    /// best continue the previous segment.
+    /// How well the candidate at `candidate` in `search_buf` continues the
+    /// previous segment: its correlation with `nat` over its leading
+    /// `overlap` frames.
     ///
     /// Normalized by the candidate's own energy but not by `nat`'s, since
     /// `nat` is fixed across the scan and cannot change the argmax. Without
     /// the candidate normalization the search would simply pick the loudest
     /// nearby moment rather than the best-matching one.
-    fn best_offset(&self) -> usize {
-        let overlap = self.overlap;
+    fn score(&self, candidate: usize) -> f32 {
         let step = self.corr_decim.max(1);
-        let last = 2 * self.search;
-        let mut best_offset = 0;
-        let mut best_score = f32::NEG_INFINITY;
-        for candidate in 0..=last {
-            let mut correlation = 0.0f32;
-            let mut energy = 1.0e-9f32;
-            let mut offset = 0;
-            while offset < overlap {
-                let value = self.search_buf[candidate + offset];
-                correlation += value * self.nat[offset];
-                energy += value * value;
-                offset += step;
-            }
-            let score = correlation / energy.sqrt();
-            if score > best_score {
-                best_score = score;
-                best_offset = candidate;
-            }
+        let mut correlation = 0.0f32;
+        let mut energy = 1.0e-9f32;
+        let mut offset = 0;
+        while offset < self.overlap {
+            let value = self.search_buf[candidate + offset];
+            correlation += value * self.nat[offset];
+            energy += value * value;
+            offset += step;
         }
-        best_offset
+        correlation / energy.sqrt()
+    }
+
+    /// [`Stretcher::score`] for `LANES` neighbouring candidates at once: per
+    /// lane the same products summed in the same order, so the same bits.
+    fn score_lanes(&self, first: usize) -> [f32; LANES] {
+        let step = self.corr_decim.max(1);
+        let mut correlation = [0.0f32; LANES];
+        let mut energy = [1.0e-9f32; LANES];
+        let mut offset = 0;
+        while offset < self.overlap {
+            let at = first + offset;
+            let values: &[f32; LANES] = self.search_buf[at..at + LANES]
+                .try_into()
+                .expect("a slice of LANES");
+            let natural = self.nat[offset];
+            for lane in 0..LANES {
+                correlation[lane] += values[lane] * natural;
+                energy[lane] += values[lane] * values[lane];
+            }
+            offset += step;
+        }
+        let mut scores = [0.0f32; LANES];
+        for lane in 0..LANES {
+            scores[lane] = correlation[lane] / energy[lane].sqrt();
+        }
+        scores
     }
 }
 
@@ -1879,6 +2128,60 @@ mod bit_identity {
             ("reader music x2 rate 1.5", reader(StretchMode::Music, 2.0, 1.5, wrap)),
             ("reader drums x0.6 rate 0.7", reader(StretchMode::Drums, 0.6, 0.7, whole)),
         ]
+    }
+
+    /// The fast reads trust `plain_span`: every frame inside it must be what
+    /// `Region::frame` returns, for every edge, including a crossfaded seam
+    /// with and without pre-roll and a region that overhangs the sample.
+    #[test]
+    fn a_region_plain_span_is_exactly_where_a_frame_is_read_untouched() {
+        let frames = source(10_000);
+        let regions = [
+            region(0.0, 10_000.0, RegionEdge::Silent),
+            region(100.4, 9_000.6, RegionEdge::Wrap),
+            region(300.0, 12_000.0, RegionEdge::Mirror),
+            region(2_000.0, 6_000.0, RegionEdge::Crossfade { fade: 500, floor: 1_800, head: 0 }),
+            region(2_000.0, 6_000.0, RegionEdge::Crossfade { fade: 500, floor: 0, head: 0 }),
+            region(0.0, 6_000.0, RegionEdge::Crossfade { fade: 500, floor: 0, head: 200 }),
+            region(0.0, 900.0, RegionEdge::Crossfade { fade: 5_000, floor: 0, head: 5_000 }),
+            region(0.0, 6_000.0, RegionEdge::Crossfade { fade: 0, floor: 0, head: 0 }),
+        ];
+        for reg in regions {
+            let (lo, hi) = reg.plain_span(frames.len());
+            assert!(lo <= hi);
+            for index in -50..10_050i64 {
+                if (lo..hi).contains(&index) {
+                    assert_eq!(
+                        reg.frame(&frames, index),
+                        Some(frames[index as usize]),
+                        "{reg:?} at {index}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Spreading the search and doing it whole at the boundary choose the
+    /// same splices, sample for sample, in every case above's shape.
+    #[test]
+    fn spreading_the_search_changes_no_sample() {
+        let frames = source(60_000);
+        let reg = region(1_000.0, 30_000.0, RegionEdge::Wrap);
+        for mode in [StretchMode::Music, StretchMode::Drums, StretchMode::Grain] {
+            for ratio in [0.3, 1.0, 2.0, 7.0] {
+                let mut outs = Vec::new();
+                for spread in [true, false] {
+                    let mut stretcher = Stretcher::new(mode, SR);
+                    stretcher.set_spread(spread);
+                    stretcher.set_ratio(ratio);
+                    stretcher.reset(1_234.0);
+                    let out: Vec<_> =
+                        (0..20_000).map(|_| stretcher.next_frame(&frames, reg)).collect();
+                    outs.push(hash(&out));
+                }
+                assert_eq!(outs[0], outs[1], "{mode:?} x{ratio}");
+            }
+        }
     }
 
     /// Hashes taken from the tree before MOO-248 (8e570c4f).

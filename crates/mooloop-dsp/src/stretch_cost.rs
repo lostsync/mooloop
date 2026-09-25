@@ -148,12 +148,17 @@ fn stretch_block_cost() {
         end: frames.len() as f64,
         edge: crate::interpolate::RegionEdge::Wrap,
     };
-    let rows: Vec<(StretchMode, f64, usize)> = vec![
-        (StretchMode::Music, 2.0, 1),
-        (StretchMode::Music, 2.0, 8),
-        (StretchMode::Music, 0.5, 8),
-        (StretchMode::Drums, 2.0, 8),
-        (StretchMode::Grain, 2.0, 8),
+    // The last field spreads the search over the hop, as shipped; `false`
+    // does each hop's search whole at its boundary, as before MOO-248.
+    let rows: Vec<(StretchMode, f64, usize, bool)> = vec![
+        (StretchMode::Music, 2.0, 1, true),
+        (StretchMode::Music, 2.0, 1, false),
+        (StretchMode::Music, 2.0, 8, true),
+        (StretchMode::Music, 2.0, 8, false),
+        (StretchMode::Music, 0.5, 8, true),
+        (StretchMode::Drums, 2.0, 8, true),
+        (StretchMode::Drums, 2.0, 8, false),
+        (StretchMode::Grain, 2.0, 8, true),
     ];
     let reps: usize = std::env::var("STRETCH_BLOCK_REPS")
         .ok()
@@ -161,11 +166,12 @@ fn stretch_block_cost() {
         .unwrap_or(7);
     let mut best = vec![vec![u128::MAX; BLOCKS]; rows.len()];
     for _ in 0..reps {
-        for (row, &(mode, ratio, voices)) in rows.iter().enumerate() {
+        for (row, &(mode, ratio, voices, spread)) in rows.iter().enumerate() {
             let mut readers: Vec<StretchReader> =
                 (0..voices).map(|_| StretchReader::new(mode, SR)).collect();
             for reader in readers.iter_mut() {
                 reader.stretcher_mut().set_ratio(ratio);
+                reader.stretcher_mut().set_spread(spread);
                 reader.reset(0.0);
             }
             for block in 0..BLOCKS {
@@ -181,13 +187,19 @@ fn stretch_block_cost() {
         }
     }
     println!();
-    println!("  row                        mean µs   worst µs   worst/mean");
-    for (row, &(mode, ratio, voices)) in rows.iter().enumerate() {
+    println!("  row                                  mean µs   worst µs   worst/mean  after 1st");
+    for (row, &(mode, ratio, voices, spread)) in rows.iter().enumerate() {
         let mean = best[row].iter().sum::<u128>() as f64 / BLOCKS as f64 / 1000.0;
         let worst = *best[row].iter().max().unwrap() as f64 / 1000.0;
+        // The worst block after the first, which pays every voice's first
+        // window and fills the resampling scratch.
+        let settled = *best[row][1..].iter().max().unwrap() as f64 / 1000.0;
         println!(
-            "  {:<26} {mean:>8.1}  {worst:>9.1}  {:>10.2}",
-            format!("{mode:?} x{ratio}, {voices} voices"),
+            "  {:<36} {mean:>8.1}  {worst:>9.1}  {:>10.2}  {settled:>9.1}",
+            format!(
+                "{mode:?} x{ratio}, {voices} voices{}",
+                if spread { "" } else { ", unspread" }
+            ),
             worst / mean
         );
     }

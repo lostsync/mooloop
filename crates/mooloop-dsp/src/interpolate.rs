@@ -171,6 +171,36 @@ impl Region {
         usize::try_from(folded).ok().filter(|frame| *frame < len)
     }
 
+    /// The frames `lo..hi` that [`Region::frame`] hands back untouched, as
+    /// `frames[index]`: inside the region, inside the sample, and clear of a
+    /// crossfaded seam's blend and fade-in. A run of frames wholly inside it
+    /// can be read straight from the slice and is bit for bit what `frame`
+    /// would give, without folding each index (MOO-248).
+    pub(crate) fn plain_span(&self, len: usize) -> (i64, i64) {
+        let start = self.start.floor() as i64;
+        let end = (self.end.ceil() as i64).max(start + 1);
+        let span = end - start;
+        let (lo, hi) = match self.edge {
+            RegionEdge::Crossfade { fade, floor, head } => {
+                let pre_roll = (start - floor).max(0);
+                if pre_roll == 0 {
+                    let fade = i64::from(fade).min(span / 2);
+                    let head = i64::from(head).min(fade);
+                    (
+                        if head >= 1 { start + head } else { start },
+                        if fade >= 1 { end - fade } else { end },
+                    )
+                } else {
+                    let fade = i64::from(fade).min(span / 2).min(pre_roll);
+                    (start, if fade >= 1 { end - fade } else { end })
+                }
+            }
+            _ => (start, end),
+        };
+        let lo = lo.max(0);
+        (lo, hi.min(len as i64).max(lo))
+    }
+
     /// The stereo frame the kernel sees at `index`: [`Region::resolve`]'s
     /// frame, blended across a crossfaded seam, or `None` where nothing plays.
     ///
