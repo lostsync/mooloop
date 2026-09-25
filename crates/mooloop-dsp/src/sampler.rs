@@ -1440,7 +1440,14 @@ impl Sampler {
         drive_compensation: f32,
     ) -> [f32; 2] {
         let rate_reduction = clamp01(params.rate_reduction);
-        let hold_frames = 1 + (rate_reduction * 31.0).round() as u32;
+        // Off is the usual case and needs no `round`, which is a library
+        // call on x86-64's baseline and ran every frame of every voice
+        // (MOO-247). The same value either way.
+        let hold_frames = if rate_reduction <= 0.0 {
+            1
+        } else {
+            1 + (rate_reduction * 31.0).round() as u32
+        };
         if voice.hold_remaining == 0 {
             let bit_reduction = clamp01(params.bit_reduction);
             voice.held_frame = if bit_reduction <= f32::EPSILON {
@@ -3285,7 +3292,13 @@ mod tests {
         assert_eq!(hash, DEFAULT_OVERLAP_HASH, "the render changed: {hash:#x}");
     }
 
-    const DEFAULT_OVERLAP_HASH: u64 = 0xffb6_5de3_81f2_92c9;
+    /// Moved once, by MOO-247's unity read: a root-note voice on a whole
+    /// frame now returns that frame instead of the full kernel sum, which
+    /// differs from it only by the table's sinc zeros (about 4e-17 of each
+    /// neighbour), so it can move only a frame at or next to zero: this
+    /// ramp starts at exactly zero, which the full sum left at about 1e-21.
+    /// Was `0xffb6_5de3_81f2_92c9`.
+    const DEFAULT_OVERLAP_HASH: u64 = 0xfc3c_7996_d5b7_4bdd;
 
     /// A one-voice patch that has not asked for glide or legato is the
     /// sampler every song saved before them has: releasing the newer of two

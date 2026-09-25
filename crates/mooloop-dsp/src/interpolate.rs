@@ -177,8 +177,8 @@ impl Region {
     /// can be read straight from the slice and is bit for bit what `frame`
     /// would give, without folding each index (MOO-248).
     pub(crate) fn plain_span(&self, len: usize) -> (i64, i64) {
-        let start = self.start.floor() as i64;
-        let end = (self.end.ceil() as i64).max(start + 1);
+        let start = floor_i64(self.start);
+        let end = ceil_i64(self.end).max(start + 1);
         let span = end - start;
         let (lo, hi) = match self.edge {
             RegionEdge::Crossfade { fade, floor, head } => {
@@ -256,6 +256,33 @@ impl Region {
     }
 }
 
+/// `x.floor() as i64`, without the library call `floor` is on x86-64's
+/// baseline, which has no rounding instruction (MOO-247). Truncation is
+/// floor for everything at or above zero and one more below it for a
+/// negative non-integer; the saturating ends and NaN come out as the
+/// `as` cast of `floor` gives them. Read positions and region edges go
+/// through this once or twice a frame per voice.
+#[inline]
+fn floor_i64(x: f64) -> i64 {
+    let truncated = x as i64;
+    if (truncated as f64) > x {
+        truncated.saturating_sub(1)
+    } else {
+        truncated
+    }
+}
+
+/// `x.ceil() as i64`, the same way as [`floor_i64`].
+#[inline]
+fn ceil_i64(x: f64) -> i64 {
+    let truncated = x as i64;
+    if (truncated as f64) < x {
+        truncated.saturating_add(1)
+    } else {
+        truncated
+    }
+}
+
 /// The shared windowed-sinc prototype.
 ///
 /// One table serves every playback rate, so this is built once for the
@@ -288,16 +315,23 @@ impl SincTable {
 
     /// Read the prototype at `t` frames from the kernel's centre, linearly
     /// between neighbouring samples. Zero past the kernel's support.
+    ///
+    /// The index goes through `i32` rather than `usize` (MOO-247): x86-64
+    /// has no single instruction for a float to or from an unsigned 64-bit
+    /// integer. The values are the same: past `i32::MAX` saturates, which
+    /// is past the table as before.
+    #[inline]
     fn tap(&self, t: f64) -> f32 {
         let scaled = t * DENSITY as f64;
         if scaled < 0.0 {
             return 0.0;
         }
-        let index = scaled as usize;
-        if index + 1 >= TABLE_LEN {
+        let index = scaled as i32;
+        if index as usize + 1 >= TABLE_LEN {
             return 0.0;
         }
-        let frac = (scaled - index as f64) as f32;
+        let frac = (scaled - f64::from(index)) as f32;
+        let index = index as usize;
         let low = self.prototype[index];
         low + (self.prototype[index + 1] - low) * frac
     }
@@ -330,10 +364,128 @@ impl SincTable {
         let ratio = 1.0 / stretch;
         let half_width = HALF_TAPS as f64 * stretch;
 
+        let centre = floor_i64(pos) as f64;
+        let (first, last) = if stretch == 1.0 {
+            // Whole numbers either side of a whole number: no rounding to do.
+            (centre as i64 - HALF_TAPS as i64, centre as i64 + HALF_TAPS as i64)
+        } else {
+            (
+                ceil_i64(centre - half_width),
+                floor_i64(centre + half_width),
+            )
+        };
+
+        // A whole frame at the source's own rate (a one-shot at its root
+        // note, on a sample at the project rate) is that frame (MOO-247). The
+        // kernel's centre tap is exactly 1 and every other tap lands on a
+        // zero of the sinc, which the table holds as about 4e-17 rather than
+        // 0, so this differs from the full sum only below about -300 dB of
+        // the frame's neighbours: bit for bit wherever the frame itself is
+        // above about -180 dBFS.
+        if rate.abs() == 1.0 && pos == centre {
+            return region.frame(frames, pos as i64).unwrap_or([0.0, 0.0]);
+        }
+
+        let mut left = 0.0f32;
+        let mut right = 0.0f32;
+        let (lo, hi) = region.plain_span(len);
+        if first >= lo && last < hi && stretch == 1.0 {
+            // The usual case at or below the source's rate (MOO-247): the
+            // kernel is 17 taps, all inside the region, and every tap's
+            // table position is a whole number of table steps from the
+            // centre's plus one of two fractions. Inside a region the read
+            // position is at least 8, so `pos - centre` is exact, and so is
+            // every `m ± f` a tap is at: the fractions below are the very
+            // values `tap` would compute per tap, found once per frame. The
+            // same coefficients, the same sums in the same order, so bit for
+            // bit what the edge path gives on any finite sample.
+            let centre_index = centre as usize;
+            let f = pos - centre;
+            let before = f * DENSITY as f64;
+            // Through `i32`: both are in `0..=256`, and a float to or from
+            // an unsigned 64-bit integer is a sequence on x86-64, not one
+            // instruction.
+            let a = before as i32;
+            let before_frac = (before - f64::from(a)) as f32;
+            let after = DENSITY as f64 - before;
+            let b = after as i32;
+            let after_frac = (after - f64::from(b)) as f32;
+            let (a, b) = (a as usize, b as usize);
+            let p = &self.prototype;
+            let lerp = |index: usize, frac: f32| p[index] + (p[index + 1] - p[index]) * frac;
+            // `centre - 8` is past the kernel's support, a zero tap the edge
+            // path skips, so the taps start at `centre - 7`.
+            let taps = &frames[centre_index - 7..=centre_index + 8];
+            for (m, source) in (0..HALF_TAPS).rev().zip(&taps[..HALF_TAPS]) {
+                let coeff = lerp(m * DENSITY + a, before_frac);
+                if coeff == 0.0 {
+                    continue;
+                }
+                left += source[0] * coeff;
+                right += source[1] * coeff;
+            }
+            for (m, source) in (1..=HALF_TAPS).zip(&taps[HALF_TAPS..]) {
+                let coeff = lerp((m - 1) * DENSITY + b, after_frac);
+                if coeff == 0.0 {
+                    continue;
+                }
+                left += source[0] * coeff;
+                right += source[1] * coeff;
+            }
+        } else if first >= lo && last < hi {
+            // Pitching up: the kernel is wider and its steps are not whole
+            // table steps, so each tap's position is worked out as the edge
+            // path does. Still no folding, and the same sums in the same
+            // order: bit for bit what the edge path gives.
+            let taps = &frames[first as usize..=last as usize];
+            for (index, source) in (first..).zip(taps) {
+                let coeff = self.tap((pos - index as f64).abs() * ratio);
+                if coeff == 0.0 {
+                    continue;
+                }
+                left += source[0] * coeff;
+                right += source[1] * coeff;
+            }
+        } else {
+            for index in first..=last {
+                let coeff = self.tap((pos - index as f64).abs() * ratio);
+                if coeff == 0.0 {
+                    continue;
+                }
+                if let Some(source) = region.frame(frames, index) {
+                    left += source[0] * coeff;
+                    right += source[1] * coeff;
+                }
+            }
+        }
+
+        let gain = ratio as f32;
+        [left * gain, right * gain]
+    }
+}
+
+/// The read as it was before MOO-247's fast paths: every tap through the
+/// region's edge policy. Kept for the tests that pin the fast paths to it and
+/// for the cost measurement.
+#[cfg(test)]
+impl SincTable {
+    pub(crate) fn read_through_edges(
+        &self,
+        frames: &[[f32; 2]],
+        pos: f64,
+        rate: f64,
+        region: Region,
+    ) -> [f32; 2] {
+        let len = frames.len();
+        if len == 0 || !pos.is_finite() || !rate.is_finite() {
+            return [0.0, 0.0];
+        }
+        let stretch = rate.abs().clamp(1.0, MAX_STRETCH);
+        let ratio = 1.0 / stretch;
+        let half_width = HALF_TAPS as f64 * stretch;
         let centre = pos.floor();
         let first = (centre - half_width).ceil() as i64;
         let last = (centre + half_width).floor() as i64;
-
         let mut left = 0.0f32;
         let mut right = 0.0f32;
         for index in first..=last {
@@ -346,7 +498,6 @@ impl SincTable {
                 right += source[1] * coeff;
             }
         }
-
         let gain = ratio as f32;
         [left * gain, right * gain]
     }
@@ -528,6 +679,161 @@ mod tests {
 
     /// A loop shorter than the kernel folds many times over. The read must
     /// still land inside the region rather than walking off the sample.
+    fn noise(len: usize) -> Vec<[f32; 2]> {
+        let mut state = 0x9e37_79b9_u32;
+        (0..len)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let a = (state >> 8) as f32 / (1u32 << 24) as f32 - 0.5;
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let b = (state >> 8) as f32 / (1u32 << 24) as f32 - 0.5;
+                [a, b]
+            })
+            .collect()
+    }
+
+    fn test_regions() -> Vec<Region> {
+        vec![
+            Region::whole(4_000),
+            Region { start: 100.5, end: 3_000.25, edge: RegionEdge::Wrap },
+            Region { start: 200.0, end: 230.0, edge: RegionEdge::Wrap },
+            Region { start: 300.0, end: 3_500.0, edge: RegionEdge::Mirror },
+            Region {
+                start: 1_000.0,
+                end: 3_000.0,
+                edge: RegionEdge::Crossfade { fade: 300, floor: 500, head: 0 },
+            },
+            Region {
+                start: 0.0,
+                end: 2_000.0,
+                edge: RegionEdge::Crossfade { fade: 300, floor: 0, head: 120 },
+            },
+            Region { start: 50.0, end: 5_000.0, edge: RegionEdge::Silent },
+        ]
+    }
+
+    /// MOO-247's fast paths read the same taps in the same order as the
+    /// edge-resolving loop, so every read is bit for bit what it was: every
+    /// edge, positions near and far from them, whole and fractional, at
+    /// rates that narrow the kernel and ones that do not.
+    #[test]
+    fn the_fast_reads_are_bit_identical_to_reading_through_the_edges() {
+        let table = SincTable::shared();
+        let frames = noise(4_000);
+        let (mut unity_reads, mut unity_identical) = (0usize, 0usize);
+        for region in test_regions() {
+            for rate in [0.25, 0.5, 0.749, 1.0, 1.0001, 1.5, 2.0, 3.3, 4.0, 6.0] {
+                let mut pos = -40.0f64;
+                while pos < 4_060.0 {
+                    let fast = table.read(&frames, pos, rate, region);
+                    let slow = table.read_through_edges(&frames, pos, rate, region);
+                    if rate == 1.0 && pos.fract() == 0.0 {
+                        // The unity path: the frame itself, which the full
+                        // sum is to within the table's sinc zeros.
+                        unity_reads += 1;
+                        for channel in 0..2 {
+                            assert!(
+                                (fast[channel] - slow[channel]).abs() < 1.0e-12,
+                                "{region:?} unity at {pos}: {fast:?} vs {slow:?}"
+                            );
+                        }
+                        if fast == slow {
+                            unity_identical += 1;
+                        }
+                    } else {
+                        assert_eq!(
+                            (fast[0].to_bits(), fast[1].to_bits()),
+                            (slow[0].to_bits(), slow[1].to_bits()),
+                            "{region:?} rate {rate} at {pos}"
+                        );
+                    }
+                    pos += if pos.fract() == 0.0 { 0.371 } else { 0.629 };
+                }
+                // And every whole position, which the stepping above
+                // mostly misses: the unity path at 1.0.
+                for whole in -40..4_060 {
+                    let pos = f64::from(whole);
+                    let fast = table.read(&frames, pos, rate, region);
+                    let slow = table.read_through_edges(&frames, pos, rate, region);
+                    if rate == 1.0 {
+                        unity_reads += 1;
+                        for channel in 0..2 {
+                            assert!(
+                                (fast[channel] - slow[channel]).abs() < 1.0e-12,
+                                "{region:?} unity at {pos}: {fast:?} vs {slow:?}"
+                            );
+                        }
+                        if fast == slow {
+                            unity_identical += 1;
+                        }
+                    } else {
+                        assert_eq!(
+                            (fast[0].to_bits(), fast[1].to_bits()),
+                            (slow[0].to_bits(), slow[1].to_bits()),
+                            "{region:?} rate {rate} at {pos}"
+                        );
+                    }
+                }
+            }
+        }
+        // Inside a region, a unity read is the frame to the bit; the only
+        // differences are past a silent edge, where the full sum picks up
+        // the zeros' residue from the frames inside.
+        assert!(unity_reads > 1_000);
+        assert!(
+            unity_identical * 100 >= unity_reads * 97,
+            "{unity_identical} of {unity_reads} unity reads identical"
+        );
+    }
+
+    /// What one voice's reads cost per 128-frame block, before and after the
+    /// fast paths, in one run: each variant's fastest of 9 passes.
+    ///
+    /// ```sh
+    /// cargo test -p mooloop-dsp --release --lib sinc_read_cost -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "measures wall time; run deliberately in release"]
+    fn sinc_read_cost() {
+        use std::time::Instant;
+        let table = SincTable::shared();
+        let frames = noise(96_000);
+        let region = Region { start: 0.0, end: 96_000.0, edge: RegionEdge::Silent };
+        let looped = Region { start: 1_000.0, end: 90_000.0, edge: RegionEdge::Wrap };
+        println!();
+        println!("  case                         edges µs/block   fast µs/block");
+        for (label, rate, start, reg) in [
+            ("unity, whole frames", 1.0, 100.0, region),
+            ("unity, whole frames, loop", 1.0, 1_100.0, looped),
+            ("half rate", 0.5, 100.25, region),
+            ("0.7491 (a fifth down)", 0.7491, 100.0, region),
+            ("1.4983 (a fifth up)", 1.4983, 100.0, region),
+            ("2.0", 2.0, 100.0, region),
+            ("3.0", 3.0, 100.0, region),
+        ] {
+            let blocks = 400usize;
+            let mut best = [f64::MAX; 2];
+            for _ in 0..9 {
+                for (variant, slot) in best.iter_mut().enumerate() {
+                    let mut pos: f64 = start;
+                    let started = Instant::now();
+                    for _ in 0..blocks * 128 {
+                        let frame = if variant == 0 {
+                            table.read_through_edges(&frames, pos, rate, reg)
+                        } else {
+                            table.read(&frames, pos, rate, reg)
+                        };
+                        std::hint::black_box(frame);
+                        pos += rate;
+                    }
+                    let per_block = started.elapsed().as_nanos() as f64 / blocks as f64 / 1e3;
+                    *slot = slot.min(per_block);
+                }
+            }
+            println!("  {label:<28} {:>14.2}  {:>14.2}", best[0], best[1]);
+        }
+    }
+
     #[test]
     fn a_loop_shorter_than_the_kernel_still_resolves_inside_itself() {
         let region = Region {
