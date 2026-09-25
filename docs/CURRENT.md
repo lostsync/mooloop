@@ -671,6 +671,20 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   stacked on the pattern's last tick); in song mode it lands at its offset in
   the placement of the selected pattern under the playhead, and a note played
   where no placement of that pattern is playing is heard but not recorded.
+  **OVR/REPL** beside the arm picks what a take does to the notes already
+  there (MOO-234, 2026-09-25). **Overdub**, the default, adds every pass.
+  **Replace** removes the recording channel's notes in the pattern being
+  recorded into as the playhead crosses their start, so each pass replaces
+  the one before and only the last is left; a note is never removed by the
+  pass that played it. Only continuous playing crosses anything: a locate,
+  a stop, a pattern switch or a jump of more than a bar does not, and the
+  song loop's own jump back does. The recording channel is fixed when the
+  take starts: every channel whose own MIDI input takes the keyboard, or the
+  selected channel when none does. A pass where nothing is played still
+  clears what it crosses. The
+  removal happens in the 8 ms pump, so an old note still sounds if the
+  playhead reaches it before the pump does. A take, removals and all, is one
+  undo step. The mode is not saved, like the arm.
   The transport follows an external Start,
   Continue, Stop or Song Position without any mapping, because a device that
   sends Start is asking for exactly one thing. Start plays from the
@@ -784,10 +798,6 @@ compressor, limiter and Buffer also clear their own state if a non-finite
 value gets in, one pass over the block, the way MOO-174 made the shared
 filters do. So a device that blows up costs one block of silence downstream,
 where it used to silence every device after it until the song was reloaded.
-The sources that feed themselves do the same (MOO-201): an ML-P8 voice whose
-output goes non-finite restarts its feedback loop, oscillator taps and glide,
-losing that one sample, and a DS-01 body mode that blows up comes to rest
-instead of ringing NaN into every later hit.
 
 The engine preallocates channel strips, pattern storage, event lists, and audio
 buses. A driver-independent render state owns transport, scheduling,
@@ -2113,8 +2123,6 @@ land on its own when it starts to matter:
   the middle. Volume is one-pole smoothed over 5 ms like the device's other
   levels, so modulating it (a kick-gated envelope pumping a pad) or dragging
   it glides instead of stepping once per 32-frame control tick (MOO-214).
-  Pan and Spread are smoothed the same way, so a route sweeping the device's
-  Pan no longer steps both channels' gains every tick (MOO-221).
 - The ML-P8 allocates its eight physical voices as *groups*. Unison at 1x, 2x,
   4x and 8x spends the pool rather than growing it, leaving 8, 4, 2 and 1 notes
   of polyphony; a note allocates a complete group and steals complete older

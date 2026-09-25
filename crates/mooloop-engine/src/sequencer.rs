@@ -13,6 +13,7 @@ use mooloop_core::{
     MAX_NOTES_PER_CHANNEL_PATTERN, MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS,
     MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_BAR, TICKS_PER_STEP,
 };
+use mooloop_core::playlist::{recording_offset, wrap_tick};
 use mooloop_dsp::{Event, EventList, TimedEvent};
 
 /// The stretch of a process block one scheduling pass may write into.
@@ -552,32 +553,23 @@ impl Sequencer {
     /// one -- and where in it, or `None` when the selected pattern is not
     /// what is playing there.
     ///
-    /// The transport never folds in pattern mode -- scheduling wraps its own
-    /// copy of the position -- so a recorder that reported the playhead as it
-    /// stands would report tick 400 of a 384-tick pattern on the second pass.
-    /// Pattern mode folds with the same [`wrap_tick`] scheduling uses. Song
-    /// mode answers the offset into the placement of the selected pattern
-    /// that covers the playhead, taking the latest-starting one where two
-    /// overlap, the rule [`Self::automation_lane_at`] follows. Where no
-    /// placement of it covers the playhead there is nowhere to record: the
-    /// note would otherwise land in a pattern at a position that was never
-    /// heard against it.
+    /// The rule is [`recording_offset`], in `mooloop-core`, because the
+    /// session asks the same question of the span a Replace take has crossed
+    /// (MOO-234): pattern mode folds with the same [`wrap_tick`] scheduling
+    /// uses, and song mode takes the latest-starting placement of the
+    /// selected pattern under the playhead, the rule
+    /// [`Self::automation_lane_at`] follows.
     pub fn recording_tick(&self, song_tick: f64) -> Option<(usize, u32)> {
         let length = self.pattern_length_ticks(self.current)?;
-        let tick = match self.playback_mode {
-            PlaybackMode::Pattern => Some(wrap_tick(song_tick, length) as u32),
-            PlaybackMode::Song => {
-                let position = wrap_tick(song_tick, self.song_length_ticks());
-                self.playlist
-                    .iter()
-                    .rev()
-                    .filter(|placement| placement.pattern as usize == self.current)
-                    .map(|placement| position - f64::from(placement.start_tick))
-                    .find(|offset| (0.0..f64::from(length)).contains(offset))
-                    .map(|offset| offset as u32)
-            }
-        };
-        tick.map(|tick| (self.current, tick))
+        recording_offset(
+            self.playback_mode,
+            song_tick,
+            self.current,
+            length,
+            self.song_length_ticks(),
+            &self.playlist,
+        )
+        .map(|tick| (self.current, tick))
     }
 
     /// The `ordinal`-th pattern covering a position, for a caller that has to
@@ -1452,20 +1444,6 @@ impl Sequencer {
     }
 }
 
-/// Fold a transport position into `[0, period)`. The transport is monotonic
-/// across loops, so every pattern-local read needs this.
-fn wrap_tick(tick: f64, period_ticks: u32) -> f64 {
-    if period_ticks == 0 {
-        return 0.0;
-    }
-    let period = period_ticks as f64;
-    let wrapped = tick % period;
-    if wrapped < 0.0 {
-        wrapped + period
-    } else {
-        wrapped
-    }
-}
 
 fn swing_offset_ticks(note_start_tick: u32, percent: u8) -> u32 {
     if (note_start_tick / TICKS_PER_STEP).is_multiple_of(2) {

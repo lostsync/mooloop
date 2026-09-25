@@ -351,7 +351,7 @@ In the order worth playing:
    reopened present identically and missing as the dry loop, its slot and
    lanes kept. `live-64.wav` is what the executor played. In the app, open
    `clap-automation/clap-automation.mooloop` and play it on JACK.
-9. **ML-P8's Volume and Pan under modulation** (MOO-214, MOO-221). A held chord of sines,
+9. **ML-P8's Volume under modulation** (MOO-214). A held chord of sines,
    its Volume pumped by a quarter-note LFO. It should duck smoothly, with
    no buzz on the duck:
 
@@ -365,12 +365,6 @@ In the order worth playing:
    the fix and 100 dB under after. Then do the real case, an Envelope gated
    by the kick and routed to ML-P8's Volume with negative depth, at an
    Attack well under 500 ms.
-
-   The same run writes `pan.wav` (MOO-221): the chord with the LFO on the
-   device's Pan at full depth instead, sweeping hard left to hard right
-   twice a second. It should move without a buzz on either side. Its
-   loudest zipper line on the left channel measured 65 dB under its tone
-   before the fix and 98 dB under after.
 10. **The sampler's loop seam** (MOO-43). A one-bar synthetic break whose
     bass tone doesn't fit the bar, so the hard seam clicks. It's looped two
     ways, from the top (starting on the kick, with nothing before it) and

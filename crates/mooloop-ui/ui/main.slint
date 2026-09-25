@@ -1272,6 +1272,8 @@ export component MainWindow inherits Window {
     callback sampler-record-clip-changed(bool);
     callback sampler-record-bars-changed(int);
     callback record-armed-toggled();
+    // Overdub or Replace for the next MIDI take (MOO-234).
+    callback record-mode-toggled();
     // Channel structure is a project edit, so these callbacks carry the
     // clicked row rather than relying on whichever row was selected before a
     // context menu opened.
@@ -2157,6 +2159,9 @@ export component MainWindow inherits Window {
     // Whether recording is armed. A transport state rather than a document
     // one: opening a song and pressing play must not record.
     in-out property <bool> record-armed;
+    // Whether a MIDI take replaces what the playhead passes over rather than
+    // adding to it. Rust owns it, like the arm, and it is not saved either.
+    in-out property <bool> record-replace;
 
     // ---- controller mapping ----
     // The toolbar arm. Rust owns it, because it also ends when a binding
@@ -3124,6 +3129,18 @@ export component MainWindow inherits Window {
                                 role: "record";
                                 active: root.record-armed;
                                 clicked => { root.record-armed-toggled(); }
+                            }
+                            // What the take does to the notes already there.
+                            // A word rather than a lamp: the two states are
+                            // both normal, and neither is "on".
+                            ToolButton {
+                                text: root.record-replace ? "REPL" : "OVR";
+                                width: 44px;
+                                tooltip: root.record-replace ? "Replace" : "Overdub";
+                                hint: root.record-replace
+                                    ? "Replace: each pass removes the notes the playhead crosses on the recording channel. Click for Overdub."
+                                    : "Overdub: each pass adds to the notes already there. Click for Replace.";
+                                clicked => { root.record-mode-toggled(); }
                             }
                             // The arm for controller mapping. It lives here
                             // rather than in Preferences because the gesture

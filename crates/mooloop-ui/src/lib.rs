@@ -1939,6 +1939,50 @@ fn drain_control_surface(
     drain
 }
 
+/// Hand the engine's positions to the take, in order, and remove what a
+/// Replace take's playhead crossed (MOO-234).
+///
+/// Before the drain's recorded notes, so a note is never removed by the
+/// position that reported it. The removals go into the take's own undo
+/// entry, the [`Stream::Recording`] its notes land in, opened here if the
+/// first thing the take does is remove: one Ctrl+Z puts back what the take
+/// replaced and takes out what it played. The snapshot is taken only when
+/// something is about to go, which `Session::record_position` says
+/// without changing anything.
+///
+/// The removal happens here, in the pump, so an old note still sounds if
+/// the playhead reaches it before the pump does.
+fn replace_crossed_notes(
+    state: &Rc<RefCell<UiState>>,
+    commands: &Rc<RefCell<CommandState>>,
+    window: &MainWindow,
+    positions: &mut Vec<(u64, bool)>,
+) -> ControlDrain {
+    let mut drain = ControlDrain::default();
+    for (tick, playing) in positions.drain(..) {
+        let Some(plan) = state.borrow_mut().session.record_position(tick, playing) else {
+            continue;
+        };
+        let taking = commands.borrow().history.open_stream() == Some(Stream::Recording);
+        let before = (!taking).then(|| project_snapshot(&state.borrow(), window));
+        drain
+            .written
+            .extend(plan.removals.iter().map(|(channel, _)| *channel));
+        {
+            let mut st = state.borrow_mut();
+            let edit = st.session.apply_replace(plan);
+            drain.commands.extend(edit.commands);
+            st.session.mark_dirty();
+        }
+        drain.edited = true;
+        drain.moved = true;
+        if let Some(before) = before {
+            open_edit_stream(commands, window, Stream::Recording, before, "Record notes");
+        }
+    }
+    drain
+}
+
 /// Snapshot, run one console or rack verb, and record the undo entry for it.
 ///
 /// Eleven mixer verbs -- mute, volume, pan, bus pick, console on, polarity,
@@ -11306,6 +11350,24 @@ impl AppUi {
                 }
             });
         }
+        // Overdub or Replace (MOO-234). Not an edit, for the arm's reason:
+        // it changes what the next take does, not the song.
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_record_mode_toggled(move || {
+                use mooloop_session::transport::RecordMode;
+                let mut guard = st.borrow_mut();
+                let mode = match guard.session.record_mode() {
+                    RecordMode::Overdub => RecordMode::Replace,
+                    RecordMode::Replace => RecordMode::Overdub,
+                };
+                guard.session.set_record_mode(mode);
+                if let Some(window) = weak.upgrade() {
+                    window.set_record_replace(mode == RecordMode::Replace);
+                }
+            });
+        }
         // The value gesture, wired once for every control in every face.
         //
         // Beside the MIDI learn arm below on purpose: `ControlAssign` and
@@ -16123,6 +16185,7 @@ impl AppUi {
         // a fader stream fills these sixty times a second.
         let mut control_input: Vec<mooloop_core::MidiMessage> = Vec::new();
         let mut recorded: Vec<(u8, u8, u8, u8, u32, u32)> = Vec::new();
+        let mut positions: Vec<(u64, bool)> = Vec::new();
         // When a mapped hardware control last moved a parameter, which is
         // how the pump knows a controller gesture has ended: a desk sends no
         // release.
@@ -17271,6 +17334,8 @@ impl AppUi {
                             w.set_position_bar(position.bar);
                             w.set_position_beat(position.beat);
                             w.set_position_tick(position.tick);
+                            // For the take, after the loop (MOO-234).
+                            positions.push((tick, playing));
                         }
                         // The master's level comes off `BusMeters` cell 0
                         // below, beside the mixer strip's, so this carries
@@ -17302,6 +17367,34 @@ impl AppUi {
                         EngineEvent::ProjectInstalled { .. } => {
                             unreachable!("EngineHandle filters project acknowledgements")
                         }
+                    }
+                }
+                // Positions before the notes they came with: a note is never
+                // removed by the position that reported it (MOO-234).
+                if !positions.is_empty() {
+                    let drain = replace_crossed_notes(&st, &commands, &w, &mut positions);
+                    let refused = drain
+                        .commands
+                        .iter()
+                        .filter(|command| !handle.send(**command))
+                        .count();
+                    if refused > 0 {
+                        log_error!(
+                            "midi",
+                            "the command queue refused {refused} note removal(s) from a \
+                             Replace take: the model has moved where the engine has not"
+                        );
+                    }
+                    if drain.edited {
+                        let state = st.borrow();
+                        state.refresh_editor(&w);
+                        let mut written = drain.written;
+                        written.sort_unstable();
+                        written.dedup();
+                        for channel in &written {
+                            state.refresh_rack_row(*channel);
+                        }
+                        state.update_document_title(&w);
                     }
                 }
                 if !control_input.is_empty() || !recorded.is_empty() {
@@ -21377,6 +21470,71 @@ mod tests {
             .redo_target()
             .map(|entry| notes(&entry.after.project));
         assert_eq!(redo, Some(before + 3), "and Redo brings the take back");
+    }
+
+    /// A Replace take is one undo step that holds both halves: the notes
+    /// its playhead crossed and the notes it played. One Ctrl+Z restores
+    /// what was there before it (MOO-234).
+    #[test]
+    fn a_replace_take_and_what_it_removed_are_one_undo_step() {
+        use mooloop_session::transport::RecordMode;
+
+        let (window, state, commands) = undo_fixture();
+        let old = {
+            let mut st = state.borrow_mut();
+            st.session.channels[0].notes[0].clear();
+            st.session.channels[0]
+                .create_note(0, 24, 12, 50)
+                .expect("room")
+                .id
+        };
+        an_earlier_edit(&state, &commands, &window);
+        {
+            let mut st = state.borrow_mut();
+            let _ = st.session.set_record_armed(true);
+            st.session.set_record_mode(RecordMode::Replace);
+        }
+        let starts = |project: &Project| {
+            project.channels[0].notes[0]
+                .iter()
+                .map(|note| note.start_tick)
+                .collect::<Vec<_>>()
+        };
+
+        let mut positions = vec![(0, false)];
+        positions.extend((8..=40).step_by(8).map(|tick| (tick, true)));
+        let drain = replace_crossed_notes(&state, &commands, &window, &mut positions);
+        assert!(
+            matches!(drain.commands[..], [EngineCommand::RemoveNote { id, .. }] if id == old),
+            "the crossed note goes: {:?}",
+            drain.commands
+        );
+        assert_eq!(
+            commands.borrow().history.open_stream(),
+            Some(Stream::Recording),
+            "the removal opens the take"
+        );
+        let drain = drain_control_surface(
+            &state,
+            &commands,
+            &window,
+            &mut Vec::new(),
+            &mut vec![(0, 0, 60, 100, 32, 12)],
+            true,
+        );
+        assert_eq!(drain.written, vec![0]);
+        settle_edit_streams(&state, &commands, &window, true, true);
+        assert_eq!(commands.borrow().history.open_stream(), Some(Stream::Recording));
+
+        settle_edit_streams(&state, &commands, &window, false, true);
+        {
+            let open = commands.borrow();
+            let entry = open.history.undo_target().expect("the take is an undo step");
+            assert_eq!(entry.label, "Record notes");
+            assert_eq!(starts(&entry.before.project), vec![24], "Ctrl+Z puts back what it replaced");
+            assert_eq!(starts(&entry.after.project), vec![32]);
+        }
+        assert_eq!(label_under_top(&commands), "Rename channel");
     }
 
     /// A sample loaded onto a sliced channel is one undo step, and undoing it

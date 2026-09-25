@@ -269,6 +269,9 @@ pub struct Session {
     /// Whether recording is armed. A session gesture: a song does not reopen
     /// armed, because opening a song and pressing play should not record.
     pub record_armed: bool,
+    /// Overdub or Replace, and where a Replace take's playhead has been
+    /// (MOO-234). Not document state, for the arm's reason.
+    pub recording: crate::transport::RecordTake,
     pub song_mode: bool,
     pub current_pattern: usize,
     pub selected: usize,
@@ -377,6 +380,7 @@ impl Default for Session {
             control_state: mooloop_core::ControlMapState::default(),
             control_learn: None,
             record_armed: false,
+            recording: crate::transport::RecordTake::default(),
             song_mode: false,
             current_pattern: 0,
             selected: 0,

@@ -120,3 +120,104 @@ impl LoopRange {
         })
     }
 }
+
+/// Fold a transport position into `[0, period)`. The transport is monotonic
+/// across loops, so every pattern-local read needs this. A zero period folds
+/// everything to 0.
+pub fn wrap_tick(tick: f64, period_ticks: u32) -> f64 {
+    if period_ticks == 0 {
+        return 0.0;
+    }
+    let period = period_ticks as f64;
+    let wrapped = tick % period;
+    if wrapped < 0.0 {
+        wrapped + period
+    } else {
+        wrapped
+    }
+}
+
+/// Where a note played at `song_tick` lands in the selected pattern, or
+/// `None` when the selected pattern is not what is playing there.
+///
+/// The one copy of the rule. The engine asks it for a recorded note's start
+/// (`Sequencer::recording_tick`) and the session asks it for the span a
+/// Replace take has crossed (MOO-234), so the two cannot come to disagree
+/// about which pattern tick the playhead is over.
+///
+/// The transport never folds in pattern mode -- scheduling wraps its own
+/// copy of the position -- so a recorder that reported the playhead as it
+/// stands would report tick 400 of a 384-tick pattern on the second pass.
+/// Pattern mode folds with [`wrap_tick`]. Song mode answers the offset into
+/// the placement of the selected pattern that covers the playhead, taking
+/// the latest-starting one where two overlap. Where no placement of it
+/// covers the playhead there is nowhere to record: the note would otherwise
+/// land in a pattern at a position that was never heard against it.
+///
+/// `placements` must be in playlist order; `pattern_ticks` is the selected
+/// pattern's length, and a zero length records nothing.
+pub fn recording_offset(
+    mode: PlaybackMode,
+    song_tick: f64,
+    selected: usize,
+    pattern_ticks: u32,
+    song_ticks: u32,
+    placements: &[PatternPlacement],
+) -> Option<u32> {
+    if pattern_ticks == 0 {
+        return None;
+    }
+    match mode {
+        PlaybackMode::Pattern => Some(wrap_tick(song_tick, pattern_ticks) as u32),
+        PlaybackMode::Song => {
+            let position = wrap_tick(song_tick, song_ticks);
+            placements
+                .iter()
+                .rev()
+                .filter(|placement| placement.pattern as usize == selected)
+                .map(|placement| position - f64::from(placement.start_tick))
+                .find(|offset| (0.0..f64::from(pattern_ticks)).contains(offset))
+                .map(|offset| offset as u32)
+        }
+    }
+}
+
+#[cfg(test)]
+mod recording_offset_tests {
+    use super::*;
+
+    #[test]
+    fn pattern_mode_folds_every_pass_into_the_pattern() {
+        for pass in 0..3u32 {
+            let tick = f64::from(pass * 96 + 48);
+            assert_eq!(
+                recording_offset(PlaybackMode::Pattern, tick, 0, 96, TICKS_PER_BAR, &[]),
+                Some(48)
+            );
+        }
+    }
+
+    #[test]
+    fn song_mode_takes_the_latest_placement_of_the_selected_pattern() {
+        let placements = [
+            PatternPlacement::new(0, 0),
+            PatternPlacement::new(1, 0),
+            PatternPlacement::new(0, 48),
+        ];
+        let at = |tick: u32, selected| {
+            recording_offset(
+                PlaybackMode::Song,
+                f64::from(tick),
+                selected,
+                96,
+                TICKS_PER_BAR,
+                &placements,
+            )
+        };
+        assert_eq!(at(24, 0), Some(24));
+        assert_eq!(at(60, 0), Some(12), "the later placement wins the overlap");
+        assert_eq!(at(200, 0), None, "no placement covers it");
+        assert_eq!(at(TICKS_PER_BAR + 24, 0), Some(24), "the song wraps");
+        assert_eq!(at(24, 2), None, "a pattern with no placement");
+    }
+}

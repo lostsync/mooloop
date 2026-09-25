@@ -156,6 +156,11 @@ mod jack_driver;
 #[doc(hidden)]
 pub mod live_check;
 pub mod load;
+// Test support, not API: the MIDI capture path without a driver, for the
+// session's check of a recorded take (MOO-234).
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod record_check;
 mod meters;
 mod null_driver;
 mod offline;

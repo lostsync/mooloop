@@ -200,6 +200,8 @@ impl Session {
             state.notes[pattern].sort_by_key(|note| (note.start_tick, note.id));
             event
         };
+        // This take's own: the pass that played it must not replace it.
+        self.remember_take_note(channel, pattern, event.id);
         Some(NoteEdit {
             commands: vec![EngineCommand::UpsertNote {
                 pattern: pattern as u8,
@@ -215,7 +217,7 @@ impl Session {
 
     /// One pattern's length in ticks, for recording, or 0 if there is no such
     /// pattern.
-    fn recorded_pattern_length(&self, pattern: usize) -> u32 {
+    pub(crate) fn recorded_pattern_length(&self, pattern: usize) -> u32 {
         self.pattern_lengths
             .get(pattern)
             .map_or(0, |steps| *steps as u32 * mooloop_core::TICKS_PER_STEP)
