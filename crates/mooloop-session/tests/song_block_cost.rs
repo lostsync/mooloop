@@ -22,7 +22,12 @@
 //! strips out whatever else the machine was doing. `BLOCK` (default 128) is
 //! the callback size. `SONG_COST_OUT`, if set, is a directory to write one
 //! TSV per song into -- frame, bar, nanoseconds, allocator calls -- for
-//! looking at more closely.
+//! looking at more closely. `ATTRIBUTE`, a `,`-separated list of song
+//! names, re-plays each of those with every channel muted in turn and with
+//! the bus inserts removed, to say which channel a spike belongs to.
+//! `ATTRIBUTE_BY` picks `channels`, `kinds` (every device of one kind
+//! bypassed in turn) or both, the default. `DISPLAYS=off` plays every song
+//! with its saved displays switched off.
 //!
 //! **Read it as a map, not a verdict.** A bar that costs more than the bars
 //! around it is a place to look: something the song does there is expensive,
@@ -125,6 +130,9 @@ fn profile(path: &Path, reps: usize, block: usize) {
     };
     // The whole arrangement, once, whatever the song was left looping.
     project.loop_range.enabled = false;
+    if std::env::var("DISPLAYS").is_ok_and(|displays| displays == "off") {
+        project = displays_off(&project);
+    }
     let song_mode = project.playback_mode == PlaybackMode::Song && !project.playlist.is_empty();
     let length_ticks = if song_mode {
         let end = project
@@ -151,28 +159,11 @@ fn profile(path: &Path, reps: usize, block: usize) {
         f64::from(project.bpm) / 60.0 * f64::from(project.ppq) / f64::from(SAMPLE_RATE);
     let frames = (f64::from(length_ticks) / ticks_per_frame).ceil() as usize;
 
-    let mut best: Vec<u64> = Vec::new();
-    let mut allocating: Vec<usize> = Vec::new();
-    let mut starts: Vec<usize> = Vec::new();
-    for _ in 0..reps {
-        let costs = time_through_executor(
-            &project,
-            &resolved.samples,
-            SAMPLE_RATE,
-            frames,
-            block,
-            allocator_calls,
-        );
-        if best.is_empty() {
-            best = vec![u64::MAX; costs.len()];
-            allocating = vec![0; costs.len()];
-            starts = costs.iter().map(|cost| cost.frame).collect();
-        }
-        for (index, cost) in costs.iter().enumerate() {
-            best[index] = best[index].min(cost.nanos);
-            allocating[index] = allocating[index].max(cost.allocations);
-        }
-    }
+    let Measured {
+        best,
+        allocating,
+        starts,
+    } = measure(&project, &resolved.samples, frames, reps, block);
 
     let bar_of = |frame: usize| frame as f64 * ticks_per_frame / f64::from(TICKS_PER_BAR);
     let budget = block as f64 / f64::from(SAMPLE_RATE) * 1e9;
@@ -240,6 +231,12 @@ fn profile(path: &Path, reps: usize, block: usize) {
         println!("   allocating: {}", first_allocating.join(", "));
     }
 
+    let attributed = std::env::var("ATTRIBUTE")
+        .is_ok_and(|names| names.split(',').any(|wanted| wanted == name));
+    if attributed {
+        attribute(&project, &resolved.samples, frames, reps, block);
+    }
+
     if let Ok(out) = std::env::var("SONG_COST_OUT") {
         let out = PathBuf::from(out);
         std::fs::create_dir_all(&out).expect("SONG_COST_OUT can be created");
@@ -255,6 +252,174 @@ fn profile(path: &Path, reps: usize, block: usize) {
         }
         std::fs::write(out.join(format!("{name}.tsv")), tsv).expect("the TSV is written");
     }
+}
+
+/// Each callback's fastest time over `reps` plays, the most allocator calls
+/// any play made in it, and the frame it started on.
+struct Measured {
+    best: Vec<u64>,
+    allocating: Vec<usize>,
+    starts: Vec<usize>,
+}
+
+fn measure(
+    project: &mooloop_core::Project,
+    samples: &[Option<std::sync::Arc<mooloop_dsp::SampleData>>],
+    frames: usize,
+    reps: usize,
+    block: usize,
+) -> Measured {
+    let mut best: Vec<u64> = Vec::new();
+    let mut allocating: Vec<usize> = Vec::new();
+    let mut starts: Vec<usize> = Vec::new();
+    for _ in 0..reps {
+        let costs = time_through_executor(
+            project,
+            samples,
+            SAMPLE_RATE,
+            frames,
+            block,
+            allocator_calls,
+        );
+        if best.is_empty() {
+            best = vec![u64::MAX; costs.len()];
+            allocating = vec![0; costs.len()];
+            starts = costs.iter().map(|cost| cost.frame).collect();
+        }
+        for (index, cost) in costs.iter().enumerate() {
+            best[index] = best[index].min(cost.nanos);
+            allocating[index] = allocating[index].max(cost.allocations);
+        }
+    }
+
+    Measured {
+        best,
+        allocating,
+        starts,
+    }
+}
+
+/// Median, 99th percentile and worst, in microseconds, and the spike: how
+/// far the costliest 1% of callbacks sit above the median.
+fn shape(best: &[u64]) -> (u64, u64, u64, u64) {
+    let mut sorted = best.to_vec();
+    sorted.sort_unstable();
+    let median = percentile(&sorted, 0.5);
+    let top = &sorted[sorted.len() - (sorted.len() / 100).max(1)..];
+    let spike = (top.iter().sum::<u64>() / top.len() as u64).saturating_sub(median);
+    (
+        median / 1000,
+        percentile(&sorted, 0.99) / 1000,
+        sorted[sorted.len() - 1] / 1000,
+        spike / 1000,
+    )
+}
+
+fn all_effects(project: &mooloop_core::Project) -> impl Iterator<Item = &mooloop_core::EffectSlotState> {
+    project
+        .channels
+        .iter()
+        .flat_map(|channel| channel.setup.effects.iter())
+        .chain(project.buses.iter().flat_map(|bus| bus.effects.iter()))
+}
+
+fn all_effects_mut(
+    project: &mut mooloop_core::Project,
+) -> impl Iterator<Item = &mut mooloop_core::EffectSlotState> {
+    project
+        .channels
+        .iter_mut()
+        .flat_map(|channel| channel.setup.effects.iter_mut())
+        .chain(project.buses.iter_mut().flat_map(|bus| bus.effects.iter_mut()))
+}
+
+/// `project` with every saved display switched off: the Preamp's band display
+/// and the EQ's analyzer. These are view settings saved with a song, and each
+/// runs on the audio thread for as long as it is on, looked at or not.
+fn displays_off(project: &mooloop_core::Project) -> mooloop_core::Project {
+    let mut unwatched = project.clone();
+    for effect in all_effects_mut(&mut unwatched) {
+        match &mut effect.params {
+            mooloop_core::EffectParams::Preamp(params) => params.display_enabled = false,
+            mooloop_core::EffectParams::Eq(params) => params.analyzer_enabled = false,
+            _ => {}
+        }
+    }
+    unwatched
+}
+
+/// Which channel carries a song's cost: the song again with each channel
+/// muted in turn, and once with every bus's inserts removed. A channel whose
+/// muting takes the spike away is where to look; mute is used rather than
+/// removal so every other channel keeps its seat and its routing.
+fn attribute(
+    project: &mooloop_core::Project,
+    samples: &[Option<std::sync::Arc<mooloop_dsp::SampleData>>],
+    frames: usize,
+    reps: usize,
+    block: usize,
+) {
+    let line = |label: &str, measured: &Measured| {
+        let (median, p99, max, spike) = shape(&measured.best);
+        let mean = measured.best.iter().sum::<u64>() / measured.best.len().max(1) as u64 / 1000;
+        println!(
+            "   {label:<34} mean {mean:>5}  p50 {median:>5}  p99 {p99:>5}  max {max:>5}  spike {spike:>5} us"
+        );
+    };
+    line("(as saved)", &measure(project, samples, frames, reps, block));
+    line("displays off", &measure(&displays_off(project), samples, frames, reps, block));
+    let by = std::env::var("ATTRIBUTE_BY").unwrap_or_else(|_| "channels,kinds".into());
+    if by.split(',').any(|by| by == "kinds") {
+        // Every device of one kind bypassed, song-wide. Bypass rather than
+        // removal so a container's span still names the rows it did; and a
+        // bypassed device should cost nothing once it has faded out, so a
+        // kind whose bypass saves nothing is itself worth a look.
+        let mut kinds: Vec<mooloop_core::EffectKind> = Vec::new();
+        for effect in all_effects(project) {
+            if !kinds.contains(&effect.params.kind()) {
+                kinds.push(effect.params.kind());
+            }
+        }
+        for kind in kinds {
+            let mut bypassed = project.clone();
+            let mut count = 0;
+            for effect in all_effects_mut(&mut bypassed) {
+                if effect.params.kind() == kind && !effect.bypassed {
+                    effect.bypassed = true;
+                    count += 1;
+                }
+            }
+            let label = format!("bypass {count} {kind:?}");
+            line(&label, &measure(&bypassed, samples, frames, reps, block));
+        }
+    }
+    if !by.split(',').any(|by| by == "channels") {
+        return;
+    }
+    for (index, channel) in project.channels.iter().enumerate() {
+        let mut muted = project.clone();
+        muted.channels[index].setup.channel.muted = true;
+        let effects: Vec<String> = channel
+            .setup
+            .effects
+            .iter()
+            .map(|effect| format!("{:?}", effect.params.kind()))
+            .collect();
+        let label = format!(
+            "mute {} {} [{:?}{}{}]",
+            index,
+            channel.setup.channel.name,
+            channel.setup.channel.kind,
+            if effects.is_empty() { "" } else { ": " },
+            effects.join(",")
+        );
+        line(&label, &measure(&muted, samples, frames, reps, block));
+    }
+    let mut bare = project.clone();
+    for bus in &mut bare.buses {
+        bus.effects.clear();
+    }
+    line("no bus inserts", &measure(&bare, samples, frames, reps, block));
 }
 
 #[test]
