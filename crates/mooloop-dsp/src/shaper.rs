@@ -43,11 +43,13 @@ fn fold(x: f32) -> f32 {
 /// in [-1, 1]. It compresses harder on the positive side than the negative
 /// one, which is the asymmetry being asked for rather than a defect.
 fn tape(x: f32) -> f32 {
-    const BIAS: f32 = 0.12;
-    /// `BIAS.tanh()`, precomputed: `tanh` is not a const fn.
-    const BIAS_DC: f32 = 0.119_427_3;
-    ((x + BIAS).tanh() - BIAS_DC) / (1.0 + BIAS_DC)
+    ((x + TAPE_BIAS).tanh() - TAPE_BIAS_DC) / (1.0 + TAPE_BIAS_DC)
 }
+
+/// The Tape curve's fixed bias.
+const TAPE_BIAS: f32 = 0.12;
+/// `TAPE_BIAS.tanh()`, precomputed: `tanh` is not a const fn.
+const TAPE_BIAS_DC: f32 = 0.119_427_3;
 
 /// Signal level (linear) that drive compensation anchors to: the operating
 /// level, `10^(REFERENCE_PEAK_DBFS/20)`. Written as a literal because it is
@@ -98,13 +100,25 @@ pub fn reference_drive_compensation(curve: DriveCurve, drive: f32) -> f32 {
 }
 
 /// Number of FIR taps in the oversampler's anti-imaging/anti-aliasing filter.
-/// Even, so it splits into two equal polyphase branches.
-const FIR_TAPS: usize = 32;
-const HALF_TAPS: usize = FIR_TAPS / 2;
+/// Odd, so the kernel is a true half-band: cut at a quarter of the 2x rate,
+/// every tap an even distance from the centre is zero, apart from the centre
+/// itself (MOO-250). That is what lets both filters skip half their work.
+const FIR_TAPS: usize = 31;
+/// The centre tap, and the delay of either filter at the 2x rate.
+const CENTRE: usize = FIR_TAPS / 2;
+/// The nonzero taps an odd distance from the centre: `kernel[0]`,
+/// `kernel[2]`, ... `kernel[30]`. Both filters use exactly these, plus the
+/// centre.
+const BRANCH_TAPS: usize = CENTRE + 1;
+/// How many frames back the centre tap reaches, in each filter's branch
+/// history: the upsampler's odd phase is the input `CENTRE / 2` frames ago,
+/// and the decimator's centre tap is the odd 2x sample `CENTRE / 2 + 1`
+/// frames ago.
+const CENTRE_FRAMES: usize = CENTRE / 2;
 
 /// Effective base-rate latency of the complete interpolate/process/decimate
-/// path. Both 32-tap filters contribute; the retained polyphase output has its
-/// impulse peak at frame 15.
+/// path: each filter delays by `CENTRE` samples at the 2x rate, so the pair
+/// delays by `CENTRE` frames at the base rate, exactly.
 ///
 /// Re-exported from `mooloop_core::effect`, which owns it: the control thread
 /// sizes compensation delays from it before any node exists to ask, so it is
@@ -112,7 +126,7 @@ const HALF_TAPS: usize = FIR_TAPS / 2;
 /// this file. `identity_path_has_the_declared_latency` below is what keeps the declaration
 /// honest against the filter that produces it: it drives an impulse through
 /// the real path and asserts where the peak lands, which no derivation from
-/// `HALF_TAPS` could do once the kernel changed shape.
+/// the tap count could do once the kernel changed shape.
 pub use mooloop_core::effect::OVERSAMPLER_LATENCY_FRAMES as OVERSAMPLER_LATENCY_U32;
 
 /// The same figure as a `usize`, for the array lengths and index arithmetic
@@ -121,21 +135,43 @@ pub const OVERSAMPLER_LATENCY_FRAMES: usize = OVERSAMPLER_LATENCY_U32 as usize;
 
 /// A 2x oversampler for one audio channel.
 ///
-/// Zero-stuffs to twice the rate through a windowed-sinc low-pass, hands both
-/// half-rate samples to a caller-supplied nonlinearity, then low-passes and
-/// decimates back down. Both filters use the same kernel.
+/// Zero-stuffs to twice the rate through a windowed-sinc half-band low-pass,
+/// hands both 2x samples to a caller-supplied nonlinearity, then low-passes
+/// and decimates back down. Both filters use the same kernel.
+///
+/// **Polyphase, and half-band** (MOO-250). Zero-stuffing means the
+/// upsampler's even output only ever meets the kernel's even taps, and its
+/// odd output only the odd taps, which in a half-band are all zero but the
+/// centre: so the odd output is one delayed, scaled input sample. The
+/// decimator keeps only the even 2x samples, and its kernel's nonzero taps
+/// fall on the even samples plus the centre, which lands on one odd sample.
+/// That is 34 multiplies a frame where the 32-tap full-rate version did 64.
+/// Both histories are doubled buffers (each sample written twice, `N` apart),
+/// so a convolution reads one contiguous slice in order and vectorises, with
+/// no `%` per tap.
 ///
 /// Construction allocates nothing beyond the struct itself and computes the
 /// kernel once; [`Oversampler2x::process`] is allocation-free and safe on the
 /// realtime thread.
 pub struct Oversampler2x {
-    kernel: [f32; FIR_TAPS],
-    /// Input history for the interpolating (upsampling) filter.
-    up_history: [f32; HALF_TAPS],
-    /// 2x-rate history for the decimating filter.
-    down_history: [f32; FIR_TAPS],
-    up_pos: usize,
-    down_pos: usize,
+    /// `kernel[2t]` in the order a history slice runs, oldest first: entry
+    /// `i` weighs the sample `BRANCH_TAPS - 1 - i` frames old.
+    branch: [f32; BRANCH_TAPS],
+    /// The centre tap.
+    centre: f32,
+    /// The last `BRANCH_TAPS` inputs, twice over.
+    up_history: [f32; 2 * BRANCH_TAPS],
+    /// The last `BRANCH_TAPS` even 2x samples after the nonlinearity, twice
+    /// over.
+    down_history: [f32; 2 * BRANCH_TAPS],
+    /// Where the next input and the next even sample are written; both
+    /// histories advance together, once a frame.
+    pos: usize,
+    /// The odd 2x samples after the nonlinearity, of the last
+    /// `CENTRE_FRAMES + 1` frames: the decimator's centre tap reads the one
+    /// about to be overwritten.
+    odd_history: [f32; CENTRE_FRAMES + 1],
+    odd_pos: usize,
 }
 
 impl Default for Oversampler2x {
@@ -146,77 +182,97 @@ impl Default for Oversampler2x {
 
 impl Oversampler2x {
     pub fn new() -> Self {
+        let kernel = blackman_sinc_kernel();
+        let mut branch = [0.0; BRANCH_TAPS];
+        for (i, tap) in branch.iter_mut().enumerate() {
+            *tap = kernel[2 * (BRANCH_TAPS - 1 - i)];
+        }
         Self {
-            kernel: blackman_sinc_kernel(),
-            up_history: [0.0; HALF_TAPS],
-            down_history: [0.0; FIR_TAPS],
-            up_pos: 0,
-            down_pos: 0,
+            branch,
+            centre: kernel[CENTRE],
+            up_history: [0.0; 2 * BRANCH_TAPS],
+            down_history: [0.0; 2 * BRANCH_TAPS],
+            pos: 0,
+            odd_history: [0.0; CENTRE_FRAMES + 1],
+            odd_pos: 0,
         }
     }
 
     /// Drop all filter state. Call when a chain is reset, not per block.
     pub fn reset(&mut self) {
-        self.up_history = [0.0; HALF_TAPS];
-        self.down_history = [0.0; FIR_TAPS];
-        self.up_pos = 0;
-        self.down_pos = 0;
+        self.up_history = [0.0; 2 * BRANCH_TAPS];
+        self.down_history = [0.0; 2 * BRANCH_TAPS];
+        self.pos = 0;
+        self.odd_history = [0.0; CENTRE_FRAMES + 1];
+        self.odd_pos = 0;
     }
 
     /// Run one input sample through `f` at twice the sample rate.
     pub fn process<F: FnMut(f32) -> f32>(&mut self, input: f32, mut f: F) -> f32 {
+        let pos = self.pos;
+        self.up_history[pos] = input;
+        self.up_history[pos + BRANCH_TAPS] = input;
+        // Oldest first, ending with `input`.
+        let inputs = &self.up_history[pos + 1..pos + 1 + BRANCH_TAPS];
+
         // Upsample. Zero-stuffing halves the signal's energy, so the kernel's
         // gain is doubled here to compensate.
-        self.up_history[self.up_pos] = input;
-        self.up_pos = (self.up_pos + 1) % HALF_TAPS;
-
-        let mut even = 0.0;
-        let mut odd = 0.0;
-        for tap in 0..HALF_TAPS {
-            // Most recent sample first.
-            let idx = (self.up_pos + HALF_TAPS - 1 - tap) % HALF_TAPS;
-            let sample = self.up_history[idx];
-            even += sample * self.kernel[tap * 2];
-            odd += sample * self.kernel[tap * 2 + 1];
-        }
-
+        let even = dot(inputs, &self.branch);
+        let odd = inputs[BRANCH_TAPS - 1 - CENTRE_FRAMES] * self.centre;
         let shaped_even = f(even * 2.0);
         let shaped_odd = f(odd * 2.0);
 
-        // Decimate: low-pass the 2x stream, keep every second sample. Only
-        // the retained phase's convolution is evaluated.
-        self.push_down(shaped_even);
-        self.push_down(shaped_odd);
-        self.decimate()
-    }
-
-    fn push_down(&mut self, sample: f32) {
-        self.down_history[self.down_pos] = sample;
-        self.down_pos = (self.down_pos + 1) % FIR_TAPS;
-    }
-
-    fn decimate(&self) -> f32 {
-        let mut acc = 0.0;
-        for tap in 0..FIR_TAPS {
-            let idx = (self.down_pos + FIR_TAPS - 1 - tap) % FIR_TAPS;
-            acc += self.down_history[idx] * self.kernel[tap];
+        // Decimate: keep the even 2x sample, low-passed. Its even taps read
+        // the even history, and its centre tap the odd sample
+        // `CENTRE_FRAMES + 1` frames back, which is the one in the odd ring
+        // this frame replaces.
+        self.down_history[pos] = shaped_even;
+        self.down_history[pos + BRANCH_TAPS] = shaped_even;
+        let evens = &self.down_history[pos + 1..pos + 1 + BRANCH_TAPS];
+        let output = dot(evens, &self.branch) + self.odd_history[self.odd_pos] * self.centre;
+        self.odd_history[self.odd_pos] = shaped_odd;
+        self.odd_pos += 1;
+        if self.odd_pos == self.odd_history.len() {
+            self.odd_pos = 0;
         }
-        acc
+        self.pos = if pos + 1 == BRANCH_TAPS { 0 } else { pos + 1 };
+        output
     }
+}
+
+/// A dot product over one branch, in four lanes so the compiler can
+/// vectorise it: a single running sum is a chain of dependent float adds it
+/// may not reorder.
+fn dot(samples: &[f32], taps: &[f32; BRANCH_TAPS]) -> f32 {
+    let samples: &[f32; BRANCH_TAPS] = samples.try_into().expect("a branch-long slice");
+    let mut lanes = [0.0f32; 4];
+    for (samples, taps) in samples.as_chunks::<4>().0.iter().zip(taps.as_chunks::<4>().0) {
+        for lane in 0..4 {
+            lanes[lane] += samples[lane] * taps[lane];
+        }
+    }
+    (lanes[0] + lanes[1]) + (lanes[2] + lanes[3])
 }
 
 /// Blackman-windowed sinc low-pass at a quarter of the 2x-rate sample rate,
 /// i.e. the base rate's Nyquist. Normalized to unity DC gain.
+///
+/// A half-band: the sinc is zero at every even distance from the centre but
+/// the centre itself. Those taps are set to exactly zero rather than left at
+/// the few parts in 1e8 `sin` rounds them to, so that skipping them in
+/// [`Oversampler2x`] is not an approximation.
 fn blackman_sinc_kernel() -> [f32; FIR_TAPS] {
     use core::f32::consts::PI;
     let mut kernel = [0.0f32; FIR_TAPS];
-    let center = (FIR_TAPS - 1) as f32 / 2.0;
     let cutoff = 0.25; // cycles/sample at the oversampled rate
     let mut sum = 0.0;
     for (i, tap) in kernel.iter_mut().enumerate() {
-        let n = i as f32 - center;
-        let sinc = if n.abs() < 1e-6 {
+        let offset = i as i32 - CENTRE as i32;
+        let n = offset as f32;
+        let sinc = if offset == 0 {
             2.0 * cutoff
+        } else if offset % 2 == 0 {
+            0.0
         } else {
             (2.0 * PI * cutoff * n).sin() / (PI * n)
         };
@@ -229,6 +285,118 @@ fn blackman_sinc_kernel() -> [f32; FIR_TAPS] {
         *tap /= sum;
     }
     kernel
+}
+
+/// `tanh`, as a [7/6] Padé approximant clamped to ±1, for the curves
+/// [`shape_oversampled`] runs twice a frame per channel (MOO-250).
+///
+/// Within 1.0e-4 of `f32::tanh` everywhere, the worst at |x| near 4.97 where
+/// the rational function reaches 1 and the clamp takes over
+/// (`fast_tanh_is_within_its_stated_error`). Odd, bounded, monotone to within
+/// float rounding, and one division where libm's is several times the work. Only the oversampled path uses
+/// it: what a test pins to the bit, and every curve outside the 2x path,
+/// keeps `f32::tanh`.
+pub(crate) fn fast_tanh(x: f32) -> f32 {
+    // Past 5 the rational function is over 1 anyway, and the input is held
+    // there so its seventh power cannot overflow into inf / inf.
+    let x = x.clamp(-5.0, 5.0);
+    let x2 = x * x;
+    let numerator = x * (135_135.0 + x2 * (17_325.0 + x2 * (378.0 + x2)));
+    let denominator = 135_135.0 + x2 * (62_370.0 + x2 * (3_150.0 + x2 * 28.0));
+    (numerator / denominator).clamp(-1.0, 1.0)
+}
+
+/// [`shape`] for the inside of [`Oversampler2x`]: the same curves, with
+/// [`fast_tanh`] for `Soft` and `Tape`. The difference is at most 1e-4 of full
+/// scale before the decimator, and the decimator's low-pass only removes from
+/// it.
+pub fn shape_oversampled(curve: DriveCurve, x: f32) -> f32 {
+    match curve {
+        DriveCurve::Soft => fast_tanh(x),
+        DriveCurve::Tape => (fast_tanh(x + TAPE_BIAS) - TAPE_BIAS_DC) / (1.0 + TAPE_BIAS_DC),
+        DriveCurve::Hard | DriveCurve::Fold => shape(curve, x),
+    }
+}
+
+/// The oversampler as it was before MOO-250: a 32-tap full-rate kernel, both
+/// filters convolving every tap through a `%` ring. Kept for the tests that
+/// measure the new one against it, for its sound and its cost.
+#[cfg(test)]
+pub(crate) mod before_moo250 {
+    const FIR_TAPS: usize = 32;
+    const HALF_TAPS: usize = FIR_TAPS / 2;
+
+    pub(crate) struct Oversampler2x {
+        pub(crate) kernel: [f32; FIR_TAPS],
+        up_history: [f32; HALF_TAPS],
+        down_history: [f32; FIR_TAPS],
+        up_pos: usize,
+        down_pos: usize,
+    }
+
+    impl Oversampler2x {
+        pub(crate) fn new() -> Self {
+            Self {
+                kernel: kernel(),
+                up_history: [0.0; HALF_TAPS],
+                down_history: [0.0; FIR_TAPS],
+                up_pos: 0,
+                down_pos: 0,
+            }
+        }
+
+        pub(crate) fn process<F: FnMut(f32) -> f32>(&mut self, input: f32, mut f: F) -> f32 {
+            self.up_history[self.up_pos] = input;
+            self.up_pos = (self.up_pos + 1) % HALF_TAPS;
+            let mut even = 0.0;
+            let mut odd = 0.0;
+            for tap in 0..HALF_TAPS {
+                let idx = (self.up_pos + HALF_TAPS - 1 - tap) % HALF_TAPS;
+                let sample = self.up_history[idx];
+                even += sample * self.kernel[tap * 2];
+                odd += sample * self.kernel[tap * 2 + 1];
+            }
+            let shaped_even = f(even * 2.0);
+            let shaped_odd = f(odd * 2.0);
+            self.push_down(shaped_even);
+            self.push_down(shaped_odd);
+            let mut acc = 0.0;
+            for tap in 0..FIR_TAPS {
+                let idx = (self.down_pos + FIR_TAPS - 1 - tap) % FIR_TAPS;
+                acc += self.down_history[idx] * self.kernel[tap];
+            }
+            acc
+        }
+
+        fn push_down(&mut self, sample: f32) {
+            self.down_history[self.down_pos] = sample;
+            self.down_pos = (self.down_pos + 1) % FIR_TAPS;
+        }
+    }
+
+    fn kernel() -> [f32; FIR_TAPS] {
+        use core::f32::consts::PI;
+        let mut kernel = [0.0f32; FIR_TAPS];
+        let center = (FIR_TAPS - 1) as f32 / 2.0;
+        let cutoff = 0.25;
+        let mut sum = 0.0;
+        for (i, tap) in kernel.iter_mut().enumerate() {
+            let n = i as f32 - center;
+            let sinc = if n.abs() < 1e-6 {
+                2.0 * cutoff
+            } else {
+                (2.0 * PI * cutoff * n).sin() / (PI * n)
+            };
+            let phase = 2.0 * PI * i as f32 / (FIR_TAPS - 1) as f32;
+            let window = 0.42 - 0.5 * phase.cos() + 0.08 * (2.0 * phase).cos();
+            *tap = sinc * window;
+            sum += *tap;
+        }
+        for tap in kernel.iter_mut() {
+            *tap /= sum;
+        }
+        kernel
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -507,10 +675,28 @@ mod tests {
                 .iter()
                 .map(|&x| os.process(x, |v| shape(DriveCurve::Hard, v)))
                 .collect();
+            let mut before = before_moo250::Oversampler2x::new();
+            let over_before: Vec<f32> = input
+                .iter()
+                .map(|&x| before.process(x, |v| shape(DriveCurve::Hard, v)))
+                .collect();
             let band = (20.0, 20_000.0);
             let naive_alias = alias_db(&naive, sr, freq, band);
             let over_alias = alias_db(&over, sr, freq, band);
-            println!("{sr} Hz: hard clip aliases at {naive_alias:.1} dB, oversampled {over_alias:.1} dB");
+            let before_alias = alias_db(&over_before, sr, freq, band);
+            println!(
+                "{sr} Hz: hard clip aliases at {naive_alias:.1} dB, oversampled {over_alias:.1} dB \
+                 (the 32-tap path before MOO-250: {before_alias:.1} dB)"
+            );
+            // Within 3 dB of the 32-tap path at every rate: measured
+            // 2026-09-25 as 0.0, +0.9, -5.4 and +2.6 dB at 44.1, 48, 96 and
+            // 192 kHz. The loudest single alias line moves with the stopband's
+            // exact ripple, which one tap changes.
+            assert!(
+                over_alias <= before_alias + 3.0,
+                "{sr} Hz: the half-band path aliases at {over_alias:.1} dB, the 32-tap one at \
+                 {before_alias:.1} dB"
+            );
             assert!(
                 over_alias < naive_alias - OVERSAMPLED_ALIAS_MARGIN_DB,
                 "{sr} Hz: oversampled alias {over_alias:.1} dB should be well under naive \
@@ -522,6 +708,106 @@ mod tests {
     /// How much the 2x path has to take off the loudest alias of a
     /// hard-clipped 9 kHz sine.
     const OVERSAMPLED_ALIAS_MARGIN_DB: f32 = 6.0;
+
+    /// [`fast_tanh`]'s stated error, over the whole range a driven sample
+    /// can reach, and its shape: odd, bounded, never decreasing.
+    #[test]
+    fn fast_tanh_is_within_its_stated_error() {
+        let mut worst = 0.0f32;
+        let mut previous = -1.0f32;
+        for step in -200_000..=200_000 {
+            let x = step as f32 * 1.0e-4;
+            let fast = fast_tanh(x);
+            worst = worst.max((fast - x.tanh()).abs());
+            // Monotone to within float rounding: near |x| = 5, where the
+            // curve flattens into 1, the rational function's terms are large
+            // enough that one step can round a few ulps below the last.
+            assert!(fast >= previous - 5.0e-7, "fast_tanh decreases at {x}");
+            assert_eq!(fast, -fast_tanh(-x), "fast_tanh is not odd at {x}");
+            assert!(fast.abs() <= 1.0);
+            previous = fast;
+        }
+        for x in [100.0f32, 1.0e6, f32::MAX] {
+            assert_eq!(fast_tanh(x), 1.0);
+        }
+        println!("fast_tanh is within {worst:.2e} of tanh over -20..20");
+        assert!(worst <= 1.0e-4, "fast_tanh is {worst} from tanh");
+    }
+
+    /// The kernel really is a half-band: the taps the filters skip are zero,
+    /// and the two phases each carry half the gain.
+    #[test]
+    fn the_kernel_is_a_half_band() {
+        let kernel = blackman_sinc_kernel();
+        for (i, tap) in kernel.iter().enumerate() {
+            let offset = i as i32 - CENTRE as i32;
+            if offset != 0 && offset % 2 == 0 {
+                assert_eq!(*tap, 0.0, "tap {i}");
+            }
+        }
+        let branch: f32 = kernel.iter().step_by(2).sum();
+        assert!((branch - 0.5).abs() < 2.0e-3, "the even taps sum to {branch}");
+        assert!((kernel[CENTRE] - 0.5).abs() < 2.0e-3, "the centre is {}", kernel[CENTRE]);
+    }
+
+    /// The kernel's response in the band the decimator has to throw away,
+    /// from 0.35 of the 2x rate to its Nyquist (above 1.4 times the base
+    /// rate's Nyquist): no worse than the 32-tap kernel it replaced (MOO-250).
+    #[test]
+    fn the_half_band_rejects_its_stopband_as_well_as_the_kernel_before_it() {
+        fn worst_db(kernel: &[f32]) -> f32 {
+            let mut worst = 0.0f32;
+            for step in 0..=300 {
+                let f = 0.35 + 0.15 * step as f32 / 300.0;
+                let (mut re, mut im) = (0.0f32, 0.0f32);
+                for (n, tap) in kernel.iter().enumerate() {
+                    let w = core::f32::consts::TAU * f * n as f32;
+                    re += tap * w.cos();
+                    im -= tap * w.sin();
+                }
+                worst = worst.max((re * re + im * im).sqrt());
+            }
+            20.0 * worst.max(1.0e-12).log10()
+        }
+        let now = worst_db(&blackman_sinc_kernel());
+        let before = worst_db(&before_moo250::Oversampler2x::new().kernel);
+        println!("stopband: {now:.1} dB now, {before:.1} dB before");
+        assert!(now <= before + 1.0, "the stopband rose from {before:.1} to {now:.1} dB");
+        assert!(now < -60.0, "the stopband is only {now:.1} dB down");
+    }
+
+    /// **The half-band oversampler sounds like the one it replaced**
+    /// (MOO-250). A two-tone signal hard-clipped and soft-clipped through
+    /// both, at every rate: the new one against the old, over the same
+    /// latency. The two kernels differ by one tap, so this is the size of that
+    /// difference, and it is held under 50 dB below the signal.
+    #[test]
+    fn the_half_band_path_matches_the_32_tap_one() {
+        for sr in RATES {
+            for curve in [DriveCurve::Soft, DriveCurve::Hard] {
+                let frames = frames_for(0.25, sr);
+                let input: Vec<f32> = (0..frames)
+                    .map(|i| {
+                        let t = i as f32 / sr as f32;
+                        0.5 * (t * 220.0 * core::f32::consts::TAU).sin()
+                            + 0.3 * (t * 3_100.0 * core::f32::consts::TAU).sin()
+                    })
+                    .collect();
+                let mut now = Oversampler2x::new();
+                let mut before = before_moo250::Oversampler2x::new();
+                let (mut diff, mut power) = (0.0f64, 0.0f64);
+                for &x in &input {
+                    let a = now.process(x, |v| shape(curve, v * 3.0));
+                    let b = before.process(x, |v| shape(curve, v * 3.0));
+                    diff += f64::from((a - b) * (a - b));
+                    power += f64::from(b * b);
+                }
+                let null_db = 10.0 * (diff / power).log10();
+                println!("{sr} Hz {curve:?}: the two paths differ by {null_db:.1} dB");
+                assert!(null_db < -50.0, "{sr} Hz {curve:?}: only {null_db:.1} dB apart");
+            }
+        }
+    }
 
     #[test]
     fn identity_path_has_the_declared_latency() {

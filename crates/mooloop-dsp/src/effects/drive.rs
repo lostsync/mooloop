@@ -15,7 +15,7 @@ use crate::event::EventList;
 use crate::filter::OnePoleLp;
 use crate::node::{AudioNode, ProcessContext};
 use crate::shaper::{
-    reference_drive_compensation, shape, Oversampler2x, OVERSAMPLER_LATENCY_FRAMES,
+    reference_drive_compensation, shape_oversampled, Oversampler2x, OVERSAMPLER_LATENCY_FRAMES,
 };
 use crate::smooth::Smoothed;
 use super::{process_param_split, RangeProcessor};
@@ -126,8 +126,10 @@ impl RangeProcessor for DriveEffect {
             let compensation = self.compensation;
             let (dry_l, dry_r) = (bus.l[i], bus.r[i]);
 
-            let wet_l = self.left.process(dry_l, |x| shape(curve, x * drive)) * compensation;
-            let wet_r = self.right.process(dry_r, |x| shape(curve, x * drive)) * compensation;
+            let wet_l =
+                self.left.process(dry_l, |x| shape_oversampled(curve, x * drive)) * compensation;
+            let wet_r =
+                self.right.process(dry_r, |x| shape_oversampled(curve, x * drive)) * compensation;
 
             let wet_l = Self::tilt(&mut self.tone_lp_l, wet_l, tone);
             let wet_r = Self::tilt(&mut self.tone_lp_r, wet_r, tone);
@@ -176,8 +178,8 @@ impl AudioNode for DriveEffect {
     }
 
     /// Three things hold audio here after the input stops: the oversampler's
-    /// two 32-tap FIR histories, which between them span about 32 base-rate
-    /// frames; the internal ring that realigns the dry path against them,
+    /// two 31-tap half-band FIR histories, which between them span about 31
+    /// base-rate frames; the internal ring that realigns the dry path against them,
     /// which is exactly `OVERSAMPLER_LATENCY_FRAMES`; and the 1.5 kHz tilt
     /// one-pole, whose free response needs `ln(REST_EPSILON) / ln(e^(-2 pi f
     /// / fs))` samples — about 106 at 48 kHz, and proportional to the rate.
@@ -489,7 +491,7 @@ mod tests {
                 let mix = reference.mix.advance();
                 let output = reference.output.advance();
                 let compensation = reference_drive_compensation(curve, drive);
-                let wet = reference.left.process(x, |v| shape(curve, v * drive)) * compensation;
+                let wet = reference.left.process(x, |v| shape_oversampled(curve, v * drive)) * compensation;
                 let wet = DriveEffect::tilt(&mut reference.tone_lp_l, wet, tone);
                 let aligned = dry[dry_pos];
                 dry[dry_pos] = x;
@@ -537,5 +539,194 @@ mod tests {
             at_boundary < steady_state * 3.0 + 0.02,
             "mix change left a discontinuity of {at_boundary} vs steady-state {steady_state}"
         );
+    }
+
+    /// The Drive loop as it was before MOO-250 and MOO-251: the 32-tap
+    /// oversampler, libm `tanh` inside it, and the compensation worked out
+    /// every frame. Kept to measure the device against, for sound and cost.
+    struct DriveBefore {
+        effect: DriveEffect,
+        left: crate::shaper::before_moo250::Oversampler2x,
+        right: crate::shaper::before_moo250::Oversampler2x,
+        dry_l: [f32; OVERSAMPLER_LATENCY_FRAMES],
+        dry_r: [f32; OVERSAMPLER_LATENCY_FRAMES],
+        dry_pos: usize,
+    }
+
+    impl DriveBefore {
+        fn new(params: DriveParams) -> Self {
+            Self {
+                effect: DriveEffect::new(params, 48_000),
+                left: crate::shaper::before_moo250::Oversampler2x::new(),
+                right: crate::shaper::before_moo250::Oversampler2x::new(),
+                dry_l: [0.0; OVERSAMPLER_LATENCY_FRAMES],
+                dry_r: [0.0; OVERSAMPLER_LATENCY_FRAMES],
+                dry_pos: 0,
+            }
+        }
+
+        fn process(&mut self, bus: &mut StereoBus, frames: usize) {
+            let e = &mut self.effect;
+            let curve = e.params.curve;
+            for i in 0..frames {
+                let drive = e.drive.advance();
+                let tone = e.tone.advance();
+                let mix = e.mix.advance();
+                let output = e.output.advance();
+                let compensation = reference_drive_compensation(curve, drive);
+                let (dry_l, dry_r) = (bus.l[i], bus.r[i]);
+                let wet_l = self.left.process(dry_l, |x| crate::shaper::shape(curve, x * drive))
+                    * compensation;
+                let wet_r = self.right.process(dry_r, |x| crate::shaper::shape(curve, x * drive))
+                    * compensation;
+                let wet_l = DriveEffect::tilt(&mut e.tone_lp_l, wet_l, tone);
+                let wet_r = DriveEffect::tilt(&mut e.tone_lp_r, wet_r, tone);
+                let aligned_l = self.dry_l[self.dry_pos];
+                let aligned_r = self.dry_r[self.dry_pos];
+                self.dry_l[self.dry_pos] = dry_l;
+                self.dry_r[self.dry_pos] = dry_r;
+                self.dry_pos = (self.dry_pos + 1) % OVERSAMPLER_LATENCY_FRAMES;
+                bus.l[i] = (aligned_l + (wet_l - aligned_l) * mix) * output;
+                bus.r[i] = (aligned_r + (wet_r - aligned_r) * mix) * output;
+            }
+        }
+    }
+
+    /// The factory settings the cost and sound comparisons use: the
+    /// default (Soft at 2), Tape Warmth, Soft Push and Hard Clip.
+    fn drive_rows() -> [(&'static str, DriveParams); 4] {
+        let with = |curve, drive, tone, mix| DriveParams {
+            curve,
+            drive,
+            tone,
+            mix,
+            ..DriveParams::default()
+        };
+        [
+            ("default (Soft 2)", DriveParams::default()),
+            ("Tape Warmth", with(DriveCurve::Tape, 3.0, -0.2, 0.7)),
+            ("Soft Push", with(DriveCurve::Soft, 4.0, 0.1, 1.0)),
+            ("Hard Clip", with(DriveCurve::Hard, 12.0, 0.0, 1.0)),
+        ]
+    }
+
+    /// A chord of saws at the operating level: harmonics all the way up, the
+    /// way a Drive is actually fed.
+    fn chord_input(frames: usize) -> Vec<f32> {
+        (0..frames)
+            .map(|i| {
+                [110.0f32, 164.8, 220.0, 277.2]
+                    .iter()
+                    .map(|hz| 2.0 * (i as f32 * hz / 48_000.0).fract() - 1.0)
+                    .sum::<f32>()
+                    * 0.06
+            })
+            .collect()
+    }
+
+    /// **The Drive sounds as it did** (MOO-250): the device against the loop
+    /// before the half-band oversampler, the Padé `tanh` and the cached
+    /// compensation, on a chord of saws at every factory setting above. For
+    /// the smooth curves the difference is held 60 dB under the output, and
+    /// 80 dB under it below 15 kHz; measured 2026-09-25 at 64 to 70 dB and 84
+    /// to 91 dB. Hard Clip is held at 40 dB (measured 45): see below.
+    #[test]
+    fn the_drive_matches_the_loop_before_the_oversampler_changed() {
+        let frames = 24_000;
+        let input = chord_input(frames);
+        for (label, params) in drive_rows() {
+            let mut now = StereoBus::with_capacity(frames);
+            now.l[..frames].copy_from_slice(&input);
+            now.r[..frames].copy_from_slice(&input);
+            let mut before = StereoBus::with_capacity(frames);
+            before.l[..frames].copy_from_slice(&input);
+            before.r[..frames].copy_from_slice(&input);
+            DriveEffect::new(params, 48_000).process(
+                &context(frames),
+                &mut now,
+                &EventList::empty(),
+                None,
+            );
+            DriveBefore::new(params).process(&mut before, frames);
+            let error: Vec<f32> = (0..frames).map(|i| now.l[i] - before.l[i]).collect();
+            let full = crate::testkit::db(rms(&error) / rms(&before.l[..frames]));
+            let band = (20.0, 15_000.0);
+            let audible = crate::testkit::db(
+                crate::testkit::band_rms(&error, 48_000, band)
+                    / crate::testkit::band_rms(&before.l[..frames], 48_000, band),
+            );
+            println!("{label}: {full:.1} dB from the loop before, {audible:.1} dB below 15 kHz");
+            if params.curve == DriveCurve::Hard {
+                // A hard clip at drive 12 puts harmonics far past the 2x
+                // rate's Nyquist, and what folds back in is set by each
+                // kernel's stopband, which differ. So the two paths differ by
+                // their aliasing, at every frequency; how loud the new path's
+                // aliasing is against the old is
+                // `oversampling_reduces_aliasing_below_the_fundamental`'s to
+                // say, and it is no louder.
+                assert!(full < -40.0, "{label}: only {full:.1} dB from before");
+            } else {
+                assert!(full < -60.0, "{label}: only {full:.1} dB from before");
+                assert!(audible < -80.0, "{label}: only {audible:.1} dB from before below 15 kHz");
+            }
+        }
+    }
+
+    /// **What a Drive costs, before and after MOO-250 and MOO-251**, per
+    /// 128-frame block, in one run: the loop as it was against the device, at
+    /// the factory settings above, round-robin, each block's fastest of
+    /// `REPS` passes (default 7).
+    ///
+    /// ```sh
+    /// cargo test -p mooloop-dsp --release --lib -- drive_cost --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "measures wall time; run deliberately in release"]
+    fn drive_cost() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        const BLOCK: usize = 128;
+        const BLOCKS: usize = 750;
+        enum Device {
+            Now(Box<DriveEffect>),
+            Before(Box<DriveBefore>),
+        }
+        let reps = std::env::var("REPS")
+            .ok()
+            .and_then(|reps| reps.parse().ok())
+            .unwrap_or(7usize)
+            .max(1);
+        let input = chord_input(BLOCK * BLOCKS);
+        let mut rows: Vec<(String, Device)> = Vec::new();
+        for (label, params) in drive_rows() {
+            rows.push((format!("{label}, before"), Device::Before(Box::new(DriveBefore::new(params)))));
+            rows.push((format!("{label}, after"), Device::Now(Box::new(DriveEffect::new(params, 48_000)))));
+        }
+        let mut best = vec![vec![u128::MAX; BLOCKS]; rows.len()];
+        let mut bus = StereoBus::with_capacity(BLOCK);
+        for _ in 0..reps {
+            for (row, (_, device)) in rows.iter_mut().enumerate() {
+                for (block, best) in best[row].iter_mut().enumerate() {
+                    let chunk = &input[block * BLOCK..(block + 1) * BLOCK];
+                    bus.l[..BLOCK].copy_from_slice(chunk);
+                    bus.r[..BLOCK].copy_from_slice(chunk);
+                    let start = Instant::now();
+                    match device {
+                        Device::Now(effect) => {
+                            effect.process(&context(BLOCK), &mut bus, &EventList::empty(), None)
+                        }
+                        Device::Before(before) => before.process(&mut bus, BLOCK),
+                    }
+                    black_box(&bus);
+                    *best = (*best).min(start.elapsed().as_nanos());
+                }
+            }
+        }
+        println!("{reps} passes, {BLOCKS} blocks of {BLOCK}, each block's fastest pass");
+        for ((label, _), best) in rows.iter().zip(&best) {
+            let us = best.iter().sum::<u128>() as f64 / BLOCKS as f64 / 1_000.0;
+            println!("{label:<28} {us:7.2} us/block");
+        }
     }
 }

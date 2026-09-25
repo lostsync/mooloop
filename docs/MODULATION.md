@@ -557,8 +557,8 @@ stereo bus. Extend both through the process-buffer and typed-edge design in
 
 Latency compensation is also required and is not hypothetical. `AudioNode`
 now reports integer latency, and the drive effect declares 15 frames for its
-complete 2x oversampling path (both 32-tap FIR stages, including the retained
-polyphase offset). Its internal dry path is aligned, but the graph does not yet
+complete 2x oversampling path (both 31-tap half-band FIR stages, 15 samples
+each at the 2x rate, since MOO-250). Its internal dry path is aligned, but the graph does not yet
 delay neighbouring shorter paths at a sum. **Build preallocated graph
 compensation before parallel sends or true sidechain.**
 

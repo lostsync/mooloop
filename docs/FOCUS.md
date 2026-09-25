@@ -604,3 +604,19 @@ In the order worth playing:
     (8x) -9.6 dB, "ML-P8 7" (4x) -2.3 dB and "ML-P8 15" (4x) -1.3 dB. The
     whole songs moved 0.06 and 0.01 dB. Whether those channels want their
     faders back up is a listening call.
+24. **The Drive after its oversampler changed** (MOO-250, MOO-251). The
+    2x oversampler is now a 31-tap half-band with a rational `tanh` inside.
+    A saw chord, one bar each through the default Drive, Tape Warmth and Hard
+    Clip, then dry:
+
+    ```sh
+    scripts/antibox --no-incremental --pull target/drive-curves \
+      cargo run -p mooloop-engine --example drive_curves -- target/drive-curves
+    ```
+
+    Play `drive.wav`. Each Drive should sound as it did: the smooth curves
+    measure 64 to 70 dB from the old path, and Hard Clip 45 dB, where the
+    difference is the two kernels' aliasing
+    (`the_drive_matches_the_loop_before_the_oversampler_changed`, mooloop-dsp).
+    There's no old build in the render to A/B against. A song with a Drive
+    saved before today is the real comparison.
