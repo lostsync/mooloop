@@ -9,7 +9,10 @@ use mooloop_core::{
     log_error, log_warn, ChannelSetup, EffectSlotState, Project, SampleReference,
 };
 use mooloop_dsp::SampleData;
-use mooloop_engine::{ExportFormat, Mp3Bitrate, RenderScope, WavEncoding};
+use mooloop_engine::{
+    ExportError, ExportProgress, OfflineRenderer, RenderJob, RenderScope, RenderedFile,
+};
+use crate::render_settings::{default_export_folder, RenderSettings, SettingsProblem};
 use mooloop_project::{AssetMode, AssetWarning, Issue, LoadReport, LoadedDocument, SaveReport};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -230,10 +233,13 @@ pub enum DocumentResult {
         target: LoadTarget,
         document: ResolvedDocument,
     },
+    /// An export's files, each with what its render found, shown in the
+    /// export dialog (MOO-125). `cancelled` is a job stopped partway whose
+    /// earlier files stay (MOO-180); a job cancelled before any file had
+    /// finished is [`DocumentResult::Cancelled`].
     Exported {
-        path: PathBuf,
-        /// What the render found, shown in the export dialog (MOO-125).
-        summary: mooloop_engine::RenderSummary,
+        files: Vec<RenderedFile>,
+        cancelled: bool,
     },
 }
 
@@ -287,6 +293,89 @@ pub fn export_result_detail(summary: &mooloop_engine::RenderSummary) -> String {
         lines.push("Nothing was over, clipped or lost.".into());
     }
     lines.join("\n")
+}
+
+/// The export dialog's title and account of a finished job (MOO-180): one
+/// file is named with [`export_result_detail`] under it; several are
+/// counted, each named with its own account.
+pub fn export_job_result(files: &[RenderedFile], cancelled: bool) -> (String, String) {
+    let name = |file: &RenderedFile| {
+        file.path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| file.path.display().to_string())
+    };
+    let mut title = match files {
+        [one] => name(one),
+        _ => format!("{} files", files.len()),
+    };
+    if cancelled {
+        title = format!("Cancelled; kept {title}");
+    }
+    let detail = match files {
+        [one] => export_result_detail(&one.summary),
+        _ => files
+            .iter()
+            .map(|file| format!("{}: {}", name(file), export_result_detail(&file.summary)))
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+    };
+    (title, detail)
+}
+
+/// Render `request`'s job, reporting into `progress`: what an export worker
+/// runs, and what it sends back (MOO-180). A cancel keeps the files that had
+/// finished; a failure names them too, since they are on disk.
+pub fn run_export(
+    request: ExportRequest,
+    sample_rate: u32,
+    progress: &ExportProgress,
+    plugins: std::collections::BTreeMap<
+        mooloop_core::PluginSlotId,
+        Box<dyn mooloop_dsp::AudioNode + Send>,
+    >,
+) -> DocumentResult {
+    let mut plugins = Some(plugins);
+    match OfflineRenderer::render_job_with_plugins(
+        &request.project,
+        &request.samples,
+        sample_rate,
+        &request.job,
+        progress,
+        // Every job the dialog builds so far is one pass, and a pass is
+        // the only one that gets the processors.
+        &mut |_| plugins.take().unwrap_or_default(),
+    ) {
+        Ok(files) => DocumentResult::Exported {
+            files,
+            cancelled: false,
+        },
+        Err(failure) => match failure.error {
+            ExportError::Cancelled if failure.written.is_empty() => DocumentResult::Cancelled,
+            ExportError::Cancelled => DocumentResult::Exported {
+                files: failure.written,
+                cancelled: true,
+            },
+            error => {
+                let mut message = error.to_string();
+                if !failure.written.is_empty() {
+                    let kept: Vec<String> = failure
+                        .written
+                        .iter()
+                        .map(|file| file.path.display().to_string())
+                        .collect();
+                    message.push_str(&format!(
+                        "\n\nThe files that had finished were kept: {}",
+                        kept.join(", ")
+                    ));
+                }
+                DocumentResult::Failed {
+                    action: "export this song",
+                    problem: message.into(),
+                }
+            }
+        },
+    }
 }
 
 /// The path a chooser picked, or the result to send instead.
@@ -452,18 +541,8 @@ pub fn log_asset_warnings(what: &str, warnings: &[AssetWarning]) {
 pub struct ExportRequest {
     pub project: Project,
     pub samples: Vec<Option<Arc<SampleData>>>,
-    pub scope: RenderScope,
-    pub format: ExportFormat,
-}
-
-impl ExportRequest {
-    /// The file extension the chosen format wants.
-    pub fn extension(&self) -> &'static str {
-        match self.format {
-            ExportFormat::Mp3(_) => "mp3",
-            _ => "wav",
-        }
-    }
+    /// The files to write, built from the dialog's [`RenderSettings`].
+    pub job: RenderJob,
 }
 
 /// The channel a preset is being saved from, and which kind of preset it is.
@@ -483,39 +562,52 @@ pub struct PresetSource {
 }
 
 impl Session {
-    /// Resolves an export from the menu's two indices and the current
-    /// transport state.
-    ///
-    /// The scope follows the transport rather than being asked for
-    /// separately: exporting the song while the sequencer is in pattern mode
-    /// would render something the user is not listening to.
+    /// What the transport plays, which is what an export renders until a
+    /// range is chosen (MOO-181): exporting the song while the sequencer is
+    /// in pattern mode would render something the user is not listening to.
+    pub fn export_scope(&self) -> RenderScope {
+        if self.song_mode {
+            RenderScope::Song
+        } else {
+            RenderScope::Pattern {
+                index: self.current_pattern,
+            }
+        }
+    }
+
+    /// The song's name, which an export's file takes when none is typed:
+    /// its file's, or `None` for a song never saved.
+    pub fn export_song_name(&self) -> Option<String> {
+        self.bundle_path
+            .as_deref()
+            .and_then(Path::file_stem)
+            .map(|stem| stem.to_string_lossy().into_owned())
+    }
+
+    /// The folder an export writes to when none is chosen: the song's own,
+    /// or the music folder for a song never saved.
+    pub fn export_default_folder(&self) -> PathBuf {
+        default_export_folder(self.bundle_path.as_deref())
+    }
+
+    /// Resolves an export from the dialog's settings and the current
+    /// transport state, or says why it can't be exported as it is.
     pub fn export_request(
         &self,
         bpm: i32,
         swing_percent: i32,
-        format: i32,
-        bitrate: i32,
-    ) -> ExportRequest {
-        ExportRequest {
+        settings: &RenderSettings,
+    ) -> Result<ExportRequest, SettingsProblem> {
+        let job = settings.job(
+            self.export_scope(),
+            self.export_song_name().as_deref(),
+            &self.export_default_folder(),
+        )?;
+        Ok(ExportRequest {
             project: self.project_snapshot(bpm, swing_percent),
             samples: self.sample_snapshots(),
-            scope: if self.song_mode {
-                RenderScope::Song
-            } else {
-                RenderScope::Pattern {
-                    index: self.current_pattern,
-                }
-            },
-            format: match format {
-                1 => ExportFormat::Wav(WavEncoding::Float32),
-                2 => ExportFormat::Mp3(match bitrate {
-                    0 => Mp3Bitrate::Kbps192,
-                    1 => Mp3Bitrate::Kbps256,
-                    _ => Mp3Bitrate::Kbps320,
-                }),
-                _ => ExportFormat::Wav(WavEncoding::Pcm24),
-            },
-        }
+            job,
+        })
     }
 
     /// Takes the pending preset save, with the channel setup it applies to.
@@ -575,8 +667,83 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use super::{export_result_detail, spawn_document_worker, DocumentResult};
-    use mooloop_engine::RenderSummary;
+    use super::{
+        export_job_result, export_result_detail, run_export, spawn_document_worker,
+        DocumentResult,
+    };
+    use crate::render_settings::{OutputSettings, RenderSettings, TailSettings};
+    use crate::session::Session;
+    use mooloop_engine::{ExportProgress, RenderSummary, RenderedFile};
+    use std::path::PathBuf;
+
+    /// **The master mix goes to the folder and name typed on the card, with
+    /// no chooser** (MOO-180): the settings build the job, and the job
+    /// writes exactly that file.
+    #[test]
+    fn an_export_writes_the_typed_name_in_the_typed_folder() {
+        let folder = tempfile::tempdir().unwrap();
+        let session = Session::default();
+        let settings = RenderSettings {
+            tail: TailSettings { max_seconds: 0 },
+            output: OutputSettings {
+                folder: Some(folder.path().to_path_buf()),
+                name: "first mix".into(),
+            },
+            ..RenderSettings::default()
+        };
+        let request = session.export_request(120, 0, &settings).unwrap();
+        let result = run_export(request, 48_000, &ExportProgress::new(), Default::default());
+        let DocumentResult::Exported { files, cancelled } = result else {
+            panic!("expected Exported");
+        };
+        assert!(!cancelled);
+        assert_eq!(files.len(), 1);
+        let target = folder.path().join("first mix.wav");
+        assert_eq!(files[0].path, target);
+        assert!(target.is_file());
+        let names: Vec<_> = std::fs::read_dir(folder.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["first mix.wav"], "nothing but the file is left behind");
+    }
+
+    /// A folder that isn't there is said on the card, before any render.
+    #[test]
+    fn an_export_to_a_missing_folder_is_refused_before_it_renders() {
+        let folder = tempfile::tempdir().unwrap();
+        let settings = RenderSettings {
+            output: OutputSettings {
+                folder: Some(folder.path().join("gone")),
+                name: String::new(),
+            },
+            ..RenderSettings::default()
+        };
+        let problem = Session::default()
+            .export_request(120, 0, &settings)
+            .err()
+            .expect("a missing folder is a problem");
+        assert!(problem.0.contains("doesn't exist"), "{problem}");
+    }
+
+    #[test]
+    fn a_job_of_several_files_is_counted_and_each_is_named() {
+        let file = |name: &str| RenderedFile {
+            path: PathBuf::from("/renders").join(name),
+            summary: summary(),
+        };
+        let (title, detail) = export_job_result(&[file("mix.wav")], false);
+        assert_eq!(title, "mix.wav");
+        assert_eq!(detail, export_result_detail(&summary()));
+
+        let (title, detail) = export_job_result(&[file("mix.wav"), file("mix.mp3")], false);
+        assert_eq!(title, "2 files");
+        assert!(detail.starts_with("mix.wav: 2.5 s"), "{detail}");
+        assert!(detail.contains("\n\nmix.mp3: 2.5 s"), "{detail}");
+
+        let (title, _) = export_job_result(&[file("mix.wav")], true);
+        assert_eq!(title, "Cancelled; kept mix.wav");
+    }
 
     /// **A worker that panics still reports** (MOO-103). The UI clears
     /// `document-busy` on whatever result arrives, so a panic that sent

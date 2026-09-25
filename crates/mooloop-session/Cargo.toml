@@ -17,6 +17,10 @@ mooloop-project = { workspace = true }
 # format's types leave that crate, which `plugin_formats_stay_out` holds.
 mooloop-plugin-host = { workspace = true }
 hound = "3"
+# `RenderSettings` (MOO-180): everything the export dialog sets, as one
+# value the settings memory, presets and a song's own export settings
+# serialize as it is (MOO-190, 191, 194).
+serde = { workspace = true }
 rtrb = { workspace = true }
 symphonia = {
     version = "0.6.1",
@@ -42,6 +46,7 @@ rustix = { version = "1", features = ["fs"] }
 
 [dev-dependencies]
 tempfile = "3"
+serde_json = { workspace = true }
 # The in-repo CLAP test plugin, for the plugin-hosting case
 # (`tests/clap_effect.rs`, MOO-81): naming it builds its cdylib next to the
 # test binary, where the test loads it by path.

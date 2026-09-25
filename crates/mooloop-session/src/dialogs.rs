@@ -243,6 +243,65 @@ pub fn pick_export_dialog(extension: &str) -> Picked {
     })
 }
 
+/// Pick a folder: where an export writes its files (MOO-180). A chooser
+/// that could not be shown is [`Picked::Unavailable`], not a cancel, as for
+/// every other chooser here (MOO-90).
+pub fn pick_folder_dialog(title: &str) -> Picked {
+    backend::pick(Request::Directory { title })
+}
+
+/// The user's music folder: `XDG_MUSIC_DIR` from the environment or from
+/// `user-dirs.dirs`, else `~/Music` if there is one. On a Mac, `~/Music`.
+/// `None` when there is no such folder, and the caller falls back to home.
+pub fn music_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    #[cfg(not(target_os = "macos"))]
+    {
+        let named = std::env::var_os("XDG_MUSIC_DIR")
+            .map(PathBuf::from)
+            .or_else(|| {
+                let config = std::env::var_os("XDG_CONFIG_HOME")
+                    .map(PathBuf::from)
+                    .filter(|path| path.is_absolute())
+                    .unwrap_or_else(|| home.join(".config"));
+                let text = std::fs::read_to_string(config.join("user-dirs.dirs")).ok()?;
+                xdg_user_dir(&text, "XDG_MUSIC_DIR", &home)
+            })
+            .filter(|path| path.is_dir());
+        if named.is_some() {
+            return named;
+        }
+    }
+    Some(home.join("Music")).filter(|path| path.is_dir())
+}
+
+/// One entry of a `user-dirs.dirs` file, which is shell assignments of the
+/// form `XDG_MUSIC_DIR="$HOME/Music"`: a path either absolute or relative to
+/// `$HOME`, and nothing else (`man user-dirs.dirs`). An entry that is `$HOME`
+/// itself means the directory is disabled.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn xdg_user_dir(text: &str, key: &str, home: &Path) -> Option<PathBuf> {
+    let value = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with('#'))
+        .find_map(|line| line.strip_prefix(key)?.trim_start().strip_prefix('='))?
+        .trim()
+        .trim_matches('"');
+    let path = if let Some(rest) = value.strip_prefix("$HOME") {
+        let rest = rest.trim_start_matches('/');
+        if rest.is_empty() {
+            return None;
+        }
+        home.join(rest)
+    } else if value.starts_with('/') {
+        PathBuf::from(value)
+    } else {
+        return None;
+    };
+    Some(path)
+}
+
 /// Pick a supported audio file.
 pub fn pick_sample_dialog() -> Picked {
     let filter = Filter::new(
@@ -610,6 +669,25 @@ mod tests {
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect()
+    }
+
+    #[test]
+    fn the_music_folder_is_read_from_user_dirs() {
+        let home = Path::new("/home/adam");
+        let text = "# written by xdg-user-dirs-update\n\
+                    XDG_DESKTOP_DIR=\"$HOME/Desktop\"\n\
+                    XDG_MUSIC_DIR=\"$HOME/Audio/Music\"\n";
+        assert_eq!(
+            xdg_user_dir(text, "XDG_MUSIC_DIR", home),
+            Some(PathBuf::from("/home/adam/Audio/Music"))
+        );
+        assert_eq!(
+            xdg_user_dir("XDG_MUSIC_DIR=\"/srv/music\"", "XDG_MUSIC_DIR", home),
+            Some(PathBuf::from("/srv/music"))
+        );
+        // `$HOME` itself is a disabled entry, and a missing one is none.
+        assert_eq!(xdg_user_dir("XDG_MUSIC_DIR=\"$HOME/\"", "XDG_MUSIC_DIR", home), None);
+        assert_eq!(xdg_user_dir("#XDG_MUSIC_DIR=\"$HOME/M\"", "XDG_MUSIC_DIR", home), None);
     }
 
     #[test]

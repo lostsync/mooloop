@@ -1051,6 +1051,16 @@ export component MainWindow inherits Window {
     in-out property <float> export-progress: -1;
     in-out property <string> export-result-title;
     in-out property <string> export-result-detail;
+    // The card's Range and Output (MOO-180). The folder and name are what
+    // was typed, empty for the defaults, which Rust writes into the
+    // placeholders when the card opens.
+    in-out property <string> export-range-text;
+    in-out property <string> export-folder;
+    in-out property <string> export-default-folder;
+    in-out property <string> export-name;
+    in-out property <string> export-default-name;
+    in-out property <bool> export-browsing;
+    in-out property <string> export-problem;
     callback open-song();
     callback save-song();
     callback save-song-as();
@@ -1059,7 +1069,8 @@ export component MainWindow inherits Window {
     callback load-channel();
     callback save-channel();
     callback export-audio();
-    callback export-confirmed(int, int, int);
+    callback export-confirmed();
+    callback export-browse-folder();
     callback export-cancel-render();
     callback quit-requested();
 
@@ -8170,7 +8181,15 @@ export component MainWindow inherits Window {
         progress: root.export-progress;
         result-title: root.export-result-title;
         result-detail: root.export-result-detail;
-        accepted(format, bitrate, tail) => { root.export-confirmed(format, bitrate, tail); }
+        range-text: root.export-range-text;
+        folder <=> root.export-folder;
+        default-folder: root.export-default-folder;
+        file-name <=> root.export-name;
+        default-name: root.export-default-name;
+        browsing: root.export-browsing;
+        problem: root.export-problem;
+        accepted => { root.export-confirmed(); }
+        browse-folder => { root.export-browse-folder(); }
         cancelled => { root.export-open = false; }
         cancel-render => { root.export-cancel-render(); }
         dismissed => {

@@ -1,45 +1,105 @@
-import { ComboBox, SpinBox } from "std-widgets.slint";
+import { LineEdit, SpinBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
+import { SectionLabel, SegmentedControl, SelectorBank } from "controls.slint";
 
 // One of the dialog's buttons. `primary` is the accent-filled one.
 component DialogButton inherits Rectangle {
     in property <string> label;
     in property <bool> primary;
+    in property <bool> enabled: true;
     callback clicked;
     width: 76px;
     height: 28px;
     border-radius: Theme.radius-md;
-    background: root.primary
-        ? (touch.pressed ? Theme.accent-active : Theme.accent)
-        : (touch.has-hover ? Theme.surface-active : Theme.surface-raised);
+    background: !root.enabled
+        ? Theme.surface
+        : root.primary
+            ? (touch.pressed ? Theme.accent-active : Theme.accent)
+            : (touch.has-hover ? Theme.surface-active : Theme.surface-raised);
     Text {
         text: root.label;
-        color: root.primary ? Theme.background : Theme.text;
+        color: !root.enabled ? Theme.text-faint : root.primary ? Theme.background : Theme.text;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
-    touch := TouchArea { clicked => { root.clicked(); } }
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+// One section of the settings: its name in a fixed left column, its
+// controls on the right, one or more rows of them.
+component Section inherits HorizontalLayout {
+    in property <string> label;
+    spacing: 12px;
+    SectionLabel {
+        text: root.label;
+        width: 56px;
+        height: 26px;
+        vertical-alignment: center;
+    }
+    VerticalLayout {
+        spacing: 6px;
+        horizontal-stretch: 1;
+        @children
+    }
+}
+
+// A read-only answer in a section that has one choice so far. Drawn as the
+// text a control would show, at a control's height, so a section that grows
+// a control later keeps its row.
+component Fixed inherits Text {
+    color: Theme.text-muted;
+    font-size: Theme.text-lg;
+    height: 26px;
+    vertical-alignment: center;
+    overflow: elide;
 }
 
 // The export dialog, in three phases on one card: the settings, the render
 // with its progress and a Cancel, and what the render found (MOO-125). The
 // card stays up for all three, so a render is never something that happens
 // behind a closed dialog with only the status bar to say it finished.
+//
+// The settings are five sections -- Source, Range, Format, Tail, Output --
+// each a row group under one label column (MOO-180). Source and Range have
+// one answer each today and say it; stems and channels (MOO-182, 183) grow
+// Source, the range choice (MOO-181) grows Range, and the delivery formats
+// (MOO-186) grow Format. Output is on the card itself: a folder and a name,
+// with no save-file chooser, because one render can write several files.
 export component ExportDialog inherits Rectangle {
     in-out property <bool> open;
+    // 0 WAV 24-bit, 1 WAV 32-bit float, 2 MP3.
     in-out property <int> format-index;
+    // 0 192, 1 256, 2 320 kbps.
     in-out property <int> bitrate-index: 2;
     // The most tail there may be. The render stops as soon as every device
     // has fallen silent, so this is a cap rather than a length.
     in-out property <int> tail-seconds: 10;
+    // What is rendered, and which stretch of it, in words.
+    in property <string> source-text: "Master mix";
+    in property <string> range-text;
+    // The folder typed or browsed to. Empty is `default-folder`, shown as
+    // the field's placeholder: the song's own folder, or the music folder
+    // for a song never saved.
+    in-out property <string> folder;
+    in property <string> default-folder;
+    // The file name without its extension. Empty is `default-name`.
+    in-out property <string> file-name;
+    in property <string> default-name;
+    // The folder chooser is up; Browse waits for it.
+    in property <bool> browsing;
+    // Why the settings can't be exported as they are, in one sentence.
+    in property <string> problem;
     // 0: the settings. 1: rendering. 2: the result.
     in-out property <int> phase;
-    // How far the render is, 0 to 1. Negative while the file picker is still
-    // open and nothing has started.
+    // How far the render is, 0 to 1. Negative before it has started.
     in property <float> progress: -1;
     in property <string> result-title;
     in property <string> result-detail;
-    callback accepted(int, int, int);
+    callback accepted;
+    callback browse-folder;
     callback cancelled;
     callback cancel-render;
     callback dismissed;
@@ -47,9 +107,11 @@ export component ExportDialog inherits Rectangle {
     visible: root.open;
     background: #00000099;
     z: 200;
+    // Nothing behind the card takes a click while it is up.
+    TouchArea { }
     Rectangle {
-        width: 390px;
-        height: root.phase == 2 ? 250px : 230px;
+        width: min(parent.width - 32px, 460px);
+        height: root.phase == 0 ? 392px : root.phase == 2 ? 250px : 180px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Theme.surface;
@@ -58,38 +120,93 @@ export component ExportDialog inherits Rectangle {
         border-radius: Theme.radius-lg;
         if root.phase == 0: VerticalLayout {
             padding: 18px;
-            spacing: 14px;
+            spacing: 12px;
             Text { text: "Export Audio"; color: Theme.text; font-size: Theme.text-3xl; }
-            HorizontalLayout {
-                spacing: 8px;
-                Text { text: "FORMAT"; color: Theme.text-faint; font-size: Theme.text-md; vertical-alignment: center; }
-                ComboBox {
-                    model: ["WAV 24-bit PCM", "WAV 32-bit float", "MP3"];
-                    current-index <=> root.format-index;
-                    horizontal-stretch: 1;
+            Section {
+                label: "SOURCE";
+                Fixed { text: root.source-text; }
+            }
+            Section {
+                label: "RANGE";
+                Fixed { text: root.range-text; }
+            }
+            Section {
+                label: "FORMAT";
+                SegmentedControl {
+                    options: ["WAV 24-bit", "WAV 32-bit float", "MP3"];
+                    hint: "The file format: WAV for a master or further work, MP3 to share";
+                    selected-index: root.format-index;
+                    selected(index) => { root.format-index = index; }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    SelectorBank {
+                        options: ["192", "256", "320"];
+                        tooltip: "The MP3's bitrate";
+                        enabled: root.format-index == 2;
+                        selected-index: root.bitrate-index;
+                        selected(index) => { root.bitrate-index = index; }
+                    }
+                    Text {
+                        text: "kbps";
+                        color: root.format-index == 2 ? Theme.text-muted : Theme.text-faint;
+                        font-size: Theme.text-md;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
                 }
             }
-            HorizontalLayout {
-                spacing: 8px;
-                Text { text: "MP3 RATE"; color: Theme.text-faint; font-size: Theme.text-md; vertical-alignment: center; }
-                ComboBox {
-                    enabled: root.format-index == 2;
-                    model: ["192 kbps", "256 kbps", "320 kbps"];
-                    current-index <=> root.bitrate-index;
-                    horizontal-stretch: 1;
+            Section {
+                label: "TAIL";
+                HorizontalLayout {
+                    spacing: 8px;
+                    SpinBox { value <=> root.tail-seconds; minimum: 0; maximum: 30; width: 90px; }
+                    Text {
+                        text: "s at most; it ends when the sound does";
+                        color: Theme.text-faint;
+                        font-size: Theme.text-md;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
                 }
             }
-            HorizontalLayout {
-                spacing: 8px;
-                Text { text: "TAIL, AT MOST (S)"; color: Theme.text-faint; font-size: Theme.text-md; vertical-alignment: center; }
-                SpinBox { value <=> root.tail-seconds; minimum: 0; maximum: 30; width: 100px; }
-                Text {
-                    text: "ends when the sound does";
-                    color: Theme.text-faint;
-                    font-size: Theme.text-sm;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
+            Section {
+                label: "OUTPUT";
+                HorizontalLayout {
+                    spacing: 8px;
+                    LineEdit {
+                        text <=> root.folder;
+                        placeholder-text: root.default-folder;
+                        horizontal-stretch: 1;
+                    }
+                    DialogButton {
+                        label: root.browsing ? "Browsing" : "Browse...";
+                        enabled: !root.browsing;
+                        clicked => { root.browse-folder(); }
+                    }
                 }
+                HorizontalLayout {
+                    spacing: 8px;
+                    LineEdit {
+                        text <=> root.file-name;
+                        placeholder-text: root.default-name;
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        width: 76px;
+                        text: root.format-index == 2 ? ".mp3" : ".wav";
+                        color: Theme.text-muted;
+                        font-size: Theme.text-lg;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+            Text {
+                text: root.problem;
+                color: Theme.destructive;
+                font-size: Theme.text-md;
+                wrap: word-wrap;
+                vertical-stretch: 1;
             }
             HorizontalLayout {
                 spacing: 8px;
@@ -101,7 +218,8 @@ export component ExportDialog inherits Rectangle {
                 DialogButton {
                     label: "Export";
                     primary: true;
-                    clicked => { root.accepted(root.format-index, root.bitrate-index, root.tail-seconds); }
+                    enabled: !root.browsing;
+                    clicked => { root.accepted(); }
                 }
             }
         }
@@ -110,7 +228,7 @@ export component ExportDialog inherits Rectangle {
             spacing: 14px;
             Text { text: "Exporting"; color: Theme.text; font-size: Theme.text-3xl; }
             Text {
-                text: root.progress < 0 ? "Choose where to save it" : "Rendering " + round(root.progress * 100) + "%";
+                text: root.progress < 0 ? "Starting" : "Rendering " + round(root.progress * 100) + "%";
                 color: Theme.text-muted;
                 font-size: Theme.text-md;
             }

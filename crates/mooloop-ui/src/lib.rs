@@ -20,6 +20,7 @@ mod controlled_faces_tests;
 mod rack_fold_tests;
 #[cfg(test)]
 mod rack_join_tests;
+mod export_ui;
 mod plugin_ui;
 #[cfg(test)]
 mod plugin_ui_tests;
@@ -98,8 +99,8 @@ use mooloop_dsp::{
     IntegerDelay, SampleData, SpectrumAnalyzer,
 };
 use mooloop_engine::{
-    CommandSink, ContainerScratch, EffectSlot, EngineHandle, ExportError, ExportProgress,
-    ExportSpec, OfflineRenderer, PreviewCommand, StructuralCommand,
+    CommandSink, ContainerScratch, EffectSlot, EngineHandle, ExportProgress, PreviewCommand,
+    RenderScope, StructuralCommand,
 };
 use mooloop_project::{
     AssetMode, AssetWarning, Issue, LoadReport, LoadedDocument, PresetInfo, PresetKind,
@@ -114,13 +115,17 @@ use mooloop_session::channel::{
 use mooloop_session::command::{cycle_pane, CommandState, Pane};
 use mooloop_session::effects::EffectParamWrite;
 use mooloop_session::dialogs::{
-    pick_bundle_dialog, pick_export_dialog, pick_sample_dialog,
+    pick_bundle_dialog, pick_folder_dialog, pick_sample_dialog,
     pick_save_dialog, pick_song_dialog, Picked,
 };
 use mooloop_session::document::{
-    chosen_path, export_result_detail, log_asset_warnings, log_repairs, quarantine_song, repair_suffix,
-    resolve_document, spawn_document_worker, warning_suffix, DocumentProblem,
+    chosen_path, export_job_result, log_asset_warnings, log_repairs, quarantine_song, repair_suffix,
+    resolve_document, run_export, spawn_document_worker, warning_suffix, DocumentProblem,
     DocumentResult, LoadTarget, PresetNaming, ResolvedDocument,
+};
+use mooloop_session::render_settings::{
+    FileFormat, OutputSettings, RenderSettings, TailSettings, WavDepth, MAX_TAIL_SECONDS,
+    MP3_KBPS,
 };
 use mooloop_session::engine::{
     discard_document_messages, publish_channel_audio_to, AudioAction, AudioActionSender,
@@ -7645,97 +7650,16 @@ impl AppUi {
             });
         }
 
-        {
-            let weak = window.as_weak();
-            window.on_export_audio(move || {
-                if let Some(window) = weak.upgrade() {
-                    // A second export while one renders reopens the one in
-                    // flight, with its progress and its Cancel.
-                    if window.get_export_phase() != 1 {
-                        window.set_export_phase(0);
-                    }
-                    window.set_export_open(true);
-                }
-            });
-        }
-        {
-            let progress = export_progress.clone();
-            let weak = window.as_weak();
-            window.on_export_cancel_render(move || {
-                if let Some(progress) = progress.borrow().as_ref() {
-                    progress.cancel();
-                }
-                if let Some(window) = weak.upgrade() {
-                    window.set_status_message("Cancelling the export...".into());
-                }
-            });
-        }
-        {
-            let st = state.clone();
-            let tx = document_tx.clone();
-            let weak = window.as_weak();
-            let export_progress = export_progress.clone();
-            window.on_export_confirmed(move |format, bitrate, tail| {
-                let Some(window) = weak.upgrade() else {
-                    return;
-                };
-                // Hosted plugins render in the export too (MOO-81). Their
-                // live processors are the engine's, so the export gets
-                // processors of second instances, opened here on the
-                // control thread with the live ones' state -- which is also
-                // captured into the song first, so the request carries it.
-                let plugins = st
-                    .borrow_mut()
-                    .session
-                    .export_plugin_processors(export_sample_rate);
-                let request = st.borrow().session.export_request(
-                    window.get_bpm(),
-                    window.get_swing_percent(),
-                    format,
-                    bitrate,
-                );
-                if !begin_document_operation(&window, "Rendering audio...") {
-                    return;
-                }
-                // The dialog stays up through the render, with its progress
-                // and a Cancel, and then shows what the render found
-                // (MOO-125). The pump drives it from `export_progress`.
-                let progress = Arc::new(ExportProgress::new());
-                *export_progress.borrow_mut() = Some(progress.clone());
-                window.set_export_progress(-1.0);
-                window.set_export_phase(1);
-                spawn_document_worker(tx.clone(), "export this song", move || {
-                    let path = match chosen_path(
-                        pick_export_dialog(request.extension()),
-                        "export this song",
-                    ) {
-                        Ok(path) => path,
-                        Err(result) => return result,
-                    };
-                    let spec = ExportSpec {
-                        path: path.clone(),
-                        scope: request.scope,
-                        tail_seconds: tail as f32,
-                        format: request.format,
-                    };
-                    match OfflineRenderer::render_with_plugins(
-                        &request.project,
-                        &request.samples,
-                        export_sample_rate,
-                        &spec,
-                        &progress,
-                        plugins,
-                    ) {
-                        Ok(summary) => DocumentResult::Exported { path, summary },
-                        Err(ExportError::Cancelled) => DocumentResult::Cancelled,
-                        Err(error) => DocumentResult::Failed {
-                            action: "export this song",
-                            problem: error.to_string().into(),
-                        },
-                    }
-                });
-            });
-        }
+        // The export card: its defaults, Browse, Export and its Cancel
+        // (MOO-180).
+        export_ui::wire(
+            &window,
+            &state,
+            &document_tx,
+            &export_progress,
+            &question,
+            export_sample_rate,
+        );
 
         {
             let st = state.clone();
@@ -7831,6 +7755,11 @@ impl AppUi {
                         } else {
                             window.set_document_busy(false);
                             window.set_status_message("Kit load cancelled".into());
+                        }
+                    }
+                    Question::ReplaceExport(start) => {
+                        if answer == 1 {
+                            start(&window);
                         }
                     }
                     Question::Reconnect => {
@@ -16642,18 +16571,19 @@ impl AppUi {
                             window.set_save_preset_open(false);
                             refresh_preset_menus(&st, &window);
                         }
-                        DocumentResult::Exported { path, summary } => {
-                            log_info!("project", "exported {}", path.display());
-                            window
-                                .set_status_message(format!("Exported {}", path.display()).into());
-                            let name = path
-                                .file_name()
-                                .map(|name| name.to_string_lossy().into_owned())
-                                .unwrap_or_else(|| path.display().to_string());
-                            window.set_export_result_title(name.into());
-                            window.set_export_result_detail(
-                                export_result_detail(&summary).into(),
-                            );
+                        DocumentResult::Exported { files, cancelled } => {
+                            for file in &files {
+                                log_info!("project", "exported {}", file.path.display());
+                            }
+                            let (title, detail) = export_job_result(&files, cancelled);
+                            let status = match files.as_slice() {
+                                [one] if !cancelled => format!("Exported {}", one.path.display()),
+                                _ if cancelled => format!("Export cancelled; {title}"),
+                                _ => format!("Exported {} files", files.len()),
+                            };
+                            window.set_status_message(status.into());
+                            window.set_export_result_title(title.into());
+                            window.set_export_result_detail(detail.into());
                             window.set_export_phase(2);
                             window.set_export_open(true);
                         }
@@ -19641,6 +19571,9 @@ enum Question {
     /// A mooloop that is gone left a song unsaved (MOO-103). Yes opens it
     /// as the song, unsaved; no deletes it.
     Recover(Recoverable),
+    /// An export would write over files already there (MOO-180). Yes starts
+    /// it; no leaves the export card up to change the name or folder.
+    ReplaceExport(Box<dyn FnOnce(&MainWindow)>),
 }
 
 /// What the unsaved-changes question was standing in front of.

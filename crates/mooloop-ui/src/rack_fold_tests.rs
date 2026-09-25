@@ -10,6 +10,7 @@
 use super::*;
 use crate::window_probe::{click, controls, install_backend, Control};
 use i_slint_core::items::AccessibleRole;
+use mooloop_engine::{ExportSpec, OfflineRenderer};
 use slint::LogicalSize;
 
 const WIDTH: f32 = 4000.0;

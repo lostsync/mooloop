@@ -69,6 +69,7 @@ pub mod plugin_rack;
 pub mod project;
 pub mod rack;
 pub mod recordings;
+pub mod render_settings;
 pub mod roll;
 pub mod sample;
 pub mod sampler;

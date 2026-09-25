@@ -597,7 +597,18 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   render with a progress bar and a Cancel, which stops the render and leaves
   any file already at the target untouched, and then shows the file's length
   and rate and every one of those counts. A finished file replaces the
-  target with one rename. Every format renders at the session's rate: an MP3
+  target with one rename. As of 2026-09-25 (MOO-180) the dialog is five
+  sections, Source, Range, Format, Tail and Output, and there is **no
+  save-file chooser**: Output is a folder field with Browse... (a folder
+  chooser) and a file-name field on the card itself. An empty folder is the
+  song's own folder, or the music folder (`XDG_MUSIC_DIR`, else `~/Music`)
+  for a song never saved; an empty name is the song's name. A folder that
+  is not there is said on the card before anything renders, and an export
+  that would replace files asks once, saying how many. Source (the master
+  mix) and Range (what the transport plays) have one answer each so far.
+  Underneath, an export is a job of passes, each pass one render handed to
+  every file it writes, under one progress bar and one Cancel; cancelling
+  keeps the files of passes that had finished. Every format renders at the session's rate: an MP3
   of a session faster than 48 kHz is rendered at the session's rate and
   converted by LAME as it encodes (88.2/176.4 kHz to 44.1, the rest to 48).
 - A shared widget library in `crates/mooloop-ui/ui`: knobs with value arcs and a
