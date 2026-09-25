@@ -537,11 +537,11 @@ fn wide_machine() -> MlP8FactoryPatch {
     params.spread = 0.7;
     params.drift = 0.3;
     params.chorus = MlP8Chorus::Two;
-    // Unison spends the pool rather than growing it, but four voices at full
-    // level still *sum* -- the device does not normalise them, by design, and
-    // the plan says so. So the patch pays for its own width here rather than
-    // asking the instrument to quietly turn four voices down.
-    params.master_volume = 0.5;
+    // Full Volume. Until MOO-244 the device let a unison group sum at full
+    // level and this patch paid for its own four voices with Volume 0.5; the
+    // device now shares a group's level between its members, so the patch
+    // is back at the level it was balanced at with nothing to pay for.
+    params.master_volume = 1.0;
 
     let mut routes = MlP8Routes::default();
     // The one route, so the width is the finishers' and not a modulation

@@ -578,3 +578,29 @@ In the order worth playing:
     noise and a saw at 12 Hz, full depth and 85% feedback with knobs moving.
     Measured 2026-09-25: the difference is 81, 74 and 71 dB under the wet
     signal at 4, 8 and 12 stages.
+23. **ML-P8 unison at a constant level** (MOO-244). Turning Unison up should
+    thicken a note, not make it louder. One held A3 on Init Saw at 1x, 2x,
+    4x and 8x, at a sweep of Detune and Drift:
+
+    ```sh
+    scripts/antibox --no-incremental cargo test -p mooloop-dsp --release --lib \
+      unison_level_table -- --ignored --nocapture
+    ```
+
+    The table prints RMS against 1x (before the change it read up to +18 dB
+    at 8x). In the app, step a held pad through the Unison counts: the level
+    should hold while the width grows. Then open Adam's songs whose ML-P8s
+    use unison, which now play quieter than they were mixed. The renders and
+    each channel's level, from:
+
+    ```sh
+    scripts/antibox --no-incremental --pull target/mlp8-unison \
+      cargo run --release -p mooloop-session --example mlp8_unison_levels -- \
+      target/mlp8-unison ~/perf-songs/housey-dropout-factory.mooloop ~/perf-songs/ok-then.mooloop
+    ```
+
+    Measured 2026-09-25, before and after, each channel alone:
+    `housey-dropout-factory` "ML-P8 9" (2x) -2.1 dB; `ok-then` "ML-P8 1"
+    (8x) -9.6 dB, "ML-P8 7" (4x) -2.3 dB and "ML-P8 15" (4x) -1.3 dB. The
+    whole songs moved 0.06 and 0.01 dB. Whether those channels want their
+    faders back up is a listening call.

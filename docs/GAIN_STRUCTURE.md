@@ -301,6 +301,59 @@ Three consequences worth stating, because each one is a decision:
   and so never pays the pan law the sampler's extra 3 dB cancels. Both
   arrive at -12 dBFS.
 
+## ML-P8's unison
+
+**Unison makes one note thicker. It doesn't add sources, so it is
+compensated** (MOO-244; Adam, 2026-09-25: *"poly8 unison gets LOUD ... at
+least on loudness we should compensate"*). *Summing* above still holds for
+sources and for chords: eight notes on an ML-P8 at 1x sum honestly. What
+changed is that the members of one unison group share their note's level
+rather than each adding a full voice to it. Turning Unison up is a timbre
+decision, and the complaint was having to pull the fader down every time.
+This reverses the `poly-synth-v2` plan's "no gain normalization by unison
+count", on Adam's ruling.
+
+The law is `unison_gain` in `mlp8.rs`, per member of an N-voice group:
+`N^-(1/2 + c/2)`. N members in phase are N times one voice. Members whose
+phases have drifted apart are √N times one voice in RMS. The coherence `c`
+says which a group is: 1 when the members are identical, falling to 0 as
+they spread, as `(1 - d)²` with
+`d = min(1, hypot(Detune's outer cents / 1.6, Drift))`. Detune's outer cents
+are `detune² × 40`. Drift's per-voice pitch and start phase pull a group
+apart by about Drift 100% on their own. The 1.6 cents and the curve were
+fitted to the table below.
+
+One A3 held on Init Saw, RMS from 0.25 s to 6 s against Unison 1x, in dB
+(`unison_level_table`):
+
+| Drift, Detune | before 2x / 4x / 8x | after 2x / 4x / 8x |
+| -- | -- | -- |
+| 0, 0 | +6.0 / +12.0 / +18.1 | 0.0 / 0.0 / 0.0 |
+| 0, 10% | +2.4 / +8.4 / +14.7 | -2.3 / -1.1 / +0.6 |
+| 0, 25% | +2.8 / +6.0 / +7.8 | -0.2 / 0.0 / -1.2 |
+| 0, 50% | +3.1 / +6.0 / +8.9 | 0.0 / 0.0 / -0.1 |
+| 0, 100% | +3.0 / +6.1 / +8.9 | 0.0 / 0.0 / -0.1 |
+| 30%, 0 | +2.1 / +8.1 / +11.2 | -2.4 / -0.9 / -2.2 |
+| 30%, 50% | +3.0 / +5.9 / +8.8 | 0.0 / -0.2 / -0.3 |
+| 100%, 0 | +3.0 / +7.4 / +10.4 | 0.0 / +1.3 / +1.4 |
+
+Across every count, the drifts 0, 10, 30 and 100% and nine detunes from 0 to
+100%, the level stays within ±2.4 dB of 1x (0.9 dB RMS). From Detune 50% up,
+it stays within ±0.7 dB. The residue is in the narrow band, 5 to 20% Detune,
+where a group is half in phase and beats slowly. A held note there swells
+and dips, so no single gain can pin its level.
+`unison_keeps_a_note_at_the_level_of_one_voice` holds every count within
+1.5 dB of 1x at Detune 50%, with and without Drift, on Init Saw and on Wide
+Machine, and holds an undetuned, undrifted group at exactly one voice.
+
+**Old songs get quieter where they used unison.** That is deliberate: Adam's
+ruling is that the compensation wins, so no migration scales a saved patch
+back up. Among the songs on hand, that means `housey-dropout-factory` (one
+ML-P8 above 1x) and `ok-then` (three). The factory bank's Wide Machine had
+set its Volume to 0.5 to pay for its own 4x stack by hand. It is back at full
+Volume, which is the level it was balanced at. A bank already seeded into a
+user's presets keeps the old 0.5, because factory banks seed once.
+
 ## Ranges and readouts
 
 - Stored gains are linear: channel and bus volume clamp to

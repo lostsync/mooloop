@@ -156,6 +156,37 @@ const DRIFT_TIME_FRACTION: f32 = 0.07;
 /// actually for.
 const DETUNE_MAX_CENTS: f32 = 40.0;
 
+/// How far apart, in cents at the outermost member, a unison group's pitches
+/// have to be before it sums like unrelated sources (MOO-244). Measured: an
+/// Init Saw group at Detune 20% (1.6 cents out) is within about a decibel of
+/// the incoherent `sqrt(N)` over a held note, and at 5% (0.1 cents) still
+/// within one of the coherent `N`.
+const UNISON_INCOHERENT_CENTS: f32 = 1.6;
+
+/// Each member's share of its unison group's level, so turning Unison up
+/// thickens a note without making it louder (MOO-244, Adam: *"at least on
+/// loudness we should compensate"*).
+///
+/// `N` members in phase are `N` times one voice; `N` members whose phases
+/// have drifted apart are `sqrt(N)` times it in RMS. Which a group is
+/// depends on how far apart its members are: Detune's spread (in units of
+/// [`UNISON_INCOHERENT_CENTS`]) and Drift (whose per-voice pitch and start
+/// phase decorrelate a group by about Drift 100% on their own), taken as one
+/// distance. The gain is `N^-(1/2 + c/2)`, where the coherence `c` is 1 for
+/// identical members and falls to 0 at that distance. Against a held note
+/// at every count, drift and detune measured, this keeps the level within
+/// ±2.4 dB of Unison 1x (0.9 dB RMS), and within ±0.7 dB at any Detune from
+/// 50% up; the table is in `docs/GAIN_STRUCTURE.md`.
+fn unison_gain(members: u8, detune: f32, drift: f32) -> f32 {
+    if members <= 1 {
+        return 1.0;
+    }
+    let detuned = detune * detune * DETUNE_MAX_CENTS / UNISON_INCOHERENT_CENTS;
+    let apart = detuned.hypot(drift).min(1.0);
+    let coherence = (1.0 - apart) * (1.0 - apart);
+    f32::from(members).powf(-0.5 - 0.5 * coherence)
+}
+
 /// Frames of ML-P8's own output the finisher works on at a time.
 ///
 /// The chorus needs buses of its own — it may not read or rewrite the
@@ -1162,6 +1193,9 @@ struct Voice {
     /// pair the channel strip would have applied anyway.
     spread_pan: f32,
     spread_gain: (f32, f32),
+    /// This voice's share of its unison group's level ([`unison_gain`]),
+    /// resolved once a range like the pan gains. 1 at Unison 1x.
+    unison_gain: f32,
 }
 
 impl Voice {
@@ -1217,6 +1251,7 @@ impl Voice {
             cached_hz_from_knob: CUTOFF_CEILING_HZ,
             spread_pan: 0.0,
             spread_gain: pan_gains(0.0),
+            unison_gain: 1.0,
         }
     }
 
@@ -1354,6 +1389,7 @@ impl Voice {
         // together can reach past the field.
         self.spread_pan = (pan + spread * self.pan_offset()).clamp(-1.0, 1.0);
         self.spread_gain = pan_gains(self.spread_pan);
+        self.unison_gain = unison_gain(self.members, detune, drift);
     }
 
     /// This voice's symmetric position in its note group, in `[-1, 1]`.
@@ -2207,8 +2243,12 @@ impl MlP8 {
                 } else {
                     voice.spread_gain
                 };
-                let sample =
-                    shaped * voice.env.level() * amp * voice_level * VOICE_OUTPUT_REFERENCE;
+                let sample = shaped
+                    * voice.env.level()
+                    * amp
+                    * voice_level
+                    * VOICE_OUTPUT_REFERENCE
+                    * voice.unison_gain;
                 target.l[frame - offset] += sample * gain_l;
                 target.r[frame - offset] += sample * gain_r;
                 if publishing {
@@ -4373,6 +4413,102 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         (ids.len(), slots)
+    }
+
+    /// RMS in dB over a held note's sustain, both channels.
+    fn unison_level_db(params: MlP8Params) -> (f32, f32) {
+        let frames = SR as usize * 6;
+        let mut synth = MlP8::new(params, SR);
+        let mut bus = StereoBus::with_capacity(frames);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 57));
+        synth.process(&ctx(frames), &mut bus, &events, None);
+        let from = SR as usize / 4;
+        let mut sum = 0.0f64;
+        let mut peak = 0.0f32;
+        for frame in from..frames {
+            sum += f64::from(bus.l[frame]).powi(2) + f64::from(bus.r[frame]).powi(2);
+            peak = peak.max(bus.l[frame].abs()).max(bus.r[frame].abs());
+        }
+        let rms = (sum / (2 * (frames - from)) as f64).sqrt() as f32;
+        (20.0 * rms.max(1.0e-9).log10(), 20.0 * peak.max(1.0e-9).log10())
+    }
+
+    /// MOO-244's acceptance: one held note at every Unison count stays
+    /// within 1.5 dB of Unison 1x at mid Detune, with and without Drift, on
+    /// the reference patch and on the bank's unison patch. With nothing to
+    /// tell the members apart the group is exactly one voice's level.
+    #[test]
+    fn unison_keeps_a_note_at_the_level_of_one_voice() {
+        let wide = mooloop_core::mlp8_factory::patches()
+            .into_iter()
+            .find(|patch| patch.name == "Wide Machine")
+            .expect("the bank's unison patch")
+            .params;
+        for (name, patch) in [("Init Saw", init_saw()), ("Wide Machine", wide)] {
+            for drift in [0.0f32, 0.3] {
+                let level = |unison| {
+                    let mut params = patch;
+                    params.unison = unison;
+                    params.detune = 0.5;
+                    params.drift = drift;
+                    unison_level_db(params).0
+                };
+                let one = level(MlP8Unison::X1);
+                for unison in [MlP8Unison::X2, MlP8Unison::X4, MlP8Unison::X8] {
+                    let difference = level(unison) - one;
+                    assert!(
+                        difference.abs() <= 1.5,
+                        "{name}, drift {drift}: {unison:?} is {difference:+.2} dB from 1x"
+                    );
+                }
+            }
+        }
+        let mut identical = init_saw();
+        let one = unison_level_db(identical).0;
+        identical.unison = MlP8Unison::X8;
+        let eight = unison_level_db(identical).0;
+        assert!(
+            (eight - one).abs() < 0.01,
+            "eight identical voices are {:+.3} dB",
+            eight - one
+        );
+    }
+
+    /// MOO-244's table: a held note's RMS and peak at every unison count,
+    /// at a sweep of detune and drift, relative to unison 1. Before the
+    /// compensation the same table read up to +18 dB at 8x.
+    #[test]
+    #[ignore = "prints a measurement; run deliberately"]
+    fn unison_level_table() {
+        for patch in ["init", "Wide Machine"] {
+            for drift in [0.0f32, 0.1, 0.3, 1.0] {
+                for detune in [0.0f32, 0.05, 0.1, 0.15, 0.2, 0.25, 0.5, 0.75, 1.0] {
+                    let mut line = format!("{patch:<13} drift {drift:.2} detune {detune:.2}:");
+                    let mut reference = None;
+                    for unison in
+                        [MlP8Unison::X1, MlP8Unison::X2, MlP8Unison::X4, MlP8Unison::X8]
+                    {
+                        let mut params = if patch == "init" {
+                            init_saw()
+                        } else {
+                            mooloop_core::mlp8_factory::patches()
+                                .into_iter()
+                                .find(|p| p.name == patch)
+                                .expect("the patch")
+                                .params
+                        };
+                        params.unison = unison;
+                        params.detune = detune;
+                        params.drift = drift;
+                        let (rms, peak) = unison_level_db(params);
+                        let base = *reference.get_or_insert(rms);
+                        line += &format!("  {unison:?} {:+5.1} ({peak:+5.1} pk)", rms - base);
+                    }
+                    println!("{line}");
+                }
+            }
+        }
     }
 
     /// The headline of the step: Unison spends the eight slots, it never adds

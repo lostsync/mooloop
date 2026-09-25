@@ -17687,7 +17687,11 @@ mod footprint {
         // bytes), a countdown, a primed flag, and the Tone its cutoff was
         // last set for. That is what took the phaser from an `exp2` and a
         // `tan` per stage per sample to one every 8 samples.
-        assert_eq!(size_of::<MlP8>(), 6_464);
+        //
+        // Grew by 64 with MOO-244: each of the eight voices carries its
+        // share of its unison group's level (an `f32`, resolved once a range
+        // like the pan gains; 8 bytes a voice once the voice is aligned).
+        assert_eq!(size_of::<MlP8>(), 6_528);
         // DS-01 is 6,832, and almost all of it is the eight-voice pool: a
         // voice carries six tone oscillators for its partial bank, an FM
         // modulator, four noise generators' worth of state, a state-variable

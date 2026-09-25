@@ -2279,7 +2279,13 @@ land on its own when it starts to matter:
   four fixed policies (OFF, I, II, Ensemble) reuses the rack's modulation
   effect over ML-P8's own scratch buses, never the channel's; OFF is a true
   bypass and a mode change crosses through a silent wet rather than stepping.
-  There is no gain normalization by voice count anywhere in the device.
+  A unison group shares one note's level between its members (MOO-244):
+  each plays at `N^-(1/2 + c/2)`, where the coherence `c` falls from 1 for
+  identical members to 0 as Detune and Drift pull them apart. A held note at
+  any Unison count stays within a couple of decibels of 1x, and within
+  0.7 dB from Detune 50% up. Chords still sum honestly: this is the one
+  normalization in the device, and it is by group, not by note count. The
+  law and its measurements are in `docs/GAIN_STRUCTURE.md`.
 - The ML-P8 and DS-01 are the two generators with modulation of their own. It owns an
   audio-rate LFO and a list of internal routes reading six per-voice sources
   — the LFO, both envelopes, velocity, key, and gate — into thirty-one
