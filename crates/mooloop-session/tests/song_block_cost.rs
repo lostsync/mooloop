@@ -26,7 +26,9 @@
 //! names, re-plays each of those with every channel muted in turn and with
 //! the bus inserts removed, to say which channel a spike belongs to.
 //! `ATTRIBUTE_BY` picks `channels`, `kinds` (every device of one kind
-//! bypassed in turn) or both, the default. `DISPLAYS=off` plays every song
+//! bypassed in turn), `devices` (every insert bypassed on its own), or a
+//! `,`-separated mix; the default is `channels,kinds`. Variants are played
+//! round-robin, so they are compared within one run. `DISPLAYS=off` plays every song
 //! with its saved displays switched off.
 //!
 //! **Read it as a map, not a verdict.** A bar that costs more than the bars
@@ -394,6 +396,37 @@ fn attribute(
                 }
             }
             variants.push((format!("bypass {count} {kind:?}"), bypassed));
+        }
+    }
+    if by.split(',').any(|by| by == "devices") {
+        // Every device on its own: one insert bypassed, everything else as
+        // saved. What a channel's or a bus's row saves, broken down.
+        for (index, channel) in project.channels.iter().enumerate() {
+            for (slot, effect) in channel.setup.effects.iter().enumerate() {
+                if effect.bypassed {
+                    continue;
+                }
+                let mut bypassed = project.clone();
+                bypassed.channels[index].setup.effects[slot].bypassed = true;
+                let label = format!(
+                    "bypass {} {} #{slot} {:?}",
+                    index,
+                    channel.setup.channel.name,
+                    effect.params.kind()
+                );
+                variants.push((label, bypassed));
+            }
+        }
+        for (index, bus) in project.buses.iter().enumerate() {
+            for (slot, effect) in bus.effects.iter().enumerate() {
+                if effect.bypassed {
+                    continue;
+                }
+                let mut bypassed = project.clone();
+                bypassed.buses[index].effects[slot].bypassed = true;
+                let label = format!("bypass bus {index} #{slot} {:?}", effect.params.kind());
+                variants.push((label, bypassed));
+            }
         }
     }
     let channels = by.split(',').any(|by| by == "channels");
