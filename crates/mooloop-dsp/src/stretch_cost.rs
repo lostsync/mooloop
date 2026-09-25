@@ -121,3 +121,74 @@ fn stretch_pool_footprint() {
         );
     }
 }
+
+/// What a stretching chord costs **per 128-frame block**, mean and worst
+/// (MOO-248). The realtime factor above hides the thing that drops out: a
+/// hop's splice search used to land whole in one block, and voices started
+/// together searched in the same block.
+///
+/// Every row is played once per pass, `STRETCH_BLOCK_REPS` passes (default
+/// 7), round-robin; each block's cost is its fastest over the passes, so a
+/// burst of another process's work on a shared machine is stripped out and
+/// every row is compared across the same stretch of time.
+///
+/// ```sh
+/// cargo test -p mooloop-dsp --release stretch_block_cost -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "measures wall time; run deliberately in release"]
+fn stretch_block_cost() {
+    const BLOCK: usize = 128;
+    const BLOCKS: usize = 750; // 2 s at 48 kHz
+    // A chord's playback rates, as eight sampler voices on different keys.
+    const RATES: [f64; 8] = [1.0, 1.2599, 1.4983, 2.0, 0.7492, 0.8909, 1.1225, 1.6818];
+    let frames = source(2.0);
+    let region = Region {
+        start: 0.0,
+        end: frames.len() as f64,
+        edge: crate::interpolate::RegionEdge::Wrap,
+    };
+    let rows: Vec<(StretchMode, f64, usize)> = vec![
+        (StretchMode::Music, 2.0, 1),
+        (StretchMode::Music, 2.0, 8),
+        (StretchMode::Music, 0.5, 8),
+        (StretchMode::Drums, 2.0, 8),
+        (StretchMode::Grain, 2.0, 8),
+    ];
+    let reps: usize = std::env::var("STRETCH_BLOCK_REPS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(7);
+    let mut best = vec![vec![u128::MAX; BLOCKS]; rows.len()];
+    for _ in 0..reps {
+        for (row, &(mode, ratio, voices)) in rows.iter().enumerate() {
+            let mut readers: Vec<StretchReader> =
+                (0..voices).map(|_| StretchReader::new(mode, SR)).collect();
+            for reader in readers.iter_mut() {
+                reader.stretcher_mut().set_ratio(ratio);
+                reader.reset(0.0);
+            }
+            for block in 0..BLOCKS {
+                let started = Instant::now();
+                for (voice, reader) in readers.iter_mut().enumerate() {
+                    for _ in 0..BLOCK {
+                        std::hint::black_box(reader.read(&frames, region, RATES[voice]));
+                    }
+                }
+                let nanos = started.elapsed().as_nanos();
+                best[row][block] = best[row][block].min(nanos);
+            }
+        }
+    }
+    println!();
+    println!("  row                        mean µs   worst µs   worst/mean");
+    for (row, &(mode, ratio, voices)) in rows.iter().enumerate() {
+        let mean = best[row].iter().sum::<u128>() as f64 / BLOCKS as f64 / 1000.0;
+        let worst = *best[row].iter().max().unwrap() as f64 / 1000.0;
+        println!(
+            "  {:<26} {mean:>8.1}  {worst:>9.1}  {:>10.2}",
+            format!("{mode:?} x{ratio}, {voices} voices"),
+            worst / mean
+        );
+    }
+}

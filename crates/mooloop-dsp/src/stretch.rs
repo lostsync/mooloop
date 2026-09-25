@@ -1761,3 +1761,151 @@ mod render_tests {
         assert!(render_stretched(&source, inverted, StretchMode::Music, 1024, 2.0, SR).is_empty());
     }
 }
+
+/// MOO-248 pinned the stretcher's output bit for bit before spreading the
+/// splice search over the hop: the search and the overlap-add do the same
+/// arithmetic on the same frames, only earlier, so every case below must hash
+/// exactly as it did when each hop was computed in one call.
+#[cfg(test)]
+mod bit_identity {
+    use super::*;
+    use crate::interpolate::RegionEdge;
+
+    const SR: u32 = 48_000;
+
+    /// Tones plus deterministic noise, so the search has something real to
+    /// choose between and a changed choice cannot hide.
+    fn source(len: usize) -> Vec<[f32; 2]> {
+        let mut seed = 0x2545_f491_u32;
+        (0..len)
+            .map(|index| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let noise = (seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5;
+                let t = index as f32 / SR as f32;
+                let tone = (t * 110.0 * core::f32::consts::TAU).sin() * 0.4
+                    + (t * 587.0 * core::f32::consts::TAU).sin() * 0.2;
+                [tone + noise * 0.2, tone * 0.8 - noise * 0.1]
+            })
+            .collect()
+    }
+
+    fn hash(out: &[[f32; 2]]) -> u64 {
+        let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+        for frame in out {
+            for sample in frame {
+                hash ^= u64::from(sample.to_bits());
+                hash = hash.wrapping_mul(0x0100_0000_01b3);
+            }
+        }
+        hash
+    }
+
+    fn region(start: f64, end: f64, edge: RegionEdge) -> Region {
+        Region { start, end, edge }
+    }
+
+    /// One case: a mode, a ratio, a region, and what changes mid-render
+    /// (every `change` frames, by `step`'s index), pulled in blocks of 128.
+    fn run(mode: StretchMode, ratio: f64, reg: Region, changes: u32) -> u64 {
+        let frames = source(60_000);
+        let mut stretcher = Stretcher::new(mode, SR);
+        stretcher.set_ratio(ratio);
+        stretcher.reset(reg.start.max(0.0) + 17.0);
+        let mut out = Vec::with_capacity(40_000);
+        let mut reg = reg;
+        for block in 0..(40_000 / 128) {
+            if changes & 1 != 0 && block % 23 == 22 {
+                stretcher.set_ratio(0.4 + (block % 7) as f64 * 0.6);
+            }
+            if changes & 2 != 0 && block % 41 == 40 {
+                let next = match stretcher.mode() {
+                    StretchMode::Music => StretchMode::Drums,
+                    StretchMode::Drums => StretchMode::Grain,
+                    _ => StretchMode::Music,
+                };
+                stretcher.set_mode(next);
+            }
+            if changes & 4 != 0 && block % 5 == 4 {
+                stretcher.set_grain_frames(200 + (block as u32 * 37) % 1500);
+            }
+            if changes & 8 != 0 && block % 17 == 16 {
+                // A loop end that moves, as a modulated loop does.
+                reg.end = 30_000.0 + (block % 9) as f64 * 1_234.5;
+            }
+            for _ in 0..128 {
+                out.push(stretcher.next_frame(&frames, reg));
+            }
+        }
+        hash(&out)
+    }
+
+    fn reader(mode: StretchMode, ratio: f64, rate: f64, reg: Region) -> u64 {
+        let frames = source(60_000);
+        let mut reader = StretchReader::new(mode, SR);
+        reader.stretcher_mut().set_ratio(ratio);
+        reader.reset(reg.start);
+        let out: Vec<_> = (0..30_000).map(|_| reader.read(&frames, reg, rate)).collect();
+        hash(&out)
+    }
+
+    fn cases() -> Vec<(&'static str, u64)> {
+        let whole = region(0.0, 60_000.0, RegionEdge::Silent);
+        let wrap = region(1_000.0, 30_000.0, RegionEdge::Wrap);
+        let short = region(2_000.0, 3_100.0, RegionEdge::Wrap);
+        let mirror = region(4_000.5, 21_000.25, RegionEdge::Mirror);
+        let fade_pre = region(
+            5_000.0,
+            25_000.0,
+            RegionEdge::Crossfade { fade: 900, floor: 1_000, head: 0 },
+        );
+        let fade_none = region(
+            0.0,
+            25_000.0,
+            RegionEdge::Crossfade { fade: 700, floor: 0, head: 300 },
+        );
+        vec![
+            ("music x2 whole", run(StretchMode::Music, 2.0, whole, 0)),
+            ("music x0.5 whole", run(StretchMode::Music, 0.5, whole, 0)),
+            ("drums x1.37 wrap", run(StretchMode::Drums, 1.37, wrap, 0)),
+            ("grain x3 wrap sweep", run(StretchMode::Grain, 3.0, wrap, 4)),
+            ("music x8 short loop", run(StretchMode::Music, 8.0, short, 0)),
+            ("music x1.5 mirror", run(StretchMode::Music, 1.5, mirror, 0)),
+            ("music x1.5 fade pre-roll", run(StretchMode::Music, 1.5, fade_pre, 0)),
+            ("drums x2 fade head", run(StretchMode::Drums, 2.0, fade_none, 0)),
+            ("music ratio changes", run(StretchMode::Music, 1.2, wrap, 1)),
+            ("mode switches and sweeps", run(StretchMode::Music, 1.7, wrap, 1 | 2 | 4)),
+            ("moving loop end", run(StretchMode::Music, 2.5, wrap, 8)),
+            ("everything moves", run(StretchMode::Drums, 0.7, fade_pre, 15)),
+            ("reader music x2 rate 1.5", reader(StretchMode::Music, 2.0, 1.5, wrap)),
+            ("reader drums x0.6 rate 0.7", reader(StretchMode::Drums, 0.6, 0.7, whole)),
+        ]
+    }
+
+    /// Hashes taken from the tree before MOO-248 (8e570c4f).
+    const PINNED: &[(&str, u64)] = &[
+        ("music x2 whole", 0x36b80430d7872885),
+        ("music x0.5 whole", 0x2a669b54e16c7337),
+        ("drums x1.37 wrap", 0x210d55c1c7490989),
+        ("grain x3 wrap sweep", 0x17261422c7436b1d),
+        ("music x8 short loop", 0xf574a223b5c904aa),
+        ("music x1.5 mirror", 0x577346cceea4959e),
+        ("music x1.5 fade pre-roll", 0x63a0663d401b0a18),
+        ("drums x2 fade head", 0x12b7f08a9e031924),
+        ("music ratio changes", 0x652f46e1063fe28c),
+        ("mode switches and sweeps", 0x51cfdec73dfd874b),
+        ("moving loop end", 0xd06ac476834ca5d5),
+        ("everything moves", 0xe00b6f42ae92ff9d),
+        ("reader music x2 rate 1.5", 0x5d0dbdfe4a062c42),
+        ("reader drums x0.6 rate 0.7", 0x7ea6f298f9c94e4a),
+    ];
+
+    #[test]
+    fn the_stretcher_output_is_bit_identical_to_before_the_search_was_spread() {
+        let got = cases();
+        assert_eq!(got.len(), PINNED.len());
+        for ((name, hash), (pinned_name, pinned)) in got.iter().zip(PINNED) {
+            assert_eq!(name, pinned_name);
+            assert_eq!(hash, pinned, "{name} changed");
+        }
+    }
+}
