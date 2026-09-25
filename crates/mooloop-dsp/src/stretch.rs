@@ -976,7 +976,11 @@ impl StretchReader {
             }
             self.base += SHIFT as i64;
         }
-        while self.produced < self.base + SCRATCH as i64 {
+        // Only as far as the read needs, not to the end of the window: the
+        // kernel never looks past `upto`, and filling the whole window at a
+        // note-on paid for half a hop's splice search in the first block
+        // (MOO-248). Which frames are produced is unchanged, only when.
+        while self.produced <= upto {
             let frame = self.stretcher.next_frame(frames, region);
             let slot = self.produced - self.base;
             // Frames that fell behind the window as it slid are simply

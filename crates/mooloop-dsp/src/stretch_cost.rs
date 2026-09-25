@@ -174,7 +174,7 @@ fn stretch_block_cost() {
                 reader.stretcher_mut().set_spread(spread);
                 reader.reset(0.0);
             }
-            for block in 0..BLOCKS {
+            for slot in best[row].iter_mut() {
                 let started = Instant::now();
                 for (voice, reader) in readers.iter_mut().enumerate() {
                     for _ in 0..BLOCK {
@@ -182,7 +182,7 @@ fn stretch_block_cost() {
                     }
                 }
                 let nanos = started.elapsed().as_nanos();
-                best[row][block] = best[row][block].min(nanos);
+                *slot = (*slot).min(nanos);
             }
         }
     }
