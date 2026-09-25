@@ -254,7 +254,7 @@ pub enum DocumentResult {
 /// how long the file is and at what rate, then anything that makes it not
 /// quite the project -- overs the safety limiter held, samples a broken
 /// device produced as NaN, automation that found no room, and any clamp the
-/// 24-bit encoder still made (MOO-125, MOO-94).
+/// PCM encoder still made (MOO-125, MOO-94).
 pub fn export_result_detail(summary: &mooloop_engine::RenderSummary) -> String {
     let rate = f64::from(summary.sample_rate.max(1));
     let seconds = summary.total_frames as f64 / rate;
@@ -292,7 +292,7 @@ pub fn export_result_detail(summary: &mooloop_engine::RenderSummary) -> String {
     }
     if summary.clipped_samples > 0 {
         lines.push(format!(
-            "{} samples were clipped at full scale by the 24-bit encoder.",
+            "{} samples were clipped at full scale by the PCM encoder.",
             summary.clipped_samples
         ));
     }

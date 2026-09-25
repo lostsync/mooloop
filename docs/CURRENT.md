@@ -600,8 +600,17 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   followed by a release tail that runs
   until every device has fallen silent (`RenderState::is_at_rest`, so a
   reverb's decay and a delay's last echo are waited for), capped at a
-  0-30 second limit the dialog sets (10 s by default). Outputs are 24-bit
-  PCM WAV, 32-bit float WAV, or 192/256/320 kbps MP3. It renders in 512-frame blocks, a size live playback runs at,
+  0-30 second limit the dialog sets (10 s by default). Outputs are WAV at
+  16-bit PCM, 24-bit PCM or 32-bit float, or 192/256/320 kbps MP3, each
+  stereo or mono. As of 2026-09-25 (MOO-186), the card's Format row is WAV
+  or MP3 with Stereo or Mono, then a WAV's depth and a Dither box, or an
+  MP3's bitrate. Dither is TPDF, on by default at 16-bit and off at 24,
+  and never applied to float. Its seed comes from the file's place in
+  the job: renders are bit-identical, and two files of one job carry
+  unrelated dither. A mono file is (L + R) / 2: a centred sound
+  keeps its per-side level, and a hard-panned one is 6 dB down
+  (`GAIN_STRUCTURE.md`, "Mono files"). An MP3 in mono uses LAME's mono
+  mode. It renders in 512-frame blocks, a size live playback runs at,
   rather than the graph's 8192-frame maximum, where one automated parameter
   filled a device's event list and every later one on it was dropped from
   the export. Parameter events that still find no room are counted, and an
@@ -609,7 +618,7 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   output guard as playback, so a file never holds NaN or a sample over
   0 dBFS; `RenderSummary` counts the mix's overs (which the safety limiter
   held at the ceiling), the non-finite samples written as silence, and any
-  sample the 24-bit encoder still had to clamp, and a non-zero count is
+  sample the PCM encoder still had to clamp, and a non-zero count is
   logged. As of 2026-09-23 (MOO-125) the export dialog stays up through the
   render with a progress bar and a Cancel, which stops the render and leaves
   any file already at the target untouched, and then shows the file's length

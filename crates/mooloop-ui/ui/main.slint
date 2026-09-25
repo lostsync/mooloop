@@ -1041,7 +1041,12 @@ export component MainWindow inherits Window {
     in-out property <string> save-error-report;
     callback save-error-dismissed();
     in-out property <bool> export-open;
+    // 0 WAV, 1 MP3; a WAV's depth (0 16, 1 24, 2 float) and dither; mono
+    // (MOO-186).
     in-out property <int> export-format;
+    in-out property <int> export-wav-depth: 1;
+    in-out property <bool> export-dither;
+    in-out property <bool> export-mono;
     in-out property <int> export-bitrate: 2;
     // A cap: the render stops when every device has fallen silent (MOO-125).
     in-out property <int> export-tail-seconds: 10;
@@ -8202,6 +8207,9 @@ export component MainWindow inherits Window {
         height: parent.height;
         open <=> root.export-open;
         format-index <=> root.export-format;
+        depth-index <=> root.export-wav-depth;
+        dither <=> root.export-dither;
+        mono <=> root.export-mono;
         bitrate-index <=> root.export-bitrate;
         tail-seconds <=> root.export-tail-seconds;
         phase <=> root.export-phase;

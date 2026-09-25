@@ -232,7 +232,8 @@ pub use meters::{
 };
 pub use offline::{
     ExportError, ExportFormat, ExportProgress, ExportSpec, JobFailure, Mp3Bitrate, OfflineRenderer,
-    RenderJob, RenderOutput, RenderPass, RenderScope, RenderSummary, RenderTap, RenderedFile,
+    OutputChannels, RenderJob, RenderOutput, RenderPass, RenderScope, RenderSummary, RenderTap,
+    RenderedFile,
     WavEncoding,
 };
 

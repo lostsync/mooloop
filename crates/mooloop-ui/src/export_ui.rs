@@ -6,7 +6,7 @@
 
 use super::*;
 use mooloop_session::render_settings::{
-    format_bar_beat, parse_bar_beat, RenderRange, SettingsProblem, Timeline,
+    format_bar_beat, parse_bar_beat, Channels, RenderRange, SettingsProblem, Timeline,
 };
 use std::cell::Cell;
 
@@ -233,15 +233,23 @@ pub(crate) fn export_settings(window: &MainWindow) -> Result<RenderSettings, Set
     Ok(RenderSettings {
         range: card_range(window)?,
         format: match window.get_export_format() {
-            1 => FileFormat::Wav {
-                depth: WavDepth::Float32,
-            },
-            2 => FileFormat::Mp3 {
+            1 => FileFormat::Mp3 {
                 kbps: MP3_KBPS[bitrate],
             },
             _ => FileFormat::Wav {
-                depth: WavDepth::Pcm24,
+                depth: match window.get_export_wav_depth() {
+                    0 => WavDepth::Pcm16,
+                    2 => WavDepth::Float32,
+                    _ => WavDepth::Pcm24,
+                },
+                // The card shows the dither it will use, so it says it.
+                dither: Some(window.get_export_dither()),
             },
+        },
+        channels: if window.get_export_mono() {
+            Channels::Mono
+        } else {
+            Channels::Stereo
         },
         tail: TailSettings {
             max_seconds: window.get_export_tail_seconds().clamp(0, MAX_TAIL_SECONDS as i32) as u32,
@@ -386,7 +394,7 @@ mod tests {
         assert!(card.window.get_export_open());
         card.window.set_export_folder(folder.path().display().to_string().into());
         card.window.set_export_name("take one".into());
-        card.window.set_export_format(1);
+        card.window.set_export_wav_depth(2);
 
         card.window.invoke_export_confirmed();
         assert_eq!(card.window.get_export_phase(), 1, "the card shows the render");
@@ -434,6 +442,43 @@ mod tests {
         assert_eq!(settings.output.folder, None);
         assert_eq!(settings.output.name, "");
         assert_eq!(settings.tail.max_seconds, 0);
+    }
+
+    /// **The card's format row reads into the settings** (MOO-186): WAV
+    /// depth and dither, MP3 bitrate, and mono for either.
+    #[test]
+    fn the_format_row_reads_depth_dither_and_mono() {
+        let card = card();
+        let window = &card.window;
+        let settings = export_settings(window).unwrap();
+        assert_eq!(
+            settings.format,
+            FileFormat::Wav {
+                depth: WavDepth::Pcm24,
+                dither: Some(false),
+            },
+            "the card opens on today's export, 24-bit undithered"
+        );
+        assert_eq!(settings.channels, Channels::Stereo);
+
+        window.set_export_wav_depth(0);
+        window.set_export_dither(true);
+        window.set_export_mono(true);
+        let settings = export_settings(window).unwrap();
+        assert_eq!(
+            settings.format,
+            FileFormat::Wav {
+                depth: WavDepth::Pcm16,
+                dither: Some(true),
+            }
+        );
+        assert_eq!(settings.channels, Channels::Mono);
+
+        window.set_export_format(1);
+        window.set_export_bitrate(0);
+        let settings = export_settings(window).unwrap();
+        assert_eq!(settings.format, FileFormat::Mp3 { kbps: 192 });
+        assert_eq!(settings.channels, Channels::Mono);
     }
 
     /// The window and its session, for the range tests, which set up the

@@ -185,11 +185,49 @@ silence, so a broken device lights the latch too and is not put to sleep by
 the effect host's idle check.
 
 An export reports what the guard did (`RenderSummary::overs`,
-`non_finite_samples`) and logs it when either is non-zero. `pcm24`, the
-24-bit WAV encoder in `mooloop-engine/src/offline.rs`, still clamps at full
+`non_finite_samples`) and logs it when either is non-zero. `pcm`, the
+16- and 24-bit WAV encoder in `mooloop-engine/src/offline.rs`, still clamps at full
 scale, but the limiter has already held the signal there, so its own count
 (`RenderSummary::clipped_samples`) is zero unless the limiter stopped doing
 its job.
+
+### Mono files, and dither
+
+**A mono export is `(L + R) / 2`** (MOO-186, `OutputChannels::Mono` in
+`mooloop-engine/src/offline.rs`). Against the 3 dB pan law above, that
+means:
+
+- A **centred** source is `0.707` of its device level on each side, and the
+  mono file holds that same `0.707`. It keeps exactly the level each side
+  had: 3.01 dB under the device, the same as either speaker of the stereo
+  file.
+- A source panned **hard** to one side is `1.0` on that side and `0` on the
+  other, so the mono file holds `0.5`: 6.02 dB under the device, and 6.02 dB
+  under the side it was on. Against a centred source, a hard-panned one is
+  3 dB quieter in mono than in stereo. That is the usual mono-compatibility
+  cost of an equal-power law.
+
+The alternative was `(L + R) × 0.707`, which keeps a hard-panned source's
+energy but puts a centred one 3 dB *over* its per-side level. A mix whose
+stereo file peaks at 0 dBFS would then clip in mono after the limiter has
+already run. Halving the sum can never exceed the larger side, so the mono
+file is never hotter than the stereo one, and nothing downstream of the
+guard needs a second limiter. The test is
+`a_mono_file_is_one_channel_of_the_sides_average`.
+
+**Dither is TPDF of one LSB, added last.** It goes on after the mono mix,
+just before a PCM sample is rounded. It is on by default at 16 bits, off at
+24, and never applied to float or MP3. Its generator is seeded from
+the file's place in the job, so two renders of one song are bit-identical
+(`two_dithered_renders_are_bit_identical`). Every file of one job has its
+own sequence, and left and right take alternate draws, so stems summed
+in another program add their dither as power (+10 log N), not coherently
+(+20 log N) (`two_outputs_of_one_job_have_uncorrelated_dither`). At 16 bits, a -90 dBFS tone
+rounds to a flat noise floor rather than to odd harmonics
+(`a_dithered_16_bit_tone_has_a_flat_floor_and_no_harmonics`). The PCM
+encoders still clamp at full scale and count it in
+`RenderSummary::clipped_samples`. Dither at full scale is clamped too, and
+is not counted.
 
 ## The master bus compressor
 

@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 use mooloop_core::{PlaybackMode, PluginSlotId, Project};
 use mooloop_dsp::{AudioNode, SampleData, MAX_BLOCK_SIZE};
-use mp3lame_encoder::{Bitrate, Builder, DualPcm, FlushGap, Quality};
+use mp3lame_encoder::{Bitrate, Builder, DualPcm, FlushGap, MonoPcm, Quality};
 
 use crate::render::RenderState;
 use mooloop_core::EngineCommand;
@@ -54,8 +54,21 @@ pub enum RenderScope {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WavEncoding {
+    /// 16-bit PCM, for a CD-style delivery (MOO-186). Dither it.
+    Pcm16,
     Pcm24,
     Float32,
+}
+
+/// How many channels a file holds (MOO-186).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OutputChannels {
+    #[default]
+    Stereo,
+    /// One channel, `(L + R) / 2`: a centred source keeps the level each
+    /// side had, and a hard-panned one is 6 dB under the side it was on
+    /// (`docs/GAIN_STRUCTURE.md`, "Mono files").
+    Mono,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,7 +126,7 @@ pub struct RenderSummary {
     /// to the ceiling -- the file holds none -- but a non-zero count means
     /// the mix was over and what was written is limited, so it is logged.
     pub overs: u64,
-    /// Samples the 24-bit encoder had to clamp to full scale. The limiter
+    /// Samples the PCM (16- or 24-bit) encoder had to clamp to full scale. The limiter
     /// runs first, so this is zero unless the limiter stopped holding its
     /// ceiling; it is counted rather than assumed, because the clamp is
     /// silent and a file damaged by one says nothing on its own.
@@ -237,6 +250,28 @@ pub struct RenderOutput {
     pub path: PathBuf,
     pub tap: RenderTap,
     pub format: ExportFormat,
+    /// Stereo, or a mono mix of the two sides (MOO-186).
+    pub channels: OutputChannels,
+    /// TPDF dither of one LSB, added just before a PCM file's samples are
+    /// rounded, after everything else (MOO-186). Its generator is seeded
+    /// from the output's place in the job, so two renders of one job are
+    /// bit-identical and two outputs of one job carry unrelated dither.
+    /// Float and MP3 files take no dither and ignore it.
+    pub dither: bool,
+}
+
+impl RenderOutput {
+    /// A stereo file at `path`, dithered where its format is 16-bit: the
+    /// defaults the dialog offers.
+    pub fn new(path: PathBuf, tap: RenderTap, format: ExportFormat) -> Self {
+        Self {
+            path,
+            tap,
+            format,
+            channels: OutputChannels::Stereo,
+            dither: format == ExportFormat::Wav(WavEncoding::Pcm16),
+        }
+    }
 }
 
 /// Outputs that share one timeline, rendered in **one** pass: the project is
@@ -268,11 +303,11 @@ impl RenderJob {
             passes: vec![RenderPass {
                 scope: spec.scope,
                 tail_seconds: spec.tail_seconds,
-                outputs: vec![RenderOutput {
-                    path: spec.path.clone(),
-                    tap: RenderTap::Master,
-                    format: spec.format,
-                }],
+                outputs: vec![RenderOutput::new(
+                    spec.path.clone(),
+                    RenderTap::Master,
+                    spec.format,
+                )],
             }],
         }
     }
@@ -520,6 +555,8 @@ impl OfflineRenderer {
 
         let mut written = Vec::new();
         let mut rendered_frames = 0u64;
+        // Each output's place in the whole job, which seeds its dither.
+        let mut first_output = 0usize;
         for (index, (pass, &(base_frames, tail_cap))) in
             job.passes.iter().zip(&lengths).enumerate()
         {
@@ -531,7 +568,17 @@ impl OfflineRenderer {
                 },
             };
             let before = progress.done.load(Ordering::Relaxed);
-            match render_pass(&mut state, pass, sample_rate, base_frames, tail_cap, progress) {
+            let rendered = render_pass(
+                &mut state,
+                pass,
+                first_output,
+                sample_rate,
+                base_frames,
+                tail_cap,
+                progress,
+            );
+            first_output += pass.outputs.len();
+            match rendered {
                 Ok(files) => {
                     rendered_frames = rendered_frames.saturating_add(
                         files
@@ -637,9 +684,11 @@ fn prepare_pass(
 /// Render one pass into every one of its outputs, then move each finished
 /// file over its target. On failure, the files already moved are returned
 /// with the error, and every other output's partial file is removed.
+/// `first_output` is the job-wide index of the pass's first output.
 fn render_pass(
     state: &mut RenderState,
     pass: &RenderPass,
+    first_output: usize,
     sample_rate: u32,
     base_frames: u64,
     tail_cap: u64,
@@ -657,8 +706,8 @@ fn render_pass(
     };
 
     let mut sinks = Vec::with_capacity(pass.outputs.len());
-    for (output, temporary) in pass.outputs.iter().zip(&temporaries) {
-        match Sink::open(temporary, output, sample_rate) {
+    for (index, (output, temporary)) in pass.outputs.iter().zip(&temporaries).enumerate() {
+        match Sink::open(temporary, output, first_output + index, sample_rate) {
             Ok(sink) => sinks.push(sink),
             Err(error) => {
                 drop(sinks);
@@ -767,7 +816,7 @@ fn report(summary: &RenderSummary, path: &Path) {
     if summary.clipped_samples > 0 {
         mooloop_core::log_warn!(
             "export",
-            "{} samples were clipped to full scale by the 24-bit encoder in {}",
+            "{} samples were clipped to full scale by the PCM encoder in {}",
             summary.clipped_samples,
             path.display()
         );
@@ -847,14 +896,20 @@ fn render_blocks(
 /// One output's encoder, fed a block at a time.
 struct Sink {
     tap: RenderTap,
+    channels: OutputChannels,
     encoder: Encoder,
+    /// The block's mono mix, for a mono output: sized once, at open.
+    mono: Vec<f32>,
 }
 
 enum Encoder {
     Wav {
         writer: hound::WavWriter<std::io::BufWriter<fs::File>>,
         encoding: WavEncoding,
-        /// Samples the 24-bit encoder had to clamp.
+        /// The dither added before a PCM sample is rounded, when the output
+        /// asked for it and its format is PCM.
+        dither: Option<Tpdf>,
+        /// Samples the PCM encoder had to clamp.
         clipped: u64,
     },
     /// LAME, and what it has encoded so far; written to the file at the end.
@@ -864,19 +919,100 @@ enum Encoder {
     },
 }
 
+/// Triangular (TPDF) dither of one LSB either way (MOO-186): the difference
+/// of two uniform draws, which makes the rounding error independent of the
+/// signal, so a quiet tone rounds into a flat noise floor rather than
+/// into harmonics.
+///
+/// The seed comes from the output's place in the job, so a render is
+/// repeatable to the bit and every output of one job has its own sequence:
+/// stems summed in another program add their floors as power, not
+/// coherently, which one shared sequence would do (+20 log N rather than
+/// +10 log N). Left and right take alternate draws of one generator, so
+/// they never share values either.
+struct Tpdf {
+    state: u64,
+}
+
+impl Tpdf {
+    const SEED: u64 = 0x9E37_79B9_7F4A_7C15;
+
+    fn new(index: usize) -> Self {
+        // splitmix64 of the base plus the index: neighbouring indices land
+        // far apart, and xorshift must never start at zero.
+        let mut z = Self::SEED.wrapping_add((index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        Self {
+            state: if z == 0 { Self::SEED } else { z },
+        }
+    }
+
+    /// xorshift64*, uniform over [0, 1).
+    fn uniform(&mut self) -> f64 {
+        let mut x = self.state;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.state = x;
+        (x.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    /// The next dither value in LSBs, triangular over (-1, 1).
+    fn next(&mut self) -> f64 {
+        self.uniform() - self.uniform()
+    }
+}
+
+/// The largest code of a PCM depth.
+fn full_scale(encoding: WavEncoding) -> Option<f32> {
+    match encoding {
+        WavEncoding::Pcm16 => Some(32_767.0),
+        WavEncoding::Pcm24 => Some(8_388_607.0),
+        WavEncoding::Float32 => None,
+    }
+}
+
+/// A PCM sample: full scale is the most it can say, so anything past it is
+/// clamped -- and counted by the caller, since the clamp is silent. With
+/// dither, the dither is added last, just before rounding.
+fn pcm(sample: f32, full_scale: f32, dither: Option<&mut Tpdf>) -> i32 {
+    let clamped = sample.clamp(-1.0, 1.0);
+    match dither {
+        None => (clamped * full_scale).round() as i32,
+        Some(dither) => {
+            let scale = f64::from(full_scale);
+            (f64::from(clamped) * scale + dither.next())
+                .round()
+                .clamp(-scale - 1.0, scale) as i32
+        }
+    }
+}
+
 impl Sink {
-    fn open(path: &Path, output: &RenderOutput, sample_rate: u32) -> Result<Self, ExportError> {
+    /// `index` is the output's place in the job, which seeds its dither.
+    fn open(
+        path: &Path,
+        output: &RenderOutput,
+        index: usize,
+        sample_rate: u32,
+    ) -> Result<Self, ExportError> {
+        let channels: u16 = match output.channels {
+            OutputChannels::Stereo => 2,
+            OutputChannels::Mono => 1,
+        };
         let encoder = match output.format {
             ExportFormat::Wav(encoding) => {
                 let spec = match encoding {
-                    WavEncoding::Pcm24 => hound::WavSpec {
-                        channels: 2,
+                    WavEncoding::Pcm16 | WavEncoding::Pcm24 => hound::WavSpec {
+                        channels,
                         sample_rate,
-                        bits_per_sample: 24,
+                        bits_per_sample: if encoding == WavEncoding::Pcm16 { 16 } else { 24 },
                         sample_format: hound::SampleFormat::Int,
                     },
                     WavEncoding::Float32 => hound::WavSpec {
-                        channels: 2,
+                        channels,
                         sample_rate,
                         bits_per_sample: 32,
                         sample_format: hound::SampleFormat::Float,
@@ -885,16 +1021,21 @@ impl Sink {
                 Encoder::Wav {
                     writer: hound::WavWriter::create(path, spec)?,
                     encoding,
+                    dither: (output.dither && full_scale(encoding).is_some()).then(|| Tpdf::new(index)),
                     clipped: 0,
                 }
             }
             ExportFormat::Mp3(bitrate) => {
                 let file_rate = NonZeroU32::new(mp3_file_rate(sample_rate))
                     .ok_or_else(|| ExportError::Invalid("sample rate cannot be zero".into()))?;
-                let encoder = Builder::new()
+                let mut builder = Builder::new()
                     .ok_or_else(|| ExportError::Mp3("could not initialize LAME".into()))?
-                    .with_num_channels(2)
-                    .map_err(lame)?
+                    .with_num_channels(channels as u8)
+                    .map_err(lame)?;
+                if output.channels == OutputChannels::Mono {
+                    builder = builder.with_mode(mp3lame_encoder::Mode::Mono).map_err(lame)?;
+                }
+                let encoder = builder
                     .with_sample_rate(sample_rate)
                     .map_err(lame)?
                     .with_output_sample_rate(Some(file_rate))
@@ -913,37 +1054,64 @@ impl Sink {
         };
         Ok(Self {
             tap: output.tap,
+            channels: output.channels,
             encoder,
+            mono: match output.channels {
+                OutputChannels::Stereo => Vec::new(),
+                OutputChannels::Mono => vec![0.0; OFFLINE_BLOCK_FRAMES],
+            },
         })
     }
 
     fn write(&mut self, left: &[f32], right: &[f32]) -> Result<(), ExportError> {
+        let mono = match self.channels {
+            OutputChannels::Stereo => None,
+            OutputChannels::Mono => {
+                let mono = &mut self.mono[..left.len()];
+                for ((mono, &left), &right) in mono.iter_mut().zip(left).zip(right) {
+                    *mono = (left + right) * 0.5;
+                }
+                Some(&*mono)
+            }
+        };
         match &mut self.encoder {
             Encoder::Wav {
                 writer,
                 encoding,
+                dither,
                 clipped,
             } => {
-                for (&left, &right) in left.iter().zip(right) {
-                    match encoding {
-                        WavEncoding::Pcm24 => {
-                            *clipped +=
-                                u64::from(left.abs() > 1.0) + u64::from(right.abs() > 1.0);
-                            writer.write_sample(pcm24(left))?;
-                            writer.write_sample(pcm24(right))?;
+                let mut put = |sample: f32| -> Result<(), ExportError> {
+                    match full_scale(*encoding) {
+                        Some(scale) => {
+                            *clipped += u64::from(sample.abs() > 1.0);
+                            writer.write_sample(pcm(sample, scale, dither.as_mut()))?;
                         }
-                        WavEncoding::Float32 => {
-                            writer.write_sample(left)?;
-                            writer.write_sample(right)?;
+                        None => writer.write_sample(sample)?,
+                    }
+                    Ok(())
+                };
+                match mono {
+                    Some(mono) => {
+                        for &sample in mono {
+                            put(sample)?;
+                        }
+                    }
+                    None => {
+                        for (&left, &right) in left.iter().zip(right) {
+                            put(left)?;
+                            put(right)?;
                         }
                     }
                 }
             }
             Encoder::Mp3 { encoder, encoded } => {
                 encoded.reserve(mp3lame_encoder::max_required_buffer_size(left.len()));
-                encoder
-                    .encode_to_vec(DualPcm { left, right }, encoded)
-                    .map_err(|error| ExportError::Mp3(error.to_string()))?;
+                match mono {
+                    Some(mono) => encoder.encode_to_vec(MonoPcm(mono), encoded),
+                    None => encoder.encode_to_vec(DualPcm { left, right }, encoded),
+                }
+                .map_err(|error| ExportError::Mp3(error.to_string()))?;
             }
         }
         Ok(())
@@ -980,11 +1148,6 @@ fn lame(error: impl fmt::Display) -> ExportError {
     ExportError::Mp3(error.to_string())
 }
 
-/// The 24-bit encoder: full scale is the most it can say, so anything past
-/// it is clamped -- and counted by the caller, since the clamp is silent.
-fn pcm24(sample: f32) -> i32 {
-    (sample.clamp(-1.0, 1.0) * 8_388_607.0).round() as i32
-}
 
 #[cfg(test)]
 mod tests {
@@ -1385,11 +1548,7 @@ mod tests {
     }
 
     fn master(path: &Path, format: ExportFormat) -> RenderOutput {
-        RenderOutput {
-            path: path.to_path_buf(),
-            tap: RenderTap::Master,
-            format,
-        }
+        RenderOutput::new(path.to_path_buf(), RenderTap::Master, format)
     }
 
     fn pattern_pass(tail_seconds: f32, outputs: Vec<RenderOutput>) -> RenderPass {
@@ -1449,8 +1608,8 @@ mod tests {
         assert_eq!(read_float.len() as u64, total * 2);
         assert_eq!(read_pcm.len(), read_float.len());
         assert!(read_float.iter().any(|sample| sample.abs() > 0.1));
-        for (index, (&float, &pcm)) in read_float.iter().zip(&read_pcm).enumerate() {
-            assert_eq!(pcm, pcm24(float), "sample {index} differs between the two files");
+        for (index, (&float, &written)) in read_float.iter().zip(&read_pcm).enumerate() {
+            assert_eq!(written, super::pcm(float, 8_388_607.0, None), "sample {index} differs between the two files");
         }
         assert!(fs::read(&mp3).unwrap().len() > 1_000);
     }
@@ -1736,6 +1895,235 @@ mod tests {
             assert!(matches!(result, Err(ExportError::Invalid(_))), "{result:?}");
             assert!(!path.exists());
         }
+    }
+
+    fn render_one(
+        project: &Project,
+        sample: &Arc<SampleData>,
+        path: &Path,
+        format: ExportFormat,
+        channels: OutputChannels,
+        dither: bool,
+    ) -> RenderSummary {
+        let job = RenderJob {
+            passes: vec![pattern_pass(
+                0.0,
+                vec![RenderOutput {
+                    channels,
+                    dither,
+                    ..master(path, format)
+                }],
+            )],
+        };
+        OfflineRenderer::render_job(project, &[Some(sample.clone())], 48_000, &job, &ExportProgress::new())
+            .unwrap()
+            .remove(0)
+            .summary
+    }
+
+    /// Every channel of a WAV, one `Vec` per channel, as floats at full
+    /// scale 1.0 whatever the depth.
+    fn wav_channels(path: &Path) -> Vec<Vec<f32>> {
+        let mut reader = hound::WavReader::open(path).unwrap();
+        let spec = reader.spec();
+        let samples: Vec<f32> = match spec.sample_format {
+            hound::SampleFormat::Float => reader.samples::<f32>().map(Result::unwrap).collect(),
+            hound::SampleFormat::Int => {
+                let scale = ((1i64 << (spec.bits_per_sample - 1)) - 1) as f32;
+                reader
+                    .samples::<i32>()
+                    .map(|sample| sample.unwrap() as f32 / scale)
+                    .collect()
+            }
+        };
+        let channels = usize::from(spec.channels);
+        (0..channels)
+            .map(|channel| samples.iter().skip(channel).step_by(channels).copied().collect())
+            .collect()
+    }
+
+    /// **A 16-bit file of a quiet tone has a flat dither floor, not
+    /// rounding's harmonics** (MOO-186).
+    ///
+    /// A 1 kHz sine about one LSB tall at 16 bits (-90 dBFS). Rounded bare,
+    /// it becomes a stepped wave whose odd harmonics stand far above the
+    /// floor; with TPDF dither the harmonics sink into noise that is the
+    /// same across the band, and the tone itself is still there at its
+    /// level. The undithered file is rendered too, so the measure is shown
+    /// to see what it is looking for.
+    #[test]
+    fn a_dithered_16_bit_tone_has_a_flat_floor_and_no_harmonics() {
+        use mooloop_dsp::testkit::{band_rms, tone_amplitude};
+        const LSB: f32 = 1.0 / 32_767.0;
+        let temp = tempdir().unwrap();
+        // The master hears a centred sampler 3 dB down (the pan law), so
+        // the sample is that much hotter than the tone wanted in the file.
+        let wanted = mooloop_dsp::testkit::from_db(-90.0);
+        let project = sampler_project(1.0);
+        let sample = long_sample(48_000, |index| {
+            wanted * std::f32::consts::SQRT_2
+                * (index as f32 * std::f32::consts::TAU * 1_000.0 / 48_000.0).sin()
+        });
+        let wav16 = ExportFormat::Wav(WavEncoding::Pcm16);
+        let render = |name: &str, format, dither| {
+            let path = temp.path().join(name);
+            render_one(&project, &sample, &path, format, OutputChannels::Stereo, dither);
+            // The note is 24 000 frames long; measure inside it.
+            wav_channels(&path).remove(0)[2_000..22_000].to_vec()
+        };
+        let float = render("float.wav", ExportFormat::Wav(WavEncoding::Float32), false);
+        let bare = render("bare.wav", wav16, false);
+        let dithered = render("dithered.wav", wav16, true);
+
+        let tone = tone_amplitude(&float, 48_000, 1_000.0);
+        assert!(
+            (0.5 * LSB..3.0 * LSB).contains(&tone),
+            "the tone is {} LSB, not about one",
+            tone / LSB
+        );
+        let harmonic = |samples: &[f32], k: f32| tone_amplitude(samples, 48_000, 1_000.0 * k) / LSB;
+        let worst = |samples: &[f32]| [3.0, 5.0, 7.0].map(|k| harmonic(samples, k)).into_iter().fold(0.0, f32::max);
+        assert!(worst(&bare) > 0.05, "rounding bare showed no harmonics: {}", worst(&bare));
+        assert!(
+            worst(&dithered) < 0.02,
+            "dither left a harmonic {} LSB tall",
+            worst(&dithered)
+        );
+        let kept = tone_amplitude(&dithered, 48_000, 1_000.0);
+        assert!(
+            (kept / tone - 1.0).abs() < 0.12,
+            "dither moved the tone from {} to {} LSB",
+            tone / LSB,
+            kept / LSB
+        );
+        // Flat: the floor's density, per root hertz, is the same low, middle
+        // and high in the band.
+        let density = |band: (f32, f32)| band_rms(&dithered, 48_000, band) / (band.1 - band.0).sqrt();
+        let floors = [density((2_500.0, 4_500.0)), density((8_000.0, 12_000.0)), density((15_000.0, 20_000.0))];
+        let (low, high) = floors
+            .iter()
+            .fold((f32::MAX, 0.0f32), |(low, high), &f| (low.min(f), high.max(f)));
+        assert!(
+            mooloop_dsp::testkit::db(high / low) < 2.0,
+            "the floor is not flat: {floors:?}"
+        );
+    }
+
+    /// **Two dithered renders of one song are the same file** (MOO-186).
+    #[test]
+    fn two_dithered_renders_are_bit_identical() {
+        let temp = tempdir().unwrap();
+        let project = sampler_project(1.0);
+        let sample = sample_of(tone);
+        let bytes = |name: &str, format| {
+            let path = temp.path().join(name);
+            render_one(&project, &sample, &path, format, OutputChannels::Stereo, true);
+            fs::read(path).unwrap()
+        };
+        for format in [
+            ExportFormat::Wav(WavEncoding::Pcm16),
+            ExportFormat::Wav(WavEncoding::Pcm24),
+        ] {
+            assert_eq!(bytes("a.wav", format), bytes("b.wav", format), "{format:?}");
+        }
+        // And dither is really there: the 24-bit dithered file is not the
+        // bare one.
+        let path = temp.path().join("bare.wav");
+        render_one(&project, &sample, &path, ExportFormat::Wav(WavEncoding::Pcm24), OutputChannels::Stereo, false);
+        assert_ne!(fs::read(path).unwrap(), bytes("c.wav", ExportFormat::Wav(WavEncoding::Pcm24)));
+        // A float file ignores it.
+        let float = ExportFormat::Wav(WavEncoding::Float32);
+        let path = temp.path().join("float-bare.wav");
+        render_one(&project, &sample, &path, float, OutputChannels::Stereo, false);
+        assert_eq!(fs::read(path).unwrap(), bytes("float.wav", float));
+    }
+
+    /// **Two dithered outputs of one job carry different dither** (MOO-186):
+    /// the rounding error of two 24-bit files of one silent-but-for-dither
+    /// render is uncorrelated between the files, and between a file's left
+    /// and right, so stems summed elsewhere add their floors as power.
+    #[test]
+    fn two_outputs_of_one_job_have_uncorrelated_dither() {
+        let temp = tempdir().unwrap();
+        let pcm24 = ExportFormat::Wav(WavEncoding::Pcm24);
+        let output = |name: &str| RenderOutput {
+            dither: true,
+            ..master(&temp.path().join(name), pcm24)
+        };
+        let job = RenderJob {
+            passes: vec![pattern_pass(0.0, vec![output("one.wav"), output("two.wav")])],
+        };
+        // Nothing plays: every non-zero code in the files is dither.
+        let project = Project::default();
+        OfflineRenderer::render_job(&project, &[], 48_000, &job, &ExportProgress::new()).unwrap();
+        let one = wav_channels(&temp.path().join("one.wav"));
+        let two = wav_channels(&temp.path().join("two.wav"));
+        let correlation = |a: &[f32], b: &[f32]| {
+            let dot: f64 = a.iter().zip(b).map(|(x, y)| f64::from(*x) * f64::from(*y)).sum();
+            let norm = |v: &[f32]| v.iter().map(|x| f64::from(*x).powi(2)).sum::<f64>().sqrt();
+            dot / (norm(a) * norm(b)).max(1e-30)
+        };
+        assert!(one[0].iter().any(|s| *s != 0.0), "the silent render carried no dither");
+        for (a, b, what) in [
+            (&one[0], &two[0], "the two files' left"),
+            (&one[1], &two[1], "the two files' right"),
+            (&one[0], &one[1], "one file's left and right"),
+        ] {
+            let r = correlation(a, b);
+            assert!(r.abs() < 0.02, "{what} correlate at {r:.4}");
+        }
+    }
+
+    /// **A mono file is one channel of (L + R) / 2** (MOO-186): a centred
+    /// source keeps the level each side had, and one panned hard left is
+    /// half of what its side had, 6 dB down (`GAIN_STRUCTURE.md`, "Mono
+    /// files").
+    #[test]
+    fn a_mono_file_is_one_channel_of_the_sides_average() {
+        let temp = tempdir().unwrap();
+        let float = ExportFormat::Wav(WavEncoding::Float32);
+        let sample = sample_of(tone);
+        for (pan, mono_over_left) in [(0.0f32, 1.0f32), (-1.0, 0.5)] {
+            let mut project = sampler_project(1.0);
+            project.channels[0].setup.channel.pan = pan;
+            let stereo_path = temp.path().join("stereo.wav");
+            let mono_path = temp.path().join("mono.wav");
+            render_one(&project, &sample, &stereo_path, float, OutputChannels::Stereo, false);
+            render_one(&project, &sample, &mono_path, float, OutputChannels::Mono, false);
+            let stereo = wav_channels(&stereo_path);
+            let mono = wav_channels(&mono_path);
+            assert_eq!(mono.len(), 1, "a mono file has one channel");
+            assert_eq!(mono[0].len(), stereo[0].len());
+            for (index, ((&m, &l), &r)) in mono[0].iter().zip(&stereo[0]).zip(&stereo[1]).enumerate() {
+                assert_eq!(m, (l + r) * 0.5, "frame {index}");
+            }
+            let (m, l) = (
+                mooloop_dsp::testkit::rms(&mono[0]),
+                mooloop_dsp::testkit::rms(&stereo[0]),
+            );
+            assert!(
+                (m / l - mono_over_left).abs() < 1e-3,
+                "pan {pan}: mono is {} of the left side, not {mono_over_left}",
+                m / l
+            );
+        }
+
+        // An MP3 in mono is LAME's mono mode: channel mode bits 11.
+        let path = temp.path().join("mono.mp3");
+        render_one(
+            &sampler_project(1.0),
+            &sample,
+            &path,
+            ExportFormat::Mp3(Mp3Bitrate::Kbps192),
+            OutputChannels::Mono,
+            false,
+        );
+        let bytes = fs::read(path).unwrap();
+        let at = bytes
+            .windows(2)
+            .position(|pair| pair[0] == 0xff && pair[1] & 0xe0 == 0xe0)
+            .expect("no MP3 frame");
+        assert_eq!(bytes[at + 3] >> 6, 0b11, "the MP3 is not mono");
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import { LineEdit, SpinBox } from "std-widgets.slint";
+import { CheckBox, LineEdit, SpinBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { SectionLabel, SegmentedControl, SelectorBank, ToolButton } from "controls.slint";
 
@@ -96,12 +96,21 @@ component RangeChoice inherits Rectangle {
 // each a row group under one label column (MOO-180). Source has one answer
 // today and says it; stems and channels (MOO-182, 183) grow it, and the
 // delivery formats (MOO-186) grow Format. Range is a choice of four, with
-// the stretch it covers shown as bar.beat underneath (MOO-181). Output is on the card itself: a folder and a name,
+// the stretch it covers shown as bar.beat underneath (MOO-181). Format is
+// WAV or MP3 with stereo or mono, then the depth and dither of a WAV or the
+// bitrate of an MP3 (MOO-186). Output is on the card itself: a folder and a name,
 // with no save-file chooser, because one render can write several files.
 export component ExportDialog inherits Rectangle {
     in-out property <bool> open;
-    // 0 WAV 24-bit, 1 WAV 32-bit float, 2 MP3.
+    // 0 WAV, 1 MP3 (MOO-186).
     in-out property <int> format-index;
+    // The WAV's depth: 0 16-bit, 1 24-bit, 2 32-bit float.
+    in-out property <int> depth-index: 1;
+    // TPDF dither before rounding, for 16- and 24-bit; a float file takes
+    // none. Picking a depth sets it to that depth's default.
+    in-out property <bool> dither;
+    // One channel, (L + R) / 2, instead of two.
+    in-out property <bool> mono;
     // 0 192, 1 256, 2 320 kbps.
     in-out property <int> bitrate-index: 2;
     // The most tail there may be. The render stops as soon as every device
@@ -219,28 +228,59 @@ export component ExportDialog inherits Rectangle {
             }
             Section {
                 label: "FORMAT";
-                SegmentedControl {
-                    options: ["WAV 24-bit", "WAV 32-bit float", "MP3"];
-                    hint: "The file format: WAV for a master or further work, MP3 to share";
-                    selected-index: root.format-index;
-                    selected(index) => { root.format-index = index; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    SegmentedControl {
+                        options: ["WAV", "MP3"];
+                        hint: "The file format: WAV for a master or further work, MP3 to share";
+                        selected-index: root.format-index;
+                        selected(index) => { root.format-index = index; }
+                    }
+                    SegmentedControl {
+                        options: ["Stereo", "Mono"];
+                        hint: "Mono writes one channel, (L + R) / 2: a centred sound keeps its level, a hard-panned one is 6 dB down";
+                        selected-index: root.mono ? 1 : 0;
+                        selected(index) => { root.mono = index == 1; }
+                    }
                 }
                 HorizontalLayout {
                     spacing: 8px;
-                    SelectorBank {
+                    if root.format-index == 0: SelectorBank {
+                        options: ["16", "24", "32 float"];
+                        tooltip: "The WAV's bit depth";
+                        selected-index: root.depth-index;
+                        // Dither follows the depth's default each time
+                        // the depth is picked: on at 16, off at 24.
+                        selected(index) => {
+                            root.depth-index = index;
+                            root.dither = index == 0;
+                        }
+                    }
+                    if root.format-index == 0: Text {
+                        text: "bit";
+                        color: Theme.text-muted;
+                        font-size: Theme.text-md;
+                        vertical-alignment: center;
+                    }
+                    if root.format-index == 0: CheckBox {
+                        text: "Dither";
+                        enabled: root.depth-index != 2;
+                        checked: root.dither && root.depth-index != 2;
+                        toggled => { root.dither = self.checked; }
+                    }
+                    if root.format-index == 1: SelectorBank {
                         options: ["192", "256", "320"];
                         tooltip: "The MP3's bitrate";
-                        enabled: root.format-index == 2;
                         selected-index: root.bitrate-index;
                         selected(index) => { root.bitrate-index = index; }
                     }
-                    Text {
+                    if root.format-index == 1: Text {
                         text: "kbps";
-                        color: root.format-index == 2 ? Theme.text-muted : Theme.text-faint;
+                        color: Theme.text-muted;
                         font-size: Theme.text-md;
                         vertical-alignment: center;
-                        horizontal-stretch: 1;
                     }
+                    Rectangle { horizontal-stretch: 1; }
                 }
             }
             Section {
@@ -281,7 +321,7 @@ export component ExportDialog inherits Rectangle {
                     }
                     Text {
                         width: 76px;
-                        text: root.format-index == 2 ? ".mp3" : ".wav";
+                        text: root.format-index == 1 ? ".mp3" : ".wav";
                         color: Theme.text-muted;
                         font-size: Theme.text-lg;
                         vertical-alignment: center;

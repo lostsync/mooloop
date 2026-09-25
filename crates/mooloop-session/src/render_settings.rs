@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use mooloop_core::{LoopRange, BEATS_PER_BAR, TICKS_PER_BAR, TICKS_PER_STEP};
 use mooloop_engine::{
-    ExportFormat, Mp3Bitrate, RenderJob, RenderOutput, RenderPass, RenderScope, RenderTap,
+    ExportFormat, Mp3Bitrate, OutputChannels, RenderJob, RenderOutput, RenderPass, RenderScope, RenderTap,
     WavEncoding,
 };
 use serde::{Deserialize, Serialize};
@@ -29,7 +29,11 @@ pub struct RenderSettings {
     pub source: RenderSource,
     #[serde(deserialize_with = "tolerant_range")]
     pub range: RenderRange,
+    #[serde(deserialize_with = "tolerant_format")]
     pub format: FileFormat,
+    /// Stereo or mono, for every format (MOO-186).
+    #[serde(deserialize_with = "tolerant_channels")]
+    pub channels: Channels,
     pub tail: TailSettings,
     pub output: OutputSettings,
 }
@@ -201,6 +205,39 @@ pub fn format_bar_beat(tick: u32) -> String {
     }
 }
 
+/// Reads a format from saved settings, and never fails the settings over
+/// it: one this build does not know is the default, 24-bit WAV.
+fn tolerant_format<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<FileFormat, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Tolerant {
+        Known(FileFormat),
+        Unknown(serde::de::IgnoredAny),
+    }
+    Ok(match Tolerant::deserialize(deserializer)? {
+        Tolerant::Known(format) => format,
+        Tolerant::Unknown(_) => FileFormat::default(),
+    })
+}
+
+/// Reads the channel count from saved settings: anything unknown is stereo.
+fn tolerant_channels<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Channels, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Tolerant {
+        Known(Channels),
+        Unknown(serde::de::IgnoredAny),
+    }
+    Ok(match Tolerant::deserialize(deserializer)? {
+        Tolerant::Known(channels) => channels,
+        Tolerant::Unknown(_) => Channels::Stereo,
+    })
+}
+
 /// Reads a range from saved settings, and never fails the settings over it:
 /// anything that is not a range this build knows is the whole song.
 fn tolerant_range<'de, D: serde::Deserializer<'de>>(
@@ -221,7 +258,14 @@ fn tolerant_range<'de, D: serde::Deserializer<'de>>(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FileFormat {
-    Wav { depth: WavDepth },
+    Wav {
+        depth: WavDepth,
+        /// TPDF dither before rounding (MOO-186). `None` is the depth's
+        /// default ([`WavDepth::dithers_by_default`]); a float file takes
+        /// none whatever this says.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dither: Option<bool>,
+    },
     Mp3 { kbps: u16 },
 }
 
@@ -229,6 +273,7 @@ impl Default for FileFormat {
     fn default() -> Self {
         Self::Wav {
             depth: WavDepth::Pcm24,
+            dither: None,
         }
     }
 }
@@ -236,9 +281,39 @@ impl Default for FileFormat {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WavDepth {
+    /// 16-bit PCM (MOO-186).
+    Pcm16,
     #[default]
     Pcm24,
     Float32,
+}
+
+impl WavDepth {
+    /// Dither is on by default at 16 bits, where rounding is audible on a
+    /// quiet fade, and off at 24, where it sits under any playback chain's
+    /// own noise (MOO-186).
+    pub fn dithers_by_default(self) -> bool {
+        self == Self::Pcm16
+    }
+}
+
+/// How many channels the files hold (MOO-186).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Channels {
+    #[default]
+    Stereo,
+    /// `(L + R) / 2`; see `docs/GAIN_STRUCTURE.md`, "Mono files".
+    Mono,
+}
+
+impl Channels {
+    pub fn engine(self) -> OutputChannels {
+        match self {
+            Self::Stereo => OutputChannels::Stereo,
+            Self::Mono => OutputChannels::Mono,
+        }
+    }
 }
 
 /// The MP3 bitrates the encoder offers, in kbps.
@@ -253,15 +328,34 @@ impl FileFormat {
         }
     }
 
+    /// Whether the file is dithered: the choice made, else the depth's
+    /// default. Never for float or MP3.
+    pub fn dither(self) -> bool {
+        match self {
+            Self::Wav {
+                depth: WavDepth::Float32,
+                ..
+            }
+            | Self::Mp3 { .. } => false,
+            Self::Wav { depth, dither } => dither.unwrap_or(depth.dithers_by_default()),
+        }
+    }
+
     /// The engine's format. A bitrate the encoder does not offer -- a hand
     /// edited settings file, say -- is the nearest one it does.
     pub fn engine(self) -> ExportFormat {
         match self {
             Self::Wav {
+                depth: WavDepth::Pcm16,
+                ..
+            } => ExportFormat::Wav(WavEncoding::Pcm16),
+            Self::Wav {
                 depth: WavDepth::Pcm24,
+                ..
             } => ExportFormat::Wav(WavEncoding::Pcm24),
             Self::Wav {
                 depth: WavDepth::Float32,
+                ..
             } => ExportFormat::Wav(WavEncoding::Float32),
             Self::Mp3 { kbps } => ExportFormat::Mp3(match kbps {
                 0..=223 => Mp3Bitrate::Kbps192,
@@ -377,6 +471,8 @@ impl RenderSettings {
                     path,
                     tap: RenderTap::Master,
                     format: self.format.engine(),
+                    channels: self.channels.engine(),
+                    dither: self.format.dither(),
                 }],
             }],
         })
@@ -627,6 +723,47 @@ mod tests {
         assert_eq!(fits.loaded(&timeline()), fits);
     }
 
+    /// **16-bit is dithered by default, 24-bit is not, float never is, and
+    /// mono reaches the job** (MOO-186). A table saved before either field
+    /// existed loads as stereo with the depth's default.
+    #[test]
+    fn depth_dither_and_channels_reach_the_job() {
+        let wav = |depth, dither| FileFormat::Wav { depth, dither };
+        assert!(wav(WavDepth::Pcm16, None).dither());
+        assert!(!wav(WavDepth::Pcm24, None).dither());
+        assert!(wav(WavDepth::Pcm24, Some(true)).dither());
+        assert!(!wav(WavDepth::Pcm16, Some(false)).dither());
+        assert!(!wav(WavDepth::Float32, Some(true)).dither());
+        assert!(!FileFormat::Mp3 { kbps: 320 }.dither());
+        assert_eq!(
+            wav(WavDepth::Pcm16, None).engine(),
+            ExportFormat::Wav(WavEncoding::Pcm16)
+        );
+
+        let temp = tempdir().unwrap();
+        let settings = RenderSettings {
+            format: wav(WavDepth::Pcm16, None),
+            channels: Channels::Mono,
+            ..RenderSettings::default()
+        };
+        let job = settings.job(RenderScope::Song, None, temp.path()).unwrap();
+        let output = only_output(&job);
+        assert_eq!(output.channels, OutputChannels::Mono);
+        assert!(output.dither);
+
+        let old: RenderSettings =
+            serde_json::from_str(r#"{"format":{"kind":"wav","depth":"pcm24"}}"#).unwrap();
+        assert_eq!(old.format, FileFormat::default());
+        assert_eq!(old.channels, Channels::Stereo);
+        let unknown: RenderSettings = serde_json::from_str(
+            r#"{"format":{"kind":"flac","level":8},"channels":"surround","tail":{"max_seconds":2}}"#,
+        )
+        .unwrap();
+        assert_eq!(unknown.format, FileFormat::default());
+        assert_eq!(unknown.channels, Channels::Stereo);
+        assert_eq!(unknown.tail.max_seconds, 2);
+    }
+
     /// The settings are a serde value, and a table missing fields still
     /// loads: what MOO-190 saves stays readable as fields are added.
     #[test]
@@ -635,6 +772,7 @@ mod tests {
             range: RenderRange::Loop,
             format: FileFormat::Wav {
                 depth: WavDepth::Float32,
+                dither: None,
             },
             tail: TailSettings { max_seconds: 0 },
             output: OutputSettings {
