@@ -10,7 +10,9 @@
 use std::path::{Path, PathBuf};
 
 use mooloop_core::file_names;
-use mooloop_core::{LoopRange, BEATS_PER_BAR, TICKS_PER_BAR, TICKS_PER_STEP};
+use mooloop_core::{
+    LoopRange, TrackId, BEATS_PER_BAR, MASTER_BUS, TICKS_PER_BAR, TICKS_PER_STEP,
+};
 use mooloop_engine::{
     ExistingFile, ExportFormat, Mp3Bitrate, OutputChannels, RenderJob, RenderOutput, RenderPass, RenderScope, RenderTap,
     WavEncoding,
@@ -27,6 +29,7 @@ pub const MAX_TAIL_SECONDS: u32 = 30;
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RenderSettings {
+    #[serde(deserialize_with = "tolerant_source")]
     pub source: RenderSource,
     #[serde(deserialize_with = "tolerant_range")]
     pub range: RenderRange,
@@ -39,13 +42,82 @@ pub struct RenderSettings {
     pub output: OutputSettings,
 }
 
-/// What is rendered. The master mix only, until stems (MOO-182) and direct
-/// channels (MOO-183).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+/// What is rendered.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RenderSource {
+    /// The master mix, one file.
     #[default]
     Master,
+    /// Stems (MOO-182): each checked track's own output -- after its rack,
+    /// fader and balance, before what it feeds -- to its own file, all in
+    /// one pass. Tracks are named by their durable identity, so a saved
+    /// choice survives a reorder; one the song no longer has is dropped.
+    Tracks {
+        tracks: Vec<TrackId>,
+        /// The master mix as well, on the same pass.
+        #[serde(default)]
+        with_master: bool,
+        /// Write no file for a stem that stayed silent throughout.
+        #[serde(default)]
+        skip_silent: bool,
+    },
+}
+
+/// A track as an export sees it: the song's own, at its place in the bank.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportTrack {
+    pub id: TrackId,
+    /// Its index in the song's tracks, which the engine's tap names.
+    pub index: u8,
+    pub name: String,
+    /// The track it feeds.
+    pub output: u8,
+}
+
+impl ExportTrack {
+    /// The tracks a stem export checks until told otherwise: the ones that
+    /// feed the master straight. Their stems summed are the master's input;
+    /// adding a bus's feeders as well would count their audio twice.
+    pub fn default_selection(tracks: &[ExportTrack]) -> Vec<TrackId> {
+        tracks
+            .iter()
+            .filter(|track| track.output == MASTER_BUS)
+            .map(|track| track.id)
+            .collect()
+    }
+
+    /// The tracks in the order the card lists them, each with how deep it
+    /// sits: a track feeding the master at 0, and the tracks feeding a bus
+    /// straight after it, one deeper, so checking a bus and its feeders
+    /// both is plain to see. A track in a routing loop, which the mixer
+    /// refuses, is listed at 0 at the end rather than lost.
+    pub fn tree(tracks: &[ExportTrack]) -> Vec<(&ExportTrack, usize)> {
+        let mut listed = Vec::with_capacity(tracks.len());
+        let mut seen = vec![false; tracks.len()];
+        fn walk<'a>(
+            tracks: &'a [ExportTrack],
+            into: u8,
+            depth: usize,
+            seen: &mut [bool],
+            listed: &mut Vec<(&'a ExportTrack, usize)>,
+        ) {
+            for (position, track) in tracks.iter().enumerate() {
+                if track.output == into && !seen[position] && track.index != into {
+                    seen[position] = true;
+                    listed.push((track, depth));
+                    walk(tracks, track.index, depth + 1, seen, listed);
+                }
+            }
+        }
+        walk(tracks, MASTER_BUS, 0, &mut seen, &mut listed);
+        for (position, track) in tracks.iter().enumerate() {
+            if !seen[position] {
+                listed.push((track, 0));
+            }
+        }
+        listed
+    }
 }
 
 /// Which stretch of the timeline is rendered (MOO-181).
@@ -204,6 +276,22 @@ pub fn format_bar_beat(tick: u32) -> String {
     } else {
         format!("{bar}.{beat}.{sixteenth}")
     }
+}
+
+/// Reads a source from saved settings: anything unknown is the master mix.
+fn tolerant_source<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<RenderSource, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Tolerant {
+        Known(RenderSource),
+        Unknown(serde::de::IgnoredAny),
+    }
+    Ok(match Tolerant::deserialize(deserializer)? {
+        Tolerant::Known(source) => source,
+        Tolerant::Unknown(_) => RenderSource::Master,
+    })
 }
 
 /// Reads a format from saved settings, and never fails the settings over
@@ -450,14 +538,16 @@ impl RenderSettings {
     }
 
     /// The job these settings describe, rendering `scope`, for a song named
-    /// `song_name` whose default folder is `default_folder`. The scope is
-    /// the range resolved against the song ([`RenderRange::scope`]), which
-    /// the caller does because only it has the song.
+    /// `song_name` whose default folder is `default_folder` and whose tracks
+    /// are `tracks`. The scope is the range resolved against the song
+    /// ([`RenderRange::scope`]), which the caller does because only it has
+    /// the song.
     pub fn job(
         &self,
         scope: RenderScope,
         song_name: Option<&str>,
         default_folder: &Path,
+        tracks: &[ExportTrack],
     ) -> Result<RenderJob, SettingsProblem> {
         let folder = self.folder(default_folder);
         if !folder.is_dir() {
@@ -467,13 +557,43 @@ impl RenderSettings {
             )));
         }
         let stem = self.stem(song_name)?;
-        let path = folder.join(format!("{stem}.{}", self.format.extension()));
-        let RenderSource::Master = self.source;
-        let mut outputs = vec![RenderOutput {
+        let extension = self.format.extension();
+        let output = |name: &str, tap: RenderTap, skip_silent: bool| RenderOutput {
             channels: self.channels.engine(),
             dither: self.format.dither(),
-            ..RenderOutput::new(path, RenderTap::Master, self.format.engine())
-        }];
+            skip_silent,
+            ..RenderOutput::new(
+                folder.join(format!("{name}.{extension}")),
+                tap,
+                self.format.engine(),
+            )
+        };
+        let mut outputs = match &self.source {
+            RenderSource::Master => vec![output(&stem, RenderTap::Master, false)],
+            RenderSource::Tracks {
+                tracks: checked,
+                with_master,
+                skip_silent,
+            } => {
+                let mut outputs = Vec::new();
+                if *with_master {
+                    outputs.push(output(&stem, RenderTap::Master, false));
+                }
+                for track in tracks.iter().filter(|track| checked.contains(&track.id)) {
+                    outputs.push(output(
+                        &format!("{stem}-{}", stem_name(track, tracks)),
+                        RenderTap::Track(track.index),
+                        *skip_silent,
+                    ));
+                }
+                if outputs.is_empty() {
+                    return Err(SettingsProblem("Check at least one track.".into()));
+                }
+                outputs
+            }
+        };
+        // Every file of the job, stems included, takes the one number
+        // (MOO-188).
         if !self.output.replace_existing {
             number_outputs(&mut outputs, file_names::is_taken);
         }
@@ -501,6 +621,36 @@ pub fn number_outputs(outputs: &mut [RenderOutput], taken: impl Fn(&Path) -> boo
     for (output, base) in outputs.iter_mut().zip(bases) {
         output.path = file_names::numbered(&base, number);
         output.existing = ExistingFile::Number { base };
+    }
+}
+
+/// A track's part of its stem's file name: its own name with anything a
+/// file name cannot hold replaced, or `track N` for one with none, and its
+/// number added when another track has the same name, so no two stems of
+/// one export share a file.
+fn stem_name(track: &ExportTrack, tracks: &[ExportTrack]) -> String {
+    let clean = |name: &str| -> String {
+        let replaced: String = name
+            .chars()
+            .map(|c| if matches!(c, '/' | '\\' | ':' | '\0') { '-' } else { c })
+            .collect();
+        replaced
+            .trim_matches(|c: char| c == '-' || c.is_whitespace())
+            .to_string()
+    };
+    let name = clean(&track.name);
+    if name.is_empty() {
+        return format!("track {}", track.index);
+    }
+    let shared = tracks
+        .iter()
+        .filter(|other| clean(&other.name).eq_ignore_ascii_case(&name))
+        .count()
+        > 1;
+    if shared {
+        format!("{name} {}", track.index)
+    } else {
+        name
     }
 }
 
@@ -564,7 +714,7 @@ mod tests {
             ..RenderSettings::default()
         };
         let job = settings
-            .job(RenderScope::Song, Some("song"), Path::new("/nowhere"))
+            .job(RenderScope::Song, Some("song"), Path::new("/nowhere"), &[])
             .unwrap();
         let output = only_output(&job);
         assert_eq!(output.path, temp.path().join("take two.mp3"));
@@ -579,11 +729,11 @@ mod tests {
         let temp = tempdir().unwrap();
         let settings = RenderSettings::default();
         let job = settings
-            .job(RenderScope::Pattern { index: 2 }, Some("ok then"), temp.path())
+            .job(RenderScope::Pattern { index: 2 }, Some("ok then"), temp.path(), &[])
             .unwrap();
         assert_eq!(only_output(&job).path, temp.path().join("ok then.wav"));
 
-        let untitled = settings.job(RenderScope::Song, None, temp.path()).unwrap();
+        let untitled = settings.job(RenderScope::Song, None, temp.path(), &[]).unwrap();
         assert_eq!(
             only_output(&untitled).path,
             temp.path().join(format!("{UNTITLED_EXPORT_NAME}.wav"))
@@ -595,12 +745,12 @@ mod tests {
         let temp = tempdir().unwrap();
         let mut settings = RenderSettings::default();
         settings.output.name = "sub/take".into();
-        assert!(settings.job(RenderScope::Song, None, temp.path()).is_err());
+        assert!(settings.job(RenderScope::Song, None, temp.path(), &[]).is_err());
 
         settings.output.name = "take".into();
         settings.output.folder = Some(temp.path().join("not here"));
         let problem = settings
-            .job(RenderScope::Song, None, temp.path())
+            .job(RenderScope::Song, None, temp.path(), &[])
             .unwrap_err();
         assert!(problem.0.contains("doesn't exist"), "{problem}");
     }
@@ -772,7 +922,7 @@ mod tests {
             channels: Channels::Mono,
             ..RenderSettings::default()
         };
-        let job = settings.job(RenderScope::Song, None, temp.path()).unwrap();
+        let job = settings.job(RenderScope::Song, None, temp.path(), &[]).unwrap();
         let output = only_output(&job);
         assert_eq!(output.channels, OutputChannels::Mono);
         assert!(output.dither);
@@ -840,16 +990,121 @@ mod tests {
             },
             ..RenderSettings::default()
         };
-        let job = settings.job(RenderScope::Song, None, Path::new("/nowhere")).unwrap();
+        let job = settings.job(RenderScope::Song, None, Path::new("/nowhere"), &[]).unwrap();
         assert_eq!(only_output(&job).path, temp.path().join("mix-001.wav"));
         assert!(job.existing_targets().is_empty());
 
         settings.output.replace_existing = true;
-        let job = settings.job(RenderScope::Song, None, Path::new("/nowhere")).unwrap();
+        let job = settings.job(RenderScope::Song, None, Path::new("/nowhere"), &[]).unwrap();
         let output = only_output(&job);
         assert_eq!(output.path, temp.path().join("mix.wav"));
         assert_eq!(output.existing, ExistingFile::Replace);
         assert_eq!(job.existing_targets(), [temp.path().join("mix.wav")]);
+    }
+
+    fn bank() -> Vec<ExportTrack> {
+        let track = |index: u8, name: &str, output: u8| ExportTrack {
+            id: TrackId(u32::from(index) + 100),
+            index,
+            name: name.into(),
+            output,
+        };
+        vec![
+            track(1, "Drums", MASTER_BUS),
+            track(2, "Kick", 1),
+            track(3, "Bass", MASTER_BUS),
+            track(4, "Verb", MASTER_BUS),
+            track(5, "bass", MASTER_BUS),
+            track(6, " / ", MASTER_BUS),
+        ]
+    }
+
+    /// **Stems: one file a checked track, named after the song and the
+    /// track, all on one pass, the master too when asked** (MOO-182).
+    #[test]
+    fn stems_write_one_file_a_checked_track_on_one_pass() {
+        let temp = tempdir().unwrap();
+        let tracks = bank();
+        let settings = RenderSettings {
+            source: RenderSource::Tracks {
+                tracks: vec![TrackId(101), TrackId(103), TrackId(105), TrackId(106), TrackId(999)],
+                with_master: true,
+                skip_silent: true,
+            },
+            format: FileFormat::Wav {
+                depth: WavDepth::Float32,
+                dither: None,
+            },
+            ..RenderSettings::default()
+        };
+        let job = settings
+            .job(RenderScope::Song, Some("ok then"), temp.path(), &tracks)
+            .unwrap();
+        assert_eq!(job.passes.len(), 1, "stems are one pass");
+        let outputs = &job.passes[0].outputs;
+        let named: Vec<_> = outputs
+            .iter()
+            .map(|output| {
+                (
+                    output.path.file_name().unwrap().to_string_lossy().into_owned(),
+                    output.tap,
+                    output.skip_silent,
+                )
+            })
+            .collect();
+        assert_eq!(
+            named,
+            [
+                ("ok then.wav".to_string(), RenderTap::Master, false),
+                ("ok then-Drums.wav".to_string(), RenderTap::Track(1), true),
+                ("ok then-Bass 3.wav".to_string(), RenderTap::Track(3), true),
+                ("ok then-bass 5.wav".to_string(), RenderTap::Track(5), true),
+                ("ok then-track 6.wav".to_string(), RenderTap::Track(6), true),
+            ]
+        );
+
+        let none = RenderSettings {
+            source: RenderSource::Tracks {
+                tracks: vec![TrackId(999)],
+                with_master: false,
+                skip_silent: false,
+            },
+            ..RenderSettings::default()
+        };
+        let problem = none.job(RenderScope::Song, None, temp.path(), &tracks).unwrap_err();
+        assert_eq!(problem.0, "Check at least one track.");
+    }
+
+    /// The default selection is the tracks feeding the master, and the card
+    /// lists a bus's feeders under it, one deeper.
+    #[test]
+    fn the_default_stems_are_the_tracks_feeding_the_master() {
+        let tracks = bank();
+        assert_eq!(
+            ExportTrack::default_selection(&tracks),
+            [101, 103, 104, 105, 106].map(TrackId)
+        );
+        let tree: Vec<_> = ExportTrack::tree(&tracks)
+            .into_iter()
+            .map(|(track, depth)| (track.index, depth))
+            .collect();
+        assert_eq!(tree, [(1, 0), (2, 1), (3, 0), (4, 0), (5, 0), (6, 0)]);
+        let saved: RenderSettings = serde_json::from_str(
+            r#"{"source":{"kind":"tracks","tracks":[101,103]},"tail":{"max_seconds":1}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            saved.source,
+            RenderSource::Tracks {
+                tracks: vec![TrackId(101), TrackId(103)],
+                with_master: false,
+                skip_silent: false,
+            }
+        );
+        let unknown: RenderSettings =
+            serde_json::from_str(r#"{"source":{"kind":"busses"},"tail":{"max_seconds":1}}"#).unwrap();
+        assert_eq!(unknown.source, RenderSource::Master);
+        assert_eq!(unknown.tail.max_seconds, 1);
     }
 
     /// The settings are a serde value, and a table missing fields still

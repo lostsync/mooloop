@@ -25,7 +25,7 @@ import { SaveErrorDialog } from "save-error-dialog.slint";
 import { AboutDialog } from "about-dialog.slint";
 import { QuestionDialog } from "question-dialog.slint";
 import { TakesDialog, TakeRow } from "takes-dialog.slint";
-import { ExportDialog } from "export-dialog.slint";
+import { ExportDialog, ExportTrackRow } from "export-dialog.slint";
 import { MenuBar, MenuBarItem, MenuRow, MenuSeparator } from "menubar.slint";
 import { PianoGrid, NoteCell, NoteHit, GestureMod, PianoGestures, RollMetrics } from "piano-grid.slint";
 import {
@@ -90,6 +90,7 @@ export { DeviceRackConcepts } from "device-concepts.slint";
 // routing to the handle were broken.
 export { CompressorDeviceDragHarness, Ds01DeviceDragHarness, EqDeviceDragHarness, FilterDeviceDragHarness, MlP8DeviceDragHarness } from "device-drag-harness.slint";
 export { MixerSendRow }
+export { ExportTrackRow }
 export { MixerStripRow }
 export { AudioDriverCopy, OutputTargetRow }
 export { ShortcutRow }
@@ -1043,6 +1044,12 @@ export component MainWindow inherits Window {
     in-out property <bool> export-open;
     // 0 WAV, 1 MP3; a WAV's depth (0 16, 1 24, 2 float) and dither; mono
     // (MOO-186).
+    // The card's Source (MOO-182): 0 master mix, 1 tracks from the checklist.
+    in-out property <int> export-source;
+    in-out property <[ExportTrackRow]> export-tracks;
+    in-out property <bool> export-with-master;
+    in-out property <bool> export-skip-silent;
+    callback export-tracks-all(bool);
     in-out property <int> export-format;
     in-out property <int> export-wav-depth: 1;
     in-out property <bool> export-dither;
@@ -8212,6 +8219,11 @@ export component MainWindow inherits Window {
         width: parent.width;
         height: parent.height;
         open <=> root.export-open;
+        source-index <=> root.export-source;
+        tracks <=> root.export-tracks;
+        with-master <=> root.export-with-master;
+        skip-silent <=> root.export-skip-silent;
+        tracks-all(checked) => { root.export-tracks-all(checked); }
         format-index <=> root.export-format;
         depth-index <=> root.export-wav-depth;
         dither <=> root.export-dither;

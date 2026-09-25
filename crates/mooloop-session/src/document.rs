@@ -12,7 +12,9 @@ use mooloop_dsp::SampleData;
 use mooloop_engine::{
     ExportError, ExportProgress, OfflineRenderer, RenderJob, RenderScope, RenderedFile,
 };
-use crate::render_settings::{default_export_folder, RenderSettings, SettingsProblem, Timeline};
+use crate::render_settings::{
+    default_export_folder, ExportTrack, RenderSettings, SettingsProblem, Timeline,
+};
 use mooloop_project::{AssetMode, AssetWarning, Issue, LoadReport, LoadedDocument, SaveReport};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -639,6 +641,22 @@ impl Session {
             .map(|stem| stem.to_string_lossy().into_owned())
     }
 
+    /// The song's tracks, the master left out, as a stem export names them
+    /// (MOO-182).
+    pub fn export_tracks(&self) -> Vec<ExportTrack> {
+        self.buses
+            .iter()
+            .enumerate()
+            .skip(1)
+            .map(|(index, track)| ExportTrack {
+                id: track.id,
+                index: index as u8,
+                name: track.bus.name.clone(),
+                output: track.bus.output,
+            })
+            .collect()
+    }
+
     /// The folder an export writes to when none is chosen: the song's own,
     /// or the music folder for a song never saved.
     pub fn export_default_folder(&self) -> PathBuf {
@@ -658,6 +676,7 @@ impl Session {
             scope,
             self.export_song_name().as_deref(),
             &self.export_default_folder(),
+            &self.export_tracks(),
         )?;
         Ok(ExportRequest {
             project: self.project_snapshot(bpm, swing_percent),

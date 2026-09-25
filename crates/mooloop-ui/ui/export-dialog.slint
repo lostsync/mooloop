@@ -1,4 +1,4 @@
-import { CheckBox, LineEdit, SpinBox } from "std-widgets.slint";
+import { CheckBox, LineEdit, ScrollView, SpinBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { SectionLabel, SegmentedControl, SelectorBank, ToolButton } from "controls.slint";
 
@@ -46,15 +46,14 @@ component Section inherits HorizontalLayout {
     }
 }
 
-// A read-only answer in a section that has one choice so far. Drawn as the
-// text a control would show, at a control's height, so a section that grows
-// a control later keeps its row.
-component Fixed inherits Text {
-    color: Theme.text-muted;
-    font-size: Theme.text-lg;
-    height: 26px;
-    vertical-alignment: center;
-    overflow: elide;
+// One track on the Source's checklist (MOO-182). `id` is the track's
+// durable identity, which Rust reads back; `depth` indents a bus's feeders
+// under it.
+export struct ExportTrackRow {
+    id: int,
+    name: string,
+    checked: bool,
+    depth: int,
 }
 
 // The Range choice: SegmentedControl's look, with one segment that can be
@@ -93,9 +92,9 @@ component RangeChoice inherits Rectangle {
 // behind a closed dialog with only the status bar to say it finished.
 //
 // The settings are five sections -- Source, Range, Format, Tail, Output --
-// each a row group under one label column (MOO-180). Source has one answer
-// today and says it; stems and channels (MOO-182, 183) grow it, and the
-// delivery formats (MOO-186) grow Format. Range is a choice of four, with
+// each a row group under one label column (MOO-180). Source is the master
+// mix or tracks, each checked track to its own file with a checklist under
+// it (MOO-182), and the delivery formats (MOO-186) grow Format. Range is a choice of four, with
 // the stretch it covers shown as bar.beat underneath (MOO-181). Format is
 // WAV or MP3 with stereo or mono, then the depth and dither of a WAV or the
 // bitrate of an MP3 (MOO-186). Output is on the card itself: a folder and a name,
@@ -116,8 +115,12 @@ export component ExportDialog inherits Rectangle {
     // The most tail there may be. The render stops as soon as every device
     // has fallen silent, so this is a cap rather than a length.
     in-out property <int> tail-seconds: 10;
-    // What is rendered, in words.
-    in property <string> source-text: "Master mix";
+    // What is rendered (MOO-182): 0 the master mix, 1 tracks, each checked
+    // track to its own file, with the master too if `with-master`.
+    in-out property <int> source-index;
+    in-out property <[ExportTrackRow]> tracks;
+    in-out property <bool> with-master;
+    in-out property <bool> skip-silent;
     // Which stretch of it (MOO-181): 0 the whole song, 1 the loop
     // selection, 2 a custom range, 3 the current pattern. `range-from` and
     // `range-to` show the stretch as bar.beat, and are typed only for a
@@ -161,6 +164,8 @@ export component ExportDialog inherits Rectangle {
     callback range-picked;
     callback range-edited;
     callback browse-folder;
+    // All or None on the track checklist.
+    callback tracks-all(bool);
     callback cancelled;
     callback cancel-render;
     callback dismissed;
@@ -172,7 +177,9 @@ export component ExportDialog inherits Rectangle {
     TouchArea { }
     Rectangle {
         width: min(parent.width - 32px, 460px);
-        height: root.phase == 0 ? 460px : root.phase == 2 ? 250px : 180px;
+        // A checklist adds its list and its option row (MOO-182).
+        height: root.phase == 0 ? (root.source-index == 1 ? 616px : 460px)
+            : root.phase == 2 ? 250px : 180px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Theme.surface;
@@ -185,7 +192,57 @@ export component ExportDialog inherits Rectangle {
             Text { text: "Export Audio"; color: Theme.text; font-size: Theme.text-3xl; }
             Section {
                 label: "SOURCE";
-                Fixed { text: root.source-text; }
+                SegmentedControl {
+                    options: ["Master mix", "Tracks"];
+                    hint: "Tracks writes each checked track's own output, after its fader and before what it feeds, to its own file: no limiter runs on a stem, so float is the safe format";
+                    selected-index: root.source-index;
+                    selected(index) => { root.source-index = index; }
+                }
+                if root.source-index == 1: Rectangle {
+                    height: 112px;
+                    background: Theme.background;
+                    border-radius: Theme.radius-md;
+                    border-width: Theme.hairline;
+                    border-color: Theme.border;
+                    ScrollView {
+                        VerticalLayout {
+                            padding: 4px;
+                            spacing: 0px;
+                            for row[i] in root.tracks: HorizontalLayout {
+                                padding-left: row.depth * 16px;
+                                CheckBox {
+                                    text: row.name;
+                                    checked: row.checked;
+                                    toggled => { root.tracks[i].checked = self.checked; }
+                                }
+                            }
+                        }
+                    }
+                }
+                if root.source-index == 1: HorizontalLayout {
+                    spacing: 6px;
+                    ToolButton {
+                        text: "All";
+                        width: 36px;
+                        hint: "Check every track";
+                        clicked => { root.tracks-all(true); }
+                    }
+                    ToolButton {
+                        text: "None";
+                        width: 44px;
+                        hint: "Uncheck every track";
+                        clicked => { root.tracks-all(false); }
+                    }
+                    CheckBox {
+                        text: "+ master";
+                        checked <=> root.with-master;
+                    }
+                    CheckBox {
+                        text: "Skip silent";
+                        checked <=> root.skip-silent;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                }
             }
             Section {
                 label: "RANGE";

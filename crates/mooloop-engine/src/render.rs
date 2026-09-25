@@ -9647,6 +9647,23 @@ impl RenderState {
         &self.buses[MASTER_BUS as usize].bus
     }
 
+    /// How many tracks the render has, the master included.
+    pub fn track_count(&self) -> usize {
+        self.buses.len()
+    }
+
+    /// A track's own output this block, the way a take reads a track: after
+    /// its rack, fader and balance, before it reaches what it feeds. `None`
+    /// while it is not heard -- muted or solo-silenced, once its fade has
+    /// finished -- and for a track that does not exist. An export's stems
+    /// read this (MOO-182).
+    pub fn track_output(&self, track: usize) -> Option<&StereoBus> {
+        self.buses
+            .get(track)
+            .filter(|track| track.is_heard())
+            .map(|track| &track.bus)
+    }
+
     /// Move the strip's pinned position, for a test that renders the same
     /// project both ways. `mooloop_core::mixer::STRIP_PIN` is the policy;
     /// this only exists so the difference the policy makes can be asserted

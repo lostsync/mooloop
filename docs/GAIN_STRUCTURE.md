@@ -191,6 +191,20 @@ scale, but the limiter has already held the signal there, so its own count
 (`RenderSummary::clipped_samples`) is zero unless the limiter stopped doing
 its job.
 
+### Stems have no guard
+
+A track stem (`RenderTap::Track`, MOO-182) is the track's own output,
+taken before it reaches the master, so the master's output guard and
+safety limiter never see it. Its sink does a guard's bookkeeping without
+the limiting: a non-finite sample is written as silence and counted, and a
+sample over full scale is counted in the file's own `RenderSummary::overs`
+and written as it is. A float stem keeps it; a PCM stem clamps it and
+counts that in `clipped_samples`. This is deliberate. A stem is meant to be
+summed again somewhere else, and a limiter on each one would make the sum
+differ from the mix
+(`the_stems_of_every_top_level_track_sum_to_the_masters_input`,
+`a_stem_counts_its_own_overs_and_writes_them_as_they_are`).
+
 ### Mono files, and dither
 
 **A mono export is `(L + R) / 2`** (MOO-186, `OutputChannels::Mono` in

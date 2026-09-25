@@ -235,13 +235,20 @@ impl ExportProgress {
     }
 }
 
-/// Where an output's audio is taken from.
-///
-/// Only the master mix for now; stems (MOO-182) and channels rendered
-/// directly (MOO-183) are further taps on the same pass.
+/// Where an output's audio is taken from. Every tap of a pass reads the same
+/// render, so a job's stems line up to the frame with its master.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderTap {
+    /// The master mix, after the master's output guard and safety limiter.
     Master,
+    /// A mixer track's own output, by its index in the song's tracks
+    /// (MOO-182): after its rack, fader and balance, before it reaches what
+    /// it feeds -- the direct out of a console channel. Its sends' returns
+    /// are tracks of their own, and the master's rack is not in it. Silence
+    /// while the track is muted or solo-silenced, as playback hears it. No
+    /// limiter runs on it: a non-finite sample is written as silence and
+    /// counted, an over is counted, and a PCM file clamps it.
+    Track(u8),
 }
 
 /// One file a job writes: where, from which tap, in which format.
@@ -258,6 +265,10 @@ pub struct RenderOutput {
     /// bit-identical and two outputs of one job carry unrelated dither.
     /// Float and MP3 files take no dither and ignore it.
     pub dither: bool,
+    /// Write no file when every sample stayed at or below `SILENCE_PEAK` --
+    /// a muted track's stem, say (MOO-182). Judged on the signal before
+    /// dither, which would otherwise make every file audible.
+    pub skip_silent: bool,
     /// What becomes of a file already at `path` when the render is done
     /// (MOO-188).
     pub existing: ExistingFile,
@@ -286,6 +297,7 @@ impl RenderOutput {
             format,
             channels: OutputChannels::Stereo,
             dither: format == ExportFormat::Wav(WavEncoding::Pcm16),
+            skip_silent: false,
             existing: ExistingFile::Replace,
         }
     }
@@ -732,6 +744,19 @@ fn render_pass(
         }
     };
 
+    // A stem of a track the song does not have, or of the master's own bus
+    // (which is the master tap, with its guard), is a defective job.
+    for output in &pass.outputs {
+        if let RenderTap::Track(track) = output.tap {
+            if track == mooloop_core::MASTER_BUS || usize::from(track) >= state.track_count() {
+                return Err((
+                    Vec::new(),
+                    ExportError::Invalid(format!("the song has no track {track} to render")),
+                ));
+            }
+        }
+    }
+
     let mut sinks = Vec::with_capacity(pass.outputs.len());
     for (index, (output, temporary)) in pass.outputs.iter().zip(&temporaries).enumerate() {
         match Sink::open(temporary, output, first_output + index, sample_rate) {
@@ -746,8 +771,7 @@ fn render_pass(
 
     let rendered = render_blocks(state, base_frames, tail_cap, progress, |state, frames| {
         for sink in &mut sinks {
-            let (left, right) = tap(state, sink.tap, frames);
-            sink.write(left, right)?;
+            sink.feed(state, frames)?;
         }
         Ok(())
     });
@@ -760,10 +784,11 @@ fn render_pass(
         }
     };
 
-    let mut clipped = Vec::with_capacity(sinks.len());
+    let mut found = Vec::with_capacity(sinks.len());
     for (index, (sink, temporary)) in sinks.into_iter().zip(&temporaries).enumerate() {
+        let (overs, non_finite, audible) = (sink.overs, sink.non_finite, sink.audible);
         match sink.finish(temporary) {
-            Ok(count) => clipped.push(count),
+            Ok(clipped) => found.push((clipped, overs, non_finite, audible)),
             Err(error) => {
                 discard(index);
                 return Err((Vec::new(), error));
@@ -773,6 +798,22 @@ fn render_pass(
 
     let mut files = Vec::with_capacity(pass.outputs.len());
     for (index, (output, temporary)) in pass.outputs.iter().zip(&temporaries).enumerate() {
+        let (clipped, overs, non_finite, audible) = found[index];
+        if output.skip_silent && !audible {
+            let _ = fs::remove_file(temporary);
+            mooloop_core::log_info!(
+                "export",
+                "{} was silent from start to end and was not written",
+                output.path.display()
+            );
+            continue;
+        }
+        // The master's counts are its output guard's; a stem has no guard,
+        // so its sink counted its own.
+        let (overs, non_finite) = match output.tap {
+            RenderTap::Master => (state.output_overs(), state.output_non_finite()),
+            RenderTap::Track(_) => (overs, non_finite),
+        };
         let summary = RenderSummary {
             sample_rate,
             file_sample_rate: match output.format {
@@ -783,9 +824,9 @@ fn render_pass(
             tail_frames,
             total_frames: base_frames.saturating_add(tail_frames),
             refused_events: state.refused_events(),
-            overs: state.output_overs(),
-            clipped_samples: clipped[index],
-            non_finite_samples: state.output_non_finite(),
+            overs,
+            clipped_samples: clipped,
+            non_finite_samples: non_finite,
         };
         let placed = match &output.existing {
             // One rename over the target, which replaces it atomically:
@@ -803,7 +844,7 @@ fn render_pass(
                 return Err((files, error.into()));
             }
         };
-        report(&summary, &path);
+        report(&summary, &path, output.tap == RenderTap::Master);
         files.push(RenderedFile { path, summary });
     }
     Ok(files)
@@ -825,17 +866,12 @@ fn place_numbered(temporary: &Path, path: &Path, base: &Path) -> std::io::Result
     unreachable!("the numbers never run out")
 }
 
-/// The block `tap` produced, left and right.
-fn tap(state: &RenderState, tap: RenderTap, frames: usize) -> (&[f32], &[f32]) {
-    match tap {
-        RenderTap::Master => (&state.master().l[..frames], &state.master().r[..frames]),
-    }
-}
-
 /// Log whatever the render found that makes the file not quite the project:
 /// the export itself succeeded, so these are warnings, and each one names
 /// the file it is about.
-fn report(summary: &RenderSummary, path: &Path) {
+/// `limited` says whether the file came through the master's safety
+/// limiter; a stem's overs are written as they are (MOO-182).
+fn report(summary: &RenderSummary, path: &Path, limited: bool) {
     if summary.refused_events > 0 {
         mooloop_core::log_warn!(
             "export",
@@ -854,11 +890,19 @@ fn report(summary: &RenderSummary, path: &Path) {
             path.display()
         );
     }
-    if summary.overs > 0 {
+    if summary.overs > 0 && limited {
         mooloop_core::log_warn!(
             "export",
             "{} samples of the mix were over 0 dBFS; the master's safety \
              limiter held {} at the ceiling",
+            summary.overs,
+            path.display()
+        );
+    } else if summary.overs > 0 {
+        mooloop_core::log_warn!(
+            "export",
+            "{} samples of {} were over 0 dBFS; a stem has no limiter, so \
+             they are written as they are",
             summary.overs,
             path.display()
         );
@@ -950,6 +994,15 @@ struct Sink {
     encoder: Encoder,
     /// The block's mono mix, for a mono output: sized once, at open.
     mono: Vec<f32>,
+    /// A stem's block, copied out of its track so it can be scrubbed
+    /// without touching the render: sized once, at open, for a track tap.
+    stem: [Vec<f32>; 2],
+    /// A stem's own counts, since no output guard runs on a track: samples
+    /// over full scale, and non-finite samples written as silence.
+    overs: u64,
+    non_finite: u64,
+    /// Whether any sample so far rose above `SILENCE_PEAK`.
+    audible: bool,
 }
 
 enum Encoder {
@@ -1013,6 +1066,13 @@ impl Tpdf {
     fn next(&mut self) -> f64 {
         self.uniform() - self.uniform()
     }
+}
+
+/// Whether a block holds anything above `SILENCE_PEAK`.
+fn is_audible(left: &[f32], right: &[f32]) -> bool {
+    left.iter()
+        .chain(right)
+        .any(|sample| sample.abs() > mooloop_dsp::SILENCE_PEAK)
 }
 
 /// The largest code of a PCM depth.
@@ -1110,7 +1170,53 @@ impl Sink {
                 OutputChannels::Stereo => Vec::new(),
                 OutputChannels::Mono => vec![0.0; OFFLINE_BLOCK_FRAMES],
             },
+            stem: match output.tap {
+                RenderTap::Master => [Vec::new(), Vec::new()],
+                RenderTap::Track(_) => {
+                    [vec![0.0; OFFLINE_BLOCK_FRAMES], vec![0.0; OFFLINE_BLOCK_FRAMES]]
+                }
+            },
+            overs: 0,
+            non_finite: 0,
+            audible: false,
         })
+    }
+
+    /// Hand this block of the render to the file, from the sink's tap.
+    fn feed(&mut self, state: &RenderState, frames: usize) -> Result<(), ExportError> {
+        match self.tap {
+            RenderTap::Master => {
+                let master = state.master();
+                let (left, right) = (&master.l[..frames], &master.r[..frames]);
+                self.audible |= is_audible(left, right);
+                self.write(left, right)
+            }
+            RenderTap::Track(track) => {
+                let [mut left, mut right] = std::mem::take(&mut self.stem);
+                match state.track_output(usize::from(track)) {
+                    Some(bus) => {
+                        left[..frames].copy_from_slice(&bus.l[..frames]);
+                        right[..frames].copy_from_slice(&bus.r[..frames]);
+                    }
+                    None => {
+                        left[..frames].fill(0.0);
+                        right[..frames].fill(0.0);
+                    }
+                }
+                for sample in left[..frames].iter_mut().chain(&mut right[..frames]) {
+                    if !sample.is_finite() {
+                        *sample = 0.0;
+                        self.non_finite += 1;
+                    } else if sample.abs() > 1.0 {
+                        self.overs += 1;
+                    }
+                }
+                self.audible |= is_audible(&left[..frames], &right[..frames]);
+                let written = self.write(&left[..frames], &right[..frames]);
+                self.stem = [left, right];
+                written
+            }
+        }
     }
 
     fn write(&mut self, left: &[f32], right: &[f32]) -> Result<(), ExportError> {
@@ -1202,7 +1308,7 @@ fn lame(error: impl fmt::Display) -> ExportError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mooloop_core::{NoteEvent, PatternPlacement, ProjectChannel};
+    use mooloop_core::{EffectSlotState, NoteEvent, PatternPlacement, ProjectChannel};
     use tempfile::tempdir;
 
     fn audible_project() -> Project {
@@ -2283,6 +2389,162 @@ mod tests {
         // This thread still makes subnormals: the export put its mode back.
         let tiny = std::hint::black_box(f32::MIN_POSITIVE) * std::hint::black_box(0.5f32);
         assert!(tiny.is_subnormal(), "the export left flush-to-zero on its caller's thread");
+    }
+
+    /// Two drum channels, each on its own track, both tracks straight to the
+    /// master; track 2 has a reverb on it and track 1 a lowered fader. The
+    /// master has nothing on it and sits at unity, so its output is its
+    /// input as long as it stays under the ceiling.
+    fn two_track_project() -> Project {
+        use mooloop_core::{EffectParams, ReverbParams};
+        let mut project = Project::default();
+        project.ensure_tracks(3);
+        let mut kick = ProjectChannel::drum_synth(0, 1);
+        kick.notes[0].push(NoteEvent::new(1, 0, 24, 36, 100));
+        kick.setup.channel.bus = 1;
+        let mut snare = ProjectChannel::drum_synth(1, 1);
+        snare.notes[0].push(NoteEvent::new(1, 96, 24, 38, 100));
+        snare.setup.channel.bus = 2;
+        project.channels = vec![kick, snare];
+        project.buses[1].bus.volume = 0.7;
+        project.buses[2].push_effect(EffectSlotState::new(EffectParams::Reverb(
+            ReverbParams::default(),
+        )));
+        project
+    }
+
+    fn stem(path: &Path, track: u8) -> RenderOutput {
+        RenderOutput::new(
+            path.to_path_buf(),
+            RenderTap::Track(track),
+            ExportFormat::Wav(WavEncoding::Float32),
+        )
+    }
+
+    /// **Every top-level track's stem, summed, is the master's input, and
+    /// every stem is as long as the master** (MOO-182).
+    ///
+    /// One pass renders the master and both stems. Track 2's reverb rings on
+    /// into the tail, which runs until the whole project is at rest, so the
+    /// dry track's stem is as long as the wet one's.
+    #[test]
+    fn the_stems_of_every_top_level_track_sum_to_the_masters_input() {
+        let temp = tempdir().unwrap();
+        let project = two_track_project();
+        let paths = ["master.wav", "kick.wav", "snare.wav"].map(|name| temp.path().join(name));
+        let float = ExportFormat::Wav(WavEncoding::Float32);
+        let job = RenderJob {
+            passes: vec![pattern_pass(
+                5.0,
+                vec![master(&paths[0], float), stem(&paths[1], 1), stem(&paths[2], 2)],
+            )],
+        };
+        let files =
+            OfflineRenderer::render_job(&project, &[], 48_000, &job, &ExportProgress::new()).unwrap();
+        assert_eq!(files.len(), 3);
+        let total = files[0].summary.total_frames;
+        assert!(files[0].summary.tail_frames > 0, "the reverb left no tail");
+        assert!(files.iter().all(|file| file.summary.total_frames == total));
+
+        let [mix, kick, snare] = paths.map(|path| wav_channels(&path));
+        for channels in [&mix, &kick, &snare] {
+            assert_eq!(channels[0].len() as u64, total, "a stem is not the master's length");
+        }
+        assert!(mooloop_dsp::testkit::peak(&kick[0]) > 0.01, "the kick stem is silent");
+        assert!(mooloop_dsp::testkit::peak(&snare[0]) > 0.01, "the snare stem is silent");
+        assert!(mooloop_dsp::testkit::peak(&mix[0]) < 1.0, "the mix hit the limiter");
+        let mut worst = 0.0f32;
+        for side in 0..2 {
+            for ((&m, &k), &s) in mix[side].iter().zip(&kick[side]).zip(&snare[side]) {
+                worst = worst.max((m - (k + s)).abs());
+            }
+        }
+        assert!(worst < 1e-6, "the stems summed are {worst} from the master's input");
+    }
+
+    /// **A muted track's stem is silence, and with "skip silent" it is not
+    /// written at all** (MOO-182). The master still renders the other.
+    #[test]
+    fn a_muted_tracks_stem_is_silent_and_can_be_skipped() {
+        let temp = tempdir().unwrap();
+        let mut project = two_track_project();
+        project.buses[2].bus.muted = true;
+        let kept = temp.path().join("snare-kept.wav");
+        let skipped = temp.path().join("snare-skipped.wav");
+        let kick = temp.path().join("kick.wav");
+        let job = RenderJob {
+            passes: vec![pattern_pass(
+                0.0,
+                vec![
+                    stem(&kick, 1),
+                    stem(&kept, 2),
+                    RenderOutput {
+                        skip_silent: true,
+                        ..stem(&skipped, 2)
+                    },
+                ],
+            )],
+        };
+        let files =
+            OfflineRenderer::render_job(&project, &[], 48_000, &job, &ExportProgress::new()).unwrap();
+        let written: Vec<_> = files.iter().map(|file| file.path.clone()).collect();
+        assert_eq!(written, [kick, kept.clone()]);
+        assert!(!skipped.exists(), "a silent stem was written with skip on");
+        assert!(wav_channels(&kept).iter().flatten().all(|sample| *sample == 0.0));
+        let names = fs::read_dir(temp.path()).unwrap().count();
+        assert_eq!(names, 2, "a partial file was left behind");
+    }
+
+    /// A stem has no limiter: an over is written as it is in float, counted,
+    /// and a non-finite sample is silence, counted -- per file.
+    #[test]
+    fn a_stem_counts_its_own_overs_and_writes_them_as_they_are() {
+        let temp = tempdir().unwrap();
+        let mut project = sampler_project(mooloop_core::MAX_LINEAR_GAIN);
+        project.ensure_tracks(2);
+        project.channels[0].setup.channel.bus = 1;
+        let hot = temp.path().join("hot-stem.wav");
+        let mix = temp.path().join("mix.wav");
+        let float = ExportFormat::Wav(WavEncoding::Float32);
+        let job = RenderJob {
+            passes: vec![pattern_pass(0.0, vec![stem(&hot, 1), master(&mix, float)])],
+        };
+        let files = OfflineRenderer::render_job(
+            &project,
+            &[Some(sample_of(full_scale))],
+            48_000,
+            &job,
+            &ExportProgress::new(),
+        )
+        .unwrap();
+        assert!(files[0].summary.overs > 0, "the stem reported no overs");
+        let peak = mooloop_dsp::testkit::peak(&wav_channels(&hot)[0]);
+        assert!(peak > 1.0, "the stem was limited to {peak}");
+        let limited = mooloop_dsp::testkit::peak(&wav_channels(&mix)[0]);
+        assert!(limited <= 1.0, "the master was not limited: {limited}");
+    }
+
+    /// A stem of a track the song does not have, or of the master's own
+    /// bus, is refused before anything is written.
+    #[test]
+    fn a_stem_of_no_track_is_refused() {
+        let temp = tempdir().unwrap();
+        for track in [0, 7] {
+            let path = temp.path().join("nothing.wav");
+            let job = RenderJob {
+                passes: vec![pattern_pass(0.0, vec![stem(&path, track)])],
+            };
+            let failure = OfflineRenderer::render_job(
+                &two_track_project(),
+                &[],
+                48_000,
+                &job,
+                &ExportProgress::new(),
+            )
+            .unwrap_err();
+            assert!(matches!(failure.error, ExportError::Invalid(_)), "{failure:?}");
+            assert!(!path.exists());
+        }
     }
 
     #[test]

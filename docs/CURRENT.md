@@ -641,8 +641,19 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   instead: the last step is a rename that refuses to replace (a hard link,
   or a claimed new file and a copy where the drive has no hard links). With
   the box off, an export that would replace files asks once, saying how
-  many. Source (the master
-  mix) has one answer so far. As of 2026-09-25 (MOO-181) Range is a choice
+  many. As of 2026-09-25 (MOO-182), Source is the master mix or
+  **Tracks**. Tracks shows a checklist of every track but the master, with
+  a bus's feeders indented under it, plus All / None, "+ master" and "Skip
+  silent". The tracks feeding the master are checked by default: their
+  stems summed are the master's input. Each checked track's own output
+  (after its rack, fader and balance, before what it feeds, as a console's
+  direct out) goes to `<name>-<track name>` in one pass, and every file of
+  the export shares the one number. Every stem is as long as the master,
+  because the tail runs until the whole song is at rest. A muted or
+  solo-silenced track's stem is silence, and with Skip silent it is not
+  written (that is logged; the result card does not list it). No limiter
+  runs on a stem: an over is written as it is in float, clamped in PCM,
+  and counted per file, so float is the format for stems. As of 2026-09-25 (MOO-181) Range is a choice
   of four: the whole song, the loop selection (its points whether or not
   looping is on; unavailable while the song has none), a custom range
   typed as bar.beat (or bar.beat.sixteenth), which starts as the loop
