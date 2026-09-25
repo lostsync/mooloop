@@ -23,10 +23,11 @@ dropped about 9.6 dB). Turn that channel up to match.
   mid-September, and several devices cost a fraction of what they did (see
   *Performance*).
 - **CLAP plugins.** mooloop can host CLAP instruments and effects: they play,
-  save, reopen and export, their parameters take automation lanes and
-  modulation routes, and a plugin with no GUI of its own gets a face. The
-  plugin scanner runs every library in a separate process and caches the
-  result, so a bad plugin can't take the app down.
+  save, reopen and export, and their parameters take automation lanes and
+  modulation routes. Every plugin is shown on mooloop's own face, a knob per
+  parameter. The plugin scanner runs every library in a separate process and
+  caches the result, so a bad plugin can't take the app down. Not yet: opening
+  a plugin's own GUI (MOO-86), and mono-only effects in a chain (MOO-266).
 - **Audio recording.** A channel can record its audio input into a take, and
   a finished take becomes that channel's sample. The sampler has a RECORD
   page, inputs can be monitored and metered, and Core Audio takes input on
