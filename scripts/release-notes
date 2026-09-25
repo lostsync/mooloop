@@ -1,12 +1,23 @@
 #!/usr/bin/env bash
-# Print a release's changelog, as Markdown, from the commits since the
-# previous release tag.
+# Print a release's notes as Markdown: its curated section of CHANGELOG.md,
+# or the commits since the previous release tag.
 #
-#   scripts/release-notes            # HEAD against the latest tag: a preview
-#   scripts/release-notes v0.1.5     # what v0.1.5 has that the tag before it lacks
+#   scripts/release-notes --changelog v0.1.5   # CHANGELOG.md's `## 0.1.5` section
+#   scripts/release-notes            # commits: HEAD against the latest tag, a preview
+#   scripts/release-notes v0.1.5     # commits v0.1.5 has that the tag before it lacks
 #
-# The release workflow publishes this as the GitHub Release's text and as a
-# `mooloop-<version>-CHANGELOG.md` asset. GitHub's generated notes list pull
+# The release workflow publishes the CHANGELOG.md section as the GitHub
+# Release's text and as `mooloop-<version>-CHANGELOG.md`, and the commit list
+# as `mooloop-<version>-commits.md` (MOO-265).
+#
+# `--changelog` prints from the `## <version>` heading (a leading `v` is
+# dropped, so a tag name works) up to the next `## ` heading, less the blank
+# lines before that heading. It fails, and says why, if CHANGELOG.md has no
+# such section or if the section's heading still says "unreleased": date the
+# heading before tagging. It reads CHANGELOG.md at the top of the working
+# tree, which in the workflow is the tagged commit.
+#
+# The commit list exists because GitHub's generated notes list pull
 # requests, and most of this project's commits land on main without one:
 # v0.1.4's listed 7 pull requests for 347 commits.
 #
@@ -20,6 +31,44 @@ set -euo pipefail
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   awk 'NR>1 && !/^#/ { exit } NR>1 { sub(/^# ?/, ""); print }' "$0"
+  exit 0
+fi
+
+if [[ "${1:-}" == "--changelog" ]]; then
+  version="${2:?release-notes: --changelog needs a version, such as v0.1.5}"
+  version="${version#v}"
+  changelog="$(git rev-parse --show-toplevel)/CHANGELOG.md"
+  if [[ ! -f "$changelog" ]]; then
+    echo "release-notes: no CHANGELOG.md at $changelog" >&2
+    exit 1
+  fi
+  # The heading is `## <version>` alone or followed by a space (`## 0.1.4 —
+  # 2026-09-18`), so 0.1.1 never matches 0.1.10. `### ` subheadings stay in.
+  # Blank lines are held back and printed only before more text, which drops
+  # the ones between the section and the next heading.
+  section="$(awk -v want="## $version" '
+    /^## / {
+      if (found) exit
+      if ($0 == want || index($0, want " ") == 1) found = 1
+    }
+    found {
+      if ($0 == "") { blanks++; next }
+      for (; blanks > 0; blanks--) print ""
+      print
+    }
+  ' "$changelog")"
+  if [[ -z "$section" ]]; then
+    echo "release-notes: CHANGELOG.md has no '## $version' section. Write one, dated, before tagging." >&2
+    exit 1
+  fi
+  heading="${section%%$'\n'*}"
+  if [[ "${heading,,}" == *unreleased* ]]; then
+    echo "release-notes: CHANGELOG.md's heading for $version still says unreleased:" >&2
+    echo "  $heading" >&2
+    echo "Date it (## $version — YYYY-MM-DD) and commit that before tagging." >&2
+    exit 1
+  fi
+  printf '%s\n' "$section"
   exit 0
 fi
 

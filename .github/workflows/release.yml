@@ -18,7 +18,10 @@ name: Release
 #   as `mooloop-<version>-x86_64.debug`, which the binary names in its
 #   `.gnu_debuglink`, so a backtrace from a user's crash report can still be
 #   symbolised.
-# - `publish` adds SHA256SUMS and a changelog (`scripts/release-notes`).
+# - `publish` adds SHA256SUMS, uses CHANGELOG.md's section for the version
+#   as the release text (`scripts/release-notes --changelog`; `verify` fails
+#   first if it is missing or still "unreleased"), and attaches the full
+#   commit list since the previous tag (`scripts/release-notes <tag>`).
 #
 # Everything is pinned: the toolchain by rust-toolchain.toml (installed by
 # `.github/actions/setup-rust`), dependencies by `--locked`, and linuxdeploy
@@ -56,6 +59,14 @@ jobs:
             echo "Tag $GITHUB_REF_NAME does not match the workspace version $VERSION (Cargo.toml)." >&2
             exit 1
           fi
+
+      # The release text is CHANGELOG.md's section for this version (MOO-265).
+      # Checked here, before half an hour of building, as well as in
+      # `publish`: no section, or a heading that still says "unreleased",
+      # stops the release with the script's own message.
+      - name: CHANGELOG.md has a dated section for this version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: scripts/release-notes --changelog "$GITHUB_REF_NAME" > /dev/null
 
       - name: Install system dependencies
         run: |
@@ -382,7 +393,10 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
-          scripts/release-notes "$GITHUB_REF_NAME" > "dist/mooloop-${VERSION}-CHANGELOG.md"
+          # The curated section is the release text; the full commit list
+          # since the previous tag rides along as its own asset.
+          scripts/release-notes --changelog "$GITHUB_REF_NAME" > "dist/mooloop-${VERSION}-CHANGELOG.md"
+          scripts/release-notes "$GITHUB_REF_NAME" > "dist/mooloop-${VERSION}-commits.md"
           (cd dist && sha256sum -- * > SHA256SUMS)
           {
             cat "dist/mooloop-${VERSION}-CHANGELOG.md"

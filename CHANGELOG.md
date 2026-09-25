@@ -171,6 +171,8 @@ Measured on Adam's songs. `housey-dropout-factory` was the worst case.
   - A resting Compressor skips its log maths.
   - A settled insert does no dry copy.
   - Effect displays analyze only while they are on screen.
+- **Linux release builds** now require an x86-64-v2 CPU (roughly Intel from
+  2009, AMD from 2011), which makes ML-P8 about 5% cheaper.
 
 ## 0.1.4 — 2026-09-18
 

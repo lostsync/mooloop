@@ -1062,8 +1062,19 @@ you have deliberately decided to discard those changes.
 
 The version lives in the root `Cargo.toml` under `[workspace.package]`.
 Change it on a normal release branch, commit it, run the full suite above, and
-fast-forward it into a clean, current `main`. Then tag the exact `main` commit
-and push the branch before the tag:
+fast-forward it into a clean, current `main`.
+
+In the same commit, **date the version's heading in `CHANGELOG.md`**:
+`## 0.1.5 — unreleased (...)` becomes `## 0.1.5 — 2026-09-26`. That section is
+the GitHub Release's text (MOO-265), and the workflow's `verify` job fails the
+tag if the section is missing or its heading still says "unreleased". Check it
+before tagging; this prints exactly what will be published, or says why not:
+
+```sh
+scripts/release-notes --changelog vX.Y.Z
+```
+
+Then tag the exact `main` commit and push the branch before the tag:
 
 ```sh
 git -C /home/adam/projects/mooloop pull --ff-only origin main
@@ -1080,7 +1091,9 @@ git -C /home/adam/projects/mooloop push origin vX.Y.Z
 A pushed tag matching `v*.*.*` starts the release workflow. It produces the
 `.deb`, `.rpm`, and AppImage packages, plus `Mooloop-<version>-macos-arm64.zip`
 (an unsigned Apple Silicon `.app`, ad-hoc signed, built on `macos-latest`), and
-attaches them to a GitHub Release. Because the app is not notarized, macOS
+attaches them to a GitHub Release whose text is the version's `CHANGELOG.md`
+section, with the full commit list since the previous tag attached as
+`mooloop-<version>-commits.md`. Because the app is not notarized, macOS
 refuses the first double-click. Right-click > Open once, or run
 `xattr -dr com.apple.quarantine Mooloop.app`. Every job also runs, without
 publishing, from **Run workflow** (`workflow_dispatch`), which is how to check a
