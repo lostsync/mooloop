@@ -228,7 +228,17 @@ export global StripIcons {
     out property <string> dot: "M 6 8 A 2 2 0 1 1 10 8 A 2 2 0 1 1 6 8";
 }
 
-// What the strip's lamps read, per track.
+// One track's meter, through the ballistics the pump runs per bus: the
+// level, its held peak and the clip latch.
+export struct StripLevel {
+    left-db: float,
+    right-db: float,
+    held-left-db: float,
+    held-right-db: float,
+    clipping: bool,
+}
+
+// What the strip's lamps and meters read, per track.
 //
 // One array rather than a field on every strip row, because this is the only
 // thing about a strip that changes sixty times a second: the pump writes one
@@ -239,6 +249,25 @@ export global StripMeters {
     /// Gain reduction per track, in dB as a positive amount. Zero while a
     /// track's compressor is out, which takes its lamp dark.
     in-out property <[float]> reduction-db;
+    /// Each track's meter, indexed by track (MOO-261). Not fields on
+    /// `MixerStripRow` for the reason `reduction-db` is not: a meter moves
+    /// every pump tick, and writing a whole strip row to move it dirtied
+    /// every binding on the strip, its texts' layouts included.
+    in-out property <[StripLevel]> levels;
+
+    /// A track's meter, or silence for a track the model has not reached.
+    public pure function level(track: int) -> StripLevel {
+        if track >= 0 && track < root.levels.length {
+            return root.levels[track];
+        }
+        return {
+            left-db: GainMath.min-db,
+            right-db: GainMath.min-db,
+            held-left-db: GainMath.min-db,
+            held-right-db: GainMath.min-db,
+            clipping: false,
+        };
+    }
 
     public pure function reduction(track: int) -> float {
         return track >= 0 && track < root.reduction-db.length ? root.reduction-db[track] : 0;

@@ -312,56 +312,25 @@ struct EffectSlotRow {
     eq-band-kinds: [int],
     eq-pass-data: [float],
     eq-curve-db: [float],
-    eq-spectrum-data: [float],
+    // The analyzer's bars move every tick, so they are the slot's
+    // `effect-slot-traces` entry rather than a field here (MOO-261).
     eq-analyzer-enabled: bool,
-    // Per-band decibels the preamp *added*, already gated and normalized by
-    // `mooloop_dsp::effects::preamp`. Not a spectrum: a difference between
-    // two of them, which is why it is its own field rather than a second
-    // reader of `eq-spectrum-data`.
-    preamp-deviation: [float],
+    // Whether the preamp draws the per-band decibels it *added* (already
+    // gated and normalized by `mooloop_dsp::effects::preamp`). The values are
+    // the slot's `effect-slot-traces` entry: not a spectrum but a difference
+    // between two of them, published through the same pool.
     preamp-display-enabled: bool,
     wet-dry: float,
     // Trims are carried in dB from unity; the Rust side stores linear gain.
     input-trim-db: float,
     output-trim-db: float,
-    input-left-db: float,
-    input-right-db: float,
-    output-left-db: float,
-    output-right-db: float,
-    // Buffer-only: wraps and cuts counted by the inserted device. It was a
-    // count of forced *returns to live*, which is a failure the turntable
-    // model could have and this one cannot: every head wraps instead, so what
-    // is worth reporting is how often it did.
-    buffer-collisions: int,
-    // Buffer-only: the picture its face draws. Peaks over the retained
-    // history and the marks on top of them, published as display telemetry
-    // and therefore latest-available rather than timed. The bars-beats-ticks
-    // numbers are computed in Rust: the markup formats and never derives.
-    buffer-peaks: [float],
-    buffer-head: float,
-    buffer-write: float,
-    buffer-window-start: float,
-    buffer-window-end: float,
-    buffer-frozen: bool,
-    buffer-armed-freeze: int,
-    buffer-armed-gesture: bool,
+    // Buffer-only: how many bars its history holds. A setting; what the
+    // device is doing with that history is in `EffectSlotMeters`.
     buffer-history-bars: int,
-    buffer-position-bar: int,
-    buffer-position-beat: int,
-    buffer-position-tick: int,
-    // Dynamics-only: the level this device's sidechain detector reached and
-    // the gain reduction it applied. Both are the device's own state, not a
-    // difference of the meters above -- the meters are block peaks, these
-    // carry the attack and release the device is actually running.
-    detector-db: float,
-    gain-reduction-db: float,
     // Bus Comp only (MOO-216): its settings as the master section's face
-    // takes them, positions and natural units, so the one panel draws both;
-    // and the needle's held mark as a positive depth. On a Bus Comp row
-    // `gain-reduction-db` is the needle, through `ReductionBallistics`,
-    // rather than the block's raw extreme.
+    // takes them, positions and natural units, so the one panel draws both.
+    // Its needle is in `EffectSlotMeters`.
     bus-comp: MasterRow,
-    held-reduction-db: float,
     // Container-only: how many of the rows after this one are inside it, and
     // how deeply this row is nested. `children` is structure rather than a
     // parameter, which is why it is not one of the `pN` fields. The frame the
@@ -437,6 +406,49 @@ struct EffectSlotRow {
     bracket: bool,
     bracket-start: bool,
     bracket-end: bool,
+}
+
+// What a rack slot's device is doing this tick: its meters, its dynamics and
+// the Buffer's marks. Its own model (`effect-slot-meters`), indexed like
+// `effect-slots`, rather than fields on `EffectSlotRow`, because these move
+// every pump tick while a song plays, and writing a whole row dirties every
+// binding on the face -- the texts' layouts included, which then re-measure
+// their strings (MOO-261, MOO-258). Read it through `slot-meters(index)`,
+// which answers the resting values for a slot the model has not reached.
+export struct EffectSlotMeters {
+    input-left-db: float,
+    input-right-db: float,
+    output-left-db: float,
+    output-right-db: float,
+    // Dynamics-only: the level this device's sidechain detector reached and
+    // the gain reduction it applied. Both are the device's own state, not a
+    // difference of the meters above -- the meters are block peaks, these
+    // carry the attack and release the device is actually running.
+    detector-db: float,
+    // On a Bus Comp slot this is the needle, through `ReductionBallistics`,
+    // rather than the block's raw extreme, and `held-reduction-db` is the
+    // needle's held mark as a positive depth (MOO-216).
+    gain-reduction-db: float,
+    held-reduction-db: float,
+    // Buffer-only: wraps and cuts counted by the inserted device. It was a
+    // count of forced *returns to live*, which is a failure the turntable
+    // model could have and this one cannot: every head wraps instead, so what
+    // is worth reporting is how often it did.
+    buffer-collisions: int,
+    // Buffer-only: the marks drawn over its peaks (the peaks themselves are
+    // the slot's `effect-slot-traces` entry), published as display telemetry
+    // and therefore latest-available rather than timed. The bars-beats-ticks
+    // numbers are computed in Rust: the markup formats and never derives.
+    buffer-head: float,
+    buffer-write: float,
+    buffer-window-start: float,
+    buffer-window-end: float,
+    buffer-frozen: bool,
+    buffer-armed-freeze: int,
+    buffer-armed-gesture: bool,
+    buffer-position-bar: int,
+    buffer-position-beat: int,
+    buffer-position-tick: int,
 }
 
 // The selected channel's generator, addressed the way `EffectSlotRow`
@@ -1175,6 +1187,13 @@ export component MainWindow inherits Window {
     in-out property <bool> song-mode;
     in-out property <[PlaylistClip]> playlist-clips;
     in-out property <int> playlist-position-ticks;
+    // The greatest clip boundary (a clip's start or end, or 0) at or before
+    // the playhead, set by the pump (MOO-261). A clip is under the playhead
+    // exactly when it is under this tick, since no boundary lies between the
+    // two, and this moves only when the playhead crosses a clip's edge: the
+    // clips' borders read it so that ~170 bindings are not dirtied on every
+    // tick the playhead moves.
+    in property <int> playlist-live-from;
     in-out property <int> playlist-song-length-ticks: RollMetrics.ticks-per-bar;
     in-out property <int> playlist-bars: 64;
     in-out property <length> playlist-bar-width: 24px;
@@ -1861,6 +1880,42 @@ export component MainWindow inherits Window {
 
     // ---- effect chain of the selected channel ----
     in property <[EffectSlotRow]> effect-slots;
+    // Per-tick state of each slot, indexed like `effect-slots` and rebuilt
+    // wherever it is (MOO-261). Rewritten entry by entry, and only where a
+    // value moved.
+    in property <[EffectSlotMeters]> effect-slot-meters;
+    // Each slot's live trace -- the EQ analyzer's bars, the Preamp's
+    // deviation or the Buffer's peaks, whichever the slot draws. One model a
+    // slot, kept and rewritten in place, so a moving spectrum repaints its
+    // bars and nothing else. Empty past the end, which draws nothing.
+    in property <[[float]]> effect-slot-traces;
+    // A slot's meters, or the resting values for one the model has not
+    // reached: a slot read past the end would otherwise meter 0 dB.
+    public pure function slot-meters(index: int) -> EffectSlotMeters {
+        if index >= 0 && index < root.effect-slot-meters.length {
+            return root.effect-slot-meters[index];
+        }
+        return {
+            input-left-db: GainMath.min-db,
+            input-right-db: GainMath.min-db,
+            output-left-db: GainMath.min-db,
+            output-right-db: GainMath.min-db,
+            detector-db: GainMath.min-db,
+            gain-reduction-db: 0,
+            held-reduction-db: 0,
+            buffer-collisions: 0,
+            buffer-head: -1,
+            buffer-write: 0,
+            buffer-window-start: -1,
+            buffer-window-end: -1,
+            buffer-frozen: false,
+            buffer-armed-freeze: 0,
+            buffer-armed-gesture: false,
+            buffer-position-bar: 1,
+            buffer-position-beat: 1,
+            buffer-position-tick: 0,
+        };
+    }
     // EffectKind index, then the slot it must precede. `effect-slots.length`
     // means append; every device shell can therefore insert into the chain.
     callback add-effect-clicked(int, int);
@@ -5198,10 +5253,10 @@ export component MainWindow inherits Window {
                                                 drop-shadow-color: #000000dd;
                                                 drop-shadow-offset-y: cell.dragging ? 8px : 0px;
                                                 opacity: cell.dragging ? 0.95 : 1.0;
-                                                input-left-db: slot.input-left-db;
-                                                input-right-db: slot.input-right-db;
-                                                output-left-db: slot.output-left-db;
-                                                output-right-db: slot.output-right-db;
+                                                input-left-db: root.slot-meters(index).input-left-db;
+                                                input-right-db: root.slot-meters(index).input-right-db;
+                                                output-left-db: root.slot-meters(index).output-left-db;
+                                                output-right-db: root.slot-meters(index).output-right-db;
                                                 bypass-enabled: true;
                                                 bypassed: slot.bypassed;
                                                 bypass-toggled => { root.effect-bypass-toggled(index); }
@@ -5332,7 +5387,7 @@ export component MainWindow inherits Window {
                                                     voicing: round(slot.p1 * 3);
                                                     mix: slot.p2;
                                                     output: slot.p3;
-                                                    deviation: slot.preamp-deviation;
+                                                    deviation: root.effect-slot-traces[index];
                                                     display-enabled: slot.preamp-display-enabled;
                                                     display-toggled(v) => { root.preamp-display-changed(index, v); }
                                                     drive-changed(v) => { root.effect-param-changed(index, 0, v); }
@@ -5433,8 +5488,8 @@ export component MainWindow inherits Window {
                                                     hold: slot.p2;
                                                     release: slot.p3;
                                                     range: slot.p4;
-                                                    detector-db: slot.detector-db;
-                                                    gain-reduction-db: slot.gain-reduction-db;
+                                                    detector-db: root.slot-meters(index).detector-db;
+                                                    gain-reduction-db: root.slot-meters(index).gain-reduction-db;
                                                     threshold-changed(v) => { root.effect-param-changed(index, 0, v); }
                                                     attack-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                     hold-changed(v) => { root.effect-param-changed(index, 2, v); }
@@ -5467,8 +5522,8 @@ export component MainWindow inherits Window {
                                                     knee: slot.p4;
                                                     makeup: slot.p5;
                                                     mix: slot.p6;
-                                                    detector-db: slot.detector-db;
-                                                    gain-reduction-db: slot.gain-reduction-db;
+                                                    detector-db: root.slot-meters(index).detector-db;
+                                                    gain-reduction-db: root.slot-meters(index).gain-reduction-db;
                                                     threshold-changed(v) => { root.effect-param-changed(index, 0, v); }
                                                     ratio-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                     attack-changed(v) => { root.effect-param-changed(index, 2, v); }
@@ -5499,8 +5554,8 @@ export component MainWindow inherits Window {
                                                     ceiling: slot.p0;
                                                     release: slot.p1;
                                                     gain: slot.p2;
-                                                    detector-db: slot.detector-db;
-                                                    gain-reduction-db: slot.gain-reduction-db;
+                                                    detector-db: root.slot-meters(index).detector-db;
+                                                    gain-reduction-db: root.slot-meters(index).gain-reduction-db;
                                                     ceiling-changed(v) => { root.effect-param-changed(index, 0, v); }
                                                     release-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                     gain-changed(v) => { root.effect-param-changed(index, 2, v); }
@@ -5529,8 +5584,8 @@ export component MainWindow inherits Window {
                                                     bypassed: slot.bypassed;
                                                     preset-name: slot.preset-name;
                                                     section: slot.bus-comp;
-                                                    reduction-db: -slot.gain-reduction-db;
-                                                    held-reduction-db: slot.held-reduction-db;
+                                                    reduction-db: -root.slot-meters(index).gain-reduction-db;
+                                                    held-reduction-db: root.slot-meters(index).held-reduction-db;
                                                     moved(id, v) => { root.bus-comp-param-changed(index, id, v); }
                                                     reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     select-requested => { root.device-selected(index); }
@@ -5563,7 +5618,7 @@ export component MainWindow inherits Window {
                                                     band-kinds: slot.eq-band-kinds;
                                                     pass-data: slot.eq-pass-data;
                                                     curve-db: slot.eq-curve-db;
-                                                    spectrum-data: slot.eq-spectrum-data;
+                                                    spectrum-data: root.effect-slot-traces[index];
                                                     analyzer-enabled: slot.eq-analyzer-enabled;
                                                     target-changed(v) => { root.effect-param-changed(index, 0, v); }
                                                     enabled-changed(v) => { root.effect-param-changed(index, 1, v); }
@@ -5710,19 +5765,19 @@ export component MainWindow inherits Window {
                                                     slot-count: root.effect-slots.length;
                                                     bypassed: slot.bypassed;
                                                     preset-name: slot.preset-name;
-                                                    seams: slot.buffer-collisions;
-                                                    peaks: slot.buffer-peaks;
-                                                    head-fraction: slot.buffer-head;
-                                                    write-fraction: slot.buffer-write;
-                                                    region-start: slot.buffer-window-start;
-                                                    region-end: slot.buffer-window-end;
-                                                    frozen: slot.buffer-frozen;
-                                                    armed-freeze: slot.buffer-armed-freeze;
-                                                    armed-gesture: slot.buffer-armed-gesture;
+                                                    seams: root.slot-meters(index).buffer-collisions;
+                                                    peaks: root.effect-slot-traces[index];
+                                                    head-fraction: root.slot-meters(index).buffer-head;
+                                                    write-fraction: root.slot-meters(index).buffer-write;
+                                                    region-start: root.slot-meters(index).buffer-window-start;
+                                                    region-end: root.slot-meters(index).buffer-window-end;
+                                                    frozen: root.slot-meters(index).buffer-frozen;
+                                                    armed-freeze: root.slot-meters(index).buffer-armed-freeze;
+                                                    armed-gesture: root.slot-meters(index).buffer-armed-gesture;
                                                     history-bars: slot.buffer-history-bars;
-                                                    position-bar: slot.buffer-position-bar;
-                                                    position-beat: slot.buffer-position-beat;
-                                                    position-tick: slot.buffer-position-tick;
+                                                    position-bar: root.slot-meters(index).buffer-position-bar;
+                                                    position-beat: root.slot-meters(index).buffer-position-beat;
+                                                    position-tick: root.slot-meters(index).buffer-position-tick;
                                                     // Normalized values are stored in fields addressed
                                                     // by descriptor id. Edits are addressed by position
                                                     // in the descriptor table, which is the contract of
@@ -5804,8 +5859,8 @@ export component MainWindow inherits Window {
                                                         // leaf branch p2 and p3 are its own knobs.
                                                         muted: branch.controls && root.effect-slots[branch.slot].p2 >= 0.5;
                                                         soloed: branch.controls && root.effect-slots[branch.slot].p3 >= 0.5;
-                                                        level-db: max(root.effect-slots[branch.slot].output-left-db,
-                                                            root.effect-slots[branch.slot].output-right-db);
+                                                        level-db: max(root.slot-meters(branch.slot).output-left-db,
+                                                            root.slot-meters(branch.slot).output-right-db);
                                                         select-requested => { root.layer-branch-selected(index, branch.slot); }
                                                         // Ids 2 and 3, `CONTAINER_PARAM_MUTE` and
                                                         // `_SOLO`, on the branch head's own row.
@@ -5858,8 +5913,8 @@ export component MainWindow inherits Window {
                                                 container-children: root.effect-slots[container].children;
                                                 output-trim-enabled: true;
                                                 output-trim: root.effect-slots[container].output-trim-db;
-                                                output-left-db: root.effect-slots[container].output-left-db;
-                                                output-right-db: root.effect-slots[container].output-right-db;
+                                                output-left-db: root.slot-meters(container).output-left-db;
+                                                output-right-db: root.slot-meters(container).output-right-db;
                                                 remove-requested => { root.remove-effect-clicked(container); }
                                                 unwrap-requested => { root.unwrap-effect-clicked(container); }
                                                 output-trim-changed(v) => {
@@ -7156,8 +7211,8 @@ export component MainWindow inherits Window {
                                                     height: parent.height - 4px;
                                                     border-radius: Theme.radius-sm;
                                                     border-width: root.playing && root.song-mode
-                                                        && root.playlist-position-ticks >= clip.start-tick
-                                                        && root.playlist-position-ticks < self.clip-end-tick ? Theme.hairline : 0px;
+                                                        && root.playlist-live-from >= clip.start-tick
+                                                        && root.playlist-live-from < self.clip-end-tick ? Theme.hairline : 0px;
                                                     border-color: Theme.text;
                                                     // **The clip is filled, so here
                                                     // the colour replaces the fill

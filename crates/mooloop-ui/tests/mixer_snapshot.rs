@@ -1,8 +1,9 @@
 use mooloop_core::strip::{StripBand, StripParams};
 use mooloop_core::{EffectKind, EqBandKind, PreampVoicing, MAX_BUSES};
 use mooloop_ui::{
-    effect_kind_index, effect_kind_units, strip_row, view, ChannelRow, EffectSlotRow, MainWindow,
-    MixerMetrics, MixerSendRow, MixerStripRow, StepCell, StripRow,
+    effect_kind_index, effect_kind_units, strip_row, view, ChannelRow, EffectSlotMeters,
+    EffectSlotRow, MainWindow, MixerMetrics, MixerSendRow, MixerStripRow, StepCell, StripLevel,
+    StripMeters, StripRow,
 };
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString, VecModel};
@@ -114,13 +115,6 @@ fn strips(selected: usize) -> Rc<VecModel<MixerStripRow>> {
                 allowed: ModelRc::from(Rc::new(VecModel::from(
                     (0..MAX_BUSES).map(|other| other != index).collect::<Vec<_>>(),
                 ))),
-                left_db: if index == 0 { -6.0 } else { -60.0 },
-                right_db: if index == 0 { -8.0 } else { -60.0 },
-                // A peak above the level, so the snapshot carries the held
-                // marker the strips did not draw before.
-                held_left_db: if index == 0 { -3.0 } else { -60.0 },
-                held_right_db: if index == 0 { -4.0 } else { -60.0 },
-                clipping: false,
             })
             .collect::<Vec<_>>(),
     ))
@@ -182,7 +176,50 @@ fn headless() -> MainWindow {
     ui.set_pattern_length(16);
     ui.set_bus_names(bus_names());
     ui.set_mixer_strips(ModelRc::from(strips(3)));
+    ui.global::<StripMeters>().set_levels(ModelRc::from(Rc::new(VecModel::from(
+        (0..MAX_BUSES)
+            .map(|index| StripLevel {
+                left_db: if index == 0 { -6.0 } else { -60.0 },
+                right_db: if index == 0 { -8.0 } else { -60.0 },
+                // A peak above the level, so the snapshot carries the held
+                // marker the strips did not draw before.
+                held_left_db: if index == 0 { -3.0 } else { -60.0 },
+                held_right_db: if index == 0 { -4.0 } else { -60.0 },
+                clipping: false,
+            })
+            .collect::<Vec<_>>(),
+    ))));
     ui
+}
+
+/// A rack slot's meters as the pump publishes them (MOO-261): levels and
+/// dynamics, with the Buffer's marks at rest.
+fn slot_meters(
+    input: (f32, f32),
+    output: (f32, f32),
+    detector_db: f32,
+    gain_reduction_db: f32,
+) -> EffectSlotMeters {
+    EffectSlotMeters {
+        input_left_db: input.0,
+        input_right_db: input.1,
+        output_left_db: output.0,
+        output_right_db: output.1,
+        detector_db,
+        gain_reduction_db,
+        held_reduction_db: 0.0,
+        buffer_collisions: 0,
+        buffer_head: -1.0,
+        buffer_write: 0.0,
+        buffer_window_start: -1.0,
+        buffer_window_end: -1.0,
+        buffer_frozen: false,
+        buffer_armed_freeze: 0,
+        buffer_armed_gesture: false,
+        buffer_position_bar: 1,
+        buffer_position_beat: 1,
+        buffer_position_tick: 0,
+    }
 }
 
 fn click(ui: &MainWindow, x: f32, y: f32) {
@@ -247,34 +284,13 @@ fn render_mixer_pane_with_a_bus_chain() {
             eq_band_kinds: Vec::<i32>::new().as_slice().into(),
             eq_pass_data: Vec::<f32>::new().as_slice().into(),
             eq_curve_db: Vec::<f32>::new().as_slice().into(),
-            eq_spectrum_data: Vec::<f32>::new().as_slice().into(),
             eq_analyzer_enabled: false,
-            preamp_deviation: Vec::<f32>::new().as_slice().into(),
             preamp_display_enabled: false,
-            buffer_collisions: 0,
-            buffer_peaks: Vec::<f32>::new().as_slice().into(),
-            buffer_head: -1.0,
-            buffer_write: 0.0,
-            buffer_window_start: -1.0,
-            buffer_window_end: -1.0,
-            buffer_frozen: false,
-            buffer_armed_freeze: 0,
-            buffer_armed_gesture: false,
             buffer_history_bars: 0,
-            buffer_position_bar: 1,
-            buffer_position_beat: 1,
-            buffer_position_tick: 0,
             wet_dry: 1.0,
             input_trim_db: 0.0,
             output_trim_db: 0.0,
-            input_left_db: -9.0,
-            input_right_db: -11.0,
-            output_left_db: -12.0,
-            output_right_db: -14.0,
-            detector_db: -60.0,
-            gain_reduction_db: 0.0,
             bus_comp: Default::default(),
-            held_reduction_db: 0.0,
             children: 0,
             is_container: false,
             label: EffectKind::Compressor.label().into(),
@@ -333,34 +349,13 @@ fn render_mixer_pane_with_a_bus_chain() {
             eq_band_kinds: Vec::<i32>::new().as_slice().into(),
             eq_pass_data: Vec::<f32>::new().as_slice().into(),
             eq_curve_db: Vec::<f32>::new().as_slice().into(),
-            eq_spectrum_data: Vec::<f32>::new().as_slice().into(),
             eq_analyzer_enabled: false,
-            preamp_deviation: Vec::<f32>::new().as_slice().into(),
             preamp_display_enabled: false,
-            buffer_collisions: 0,
-            buffer_peaks: Vec::<f32>::new().as_slice().into(),
-            buffer_head: -1.0,
-            buffer_write: 0.0,
-            buffer_window_start: -1.0,
-            buffer_window_end: -1.0,
-            buffer_frozen: false,
-            buffer_armed_freeze: 0,
-            buffer_armed_gesture: false,
             buffer_history_bars: 0,
-            buffer_position_bar: 1,
-            buffer_position_beat: 1,
-            buffer_position_tick: 0,
             wet_dry: 1.0,
             input_trim_db: 0.0,
             output_trim_db: 0.0,
-            input_left_db: -12.0,
-            input_right_db: -14.0,
-            output_left_db: -10.0,
-            output_right_db: -10.5,
-            detector_db: -12.0,
-            gain_reduction_db: -6.0,
             bus_comp: Default::default(),
-            held_reduction_db: 0.0,
             children: 0,
             is_container: false,
             label: EffectKind::Limiter.label().into(),
@@ -387,6 +382,10 @@ fn render_mixer_pane_with_a_bus_chain() {
             bracket_end: false,
             selected: false,
         },
+    ]))));
+    ui.set_effect_slot_meters(ModelRc::from(Rc::new(VecModel::from(vec![
+        slot_meters((-9.0, -11.0), (-12.0, -14.0), -60.0, 0.0),
+        slot_meters((-12.0, -14.0), (-10.0, -10.5), -12.0, -6.0),
     ]))));
 
     let snapshot = ui.window().take_snapshot().unwrap();

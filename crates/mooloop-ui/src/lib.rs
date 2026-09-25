@@ -23,6 +23,9 @@ mod rack_join_tests;
 mod export_ui;
 #[cfg(test)]
 mod modulation_offsets_tests;
+mod rack_displays;
+#[cfg(test)]
+mod rack_displays_tests;
 mod plugin_ui;
 mod pump_profile;
 #[cfg(test)]
@@ -3141,9 +3144,7 @@ fn effect_slot_row(
         eq_band_kinds: eq_band_kinds.as_slice().into(),
         eq_pass_data: eq_pass_data.as_slice().into(),
         eq_curve_db: eq_curve_db.as_slice().into(),
-        eq_spectrum_data: Vec::<f32>::new().as_slice().into(),
         eq_analyzer_enabled: slot.params.eq().is_some_and(|eq| eq.analyzer_enabled),
-        preamp_deviation: Vec::<f32>::new().as_slice().into(),
         preamp_display_enabled: slot
             .params
             .preamp()
@@ -3151,35 +3152,15 @@ fn effect_slot_row(
         wet_dry: slot.wet_dry,
         input_trim_db: linear_to_db(slot.input_trim),
         output_trim_db: linear_to_db(slot.output_trim),
-        input_left_db: METER_FLOOR_DB,
-        input_right_db: METER_FLOOR_DB,
-        output_left_db: METER_FLOOR_DB,
-        output_right_db: METER_FLOOR_DB,
-        buffer_collisions: 0,
-        buffer_peaks: Vec::<f32>::new().as_slice().into(),
-        // -1 is "no head", which a fraction of a ring can never be.
-        buffer_head: -1.0,
-        buffer_write: 0.0,
-        buffer_window_start: -1.0,
-        buffer_window_end: -1.0,
-        buffer_frozen: false,
-        buffer_armed_freeze: 0,
-        buffer_armed_gesture: false,
         buffer_history_bars: slot
             .params
             .buffer()
             .map_or(0, |buffer| i32::from(buffer.bars.max(1))),
-        buffer_position_bar: 1,
-        buffer_position_beat: 1,
-        buffer_position_tick: 0,
-        detector_db: METER_FLOOR_DB,
-        gain_reduction_db: 0.0,
         bus_comp: slot
             .params
             .bus_comp()
             .map(|params| master_row(&params.section()))
             .unwrap_or_default(),
-        held_reduction_db: 0.0,
         children: slot.params.container_children().unwrap_or(0) as i32,
         // The markup asked `kind == 13` in seven places, which is the Rust
         // predicate re-derived from a number the comment above `kind` calls a
@@ -4302,6 +4283,17 @@ struct UiState {
     /// different device kind is selected, or while editing a bus.
     playhead_model: Rc<VecModel<f32>>,
     effect_slot_model: Rc<VecModel<EffectSlotRow>>,
+    /// Each rack slot's meters, dynamics and Buffer marks, indexed like
+    /// `effect_slot_model` and realigned wherever it is rebuilt: per-tick
+    /// state kept off the rows that carry text (MOO-261, `rack_displays`).
+    effect_slot_meters: Rc<VecModel<EffectSlotMeters>>,
+    /// Each rack slot's live trace (EQ spectrum, Preamp deviation or Buffer
+    /// peaks): one `VecModel<f32>` a slot, kept and rewritten in place.
+    effect_slot_traces: Rc<VecModel<ModelRc<f32>>>,
+    /// Each track's meter, `StripMeters.levels`, indexed by bus.
+    strip_levels: Rc<VecModel<StripLevel>>,
+    /// Each track's gain reduction, `StripMeters.reduction-db`, in place.
+    strip_reductions: Rc<VecModel<f32>>,
     /// Existing modulation sources and routes for the selected channel. They
     /// are models rather than fixed slot properties because the shelf must
     /// show a collection, not four vacant bays.
@@ -4449,6 +4441,13 @@ impl UiState {
         let slice_model = Rc::new(VecModel::from(Vec::<f32>::new()));
         let playhead_model = Rc::new(VecModel::from(Vec::<f32>::new()));
         let effect_slot_model = Rc::new(VecModel::from(Vec::<EffectSlotRow>::new()));
+        let effect_slot_meters = Rc::new(VecModel::from(Vec::<EffectSlotMeters>::new()));
+        let effect_slot_traces = Rc::new(VecModel::from(Vec::<ModelRc<f32>>::new()));
+        let strip_levels = Rc::new(VecModel::from(vec![
+            rack_displays::resting_strip_level();
+            MAX_BUSES
+        ]));
+        let strip_reductions = Rc::new(VecModel::from(vec![0.0_f32; MAX_BUSES]));
         let modulation_source_model = Rc::new(VecModel::from(Vec::<ModulationSourceRow>::new()));
         let modulation_outlet_model = Rc::new(VecModel::from(Vec::<ModulationOutletRow>::new()));
         let modulation_route_model = Rc::new(VecModel::from(Vec::<ModulationRouteRow>::new()));
@@ -4463,6 +4462,13 @@ impl UiState {
         window.set_slice_markers(ModelRc::from(slice_model.clone()));
         window.set_playhead_positions(ModelRc::from(playhead_model.clone()));
         window.set_effect_slots(ModelRc::from(effect_slot_model.clone()));
+        window.set_effect_slot_meters(ModelRc::from(effect_slot_meters.clone()));
+        window.set_effect_slot_traces(ModelRc::from(effect_slot_traces.clone()));
+        {
+            let meters = window.global::<StripMeters>();
+            meters.set_levels(ModelRc::from(strip_levels.clone()));
+            meters.set_reduction_db(ModelRc::from(strip_reductions.clone()));
+        }
         window.set_modulation_sources(ModelRc::from(modulation_source_model.clone()));
         window.set_modulation_outlets(ModelRc::from(modulation_outlet_model.clone()));
         window.set_modulation_routes(ModelRc::from(modulation_route_model.clone()));
@@ -4492,6 +4498,10 @@ impl UiState {
             slice_model,
             playhead_model,
             effect_slot_model,
+            effect_slot_meters,
+            effect_slot_traces,
+            strip_levels,
+            strip_reductions,
             modulation_source_model,
             modulation_outlet_model,
             modulation_route_model,
@@ -5381,7 +5391,9 @@ impl UiState {
                     .unwrap_or_default()
             }
         };
+        let count = rows.len();
         self.effect_slot_model.set_vec(rows);
+        self.realign_slot_displays(count);
     }
 
     /// The armed source's depth for each described parameter, indexed by
@@ -6206,32 +6218,10 @@ impl UiState {
             send_allowed: self.allowed_destinations(index),
             feed_count: self.session.bus_feed_count(index) as i32,
             allowed: self.allowed_destinations(index),
-            // Levels are owned by the metering timer, which writes them in
-            // place; rebuilding a row must not stamp them back to silence.
-            // The clip latch is the same, and more so: it is the one field
-            // here a user has to be shown, so a rename or a reroute clearing
-            // it would be the strip forgetting what it had just reported.
-            left_db: self.retained_meter(index, |row| row.left_db, METER_FLOOR_DB),
-            right_db: self.retained_meter(index, |row| row.right_db, METER_FLOOR_DB),
-            held_left_db: self.retained_meter(index, |row| row.held_left_db, METER_FLOOR_DB),
-            held_right_db: self.retained_meter(index, |row| row.held_right_db, METER_FLOOR_DB),
-            clipping: self.retained_meter(index, |row| row.clipping, false),
+            // No levels: they are `strip_levels`, which the metering timer
+            // owns, so rebuilding a row cannot stamp them back to silence or
+            // clear a clip latch the strip had just reported (MOO-261).
         }
-    }
-
-    /// One metering field of the strip as it stands, or its resting value if
-    /// there is no strip there yet.
-    fn retained_meter<T>(
-        &self,
-        index: usize,
-        field: impl Fn(&MixerStripRow) -> T,
-        fallback: T,
-    ) -> T {
-        self.mixer_strip_model
-            .row_data(index)
-            .as_ref()
-            .map(field)
-            .unwrap_or(fallback)
     }
 
     /// Refresh one strip's controls without disturbing the rest.
@@ -8911,7 +8901,7 @@ impl AppUi {
                 log_debug!("ui", "stop clicked, queuing Stop");
                 if let Some(window) = weak.upgrade() {
                     window.set_playing(false);
-                    window.set_playlist_position_ticks(0);
+                    rack_displays::set_playlist_position(&window, 0);
                     window.set_position_bar(1);
                     window.set_position_beat(1);
                     window.set_position_tick(0);
@@ -9195,7 +9185,7 @@ impl AppUi {
                 // position every block, so this only covers the gesture
                 // itself -- but the gesture is where the lag would be seen.
                 if let Some(window) = weak.upgrade() {
-                    window.set_playlist_position_ticks(tick.max(0));
+                    rack_displays::set_playlist_position(&window, tick.max(0));
                 }
                 let _ = tx.send(command);
             });
@@ -16418,7 +16408,6 @@ impl AppUi {
         let mut last_port_scan = std::time::Instant::now()
             - std::time::Duration::from_secs(2);
         let autodrive_verbose = std::env::var_os("MOOLOOP_AUTODRIVE_VERBOSE").is_some();
-        let mut playhead_was_nonempty = false;
         // The device-meter target the last tick drained, so the one it is
         // *leaving* can be emptied. A device meter is a `fetch_max` hold and
         // only a read empties one, so a chain nobody is looking at keeps its
@@ -17591,6 +17580,11 @@ impl AppUi {
                 profile.borrow_mut().lap(pump_profile::Section::Claimed);
                 let Some(w) = weak.upgrade() else { return };
                 let mut saw_nonzero = false;
+                // The engine reports a position every block, several a tick
+                // and dozens after a slow frame, and only the last one is
+                // ever seen: the window is given that one, after the drain
+                // (MOO-261). The take still hears every one, in order.
+                let mut latest_position: Option<(u64, u32, bool)> = None;
                 for ev in handle.drain() {
                     match ev {
                         EngineEvent::Position {
@@ -17598,16 +17592,7 @@ impl AppUi {
                             beat_in_bar,
                             playing,
                         } => {
-                            w.set_beat_in_bar(beat_in_bar as i32);
-                            w.set_playing(playing);
-                            let position = st.borrow().session.transport_position(tick);
-                            w.set_current_step(position.step);
-                            if let Some(ticks) = position.playlist_ticks {
-                                w.set_playlist_position_ticks(ticks);
-                            }
-                            w.set_position_bar(position.bar);
-                            w.set_position_beat(position.beat);
-                            w.set_position_tick(position.tick);
+                            latest_position = Some((tick, beat_in_bar as u32, playing));
                             // For the take, after the loop (MOO-234).
                             positions.push((tick, playing));
                         }
@@ -17642,6 +17627,18 @@ impl AppUi {
                             unreachable!("EngineHandle filters project acknowledgements")
                         }
                     }
+                }
+                if let Some((tick, beat_in_bar, playing)) = latest_position {
+                    w.set_beat_in_bar(beat_in_bar as i32);
+                    w.set_playing(playing);
+                    let position = st.borrow().session.transport_position(tick);
+                    w.set_current_step(position.step);
+                    if let Some(ticks) = position.playlist_ticks {
+                        rack_displays::set_playlist_position(&w, ticks);
+                    }
+                    w.set_position_bar(position.bar);
+                    w.set_position_beat(position.beat);
+                    w.set_position_tick(position.tick);
                 }
                 profile.borrow_mut().lap(pump_profile::Section::Events);
                 // Positions before the notes they came with: a note is never
@@ -17899,13 +17896,12 @@ impl AppUi {
                 // drawing it, for the reason the peaks are -- a held cell
                 // nobody read would light the lamp with a minute-old
                 // transient the moment a strip was turned to.
-                let mut reduction = Vec::with_capacity(MAX_BUSES);
-                for bus in 0..MAX_BUSES {
-                    reduction.push(handle.take_strip_reduction(bus));
+                let mut reduction = [0.0_f32; MAX_BUSES];
+                for (bus, cell) in reduction.iter_mut().enumerate() {
+                    *cell = handle.take_strip_reduction(bus);
                 }
                 if showing_mixer || showing_device_rack {
-                    w.global::<StripMeters>()
-                        .set_reduction_db(reduction.as_slice().into());
+                    st.borrow().publish_strip_reductions(&reduction);
                 }
                 // The master is always track 0, so its meter is never
                 // reading somebody else's audio and its latch is never
@@ -17992,29 +17988,19 @@ impl AppUi {
                         }
                     }
                     if showing_mixer {
-                        let strips = st.borrow();
-                        if let Some(mut row) = strips.mixer_strip_model.row_data(bus) {
-                            // The held level and the clip latch are stepped
-                            // changes rather than a continuous level, so they
-                            // get their own reasons to repaint: throttling
-                            // them behind the level's own quantiser is how a
-                            // peak marker comes to sit one segment behind
-                            // where the audio put it.
-                            let clipping = left.clipping || right.clipping;
-                            if meter_display_changed(row.left_db, left.level_db)
-                                || meter_display_changed(row.right_db, right.level_db)
-                                || meter_display_changed(row.held_left_db, left.held_db)
-                                || meter_display_changed(row.held_right_db, right.held_db)
-                                || row.clipping != clipping
-                            {
-                                row.left_db = left.level_db;
-                                row.right_db = right.level_db;
-                                row.held_left_db = left.held_db;
-                                row.held_right_db = right.held_db;
-                                row.clipping = clipping;
-                                strips.mixer_strip_model.set_row_data(bus, row);
-                            }
-                        }
+                        // Into `StripMeters.levels`, never the strip's row,
+                        // which carries its name and every other text on it
+                        // (MOO-261).
+                        st.borrow().publish_strip_level(
+                            bus,
+                            &StripLevel {
+                                left_db: left.level_db,
+                                right_db: right.level_db,
+                                held_left_db: left.held_db,
+                                held_right_db: right.held_db,
+                                clipping: left.clipping || right.clipping,
+                            },
+                        );
                     }
                     if editing_bus && bus == edited_bus {
                         w.set_editing_bus_left_db(left.level_db);
@@ -18116,127 +18102,105 @@ impl AppUi {
                         // the `showing_device_rack` arm below.
                         let (detector, reduction_db) =
                             handle.take_device_dynamics(device_target, slot + 1);
-                        if showing_device_rack {
-                            if let Some(mut row) = state.effect_slot_model.row_data(slot) {
-                                // A Bus Comp draws the master's needle, so it
-                                // reads through the master's ballistics: the
-                                // row carries the needle and its held mark
-                                // rather than the tick's raw extreme.
-                                let (reduction_db, held_reduction_db) =
-                                    if row.kind == effect_kind_index(EffectKind::BusComp) {
-                                        if bus_comp_needles.len() <= slot {
-                                            bus_comp_needles
-                                                .resize_with(slot + 1, ReductionBallistics::default);
-                                        }
-                                        let (needle, held) =
-                                            bus_comp_needles[slot].update(-reduction_db, elapsed);
-                                        (-needle, held)
-                                    } else {
-                                        (reduction_db, row.held_reduction_db)
-                                    };
-                                let held_changed = dynamics_display_changed(
-                                    row.held_reduction_db,
-                                    held_reduction_db,
-                                );
-                                let input_left_db = linear_to_db(in_l);
-                                let input_right_db = linear_to_db(in_r);
-                                let output_left_db = linear_to_db(out_l);
-                                let output_right_db = linear_to_db(out_r);
-                                let meter_changed = meter_display_changed(row.input_left_db, input_left_db)
-                                    || meter_display_changed(row.input_right_db, input_right_db)
-                                    || meter_display_changed(row.output_left_db, output_left_db)
-                                    || meter_display_changed(row.output_right_db, output_right_db);
-                                // Non-dynamics stages never publish here, so
-                                // they read the resting pair and need no
-                                // check for what kind of device they hold.
-                                // Taken above, unconditionally.
-                                let detector_db = linear_to_db(detector);
-                                let dynamics_changed =
-                                    dynamics_display_changed(row.detector_db, detector_db)
-                                        || dynamics_display_changed(
-                                            row.gain_reduction_db,
-                                            reduction_db,
-                                        );
-                                if row.eq_analyzer_enabled {
-                                    let spectrum = handle.effect_spectrum(state.session.effect_target, slot as u8);
-                                    row.eq_spectrum_data = spectrum.as_slice().into();
-                                }
-                                // The same stage, carrying a different
-                                // meaning: the preamp publishes what it did
-                                // to the signal rather than what arrived.
-                                if row.preamp_display_enabled {
-                                    let deviation = handle.effect_spectrum(state.session.effect_target, slot as u8);
-                                    row.preamp_deviation = deviation.as_slice().into();
-                                }
-                                // A forced return to live leaves no other
-                                // trace, so the buffer face reads the count
-                                // rather than waiting for an audible cue.
-                                let collisions = if row.kind == effect_kind_index(EffectKind::Buffer) {
-                                    handle.effect_buffer_collisions(state.session.effect_target, slot as u8)
-                                        as i32
-                                } else {
-                                    row.buffer_collisions
-                                };
-                                let collisions_changed = collisions != row.buffer_collisions;
-                                // The Buffer's picture: peaks while something
-                                // is looking, marks always. Subscribing is
-                                // idempotent and one atomic load, so it is
-                                // re-asserted rather than tracked -- which is
-                                // also what re-subscribes after a graph
-                                // replacement clears the bank.
-                                let buffer_drawn = row.kind == effect_kind_index(EffectKind::Buffer);
-                                if buffer_drawn {
-                                    let target = state.session.effect_target;
-                                    handle.set_buffer_waveform_enabled(target, slot as u8, true);
-                                    let peaks = handle.effect_buffer_waveform(target, slot as u8);
-                                    let marks = handle.effect_buffer_marks(target, slot as u8);
-                                    row.buffer_peaks = peaks.as_slice().into();
-                                    row.buffer_head = marks.head.unwrap_or(-1.0);
-                                    row.buffer_write = marks.write;
-                                    let (start, end) = marks.region.unwrap_or((-1.0, -1.0));
-                                    row.buffer_window_start = start;
-                                    row.buffer_window_end = end;
-                                    row.buffer_frozen = marks.frozen;
-                                    row.buffer_armed_freeze = match marks.armed_freeze {
-                                        Some(true) => 1,
-                                        Some(false) => 2,
-                                        None => 0,
-                                    };
-                                    row.buffer_armed_gesture = marks.armed_gesture;
-                                    let bars = row.buffer_history_bars.max(1) as f64;
-                                    let ppq = mooloop_core::Ppq::DEFAULT;
-                                    let history_ticks = bars
-                                        * f64::from(mooloop_core::BEATS_PER_BAR)
-                                        * f64::from(ppq.ticks_per_beat());
-                                    let head = f64::from(marks.head.unwrap_or(0.0).max(0.0));
-                                    let at = mooloop_core::BbtPosition::from_ticks(
-                                        mooloop_core::Ticks((head * history_ticks) as u64),
-                                        ppq,
-                                    );
-                                    row.buffer_position_bar = at.bar as i32;
-                                    row.buffer_position_beat = at.beat as i32;
-                                    row.buffer_position_tick = at.tick as i32;
-                                }
-                                if meter_changed
-                                    || dynamics_changed
-                                    || held_changed
-                                    || collisions_changed
-                                    || buffer_drawn
-                                    || row.eq_analyzer_enabled
-                                    || row.preamp_display_enabled
-                                {
-                                    row.input_left_db = input_left_db;
-                                    row.input_right_db = input_right_db;
-                                    row.output_left_db = output_left_db;
-                                    row.output_right_db = output_right_db;
-                                    row.buffer_collisions = collisions;
-                                    row.detector_db = detector_db;
-                                    row.gain_reduction_db = reduction_db;
-                                    row.held_reduction_db = held_reduction_db;
-                                    state.effect_slot_model.set_row_data(slot, row);
-                                }
-                            }
+                        if !showing_device_rack {
+                            continue;
                         }
+                        // The row is only read, for what the slot is: its
+                        // per-tick state goes to `effect-slot-meters` and
+                        // `effect-slot-traces`, never back into the row,
+                        // which carries every text on the face (MOO-261).
+                        let Some(row) = state.effect_slot_model.row_data(slot) else {
+                            continue;
+                        };
+                        let previous = state.slot_meters(slot);
+                        let mut meters = previous.clone();
+                        // A Bus Comp draws the master's needle, so it reads
+                        // through the master's ballistics: the slot carries
+                        // the needle and its held mark rather than the
+                        // tick's raw extreme.
+                        let (reduction_db, held_reduction_db) =
+                            if row.kind == effect_kind_index(EffectKind::BusComp) {
+                                if bus_comp_needles.len() <= slot {
+                                    bus_comp_needles
+                                        .resize_with(slot + 1, ReductionBallistics::default);
+                                }
+                                let (needle, held) =
+                                    bus_comp_needles[slot].update(-reduction_db, elapsed);
+                                (-needle, held)
+                            } else {
+                                (reduction_db, previous.held_reduction_db)
+                            };
+                        meters.input_left_db = linear_to_db(in_l);
+                        meters.input_right_db = linear_to_db(in_r);
+                        meters.output_left_db = linear_to_db(out_l);
+                        meters.output_right_db = linear_to_db(out_r);
+                        // Non-dynamics stages never publish here, so they
+                        // read the resting pair and need no check for what
+                        // kind of device they hold. Taken above,
+                        // unconditionally.
+                        meters.detector_db = linear_to_db(detector);
+                        meters.gain_reduction_db = reduction_db;
+                        meters.held_reduction_db = held_reduction_db;
+                        let target = state.session.effect_target;
+                        let buffer_drawn = row.kind == effect_kind_index(EffectKind::Buffer);
+                        // The EQ's analyzer and the Preamp's deviation come
+                        // off the same stage, carrying different meanings:
+                        // the preamp publishes what it did to the signal
+                        // rather than what arrived.
+                        let spectrum;
+                        let peaks;
+                        let trace: Option<&[f32]> = if row.eq_analyzer_enabled
+                            || row.preamp_display_enabled
+                        {
+                            spectrum = handle.effect_spectrum(target, slot as u8);
+                            Some(&spectrum)
+                        } else if buffer_drawn {
+                            // The Buffer's picture: peaks while something is
+                            // looking, marks always. Subscribing is
+                            // idempotent and one atomic load, so it is
+                            // re-asserted rather than tracked -- which is
+                            // also what re-subscribes after a graph
+                            // replacement clears the bank.
+                            handle.set_buffer_waveform_enabled(target, slot as u8, true);
+                            peaks = handle.effect_buffer_waveform(target, slot as u8);
+                            Some(&peaks)
+                        } else {
+                            None
+                        };
+                        if buffer_drawn {
+                            // A forced return to live leaves no other trace,
+                            // so the buffer face reads the count rather than
+                            // waiting for an audible cue.
+                            meters.buffer_collisions =
+                                handle.effect_buffer_collisions(target, slot as u8) as i32;
+                            let marks = handle.effect_buffer_marks(target, slot as u8);
+                            meters.buffer_head = marks.head.unwrap_or(-1.0);
+                            meters.buffer_write = marks.write;
+                            let (start, end) = marks.region.unwrap_or((-1.0, -1.0));
+                            meters.buffer_window_start = start;
+                            meters.buffer_window_end = end;
+                            meters.buffer_frozen = marks.frozen;
+                            meters.buffer_armed_freeze = match marks.armed_freeze {
+                                Some(true) => 1,
+                                Some(false) => 2,
+                                None => 0,
+                            };
+                            meters.buffer_armed_gesture = marks.armed_gesture;
+                            let bars = row.buffer_history_bars.max(1) as f64;
+                            let ppq = mooloop_core::Ppq::DEFAULT;
+                            let history_ticks = bars
+                                * f64::from(mooloop_core::BEATS_PER_BAR)
+                                * f64::from(ppq.ticks_per_beat());
+                            let head = f64::from(marks.head.unwrap_or(0.0).max(0.0));
+                            let at = mooloop_core::BbtPosition::from_ticks(
+                                mooloop_core::Ticks((head * history_ticks) as u64),
+                                ppq,
+                            );
+                            meters.buffer_position_bar = at.bar as i32;
+                            meters.buffer_position_beat = at.beat as i32;
+                            meters.buffer_position_tick = at.tick as i32;
+                        }
+                        state.publish_slot_display(slot, &meters, trace);
                     }
                 }
                 profile.borrow_mut().lap(pump_profile::Section::DeviceRows);
@@ -18249,16 +18213,12 @@ impl AppUi {
                         .session.channels
                         .get(selected_channel)
                         .is_some_and(|channel| channel.kind() == DeviceKind::Sampler);
+                    // In place while the voice count holds, so the lines'
+                    // repeater keeps its instances (MOO-261).
                     if showing_device_rack && !editing_bus && is_sampler {
-                        let positions = handle.playhead_positions(selected_channel);
-                        let has_positions = !positions.is_empty();
-                        if has_positions || playhead_was_nonempty {
-                            state.playhead_model.set_vec(positions);
-                        }
-                        playhead_was_nonempty = has_positions;
-                    } else if playhead_was_nonempty {
-                        playhead_was_nonempty = false;
-                        state.playhead_model.set_vec(Vec::new());
+                        state.publish_playheads(&handle.playhead_positions(selected_channel));
+                    } else {
+                        state.publish_playheads(&[]);
                     }
                 }
                 {
@@ -18875,7 +18835,7 @@ fn install_project_in_ui(
     // opening a document means.
     if !keep_transport {
         window.set_playing(false);
-        window.set_playlist_position_ticks(0);
+        rack_displays::set_playlist_position(window, 0);
     }
     // A new project brings its own control map, so a learn gesture waiting on
     // the old one has nothing left to bind to -- `Session::load` has already
