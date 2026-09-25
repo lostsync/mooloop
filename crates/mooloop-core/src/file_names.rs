@@ -85,10 +85,11 @@ pub fn is_taken(path: &Path) -> bool {
 /// than replace anything at `to`.
 ///
 /// A hard link then an unlink, which the OS refuses atomically when `to` is
-/// taken, on Linux, macOS and Windows alike. A file system that has no hard
-/// links (FAT and exFAT, some network shares) checks and then renames, which
-/// leaves a gap between the two; that is the most such a file system offers
-/// without a platform call per OS.
+/// taken, on Linux, macOS and Windows alike. A file system with no hard links
+/// (FAT and exFAT, some network shares; a USB stick is a likely place for an
+/// export) claims `to` with `create_new` and copies into it instead, which
+/// refuses just as atomically. It never falls back to a plain rename, which
+/// would replace.
 pub fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
     match fs::hard_link(from, to) {
         Ok(()) => {
@@ -98,9 +99,24 @@ pub fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
             Ok(())
         }
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(error),
-        Err(_) if is_taken(to) => Err(io::ErrorKind::AlreadyExists.into()),
-        Err(_) => fs::rename(from, to),
+        Err(_) => copy_no_replace(from, to),
     }
+}
+
+/// [`rename_no_replace`] where there are no hard links: claim `to`, copy,
+/// then drop `from`. A copy that fails removes what it claimed.
+fn copy_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    let mut target = OpenOptions::new().write(true).create_new(true).open(to)?;
+    let copied = File::open(from)
+        .and_then(|mut source| io::copy(&mut source, &mut target))
+        .and_then(|_| target.sync_all());
+    if let Err(error) = copied {
+        drop(target);
+        let _ = fs::remove_file(to);
+        return Err(error);
+    }
+    let _ = fs::remove_file(from);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -203,5 +219,22 @@ mod tests {
         rename_no_replace(&from, &to).unwrap();
         assert_eq!(fs::read(&to).unwrap(), b"new");
         assert!(!is_taken(&from), "moved, not copied");
+    }
+
+    /// The route a file system without hard links takes refuses as well.
+    #[test]
+    fn the_copy_fallback_refuses_too() {
+        let dir = Scratch::new();
+        let (from, to) = (dir.0.join(".part"), dir.0.join("song.wav"));
+        fs::write(&from, b"new").unwrap();
+        fs::write(&to, b"old").unwrap();
+        let refused = copy_no_replace(&from, &to).unwrap_err();
+        assert_eq!(refused.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&to).unwrap(), b"old");
+
+        fs::remove_file(&to).unwrap();
+        copy_no_replace(&from, &to).unwrap();
+        assert_eq!(fs::read(&to).unwrap(), b"new");
+        assert!(!is_taken(&from));
     }
 }
