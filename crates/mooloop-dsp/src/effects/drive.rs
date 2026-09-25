@@ -45,6 +45,14 @@ pub struct DriveEffect {
     tone: Smoothed,
     mix: Smoothed,
     output: Smoothed,
+    /// `reference_drive_compensation(compensation_for.0, compensation_for.1)`,
+    /// kept while the curve and the smoothed drive stay where they were, so
+    /// a drive at rest costs no `tanh` a frame for it (MOO-251). The same
+    /// number either way, to the bit: it is the same call on the same
+    /// arguments. The drive of `NaN` in `new` matches nothing, so the first
+    /// frame computes it.
+    compensation: f32,
+    compensation_for: (DriveCurve, f32),
 }
 
 impl DriveEffect {
@@ -68,6 +76,8 @@ impl DriveEffect {
             tone: smoothed(params.tone.clamp(-1.0, 1.0)),
             mix: smoothed(params.mix.clamp(0.0, 1.0)),
             output: smoothed(params.output.clamp(0.0, 2.0)),
+            compensation: 1.0,
+            compensation_for: (params.curve, f32::NAN),
         }
     }
 
@@ -109,7 +119,11 @@ impl RangeProcessor for DriveEffect {
             let tone = self.tone.advance();
             let mix = self.mix.advance();
             let output = self.output.advance();
-            let compensation = reference_drive_compensation(curve, drive);
+            if (curve, drive) != self.compensation_for {
+                self.compensation = reference_drive_compensation(curve, drive);
+                self.compensation_for = (curve, drive);
+            }
+            let compensation = self.compensation;
             let (dry_l, dry_r) = (bus.l[i], bus.r[i]);
 
             let wet_l = self.left.process(dry_l, |x| shape(curve, x * drive)) * compensation;
@@ -122,7 +136,10 @@ impl RangeProcessor for DriveEffect {
             let aligned_r = self.dry_r[self.dry_pos];
             self.dry_l[self.dry_pos] = dry_l;
             self.dry_r[self.dry_pos] = dry_r;
-            self.dry_pos = (self.dry_pos + 1) % OVERSAMPLER_LATENCY_FRAMES;
+            self.dry_pos += 1;
+            if self.dry_pos == OVERSAMPLER_LATENCY_FRAMES {
+                self.dry_pos = 0;
+            }
 
             bus.l[i] = (aligned_l + (wet_l - aligned_l) * mix) * output;
             bus.r[i] = (aligned_r + (wet_r - aligned_r) * mix) * output;
@@ -419,6 +436,70 @@ mod tests {
                 assert!(
                     change_db.abs() <= 1.0,
                     "{curve:?} at drive {drive} moved a reference-level peak by {change_db:+.2} dB"
+                );
+            }
+        }
+    }
+
+    /// **Caching the compensation changes nothing, to the bit** (MOO-251).
+    /// The loop as it was, with `reference_drive_compensation` called every
+    /// frame and the dry ring wrapped by `%`, against the device, on every
+    /// curve, with Drive moved twice and the curve switched mid-block.
+    #[test]
+    fn a_cached_compensation_is_bit_identical_to_one_per_frame() {
+        let frames = 4_096;
+        let moves = [
+            (700u32, DRIVE_PARAM_DRIVE, 24.0f32),
+            (1_900, DRIVE_PARAM_CURVE, 3.0),
+            (2_500, DRIVE_PARAM_DRIVE, 3.0),
+            (3_300, DRIVE_PARAM_CURVE, 0.0),
+        ];
+        for curve in [DriveCurve::Soft, DriveCurve::Hard, DriveCurve::Fold, DriveCurve::Tape] {
+            let params = DriveParams {
+                drive: 6.0,
+                curve,
+                tone: 0.3,
+                mix: 0.8,
+                ..DriveParams::default()
+            };
+            let mut bus = sine_bus(frames, 330.0, 0.4);
+            let input = bus.l[..frames].to_vec();
+            let mut events = EventList::empty();
+            for (offset, id, value) in moves {
+                assert!(events.push(TimedEvent {
+                    offset,
+                    event: Event::ParamValue { id, value },
+                }));
+            }
+            let mut effect = DriveEffect::new(params, 48_000);
+            effect.process(&context(frames), &mut bus, &events, None);
+
+            // The same device, driven one frame at a time through the old
+            // per-frame compensation.
+            let mut reference = DriveEffect::new(params, 48_000);
+            let mut dry = [0.0f32; OVERSAMPLER_LATENCY_FRAMES];
+            let mut dry_pos = 0usize;
+            for (i, &x) in input.iter().enumerate() {
+                for &(_, id, value) in moves.iter().filter(|m| m.0 as usize == i) {
+                    reference.apply_param(id, value);
+                }
+                let curve = reference.params.curve;
+                let drive = reference.drive.advance();
+                let tone = reference.tone.advance();
+                let mix = reference.mix.advance();
+                let output = reference.output.advance();
+                let compensation = reference_drive_compensation(curve, drive);
+                let wet = reference.left.process(x, |v| shape(curve, v * drive)) * compensation;
+                let wet = DriveEffect::tilt(&mut reference.tone_lp_l, wet, tone);
+                let aligned = dry[dry_pos];
+                dry[dry_pos] = x;
+                dry_pos = (dry_pos + 1) % OVERSAMPLER_LATENCY_FRAMES;
+                let expected = (aligned + (wet - aligned) * mix) * output;
+                assert_eq!(
+                    bus.l[i].to_bits(),
+                    expected.to_bits(),
+                    "{curve:?} at frame {i}: {} against {expected}",
+                    bus.l[i]
                 );
             }
         }
