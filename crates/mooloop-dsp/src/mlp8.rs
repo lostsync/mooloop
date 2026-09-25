@@ -55,7 +55,7 @@ use crate::taps::AudioTaps;
 use crate::effects::ModulationEffect;
 use crate::env::Adsr;
 use crate::event::{Event, EventList};
-use crate::filter::{SvfCascade, SvfOutput, SvfSlope};
+use crate::filter::{SvfCascade, SvfCoeffs, SvfOutput, SvfSlope};
 use crate::shaper::{soft_ceiling, PreDrive};
 use crate::node::{AudioNode, Discontinuity, ProcessContext, SourceNode};
 use crate::osc::{sync_blep, Noise, Osc};
@@ -321,45 +321,125 @@ impl ColoredNoise {
 /// per-model makeup gain because they are not the same circuit. These four
 /// come off one linear stage, so the only compensation they need is the one
 /// below, and it is about slope rather than about character.
+///
+/// Its coefficients are made at control rate (MOO-246): every
+/// [`FILTER_CONTROL_SPAN`] samples, from the cutoff and resonance at the
+/// start of the span, and ramped linearly from the previous set across it,
+/// as the Filter effect does. A TPT SVF stays stable under interpolated
+/// coefficients, and a filter envelope cannot move the corner audibly within
+/// a third of a millisecond; what it saves is a `tan`, two `exp2`s and a
+/// `log2` per sample per voice.
 #[derive(Clone, Copy)]
 struct VoiceFilter {
     cascade: SvfCascade,
+    /// The ramp's two ends, and how far into it the voice is.
+    from: SvfCoeffs,
+    to: SvfCoeffs,
+    step: u32,
+    span: u32,
+    /// The mode `to` was made for, or `None` when the next engaged sample
+    /// must take its coefficients whole rather than ramp from stale ones.
+    mode: Option<MlP8FilterMode>,
+    /// The cutoff the last span started at, which with this one's says
+    /// where the next is heading.
+    last_hz: f32,
+    /// Run the filter as it was before MOO-246, for comparison.
+    #[cfg(test)]
+    per_sample: bool,
 }
+
+/// Samples between coefficient updates of a voice filter. A power of two so
+/// the ramp's step is exact.
+const FILTER_CONTROL_SPAN: u32 = 16;
 
 impl VoiceFilter {
     fn new() -> Self {
+        let rest = SvfCoeffs::for_cutoff(1_000.0, 0.0, 48_000);
         Self {
             cascade: SvfCascade::new(),
+            from: rest,
+            to: rest,
+            step: 0,
+            span: FILTER_CONTROL_SPAN,
+            mode: None,
+            last_hz: 0.0,
+            #[cfg(test)]
+            per_sample: false,
         }
     }
 
     fn reset(&mut self) {
         self.cascade.reset();
+        self.mode = None;
     }
 
-    /// LP24 is the shared compensated cascade (MOO-123): its corner is
-    /// pushed up by the amount a cascade drops it, so the Cutoff knob means
-    /// one frequency at either slope, and the resonance is shared between
-    /// the stages so the pair peaks about as hard as one stage. That
-    /// compensation was this file's own until it became the Filter effect's
-    /// too.
-    fn next_sample(
-        &mut self,
-        mode: MlP8FilterMode,
-        input: f32,
-        cutoff_hz: f32,
-        resonance: f32,
-        sample_rate: u32,
-    ) -> f32 {
-        let (output, slope) = match mode {
+    /// Whether this sample starts a new span, so the caller must work out
+    /// the cutoff and call [`Self::retarget`]; otherwise it calls
+    /// [`Self::ramp`] and the cutoff is not needed.
+    #[inline]
+    fn due(&self, mode: MlP8FilterMode) -> bool {
+        self.step >= self.span || self.mode != Some(mode)
+    }
+
+    fn outputs(mode: MlP8FilterMode) -> (SvfOutput, SvfSlope) {
+        match mode {
             MlP8FilterMode::Lp12 => (SvfOutput::Low, SvfSlope::Db12),
             MlP8FilterMode::Lp24 => (SvfOutput::Low, SvfSlope::Db24),
             MlP8FilterMode::Bp12 => (SvfOutput::Band, SvfSlope::Db12),
             MlP8FilterMode::Hp12 => (SvfOutput::High, SvfSlope::Db12),
-        };
-        self.cascade
-            .next_sample(input, output, slope, cutoff_hz, resonance, sample_rate)
+        }
     }
+
+    /// Begin a span toward the coefficients for this cutoff and resonance.
+    /// A first sample, or a mode change, takes them whole.
+    fn retarget(
+        &mut self,
+        mode: MlP8FilterMode,
+        cutoff_hz: f32,
+        resonance: f32,
+        sample_rate: u32,
+    ) -> SvfCoeffs {
+        let (output, slope) = Self::outputs(mode);
+        let continuing = self.mode == Some(mode);
+        // Aim the ramp at where the cutoff is heading, one span on, by the
+        // octaves it moved over the last span: the ramp then runs through
+        // the cutoff as it moves instead of a span behind it. A span of one
+        // has nowhere to ramp, so it takes the cutoff as it is.
+        let aim = if continuing && self.span > 1 && self.last_hz > 0.0 {
+            cutoff_hz * (cutoff_hz / self.last_hz).clamp(0.25, 4.0)
+        } else {
+            cutoff_hz
+        };
+        self.last_hz = cutoff_hz;
+        let next = SvfCascade::coeffs(output, slope, aim, resonance, sample_rate);
+        self.from = if continuing { self.to } else { next };
+        self.to = next;
+        self.mode = Some(mode);
+        self.step = 0;
+        self.ramp()
+    }
+
+    /// The next sample's coefficients along the span. The last sample of a
+    /// span is exactly `to` (`SvfCoeffs::lerp` at 1), so at a span of one
+    /// this is the per-sample filter it replaced, bit for bit.
+    #[inline]
+    fn ramp(&mut self) -> SvfCoeffs {
+        self.step += 1;
+        self.from.lerp(&self.to, self.step as f32 / self.span as f32)
+    }
+
+    #[inline]
+    fn tick(&mut self, mode: MlP8FilterMode, input: f32, coeffs: &SvfCoeffs) -> f32 {
+        let (output, slope) = Self::outputs(mode);
+        self.cascade.tick_with(input, coeffs, output, slope)
+    }
+
+    // LP24 is the shared compensated cascade (MOO-123): its corner is
+    // pushed up by the amount a cascade drops it, so the Cutoff knob means
+    // one frequency at either slope, and the resonance is shared between the
+    // stages so the pair peaks about as hard as one stage. That compensation
+    // was this file's own until it became the Filter effect's too; it lives
+    // in `SvfCascade::coeffs`, which `retarget` calls.
 }
 
 /// How much of one cycle full Slew rounds off.
@@ -2489,6 +2569,10 @@ impl Voice {
             // publish honestly instead of freezing.
             self.pre_filter_tap = mix;
             self.filter_tap = mix;
+            // Whenever the filter is next engaged it starts from the
+            // coefficients it is then asked for, not a ramp left over from
+            // before it was bypassed.
+            self.filter.mode = None;
             return mix;
         }
 
@@ -2501,6 +2585,62 @@ impl Voice {
         // and drive applied, before the filter. That is this sample exactly.
         self.pre_filter_tap = driven;
 
+        #[cfg(test)]
+        let filtered = if self.filter.per_sample {
+            // The filter as it was before MOO-246, for the tests to hold the
+            // control-rate one to: cutoff and coefficients every sample.
+            let resonance = self.dest(routes, slot::RESONANCE, prep.resonance);
+            let cutoff_hz = self.cutoff_hz(prep, cutoff, velocity, sample_rate);
+            let (output, slope) = VoiceFilter::outputs(prep.mode);
+            self.filter
+                .cascade
+                .next_sample(driven, output, slope, cutoff_hz, resonance, sample_rate)
+        } else {
+            self.control_rate_filter(prep, cutoff, velocity, driven, sample_rate)
+        };
+        #[cfg(not(test))]
+        let filtered = self.control_rate_filter(prep, cutoff, velocity, driven, sample_rate);
+
+        // A resonant filter driven asymmetrically walks off centre, and in a
+        // loop that offset compounds. One-pole DC blocker on the tap only, so
+        // the audible path keeps whatever bias the patch actually has.
+        let blocked = filtered - self.dc_x + prep.dc_block_coeff * self.dc_y;
+        self.dc_x = filtered;
+        self.dc_y = blocked;
+        self.feedback_tap = blocked;
+        // `Filter` is the filter's output before the VCA, which is the
+        // shaped sample before the envelope, velocity and level reach it.
+        self.filter_tap = filtered;
+        filtered
+    }
+
+    /// One sample through the voice filter, its coefficients made at the
+    /// start of each span and ramped across it (MOO-246).
+    #[inline]
+    fn control_rate_filter(
+        &mut self,
+        prep: &Prepared,
+        cutoff: f32,
+        velocity: f32,
+        driven: f32,
+        sample_rate: u32,
+    ) -> f32 {
+        let coeffs = if self.filter.due(prep.mode) {
+            let resonance = self.dest(prep.routes, slot::RESONANCE, prep.resonance);
+            let cutoff_hz = self.cutoff_hz(prep, cutoff, velocity, sample_rate);
+            self.filter
+                .retarget(prep.mode, cutoff_hz, resonance, sample_rate)
+        } else {
+            self.filter.ramp()
+        };
+        self.filter.tick(prep.mode, driven, &coeffs)
+    }
+
+    /// The voice filter's cutoff this sample: the knob (cached, with
+    /// Drift's scale), keytracking of the gliding pitch, and the filter
+    /// envelope with velocity. Asked once per [`FILTER_CONTROL_SPAN`].
+    fn cutoff_hz(&mut self, prep: &Prepared, cutoff: f32, velocity: f32, sample_rate: u32) -> f32 {
+        let routes = prep.routes;
         // Drift's cutoff share rides on the authored corner rather than on
         // the tracked one, so it is a property of the voice and not something
         // that grows as a patch climbs the keyboard.
@@ -2535,24 +2675,7 @@ impl Voice {
         // a dedicated playing behaviour, not a route destination.
         let depth = self.dest(routes, slot::ENV_AMOUNT, prep.env_amount)
             + prep.filter_velocity * velocity;
-        let cutoff_hz = voice_cutoff.hz(tracked + env_octaves(self.filter_env.level(), depth));
-
-        let resonance = self.dest(routes, slot::RESONANCE, prep.resonance);
-        let filtered =
-            self.filter
-                .next_sample(prep.mode, driven, cutoff_hz, resonance, sample_rate);
-
-        // A resonant filter driven asymmetrically walks off centre, and in a
-        // loop that offset compounds. One-pole DC blocker on the tap only, so
-        // the audible path keeps whatever bias the patch actually has.
-        let blocked = filtered - self.dc_x + prep.dc_block_coeff * self.dc_y;
-        self.dc_x = filtered;
-        self.dc_y = blocked;
-        self.feedback_tap = blocked;
-        // `Filter` is the filter's output before the VCA, which is the
-        // shaped sample before the envelope, velocity and level reach it.
-        self.filter_tap = filtered;
-        filtered
+        voice_cutoff.hz(tracked + env_octaves(self.filter_env.level(), depth))
     }
 }
 
@@ -4432,6 +4555,131 @@ mod tests {
         }
         let rms = (sum / (2 * (frames - from)) as f64).sqrt() as f32;
         (20.0 * rms.max(1.0e-9).log10(), 20.0 * peak.max(1.0e-9).log10())
+    }
+
+    // --- MOO-246: the voice filter's coefficients at control rate ---------
+
+    /// How a render's voice filters run: as they did before MOO-246, or at
+    /// control rate with a span of this many samples.
+    #[derive(Clone, Copy)]
+    enum FilterRate {
+        PerSample,
+        Span(u32),
+    }
+
+    /// Render `notes` held from the start, both channels, with every voice
+    /// filter run at `rate`.
+    fn render_filtered(params: MlP8Params, notes: &[u8], frames: usize, rate: FilterRate) -> Vec<f32> {
+        let mut synth = MlP8::new(params, SR);
+        for voice in synth.voices.iter_mut() {
+            match rate {
+                FilterRate::PerSample => voice.filter.per_sample = true,
+                FilterRate::Span(span) => voice.filter.span = span,
+            }
+        }
+        let mut bus = StereoBus::with_capacity(frames);
+        let mut events = EventList::empty();
+        for (index, note) in notes.iter().enumerate() {
+            events.push(note_on(0, index as u64 + 1, *note));
+        }
+        synth.process(&ctx(frames), &mut bus, &events, None);
+        let mut out = bus.l[..frames].to_vec();
+        out.extend_from_slice(&bus.r[..frames]);
+        out
+    }
+
+    /// The fastest filter envelope the device allows, on a resonant 24 dB
+    /// low-pass five octaves shut, keytracked and driven, on a unison stack.
+    fn fast_filter_sweep() -> MlP8Params {
+        let mut params = init_saw();
+        params.unison = MlP8Unison::X4;
+        params.detune = 0.4;
+        params.filter_mode = MlP8FilterMode::Lp24;
+        params.filter_cutoff = 0.2;
+        params.filter_resonance = 0.6;
+        params.filter_env_amount = 1.0;
+        params.filter_attack = 0.001;
+        params.filter_decay = 0.05;
+        params.filter_sustain = 0.2;
+        params.filter_keytrack = 1.0;
+        params.drive = 0.4;
+        params
+    }
+
+    /// Every factory patch as a chord, and the fast sweep.
+    fn filter_cases() -> Vec<(&'static str, MlP8Params, &'static [u8])> {
+        let mut cases: Vec<(&'static str, MlP8Params, &'static [u8])> =
+            mooloop_core::mlp8_factory::patches()
+                .into_iter()
+                .map(|patch| (patch.name, patch.params, &[48u8, 55, 64][..]))
+                .collect();
+        cases.push(("fast sweep", fast_filter_sweep(), &[45, 57]));
+        cases
+    }
+
+    /// At a span of one the control-rate filter is the per-sample filter it
+    /// replaced, to the bit, on every factory patch and the fast sweep: the
+    /// ramp's last step is exactly its target, and nothing else moved.
+    #[test]
+    fn a_filter_span_of_one_is_the_per_sample_filter_bit_for_bit() {
+        for (name, params, notes) in filter_cases() {
+            let reference = render_filtered(params, notes, 24_000, FilterRate::PerSample);
+            let one = render_filtered(params, notes, 24_000, FilterRate::Span(1));
+            assert!(
+                reference.iter().zip(&one).all(|(a, b)| a.to_bits() == b.to_bits()),
+                "{name}: a span of one differs from the per-sample filter"
+            );
+        }
+    }
+
+    /// Error of `test` against `reference`, in dB under the reference's RMS.
+    fn error_db(reference: &[f32], test: &[f32]) -> f32 {
+        let signal: f64 = reference.iter().map(|x| f64::from(*x).powi(2)).sum();
+        let error: f64 = reference
+            .iter()
+            .zip(test)
+            .map(|(a, b)| f64::from(a - b).powi(2))
+            .sum();
+        (10.0 * (error / signal.max(1.0e-30)).log10()) as f32
+    }
+
+    /// Octave-band levels of a render's left channel, in dB, from 63 Hz up.
+    fn octave_bands_db(signal: &[f32]) -> Vec<f32> {
+        let left = &signal[..signal.len() / 2];
+        (0..8)
+            .map(|band| {
+                let low = 44.0 * 2.0f32.powi(band);
+                crate::testkit::db(crate::testkit::band_rms(left, SR, (low, low * 2.0)))
+            })
+            .collect()
+    }
+
+    /// The control-rate filter against the per-sample one, where ramping the
+    /// coefficients over a span instead of making them every sample could be
+    /// heard if anywhere: the fastest filter envelope, and every factory
+    /// patch as a chord. The difference is held 40 dB under the signal, and
+    /// every octave band within 0.5 dB. A patch with voice feedback is held
+    /// to the bands only: its loop runs the filter's output back into its
+    /// input through a saturator, so the smallest change in rounding sends
+    /// the waveform down a different but equally loud path.
+    #[test]
+    fn a_control_rate_voice_filter_tracks_the_per_sample_one_closely() {
+        for (name, params, notes) in filter_cases() {
+            let reference = render_filtered(params, notes, 24_000, FilterRate::PerSample);
+            let span = render_filtered(params, notes, 24_000, FilterRate::Span(FILTER_CONTROL_SPAN));
+            let error = error_db(&reference, &span);
+            let bands = octave_bands_db(&reference)
+                .into_iter()
+                .zip(octave_bands_db(&span))
+                .filter(|(reference, _)| *reference > -90.0)
+                .map(|(reference, span)| (reference - span).abs())
+                .fold(0.0f32, f32::max);
+            println!("{name}: error {error:.1} dB, widest octave-band difference {bands:.2} dB");
+            assert!(bands <= 0.5, "{name}: an octave band moved {bands:.2} dB");
+            if params.voice_feedback == 0.0 {
+                assert!(error < -40.0, "{name}: control-rate filter error {error:.1} dB");
+            }
+        }
     }
 
     /// MOO-244's acceptance: one held note at every Unison count stays

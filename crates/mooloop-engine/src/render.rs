@@ -17691,7 +17691,16 @@ mod footprint {
         // Grew by 64 with MOO-244: each of the eight voices carries its
         // share of its unison group's level (an `f32`, resolved once a range
         // like the pan gains; 8 bytes a voice once the voice is aligned).
-        assert_eq!(size_of::<MlP8>(), 6_528);
+        //
+        // Grew by 512 with MOO-246 and MOO-249, 64 bytes a voice: the voice
+        // filter keeps the two coefficient sets it ramps between (40), its
+        // place in the span, the mode the ramp was made for and the cutoff
+        // the last span started at, which is what took the `tan`, the
+        // `exp2`s and the `log2` from every sample to one in sixteen; and
+        // the drive keeps its followers' coefficient and the rate it was
+        // made for instead of an `exp` a sample. That takes ML-P8 past
+        // DS-01, so it is now the widest source below.
+        assert_eq!(size_of::<MlP8>(), 7_040);
         // DS-01 is 6,832, and almost all of it is the eight-voice pool: a
         // voice carries six tone oscillators for its partial bank, an FM
         // modulator, four noise generators' worth of state, a state-variable
@@ -17854,8 +17863,8 @@ mod footprint {
 
         // Paid per channel the project actually has. The source is boxed
         // since MOO-56, so it is not in `ChannelStrip`'s own size, and the
-        // figure pays for the widest one a live channel can hold: DS-01's
-        // eight-voice pool, just ahead of the ML-P8's.
+        // figure pays for the widest one a live channel can hold: ML-P8's
+        // eight-voice pool since MOO-246, just ahead of DS-01's.
         let widest_source = [
             size_of::<Sampler>(),
             size_of::<DrumSynth>(),
@@ -17869,7 +17878,7 @@ mod footprint {
         .into_iter()
         .max()
         .unwrap_or(0);
-        assert_eq!(widest_source, size_of::<Ds01>());
+        assert_eq!(widest_source, size_of::<MlP8>());
         let per_live = size_of::<ChannelStrip>()
             + widest_source
             + size_of::<EventList>()
@@ -17909,7 +17918,10 @@ mod footprint {
         // And by 8 for MOO-82: the boundary in `SourceCurvePool` past which
         // rows are offsets, a hosted plugin's routes. One `usize` rather than
         // a kind per row, which would have been 92 here.
-        assert_eq!(per_live, 142_808);
+        //
+        // And by 80 for MOO-246 and MOO-249: ML-P8, at 7,040, is now the
+        // widest source, 80 past DS-01's 6,960.
+        assert_eq!(per_live, 142_888);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
@@ -18000,7 +18012,10 @@ mod footprint {
         // MOO-56's one boxed source: 14,968 bytes less a live channel,
         // 234 KiB across sixteen, and that at the widest source. Sixteen
         // v1 monos are 104 KiB lighter again.
-        assert_eq!((fixed + per_live * 16) / 1024, 2_718);
+        //
+        // MOO-246 and MOO-249 made ML-P8 the widest source, 80 bytes a live
+        // channel past DS-01, 1,280 across sixteen: one more KiB boundary.
+        assert_eq!((fixed + per_live * 16) / 1024, 2_719);
     }
 
 }

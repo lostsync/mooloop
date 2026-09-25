@@ -513,6 +513,11 @@ pub struct PreDrive {
     /// their roots is the makeup gain.
     mean_input: f32,
     mean_shaped: f32,
+    /// The followers' coefficient, a constant of the sample rate, and the
+    /// rate it was made for (0 before the first sample). It was an `exp` on
+    /// every sample until MOO-249.
+    follow: f32,
+    follow_rate: u32,
 }
 
 /// Pre-gain at full drive. Much gentler than [`apply_drive`]'s, and
@@ -532,6 +537,8 @@ impl PreDrive {
         Self {
             mean_input: 0.0,
             mean_shaped: 0.0,
+            follow: 0.0,
+            follow_rate: 0,
         }
     }
 
@@ -548,7 +555,11 @@ impl PreDrive {
         let gain = 1.0 + drive * PRE_DRIVE_GAIN_RANGE;
         let shaped = (input * gain).tanh();
 
-        let follow = 1.0 - (-1.0 / (PRE_DRIVE_FOLLOW_S * sample_rate as f32)).exp();
+        if sample_rate != self.follow_rate {
+            self.follow = 1.0 - (-1.0 / (PRE_DRIVE_FOLLOW_S * sample_rate as f32)).exp();
+            self.follow_rate = sample_rate;
+        }
+        let follow = self.follow;
         self.mean_input += follow * (input * input - self.mean_input);
         self.mean_shaped += follow * (shaped * shaped - self.mean_shaped);
 
@@ -577,6 +588,50 @@ impl Default for PreDrive {
 mod tests {
     use super::*;
     use crate::testkit::{alias_db, frames_for, sine, Probe, RATES};
+
+    /// MOO-249: the followers' coefficient is made once per sample rate
+    /// instead of every sample, by the same expression, so the output is
+    /// the per-sample stage's to the bit, across a drive sweep and a change
+    /// of sample rate mid-stream.
+    #[test]
+    fn pre_drive_is_bit_identical_with_its_coefficient_cached() {
+        struct PerSample {
+            mean_input: f32,
+            mean_shaped: f32,
+        }
+        impl PerSample {
+            fn next_sample(&mut self, input: f32, drive: f32, sample_rate: u32) -> f32 {
+                let drive = clamp_param(drive, 0.0, 1.0);
+                if drive <= f32::EPSILON {
+                    return input;
+                }
+                let gain = 1.0 + drive * PRE_DRIVE_GAIN_RANGE;
+                let shaped = (input * gain).tanh();
+                let follow = 1.0 - (-1.0 / (PRE_DRIVE_FOLLOW_S * sample_rate as f32)).exp();
+                self.mean_input += follow * (input * input - self.mean_input);
+                self.mean_shaped += follow * (shaped * shaped - self.mean_shaped);
+                let compensation = if self.mean_shaped > 1.0e-12 {
+                    (self.mean_input / self.mean_shaped).sqrt()
+                } else {
+                    1.0 / gain
+                };
+                shaped * compensation
+            }
+        }
+        let mut cached = PreDrive::new();
+        let mut reference = PerSample {
+            mean_input: 0.0,
+            mean_shaped: 0.0,
+        };
+        for index in 0..96_000u32 {
+            let rate = if index < 48_000 { 48_000 } else { 44_100 };
+            let input = (index as f32 * 0.013).sin() * 0.8 + (index as f32 * 0.0007).sin() * 0.3;
+            let drive = (index % 20_000) as f32 / 20_000.0;
+            let a = cached.next_sample(input, drive, rate);
+            let b = reference.next_sample(input, drive, rate);
+            assert_eq!(a.to_bits(), b.to_bits(), "sample {index}");
+        }
+    }
 
     /// The literal is a copy of a value `mooloop-core` owns; this is what
     /// reads the original.

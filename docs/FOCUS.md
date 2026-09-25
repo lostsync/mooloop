@@ -620,3 +620,18 @@ In the order worth playing:
     (`the_drive_matches_the_loop_before_the_oversampler_changed`, mooloop-dsp).
     There's no old build in the render to A/B against. A song with a Drive
     saved before today is the real comparison.
+25. **ML-P8's filter at control rate** (MOO-246). A voice's filter
+    coefficients are now worked out every 16 samples and ramped toward
+    where the cutoff is heading, instead of every sample. The claim is that
+    it sounds the same. Play the fastest filter envelope the device has (a
+    1 ms filter attack on a resonant 24 dB low-pass, a pluck) and Furnace
+    Stab, whose voice feedback runs the filter's output back through a
+    saturator, before and after. There's no old build in the render. The
+    comparison with the per-sample filter is measured instead, in
+    `a_control_rate_voice_filter_tracks_the_per_sample_one_closely`
+    (mooloop-dsp), on every factory patch as a chord and on that pluck.
+    Measured 2026-09-25: the difference is 54 dB under the pluck and 62 to
+    78 dB under the patches, with every octave band within 0.01 dB. The
+    exception is Furnace Stab. Its feedback loop turns the smallest change
+    in rounding into a different waveform (only 29 dB under), but its
+    octave bands stay within 0.35 dB, so it is the one to listen to.
