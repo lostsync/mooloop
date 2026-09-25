@@ -30,6 +30,22 @@ const TONE_MAX_HZ: f32 = 20_000.0;
 /// Rate is deliberately excluded — it feeds a phase increment, so a step in
 /// rate is not a step in output. Stages and mode are discrete.
 const PARAM_SMOOTH_S: f32 = 0.01;
+/// How often the phaser works out its all-pass coefficients, in samples
+/// (MOO-235). Between two control points each coefficient moves in a
+/// straight line, so a stage costs a multiply-add a sample instead of an
+/// `exp2` and a `tan`. At the fastest rate (12 Hz) and full depth the sweep
+/// moves a stage about 0.03 octave in this span, which a straight line
+/// follows closely (`control_rate_phaser_matches_the_per_sample_formula`
+/// pins how closely). 16 measured 12 dB further from the per-sample formula
+/// for about 2.5 us a block less at 8 stages; the phaser is far under
+/// Chorus's cost either way, so the closer one won. Every coefficient stays
+/// inside `(-0.999, 0.999)` at both ends, so every point of the line does
+/// too and each first-order stage stays stable.
+const PHASER_CONTROL_FRAMES: u32 = 8;
+/// `log2(220)` and `log2(28)`: the phaser's centre is `220 * 28^color` Hz,
+/// whose log is a straight line in `color`.
+const PHASER_LOG2_BASE_HZ: f32 = 7.781_359_7;
+const PHASER_LOG2_COLOR_SPAN: f32 = 4.807_355;
 
 pub struct ModulationEffect {
     params: ModulationParams,
@@ -48,6 +64,21 @@ pub struct ModulationEffect {
     /// stage per sample. Only `[0..stages)` is meaningful; entries beyond
     /// the current stage count are stale and never read.
     tilt: [f32; MAX_PHASER_STAGES],
+    /// The phaser's control-rate coefficients (MOO-235): the value each
+    /// stage uses at this sample, the one it reaches at the next control
+    /// point, and the per-sample step between them.
+    phaser_coeffs: PhaserCoeffs,
+    /// Samples left until the next control point. Zero means "now".
+    phaser_countdown: u32,
+    /// Whether `phaser_coeffs` describes where the LFO is. False after
+    /// anything that moves the LFO or the stage table without the sample
+    /// loop seeing it: construction, a reset, a skipped block, a stage count
+    /// or sample-rate change, or a stretch in another mode.
+    phaser_primed: bool,
+    /// The Tone value the tone filters' cutoff was last set for, so the
+    /// `powf` and two `exp` only run while Tone moves (MOO-235). NaN when
+    /// no cutoff has been set, which no Tone value equals.
+    tone_set_for: f32,
     depth: Smoothed,
     feedback: Smoothed,
     spread: Smoothed,
@@ -70,6 +101,10 @@ impl ModulationEffect {
             phaser_l: [AllPass::default(); MAX_PHASER_STAGES],
             phaser_r: [AllPass::default(); MAX_PHASER_STAGES],
             tilt: [0.0; MAX_PHASER_STAGES],
+            phaser_coeffs: PhaserCoeffs::default(),
+            phaser_countdown: 0,
+            phaser_primed: false,
+            tone_set_for: f32::NAN,
             depth: smoothed(params.depth.clamp(0.0, 1.0)),
             feedback: smoothed(params.feedback.clamp(-0.92, 0.92)),
             spread: smoothed(params.spread.clamp(0.0, 1.0)),
@@ -107,6 +142,7 @@ impl ModulationEffect {
         for (stage, tilt) in self.tilt.iter_mut().enumerate().take(stages) {
             *tilt = (stage as f32 / denom - 0.5) * 1.1;
         }
+        self.phaser_primed = false;
     }
 
     /// Replace `start..end` of `bus` with this node's wet output, without the
@@ -127,6 +163,7 @@ impl ModulationEffect {
     pub fn reset(&mut self) {
         self.line.clear();
         self.lfo = Lfo::new();
+        self.phaser_primed = false;
         self.feedback_l = 0.0;
         self.feedback_r = 0.0;
         self.tone_l.reset();
@@ -192,67 +229,140 @@ impl ModulationEffect {
         self.tone_filter(wet_l, wet_r, tone)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn phaser_sample(
-        &mut self,
-        input_l: f32,
-        input_r: f32,
-        feedback: f32,
-        sweep_l: f32,
-        sweep_r: f32,
-        log2_center: f32,
-        octaves: f32,
-        tone: f32,
-    ) -> (f32, f32) {
+    /// One sample of the all-pass cascade, at the control-rate coefficients
+    /// [`Self::advance_phaser_control`] keeps (MOO-235).
+    fn phaser_sample(&mut self, input_l: f32, input_r: f32, feedback: f32, tone: f32) -> (f32, f32) {
         let stages = usize::from(self.params.stages).clamp(4, MAX_PHASER_STAGES);
+        let coeffs = &mut self.phaser_coeffs;
         let mut left = input_l + self.feedback_l * feedback;
+        for ((stage, coeff), step) in self.phaser_l[..stages]
+            .iter_mut()
+            .zip(&mut coeffs.now_l[..stages])
+            .zip(&coeffs.step_l[..stages])
+        {
+            left = stage.next(left, *coeff);
+            *coeff += step;
+        }
         let mut right = input_r + self.feedback_r * feedback;
-        for stage in 0..stages {
-            let tilt = self.tilt[stage];
-            left = self.phaser_l[stage].next(
-                left,
-                allpass_coefficient(
-                    self.phaser_hz(sweep_l + tilt, log2_center, octaves),
-                    self.sample_rate,
-                ),
-            );
-            right = self.phaser_r[stage].next(
-                right,
-                allpass_coefficient(
-                    self.phaser_hz(sweep_r + tilt, log2_center, octaves),
-                    self.sample_rate,
-                ),
-            );
+        for ((stage, coeff), step) in self.phaser_r[..stages]
+            .iter_mut()
+            .zip(&mut coeffs.now_r[..stages])
+            .zip(&coeffs.step_r[..stages])
+        {
+            right = stage.next(right, *coeff);
+            *coeff += step;
         }
         self.feedback_l = left;
         self.feedback_r = right;
         self.tone_filter(left, right, tone)
     }
 
-    /// `center * 2^(lfo*octaves)`, folded into one `exp2` of a sum instead of
-    /// the two `powf` calls that used to compute `center` (`220 *
-    /// 28^color`) and the depth term separately -- both per call, up to 24
-    /// times a sample (`reports/fable-2026-09-22.md` finding 2). `color` and
-    /// `depth` no longer appear here at all: `process_range` folds them into
-    /// `log2_center` and `octaves` once per sample, before the per-stage,
-    /// per-channel calls below it, so what is left here is exactly the part
-    /// that still varies with `lfo` (the LFO sweep plus this stage's tilt).
-    fn phaser_hz(&self, lfo: f32, log2_center: f32, octaves: f32) -> f32 {
-        (log2_center + lfo * octaves)
-            .exp2()
-            .clamp(60.0, self.sample_rate as f32 * 0.42)
+    /// Called once a sample before [`Self::phaser_sample`], and before the
+    /// LFO advances. At a control point, land every stage exactly on the
+    /// coefficient it was heading for and aim it at the one the sweep reaches
+    /// [`PHASER_CONTROL_FRAMES`] samples on. Unprimed, it first works out
+    /// where the sweep is now, so the line starts from the truth.
+    ///
+    /// "Samples on" means everything the coefficient depends on: the LFO
+    /// phase that far ahead at the current rate, and `depth`, `color` and
+    /// `spread` where their lags will be by then. Read at their present value
+    /// instead, a Depth or Color move put the whole sweep a span behind for
+    /// the 50 ms the lag takes: measured with a 16-sample span, a Color move
+    /// alone took the difference from the per-sample formula from 64 to 53 dB
+    /// under the signal. A Rate change unprimes, so the span it lands in restarts
+    /// from the real phase. Each control point starts from the real phase,
+    /// so nothing drifts.
+    fn advance_phaser_control(&mut self, depth: f32, color: f32, spread: f32) {
+        if self.phaser_primed && self.phaser_countdown > 0 {
+            self.phaser_countdown -= 1;
+            return;
+        }
+        let stages = usize::from(self.params.stages).clamp(4, MAX_PHASER_STAGES);
+        let sample_rate = self.sample_rate.max(1);
+        let coefficient = |lfo: f32, depth: f32, color: f32| {
+            let log2_center = PHASER_LOG2_BASE_HZ + PHASER_LOG2_COLOR_SPAN * color;
+            let octaves = 0.15 + depth * 2.2;
+            allpass_coefficient(phaser_hz(lfo, log2_center, octaves, sample_rate), sample_rate)
+        };
+        if !self.phaser_primed {
+            let sweep_l = self.lfo.peek_offset(0.0, LfoWave::Sine);
+            let sweep_r = self.lfo.peek_offset(spread * 0.25, LfoWave::Sine);
+            for stage in 0..stages {
+                let tilt = self.tilt[stage];
+                self.phaser_coeffs.target_l[stage] = coefficient(sweep_l + tilt, depth, color);
+                self.phaser_coeffs.target_r[stage] = coefficient(sweep_r + tilt, depth, color);
+            }
+            self.phaser_primed = true;
+        }
+        let ahead = |lag: &Smoothed| {
+            if lag.is_settled() {
+                lag.value()
+            } else {
+                let mut lag = *lag;
+                lag.advance_by(PHASER_CONTROL_FRAMES as usize)
+            }
+        };
+        let (depth, color, spread) = (ahead(&self.depth), ahead(&self.color), ahead(&self.spread));
+        let phase_ahead = PHASER_CONTROL_FRAMES as f32
+            * self.params.rate_hz.clamp(0.0, sample_rate as f32 * 0.25)
+            / sample_rate as f32;
+        let sweep_l = self.lfo.peek_offset(phase_ahead, LfoWave::Sine);
+        let sweep_r = self.lfo.peek_offset(phase_ahead + spread * 0.25, LfoWave::Sine);
+        let per_frame = 1.0 / PHASER_CONTROL_FRAMES as f32;
+        let coeffs = &mut self.phaser_coeffs;
+        for stage in 0..stages {
+            let tilt = self.tilt[stage];
+            let target_l = coefficient(sweep_l + tilt, depth, color);
+            let target_r = coefficient(sweep_r + tilt, depth, color);
+            coeffs.now_l[stage] = coeffs.target_l[stage];
+            coeffs.now_r[stage] = coeffs.target_r[stage];
+            coeffs.step_l[stage] = (target_l - coeffs.now_l[stage]) * per_frame;
+            coeffs.step_r[stage] = (target_r - coeffs.now_r[stage]) * per_frame;
+            coeffs.target_l[stage] = target_l;
+            coeffs.target_r[stage] = target_r;
+        }
+        self.phaser_countdown = PHASER_CONTROL_FRAMES - 1;
     }
 
+    /// The wet path's low-pass. Its cutoff is set only when `tone` differs
+    /// from the value it was last set for, so a Tone at rest costs two
+    /// one-pole samples and nothing else (MOO-235). The coefficient is the
+    /// same bits either way.
     fn tone_filter(&mut self, left: f32, right: f32, tone: f32) -> (f32, f32) {
-        let hz = TONE_MIN_HZ * (TONE_MAX_HZ / TONE_MIN_HZ).powf(tone);
-        self.tone_l.set_cutoff(hz, self.sample_rate.max(1));
-        self.tone_r.set_cutoff(hz, self.sample_rate.max(1));
+        if tone != self.tone_set_for {
+            let hz = TONE_MIN_HZ * (TONE_MAX_HZ / TONE_MIN_HZ).powf(tone);
+            self.tone_l.set_cutoff(hz, self.sample_rate.max(1));
+            self.tone_r.set_cutoff(hz, self.sample_rate.max(1));
+            self.tone_set_for = tone;
+        }
         (self.tone_l.next_sample(left), self.tone_r.next_sample(right))
     }
 }
 
 fn ring_frames(sample_rate: u32) -> usize {
     (MAX_DELAY_MS * sample_rate as f32 / 1_000.0) as usize + 8
+}
+
+/// The coefficients of both channels' all-pass stages, at control rate.
+#[derive(Clone, Copy, Default)]
+struct PhaserCoeffs {
+    now_l: [f32; MAX_PHASER_STAGES],
+    now_r: [f32; MAX_PHASER_STAGES],
+    step_l: [f32; MAX_PHASER_STAGES],
+    step_r: [f32; MAX_PHASER_STAGES],
+    target_l: [f32; MAX_PHASER_STAGES],
+    target_r: [f32; MAX_PHASER_STAGES],
+}
+
+/// A stage's corner, `center * 2^(lfo*octaves)`, as one `exp2` of a sum:
+/// `log2_center` is `log2(220 * 28^color)` and `octaves` the depth term,
+/// both worked out by the caller, and `lfo` is the sweep plus the stage's
+/// tilt. It replaced two `powf` a call (`reports/fable-2026-09-22.md`
+/// finding 2), and since MOO-235 it runs at control rate, not per sample.
+fn phaser_hz(lfo: f32, log2_center: f32, octaves: f32, sample_rate: u32) -> f32 {
+    (log2_center + lfo * octaves)
+        .exp2()
+        .clamp(60.0, sample_rate as f32 * 0.42)
 }
 
 fn allpass_coefficient(hz: f32, sample_rate: u32) -> f32 {
@@ -268,29 +378,29 @@ impl RangeProcessor for ModulationEffect {
             let spread = self.spread.advance();
             let tone = self.tone.advance();
             let color = self.color.advance();
-            // Two taps of one LFO cycle rather than two independently
-            // drifting oscillators, so the stereo image stays locked even
-            // as `spread` moves. Peek both before advancing once.
-            let sweep_l = self.lfo.peek_offset(0.0, LfoWave::Sine);
-            let sweep_r = self.lfo.peek_offset(spread * 0.25, LfoWave::Sine);
-            self.lfo.skip(1, self.params.rate_hz, self.sample_rate);
             let (input_l, input_r) = (bus.l[i], bus.r[i]);
             let (wet_l, wet_r) = match self.params.mode {
                 ModulationMode::Phaser => {
-                    // Hoisted out of the per-stage, per-channel calls inside
-                    // `phaser_sample` -- both are functions of `depth` and
-                    // `color` alone, which this loop has already advanced to
-                    // their per-sample value above, so each is computed once
-                    // per sample here instead of up to 24 times inside it.
-                    let log2_center = (220.0 * 28.0f32.powf(color)).log2();
-                    let octaves = 0.15 + depth * 2.2;
-                    self.phaser_sample(
-                        input_l, input_r, feedback, sweep_l, sweep_r, log2_center, octaves, tone,
+                    // Reads the LFO ahead of itself, so before it advances.
+                    self.advance_phaser_control(depth, color, spread);
+                    self.lfo.skip(1, self.params.rate_hz, self.sample_rate);
+                    self.phaser_sample(input_l, input_r, feedback, tone)
+                }
+                mode => {
+                    // A stretch in another mode leaves the phaser's
+                    // coefficients behind the LFO.
+                    self.phaser_primed = false;
+                    // Two taps of one LFO cycle rather than two independently
+                    // drifting oscillators, so the stereo image stays locked
+                    // even as `spread` moves. Peek both before advancing once.
+                    let sweep_l = self.lfo.peek_offset(0.0, LfoWave::Sine);
+                    let sweep_r = self.lfo.peek_offset(spread * 0.25, LfoWave::Sine);
+                    self.lfo.skip(1, self.params.rate_hz, self.sample_rate);
+                    self.delay_sample(
+                        input_l, input_r, mode, depth, feedback, spread, sweep_l, sweep_r, color,
+                        tone,
                     )
                 }
-                mode => self.delay_sample(
-                    input_l, input_r, mode, depth, feedback, spread, sweep_l, sweep_r, color, tone,
-                ),
             };
             bus.l[i] = wet_l;
             bus.r[i] = wet_r;
@@ -298,6 +408,16 @@ impl RangeProcessor for ModulationEffect {
     }
 
     fn apply_param(&mut self, id: u32, value: f32) {
+        // Rate, Depth, Color and Spread all steer the phaser's sweep, and the
+        // span in flight was aimed along their old values. A real change
+        // restarts it from where the sweep is (MOO-235); a value sent again
+        // unchanged, as a lane or a route does every block, does not.
+        let before = (
+            self.params.rate_hz,
+            self.params.depth,
+            self.params.color,
+            self.params.spread,
+        );
         match id {
             MODULATION_PARAM_MODE => {
                 self.params.mode = ModulationMode::from_index(value.round() as i32)
@@ -328,6 +448,15 @@ impl RangeProcessor for ModulationEffect {
                 self.rebuild_tilt();
             }
             _ => {}
+        }
+        let after = (
+            self.params.rate_hz,
+            self.params.depth,
+            self.params.color,
+            self.params.spread,
+        );
+        if after != before {
+            self.phaser_primed = false;
         }
     }
 }
@@ -392,6 +521,7 @@ impl AudioNode for ModulationEffect {
     /// place.
     fn skip_block(&mut self, ctx: &ProcessContext) {
         self.lfo.skip(ctx.frames, self.params.rate_hz, self.sample_rate);
+        self.phaser_primed = false;
         // The line is written too, and not because of what is in it -- it is
         // silent either way. `DelayLine::read` derives its interpolation
         // fraction from `write - 1 - offset`, so where the write head sits
@@ -419,6 +549,8 @@ impl AudioNode for ModulationEffect {
             self.spread.set_time(PARAM_SMOOTH_S, sample_rate);
             self.tone.set_time(PARAM_SMOOTH_S, sample_rate);
             self.color.set_time(PARAM_SMOOTH_S, sample_rate);
+            self.phaser_primed = false;
+            self.tone_set_for = f32::NAN;
         }
         let frames = ctx.frames.min(bus.capacity());
         process_param_split(self, bus, events_in, frames);
@@ -589,16 +721,11 @@ mod tests {
     /// original `center * 2^(lfo*octaves)` (two `powf`), not a bit-preserving
     /// hoist -- this pins the difference to float rounding rather than to
     /// changed behaviour, across the ranges `depth`, `color`, and the LFO
-    /// sweep (plus tilt) actually take.
+    /// sweep (plus tilt) actually take. Since MOO-235 `log2_center` is the
+    /// closed form `log2(220) + color * log2(28)` rather than a `powf` and a
+    /// `log2`, and the tolerance, a relative 1e-4, is unchanged.
     #[test]
     fn phaser_hz_matches_the_original_two_powf_formula() {
-        let effect = ModulationEffect::new(
-            ModulationParams {
-                mode: ModulationMode::Phaser,
-                ..ModulationParams::default()
-            },
-            SR,
-        );
         for depth in [0.0f32, 0.15, 0.5, 0.85, 1.0] {
             for color in [0.0f32, 0.2, 0.45, 0.7, 1.0] {
                 for lfo in [-1.55f32, -1.0, -0.3, 0.0, 0.4, 1.0, 1.55] {
@@ -608,8 +735,8 @@ mod tests {
                         let center = 220.0 * 28.0f32.powf(color);
                         (center * 2.0f32.powf(lfo * octaves)).clamp(60.0, SR as f32 * 0.42)
                     };
-                    let log2_center = (220.0 * 28.0f32.powf(color)).log2();
-                    let actual = effect.phaser_hz(lfo, log2_center, octaves);
+                    let log2_center = PHASER_LOG2_BASE_HZ + PHASER_LOG2_COLOR_SPAN * color;
+                    let actual = phaser_hz(lfo, log2_center, octaves, SR);
                     let scale = expected.abs().max(1.0);
                     assert!(
                         (actual - expected).abs() / scale < 1.0e-4,
@@ -668,5 +795,310 @@ mod tests {
             effect.tilt[1], four_stage_tilt_1,
             "the table did not change with the stage count"
         );
+    }
+
+    /// The phaser as it was before MOO-235, sample by sample: every stage's
+    /// coefficient from an `exp2` and a `tan` each sample, and the tone
+    /// filter's cutoff from a `powf` and two `exp` each sample. Kept here as
+    /// the reference the control-rate phaser is measured against, for its
+    /// sound (`control_rate_phaser_matches_the_per_sample_formula`) and its
+    /// cost (`phaser_cost`).
+    struct PerSamplePhaser {
+        params: ModulationParams,
+        lfo: Lfo,
+        stages_l: [AllPass; MAX_PHASER_STAGES],
+        stages_r: [AllPass; MAX_PHASER_STAGES],
+        tone_l: OnePoleLp,
+        tone_r: OnePoleLp,
+        feedback_l: f32,
+        feedback_r: f32,
+        depth: Smoothed,
+        feedback: Smoothed,
+        spread: Smoothed,
+        tone: Smoothed,
+        color: Smoothed,
+    }
+
+    impl PerSamplePhaser {
+        fn new(params: ModulationParams) -> Self {
+            let smoothed = |initial| Smoothed::new(initial, PARAM_SMOOTH_S, SR);
+            Self {
+                params,
+                lfo: Lfo::new(),
+                stages_l: [AllPass::default(); MAX_PHASER_STAGES],
+                stages_r: [AllPass::default(); MAX_PHASER_STAGES],
+                tone_l: OnePoleLp::new(),
+                tone_r: OnePoleLp::new(),
+                feedback_l: 0.0,
+                feedback_r: 0.0,
+                depth: smoothed(params.depth),
+                feedback: smoothed(params.feedback),
+                spread: smoothed(params.spread),
+                tone: smoothed(params.tone),
+                color: smoothed(params.color),
+            }
+        }
+
+        fn apply(&mut self, id: u32, value: f32) {
+            match id {
+                MODULATION_PARAM_DEPTH => self.depth.set_target(value),
+                MODULATION_PARAM_TONE => self.tone.set_target(value),
+                MODULATION_PARAM_COLOR => self.color.set_target(value),
+                MODULATION_PARAM_RATE_HZ => self.params.rate_hz = value,
+                _ => unreachable!("the reference only follows the knobs its tests move"),
+            }
+        }
+
+        fn sample(&mut self, input_l: f32, input_r: f32) -> (f32, f32) {
+            let depth = self.depth.advance();
+            let feedback = self.feedback.advance();
+            let spread = self.spread.advance();
+            let tone = self.tone.advance();
+            let color = self.color.advance();
+            let sweep_l = self.lfo.peek_offset(0.0, LfoWave::Sine);
+            let sweep_r = self.lfo.peek_offset(spread * 0.25, LfoWave::Sine);
+            self.lfo.skip(1, self.params.rate_hz, SR);
+            let log2_center = (220.0 * 28.0f32.powf(color)).log2();
+            let octaves = 0.15 + depth * 2.2;
+            let stages = usize::from(self.params.stages).clamp(4, MAX_PHASER_STAGES);
+            let denom = (stages - 1).max(1) as f32;
+            let mut left = input_l + self.feedback_l * feedback;
+            let mut right = input_r + self.feedback_r * feedback;
+            for stage in 0..stages {
+                let tilt = (stage as f32 / denom - 0.5) * 1.1;
+                let coefficient = |sweep: f32| {
+                    allpass_coefficient(phaser_hz(sweep + tilt, log2_center, octaves, SR), SR)
+                };
+                left = self.stages_l[stage].next(left, coefficient(sweep_l));
+                right = self.stages_r[stage].next(right, coefficient(sweep_r));
+            }
+            self.feedback_l = left;
+            self.feedback_r = right;
+            let hz = TONE_MIN_HZ * (TONE_MAX_HZ / TONE_MIN_HZ).powf(tone);
+            self.tone_l.set_cutoff(hz, SR);
+            self.tone_r.set_cutoff(hz, SR);
+            (self.tone_l.next_sample(left), self.tone_r.next_sample(right))
+        }
+    }
+
+    /// Noise under a 110 Hz saw: broadband, so every notch the sweep moves
+    /// has something to cut.
+    fn phaser_input(frames: usize) -> Vec<f32> {
+        let mut noise = crate::osc::Noise::new(0x2350_1a7e);
+        (0..frames)
+            .map(|i| {
+                let saw = 2.0 * (i as f32 * 110.0 / SR as f32).fract() - 1.0;
+                0.3 * noise.next_sample() + 0.2 * saw
+            })
+            .collect()
+    }
+
+    /// The fastest, deepest sweep the knobs allow, with heavy feedback, so
+    /// the notches are as sharp and move as fast as they can.
+    fn fastest_phaser(stages: u8) -> ModulationParams {
+        ModulationParams {
+            mode: ModulationMode::Phaser,
+            rate_hz: 12.0,
+            depth: 1.0,
+            color: 0.5,
+            feedback: 0.85,
+            spread: 0.5,
+            tone: 1.0,
+            stages,
+            ..ModulationParams::default()
+        }
+    }
+
+    /// **The control-rate phaser sounds like the per-sample one** (MOO-235).
+    /// Two seconds of noise and a saw through the fastest, deepest, most
+    /// resonant phaser the knobs allow, at 4, 8 and 12 stages, with Depth,
+    /// Color and Tone moved mid-block and Rate changed on the way: the
+    /// difference from the per-sample formula stays 66 dB under the wet
+    /// signal, and no single sample is off by more than 0.002. Measured
+    /// 2026-09-25: 81, 74 and 71 dB under, worst samples 3e-4, 7e-4 and
+    /// 1e-3, at 4, 8 and 12 stages.
+    #[test]
+    fn control_rate_phaser_matches_the_per_sample_formula() {
+        use crate::event::{Event, TimedEvent};
+
+        const BLOCK: usize = 128;
+        let blocks = 750;
+        let input = phaser_input(BLOCK * blocks);
+        // (block, offset, id, value)
+        let moves = [
+            (150usize, 37u32, MODULATION_PARAM_DEPTH, 0.35f32),
+            (300, 5, MODULATION_PARAM_TONE, 0.4),
+            (420, 100, MODULATION_PARAM_COLOR, 0.9),
+            (500, 64, MODULATION_PARAM_RATE_HZ, 3.0),
+            (600, 1, MODULATION_PARAM_DEPTH, 1.0),
+        ];
+        for stages in [4u8, 8, 12] {
+            let params = fastest_phaser(stages);
+            let mut effect = ModulationEffect::new(params, SR);
+            let mut reference = PerSamplePhaser::new(params);
+            let mut bus = StereoBus::with_capacity(BLOCK);
+            let (mut diff, mut wet, mut worst) = (0.0f64, 0.0f64, 0.0f32);
+            for block in 0..blocks {
+                let chunk = &input[block * BLOCK..(block + 1) * BLOCK];
+                bus.l[..BLOCK].copy_from_slice(chunk);
+                bus.r[..BLOCK].copy_from_slice(chunk);
+                let mut events = EventList::empty();
+                for &(_, offset, id, value) in moves.iter().filter(|m| m.0 == block) {
+                    assert!(events.push(TimedEvent {
+                        offset,
+                        event: Event::ParamValue { id, value },
+                    }));
+                }
+                effect.process(&context(BLOCK), &mut bus, &events, None);
+                for (i, &x) in chunk.iter().enumerate() {
+                    for &(_, _, id, value) in
+                        moves.iter().filter(|m| m.0 == block && m.1 as usize == i)
+                    {
+                        reference.apply(id, value);
+                    }
+                    let (l, r) = reference.sample(x, x);
+                    for (got, want) in [(bus.l[i], l), (bus.r[i], r)] {
+                        let error = got - want;
+                        diff += f64::from(error * error);
+                        wet += f64::from(want * want);
+                        worst = worst.max(error.abs());
+                    }
+                }
+            }
+            let null_db = 10.0 * (diff / wet).log10();
+            println!(
+                "{stages} stages: the difference is {null_db:.1} dB under the wet signal, \
+                 worst sample {worst:.2e}"
+            );
+            assert!(null_db < -66.0, "{stages} stages: the difference is only {null_db:.1} dB down");
+            assert!(worst < 0.002, "{stages} stages: a sample is off by {worst}");
+        }
+    }
+
+    /// A stretch in another mode, or a skipped block, moves the LFO without
+    /// the phaser seeing it. Coming back, its coefficients have to start from
+    /// where the sweep is, not where it was.
+    #[test]
+    fn the_phaser_catches_up_with_an_lfo_it_did_not_see_move() {
+        const BLOCK: usize = 128;
+        let params = fastest_phaser(8);
+        let input = phaser_input(BLOCK * 40);
+        for skip in [true, false] {
+            let mut effect = ModulationEffect::new(params, SR);
+            let mut bus = StereoBus::with_capacity(BLOCK);
+            for block in 0..21 {
+                let away = (10..20).contains(&block);
+                if skip && away {
+                    effect.skip_block(&context(BLOCK));
+                    continue;
+                }
+                let mode = if away { ModulationMode::Chorus } else { ModulationMode::Phaser };
+                effect.apply_param(MODULATION_PARAM_MODE, mode.to_index() as f32);
+                let chunk = &input[block * BLOCK..(block + 1) * BLOCK];
+                bus.l[..BLOCK].copy_from_slice(chunk);
+                bus.r[..BLOCK].copy_from_slice(chunk);
+                // One sample back in the phaser, so the first control point
+                // after the gap is the one being judged.
+                let frames = if block == 20 { 1 } else { BLOCK };
+                effect.process(&context(frames), &mut bus, &EventList::empty(), None);
+            }
+            // The coefficient the next sample will use, against the one the
+            // sweep says, read the way the per-sample formula reads it.
+            let log2_center = PHASER_LOG2_BASE_HZ + PHASER_LOG2_COLOR_SPAN * params.color;
+            let octaves = 0.15 + params.depth * 2.2;
+            let sweep = effect.lfo.peek_offset(0.0, LfoWave::Sine);
+            let truth =
+                allpass_coefficient(phaser_hz(sweep + effect.tilt[0], log2_center, octaves, SR), SR);
+            let now = effect.phaser_coeffs.now_l[0];
+            assert!(
+                (now - truth).abs() < 0.01,
+                "skipped {skip}: stage 0 is at {now}, the sweep says {truth}"
+            );
+        }
+    }
+
+    /// **What the phaser costs against Chorus**, per 128-frame block, before
+    /// and after MOO-235, in one run. Every row is played once per pass,
+    /// `REPS` passes (default 7), and each block's cost is its fastest over
+    /// the passes, so a burst of the shared box's other work drops out.
+    ///
+    /// ```sh
+    /// cargo test -p mooloop-dsp --release --lib -- phaser_cost --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "measures wall time; run deliberately in release"]
+    fn phaser_cost() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        const BLOCK: usize = 128;
+        const BLOCKS: usize = 750;
+        enum Device {
+            Now(Box<ModulationEffect>),
+            Before(Box<PerSamplePhaser>),
+        }
+        let reps = std::env::var("REPS")
+            .ok()
+            .and_then(|reps| reps.parse().ok())
+            .unwrap_or(7usize)
+            .max(1);
+        let input = phaser_input(BLOCK * BLOCKS);
+        let mut rows: Vec<(String, Device)> = vec![(
+            "chorus (default)".into(),
+            Device::Now(Box::new(ModulationEffect::new(ModulationParams::default(), SR))),
+        )];
+        for stages in [4u8, 8, 12] {
+            let params = ModulationParams {
+                mode: ModulationMode::Phaser,
+                stages,
+                ..ModulationParams::default()
+            };
+            rows.push((
+                format!("phaser {stages:>2}, per sample (before)"),
+                Device::Before(Box::new(PerSamplePhaser::new(params))),
+            ));
+            rows.push((
+                format!("phaser {stages:>2}, control rate (after)"),
+                Device::Now(Box::new(ModulationEffect::new(params, SR))),
+            ));
+        }
+        let mut best = vec![vec![u128::MAX; BLOCKS]; rows.len()];
+        let mut bus = StereoBus::with_capacity(BLOCK);
+        for _ in 0..reps {
+            for (row, (_, device)) in rows.iter_mut().enumerate() {
+                for (block, best) in best[row].iter_mut().enumerate() {
+                    let chunk = &input[block * BLOCK..(block + 1) * BLOCK];
+                    bus.l[..BLOCK].copy_from_slice(chunk);
+                    bus.r[..BLOCK].copy_from_slice(chunk);
+                    let start = Instant::now();
+                    match device {
+                        Device::Now(effect) => {
+                            effect.process(&context(BLOCK), &mut bus, &EventList::empty(), None)
+                        }
+                        Device::Before(reference) => {
+                            for i in 0..BLOCK {
+                                let (l, r) = reference.sample(bus.l[i], bus.r[i]);
+                                bus.l[i] = l;
+                                bus.r[i] = r;
+                            }
+                        }
+                    }
+                    black_box(&bus);
+                    *best = (*best).min(start.elapsed().as_nanos());
+                }
+            }
+        }
+        let mean_us =
+            |row: &[u128]| row.iter().sum::<u128>() as f64 / BLOCKS as f64 / 1_000.0;
+        let chorus = mean_us(&best[0]);
+        println!("{reps} passes, {BLOCKS} blocks of {BLOCK}, each block's fastest pass");
+        for ((label, _), best) in rows.iter().zip(&best) {
+            let us = mean_us(best);
+            println!(
+                "{label:<34} {us:7.2} us/block {:7.1} ns/frame {:5.2}x chorus",
+                us * 1_000.0 / BLOCK as f64,
+                us / chorus
+            );
+        }
     }
 }

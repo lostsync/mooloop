@@ -1823,7 +1823,10 @@ land on its own when it starts to matter:
   (chorus, flange, phaser, ensemble, and ADT) whose Rate carries the same
   sync lamp the delay does, over the same grid, clamped to the 12 Hz its LFO
   runs to. Its delay-based modes share a
-  bounded fractional stereo ring; Phaser uses a stereo all-pass cascade. The
+  bounded fractional stereo ring; Phaser uses a stereo all-pass cascade
+  whose coefficients are worked out every 8 samples and followed in a
+  straight line between (MOO-235), which costs about a seventh of doing it
+  every sample and less than Chorus at any stage count. The
   generic host supplies their dry/wet blend, so the DSP returns the processed
   signal only. The reverb runs eight modulated delay lines through a Hadamard
   feedback matrix behind a diffused, pre-delayed input, each line's return

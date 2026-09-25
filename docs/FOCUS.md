@@ -558,3 +558,23 @@ In the order worth playing:
     `sampler_loop_seam` and `sampler_slice_detect` hash the same. Then, in the
     app, add a zone on the ZONES page, play
     across the split on a keyboard, and undo the add.
+22. **The Modulation phaser at its fastest** (MOO-235). The phaser now
+    works out its all-pass coefficients every 8 samples and draws a straight
+    line between them, where it used to do an `exp2` and a `tan` per stage
+    per sample. The claim is that it sounds the same. A sustained ML-P8 saw
+    chord through a 12-stage phaser at half wet, Depth 100%, Feedback 70%,
+    two bars at 12 Hz (the fastest Rate) and then two at 0.5 Hz:
+
+    ```sh
+    scripts/antibox --no-incremental --pull target/phaser-sweep \
+      cargo run -p mooloop-engine --example phaser_sweep -- target/phaser-sweep
+    ```
+
+    Play `phaser.wav` against `dry.wav`. The 12 Hz half should be a fast,
+    even warble with no grain or buzz riding on it, and the 0.5 Hz half a
+    smooth sweep. There's no old build in the render to compare against; the
+    comparison with the old per-sample formula is measured instead, in
+    `control_rate_phaser_matches_the_per_sample_formula` (mooloop-dsp), on
+    noise and a saw at 12 Hz, full depth and 85% feedback with knobs moving.
+    Measured 2026-09-25: the difference is 81, 74 and 71 dB under the wet
+    signal at 4, 8 and 12 stages.
