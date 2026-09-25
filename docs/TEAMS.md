@@ -172,7 +172,9 @@ Files marked *shared* are split in the table above.
   — the `AudioNode` contract and what flows through it
 - `core/src/bridge.rs`
 - `session/src/engine.rs` (*shared*); `session/tests/ordering.rs`,
-  `session/tests/delivery.rs`
+  `session/tests/delivery.rs`, and `session/tests/song_block_cost.rs` (what a
+  real song's callbacks cost and which device kind or channel carries it; a
+  finding in a device is that device's team's)
 - `ui/ui/export-dialog.slint`
 - The plugin-host crate, once it exists (`docs/plans/plugin-hosting/`, MOO-11):
   hosted code runs inside the callback. Scanning, plugin paths and packaging

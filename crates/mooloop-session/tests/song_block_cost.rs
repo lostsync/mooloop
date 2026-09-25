@@ -352,6 +352,15 @@ fn displays_off(project: &mooloop_core::Project) -> mooloop_core::Project {
 /// muted in turn, and once with every bus's inserts removed. A channel whose
 /// muting takes the spike away is where to look; mute is used rather than
 /// removal so every other channel keeps its seat and its routing.
+///
+/// **The variants are played round-robin**: every variant once per pass,
+/// `reps` passes, each callback's cost the fastest of its passes. Played one
+/// variant at a time, a burst of someone else's work on a shared machine
+/// lands on every pass of one variant and reads as that variant's cost --
+/// on 2026-09-25 "displays off" and "mute Kick" both read 60-100 us *dearer*
+/// than the song as saved that way. Interleaved, a burst lands on one pass
+/// of many variants and the minimum removes it. `saves` is the as-saved
+/// mean less the variant's.
 fn attribute(
     project: &mooloop_core::Project,
     samples: &[Option<std::sync::Arc<mooloop_dsp::SampleData>>],
@@ -359,15 +368,10 @@ fn attribute(
     reps: usize,
     block: usize,
 ) {
-    let line = |label: &str, measured: &Measured| {
-        let (median, p99, max, spike) = shape(&measured.best);
-        let mean = measured.best.iter().sum::<u64>() / measured.best.len().max(1) as u64 / 1000;
-        println!(
-            "   {label:<34} mean {mean:>5}  p50 {median:>5}  p99 {p99:>5}  max {max:>5}  spike {spike:>5} us"
-        );
-    };
-    line("(as saved)", &measure(project, samples, frames, reps, block));
-    line("displays off", &measure(&displays_off(project), samples, frames, reps, block));
+    let mut variants: Vec<(String, mooloop_core::Project)> = vec![
+        ("(as saved)".into(), project.clone()),
+        ("displays off".into(), displays_off(project)),
+    ];
     let by = std::env::var("ATTRIBUTE_BY").unwrap_or_else(|_| "channels,kinds".into());
     if by.split(',').any(|by| by == "kinds") {
         // Every device of one kind bypassed, song-wide. Bypass rather than
@@ -389,14 +393,11 @@ fn attribute(
                     count += 1;
                 }
             }
-            let label = format!("bypass {count} {kind:?}");
-            line(&label, &measure(&bypassed, samples, frames, reps, block));
+            variants.push((format!("bypass {count} {kind:?}"), bypassed));
         }
     }
-    if !by.split(',').any(|by| by == "channels") {
-        return;
-    }
-    for (index, channel) in project.channels.iter().enumerate() {
+    let channels = by.split(',').any(|by| by == "channels");
+    for (index, channel) in project.channels.iter().enumerate().filter(|_| channels) {
         let mut muted = project.clone();
         muted.channels[index].setup.channel.muted = true;
         let effects: Vec<String> = channel
@@ -413,13 +414,56 @@ fn attribute(
             if effects.is_empty() { "" } else { ": " },
             effects.join(",")
         );
-        line(&label, &measure(&muted, samples, frames, reps, block));
+        variants.push((label, muted));
     }
-    let mut bare = project.clone();
-    for bus in &mut bare.buses {
-        bus.effects.clear();
+    if channels {
+        for (index, bus) in project.buses.iter().enumerate() {
+            if bus.effects.is_empty() {
+                continue;
+            }
+            let mut bare = project.clone();
+            bare.buses[index].effects.clear();
+            let effects: Vec<String> = bus
+                .effects
+                .iter()
+                .map(|effect| format!("{:?}", effect.params.kind()))
+                .collect();
+            variants.push((
+                format!("no inserts on bus {index} [{}]", effects.join(",")),
+                bare,
+            ));
+        }
+        let mut bare = project.clone();
+        for bus in &mut bare.buses {
+            bus.effects.clear();
+        }
+        variants.push(("no bus inserts".into(), bare));
     }
-    line("no bus inserts", &measure(&bare, samples, frames, reps, block));
+
+    let mut best: Vec<Vec<u64>> = vec![Vec::new(); variants.len()];
+    for _ in 0..reps {
+        for ((_, variant), best) in variants.iter().zip(best.iter_mut()) {
+            let measured = measure(variant, samples, frames, 1, block);
+            if best.is_empty() {
+                *best = measured.best;
+            } else {
+                for (kept, nanos) in best.iter_mut().zip(measured.best) {
+                    *kept = (*kept).min(nanos);
+                }
+            }
+        }
+    }
+    let mean_of = |best: &[u64]| best.iter().sum::<u64>() / best.len().max(1) as u64 / 1000;
+    let saved = mean_of(&best[0]);
+    for ((label, _), best) in variants.iter().zip(&best) {
+        let (median, p99, max, spike) = shape(best);
+        let mean = mean_of(best);
+        println!(
+            "   {label:<34} mean {mean:>5}  p50 {median:>5}  p99 {p99:>5}  max {max:>5}  \
+             spike {spike:>5}  saves {:>5} us",
+            saved as i64 - mean as i64
+        );
+    }
 }
 
 #[test]
