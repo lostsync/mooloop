@@ -1,11 +1,9 @@
 # Focus
 
-Status: **the 2026-09-24 sequence is done (2026-09-25); the next one is
-Adam's call.** All twenty issues in its three lanes landed over a day and a
-night of team orchestration. MOO-219 waits on Adam, and none of it has been
-heard. **Do not start new sequence work from this document until it is
-rewritten** with the choice under "The next sequence" below. The record is
-in `JOURNAL.md`, each plan's `00-status.md`, and the issues.
+Status: **the 2026-09-25 sequence is queued** (21 issues in Todo, three
+lanes, below), for an overnight run of team orchestration. The 2026-09-24
+sequence is done. Its record is in `JOURNAL.md`, and MOO-219 still waits on
+Adam. Nothing from either day has been heard.
 
 `archive/ROADMAP.md` orders the whole product by dependency, and `SCOPE.md`
 says what 0.2.0 is. This document is narrower: it names the active sequence
@@ -36,61 +34,92 @@ Two siblings, kept because they outlived the plans they came from:
 - **Order the work so something new is audible early.** 2026-09-23 was the
   biggest day of correctness work this project has had, clicks, NaNs, undo,
   durability, export parity, and almost none of it is a new sound. In the
-  sequence below, lane 3 opens on a zipper Adam heard in a real tune and
-  moves straight to new loop gestures, and lane 2 ends with a plugin put in
-  a chain from the window.
+  sequence below, lane 2 opens on a zipper and moves straight to glide and
+  key zones, which are new ways to play a sample, and lane 3 opens on the
+  oldest defect Adam reported himself.
+
+## The sequence, 2026-09-25 (overnight)
+
+Three lanes, each worked top to bottom. Every issue is in **Todo**, and its
+Linear description is the work order. Each lane's teams come from the issues'
+labels. Land each issue as it verifies, because the next one in the lane
+often builds on it.
+
+**Lane 1, Rendering (0.2.0, all of it).** Export becomes a job that can write
+several files.
+1. MOO-180: the dialog picks a folder and a name, and one render writes
+   several files. Start from the parked branch `feat/moo-180-render-job`
+   (see the issue's comment). Everything else in the lane stands on it.
+2. MOO-181: render a range (whole song, loop selection, custom, current
+   pattern).
+3. MOO-188: auto-bump the file name instead of overwriting.
+4. MOO-186: 16-bit with dither, dither on 24-bit, mono.
+5. MOO-223: an export flushes denormals the way playback does, so the two
+   are bit-identical.
+6. MOO-182: stems from mixer tracks, in one pass.
+7. MOO-183: channels straight out, bypassing the mixer.
+8. MOO-190: the dialog remembers its last settings across launches.
+
+**Lane 2, the sampler's instrument side (Sampler V2, 0.2.0).**
+1. MOO-221: ML-P8's Pan and Spread may zipper the way Volume did. Confirm
+   it first (it carries `Triage`).
+2. MOO-201: a NaN in the ML-P8's voice feedback, or any self-fed delay in a
+   source, stays there.
+3. MOO-7: the sampler's stretch pool follows Voices, by a structural resize.
+4. MOO-45: mono, legato and glide for the sampler, using ML-M1's `GlideMode`
+   plus `EnvTrigger` pair and the shared glide block.
+5. MOO-14: key zones. The zone type leaves room for a velocity range, and
+   velocity layers are not built. A v1 song loads as one full-range zone.
+6. MOO-227: a click on an instrument preset in the browser auditions it.
+   What an effect preset's audition sounds like is a question for Adam; ask
+   it on the issue and build the instrument half.
+
+**Lane 3, timing, spikes and small correctness.**
+1. MOO-234: MIDI recording over a looping pattern (`SHORT_NOTES.md`), then
+   an overdub/replace toggle.
+2. MOO-209: recorded MIDI is compensated for the driver's playback latency.
+3. MOO-233: the Preamp's band display runs two analyzers in the callback
+   for nobody. It is the largest source of callback spikes in Adam's own
+   songs.
+4. MOO-210: a container's output trim is inert.
+5. MOO-226: an insert at full wet leaks its dry signal at -147 dB.
+6. MOO-230: a hosted instrument's restart fades out instead of cutting.
+7. MOO-231: the null-driver test that flakes on a loaded macOS runner.
+
+**Rulings for this sequence:**
+- Adam's 2026-09-23 answers apply as written on each issue. Rendering is
+  all in 0.2.0, and an agent designs the export dialog's layout. Key zones
+  are built and velocity layers are not. The sampler's stretch pool is
+  resized structurally. Sampler glide uses ML-M1's pair of controls.
+- MOO-234's Replace mode removes the recording channel's notes in the span
+  the playhead crosses, and each pass stays one undo step. If that doesn't
+  fit the pattern model, the team asks on the issue and lands Overdub.
+- Out of this sequence: key-zone mapping workspace and SFZ (MOO-40, MOO-41),
+  the rest of Rendering (MOO-184, 185, 187, 189, 191, 193, 194), and
+  everything under "Left for later" below.
 
 ## The sequence, 2026-09-24: done
 
-Every item is on `main` and closed, except MOO-219, which is In Review for
-Adam. Listening and looking are items 5 and 8-18 of "Listening is a step"
-below.
+Twenty issues in three lanes: interface fixes, CLAP hosting through a
+plugin as a channel's instrument, and the sampler's loop story. All of it is
+on `main`, and all of it is closed except MOO-219, which is In Review for
+Adam. `JOURNAL.md` has the record. Its rulings still stand: MOO-43 is
+crossfade only, the master's safety limiter has no lookahead, the master
+keeps its built-in Bus Comp, and the insert runs the same DSP. A plugin's
+role (effect or instrument) comes from its own CLAP features, and its ports
+decide only what can be wired.
 
-- **Lane 1, interface and daily fixes:** knobs follow their parameter
-  (MOO-220), the left sidebar (MOO-8), browser search/select/load (MOO-9),
-  add a device from the arrow between devices (MOO-218), fold a device to
-  its header (MOO-219: needs one look in the running app, and Adam's answer
-  on whether folds are saved), no master lookahead (MOO-217), and a true
-  "realtime" readout (MOO-215).
-- **Lane 2, CLAP hosting:** plugin parameters, automation, modulation and
-  state (MOO-82), no click when a plugin swaps (MOO-213), plugin latency
-  inside containers (MOO-212), the plugin browser, the insert row and a face
-  for plugins with no GUI, so a plugin goes in a chain from the window
-  (MOO-83), and the stretch items, a plugin as a channel's instrument
-  playing its notes (MOO-84, MOO-85, MOO-232). No installed plugin makes a
-  sound from notes alone, so the instrument case uses the test sine; Surge
-  XT or Dexed would be the real one.
-- **Lane 3, the sampler's loop story:** ML-P8 Volume smoothing (MOO-214),
-  loop crossfade (MOO-43), SYNC off freezes the ratio (MOO-39), loop grid
-  (MOO-47), transient slicing (MOO-44), a pattern from slices (MOO-46), and
-  Bus Comp as an insert (MOO-216).
+## Left for later
 
-**Rulings made 2026-09-24**, still in force: MOO-43 is crossfade only; the
-master's safety limiter has no lookahead; the master keeps its built-in Bus
-Comp and the insert runs the same DSP; a plugin's role (effect or
-instrument) comes from its own CLAP features, and its ports decide only what
-can be wired.
-
-## The next sequence
-
-Not chosen. What the day left, filed, for Adam to pick from:
-
-- **Left in Backlog on purpose:** key zones and multisample (MOO-14, MOO-40,
-  MOO-41) and legato (MOO-45), the sampler's instrument side.
 - **Plugin hosting's rest:** a plugin face's modulation ring and parameter
   naming (MOO-228), pinned parameters and a Plugins preferences page
-  (MOO-229), plugin presets (MOO-222), an instrument's parameters (need a
-  source-slot id, MOO-74's open point), an instrument restart fades (MOO-230),
-  GUI windows (step 11), VST3 and AU.
-- **The browser:** auditioning a device preset on click (MOO-227), rename by
-  double-click (MOO-224), spring-loaded preset drag (MOO-225).
-- **Correctness, small:** the host leaks the dry signal at -147 dB at full
-  wet (MOO-226), exports keep subnormals playback flushes (MOO-223), ML-P8
-  Pan/Spread may step like Volume did (MOO-221, Triage), recorded MIDI is
-  compensated for no output latency (MOO-209), a container's output trim is
-  inert (MOO-210), and a timing-flaky test on macOS CI (MOO-231).
-- **The listening passes themselves**, before any of it: eighteen are
-  queued and nothing since 2026-09-18 has been heard.
+  (MOO-229), and plugin presets (MOO-222). Also an instrument's parameters,
+  which need a source-slot id (MOO-74's open point), GUI windows (MOO-86),
+  VST3 (MOO-87) and AU (MOO-88). Most of this needs someone to look at it.
+- **The browser:** rename by double-click (MOO-224), spring-loaded preset
+  drag (MOO-225), and the full-size pane (MOO-10).
+- **The listening passes themselves:** eighteen are queued, and nothing
+  since 2026-09-18 has been heard.
 
 ## Answered 2026-09-23, now construction
 
@@ -133,7 +162,6 @@ is short:
 - **MOO-219:** whether a collapsed device stays collapsed when the song
   reopens, and one look at the folded strip's rotated label in the running
   app (the test renderer ignores rotation).
-- **The next sequence** (above).
 
 MOO-159 (the tracker) keeps its label, because "not now" defers the question
 rather than answering it.
@@ -145,11 +173,6 @@ rendering the active step; threatens realtime safety or project compatibility;
 or is a small regression in the surface being touched. Record larger adjacent
 work instead of folding it into the current branch.
 
-- **`midi recording doesnt loop properly`** (`SHORT_NOTES.md`): after one
-  playthrough, notes stack at the last tick. Capture's position wrap was
-  fixed 2026-09-17. What Adam reports is the pattern not starting over, and
-  he wants an overdub/replace toggle beside it. Not yet diagnosed against
-  the tree, and the oldest user-reported defect still open.
 - **`from_index` answers out-of-range input two different ways.** The
   `ALL`-table convention clamps and the hand-written `match` falls through to
   variant 0. It is the recurring fault, an option list and a Rust table
@@ -158,18 +181,15 @@ work instead of folding it into the current branch.
 - **There is no driver-free `EngineHandle`**, so the control-plane boundary
   cannot be exercised whole in a test. `archive/control-plane-seams/01`'s
   `CommandSink` is the partial answer.
-- **A NaN in the ML-P8's voice feedback loop, or any self-fed `DelayLine` in
-  a source, stays there** (MOO-201). It is the one latch the 2026-09-23 NaN
-  work left.
-
 ## Outside the sequence, and in 0.2.0
 
 These are in `SCOPE.md` and not deferred. They are outside this sequence the
 way `coreaudio-driver/` was: asked for directly, and worked when asked.
 
 - **Rendering** (Linear project Rendering; joined 0.2.0 2026-09-23, all of
-  it). MOO-180, the dialog that picks a folder and a name and lets one render
-  write several files, is in progress and the rest stand on it.
+  it). Its first eight issues are lane 1 of the current sequence. The rest
+  (pattern renders, wrap tail, sample rate, name templates, presets,
+  normalize, and settings saved in the song) follow MOO-180.
 - **Theming's remainder**: MOO-154 (accessibility), MOO-205 (the type scale
   grows glyphs but not boxes), MOO-157 (face paddings), and relief (MOO-153,
   above).
@@ -222,11 +242,12 @@ doubts about a device-based implementation to rest"*, and the plan closed on
 parameters. Buffer now keeps its history across a tempo change, an undo and a
 reload (MOO-137); whether a saved freeze keeps its audio is MOO-196.
 
-**Sampler V2 is in for 0.2.0, and its loop half is lane 3 of this
-sequence** (Linear project Sampler V2, umbrella MOO-42; `SCOPE.md` §4). Weigh
-it against the loop story, chopped and stuttered breaks and loops mangled per
-repeat, rather than against generic sampler completeness. Its instrument half
-(key zones, multisample, legato) is not in this sequence.
+**Sampler V2 is in for 0.2.0** (Linear project Sampler V2, umbrella MOO-42;
+`SCOPE.md` §4). Its loop half landed on 2026-09-24, and its instrument half
+(legato and key zones) is lane 2 of the current sequence. Weigh it against
+the loop story, chopped and stuttered breaks and loops mangled per repeat,
+rather than against generic sampler completeness. The mapping workspace and
+SFZ import (MOO-40, MOO-41) come after key zones.
 
 ## Working discipline
 
