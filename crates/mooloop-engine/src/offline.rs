@@ -160,6 +160,10 @@ pub struct ExportProgress {
     /// cap. Zero until the render has started.
     most: AtomicU64,
     cancelled: AtomicBool,
+    /// Cancel once this many frames are done: a test's way to stop a job
+    /// at a known point. Zero is never.
+    #[cfg(test)]
+    cancel_after: AtomicU64,
 }
 
 impl ExportProgress {
@@ -179,8 +183,10 @@ impl ExportProgress {
         Some((done as f64 / most as f64) as f32)
     }
 
-    /// Ask the render to stop. It stops at its next block, removes what it
-    /// had written, and returns [`ExportError::Cancelled`].
+    /// Ask the render to stop. It stops at its next block, removes the
+    /// partial files of the pass in progress, and returns
+    /// [`ExportError::Cancelled`]. A job's files from passes that had
+    /// already finished stay.
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Relaxed);
     }
@@ -191,6 +197,13 @@ impl ExportProgress {
 
     fn advance(&self, frames: usize) -> Result<(), ExportError> {
         self.done.fetch_add(frames as u64, Ordering::Relaxed);
+        #[cfg(test)]
+        {
+            let after = self.cancel_after.load(Ordering::Relaxed);
+            if after > 0 && self.done.load(Ordering::Relaxed) >= after {
+                self.cancel();
+            }
+        }
         if self.is_cancelled() {
             Err(ExportError::Cancelled)
         } else {
@@ -198,6 +211,128 @@ impl ExportProgress {
         }
     }
 }
+
+/// Where an output's audio is taken from.
+///
+/// Only the master mix for now; stems (MOO-182) and channels rendered
+/// directly (MOO-183) are further taps on the same pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderTap {
+    Master,
+}
+
+/// One file a job writes: where, from which tap, in which format.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RenderOutput {
+    pub path: PathBuf,
+    pub tap: RenderTap,
+    pub format: ExportFormat,
+}
+
+/// Outputs that share one timeline, rendered in **one** pass: the project is
+/// rendered once and each block is handed to every output (MOO-180).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RenderPass {
+    pub scope: RenderScope,
+    /// The most tail the pass may add after the last bar, 0 to 30 s; see
+    /// [`ExportSpec::tail_seconds`]. The tail ends when the whole project is
+    /// at rest, so every output of a pass is the same length.
+    pub tail_seconds: f32,
+    pub outputs: Vec<RenderOutput>,
+}
+
+/// Everything one export writes: one or more passes, rendered in order,
+/// under one [`ExportProgress`] (MOO-180).
+///
+/// The master mix alone is a job with one pass holding one output
+/// ([`RenderJob::single`]).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RenderJob {
+    pub passes: Vec<RenderPass>,
+}
+
+impl RenderJob {
+    /// The job an [`ExportSpec`] describes: one pass, the master mix, one file.
+    pub fn single(spec: &ExportSpec) -> Self {
+        Self {
+            passes: vec![RenderPass {
+                scope: spec.scope,
+                tail_seconds: spec.tail_seconds,
+                outputs: vec![RenderOutput {
+                    path: spec.path.clone(),
+                    tap: RenderTap::Master,
+                    format: spec.format,
+                }],
+            }],
+        }
+    }
+
+    /// Every file the job writes, in the order it writes them.
+    pub fn paths(&self) -> impl Iterator<Item = &Path> {
+        self.passes
+            .iter()
+            .flat_map(|pass| pass.outputs.iter().map(|output| output.path.as_path()))
+    }
+
+    /// The files the job would replace: the ones already on disk. The export
+    /// dialog asks once, saying how many, before it starts.
+    pub fn existing_targets(&self) -> Vec<PathBuf> {
+        self.paths()
+            .filter(|path| path.exists())
+            .map(Path::to_path_buf)
+            .collect()
+    }
+
+    fn validate(&self) -> Result<(), ExportError> {
+        if self.passes.is_empty() {
+            return Err(ExportError::Invalid("the export has nothing to write".into()));
+        }
+        let mut seen = std::collections::HashSet::new();
+        for pass in &self.passes {
+            if !pass.tail_seconds.is_finite() || !(0.0..=30.0).contains(&pass.tail_seconds) {
+                return Err(ExportError::Invalid(
+                    "tail duration must be between 0 and 30 seconds".into(),
+                ));
+            }
+            if pass.outputs.is_empty() {
+                return Err(ExportError::Invalid("a render pass has no outputs".into()));
+            }
+            for output in &pass.outputs {
+                if !seen.insert(output.path.as_path()) {
+                    return Err(ExportError::Invalid(format!(
+                        "{} is written twice by the same export",
+                        output.path.display()
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// One file a job finished, with what its render found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedFile {
+    pub path: PathBuf,
+    pub summary: RenderSummary,
+}
+
+/// A job that stopped before its end: the error, and the files it had
+/// already finished. Those are complete and stay on disk; the pass that was
+/// in progress left nothing behind (MOO-180).
+#[derive(Debug)]
+pub struct JobFailure {
+    pub written: Vec<RenderedFile>,
+    pub error: ExportError,
+}
+
+impl fmt::Display for JobFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.error.fmt(f)
+    }
+}
+
+impl std::error::Error for JobFailure {}
 
 pub struct OfflineRenderer;
 
@@ -255,91 +390,272 @@ impl OfflineRenderer {
         progress: &ExportProgress,
         plugins: BTreeMap<PluginSlotId, Box<dyn AudioNode + Send>>,
     ) -> Result<RenderSummary, ExportError> {
-        if !spec.tail_seconds.is_finite() || !(0.0..=30.0).contains(&spec.tail_seconds) {
-            return Err(ExportError::Invalid(
-                "tail duration must be between 0 and 30 seconds".into(),
-            ));
+        let job = RenderJob::single(spec);
+        let mut plugins = Some(plugins);
+        match Self::render_job_with_plugins(
+            project,
+            samples,
+            realtime_sample_rate,
+            &job,
+            progress,
+            &mut |_| plugins.take().unwrap_or_default(),
+        ) {
+            Ok(mut files) => Ok(files.remove(0).summary),
+            Err(failure) => Err(failure.error),
         }
-        let mut render_project = project.clone();
-        match spec.scope {
-            RenderScope::Pattern { index } => {
-                if index >= render_project.pattern_lengths.len() {
-                    return Err(ExportError::Invalid("pattern is out of range".into()));
-                }
-                render_project.playback_mode = PlaybackMode::Pattern;
-                render_project.current_pattern = index as u16;
-            }
-            RenderScope::Song => render_project.playback_mode = PlaybackMode::Song,
+    }
+
+    /// Render every pass of `job` in order, each pass once, handing each
+    /// block to every output of the pass (MOO-180).
+    ///
+    /// `progress` covers the whole job. A cancel, or any failure, stops at
+    /// the next block: the files of the passes that had finished stay, and
+    /// the pass in progress removes its partial files, leaving whatever was
+    /// at its targets as it was.
+    pub fn render_job(
+        project: &Project,
+        samples: &[Option<Arc<SampleData>>],
+        realtime_sample_rate: u32,
+        job: &RenderJob,
+        progress: &ExportProgress,
+    ) -> Result<Vec<RenderedFile>, JobFailure> {
+        Self::render_job_with_plugins(
+            project,
+            samples,
+            realtime_sample_rate,
+            job,
+            progress,
+            &mut |_| BTreeMap::new(),
+        )
+    }
+
+    /// [`Self::render_job`] with hosted plugins' processors, as in
+    /// [`Self::render_with_plugins`]. A processor renders one pass, so
+    /// `plugins` is asked once for each pass by its index in `job.passes`,
+    /// just before that pass is built. A caller whose job has one pass
+    /// (every export the dialog builds so far) hands its map over on the
+    /// first call; a pass given an empty map plays its plugins as
+    /// placeholders.
+    pub fn render_job_with_plugins(
+        project: &Project,
+        samples: &[Option<Arc<SampleData>>],
+        realtime_sample_rate: u32,
+        job: &RenderJob,
+        progress: &ExportProgress,
+        plugins: &mut dyn FnMut(usize) -> BTreeMap<PluginSlotId, Box<dyn AudioNode + Send>>,
+    ) -> Result<Vec<RenderedFile>, JobFailure> {
+        let fail = |written, error| Err(JobFailure { written, error });
+        if let Err(error) = job.validate() {
+            return fail(Vec::new(), error);
         }
         // The session's rate for every format: an MP3 rendered at 48 kHz
         // from a 96 kHz session was not what was heard wherever a sound
         // depends on the rate (MOO-125). The encoder converts afterwards.
         let sample_rate = realtime_sample_rate;
         if sample_rate == 0 {
-            return Err(ExportError::Invalid("sample rate cannot be zero".into()));
+            return fail(
+                Vec::new(),
+                ExportError::Invalid("sample rate cannot be zero".into()),
+            );
         }
 
-        let mut state = RenderState::from_project(sample_rate, &render_project, samples);
-        state.host_plugins(&render_project, plugins);
-        let base_ticks = match spec.scope {
-            RenderScope::Pattern { index } => state
-                .pattern_length_ticks(index)
-                .ok_or_else(|| ExportError::Invalid("pattern is out of range".into()))?,
-            RenderScope::Song => state.song_length_ticks(),
-        };
-        let base_frames = (f64::from(base_ticks) / state.ticks_per_sample()).ceil() as u64;
-        let tail_cap = (f64::from(spec.tail_seconds) * f64::from(sample_rate)).round() as u64;
-        let file_sample_rate = match spec.format {
-            ExportFormat::Wav(_) => sample_rate,
-            ExportFormat::Mp3(_) => mp3_file_rate(sample_rate),
-        };
-        let mut summary = RenderSummary {
-            sample_rate,
-            file_sample_rate,
-            base_frames,
-            tail_frames: tail_cap,
-            total_frames: base_frames.saturating_add(tail_cap),
-            refused_events: 0,
-            overs: 0,
-            clipped_samples: 0,
-            non_finite_samples: 0,
-        };
-
+        // Measure every pass first, so the bar covers the whole job from its
+        // first block. A pass's state is rebuilt when its turn comes rather
+        // than held: a job of many patterns would otherwise hold a whole
+        // device graph per pattern.
+        // The first pass's state is kept, so a one-pass job builds it once,
+        // with its plugins; the others are measured without theirs, which
+        // change neither the bars nor the tail cap.
+        let mut lengths = Vec::with_capacity(job.passes.len());
+        let mut first = None;
+        for (index, pass) in job.passes.iter().enumerate() {
+            let hosted = if index == 0 { plugins(0) } else { BTreeMap::new() };
+            match prepare_pass(project, samples, sample_rate, pass, hosted) {
+                Ok((state, base, cap)) => {
+                    if first.is_none() {
+                        first = Some(state);
+                    }
+                    lengths.push((base, cap));
+                }
+                Err(error) => return fail(Vec::new(), error),
+            }
+        }
+        let most: u64 = lengths
+            .iter()
+            .map(|(base, cap)| base.saturating_add(*cap))
+            .sum();
         progress.done.store(0, Ordering::Relaxed);
-        progress.most.store(summary.total_frames.max(1), Ordering::Relaxed);
-        let temporary = temporary_path(&spec.path);
-        let result = match spec.format {
-            ExportFormat::Wav(encoding) => {
-                render_wav(&temporary, &mut state, summary, encoding, progress)
-            }
-            ExportFormat::Mp3(bitrate) => {
-                render_mp3(&temporary, &mut state, summary, bitrate, progress)
-            }
-        };
-        match result {
-            Ok(rendered) => {
-                summary.clipped_samples = rendered.clipped;
-                summary.tail_frames = rendered.tail_frames;
-                summary.total_frames = base_frames.saturating_add(rendered.tail_frames);
-            }
-            Err(error) => {
-                let _ = fs::remove_file(&temporary);
-                return Err(error);
+        progress.most.store(most.max(1), Ordering::Relaxed);
+
+        let mut written = Vec::new();
+        let mut rendered_frames = 0u64;
+        for (index, (pass, &(base_frames, tail_cap))) in
+            job.passes.iter().zip(&lengths).enumerate()
+        {
+            let mut state = match first.take() {
+                Some(state) => state,
+                None => match prepare_pass(project, samples, sample_rate, pass, plugins(index)) {
+                    Ok((state, _, _)) => state,
+                    Err(error) => return fail(written, error),
+                },
+            };
+            let before = progress.done.load(Ordering::Relaxed);
+            match render_pass(&mut state, pass, sample_rate, base_frames, tail_cap, progress) {
+                Ok(files) => {
+                    rendered_frames = rendered_frames.saturating_add(
+                        files
+                            .first()
+                            .map_or(base_frames, |file| file.summary.total_frames),
+                    );
+                    written.extend(files);
+                    // A tail that fell silent early skips the rest of its
+                    // cap, so the bar jumps to where the next pass starts.
+                    progress.done.store(
+                        before.saturating_add(base_frames.saturating_add(tail_cap)),
+                        Ordering::Relaxed,
+                    );
+                }
+                Err((files, error)) => {
+                    written.extend(files);
+                    return fail(written, error);
+                }
             }
         }
-        summary.refused_events = state.refused_events();
-        summary.overs = state.output_overs();
-        summary.non_finite_samples = state.output_non_finite();
-        report(&summary, &spec.path);
+        progress.done.store(rendered_frames.max(1), Ordering::Relaxed);
+        progress.most.store(rendered_frames.max(1), Ordering::Relaxed);
+        Ok(written)
+    }
+}
+
+/// The render state for `pass`, and its length: the bars, and the tail cap,
+/// in frames at `sample_rate`.
+fn prepare_pass(
+    project: &Project,
+    samples: &[Option<Arc<SampleData>>],
+    sample_rate: u32,
+    pass: &RenderPass,
+    plugins: BTreeMap<PluginSlotId, Box<dyn AudioNode + Send>>,
+) -> Result<(RenderState, u64, u64), ExportError> {
+    let mut render_project = project.clone();
+    match pass.scope {
+        RenderScope::Pattern { index } => {
+            if index >= render_project.pattern_lengths.len() {
+                return Err(ExportError::Invalid("pattern is out of range".into()));
+            }
+            render_project.playback_mode = PlaybackMode::Pattern;
+            render_project.current_pattern = index as u16;
+        }
+        RenderScope::Song => render_project.playback_mode = PlaybackMode::Song,
+    }
+    let mut state = RenderState::from_project(sample_rate, &render_project, samples);
+    state.host_plugins(&render_project, plugins);
+    let base_ticks = match pass.scope {
+        RenderScope::Pattern { index } => state
+            .pattern_length_ticks(index)
+            .ok_or_else(|| ExportError::Invalid("pattern is out of range".into()))?,
+        RenderScope::Song => state.song_length_ticks(),
+    };
+    let base_frames = (f64::from(base_ticks) / state.ticks_per_sample()).ceil() as u64;
+    let tail_cap = (f64::from(pass.tail_seconds) * f64::from(sample_rate)).round() as u64;
+    Ok((state, base_frames, tail_cap))
+}
+
+/// Render one pass into every one of its outputs, then move each finished
+/// file over its target. On failure, the files already moved are returned
+/// with the error, and every other output's partial file is removed.
+fn render_pass(
+    state: &mut RenderState,
+    pass: &RenderPass,
+    sample_rate: u32,
+    base_frames: u64,
+    tail_cap: u64,
+    progress: &ExportProgress,
+) -> Result<Vec<RenderedFile>, (Vec<RenderedFile>, ExportError)> {
+    let temporaries: Vec<PathBuf> = pass
+        .outputs
+        .iter()
+        .map(|output| temporary_path(&output.path))
+        .collect();
+    let discard = |from: usize| {
+        for temporary in &temporaries[from..] {
+            let _ = fs::remove_file(temporary);
+        }
+    };
+
+    let mut sinks = Vec::with_capacity(pass.outputs.len());
+    for (output, temporary) in pass.outputs.iter().zip(&temporaries) {
+        match Sink::open(temporary, output, sample_rate) {
+            Ok(sink) => sinks.push(sink),
+            Err(error) => {
+                drop(sinks);
+                discard(0);
+                return Err((Vec::new(), error));
+            }
+        }
+    }
+
+    let rendered = render_blocks(state, base_frames, tail_cap, progress, |state, frames| {
+        for sink in &mut sinks {
+            let (left, right) = tap(state, sink.tap, frames);
+            sink.write(left, right)?;
+        }
+        Ok(())
+    });
+    let tail_frames = match rendered {
+        Ok(tail_frames) => tail_frames,
+        Err(error) => {
+            drop(sinks);
+            discard(0);
+            return Err((Vec::new(), error));
+        }
+    };
+
+    let mut clipped = Vec::with_capacity(sinks.len());
+    for (index, (sink, temporary)) in sinks.into_iter().zip(&temporaries).enumerate() {
+        match sink.finish(temporary) {
+            Ok(count) => clipped.push(count),
+            Err(error) => {
+                discard(index);
+                return Err((Vec::new(), error));
+            }
+        }
+    }
+
+    let mut files = Vec::with_capacity(pass.outputs.len());
+    for (index, (output, temporary)) in pass.outputs.iter().zip(&temporaries).enumerate() {
+        let summary = RenderSummary {
+            sample_rate,
+            file_sample_rate: match output.format {
+                ExportFormat::Wav(_) => sample_rate,
+                ExportFormat::Mp3(_) => mp3_file_rate(sample_rate),
+            },
+            base_frames,
+            tail_frames,
+            total_frames: base_frames.saturating_add(tail_frames),
+            refused_events: state.refused_events(),
+            overs: state.output_overs(),
+            clipped_samples: clipped[index],
+            non_finite_samples: state.output_non_finite(),
+        };
+        report(&summary, &output.path);
         // One rename over the target, which replaces it atomically: removing
         // it first left no file at all when the rename then failed.
-        if let Err(error) = fs::rename(&temporary, &spec.path) {
-            let _ = fs::remove_file(&temporary);
-            return Err(error.into());
+        if let Err(error) = fs::rename(temporary, &output.path) {
+            discard(index);
+            return Err((files, error.into()));
         }
-        progress.done.store(summary.total_frames.max(1), Ordering::Relaxed);
-        progress.most.store(summary.total_frames.max(1), Ordering::Relaxed);
-        Ok(summary)
+        files.push(RenderedFile {
+            path: output.path.clone(),
+            summary,
+        });
+    }
+    Ok(files)
+}
+
+/// The block `tap` produced, left and right.
+fn tap(state: &RenderState, tap: RenderTap, frames: usize) -> (&[f32], &[f32]) {
+    match tap {
+        RenderTap::Master => (&state.master().l[..frames], &state.master().r[..frames]),
     }
 }
 
@@ -407,32 +723,25 @@ fn temporary_path(target: &Path) -> PathBuf {
 const OFFLINE_BLOCK_FRAMES: usize = 512;
 const _: () = assert!(OFFLINE_BLOCK_FRAMES <= MAX_BLOCK_SIZE);
 
-/// What rendering the blocks found, beyond the audio.
-struct Rendered {
-    /// Samples the 24-bit encoder had to clamp.
-    clipped: u64,
-    /// The tail actually rendered, which ends when the project is at rest.
-    tail_frames: u64,
-}
-
-/// Render the bars, then the tail until the project falls silent or the cap
-/// in `summary.tail_frames` runs out, handing each block to `sink`. Returns
-/// how much tail it rendered.
+/// Render the bars, then the tail until the project falls silent or
+/// `tail_cap` runs out, handing the state to `sink` after each block with
+/// the block's length. Returns how much tail it rendered.
 ///
 /// Nothing on the master delays its output -- the safety limiter has no
 /// lookahead (MOO-217) -- so a file starts on the bar line as rendered.
 fn render_blocks(
     state: &mut RenderState,
-    summary: RenderSummary,
+    base_frames: u64,
+    tail_cap: u64,
     progress: &ExportProgress,
-    mut sink: impl FnMut(&[f32], &[f32]) -> Result<(), ExportError>,
+    mut sink: impl FnMut(&RenderState, usize) -> Result<(), ExportError>,
 ) -> Result<u64, ExportError> {
     state.play();
-    let mut remaining = summary.base_frames;
+    let mut remaining = base_frames;
     while remaining > 0 {
         let frames = remaining.min(OFFLINE_BLOCK_FRAMES as u64) as usize;
         state.process_once_block(frames);
-        sink(&state.master().l[..frames], &state.master().r[..frames])?;
+        sink(state, frames)?;
         remaining -= frames as u64;
         progress.advance(frames)?;
     }
@@ -443,13 +752,13 @@ fn render_blocks(
     // does not end on the last audible block's final sample (MOO-125).
     state.pause();
     let mut rendered = 0u64;
-    while rendered < summary.tail_frames {
-        let frames = (summary.tail_frames - rendered).min(OFFLINE_BLOCK_FRAMES as u64) as usize;
+    while rendered < tail_cap {
+        let frames = (tail_cap - rendered).min(OFFLINE_BLOCK_FRAMES as u64) as usize;
         state.process_once_block(frames);
-        let (left, right) = (&state.master().l[..frames], &state.master().r[..frames]);
-        sink(left, right)?;
+        sink(state, frames)?;
         rendered += frames as u64;
         progress.advance(frames)?;
+        let (left, right) = (&state.master().l[..frames], &state.master().r[..frames]);
         let silent = left
             .iter()
             .chain(right)
@@ -461,100 +770,146 @@ fn render_blocks(
     Ok(rendered)
 }
 
-fn render_wav(
-    path: &Path,
-    state: &mut RenderState,
-    summary: RenderSummary,
-    encoding: WavEncoding,
-    progress: &ExportProgress,
-) -> Result<Rendered, ExportError> {
-    let spec = match encoding {
-        WavEncoding::Pcm24 => hound::WavSpec {
-            channels: 2,
-            sample_rate: summary.sample_rate,
-            bits_per_sample: 24,
-            sample_format: hound::SampleFormat::Int,
-        },
-        WavEncoding::Float32 => hound::WavSpec {
-            channels: 2,
-            sample_rate: summary.sample_rate,
-            bits_per_sample: 32,
-            sample_format: hound::SampleFormat::Float,
-        },
-    };
-    let mut writer = hound::WavWriter::create(path, spec)?;
-    let mut clipped = 0u64;
-    let tail_frames = render_blocks(state, summary, progress, |left, right| {
-        for (&left, &right) in left.iter().zip(right) {
-            match encoding {
-                WavEncoding::Pcm24 => {
-                    clipped += u64::from(left.abs() > 1.0) + u64::from(right.abs() > 1.0);
-                    writer.write_sample(pcm24(left))?;
-                    writer.write_sample(pcm24(right))?;
+/// One output's encoder, fed a block at a time.
+struct Sink {
+    tap: RenderTap,
+    encoder: Encoder,
+}
+
+enum Encoder {
+    Wav {
+        writer: hound::WavWriter<std::io::BufWriter<fs::File>>,
+        encoding: WavEncoding,
+        /// Samples the 24-bit encoder had to clamp.
+        clipped: u64,
+    },
+    /// LAME, and what it has encoded so far; written to the file at the end.
+    Mp3 {
+        encoder: Box<mp3lame_encoder::Encoder>,
+        encoded: Vec<u8>,
+    },
+}
+
+impl Sink {
+    fn open(path: &Path, output: &RenderOutput, sample_rate: u32) -> Result<Self, ExportError> {
+        let encoder = match output.format {
+            ExportFormat::Wav(encoding) => {
+                let spec = match encoding {
+                    WavEncoding::Pcm24 => hound::WavSpec {
+                        channels: 2,
+                        sample_rate,
+                        bits_per_sample: 24,
+                        sample_format: hound::SampleFormat::Int,
+                    },
+                    WavEncoding::Float32 => hound::WavSpec {
+                        channels: 2,
+                        sample_rate,
+                        bits_per_sample: 32,
+                        sample_format: hound::SampleFormat::Float,
+                    },
+                };
+                Encoder::Wav {
+                    writer: hound::WavWriter::create(path, spec)?,
+                    encoding,
+                    clipped: 0,
                 }
-                WavEncoding::Float32 => {
-                    writer.write_sample(left)?;
-                    writer.write_sample(right)?;
+            }
+            ExportFormat::Mp3(bitrate) => {
+                let file_rate = NonZeroU32::new(mp3_file_rate(sample_rate))
+                    .ok_or_else(|| ExportError::Invalid("sample rate cannot be zero".into()))?;
+                let encoder = Builder::new()
+                    .ok_or_else(|| ExportError::Mp3("could not initialize LAME".into()))?
+                    .with_num_channels(2)
+                    .map_err(lame)?
+                    .with_sample_rate(sample_rate)
+                    .map_err(lame)?
+                    .with_output_sample_rate(Some(file_rate))
+                    .map_err(lame)?
+                    .with_brate(bitrate.lame())
+                    .map_err(lame)?
+                    .with_quality(Quality::Best)
+                    .map_err(lame)?
+                    .build()
+                    .map_err(lame)?;
+                Encoder::Mp3 {
+                    encoder: Box::new(encoder),
+                    encoded: Vec::new(),
                 }
+            }
+        };
+        Ok(Self {
+            tap: output.tap,
+            encoder,
+        })
+    }
+
+    fn write(&mut self, left: &[f32], right: &[f32]) -> Result<(), ExportError> {
+        match &mut self.encoder {
+            Encoder::Wav {
+                writer,
+                encoding,
+                clipped,
+            } => {
+                for (&left, &right) in left.iter().zip(right) {
+                    match encoding {
+                        WavEncoding::Pcm24 => {
+                            *clipped +=
+                                u64::from(left.abs() > 1.0) + u64::from(right.abs() > 1.0);
+                            writer.write_sample(pcm24(left))?;
+                            writer.write_sample(pcm24(right))?;
+                        }
+                        WavEncoding::Float32 => {
+                            writer.write_sample(left)?;
+                            writer.write_sample(right)?;
+                        }
+                    }
+                }
+            }
+            Encoder::Mp3 { encoder, encoded } => {
+                encoded.reserve(mp3lame_encoder::max_required_buffer_size(left.len()));
+                encoder
+                    .encode_to_vec(DualPcm { left, right }, encoded)
+                    .map_err(|error| ExportError::Mp3(error.to_string()))?;
             }
         }
         Ok(())
-    })?;
-    writer.finalize()?;
-    Ok(Rendered {
-        clipped,
-        tail_frames,
-    })
+    }
+
+    /// Close the file at `path`, returning how many samples were clamped.
+    fn finish(self, path: &Path) -> Result<u64, ExportError> {
+        match self.encoder {
+            Encoder::Wav {
+                writer, clipped, ..
+            } => {
+                writer.finalize()?;
+                Ok(clipped)
+            }
+            Encoder::Mp3 {
+                mut encoder,
+                mut encoded,
+            } => {
+                encoded.reserve(7200);
+                encoder
+                    .flush_to_vec::<FlushGap>(&mut encoded)
+                    .map_err(|error| ExportError::Mp3(error.to_string()))?;
+                let mut file = fs::File::create(path)?;
+                file.write_all(&encoded)?;
+                file.flush()?;
+                Ok(0)
+            }
+        }
+    }
+}
+
+/// An encoder error, as the export reports it.
+fn lame(error: impl fmt::Display) -> ExportError {
+    ExportError::Mp3(error.to_string())
 }
 
 /// The 24-bit encoder: full scale is the most it can say, so anything past
 /// it is clamped -- and counted by the caller, since the clamp is silent.
 fn pcm24(sample: f32) -> i32 {
     (sample.clamp(-1.0, 1.0) * 8_388_607.0).round() as i32
-}
-
-fn render_mp3(
-    path: &Path,
-    state: &mut RenderState,
-    summary: RenderSummary,
-    bitrate: Mp3Bitrate,
-    progress: &ExportProgress,
-) -> Result<Rendered, ExportError> {
-    let file_rate = NonZeroU32::new(summary.file_sample_rate)
-        .ok_or_else(|| ExportError::Invalid("sample rate cannot be zero".into()))?;
-    let mut encoder = Builder::new()
-        .ok_or_else(|| ExportError::Mp3("could not initialize LAME".into()))?
-        .with_num_channels(2)
-        .map_err(|error| ExportError::Mp3(error.to_string()))?
-        .with_sample_rate(summary.sample_rate)
-        .map_err(|error| ExportError::Mp3(error.to_string()))?
-        .with_output_sample_rate(Some(file_rate))
-        .map_err(|error| ExportError::Mp3(error.to_string()))?
-        .with_brate(bitrate.lame())
-        .map_err(|error| ExportError::Mp3(error.to_string()))?
-        .with_quality(Quality::Best)
-        .map_err(|error| ExportError::Mp3(error.to_string()))?
-        .build()
-        .map_err(|error| ExportError::Mp3(error.to_string()))?;
-    let mut encoded = Vec::new();
-    let tail_frames = render_blocks(state, summary, progress, |left, right| {
-        encoded.reserve(mp3lame_encoder::max_required_buffer_size(left.len()));
-        encoder
-            .encode_to_vec(DualPcm { left, right }, &mut encoded)
-            .map_err(|error| ExportError::Mp3(error.to_string()))?;
-        Ok(())
-    })?;
-    encoded.reserve(7200);
-    encoder
-        .flush_to_vec::<FlushGap>(&mut encoded)
-        .map_err(|error| ExportError::Mp3(error.to_string()))?;
-    let mut file = fs::File::create(path)?;
-    file.write_all(&encoded)?;
-    file.flush()?;
-    Ok(Rendered {
-        clipped: 0,
-        tail_frames,
-    })
 }
 
 #[cfg(test)]
@@ -953,6 +1308,154 @@ mod tests {
             assert_eq!(summary.file_sample_rate, file);
             assert_eq!(mp3_header_rate(&fs::read(&path).unwrap()), file);
         }
+    }
+
+    fn master(path: &Path, format: ExportFormat) -> RenderOutput {
+        RenderOutput {
+            path: path.to_path_buf(),
+            tap: RenderTap::Master,
+            format,
+        }
+    }
+
+    fn pattern_pass(tail_seconds: f32, outputs: Vec<RenderOutput>) -> RenderPass {
+        RenderPass {
+            scope: RenderScope::Pattern { index: 0 },
+            tail_seconds,
+            outputs,
+        }
+    }
+
+    /// **Two outputs of one timeline are one render, under one bar**
+    /// (MOO-180).
+    #[test]
+    fn a_job_writes_every_output_of_a_pass_from_one_render() {
+        let temp = tempdir().unwrap();
+        let float = temp.path().join("master.wav");
+        let pcm = temp.path().join("master-24.wav");
+        let mp3 = temp.path().join("master.mp3");
+        let job = RenderJob {
+            passes: vec![pattern_pass(
+                1.0,
+                vec![
+                    master(&float, ExportFormat::Wav(WavEncoding::Float32)),
+                    master(&pcm, ExportFormat::Wav(WavEncoding::Pcm24)),
+                    master(&mp3, ExportFormat::Mp3(Mp3Bitrate::Kbps192)),
+                ],
+            )],
+        };
+        let progress = ExportProgress::new();
+        let files = OfflineRenderer::render_job(
+            &sampler_project(1.0),
+            &[Some(sample_of(tone))],
+            48_000,
+            &job,
+            &progress,
+        )
+        .unwrap();
+
+        let paths: Vec<_> = files.iter().map(|file| file.path.clone()).collect();
+        assert_eq!(paths, [float.clone(), pcm.clone(), mp3.clone()]);
+        let total = files[0].summary.total_frames;
+        assert!(files.iter().all(|file| file.summary.total_frames == total));
+        // One pass: the bar ran over the timeline once, not once per file.
+        assert_eq!(progress.most.load(Ordering::Relaxed), total);
+        assert_eq!(progress.fraction(), Some(1.0));
+
+        let read_float: Vec<f32> = hound::WavReader::open(&float)
+            .unwrap()
+            .samples::<f32>()
+            .map(Result::unwrap)
+            .collect();
+        let read_pcm: Vec<i32> = hound::WavReader::open(&pcm)
+            .unwrap()
+            .samples::<i32>()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(read_float.len() as u64, total * 2);
+        assert_eq!(read_pcm.len(), read_float.len());
+        assert!(read_float.iter().any(|sample| sample.abs() > 0.1));
+        for (index, (&float, &pcm)) in read_float.iter().zip(&read_pcm).enumerate() {
+            assert_eq!(pcm, pcm24(float), "sample {index} differs between the two files");
+        }
+        assert!(fs::read(&mp3).unwrap().len() > 1_000);
+    }
+
+    /// **Cancelling a job keeps the files that had finished, and leaves the
+    /// one in progress as it was** (MOO-180).
+    #[test]
+    fn cancelling_a_job_keeps_the_passes_that_had_finished() {
+        let temp = tempdir().unwrap();
+        let first = temp.path().join("first.wav");
+        let second = temp.path().join("second.wav");
+        fs::write(&second, b"the file that was here").unwrap();
+        let job = RenderJob {
+            passes: vec![
+                pattern_pass(0.0, vec![master(&first, ExportFormat::Wav(WavEncoding::Float32))]),
+                pattern_pass(0.0, vec![master(&second, ExportFormat::Wav(WavEncoding::Float32))]),
+            ],
+        };
+        let progress = ExportProgress::new();
+        // The pattern is two bars at 120 BPM: 96 000 frames a pass. Cancel a
+        // few blocks into the second.
+        progress
+            .cancel_after
+            .store(96_000 + 4 * OFFLINE_BLOCK_FRAMES as u64, Ordering::Relaxed);
+        let failure = OfflineRenderer::render_job(
+            &sampler_project(1.0),
+            &[Some(sample_of(tone))],
+            48_000,
+            &job,
+            &progress,
+        )
+        .unwrap_err();
+
+        assert!(matches!(failure.error, ExportError::Cancelled), "{failure:?}");
+        assert_eq!(failure.written.len(), 1);
+        assert_eq!(failure.written[0].path, first);
+        assert_eq!(
+            u64::from(hound::WavReader::open(&first).unwrap().duration()),
+            96_000
+        );
+        assert_eq!(fs::read(&second).unwrap(), b"the file that was here");
+        let mut names: Vec<_> = fs::read_dir(temp.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["first.wav", "second.wav"], "a partial file was left behind");
+    }
+
+    /// A job names the files it would replace, and refuses to write one file
+    /// twice.
+    #[test]
+    fn a_job_lists_what_it_would_replace_and_refuses_a_path_twice() {
+        let temp = tempdir().unwrap();
+        let here = temp.path().join("here.wav");
+        let new = temp.path().join("new.wav");
+        fs::write(&here, b"old").unwrap();
+        let wav = ExportFormat::Wav(WavEncoding::Float32);
+        let job = RenderJob {
+            passes: vec![pattern_pass(0.0, vec![master(&here, wav), master(&new, wav)])],
+        };
+        assert_eq!(job.existing_targets(), [here]);
+
+        let twice = RenderJob {
+            passes: vec![
+                pattern_pass(0.0, vec![master(&new, wav)]),
+                pattern_pass(0.0, vec![master(&new, wav)]),
+            ],
+        };
+        let failure = OfflineRenderer::render_job(
+            &audible_project(),
+            &[],
+            48_000,
+            &twice,
+            &ExportProgress::new(),
+        )
+        .unwrap_err();
+        assert!(matches!(failure.error, ExportError::Invalid(_)), "{failure:?}");
+        assert!(!new.exists());
     }
 
     #[test]
