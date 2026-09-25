@@ -1231,8 +1231,10 @@ fn executor_frames(
         right.extend_from_slice(&r[..n]);
         while live.events.pop().is_ok() {}
         while let Ok(reclaimed) = live.reclaim.pop() {
-            if let crate::StructuralReclaim::Effect(effect) = reclaimed {
-                displaced.extend(effect.node);
+            match reclaimed {
+                crate::StructuralReclaim::Effect(effect) => displaced.extend(effect.node),
+                crate::StructuralReclaim::HostedProcessor(node) => displaced.push(node),
+                _ => {}
             }
         }
         done += n;
@@ -1343,4 +1345,124 @@ fn plugin_swapped_away_and_back(latency_step: u32) -> (Transition, Transition) {
     assert!(lifeline.is_alone(), "the processor came home");
     assert_eq!(instance.misbehaviour(), 0, "no call on the wrong thread");
     (away, back)
+}
+
+// --- Engine: MOO-230 ---------------------------------------------------------
+
+/// The sine played by `plugin_source_tests`'s fake instrument (a quarter-
+/// level cosine per held note) as the channel's hosted source, through the
+/// executor, with the processor swapped in ahead of Play the way a song
+/// opening gets it: into a silent source, so at full level at once.
+fn hosted_sine() -> (crate::plugin_host_tests::Live, mooloop_core::PluginSlotId) {
+    use crate::plugin_source_tests::{fake, fake_ref};
+    use mooloop_core::{ChannelSource, DeviceKind, PluginSlotState};
+
+    let mut project = sine_project();
+    let slot = project.add_plugin_slot(PluginSlotState::new(fake_ref()));
+    project.channels[0].setup.source = ChannelSource::Plugin(slot);
+    project.channels[0].setup.channel.kind = DeviceKind::Plugin;
+    project.assign_channel_ids();
+    let mut live = crate::plugin_host_tests::live(RenderState::from_project(SAMPLE_RATE, &project, &[]));
+    assert!(live.commands.push(source_swap(slot, Some(fake()))).is_ok());
+    assert!(live
+        .commands
+        .push(crate::RealtimeCommand::Engine(EngineCommand::Play))
+        .is_ok());
+    (live, slot)
+}
+
+/// The lead into a hosted-source change, ending on a crest.
+///
+/// Not [`LEAD`]: the fake is a *cosine* from its note-on, a quarter cycle
+/// ahead of the mono synth's sine, so fifty-five and a quarter cycles lands
+/// it on a zero crossing, the trap `LEAD`'s own note describes. The first
+/// draft of these cases passed with the hold switched off for exactly that.
+/// Fifty-five frames more is a quarter of 220 Hz's 218-frame cycle, and the
+/// assertion keeps it true.
+fn hosted_lead(
+    live: &mut crate::plugin_host_tests::Live,
+    displaced: &mut Vec<Box<dyn mooloop_dsp::AudioNode + Send>>,
+) -> (Vec<f32>, Vec<f32>) {
+    let lead = executor_frames(live, LEAD + 55, displaced);
+    let peak = lead.0.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    let last = lead.0.last().copied().unwrap_or(0.0).abs();
+    assert!(last > 0.95 * peak, "the change lands off the crest: {last} of {peak}");
+    lead
+}
+
+fn source_swap(
+    slot: mooloop_core::PluginSlotId,
+    node: Option<mooloop_dsp::HostedNode>,
+) -> crate::RealtimeCommand {
+    crate::RealtimeCommand::Structural(StructuralCommand::HostSourceProcessor {
+        channel: 0,
+        slot,
+        node,
+    })
+}
+
+/// **A hosted instrument's restart fades it out and back in** (MOO-230).
+/// The rack pulls the processor out (`node: None`) on a plugin's restart
+/// and on a rate change, then sends the new one. Mid-note, the pull-out
+/// fades the channel to silence before the processor leaves, and a
+/// processor that arrives already sounding fades in. Both moves are held to
+/// the family's bound, the second against the sine as it was before the
+/// first, since the silence between says nothing about step size.
+#[test]
+fn a_hosted_instruments_restart_is_continuous() {
+    use crate::plugin_source_tests::fake_holding;
+
+    let (mut live, slot) = hosted_sine();
+    let mut displaced = Vec::new();
+    let lead = hosted_lead(&mut live, &mut displaced);
+    assert!(live.commands.push(source_swap(slot, None)).is_ok());
+    let tail = executor_frames(&mut live, TAIL, &mut displaced);
+    let away = Transition::measure((&lead.0, &lead.1), (&tail.0, &tail.1));
+    assert_continuous("pulling a sounding instrument's processor out", away);
+    assert_eq!(displaced.len(), 1, "the processor came back once its fade was over");
+    assert!(
+        tail.0[TAIL / 2..].iter().all(|&s| s == 0.0),
+        "with no processor the channel is silent"
+    );
+
+    // The same note the song holds, so the material either side is alike.
+    assert!(live.commands.push(source_swap(slot, Some(fake_holding(57)))).is_ok());
+    let again = executor_frames(&mut live, TAIL, &mut displaced);
+    let returned = Transition::measure((&tail.0[TAIL - 1..], &tail.1[TAIL - 1..]), (&again.0, &again.1));
+    assert_continuous(
+        "a sounding processor arriving",
+        Transition {
+            before: away.before,
+            after: returned.after,
+            peak: away.peak,
+            across: returned.across,
+        },
+    );
+    assert!(returned.after > 0.0, "the incoming processor is heard");
+}
+
+/// **Swapping one processor for another fades between them, and the notes
+/// the outgoing one held end with it** (MOO-230). The incoming processor is
+/// a new instance with no voices: the song's note, still held, is not
+/// struck again half-way through, and its release later reaches an instance
+/// that never started it, which ignores it. So after the fade the channel is
+/// silent until the song's next note-on.
+#[test]
+fn swapping_a_hosted_instruments_processor_for_another_is_continuous() {
+    use crate::plugin_source_tests::fake;
+
+    let (mut live, slot) = hosted_sine();
+    let mut displaced = Vec::new();
+    let lead = hosted_lead(&mut live, &mut displaced);
+    assert!(live.commands.push(source_swap(slot, Some(fake()))).is_ok());
+    let tail = executor_frames(&mut live, TAIL, &mut displaced);
+    assert_continuous(
+        "swapping a sounding instrument's processor for another",
+        Transition::measure((&lead.0, &lead.1), (&tail.0, &tail.1)),
+    );
+    assert_eq!(displaced.len(), 1, "the outgoing processor came back");
+    assert!(
+        tail.0[TAIL / 2..].iter().all(|&s| s == 0.0),
+        "the held note is not struck again on the incoming processor"
+    );
 }

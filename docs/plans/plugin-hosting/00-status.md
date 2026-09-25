@@ -1170,7 +1170,7 @@ pushing the base back names the same slot.
 
 **Not here, and where it went.** A restart or rate change pulls a sounding
 instrument's processor out with no fade (the effect swap's MOO-213 hold does
-not cover sources); a plugin source's latency is not compensated; a strip an
+not cover sources; fixed by MOO-230, below); a plugin source's latency is not compensated; a strip an
 install does not carry is rebuilt silent and gets its processor back a tick
 or two later, as the rack's rule does for effects, with the voices it held
 lost (as a native strip's are); a generator preset of a plugin channel would
@@ -1287,6 +1287,39 @@ continuity family's bound of 0.008. Now:
 
 Pinned by `continuity_tests::swapping_a_hosted_plugin_for_its_placeholder_and_back_is_continuous`
 and `swapping_a_latent_hosted_plugin_…` (64 frames).
+
+## Found after step 09: the source swap fades too (MOO-230, 2026-09-25)
+
+Step 09's note above: a restart or rate change pulled a sounding
+instrument's processor out in one sample. Now the executor holds a
+`HostSourceProcessor` the way it holds an effect swap
+(`RenderState::source_ready_for_processor_swap`, asking the new
+`SourceNode::ready_for_processor_swap`, default yes). The fade is the
+source's own, because the strip has no source-level gain to ramp:
+`HostedSource` ramps its output linearly to silence over 35 ms (100 ms at
+most if the strip stops rendering it), the swap then lands, and whatever
+processor arrives ramps back up. With no processor the level stays where the
+fade left it, so a processor that arrives after a pull-out, however late,
+fades in too. A swap into a source that was never asked to fade (the first
+install, an export's `host_plugins`) is at full level at once, so exports and
+the offline/realtime parity test are unchanged.
+
+**Held notes, deliberately.** The notes the outgoing processor held end with
+its fade. They are not re-sent to the incoming one: it is a new instance with
+no voices, and striking a note again half-way through is an attack nobody
+played. Their releases later reach an instance that never started them, and
+`ClapProcessor` finds no held note and sends nothing. So after a restart a
+sustained note is silent until the next note-on.
+
+**Cost:** the same as MOO-213's, 35 ms of held command ring per sounding
+instrument pulled back, one after another at quit.
+
+Pinned by `continuity_tests::a_hosted_instruments_restart_is_continuous`
+(pull-out, then a processor arriving sounding) and
+`swapping_a_hosted_instruments_processor_for_another_is_continuous` (which
+also pins that the held note is not struck again). Both fail by a
+full-crest step (0.177 against a bound of 0.007) with the hold switched off.
+The dsp side is `hosted_source::tests`.
 
 ## Step 08, recorded 2026-09-24 (MOO-83)
 

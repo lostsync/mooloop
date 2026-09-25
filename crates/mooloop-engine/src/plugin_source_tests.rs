@@ -43,7 +43,7 @@ struct Voice {
 /// The step's `FakeSourceNode`: a cosine per note id, eight at most, each
 /// starting at its note-on's frame and stopping dead at its note-off's, so
 /// both edges are visible to the frame.
-struct FakeInstrument {
+pub(crate) struct FakeInstrument {
     voices: [Option<Voice>; 8],
     sample_rate: f32,
 }
@@ -112,11 +112,23 @@ impl AudioNode for FakeInstrument {
     }
 }
 
-fn fake() -> HostedNode {
+pub(crate) fn fake() -> HostedNode {
     Box::new(FakeInstrument::new())
 }
 
-fn fake_ref() -> PluginRef {
+/// A fake already holding `note` (id `u64::MAX`, which no song note has): a
+/// processor that arrives sounding, the case a swap has to fade in.
+pub(crate) fn fake_holding(note: u8) -> HostedNode {
+    let mut instrument = FakeInstrument::new();
+    instrument.apply(&Event::NoteOn {
+        id: u64::MAX,
+        note,
+        velocity: 100,
+    });
+    Box::new(instrument)
+}
+
+pub(crate) fn fake_ref() -> PluginRef {
     PluginRef {
         format: PluginFormat::Clap,
         id: "org.mooloop.fake-instrument".to_owned(),
@@ -288,22 +300,29 @@ fn switching_and_swapping_a_hosted_source_allocates_nothing() {
         }),
         ("putting a processor back", swap_in(slot, fake())),
     ];
+    // Pulling a sounding processor out waits for its fade (MOO-230), so each
+    // step renders until what it displaced comes back, or for longer than
+    // the longest wait (100 ms is under 19 blocks of 256) if nothing does.
     let mut reclaimed = Vec::new();
     for (what, command) in steps {
         assert!(live.commands.push(command).is_ok());
-        let (allocations, frees) = (crate::COUNTING.allocations(), crate::COUNTING.frees());
-        block(&mut live);
-        let counted = (
-            crate::COUNTING.allocations() - allocations,
-            crate::COUNTING.frees() - frees,
-        );
-        assert_eq!(counted, (0, 0), "{what} allocated or freed in the callback");
-        let back = match live.reclaim.pop() {
-            Ok(StructuralReclaim::Source(node)) => format!("source {:?}", node.kind()),
-            Ok(StructuralReclaim::HostedProcessor(_)) => "processor".to_owned(),
-            Ok(_) => "something else".to_owned(),
-            Err(_) => "nothing".to_owned(),
-        };
+        let mut back = "nothing".to_owned();
+        for _ in 0..24 {
+            let (allocations, frees) = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+            block(&mut live);
+            let counted = (
+                crate::COUNTING.allocations() - allocations,
+                crate::COUNTING.frees() - frees,
+            );
+            assert_eq!(counted, (0, 0), "{what} allocated or freed in the callback");
+            match live.reclaim.pop() {
+                Ok(StructuralReclaim::Source(node)) => back = format!("source {:?}", node.kind()),
+                Ok(StructuralReclaim::HostedProcessor(_)) => back = "processor".to_owned(),
+                Ok(_) => back = "something else".to_owned(),
+                Err(_) => continue,
+            }
+            break;
+        }
         reclaimed.push(back);
     }
     assert_eq!(

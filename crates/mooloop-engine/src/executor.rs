@@ -301,6 +301,20 @@ impl Executor {
                             break;
                         }
                     }
+                    // A hosted instrument's processor leaving or being
+                    // replaced (a restart, a sample-rate change) waits for
+                    // the channel's source to fade out the same way, and the
+                    // source fades back in with what arrives (MOO-230).
+                    if let StructuralCommand::HostSourceProcessor { channel, slot, .. } = &command
+                    {
+                        if !self
+                            .render
+                            .source_ready_for_processor_swap(*channel, *slot, frames)
+                        {
+                            self.pending_command = Some(RealtimeCommand::Structural(command));
+                            break;
+                        }
+                    }
                     if let Some(displaced) = self.render.apply_structural(command) {
                         match self.reclaim_tx.push(displaced) {
                             Ok(()) => {}

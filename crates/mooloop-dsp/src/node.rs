@@ -766,6 +766,17 @@ pub trait SourceNode: AudioNode {
         let _ = slot;
         Err(node)
     }
+
+    /// Whether a [`Self::host_processor`] for `slot` can be applied now
+    /// without a step in this source's output (MOO-230). The executor asks
+    /// before each block while it holds one, with the length of the block
+    /// about to render; the first ask starts the source's fade-out, and the
+    /// processor that then arrives fades in. A native source never hosts
+    /// one, so its answer is yes at once. Allocates nothing.
+    fn ready_for_processor_swap(&mut self, slot: PluginSlotId, frames: usize) -> bool {
+        let _ = (slot, frames);
+        true
+    }
 }
 
 #[cfg(test)]

@@ -6871,6 +6871,25 @@ impl RenderState {
         !matches || self.effect_slot_vacated(target, slot, frames)
     }
 
+    /// Whether a hosted instrument's `HostSourceProcessor` for `slot` on
+    /// `channel` can be applied now without a step (MOO-230): the source has
+    /// faded out under its processor, which the first ask starts, and it
+    /// fades back in with whatever arrives. The same ~35 ms, 100 ms-at-most
+    /// rule as [`Self::plugin_slot_ready_for_swap`]; the fade is the source's
+    /// own (`HostedSource`), because the strip has no source-level gain to
+    /// ramp. A channel that no longer exists, or no longer runs that slot,
+    /// goes at once: the swap is refused and fades nothing.
+    pub(crate) fn source_ready_for_processor_swap(
+        &mut self,
+        channel: u8,
+        slot: mooloop_core::PluginSlotId,
+        frames: usize,
+    ) -> bool {
+        self.strips
+            .get_mut(usize::from(channel))
+            .is_none_or(|strip| strip.source.ready_for_processor_swap(slot, frames))
+    }
+
     /// Apply a structural change (install/remove of a boxed node). Called on
     /// the realtime thread from the ordered control stream; the boxes
     /// themselves were allocated on the control thread. Returns whatever the

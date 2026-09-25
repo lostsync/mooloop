@@ -295,6 +295,11 @@ In the order worth playing:
    no click. There's no offline render for this, because a restart only
    happens live. The measured version is
    `scripts/antibox --no-incremental cargo test -p mooloop-engine --lib -- hosted_plugin_for_its_placeholder --nocapture`.
+   A hosted *instrument's* restart fades too (MOO-230): hold a pad on a
+   CLAP instrument and force a restart or a rate change. It should fade out
+   with no click, and the held note stays silent until the next note-on,
+   which is deliberate. The measured version is
+   `scripts/antibox --no-incremental cargo test -p mooloop-engine --lib -- hosted_instruments --nocapture`.
 6. **The master bus compressor, each voicing** (MOO-13, step 3). *"Turning it
    on should feel special"* is the acceptance case and only a listen can pass
    it. A kick, a bass line and chords a few decibels hot, rendered with the

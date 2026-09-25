@@ -2405,10 +2405,13 @@ land on its own when it starts to matter:
   in the status bar; which layouts a source takes is step 10's. The channel is silent until the plugin opens, and
   stays silent, keeping its slot and state, while the plugin is missing. It is
   in an export, it survives an edit that keeps the channel, and a restart or a
-  new sample rate pulls the plugin out and puts the next processor back. Not
+  new sample rate pulls the plugin out and puts the next processor back.
+  **That swap fades rather than clicks** (MOO-230): the instrument fades to
+  silence over about 35 ms before its processor leaves, and the next one
+  fades in. The notes it was holding end with the fade and are not struck
+  again on the new processor; the next note-on plays as usual. Not
   yet: a plugin channel's editor shows no face (its number is 8, after the
-  eight native kinds; "Add Plugin…" is its own row, not one of the eight); a restart
-  cuts a sounding instrument rather than fading it; the plugin's own latency
+  eight native kinds; "Add Plugin…" is its own row, not one of the eight); the plugin's own latency
   is not compensated; and its parameters take no lanes or routes.
 - **A CLAP instrument plays its channel's notes** (MOO-85, plugin-hosting
   10), from the pattern, a keyboard or an audition, each at its own frame,
