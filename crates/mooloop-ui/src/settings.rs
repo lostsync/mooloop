@@ -7,6 +7,7 @@ use crate::theme::{
     MIN_ACCENT_CONTRAST, MODES,
 };
 use mooloop_core::{DeviceKind, EffectKind};
+use mooloop_session::render_settings::{Channels, FileFormat, TailSettings, MAX_TAIL_SECONDS};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
@@ -882,6 +883,86 @@ pub(crate) struct MidiSettings {
     pub learn_binds_port: bool,
 }
 
+/// The export card's app-wide half: what the last confirmed export used,
+/// for every song on this machine (MOO-190).
+///
+/// Adam's ruling (2026-09-23) splits the card in two. How the files are
+/// delivered -- format, depth, dither, bitrate, mono, tail, and whether a
+/// taken name is replaced or numbered -- is a habit of the person, so it
+/// lives here. Where the files go and what is in them -- the folder, the
+/// source and its checked tracks, the range -- belong to one song and are
+/// saved in it (MOO-194); where both hold a value, the song's wins.
+///
+/// Every field loads on its own ([`ExportSettings::loaded`]): a missing one
+/// is its default, and a malformed one, or a format a later build no longer
+/// knows, is its default and a line in the log. Nothing here can make the
+/// rest of `settings.toml` fail to load.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) struct ExportSettings {
+    /// The format the last export wrote.
+    pub format: FileFormat,
+    /// The card's setting for the other kind of file: the WAV depth and
+    /// dither when MP3 was exported, the MP3 bitrate when WAV was. Kept so
+    /// that switching the format row back finds what was left there.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub other_format: Option<FileFormat>,
+    pub channels: Channels,
+    pub tail: TailSettings,
+    /// Replace a file of the same name rather than number the new one
+    /// (MOO-188). Off by default: numbering never loses a file.
+    pub replace_existing: bool,
+}
+
+impl ExportSettings {
+    /// The `[export]` table as saved, field by field. An entry that will not
+    /// read is its default, said in the log; the others keep their values.
+    fn loaded(value: toml::Value) -> Self {
+        let mut settings = Self::default();
+        let toml::Value::Table(table) = value else {
+            eprintln!("mooloop: ignoring the saved export settings: not a table");
+            return settings;
+        };
+        fn field<T: serde::de::DeserializeOwned>(table: &toml::Table, key: &str) -> Option<T> {
+            let value = table.get(key)?.clone();
+            match value.try_into::<T>() {
+                Ok(value) => Some(value),
+                Err(error) => {
+                    eprintln!(
+                        "mooloop: ignoring the saved export setting {key}, using the default: {}",
+                        error.to_string().trim()
+                    );
+                    None
+                }
+            }
+        }
+        if let Some(format) = field(&table, "format") {
+            settings.format = format;
+        }
+        settings.other_format = field(&table, "other-format");
+        if let Some(channels) = field(&table, "channels") {
+            settings.channels = channels;
+        }
+        if let Some(tail) = field::<TailSettings>(&table, "tail") {
+            settings.tail = TailSettings {
+                max_seconds: tail.max_seconds.min(MAX_TAIL_SECONDS),
+            };
+        }
+        if let Some(replace) = field(&table, "replace-existing") {
+            settings.replace_existing = replace;
+        }
+        settings
+    }
+}
+
+fn tolerant_export<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<ExportSettings, D::Error> {
+    // Any TOML value reads as a `Value`, so the section itself can never
+    // fail the file; `loaded` judges what is inside it.
+    Ok(ExportSettings::loaded(toml::Value::deserialize(deserializer)?))
+}
+
 /// How plugins are found (`docs/plans/plugin-hosting/05-the-scanner.md`,
 /// MOO-80). The folders CLAP names are always searched
 /// (`mooloop_plugin_host::scan::default_search_paths`); these are the ones
@@ -1094,6 +1175,9 @@ pub(crate) struct UiSettings {
     pub plugins: PluginSettings,
     #[serde(default)]
     pub layout: LayoutSettings,
+    /// The export card's app-wide half (MOO-190).
+    #[serde(default, deserialize_with = "tolerant_export")]
+    pub export: ExportSettings,
 }
 
 impl Default for UiSettings {
@@ -1109,14 +1193,21 @@ impl Default for UiSettings {
             midi: MidiSettings::default(),
             plugins: PluginSettings::default(),
             layout: LayoutSettings::default(),
+            export: ExportSettings::default(),
         }
     }
 }
 
 impl UiSettings {
     pub(crate) fn load_or_default() -> Self {
-        let path = settings_path();
-        match Self::load_from(&path) {
+        Self::load_or_default_from(&settings_path())
+    }
+
+    /// The settings-load policy: a file that is not there is the defaults,
+    /// and one that will not load is the defaults and a line in the log.
+    /// Neither stops the app starting.
+    pub(crate) fn load_or_default_from(path: &Path) -> Self {
+        match Self::load_from(path) {
             Ok(settings) => settings,
             Err(SettingsError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
                 Self::default()
@@ -1156,7 +1247,7 @@ impl UiSettings {
         self.save_to(&settings_path())
     }
 
-    fn save_to(&self, path: &Path) -> Result<(), SettingsError> {
+    pub(crate) fn save_to(&self, path: &Path) -> Result<(), SettingsError> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(SettingsError::Io)?;
         }
@@ -1211,7 +1302,7 @@ fn migrate_user_schemes(appearance: &mut AppearanceSettings) {
     }
 }
 
-fn settings_path() -> PathBuf {
+pub(crate) fn settings_path() -> PathBuf {
     config_dir().join("settings.toml")
 }
 
@@ -1485,6 +1576,7 @@ impl fmt::Display for SettingsError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mooloop_session::render_settings::WavDepth;
 
     /// A Custom appearance: the three seeds, and no theme selected.
     ///
@@ -2001,6 +2093,16 @@ mod tests {
                 sidebar_visible: true,
                 ..LayoutSettings::default()
             },
+            export: ExportSettings {
+                format: FileFormat::Mp3 { kbps: 256 },
+                other_format: Some(FileFormat::Wav {
+                    depth: WavDepth::Pcm16,
+                    dither: Some(false),
+                }),
+                channels: Channels::Mono,
+                tail: TailSettings { max_seconds: 4 },
+                replace_existing: true,
+            },
         };
         expected.save_to(&path).unwrap();
         assert_eq!(UiSettings::load_from(&path).unwrap(), expected);
@@ -2269,5 +2371,54 @@ mod tests {
         // Added 2026-09-20 to a section that already existed in the wild,
         // so a file written before it has to keep loading.
         assert_eq!(shortcuts.super_key, SuperKeyMode::Distinct);
+    }
+
+    /// **The export card's app-wide half loads entry by entry** (MOO-190):
+    /// a missing entry is its default, a malformed one or a format this
+    /// build does not know is its default too, and none of them costs the
+    /// rest of the export section or the rest of the file.
+    #[test]
+    fn export_settings_load_entry_by_entry() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        let head = "schema-version = 1\n[appearance]\npreset = 'mooloop'\naccent = '#84CC16'\n[midi]\nlearn-binds-port = true\n";
+
+        // Written before MOO-190: the defaults.
+        fs::write(&path, head).unwrap();
+        assert_eq!(UiSettings::load_from(&path).unwrap().export, ExportSettings::default());
+
+        // A format from a later build, a tail that is not a number, a
+        // channel count that is not one of the two: each its default, and
+        // the entries that do read keep their values.
+        fs::write(
+            &path,
+            format!(
+                "{head}[export]\nchannels = 'surround'\nreplace-existing = true\n\
+                 [export.format]\nkind = 'flac'\nlevel = 8\n[export.tail]\nmax_seconds = 'long'\n"
+            ),
+        )
+        .unwrap();
+        let settings = UiSettings::load_from(&path).unwrap();
+        assert!(settings.midi.learn_binds_port, "the rest of the file loads");
+        assert_eq!(
+            settings.export,
+            ExportSettings {
+                replace_existing: true,
+                ..ExportSettings::default()
+            }
+        );
+
+        // Not even a table: the defaults, and the file still loads.
+        fs::write(&path, format!("{head}export = 7\n")).unwrap();
+        let settings = UiSettings::load_from(&path).unwrap();
+        assert!(settings.midi.learn_binds_port);
+        assert_eq!(settings.export, ExportSettings::default());
+
+        // A tail past what the engine renders is the most it renders.
+        fs::write(&path, format!("{head}[export.tail]\nmax_seconds = 900\n")).unwrap();
+        assert_eq!(
+            UiSettings::load_from(&path).unwrap().export.tail.max_seconds,
+            MAX_TAIL_SECONDS
+        );
     }
 }

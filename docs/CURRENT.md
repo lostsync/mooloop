@@ -666,6 +666,16 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   note that began before it is not chased, and effects start empty, so a
   reverb from before the range is not in the file (pre-roll: open,
   MOO-239).
+  As of 2026-09-25 (MOO-190) the card **remembers how the last export was
+  delivered**, across launches and in every song: the format, a WAV's depth
+  and dither, an MP3's bitrate (both, whichever was exported), stereo or
+  mono, the tail, and "Don't overwrite: number it". They are saved in
+  `settings.toml`'s `[export]` table when an export starts, and the card
+  opens on them each time, so an edit on a card that was cancelled is not
+  kept. An entry that will not read, or a format this build does not know,
+  is its default and a line in the log, and never costs the rest of the
+  settings. The folder, name, source and range belong to the song and are
+  not carried between songs (saving them in the song: MOO-194).
   Underneath, an export is a job of passes, each pass one render handed to
   every file it writes, under one progress bar and one Cancel; cancelling
   keeps the files of passes that had finished. As of 2026-09-25 (MOO-223)

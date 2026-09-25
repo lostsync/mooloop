@@ -7692,17 +7692,6 @@ impl AppUi {
             });
         }
 
-        // The export card: its defaults, Browse, Export and its Cancel
-        // (MOO-180).
-        export_ui::wire(
-            &window,
-            &state,
-            &document_tx,
-            &export_progress,
-            &question,
-            export_sample_rate,
-        );
-
         {
             let st = state.clone();
             let close_commands = command_state.clone();
@@ -7972,6 +7961,22 @@ impl AppUi {
         //     the engine through the pump below, the only place that owns
         //     `EngineHandle`. ---
         let ui_settings = Rc::new(RefCell::new(UiSettings::load_or_default()));
+
+        // The export card: its defaults, Browse, Export and its Cancel
+        // (MOO-180), and its app-wide half remembered in the settings
+        // (MOO-190).
+        export_ui::wire(
+            &window,
+            &state,
+            &document_tx,
+            &export_progress,
+            &question,
+            export_sample_rate,
+            &export_ui::ExportMemory {
+                settings: ui_settings.clone(),
+                file: settings::settings_path(),
+            },
+        );
         // A theme file that will not parse is skipped, and saying so is the
         // whole of what "skipped with a message" means -- a themes directory
         // somebody has been editing by hand is the ordinary case, and a file

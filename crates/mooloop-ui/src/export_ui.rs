@@ -3,13 +3,47 @@
 //! into the session's one value, `RenderSettings`, and the session builds
 //! the job from that. Nothing here knows what a job is made of, so a later
 //! Rendering issue adds a field there and a control on the card.
+//!
+//! The card's app-wide half -- how the files are delivered -- is remembered
+//! in `settings.toml` when an export starts, and the card opens on it every
+//! time, in every song and after a relaunch (MOO-190, [`ExportMemory`]).
 
 use super::*;
 use mooloop_session::render_settings::{
     format_bar_beat, parse_bar_beat, Channels, ExportTrack, RenderRange, RenderSource,
     SettingsProblem, Timeline,
 };
+use crate::settings::{ExportSettings, UiSettings};
 use std::cell::Cell;
+
+/// Where the card's app-wide half is remembered (MOO-190): the app's
+/// settings, and the file they are saved to. The app passes
+/// `settings::settings_path()`; a test passes a file of its own, so it
+/// never writes the user's.
+#[derive(Clone)]
+pub(crate) struct ExportMemory {
+    pub settings: Rc<RefCell<UiSettings>>,
+    pub file: PathBuf,
+}
+
+impl ExportMemory {
+    /// Keep `export` as the last one used, in memory and on disk. A save
+    /// that fails costs only the memory of the card after a relaunch, so it
+    /// is logged and the export goes on.
+    fn remember(&self, export: ExportSettings) {
+        let mut settings = self.settings.borrow_mut();
+        if settings.export == export {
+            return;
+        }
+        settings.export = export;
+        if let Err(error) = settings.save_to(&self.file) {
+            eprintln!(
+                "mooloop: could not remember the export settings in {}: {error}",
+                self.file.display()
+            );
+        }
+    }
+}
 
 /// The card's Range choices, by their place in the row (MOO-181).
 const RANGE_SONG: i32 = 0;
@@ -25,6 +59,7 @@ pub(crate) fn wire(
     export_progress: &Rc<RefCell<Option<Arc<ExportProgress>>>>,
     question: &Rc<RefCell<Option<Question>>>,
     export_sample_rate: u32,
+    memory: &ExportMemory,
 ) {
     // Whether a range has been picked on the card. Until one has, the range
     // follows the transport each time the card opens: the whole song in
@@ -34,12 +69,17 @@ pub(crate) fn wire(
         let st = Rc::clone(state);
         let weak = window.as_weak();
         let range_picked = range_picked.clone();
+        let memory = memory.clone();
         window.on_export_audio(move || {
             if let Some(window) = weak.upgrade() {
                 // A second export while one renders reopens the one in
                 // flight, with its progress and its Cancel.
                 if window.get_export_phase() != 1 {
                     window.set_export_phase(0);
+                    // The last export's delivery, not whatever was left on
+                    // a card that was cancelled (MOO-190). Before the
+                    // defaults, whose name preview reads the format.
+                    show_export_memory(&window, &memory.settings.borrow().export);
                     show_export_defaults(&window, &st.borrow().session, !range_picked.get());
                 }
                 window.set_export_open(true);
@@ -149,6 +189,7 @@ pub(crate) fn wire(
         let weak = window.as_weak();
         let export_progress = export_progress.clone();
         let question = question.clone();
+        let memory = memory.clone();
         window.on_export_confirmed(move || {
             let Some(window) = weak.upgrade() else {
                 return;
@@ -174,6 +215,10 @@ pub(crate) fn wire(
                 }
             };
             window.set_export_problem("".into());
+            // Read now, as the card stands when Export is pressed; kept only
+            // if the render starts.
+            let remembered = remembered_export(&window, &settings);
+            let memory = memory.clone();
             let st = st.clone();
             let tx = tx.clone();
             let export_progress = export_progress.clone();
@@ -202,6 +247,7 @@ pub(crate) fn wire(
                 if !begin_document_operation(window, "Rendering audio...") {
                     return;
                 }
+                memory.remember(remembered);
                 // The dialog stays up through the render, with its
                 // progress and a Cancel, and then shows what the render
                 // found (MOO-125). The pump drives it from
@@ -262,23 +308,9 @@ pub(crate) fn export_settings(window: &MainWindow) -> Result<RenderSettings, Set
 /// Everything on the card but the range, which is the one setting that can
 /// fail to read. The name preview needs only this.
 fn card_settings(window: &MainWindow) -> RenderSettings {
-    let bitrate = window.get_export_bitrate().clamp(0, MP3_KBPS.len() as i32 - 1) as usize;
     let folder = window.get_export_folder().trim().to_string();
     RenderSettings {
-        format: match window.get_export_format() {
-            1 => FileFormat::Mp3 {
-                kbps: MP3_KBPS[bitrate],
-            },
-            _ => FileFormat::Wav {
-                depth: match window.get_export_wav_depth() {
-                    0 => WavDepth::Pcm16,
-                    2 => WavDepth::Float32,
-                    _ => WavDepth::Pcm24,
-                },
-                // The card shows the dither it will use, so it says it.
-                dither: Some(window.get_export_dither()),
-            },
-        },
+        format: card_format(window, window.get_export_format()),
         channels: if window.get_export_mono() {
             Channels::Mono
         } else {
@@ -371,6 +403,75 @@ fn card_source(window: &MainWindow) -> RenderSource {
     }
 }
 
+/// The card's format row for one kind of file, 0 WAV or 1 MP3, as it
+/// stands, whichever kind is picked.
+fn card_format(window: &MainWindow, kind: i32) -> FileFormat {
+    match kind {
+        1 => {
+            let bitrate = window.get_export_bitrate().clamp(0, MP3_KBPS.len() as i32 - 1);
+            FileFormat::Mp3 {
+                kbps: MP3_KBPS[bitrate as usize],
+            }
+        }
+        _ => FileFormat::Wav {
+            depth: match window.get_export_wav_depth() {
+                0 => WavDepth::Pcm16,
+                2 => WavDepth::Float32,
+                _ => WavDepth::Pcm24,
+            },
+            // The card shows the dither it will use, so it says it.
+            dither: Some(window.get_export_dither()),
+        },
+    }
+}
+
+/// The app-wide half of an export about to run (MOO-190): the settings'
+/// delivery, and the card's setting for the kind of file not picked, so
+/// that switching back finds it as it was left.
+pub(crate) fn remembered_export(window: &MainWindow, settings: &RenderSettings) -> ExportSettings {
+    let other = match settings.format {
+        FileFormat::Mp3 { .. } => 0,
+        FileFormat::Wav { .. } => 1,
+    };
+    ExportSettings {
+        format: settings.format,
+        other_format: Some(card_format(window, other)),
+        channels: settings.channels,
+        tail: settings.tail,
+        replace_existing: settings.output.replace_existing,
+    }
+}
+
+/// Set the card's delivery to the remembered one (MOO-190). A value this
+/// build's card cannot show -- a bitrate it does not offer, a tail past the
+/// most it renders -- is the nearest one it can.
+pub(crate) fn show_export_memory(window: &MainWindow, export: &ExportSettings) {
+    // The kind not picked first, so the picked one sets the row last.
+    for format in export.other_format.iter().chain([&export.format]) {
+        match *format {
+            FileFormat::Wav { depth, dither } => {
+                window.set_export_format(0);
+                window.set_export_wav_depth(match depth {
+                    WavDepth::Pcm16 => 0,
+                    WavDepth::Pcm24 => 1,
+                    WavDepth::Float32 => 2,
+                });
+                window.set_export_dither(dither.unwrap_or(depth.dithers_by_default()));
+            }
+            FileFormat::Mp3 { kbps } => {
+                window.set_export_format(1);
+                let nearest = (0..MP3_KBPS.len())
+                    .min_by_key(|&index| MP3_KBPS[index].abs_diff(kbps))
+                    .unwrap_or(0);
+                window.set_export_bitrate(nearest as i32);
+            }
+        }
+    }
+    window.set_export_mono(export.channels == Channels::Mono);
+    window.set_export_tail_seconds(export.tail.max_seconds.min(MAX_TAIL_SECONDS) as i32);
+    window.set_export_number_existing(!export.replace_existing);
+}
+
 /// The range the card's choice names (MOO-181).
 fn card_range(window: &MainWindow) -> Result<RenderRange, SettingsProblem> {
     Ok(match window.get_export_range_index() {
@@ -456,25 +557,44 @@ mod tests {
         window: MainWindow,
         question: Rc<RefCell<Option<Question>>>,
         results: Receiver<DocumentResult>,
+        state: Rc<RefCell<UiState>>,
+        /// The settings folder a card made by `card` owns, removed with it.
+        _settings: Option<tempfile::TempDir>,
     }
 
-    /// The real window on a fresh song, the export card wired as
-    /// `AppUi::new` wires it, and the channel its worker reports on.
-    fn card() -> Card {
+    /// One launch of the app, as far as the card goes: the settings loaded
+    /// fresh from `settings_dir` as startup loads them, the real window on a
+    /// fresh song with `session` applied, the card wired as `AppUi::new`
+    /// wires it and opened, and the channel its worker reports on. The
+    /// settings file is the test's own, never the user's.
+    fn launch(settings_dir: &Path, session: impl FnOnce(&mut Session)) -> Card {
         install_backend();
         let window = MainWindow::new().expect("the testing backend builds a window");
         let state = Rc::new(RefCell::new(UiState::new(None, RATE, &window)));
+        session(&mut state.borrow_mut().session);
         let (tx, results) = channel();
         let progress = Rc::new(RefCell::new(None));
         let question = Rc::new(RefCell::new(None));
-        wire(&window, &state, &tx, &progress, &question, RATE);
+        let file = settings_dir.join("settings.toml");
+        let memory = ExportMemory {
+            settings: Rc::new(RefCell::new(UiSettings::load_or_default_from(&file))),
+            file,
+        };
+        wire(&window, &state, &tx, &progress, &question, RATE, &memory);
         window.invoke_export_audio();
-        window.set_export_tail_seconds(0);
         Card {
             window,
             question,
             results,
+            state,
+            _settings: None,
         }
+    }
+
+    /// The real window on a fresh song, with settings of its own and no
+    /// tail, so the renders are short.
+    fn card() -> Card {
+        card_on(|_| {}).0
     }
 
     fn exported(card: &Card) -> Vec<PathBuf> {
@@ -678,24 +798,107 @@ mod tests {
     /// The window and its session, for the range tests, which set up the
     /// song before the card opens.
     fn card_on(session: impl FnOnce(&mut Session)) -> (Card, Rc<RefCell<UiState>>) {
-        install_backend();
-        let window = MainWindow::new().expect("the testing backend builds a window");
-        let state = Rc::new(RefCell::new(UiState::new(None, RATE, &window)));
-        session(&mut state.borrow_mut().session);
-        let (tx, results) = channel();
-        let progress = Rc::new(RefCell::new(None));
-        let question = Rc::new(RefCell::new(None));
-        wire(&window, &state, &tx, &progress, &question, RATE);
-        window.invoke_export_audio();
-        window.set_export_tail_seconds(0);
+        let settings = tempfile::tempdir().unwrap();
+        let mut card = launch(settings.path(), session);
+        card._settings = Some(settings);
+        card.window.set_export_tail_seconds(0);
+        let state = card.state.clone();
+        (card, state)
+    }
+
+    /// The card's app-wide half as it shows it (MOO-190): format, WAV
+    /// depth, dither, MP3 bitrate, mono, tail, and numbering.
+    fn delivery(window: &MainWindow) -> (i32, i32, bool, i32, bool, i32, bool) {
         (
-            Card {
-                window,
-                question,
-                results,
-            },
-            state,
+            window.get_export_format(),
+            window.get_export_wav_depth(),
+            window.get_export_dither(),
+            window.get_export_bitrate(),
+            window.get_export_mono(),
+            window.get_export_tail_seconds(),
+            window.get_export_number_existing(),
         )
+    }
+
+    /// **The card opens as the last export left it: after a relaunch, and
+    /// in a new song** (MOO-190). Every app-wide option is set away from
+    /// its default, the MP3 bitrate too though a WAV is exported, and one
+    /// export saves them. A fresh settings load and a fresh window then
+    /// open the card with the same values; a card cancelled after an edit
+    /// opens as the export left it, not as the edit did; and a new song
+    /// opens it the same way. Folder and name are the song's (MOO-194), so
+    /// they are not carried.
+    #[test]
+    fn the_card_opens_as_the_last_export_left_it_after_a_relaunch() {
+        let settings = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let first = launch(settings.path(), |_| {});
+        let window = &first.window;
+        assert_eq!(
+            delivery(window),
+            (0, 1, false, 2, false, 10, true),
+            "a first launch opens on the defaults"
+        );
+
+        window.set_export_format(1);
+        window.set_export_bitrate(0);
+        window.set_export_format(0);
+        window.set_export_wav_depth(0);
+        window.set_export_dither(false);
+        window.set_export_mono(true);
+        window.set_export_tail_seconds(0);
+        window.set_export_number_existing(false);
+        window.set_export_folder(folder.path().display().to_string().into());
+        window.set_export_name("mix".into());
+        let left = delivery(window);
+        window.invoke_export_confirmed();
+        assert_eq!(exported(&first), [folder.path().join("mix.wav")]);
+        drop(first);
+
+        // Relaunch.
+        let second = launch(settings.path(), |_| {});
+        let window = &second.window;
+        assert_eq!(delivery(window), left, "the relaunched card");
+        assert_eq!(window.get_export_folder(), "");
+        assert_eq!(window.get_export_name(), "");
+
+        // An edit on a card that is then cancelled is not remembered.
+        window.set_export_mono(false);
+        window.set_export_format(1);
+        window.set_export_open(false);
+        window.invoke_export_audio();
+        assert_eq!(delivery(window), left, "the card reopened after a cancel");
+
+        // A new song.
+        let new_song = UiState::new(None, RATE, window);
+        *second.state.borrow_mut() = new_song;
+        window.set_export_open(false);
+        window.invoke_export_audio();
+        assert_eq!(delivery(window), left, "the card in a new song");
+    }
+
+    /// An MP3 export remembers the WAV settings left on the card beside it,
+    /// so switching back to WAV after a relaunch finds them (MOO-190).
+    #[test]
+    fn an_mp3_export_keeps_the_wav_settings_beside_it() {
+        let settings = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let first = launch(settings.path(), |_| {});
+        let window = &first.window;
+        window.set_export_wav_depth(2);
+        window.set_export_format(1);
+        window.set_export_bitrate(1);
+        window.set_export_tail_seconds(0);
+        window.set_export_folder(folder.path().display().to_string().into());
+        let left = delivery(window);
+        window.invoke_export_confirmed();
+        exported(&first);
+        drop(first);
+
+        let second = launch(settings.path(), |_| {});
+        assert_eq!(delivery(&second.window), left);
+        assert_eq!(second.window.get_export_format(), 1);
+        assert_eq!(second.window.get_export_wav_depth(), 2);
     }
 
     fn four_bars_looping_two(session: &mut Session) {
