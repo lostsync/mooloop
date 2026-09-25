@@ -3256,7 +3256,7 @@ dependencies = [
 
 [[package]]
 name = "mooloop-app"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "mooloop-core",
  "mooloop-dsp",
@@ -3269,7 +3269,7 @@ dependencies = [
 
 [[package]]
 name = "mooloop-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "base64",
  "serde",
@@ -3278,7 +3278,7 @@ dependencies = [
 
 [[package]]
 name = "mooloop-dsp"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "arc-swap",
  "mooloop-core",
@@ -3286,7 +3286,7 @@ dependencies = [
 
 [[package]]
 name = "mooloop-engine"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "arc-swap",
  "cpal",
@@ -3307,7 +3307,7 @@ dependencies = [
 
 [[package]]
 name = "mooloop-plugin-host"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "clack-extensions",
  "clack-host",
@@ -3323,7 +3323,7 @@ dependencies = [
 
 [[package]]
 name = "mooloop-project"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "mooloop-core",
  "pathdiff",
@@ -3334,7 +3334,7 @@ dependencies = [
 
 [[package]]
 name = "mooloop-session"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "hound",
  "mooloop-core",
@@ -3355,7 +3355,7 @@ dependencies = [
 
 [[package]]
 name = "mooloop-spike-time-stretch"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "hound",
  "rustfft",
@@ -3363,7 +3363,7 @@ dependencies = [
 
 [[package]]
 name = "mooloop-test-plugin"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "clack-extensions",
  "clack-plugin",
@@ -3371,7 +3371,7 @@ dependencies = [
 
 [[package]]
 name = "mooloop-ui"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "hound",
  "i-slint-backend-testing",

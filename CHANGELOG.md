@@ -4,7 +4,7 @@ What changed for someone making music with mooloop, grouped by area. Internal
 refactors, tests, CI and tooling are left out unless they change what ships.
 `scripts/release-notes` prints the full commit list for any release.
 
-## 0.1.5 — unreleased (changes since 0.1.4, 2026-09-18 to 2026-09-25)
+## 0.1.5 — 2026-09-25
 
 The biggest release so far. It adds plugin hosting, audio recording, a
 rebuilt export and the sampler's loop tools, and it takes most of the CPU the
