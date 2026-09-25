@@ -258,6 +258,22 @@ pub struct RenderOutput {
     /// bit-identical and two outputs of one job carry unrelated dither.
     /// Float and MP3 files take no dither and ignore it.
     pub dither: bool,
+    /// What becomes of a file already at `path` when the render is done
+    /// (MOO-188).
+    pub existing: ExistingFile,
+}
+
+/// What an output does about a file already at its path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExistingFile {
+    /// Replace it, atomically. The dialog asked first.
+    Replace,
+    /// Never replace it. `path` is `base` with the job's number already
+    /// chosen (`mooloop_core::file_names::numbered`), free when the job was
+    /// built. A file that appeared there since is left alone, and this
+    /// output lands on the next free number of `base` instead: the race
+    /// costs a file its place in the job's numbering, never someone's file.
+    Number { base: PathBuf },
 }
 
 impl RenderOutput {
@@ -270,6 +286,7 @@ impl RenderOutput {
             format,
             channels: OutputChannels::Stereo,
             dither: format == ExportFormat::Wav(WavEncoding::Pcm16),
+            existing: ExistingFile::Replace,
         }
     }
 }
@@ -319,10 +336,16 @@ impl RenderJob {
             .flat_map(|pass| pass.outputs.iter().map(|output| output.path.as_path()))
     }
 
-    /// The files the job would replace: the ones already on disk. The export
-    /// dialog asks once, saying how many, before it starts.
+    /// The files the job would replace: the ones already on disk, of the
+    /// outputs that replace. The export dialog asks once, saying how many,
+    /// before it starts. A numbered output never replaces, so it is never
+    /// among them (MOO-188).
     pub fn existing_targets(&self) -> Vec<PathBuf> {
-        self.paths()
+        self.passes
+            .iter()
+            .flat_map(|pass| &pass.outputs)
+            .filter(|output| output.existing == ExistingFile::Replace)
+            .map(|output| output.path.as_path())
             .filter(|path| path.exists())
             .map(Path::to_path_buf)
             .collect()
@@ -764,19 +787,42 @@ fn render_pass(
             clipped_samples: clipped[index],
             non_finite_samples: state.output_non_finite(),
         };
-        report(&summary, &output.path);
-        // One rename over the target, which replaces it atomically: removing
-        // it first left no file at all when the rename then failed.
-        if let Err(error) = fs::rename(temporary, &output.path) {
-            discard(index);
-            return Err((files, error.into()));
-        }
-        files.push(RenderedFile {
-            path: output.path.clone(),
-            summary,
-        });
+        let placed = match &output.existing {
+            // One rename over the target, which replaces it atomically:
+            // removing it first left no file at all when the rename then
+            // failed.
+            ExistingFile::Replace => {
+                fs::rename(temporary, &output.path).map(|()| output.path.clone())
+            }
+            ExistingFile::Number { base } => place_numbered(temporary, &output.path, base),
+        };
+        let path = match placed {
+            Ok(path) => path,
+            Err(error) => {
+                discard(index);
+                return Err((files, error.into()));
+            }
+        };
+        report(&summary, &path);
+        files.push(RenderedFile { path, summary });
     }
     Ok(files)
+}
+
+/// Move a finished file to `path` without replacing anything there, or, if
+/// a file appeared at `path` after the job was built, to the first free
+/// number of `base` (MOO-188). Where it landed.
+fn place_numbered(temporary: &Path, path: &Path, base: &Path) -> std::io::Result<PathBuf> {
+    use mooloop_core::file_names::{numbered, rename_no_replace};
+    let candidates = std::iter::once(path.to_path_buf()).chain((1..).map(|n| numbered(base, n)));
+    for candidate in candidates {
+        match rename_no_replace(temporary, &candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("the numbers never run out")
 }
 
 /// The block `tap` produced, left and right.
@@ -1561,6 +1607,48 @@ mod tests {
             tail_seconds,
             outputs,
         }
+    }
+
+    /// **A numbered output never replaces a file that appeared at its path
+    /// after the job was built** (MOO-188): it lands on the next free number
+    /// of its name, says so in the file it reports, and the file that was
+    /// there is untouched. The dialog has nothing to ask about it.
+    #[test]
+    fn a_numbered_output_never_replaces_a_file_that_appeared_since() {
+        let temp = tempdir().unwrap();
+        let base = temp.path().join("song.wav");
+        let job = RenderJob {
+            passes: vec![pattern_pass(
+                0.0,
+                vec![RenderOutput {
+                    existing: ExistingFile::Number { base: base.clone() },
+                    ..master(&base, ExportFormat::Wav(WavEncoding::Float32))
+                }],
+            )],
+        };
+        assert!(job.existing_targets().is_empty());
+        // Between resolving the name and the render's last step, somebody
+        // else writes `song.wav` and `song-001.wav`.
+        fs::write(&base, b"theirs").unwrap();
+        fs::write(temp.path().join("song-001.wav"), b"theirs too").unwrap();
+        assert!(job.existing_targets().is_empty(), "a numbered output never asks");
+
+        let files = OfflineRenderer::render_job(
+            &sampler_project(1.0),
+            &[Some(sample_of(tone))],
+            48_000,
+            &job,
+            &ExportProgress::new(),
+        )
+        .unwrap();
+
+        let landed = temp.path().join("song-002.wav");
+        assert_eq!(files[0].path, landed);
+        assert!(hound::WavReader::open(&landed).is_ok());
+        assert_eq!(fs::read(&base).unwrap(), b"theirs");
+        assert_eq!(fs::read(temp.path().join("song-001.wav")).unwrap(), b"theirs too");
+        let leftovers = fs::read_dir(temp.path()).unwrap().count();
+        assert_eq!(leftovers, 3, "no partial file is left behind");
     }
 
     /// **Two outputs of one timeline are one render, under one bar**

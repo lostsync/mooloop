@@ -137,6 +137,14 @@ export component ExportDialog inherits Rectangle {
     // The file name without its extension. Empty is `default-name`.
     in-out property <string> file-name;
     in property <string> default-name;
+    // "Don't overwrite: number it" (MOO-188): a name already in the folder
+    // is written as name-001, name-002. Off, a file there is replaced, after
+    // asking.
+    in-out property <bool> number-existing: true;
+    // The file the export will write, numbering included, in a few words.
+    // Rust fills it whenever `output-edited` says the name may have changed.
+    in property <string> output-preview;
+    callback output-edited;
     // The folder chooser is up; Browse waits for it.
     in property <bool> browsing;
     // Why the settings can't be exported as they are, in one sentence.
@@ -164,7 +172,7 @@ export component ExportDialog inherits Rectangle {
     TouchArea { }
     Rectangle {
         width: min(parent.width - 32px, 460px);
-        height: root.phase == 0 ? 424px : root.phase == 2 ? 250px : 180px;
+        height: root.phase == 0 ? 460px : root.phase == 2 ? 250px : 180px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Theme.surface;
@@ -234,7 +242,10 @@ export component ExportDialog inherits Rectangle {
                         options: ["WAV", "MP3"];
                         hint: "The file format: WAV for a master or further work, MP3 to share";
                         selected-index: root.format-index;
-                        selected(index) => { root.format-index = index; }
+                        selected(index) => {
+                            root.format-index = index;
+                            root.output-edited();
+                        }
                     }
                     SegmentedControl {
                         options: ["Stereo", "Mono"];
@@ -305,6 +316,7 @@ export component ExportDialog inherits Rectangle {
                         text <=> root.folder;
                         placeholder-text: root.default-folder;
                         horizontal-stretch: 1;
+                        edited => { root.output-edited(); }
                     }
                     DialogButton {
                         label: root.browsing ? "Browsing" : "Browse...";
@@ -318,6 +330,7 @@ export component ExportDialog inherits Rectangle {
                         text <=> root.file-name;
                         placeholder-text: root.default-name;
                         horizontal-stretch: 1;
+                        edited => { root.output-edited(); }
                     }
                     Text {
                         width: 76px;
@@ -325,6 +338,26 @@ export component ExportDialog inherits Rectangle {
                         color: Theme.text-muted;
                         font-size: Theme.text-lg;
                         vertical-alignment: center;
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    CheckBox {
+                        text: "Don't overwrite: number it";
+                        checked: root.number-existing;
+                        toggled => {
+                            root.number-existing = self.checked;
+                            root.output-edited();
+                        }
+                    }
+                    Text {
+                        text: root.output-preview;
+                        color: Theme.text-faint;
+                        font-size: Theme.text-md;
+                        vertical-alignment: center;
+                        horizontal-alignment: right;
+                        overflow: elide;
+                        horizontal-stretch: 1;
                     }
                 }
             }

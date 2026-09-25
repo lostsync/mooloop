@@ -76,6 +76,15 @@ pub(crate) fn wire(
         });
     }
     {
+        let st = Rc::clone(state);
+        let weak = window.as_weak();
+        window.on_export_output_edited(move || {
+            if let Some(window) = weak.upgrade() {
+                show_output_preview(&window, &st.borrow().session);
+            }
+        });
+    }
+    {
         let weak = window.as_weak();
         window.on_export_browse_folder(move || {
             let Some(window) = weak.upgrade() else {
@@ -93,6 +102,7 @@ pub(crate) fn wire(
                         Picked::Path(folder) => {
                             window.set_export_folder(folder.display().to_string().into());
                             window.set_export_problem("".into());
+                            window.invoke_export_output_edited();
                         }
                         Picked::Cancelled => {}
                         // Not a cancel (MOO-90): the card says why no
@@ -228,10 +238,18 @@ pub(crate) fn wire(
 /// is not bar.beat is the one thing the value cannot hold, so it is the
 /// problem instead.
 pub(crate) fn export_settings(window: &MainWindow) -> Result<RenderSettings, SettingsProblem> {
-    let bitrate = window.get_export_bitrate().clamp(0, MP3_KBPS.len() as i32 - 1) as usize;
-    let folder = window.get_export_folder().trim().to_string();
     Ok(RenderSettings {
         range: card_range(window)?,
+        ..card_settings(window)
+    })
+}
+
+/// Everything on the card but the range, which is the one setting that can
+/// fail to read. The name preview needs only this.
+fn card_settings(window: &MainWindow) -> RenderSettings {
+    let bitrate = window.get_export_bitrate().clamp(0, MP3_KBPS.len() as i32 - 1) as usize;
+    let folder = window.get_export_folder().trim().to_string();
+    RenderSettings {
         format: match window.get_export_format() {
             1 => FileFormat::Mp3 {
                 kbps: MP3_KBPS[bitrate],
@@ -257,9 +275,36 @@ pub(crate) fn export_settings(window: &MainWindow) -> Result<RenderSettings, Set
         output: OutputSettings {
             folder: (!folder.is_empty()).then(|| PathBuf::from(folder)),
             name: window.get_export_name().to_string(),
+            replace_existing: !window.get_export_number_existing(),
         },
         ..RenderSettings::default()
-    })
+    }
+}
+
+/// Say on the card which file the export will write, with the number it
+/// takes if its name is taken (MOO-188): "Writes song-001.wav", or
+/// "Replaces song.wav" with numbering off. Empty while the folder or name
+/// can't be written; Export says why.
+pub(crate) fn show_output_preview(window: &MainWindow, session: &Session) {
+    let job = card_settings(window).job(
+        RenderScope::Song,
+        session.export_song_name().as_deref(),
+        &session.export_default_folder(),
+    );
+    let preview = job.ok().and_then(|job| {
+        let paths: Vec<&Path> = job.paths().collect();
+        let name = paths.first()?.file_name()?.to_string_lossy().into_owned();
+        let verb = if job.existing_targets().is_empty() {
+            "Writes"
+        } else {
+            "Replaces"
+        };
+        Some(match paths.len() {
+            1 => format!("{verb} {name}"),
+            count => format!("{verb} {name} and {} more", count - 1),
+        })
+    });
+    window.set_export_output_preview(preview.unwrap_or_default().into());
 }
 
 /// The range the card's choice names (MOO-181).
@@ -329,6 +374,7 @@ pub(crate) fn show_export_defaults(window: &MainWindow, session: &Session, follo
     };
     window.set_export_range_index(index);
     show_export_range(window, &timeline);
+    show_output_preview(window, session);
 }
 
 #[cfg(test)]
@@ -384,9 +430,37 @@ mod tests {
         }
     }
 
+    /// **By default a second export to a taken name is numbered, and nothing
+    /// asks** (MOO-188): `song.wav`, then `song-001.wav`, the first file
+    /// untouched, with the card's preview saying which name is next.
+    #[test]
+    fn a_second_export_to_the_same_name_is_numbered_without_asking() {
+        let card = card();
+        let folder = tempfile::tempdir().unwrap();
+        assert!(card.window.get_export_number_existing(), "numbering is the default");
+        card.window.set_export_folder(folder.path().display().to_string().into());
+        card.window.set_export_name("song".into());
+        card.window.invoke_export_output_edited();
+        assert_eq!(card.window.get_export_output_preview(), "Writes song.wav");
+
+        card.window.invoke_export_confirmed();
+        let first = folder.path().join("song.wav");
+        assert_eq!(exported(&card), std::slice::from_ref(&first));
+        let before = std::fs::read(&first).unwrap();
+
+        card.window.set_export_phase(0);
+        card.window.invoke_export_output_edited();
+        assert_eq!(card.window.get_export_output_preview(), "Writes song-001.wav");
+        card.window.invoke_export_confirmed();
+        assert!(!card.window.get_question_open(), "numbering asks nothing");
+        assert_eq!(exported(&card), [folder.path().join("song-001.wav")]);
+        assert_eq!(std::fs::read(&first).unwrap(), before, "the first file is untouched");
+    }
+
     /// **Export writes the master mix to the folder and name typed on the
-    /// card, with no chooser** (MOO-180), and a second export to the same
-    /// name asks once before replacing it.
+    /// card, with no chooser** (MOO-180), and with "Don't overwrite: number
+    /// it" off, a second export to the same name asks once before replacing
+    /// it, and the preview says it replaces.
     #[test]
     fn export_writes_the_typed_name_and_asks_before_replacing_it() {
         let card = card();
@@ -395,6 +469,7 @@ mod tests {
         card.window.set_export_folder(folder.path().display().to_string().into());
         card.window.set_export_name("take one".into());
         card.window.set_export_wav_depth(2);
+        card.window.set_export_number_existing(false);
 
         card.window.invoke_export_confirmed();
         assert_eq!(card.window.get_export_phase(), 1, "the card shows the render");
@@ -404,6 +479,8 @@ mod tests {
 
         // Again, to the same name: asked, not rendered.
         card.window.set_export_phase(0);
+        card.window.invoke_export_output_edited();
+        assert_eq!(card.window.get_export_output_preview(), "Replaces take one.wav");
         card.window.invoke_export_confirmed();
         assert!(card.window.get_question_open());
         assert_eq!(card.window.get_question_title(), "Replace \"take one.wav\"?");

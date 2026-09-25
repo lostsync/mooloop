@@ -629,8 +629,19 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   chooser) and a file-name field on the card itself. An empty folder is the
   song's own folder, or the music folder (`XDG_MUSIC_DIR`, else `~/Music`)
   for a song never saved; an empty name is the song's name. A folder that
-  is not there is said on the card before anything renders, and an export
-  that would replace files asks once, saying how many. Source (the master
+  is not there is said on the card before anything renders. As of
+  2026-09-25 (MOO-188) an export **never replaces a file by default**:
+  "Don't overwrite: number it", under the name, is on, and a name already
+  in the folder is written as `song-001.wav`, then `-002`, three digits
+  before the extension. The files of one export share one number, the
+  lowest free for all of them, and a typed number is not read (`song-001`
+  numbers to `song-001-001`). The line beside the box says the file that
+  will be written. A file that appears under the chosen name while the
+  export renders is left alone, and the export takes the next free number
+  instead: the last step is a rename that refuses to replace (a hard link,
+  or a claimed new file and a copy where the drive has no hard links). With
+  the box off, an export that would replace files asks once, saying how
+  many. Source (the master
   mix) has one answer so far. As of 2026-09-25 (MOO-181) Range is a choice
   of four: the whole song, the loop selection (its points whether or not
   looping is on; unavailable while the song has none), a custom range

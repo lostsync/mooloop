@@ -745,6 +745,7 @@ mod tests {
             output: OutputSettings {
                 folder: Some(folder.path().to_path_buf()),
                 name: "first mix".into(),
+                ..OutputSettings::default()
             },
             ..RenderSettings::default()
         };
@@ -763,6 +764,19 @@ mod tests {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(names, ["first mix.wav"], "nothing but the file is left behind");
+
+        // Again, to the same name: numbered, and the first file is untouched
+        // (MOO-188).
+        let before = std::fs::read(&target).unwrap();
+        let request = session.export_request(120, 0, &settings).unwrap();
+        let DocumentResult::Exported { files, .. } =
+            run_export(request, 48_000, &ExportProgress::new(), Default::default())
+        else {
+            panic!("expected Exported");
+        };
+        assert_eq!(files[0].path, folder.path().join("first mix-001.wav"));
+        assert!(files[0].path.is_file());
+        assert_eq!(std::fs::read(&target).unwrap(), before);
     }
 
     /// **The loop selection renders exactly its points** (MOO-181), with
@@ -792,6 +806,7 @@ mod tests {
             output: OutputSettings {
                 folder: Some(folder.path().to_path_buf()),
                 name: "loop".into(),
+                ..OutputSettings::default()
             },
             ..RenderSettings::default()
         };
@@ -827,6 +842,7 @@ mod tests {
             output: OutputSettings {
                 folder: Some(folder.path().join("gone")),
                 name: String::new(),
+                ..OutputSettings::default()
             },
             ..RenderSettings::default()
         };

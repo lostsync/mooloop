@@ -1074,6 +1074,12 @@ export component MainWindow inherits Window {
     in-out property <string> export-default-folder;
     in-out property <string> export-name;
     in-out property <string> export-default-name;
+    // "Don't overwrite: number it", on by default, and the name the export
+    // will write with any number it takes (MOO-188). `export-output-edited`
+    // fires when the folder, name, format or the box changes.
+    in-out property <bool> export-number-existing: true;
+    in-out property <string> export-output-preview;
+    callback export-output-edited();
     in-out property <bool> export-browsing;
     in-out property <string> export-problem;
     callback open-song();
@@ -8228,6 +8234,9 @@ export component MainWindow inherits Window {
         default-folder: root.export-default-folder;
         file-name <=> root.export-name;
         default-name: root.export-default-name;
+        number-existing <=> root.export-number-existing;
+        output-preview: root.export-output-preview;
+        output-edited => { root.export-output-edited(); }
         browsing: root.export-browsing;
         problem: root.export-problem;
         accepted => { root.export-confirmed(); }

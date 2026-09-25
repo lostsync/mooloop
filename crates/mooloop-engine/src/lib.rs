@@ -231,7 +231,7 @@ pub use meters::{
     BufferMarks, BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters,
 };
 pub use offline::{
-    ExportError, ExportFormat, ExportProgress, ExportSpec, JobFailure, Mp3Bitrate, OfflineRenderer,
+    ExistingFile, ExportError, ExportFormat, ExportProgress, ExportSpec, JobFailure, Mp3Bitrate, OfflineRenderer,
     OutputChannels, RenderJob, RenderOutput, RenderPass, RenderScope, RenderSummary, RenderTap,
     RenderedFile,
     WavEncoding,

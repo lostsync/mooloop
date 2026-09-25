@@ -9,9 +9,10 @@
 
 use std::path::{Path, PathBuf};
 
+use mooloop_core::file_names;
 use mooloop_core::{LoopRange, BEATS_PER_BAR, TICKS_PER_BAR, TICKS_PER_STEP};
 use mooloop_engine::{
-    ExportFormat, Mp3Bitrate, OutputChannels, RenderJob, RenderOutput, RenderPass, RenderScope, RenderTap,
+    ExistingFile, ExportFormat, Mp3Bitrate, OutputChannels, RenderJob, RenderOutput, RenderPass, RenderScope, RenderTap,
     WavEncoding,
 };
 use serde::{Deserialize, Serialize};
@@ -388,6 +389,11 @@ pub struct OutputSettings {
     pub folder: Option<PathBuf>,
     /// The file name, without its extension. Empty is the song's name.
     pub name: String,
+    /// Replace a file already there, after asking. Off, the default, is the
+    /// card's "Don't overwrite: number it": a name that is taken is written
+    /// as `song-001.wav`, `song-002.wav`, and nothing is ever replaced
+    /// (MOO-188).
+    pub replace_existing: bool,
 }
 
 /// Why a job could not be built from the settings: one sentence for the
@@ -463,19 +469,38 @@ impl RenderSettings {
         let stem = self.stem(song_name)?;
         let path = folder.join(format!("{stem}.{}", self.format.extension()));
         let RenderSource::Master = self.source;
+        let mut outputs = vec![RenderOutput {
+            channels: self.channels.engine(),
+            dither: self.format.dither(),
+            ..RenderOutput::new(path, RenderTap::Master, self.format.engine())
+        }];
+        if !self.output.replace_existing {
+            number_outputs(&mut outputs, file_names::is_taken);
+        }
         Ok(RenderJob {
             passes: vec![RenderPass {
                 scope,
                 tail_seconds: self.tail.max_seconds.min(MAX_TAIL_SECONDS) as f32,
-                outputs: vec![RenderOutput {
-                    path,
-                    tap: RenderTap::Master,
-                    format: self.format.engine(),
-                    channels: self.channels.engine(),
-                    dither: self.format.dither(),
-                }],
+                outputs,
             }],
         })
+    }
+}
+
+/// Number a job's outputs so that none of them replaces a file `taken`
+/// says is there (MOO-188). The paths come in as typed and go out with
+/// **one** number for the whole job, the lowest at which every one of them
+/// is free, so a set of files keeps one number even when only one of them
+/// clashed: nothing taken is the names as typed, then `-001`, `-002`, ...
+/// Each output is marked to be placed without replacing, and to take the
+/// next free number of its own name if a file appears at its path while it
+/// renders ([`ExistingFile::Number`]).
+pub fn number_outputs(outputs: &mut [RenderOutput], taken: impl Fn(&Path) -> bool) {
+    let bases: Vec<PathBuf> = outputs.iter().map(|output| output.path.clone()).collect();
+    let number = file_names::free_number(&bases, taken);
+    for (output, base) in outputs.iter_mut().zip(bases) {
+        output.path = file_names::numbered(&base, number);
+        output.existing = ExistingFile::Number { base };
     }
 }
 
@@ -534,6 +559,7 @@ mod tests {
             output: OutputSettings {
                 folder: Some(temp.path().to_path_buf()),
                 name: "  take two.WAV ".into(),
+                ..OutputSettings::default()
             },
             ..RenderSettings::default()
         };
@@ -764,6 +790,68 @@ mod tests {
         assert_eq!(unknown.tail.max_seconds, 2);
     }
 
+    /// MOO-188's resolver cases: the job's outputs share the lowest number at
+    /// which none of them is taken, and each is marked never to replace.
+    #[test]
+    fn a_taken_name_is_numbered_and_a_job_shares_one_number() {
+        let wav = ExportFormat::Wav(WavEncoding::Pcm24);
+        let resolve = |names: &[&str], taken: &[&str]| -> Vec<PathBuf> {
+            let mut outputs: Vec<RenderOutput> = names
+                .iter()
+                .map(|name| RenderOutput::new(PathBuf::from(name), RenderTap::Master, wav))
+                .collect();
+            number_outputs(&mut outputs, |path| {
+                taken.iter().any(|name| path == Path::new(name))
+            });
+            for (output, name) in outputs.iter().zip(names) {
+                assert_eq!(
+                    output.existing,
+                    ExistingFile::Number {
+                        base: PathBuf::from(name)
+                    }
+                );
+            }
+            outputs.into_iter().map(|output| output.path).collect()
+        };
+        assert_eq!(resolve(&["song.mp3"], &[]), [PathBuf::from("song.mp3")], "nothing there");
+        assert_eq!(resolve(&["song.mp3"], &["song.mp3"]), [PathBuf::from("song-001.mp3")]);
+        assert_eq!(
+            resolve(&["song.mp3"], &["song.mp3", "song-001.mp3", "song-002.mp3"]),
+            [PathBuf::from("song-003.mp3")]
+        );
+        assert_eq!(
+            resolve(&["drums.wav", "bass.wav", "keys.wav"], &["bass.wav"]),
+            ["drums-001.wav", "bass-001.wav", "keys-001.wav"].map(PathBuf::from),
+            "one stem of three taken numbers all three"
+        );
+    }
+
+    /// The job numbers by default and replaces only when asked to, and a
+    /// numbered job has nothing for the dialog to ask about.
+    #[test]
+    fn the_job_numbers_unless_told_to_replace() {
+        let temp = tempdir().unwrap();
+        std::fs::write(temp.path().join("mix.wav"), b"old").unwrap();
+        let mut settings = RenderSettings {
+            output: OutputSettings {
+                folder: Some(temp.path().to_path_buf()),
+                name: "mix".into(),
+                ..OutputSettings::default()
+            },
+            ..RenderSettings::default()
+        };
+        let job = settings.job(RenderScope::Song, None, Path::new("/nowhere")).unwrap();
+        assert_eq!(only_output(&job).path, temp.path().join("mix-001.wav"));
+        assert!(job.existing_targets().is_empty());
+
+        settings.output.replace_existing = true;
+        let job = settings.job(RenderScope::Song, None, Path::new("/nowhere")).unwrap();
+        let output = only_output(&job);
+        assert_eq!(output.path, temp.path().join("mix.wav"));
+        assert_eq!(output.existing, ExistingFile::Replace);
+        assert_eq!(job.existing_targets(), [temp.path().join("mix.wav")]);
+    }
+
     /// The settings are a serde value, and a table missing fields still
     /// loads: what MOO-190 saves stays readable as fields are added.
     #[test]
@@ -778,6 +866,7 @@ mod tests {
             output: OutputSettings {
                 folder: Some(PathBuf::from("/tmp/renders")),
                 name: "mix".into(),
+                ..OutputSettings::default()
             },
             ..RenderSettings::default()
         };
