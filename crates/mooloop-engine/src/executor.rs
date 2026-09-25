@@ -497,19 +497,60 @@ impl Executor {
 /// with no single attributable cause. Both the x86_64 (MXCSR) and aarch64
 /// (FPCR) control registers below are per-thread, so this must run on the
 /// realtime callback's own thread rather than at engine construction.
-#[cfg(target_arch = "x86_64")]
 #[inline]
 fn enable_flush_to_zero() {
-    // `_mm_getcsr`/`_mm_setcsr` are deprecated for soundness reasons (their
-    // signature doesn't tell the optimizer they observe/change global FP
-    // state), so this reads and writes MXCSR directly instead.
+    set_float_control(float_control() | FLUSH_BITS);
+}
+
+/// Flush-to-zero on this thread until dropped, then the thread's own mode
+/// back (MOO-223).
+///
+/// An export has to render the way the callback does, subnormals flushed,
+/// or the two differ wherever a tail decays through that range -- a hosted
+/// plugin's does -- and "offline equals realtime" cannot be checked to the
+/// bit. The thread an export runs on is the app's document worker, which
+/// also saves and loads, so the mode is put back rather than left behind.
+pub(crate) struct FlushToZero {
+    saved: u64,
+}
+
+impl FlushToZero {
+    pub(crate) fn enable() -> Self {
+        let saved = float_control();
+        set_float_control(saved | FLUSH_BITS);
+        Self { saved }
+    }
+}
+
+impl Drop for FlushToZero {
+    fn drop(&mut self) {
+        set_float_control(self.saved);
+    }
+}
+
+// `_mm_getcsr`/`_mm_setcsr` are deprecated for soundness reasons (their
+// signature doesn't tell the optimizer they observe/change global FP state),
+// so MXCSR is read and written directly instead.
+#[cfg(target_arch = "x86_64")]
+const FLUSH_BITS: u64 = (1 << 15) | (1 << 6); // flush-to-zero, denormals-are-zero
+
+#[cfg(target_arch = "x86_64")]
+#[inline]
+fn float_control() -> u64 {
     use std::arch::asm;
-    const FLUSH_TO_ZERO: u32 = 1 << 15;
-    const DENORMALS_ARE_ZERO: u32 = 1 << 6;
+    let mut csr: u32 = 0;
     unsafe {
-        let mut csr: u32 = 0;
         asm!("stmxcsr [{0}]", in(reg) &mut csr, options(nostack, preserves_flags));
-        csr |= FLUSH_TO_ZERO | DENORMALS_ARE_ZERO;
+    }
+    u64::from(csr)
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline]
+fn set_float_control(value: u64) {
+    use std::arch::asm;
+    let csr = value as u32;
+    unsafe {
         asm!("ldmxcsr [{0}]", in(reg) &csr, options(nostack, preserves_flags));
     }
 }
@@ -528,21 +569,40 @@ fn enable_flush_to_zero() {
 /// would do the same for half-precision arithmetic, does not apply -- the
 /// DSP graph never runs in `f16`.
 #[cfg(target_arch = "aarch64")]
+const FLUSH_BITS: u64 = 1 << 24;
+
+#[cfg(target_arch = "aarch64")]
 #[inline]
-fn enable_flush_to_zero() {
+fn float_control() -> u64 {
     use std::arch::asm;
-    const FLUSH_TO_ZERO: u64 = 1 << 24;
+    let fpcr: u64;
     unsafe {
-        let mut fpcr: u64;
         asm!("mrs {0}, fpcr", out(reg) fpcr, options(nostack, preserves_flags));
-        fpcr |= FLUSH_TO_ZERO;
-        asm!("msr fpcr, {0}", in(reg) fpcr, options(nostack, preserves_flags));
+    }
+    fpcr
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline]
+fn set_float_control(value: u64) {
+    use std::arch::asm;
+    unsafe {
+        asm!("msr fpcr, {0}", in(reg) value, options(nostack, preserves_flags));
     }
 }
 
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+const FLUSH_BITS: u64 = 0;
+
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 #[inline]
-fn enable_flush_to_zero() {}
+fn float_control() -> u64 {
+    0
+}
+
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[inline]
+fn set_float_control(_: u64) {}
 
 /// Do, on the audio thread, the one-time work its first block would
 /// otherwise do by allocating.

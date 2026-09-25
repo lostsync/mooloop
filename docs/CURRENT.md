@@ -646,7 +646,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   MOO-239).
   Underneath, an export is a job of passes, each pass one render handed to
   every file it writes, under one progress bar and one Cancel; cancelling
-  keeps the files of passes that had finished. Every format renders at the session's rate: an MP3
+  keeps the files of passes that had finished. As of 2026-09-25 (MOO-223)
+  an export renders with subnormals flushed to zero, as the audio callback
+  does. Its render thread's floating-point mode is restored afterwards, so
+  an export and playback through the executor agree to the bit.
+  Every format renders at the session's rate: an MP3
   of a session faster than 48 kHz is rendered at the session's rate and
   converted by LAME as it encodes (88.2/176.4 kHz to 44.1, the rest to 48).
 - A shared widget library in `crates/mooloop-ui/ui`: knobs with value arcs and a

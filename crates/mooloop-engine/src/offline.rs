@@ -501,6 +501,10 @@ impl OfflineRenderer {
         progress: &ExportProgress,
         plugins: &mut dyn FnMut(usize) -> BTreeMap<PluginSlotId, Box<dyn AudioNode + Send>>,
     ) -> Result<Vec<RenderedFile>, JobFailure> {
+        // Render as the callback does, subnormals flushed, so an export and
+        // playback agree to the bit (MOO-223). The thread's own mode comes
+        // back when this returns: it is the app's shared document worker.
+        let _flush = crate::executor::FlushToZero::enable();
         let fail = |written, error| Err(JobFailure { written, error });
         if let Err(error) = job.validate() {
             return fail(Vec::new(), error);
@@ -2124,6 +2128,73 @@ mod tests {
             .position(|pair| pair[0] == 0xff && pair[1] & 0xe0 == 0xe0)
             .expect("no MP3 frame");
         assert_eq!(bytes[at + 3] >> 6, 0b11, "the MP3 is not mono");
+    }
+
+    /// **An export flushes denormals the way playback does, so the two are
+    /// the same to the bit** (MOO-223).
+    ///
+    /// A sampler playing a sample whose every value is subnormal. Native
+    /// devices put themselves to sleep before a decaying tail gets that
+    /// small -- a first draft of this test used a drum through a low
+    /// lowpass and passed against the unfixed tree -- so the subnormals are
+    /// fed in directly, the way a plugin's tail delivers them (the LSP
+    /// filter's, in the report). The executor's thread flushes them to
+    /// zero; the export's must too, or the two differ in exactly those
+    /// samples. And the thread the export ran on gets its own mode back:
+    /// the app's document worker is shared.
+    #[test]
+    fn an_export_flushes_denormals_like_playback_and_restores_the_thread() {
+        use mooloop_dsp::sampler::ChannelAudioSnapshot;
+        let temp = tempdir().unwrap();
+        let project = sampler_project(1.0);
+        let sample = long_sample(24_000, |_| 3.0e-39);
+        assert!(sample.frames[0][0].is_subnormal());
+        let path = temp.path().join("denormal.wav");
+        let summary = OfflineRenderer::render(
+            &project,
+            &[Some(sample.clone())],
+            48_000,
+            &ExportSpec {
+                path: path.clone(),
+                scope: RenderScope::Pattern { index: 0 },
+                tail_seconds: 0.0,
+                format: ExportFormat::Wav(WavEncoding::Float32),
+            },
+        )
+        .unwrap();
+        let exported: Vec<f32> = hound::WavReader::open(&path)
+            .unwrap()
+            .samples::<f32>()
+            .map(Result::unwrap)
+            .collect();
+        let subnormal = exported.iter().filter(|s| s.is_subnormal()).count();
+        assert_eq!(subnormal, 0, "the export kept {subnormal} subnormal samples");
+
+        let state = project.channels[0].setup.source.sampler_state().expect("a sampler");
+        let audio = vec![ChannelAudioSnapshot::for_sampler(
+            Some(sample),
+            &state.slices,
+            state.keys,
+            Vec::new(),
+        )];
+        let played = crate::live_check::play_audio_through_executor(
+            &project,
+            audio,
+            48_000,
+            summary.base_frames as usize,
+            OFFLINE_BLOCK_FRAMES,
+        );
+        assert_eq!(played.len(), exported.len());
+        let differing = played
+            .iter()
+            .zip(&exported)
+            .filter(|(a, b)| a.to_bits() != b.to_bits())
+            .count();
+        assert_eq!(differing, 0, "{differing} samples differ between playback and the export");
+
+        // This thread still makes subnormals: the export put its mode back.
+        let tiny = std::hint::black_box(f32::MIN_POSITIVE) * std::hint::black_box(0.5f32);
+        assert!(tiny.is_subnormal(), "the export left flush-to-zero on its caller's thread");
     }
 
     #[test]
