@@ -994,3 +994,718 @@ fn render_state_floor_by_component() {
         RenderState::from_project(SAMPLE_RATE, &one, &[])
     });
 }
+
+/// **What each device costs while it plays**, one device at a time, in the
+/// unit the song sweep (`session/tests/song_block_cost.rs`) reports: mean and
+/// worst microseconds per 128-frame block.
+///
+/// The song sweep says which device *kinds* cost the most in real songs; this
+/// says what one of them costs on its own, at its defaults and at the
+/// heaviest settings a real patch uses (every factory patch of every kind),
+/// so a finding can be stated as "this device, these settings, this many
+/// microseconds". Each row plays a one-bar pattern twice from a fresh
+/// `RenderState`: an instrument holds a chord for three quarters of every
+/// bar, and an effect sits after an ML-P8 playing the same chord.
+///
+/// **Built for a shared, noisy machine.** The rows are played round-robin,
+/// every row once per pass, `REPS` passes (default 5), and each block's cost
+/// is its fastest over the passes. A burst of someone else's work lands on
+/// one pass of many rows rather than on every pass of one, so the minimum
+/// strips it out, and two rows are always compared across the same stretch
+/// of time. The row is the mean and the worst of those minima; `over` is the
+/// row less its reference (the empty song for the engine and the
+/// instruments, the bare ML-P8 chord for an effect, ML-P8 + Filter for the
+/// control pass).
+///
+/// ```sh
+/// cargo test -p mooloop-engine --release device_cost -- --ignored --nocapture
+/// ```
+///
+/// `DEVICE_COST=engine,instruments,effects,modulation` picks sections
+/// (default all); `DEVICE_COST_MATCH=<text>` keeps only rows whose label
+/// contains it (and their references). Added by the 2026-09-25 performance
+/// survey, whose findings are in the Linear project Performance.
+#[test]
+#[ignore = "measures wall time; run deliberately in release"]
+fn device_cost() {
+    use mooloop_core::automation::{AutomationLane, AutomationPoint};
+    use mooloop_core::effect::{
+        EffectParams, EqBandKind, ModulationMode, ModulationParams, FILTER_PARAM_CUTOFF_HZ,
+    };
+    use mooloop_core::mixer::EffectTarget;
+    use mooloop_core::mlp8::{MlP8Chorus, MlP8Unison};
+    use mooloop_core::modulation::{
+        ModEnvelopeParams, ModLfoParams, ModMathParams, ModPolarity, ModRandomParams, ModRoute,
+        ModStepParams, ModulatorParams, ParamAddr,
+    };
+    use mooloop_core::sampler::StretchMode;
+    use mooloop_dsp::SampleData;
+    use std::sync::Arc;
+
+    const FRAMES: usize = 128;
+    const CHORD: [u8; 8] = [48, 55, 60, 64, 67, 71, 74, 79];
+
+    /// One line of the table: a project to play, how long to let it run
+    /// first, and which earlier row its `over` column is read against.
+    struct Row {
+        label: String,
+        project: Option<Project>,
+        warmup_blocks: usize,
+        reference: usize,
+    }
+
+    fn chord(channel: &mut ProjectChannel, notes: &[u8], bar: u32) {
+        channel.notes[0].clear();
+        for (index, note) in notes.iter().enumerate() {
+            channel.notes[0].push(NoteEvent::new(index as u32 + 1, 0, bar * 3 / 4, *note, 100));
+        }
+    }
+
+    fn solo(mut channel: ProjectChannel) -> Project {
+        let mut project = Project::default();
+        project.channels.clear();
+        channel.rescope(0);
+        project.channels.push(channel);
+        project
+    }
+
+    let reps = std::env::var("REPS")
+        .ok()
+        .and_then(|reps| reps.parse().ok())
+        .unwrap_or(5usize)
+        .max(1);
+    let sections = std::env::var("DEVICE_COST")
+        .unwrap_or_else(|_| "engine,instruments,effects,modulation".into());
+    let wants = |section: &str| sections.split(',').any(|wanted| wanted == section);
+    let matching = std::env::var("DEVICE_COST_MATCH").ok();
+
+    let bar = mooloop_core::playlist::TICKS_PER_BAR;
+    // Two bars at the default 120 bpm.
+    let blocks = (4 * SAMPLE_RATE as usize).div_ceil(FRAMES);
+    let rested = 12 * SAMPLE_RATE as usize / FRAMES;
+
+    let mut rows: Vec<Row> = Vec::new();
+    let heading = |rows: &mut Vec<Row>, label: &str| {
+        rows.push(Row {
+            label: label.into(),
+            project: None,
+            warmup_blocks: 0,
+            reference: 0,
+        });
+    };
+    let add =
+        |rows: &mut Vec<Row>, label: String, project: Project, warmup: usize, reference: usize| {
+            rows.push(Row {
+                label,
+                project: Some(project),
+                warmup_blocks: warmup,
+                reference,
+            });
+            rows.len() - 1
+        };
+
+    let empty = {
+        let mut project = Project::default();
+        project.channels.clear();
+        project
+    };
+    let floor = add(&mut rows, "empty song (no channels)".into(), empty, 0, 0);
+
+    if wants("engine") {
+        heading(&mut rows, "-- the engine around the devices --");
+        for count in [1usize, 8, 32, 128] {
+            add(
+                &mut rows,
+                format!("{count} idle samplers (no notes)"),
+                idle_sampler_project(count),
+                0,
+                floor,
+            );
+        }
+        for count in [8usize, 32] {
+            let mut project = loaded_project(count);
+            for channel in &mut project.channels {
+                channel.notes[0].clear();
+            }
+            add(
+                &mut rows,
+                format!("{count} idle ML-P8 (no notes)"),
+                project,
+                0,
+                floor,
+            );
+        }
+        // An arrangement's parked channels: a rack each, nothing to play,
+        // measured after twelve seconds so every declared tail is over.
+        for count in [8usize, 32] {
+            let mut project = idle_sampler_project(count);
+            for channel in &mut project.channels {
+                for kind in [
+                    EffectKind::Eq,
+                    EffectKind::Compressor,
+                    EffectKind::Delay,
+                    EffectKind::Reverb,
+                ] {
+                    channel
+                        .setup
+                        .push_effect(EffectSlotState::of_kind(kind))
+                        .expect("room");
+                }
+            }
+            add(
+                &mut rows,
+                format!("{count} idle samplers + EQ,Comp,Delay,Reverb, rested"),
+                project,
+                rested,
+                floor,
+            );
+        }
+        // Muted channels that would otherwise play: what a mute saves.
+        for count in [8usize, 32] {
+            let mut project = loaded_project(count);
+            for channel in &mut project.channels {
+                chord(channel, &CHORD[..4], bar);
+                channel.setup.channel.muted = true;
+            }
+            add(
+                &mut rows,
+                format!("{count} muted ML-P8 holding chords"),
+                project,
+                0,
+                floor,
+            );
+        }
+    }
+
+    if wants("instruments") {
+        heading(
+            &mut rows,
+            "-- instruments, one channel, a chord held 3/4 of each bar --",
+        );
+        let instrument =
+            |rows: &mut Vec<Row>, label: String, mut channel: ProjectChannel, notes: &[u8]| {
+                chord(&mut channel, notes, bar);
+                add(rows, label, solo(channel), 0, floor);
+            };
+        let sampler = |polyphony: u8| {
+            let mut channel = ProjectChannel::sampler(0, 1);
+            channel
+                .setup
+                .sampler_state_mut()
+                .expect("a sampler")
+                .params
+                .polyphony = polyphony;
+            channel
+        };
+        for note in [60u8, 48, 72] {
+            instrument(
+                &mut rows,
+                format!("Sampler, 1 voice, note {note}"),
+                sampler(1),
+                &[note],
+            );
+        }
+        instrument(
+            &mut rows,
+            "Sampler, 8 voices, 8 notes".into(),
+            sampler(8),
+            &CHORD,
+        );
+        for mode in StretchMode::all() {
+            for ratio in [0.5f32, 2.0] {
+                for (polyphony, notes) in [(1u8, &CHORD[..1]), (8, &CHORD[..])] {
+                    let mut channel = sampler(polyphony);
+                    let params = &mut channel.setup.sampler_state_mut().expect("a sampler").params;
+                    params.stretch_enabled = true;
+                    params.stretch_mode = mode;
+                    params.stretch_ratio = ratio;
+                    let label =
+                        format!("Sampler stretch {mode:?} x{ratio}, {} voices", notes.len());
+                    instrument(&mut rows, label, channel, notes);
+                }
+            }
+        }
+        instrument(
+            &mut rows,
+            "DrumSynth".into(),
+            ProjectChannel::drum_synth(0, 1),
+            &CHORD[..1],
+        );
+        instrument(
+            &mut rows,
+            "MonoSynth".into(),
+            ProjectChannel::mono_synth(0, 1),
+            &CHORD[..1],
+        );
+        for notes in [1usize, 8] {
+            instrument(
+                &mut rows,
+                format!("PolySynth, {notes} notes"),
+                ProjectChannel::poly_synth(0, 1),
+                &CHORD[..notes],
+            );
+        }
+        for patch in mooloop_core::ds01_factory::patches() {
+            let channel = ProjectChannel::ds01_with_params(0, 1, patch.params);
+            instrument(
+                &mut rows,
+                format!("DS-01 {}", patch.name),
+                channel,
+                &CHORD[..1],
+            );
+        }
+        for patch in mooloop_core::mlm1_factory::patches() {
+            let channel = ProjectChannel::mlm1_with_params(0, 1, patch.params);
+            instrument(
+                &mut rows,
+                format!("ML-M1 {}", patch.name),
+                channel,
+                &CHORD[..1],
+            );
+        }
+        for (notes, unison) in [
+            (1usize, MlP8Unison::X1),
+            (1, MlP8Unison::X2),
+            (1, MlP8Unison::X4),
+            (1, MlP8Unison::X8),
+            (8, MlP8Unison::X1),
+            (8, MlP8Unison::X8),
+        ] {
+            let params = MlP8Params {
+                unison,
+                ..MlP8Params::default()
+            };
+            let channel = ProjectChannel::mlp8_with_params(0, 1, params);
+            instrument(
+                &mut rows,
+                format!("ML-P8 default, unison {unison:?}, {notes} notes"),
+                channel,
+                &CHORD[..notes],
+            );
+        }
+        for chorus in [MlP8Chorus::One, MlP8Chorus::Two, MlP8Chorus::Ensemble] {
+            let params = MlP8Params {
+                chorus,
+                ..MlP8Params::default()
+            };
+            let channel = ProjectChannel::mlp8_with_params(0, 1, params);
+            instrument(
+                &mut rows,
+                format!("ML-P8 chorus {chorus:?}, 8 notes"),
+                channel,
+                &CHORD,
+            );
+        }
+        {
+            let closed = MlP8Params {
+                filter_cutoff: 0.3,
+                filter_resonance: 0.4,
+                ..MlP8Params::default()
+            };
+            for unison in [MlP8Unison::X1, MlP8Unison::X8] {
+                let params = MlP8Params { unison, ..closed };
+                let channel = ProjectChannel::mlp8_with_params(0, 1, params);
+                instrument(
+                    &mut rows,
+                    format!("ML-P8 filter closed, unison {unison:?}, 1 note"),
+                    channel,
+                    &CHORD[..1],
+                );
+            }
+            let channel = ProjectChannel::mlp8_with_params(0, 1, closed);
+            instrument(
+                &mut rows,
+                "ML-P8 filter closed, 8 notes".into(),
+                channel,
+                &CHORD,
+            );
+            let params = MlP8Params {
+                drive: 0.5,
+                ..MlP8Params::default()
+            };
+            let channel = ProjectChannel::mlp8_with_params(0, 1, params);
+            instrument(
+                &mut rows,
+                "ML-P8 drive 0.5 (filter open), 8 notes".into(),
+                channel,
+                &CHORD,
+            );
+        }
+        for patch in mooloop_core::mlp8_factory::patches() {
+            let unison = patch.params.unison;
+            for notes in [1usize, 8] {
+                let channel = ProjectChannel::mlp8_with_params(0, 1, patch.params);
+                instrument(
+                    &mut rows,
+                    format!("ML-P8 {} ({unison:?}), {notes} notes", patch.name),
+                    channel,
+                    &CHORD[..notes],
+                );
+            }
+            let params = MlP8Params {
+                unison: MlP8Unison::X8,
+                ..patch.params
+            };
+            let channel = ProjectChannel::mlp8_with_params(0, 1, params);
+            instrument(
+                &mut rows,
+                format!("ML-P8 {} unison X8, 1 note", patch.name),
+                channel,
+                &CHORD[..1],
+            );
+        }
+    }
+
+    // The reference an effect is read against: an ML-P8 holding a chord.
+    let voiced = || {
+        let mut channel = ProjectChannel::mlp8(0, 1);
+        chord(&mut channel, &CHORD[..4], bar);
+        solo(channel)
+    };
+
+    if wants("effects") {
+        heading(
+            &mut rows,
+            "-- effects, after an ML-P8 holding a 4-note chord --",
+        );
+        let bare = add(&mut rows, "(ML-P8, no effect)".into(), voiced(), 0, 0);
+        rows[bare].reference = bare;
+        let with = |effect: EffectSlotState| {
+            let mut project = voiced();
+            project.channels[0].setup.push_effect(effect).expect("room");
+            project
+        };
+        let kinds = [
+            EffectKind::Eq,
+            EffectKind::Modulation,
+            EffectKind::Filter,
+            EffectKind::Drive,
+            EffectKind::Bitcrush,
+            EffectKind::Delay,
+            EffectKind::Reverb,
+            EffectKind::Plate,
+            EffectKind::Gate,
+            EffectKind::Compressor,
+            EffectKind::Limiter,
+            EffectKind::Buffer,
+            EffectKind::Preamp,
+            EffectKind::BusComp,
+        ];
+        for kind in kinds {
+            let default = EffectSlotState::of_kind(kind);
+            let wet = default.wet_dry;
+            add(
+                &mut rows,
+                format!("{kind:?} default (wet {wet})"),
+                with(default),
+                0,
+                bare,
+            );
+            let mut full = default;
+            full.wet_dry = 1.0;
+            add(
+                &mut rows,
+                format!("{kind:?} default, wet 1.0"),
+                with(full),
+                0,
+                bare,
+            );
+            let mut half = default;
+            half.wet_dry = 0.5;
+            add(
+                &mut rows,
+                format!("{kind:?} default, wet 0.5"),
+                with(half),
+                0,
+                bare,
+            );
+            full.bypassed = true;
+            add(
+                &mut rows,
+                format!("{kind:?} default, wet 1.0, bypassed"),
+                with(full),
+                0,
+                bare,
+            );
+            half.bypassed = true;
+            add(
+                &mut rows,
+                format!("{kind:?} default, wet 0.5, bypassed"),
+                with(half),
+                0,
+                bare,
+            );
+            for patch in mooloop_core::effect_factory::patches(kind) {
+                let wet = patch.effect.wet_dry;
+                add(
+                    &mut rows,
+                    format!("{kind:?} patch {} (wet {wet})", patch.name),
+                    with(patch.effect),
+                    0,
+                    bare,
+                );
+            }
+        }
+        for mode in [
+            ModulationMode::Chorus,
+            ModulationMode::Flange,
+            ModulationMode::Ensemble,
+            ModulationMode::Adt,
+        ] {
+            let effect = EffectSlotState::modulation(ModulationParams {
+                mode,
+                ..ModulationParams::default()
+            });
+            add(
+                &mut rows,
+                format!("Modulation {mode:?}, wet 1.0"),
+                with(effect),
+                0,
+                bare,
+            );
+        }
+        for stages in [4u8, 8, 12] {
+            let effect = EffectSlotState::modulation(ModulationParams {
+                mode: ModulationMode::Phaser,
+                stages,
+                ..ModulationParams::default()
+            });
+            add(
+                &mut rows,
+                format!("Modulation Phaser {stages} stages, wet 1.0"),
+                with(effect),
+                0,
+                bare,
+            );
+        }
+        for display in [false, true] {
+            let mut effect = EffectSlotState::of_kind(EffectKind::Preamp);
+            if let EffectParams::Preamp(params) = &mut effect.params {
+                params.display_enabled = display;
+            }
+            add(
+                &mut rows,
+                format!("Preamp, display_enabled {display}"),
+                with(effect),
+                0,
+                bare,
+            );
+        }
+        // The EQ by how many stages it runs, flat and not.
+        for (label, bands, gain) in [
+            ("EQ, no band on", 0usize, 0.0f32),
+            ("EQ, 1 bell on at 0 dB", 1, 0.0),
+            ("EQ, 1 bell on at -4 dB", 1, -4.0),
+            ("EQ, 7 bells on at 0 dB", 7, 0.0),
+            ("EQ, 7 bells on at -4 dB", 7, -4.0),
+        ] {
+            let mut effect = EffectSlotState::of_kind(EffectKind::Eq);
+            if let EffectParams::Eq(params) = &mut effect.params {
+                for (index, band) in params.bands.iter_mut().enumerate() {
+                    band.enabled = index < bands;
+                    band.kind = EqBandKind::Bell;
+                    band.gain_db = gain;
+                }
+                params.high_pass.enabled = false;
+                params.low_pass.enabled = false;
+            }
+            add(&mut rows, label.into(), with(effect), 0, bare);
+        }
+    }
+
+    if wants("modulation") {
+        heading(
+            &mut rows,
+            "-- the control pass: modulators, routes and lanes on ML-P8 + Filter --",
+        );
+        let filtered = || {
+            let mut project = voiced();
+            let device = project.channels[0]
+                .setup
+                .push_effect(EffectSlotState::of_kind(EffectKind::Filter))
+                .expect("room");
+            (project, device)
+        };
+        let reference = add(
+            &mut rows,
+            "(ML-P8 + Filter, nothing driven)".into(),
+            filtered().0,
+            0,
+            0,
+        );
+        rows[reference].reference = reference;
+        let target = EffectTarget::Channel(0);
+        let kinds: [(&str, ModulatorParams); 5] = [
+            ("LFO", ModulatorParams::Lfo(ModLfoParams::default())),
+            (
+                "Envelope",
+                ModulatorParams::Envelope(ModEnvelopeParams::default()),
+            ),
+            ("Step", ModulatorParams::Step(ModStepParams::default())),
+            (
+                "Random",
+                ModulatorParams::Random(ModRandomParams::default()),
+            ),
+            ("Math", ModulatorParams::Math(ModMathParams::default())),
+        ];
+        for (name, params) in kinds {
+            let (mut project, device) = filtered();
+            let rack = &mut project.channels[0].setup.modulation;
+            rack.install(0, ModulatorParams::Lfo(ModLfoParams::default()));
+            rack.install(1, params);
+            rack.add_route(ModRoute::to_slot(
+                1,
+                ParamAddr::effect(target, device, FILTER_PARAM_CUTOFF_HZ),
+                0.4,
+                ModPolarity::Bipolar,
+            ))
+            .expect("room in the matrix");
+            add(
+                &mut rows,
+                format!("LFO + 1 {name} -> filter cutoff"),
+                project,
+                0,
+                reference,
+            );
+        }
+        // Every modulator slot filled and routed to the Filter's parameters
+        // until the matrix is full: the widest a channel's control pass gets.
+        {
+            let (mut project, device) = filtered();
+            let rack = &mut project.channels[0].setup.modulation;
+            let slots = mooloop_core::modulation::MAX_MODULATORS_PER_CHANNEL;
+            for slot in 0..slots {
+                rack.install(
+                    slot,
+                    ModulatorParams::Lfo(ModLfoParams {
+                        rate_hz: 0.5 + slot as f32,
+                        ..ModLfoParams::default()
+                    }),
+                );
+            }
+            let mut routes = 0;
+            'fill: for descriptor in EffectKind::Filter.descriptors() {
+                for slot in 0..slots {
+                    let route = ModRoute::to_slot(
+                        slot as u8,
+                        ParamAddr::effect(target, device, descriptor.id),
+                        0.1,
+                        ModPolarity::Bipolar,
+                    );
+                    if rack.add_route(route).is_none() {
+                        break 'fill;
+                    }
+                    routes += 1;
+                }
+            }
+            add(
+                &mut rows,
+                format!("{slots} LFOs, {routes} routes -> filter"),
+                project,
+                0,
+                reference,
+            );
+        }
+        // Automation: one lane per Filter parameter, each moving across the
+        // bar.
+        for lanes in [1usize, 4] {
+            let (mut project, device) = filtered();
+            for (index, descriptor) in EffectKind::Filter
+                .descriptors()
+                .iter()
+                .take(lanes)
+                .enumerate()
+            {
+                let mut lane =
+                    AutomationLane::new(ParamAddr::effect(target, device, descriptor.id));
+                lane.reserve_points();
+                lane.reset_points([
+                    AutomationPoint::new(1, 0, 0.2),
+                    AutomationPoint::new(2, bar / 2, 0.8),
+                    AutomationPoint::new(3, bar - 1, 0.3 + index as f32 * 0.1),
+                ]);
+                project.channels[0].automation[0].push(lane);
+            }
+            add(
+                &mut rows,
+                format!("{lanes} automation lanes on the filter"),
+                project,
+                0,
+                reference,
+            );
+        }
+    }
+
+    // Keep what was asked for, and whatever it is read against.
+    let mut keep: Vec<bool> = rows
+        .iter()
+        .map(|row| {
+            row.project.is_none()
+                || matching
+                    .as_deref()
+                    .is_none_or(|text| row.label.contains(text))
+        })
+        .collect();
+    for index in 0..rows.len() {
+        if keep[index] && rows[index].project.is_some() {
+            keep[rows[index].reference] = true;
+        }
+    }
+
+    // The sampler's sample: two seconds with content across the spectrum, so
+    // a stretcher's splice search has something real to search.
+    let sample = Arc::new(SampleData {
+        frames: (0..2 * SAMPLE_RATE as usize)
+            .map(|index| {
+                let t = index as f32 / SAMPLE_RATE as f32;
+                let value = (t * 220.0 * std::f32::consts::TAU).sin() * 0.4
+                    + (t * 587.0 * std::f32::consts::TAU).sin() * 0.3
+                    + (t * 1490.0 * std::f32::consts::TAU).sin() * 0.2;
+                [value, value * 0.8]
+            })
+            .collect(),
+        sample_rate: SAMPLE_RATE,
+        root_note: 60,
+    });
+    let samples: Vec<Option<Arc<SampleData>>> = vec![Some(sample)];
+
+    let _ftz = crate::executor::FlushToZero::enable();
+    let mut best: Vec<Vec<u64>> = rows.iter().map(|_| vec![u64::MAX; blocks]).collect();
+    for _ in 0..reps {
+        for (index, row) in rows.iter().enumerate() {
+            let (Some(project), true) = (&row.project, keep[index]) else {
+                continue;
+            };
+            let mut render = RenderState::from_project(SAMPLE_RATE, project, &samples);
+            render.play();
+            for _ in 0..row.warmup_blocks {
+                render.process_block(FRAMES);
+            }
+            for slot in best[index].iter_mut() {
+                let started = Instant::now();
+                render.process_block(FRAMES);
+                *slot = (*slot).min(started.elapsed().as_nanos() as u64);
+            }
+        }
+    }
+
+    let mean = |index: usize| best[index].iter().sum::<u64>() as f64 / blocks as f64 / 1e3;
+    println!();
+    println!("  {FRAMES}-frame blocks, two bars, per-block min of {reps} round-robin passes, us");
+    for (index, row) in rows.iter().enumerate() {
+        if !keep[index] {
+            continue;
+        }
+        if row.project.is_none() {
+            println!("\n  {}", row.label);
+            continue;
+        }
+        let worst = *best[index].iter().max().unwrap_or(&0) as f64 / 1e3;
+        println!(
+            "  {:<52} mean {:>7.1}  max {worst:>7.1}  over {:>7.1}",
+            row.label,
+            mean(index),
+            mean(index) - mean(row.reference)
+        );
+    }
+}
