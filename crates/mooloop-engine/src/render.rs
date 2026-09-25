@@ -1591,6 +1591,76 @@ impl HostRamps {
             .zip(targets)
             .all(|(ramp, target)| ramp.value() == target)
     }
+
+    /// How a leaf's host controls take this block (MOO-260). Read after the
+    /// ramps are aimed.
+    fn leaf_path(&self) -> LeafPath {
+        let [input, wet, output, active] = [self.input, self.wet, self.output, self.active];
+        let still = [input, wet, output, active].iter().all(Smoothed::is_settled);
+        if !still || host_reference_forced() {
+            LeafPath::Ramping
+        } else if input.value() == 1.0
+            && wet.value() >= 1.0
+            && output.value() == 1.0
+            && active.value() == 1.0
+        {
+            LeafPath::Unity
+        } else {
+            LeafPath::Still
+        }
+    }
+}
+
+/// The three ways a leaf slot's host controls -- input trim, wet/dry, output
+/// trim and the bypass crossfade -- take a block (MOO-260).
+///
+/// MOO-108 made every one of them ramp per sample, and ran that per-sample
+/// blend on every slot of every block, settled or not. Almost every slot is
+/// settled at full wet and unity trims almost all the time, so that cost the
+/// audio thread about 40% of its 09-23 slowdown for nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LeafPath {
+    /// Settled, at full wet, unity trims and in the path: the device's
+    /// output is the slot's output. No dry copy (unless a dry ring has to
+    /// keep hearing the input), no blend, no ramp stepped.
+    ///
+    /// The per-sample blend's number there is `dry * 0 + wet`, which is
+    /// `wet` for every finite dry -- except that a device output of `-0.0`
+    /// comes out `+0.0` beside a dry sample with its sign bit clear, and here stays
+    /// `-0.0`. The two are equal as `f32`s and to anything downstream.
+    Unity,
+    /// Settled anywhere else: the per-sample blend's arithmetic with its
+    /// gains taken once for the block ([`EffectChain::blend_still`]).
+    Still,
+    /// A control is moving: MOO-108's per-sample blend, unchanged
+    /// ([`EffectChain::blend_ramping`]).
+    Ramping,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Set by a test to send every leaf slot down [`LeafPath::Ramping`], so
+    /// the settled paths can be compared with it in the same process
+    /// (`settled_host_tests`). Per thread, so it touches no other test.
+    static HOST_REFERENCE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run every leaf slot's host controls down the per-sample path, settled or
+/// not, on this thread: the reference the settled paths are held to.
+#[cfg(test)]
+pub(crate) fn force_host_reference(on: bool) {
+    HOST_REFERENCE.with(|forced| forced.set(on));
+}
+
+#[cfg(test)]
+fn host_reference_forced() -> bool {
+    HOST_REFERENCE.with(std::cell::Cell::get)
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn host_reference_forced() -> bool {
+    false
 }
 
 impl EffectSlot {
@@ -3077,26 +3147,53 @@ impl EffectChain {
                     // stopped, with no ramp and no reset.
                     continue;
                 }
+                let mut ramps = self.slot(slot).map_or_else(HostRamps::new, |state| state.ramps);
+                // Which of three ways this block's host controls take
+                // (MOO-260). Asked once, after `aim_ramps`: a ramp's target
+                // moves only between blocks, so a slot settled here stays
+                // settled for the whole block.
+                let path = ramps.leaf_path();
                 // The dry copy is taken *before* the input trim: it is also
                 // the bypassed path, which the trim is not on, and the blend
                 // below puts the trim back on it frame by frame. With the
                 // trim still, that is the same product in the same order.
-                self.dry.l[..context.frames].copy_from_slice(&bus.l[..context.frames]);
-                self.dry.r[..context.frames].copy_from_slice(&bus.r[..context.frames]);
-                if let Some(align) = &mut self.dry_align[slot] {
-                    align.process(
-                        &mut self.dry.l[..context.frames],
-                        &mut self.dry.r[..context.frames],
-                    );
+                //
+                // A slot at `Unity` blends nothing, so it needs no copy --
+                // unless it has a dry ring, which has to keep hearing the
+                // input whether or not anything reads it, or the first block
+                // after the wet leaves full would blend stale audio.
+                if path != LeafPath::Unity || self.dry_align[slot].is_some() {
+                    self.dry.l[..context.frames].copy_from_slice(&bus.l[..context.frames]);
+                    self.dry.r[..context.frames].copy_from_slice(&bus.r[..context.frames]);
+                    if let Some(align) = &mut self.dry_align[slot] {
+                        align.process(
+                            &mut self.dry.l[..context.frames],
+                            &mut self.dry.r[..context.frames],
+                        );
+                    }
                 }
-                let mut ramps = self.slot(slot).map_or_else(HostRamps::new, |state| state.ramps);
                 // Walked twice, identically: once onto the device's input
                 // here, once onto the dry copy in the blend.
-                let mut dry_input = ramps.input;
-                for frame in 0..context.frames {
-                    let input_trim = ramps.input.advance();
-                    bus.l[frame] *= input_trim;
-                    bus.r[frame] *= input_trim;
+                let dry_input = ramps.input;
+                if path == LeafPath::Ramping {
+                    for frame in 0..context.frames {
+                        let input_trim = ramps.input.advance();
+                        bus.l[frame] *= input_trim;
+                        bus.r[frame] *= input_trim;
+                    }
+                } else {
+                    // A settled ramp's `advance` returns its value exactly, so
+                    // this is the loop above with the stepping taken out; and
+                    // a unity trim multiplies by one, which is nothing.
+                    let input_trim = ramps.input.value();
+                    if input_trim != 1.0 {
+                        for sample in bus.l[..context.frames]
+                            .iter_mut()
+                            .chain(bus.r[..context.frames].iter_mut())
+                        {
+                            *sample *= input_trim;
+                        }
+                    }
                 }
                 let input_trim = ramps.input.value();
                 if let Some((meters, _, target)) = device_display {
@@ -3136,26 +3233,19 @@ impl EffectChain {
                 // Every control in it ramps per sample (MOO-108), and the
                 // whole of it crossfades against the bypassed path -- the
                 // untrimmed dry copy -- while bypass takes the device out or
-                // brings it back. A still slot takes the branches that do
-                // exactly what the flat version did.
-                let wet_moving = !ramps.wet.is_settled();
-                let (mut dry_gain, mut wet_gain) = Self::blend_gains(ramps.wet.value());
-                for frame in 0..context.frames {
-                    let input_trim = dry_input.advance();
-                    if wet_moving {
-                        (dry_gain, wet_gain) = Self::blend_gains(ramps.wet.advance());
-                    }
-                    let trim = ramps.output.advance();
-                    let active = ramps.active.advance();
-                    let (dry_l, dry_r) = (self.dry.l[frame], self.dry.r[frame]);
-                    let left = (dry_l * input_trim * dry_gain + bus.l[frame] * wet_gain) * trim;
-                    let right = (dry_r * input_trim * dry_gain + bus.r[frame] * wet_gain) * trim;
-                    if active == 1.0 {
-                        bus.l[frame] = left;
-                        bus.r[frame] = right;
-                    } else {
-                        bus.l[frame] = dry_l + (left - dry_l) * active;
-                        bus.r[frame] = dry_r + (right - dry_r) * active;
+                // brings it back.
+                //
+                // Stepped per sample only while one of those controls is
+                // moving, though (MOO-260). Stepping four settled ramps and
+                // blending a dry copy at full wet, on every slot of every
+                // block, was about 40% of the audio thread's 09-23 slowdown.
+                // A settled slot takes the block whole, and gets the numbers
+                // the per-sample blend would have given it (`LeafPath`).
+                match path {
+                    LeafPath::Unity => {}
+                    LeafPath::Still => Self::blend_still(&self.dry, bus, &ramps, context.frames),
+                    LeafPath::Ramping => {
+                        Self::blend_ramping(&self.dry, bus, &mut ramps, dry_input, context.frames);
                     }
                 }
                 if let Some(state) = self.slots[slot].as_deref_mut() {
@@ -3432,6 +3522,71 @@ impl EffectChain {
             (0.0, 1.0)
         } else {
             equal_power(wet)
+        }
+    }
+
+    /// A leaf's blend while any of its host controls is moving: its device's
+    /// output (on `bus`) against the untrimmed dry copy, every control
+    /// stepped per sample (MOO-108). `ramps` is advanced through the block;
+    /// `dry_input` is a copy of the input trim as it stood before the block,
+    /// walked again here to put the trim back on the dry copy.
+    ///
+    /// Also the reference [`LeafPath::Still`] and [`LeafPath::Unity`] are
+    /// held to, sample for sample (`settled_host_tests`).
+    fn blend_ramping(
+        dry: &StereoBus,
+        bus: &mut StereoBus,
+        ramps: &mut HostRamps,
+        mut dry_input: Smoothed,
+        frames: usize,
+    ) {
+        let wet_moving = !ramps.wet.is_settled();
+        let (mut dry_gain, mut wet_gain) = Self::blend_gains(ramps.wet.value());
+        for frame in 0..frames {
+            let input_trim = dry_input.advance();
+            if wet_moving {
+                (dry_gain, wet_gain) = Self::blend_gains(ramps.wet.advance());
+            }
+            let trim = ramps.output.advance();
+            let active = ramps.active.advance();
+            let (dry_l, dry_r) = (dry.l[frame], dry.r[frame]);
+            let left = (dry_l * input_trim * dry_gain + bus.l[frame] * wet_gain) * trim;
+            let right = (dry_r * input_trim * dry_gain + bus.r[frame] * wet_gain) * trim;
+            if active == 1.0 {
+                bus.l[frame] = left;
+                bus.r[frame] = right;
+            } else {
+                bus.l[frame] = dry_l + (left - dry_l) * active;
+                bus.r[frame] = dry_r + (right - dry_r) * active;
+            }
+        }
+    }
+
+    /// A leaf's blend with every host control settled (MOO-260):
+    /// [`Self::blend_ramping`] with its constants hoisted out of the loop.
+    ///
+    /// The same expression, in the same order -- `dry * input_trim *
+    /// dry_gain` is not folded into one gain, because that rounds
+    /// differently -- so it gives the same numbers. A settled `Smoothed`'s
+    /// `advance` returns its value exactly and changes nothing, so the ramps
+    /// need no writing back.
+    fn blend_still(dry: &StereoBus, bus: &mut StereoBus, ramps: &HostRamps, frames: usize) {
+        let input_trim = ramps.input.value();
+        let (dry_gain, wet_gain) = Self::blend_gains(ramps.wet.value());
+        let trim = ramps.output.value();
+        let active = ramps.active.value();
+        for (wet, dry) in [(&mut bus.l, &dry.l), (&mut bus.r, &dry.r)] {
+            let pairs = wet[..frames].iter_mut().zip(&dry[..frames]);
+            if active == 1.0 {
+                for (wet, &dry) in pairs {
+                    *wet = (dry * input_trim * dry_gain + *wet * wet_gain) * trim;
+                }
+            } else {
+                for (wet, &dry) in pairs {
+                    let blended = (dry * input_trim * dry_gain + *wet * wet_gain) * trim;
+                    *wet = dry + (blended - dry) * active;
+                }
+            }
         }
     }
 

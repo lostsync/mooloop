@@ -206,6 +206,8 @@ mod plugin_instrument_tests;
 #[cfg(test)]
 mod sampler_tests;
 #[cfg(test)]
+mod settled_host_tests;
+#[cfg(test)]
 mod soak_tests;
 #[cfg(test)]
 mod source_slot_tests;

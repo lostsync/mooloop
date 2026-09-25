@@ -118,7 +118,7 @@ lines. Until then, this table is the boundary.
 
 | File | Default owner | Except |
 | --- | --- | --- |
-| `engine/src/render.rs` | Engine: `RenderState`, `process_block_inner`, `apply_command`, install, takes, the discontinuity fan-out, the tests | **Effects:** `EffectChain`, `EffectSlot`, `ContainerScratch`, `PendingEffectParams`, `ReclaimedEffect`. **Mixer:** `SendBank`, `OutputStage`, `BusStrip`, `AudioTapBank`, `mix_into`, the bus walk. **Sequencing:** `release_all_voices`, `inject_choke_events`, `HeldKeys`, `Audition`, `RecordingNote`, the transport and sequencer arms. **Control:** `apply_midi`, `AutomationBlock`, `AutomationCurve`, `AutomationPosition`, `ModulationBlock`, the modulator ticks, and `EffectChain::plugin_curves` (a hosted plugin's lanes and routes, MOO-82). **Instruments:** `PreviewVoice`, `RetiredPreviews`, `render_preview`, and each source's arm in `build_source` (the one match over the native kinds since MOO-56; `ChannelStrip` and its one `source` slot are Engine's). |
+| `engine/src/render.rs` | Engine: `RenderState`, `process_block_inner`, `apply_command`, install, takes, the discontinuity fan-out, the tests | **Effects:** `EffectChain`, `EffectSlot`, `HostRamps`, `LeafPath`, `ContainerScratch`, `PendingEffectParams`, `ReclaimedEffect`. **Mixer:** `SendBank`, `OutputStage`, `BusStrip`, `AudioTapBank`, `mix_into`, the bus walk. **Sequencing:** `release_all_voices`, `inject_choke_events`, `HeldKeys`, `Audition`, `RecordingNote`, the transport and sequencer arms. **Control:** `apply_midi`, `AutomationBlock`, `AutomationCurve`, `AutomationPosition`, `ModulationBlock`, the modulator ticks, and `EffectChain::plugin_curves` (a hosted plugin's lanes and routes, MOO-82). **Instruments:** `PreviewVoice`, `RetiredPreviews`, `render_preview`, and each source's arm in `build_source` (the one match over the native kinds since MOO-56; `ChannelStrip` and its one `source` slot are Engine's). |
 | `ui/src/lib.rs` | Interface: `AppUi::new` as a shell, the pump, the `wire_*!` macros as a framework | **Each feature team:** the wiring for its own faces and views inside `AppUi::new`. **Document:** the document lifecycle, and tempo, swing and embed. **Control:** the pump's control drain. **Engine:** hosted plugins' wiring (MOO-81): the opener set in `AppUi::new`, the export's plugin processors, and `AppUi::retire_plugins` with the pump's branch that waits for them at quit. |
 | `ui/ui/main.slint` | Interface | **Sequencing:** the step grid and the playlist, both inline. **Each device team:** its entries in the DEVICES block. |
 | `ui/src/settings.rs` | Interface | **Platform:** the XDG paths and the settings-load policy, and `PluginSettings`/`plugin_cache_path` (the scanner's, MOO-80). |
@@ -246,6 +246,7 @@ Files marked *shared* are split in the table above.
 - `core/src/`: `effect.rs`, `effect_factory.rs`, `buffer.rs`
 - `session/src/effects.rs`
 - `engine/src/`: the tests `buffer_workflow_tests.rs`, `container_tests.rs`,
+  `settled_host_tests.rs` (a settled insert against the per-sample blend, MOO-260),
   `bus_comp_tests.rs`, and the Bus Comp insert's acceptance render
   `engine/examples/bus_comp_insert.rs` (MOO-216)
 - `ui/ui/`: `bitcrush-device.slint`, `buffer-device.slint`, `bus-comp-device.slint`,
