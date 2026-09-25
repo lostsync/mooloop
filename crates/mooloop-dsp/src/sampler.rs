@@ -34,7 +34,8 @@ use crate::synth_voice::{note_to_freq, MIN_GLIDE_S};
 use mooloop_core::mlm1::{EnvTrigger, GlideMode};
 use mooloop_core::sampler::LoopQuantize;
 use mooloop_core::{
-    clamp01, EnvTimes, LoopMode, PlayMode, RetriggerMode, SamplerParams, SliceMap, VoiceMode,
+    clamp01, zone_for_note, EnvTimes, KeyRange, LoopMode, PlayMode, RetriggerMode, SampleZone,
+    SamplerParams, SliceMap, VoiceMode, ZoneChoice,
     MAX_CHOKE_GROUP, MAX_LINEAR_GAIN, MAX_SAMPLER_VOICES, SAMPLER_TUNE_CENT_CLAMP,
     SAMPLER_TUNE_SEMITONE_CLAMP,
 };
@@ -55,10 +56,40 @@ use arc_swap::ArcSwapOption;
 /// Replaced whole; never edited in place. A `load_slices` that read the
 /// current snapshot and stored a modified copy would reintroduce exactly the
 /// race this removes.
+///
+/// Key zones (MOO-14) are part of the same fact and ride the same value: the
+/// base zone is `sample` with `keys`, and each extra zone brings its own
+/// buffer, keys and root. Build a sampler's snapshot with
+/// [`ChannelAudioSnapshot::for_sampler`], the one place that knows what goes
+/// in it.
 #[derive(Clone, Default)]
 pub struct ChannelAudioSnapshot {
     pub sample: Option<Arc<SampleData>>,
     pub slices: Option<Arc<SliceMap>>,
+    /// The keys the base zone plays. Full unless zones split the keyboard.
+    pub keys: KeyRange,
+    /// The extra zones, looked up after the base in order.
+    pub zones: Vec<ZoneAudio>,
+}
+
+/// One extra zone as a voice reads it: its decoded buffer, its keys, and the
+/// key that plays the buffer at its own pitch. `sample` is `None` for a zone
+/// whose file is missing, which plays nothing and steals nothing.
+#[derive(Clone)]
+pub struct ZoneAudio {
+    pub keys: KeyRange,
+    pub root_note: u8,
+    pub sample: Option<Arc<SampleData>>,
+}
+
+impl ZoneAudio {
+    pub fn new(zone: &SampleZone, sample: Option<Arc<SampleData>>) -> Self {
+        Self {
+            keys: zone.keys,
+            root_note: zone.root_note.min(127),
+            sample,
+        }
+    }
 }
 
 impl ChannelAudioSnapshot {
@@ -67,15 +98,80 @@ impl ChannelAudioSnapshot {
     pub fn sample(sample: Arc<SampleData>) -> Self {
         Self {
             sample: Some(sample),
-            slices: None,
+            ..Self::default()
+        }
+    }
+
+    /// A sampler channel's whole snapshot: its published buffer, the slice
+    /// map that indexes it, the base zone's keys, and the extra zones with
+    /// their decoded buffers.
+    ///
+    /// The one builder every publisher calls -- the live install, the
+    /// session's per-channel publish and the offline render -- so a field
+    /// added here reaches all three or none (MOO-14). An empty map is no map.
+    pub fn for_sampler(
+        sample: Option<Arc<SampleData>>,
+        slices: &SliceMap,
+        keys: KeyRange,
+        zones: Vec<ZoneAudio>,
+    ) -> Self {
+        Self {
+            sample,
+            slices: (!slices.is_empty()).then(|| Arc::new(slices.clone())),
+            keys,
+            zones,
         }
     }
 
     /// Whether this says nothing at all, so an empty channel has one
     /// representation rather than two.
     pub fn is_empty(&self) -> bool {
-        self.sample.is_none() && self.slices.is_none()
+        self.sample.is_none() && self.slices.is_none() && self.zones.is_empty()
     }
+
+    /// The buffer and root key a pitched note plays, or `None` for a note no
+    /// zone holds or a zone with nothing loaded. `base_root` is the base
+    /// zone's, which lives in the patch rather than here.
+    fn zone_for(&self, note: u8, base_root: u8) -> Option<(&Arc<SampleData>, u8)> {
+        match zone_for_note(note, self.keys, self.zones.iter().map(|zone| zone.keys))? {
+            ZoneChoice::Base => self.sample.as_ref().map(|sample| (sample, base_root.min(127))),
+            ZoneChoice::Extra(index) => {
+                let zone = &self.zones[index];
+                zone.sample.as_ref().map(|sample| (sample, zone.root_note))
+            }
+        }
+    }
+
+    /// Whether `sample` is one of this snapshot's buffers, base or zone. A
+    /// voice holding one of them can let go of it without being the last
+    /// holder, so it need not go through the retired ring.
+    fn holds(&self, sample: &Arc<SampleData>) -> bool {
+        self.sample
+            .as_ref()
+            .is_some_and(|held| Arc::ptr_eq(held, sample))
+            || self.zones.iter().any(|zone| {
+                zone.sample
+                    .as_ref()
+                    .is_some_and(|held| Arc::ptr_eq(held, sample))
+            })
+    }
+}
+
+/// Whether `voice` is playing the zone that plays `sample` from `root`, so a
+/// legato move to it is a pitch change rather than a new note (MOO-14). The
+/// base zone is matched by its buffer alone: its root is the patch's, which
+/// may have moved under a sounding note, and a sampler with no zones must
+/// glide exactly as it did before zones existed.
+fn plays_zone(voice: &Voice, audio: &ChannelAudioSnapshot, sample: &Arc<SampleData>, root: u8) -> bool {
+    let held = voice
+        .sample
+        .as_ref()
+        .is_some_and(|held| Arc::ptr_eq(held, sample));
+    let base = audio
+        .sample
+        .as_ref()
+        .is_some_and(|base| Arc::ptr_eq(base, sample));
+    held && (base || voice.root_note == root)
 }
 
 /// Minimum envelope stage time, to avoid divide-by-zero and infinite rates.
@@ -335,6 +431,10 @@ struct Voice {
     /// `key_pitch_ratio` per Hz of `glide`: the sample-rate ratio over the
     /// root key's frequency, fixed at the trigger.
     glide_base: f64,
+    /// The root key of the zone this voice is playing (MOO-14): the patch's
+    /// for the base zone, the zone's own otherwise. A legato note may only
+    /// slide within one zone, since another zone is another sample.
+    root_note: u8,
     /// The source-frame span this voice was given at note-on, in
     /// [`PlayMode::Slice`]; `None` in `Pitched`, where the region is the
     /// whole answer.
@@ -378,6 +478,7 @@ impl Voice {
             key_pitch_ratio: 1.0,
             glide: Glide::new(note_to_freq(60)),
             glide_base: 1.0 / f64::from(note_to_freq(60)),
+            root_note: 60,
             slice: None,
             direction: 1.0,
             env: AdsrEnv::new(sample_rate),
@@ -403,6 +504,7 @@ impl Voice {
         self.key_pitch_ratio = 1.0;
         self.glide.jump_to(note_to_freq(60));
         self.glide_base = 1.0 / f64::from(note_to_freq(60));
+        self.root_note = 60;
         self.slice = None;
         self.direction = 1.0;
         self.env = AdsrEnv::new(sample_rate);
@@ -1051,7 +1153,36 @@ impl Sampler {
             });
         }
         let sounding = mono && self.voices[0].active;
-        if sounding && overlapping && self.params.env_trigger == EnvTrigger::Legato {
+        // One load, every field. The buffer and the map that indexes it are
+        // one fact; reading them separately let a note-on land between two
+        // stores and play new audio against old markers.
+        //
+        // Every `Arc` this function leaves behind has another holder --
+        // `last_audio`, and the voice -- so none of their drops can free.
+        let Some(audio) = self.current_audio() else {
+            return;
+        };
+        // Which zone's buffer the note plays, and the key that plays it at
+        // its own pitch (MOO-14). In Slice mode a note picks a slice of the
+        // base sample, so the zones take no part.
+        //
+        // Resolved before a voice is chosen: a note no zone holds has nothing
+        // to play, so it must not steal a voice on its way to being silent.
+        let zone = if self.params.play_mode == PlayMode::Slice {
+            audio
+                .sample
+                .as_ref()
+                .map(|sample| (sample, self.params.root_note.min(127)))
+        } else {
+            audio.zone_for(note, self.params.root_note)
+        };
+        let Some((sample, root_note)) = zone.map(|(sample, root)| (sample.clone(), root)) else {
+            return;
+        };
+        // A legato note slides the sounding voice only within its zone:
+        // another zone is another sample, which has to be struck.
+        let same_zone = plays_zone(&self.voices[0], &audio, &sample, root_note);
+        if sounding && overlapping && same_zone && self.params.env_trigger == EnvTrigger::Legato {
             self.retarget(0, event_id, note, true);
             return;
         }
@@ -1062,18 +1193,6 @@ impl Sampler {
             && (overlapping || self.params.glide_mode == GlideMode::Always)
             && self.params.glide > MIN_GLIDE_S)
             .then(|| self.voices[0].glide.hz());
-        // One load, both fields. The buffer and the map that indexes it are
-        // one fact; reading them separately let a note-on land between two
-        // stores and play new audio against old markers.
-        //
-        // Every `Arc` this function leaves behind has another holder --
-        // `last_audio`, and the voice -- so none of their drops can free.
-        let Some(audio) = self.current_audio() else {
-            return;
-        };
-        let Some(sample) = audio.sample.clone() else {
-            return;
-        };
         let len = sample.len().max(1);
         let sample_rate_ratio = sample.sample_rate as f64 / self.sample_rate as f64;
 
@@ -1105,7 +1224,6 @@ impl Sampler {
             };
             (Some(span), sample_rate_ratio)
         } else {
-            let root_note = self.params.root_note.min(127);
             let key_semitones = i16::from(note.min(127)) - i16::from(root_note);
             (
                 None,
@@ -1113,19 +1231,17 @@ impl Sampler {
             )
         };
 
-        // A finished voice still holding some other sample gives it up now.
-        // Stolen voices fade out on spare slots (MOO-110) and keep what they
-        // played there, so without this a replaced sample could outlive its
-        // replacement for as long as nothing struck that slot again.
+        // A finished voice still holding a sample this channel no longer has
+        // gives it up now. Stolen voices fade out on spare slots (MOO-110)
+        // and keep what they played there, so without this a replaced sample
+        // could outlive its replacement for as long as nothing struck that
+        // slot again. A buffer the snapshot still holds -- another zone's --
+        // is kept: letting it go would free nothing and fill the ring.
         for voice in self.voices.iter_mut().filter(|voice| !voice.active) {
             if self.retired.samples_full() {
                 break;
             }
-            if voice
-                .sample
-                .as_ref()
-                .is_some_and(|held| !Arc::ptr_eq(held, &sample))
-            {
+            if voice.sample.as_ref().is_some_and(|held| !audio.holds(held)) {
                 if let Some(held) = voice.sample.take() {
                     voice.sample = self.retired.push_sample(held);
                 }
@@ -1139,10 +1255,14 @@ impl Sampler {
         // ring rather than dropping it. With the ring full the note is
         // refused and the voice left as it was: a lost note in a backlog no
         // gesture produces, against a free on the callback.
+        //
+        // Only a sample the snapshot no longer holds is displaced in that
+        // sense. Moving between zones swaps one held buffer for another, and
+        // the snapshot keeps the old one alive, so that drop cannot free.
         let displaces = self.voices[index]
             .sample
             .as_ref()
-            .is_some_and(|held| !Arc::ptr_eq(held, &sample));
+            .is_some_and(|held| !Arc::ptr_eq(held, &sample) && !audio.holds(held));
         if displaces && self.retired.samples_full() {
             return;
         }
@@ -1165,7 +1285,11 @@ impl Sampler {
                     return;
                 }
             }
-        } else if voice.sample.is_none() {
+        } else if !voice
+            .sample
+            .as_ref()
+            .is_some_and(|held| Arc::ptr_eq(held, &sample))
+        {
             voice.sample = Some(sample.clone());
         }
         voice.active = !sample.is_empty();
@@ -1182,7 +1306,8 @@ impl Sampler {
         // The glide rests on the struck note. `key_pitch_ratio` keeps its
         // exact value above, so a patch that never glides plays what it did.
         let struck_hz = note_to_freq(note.min(127));
-        voice.glide_base = sample_rate_ratio / f64::from(note_to_freq(self.params.root_note.min(127)));
+        voice.glide_base = sample_rate_ratio / f64::from(note_to_freq(root_note));
+        voice.root_note = root_note;
         match slide_from {
             Some(from) => {
                 voice.glide.jump_to(from);
@@ -1217,6 +1342,16 @@ impl Sampler {
         }
     }
 
+    /// Whether `note` would play the buffer and root the mono voice is
+    /// sounding, so a fallback to it can be a pitch change (MOO-14).
+    fn plays_in_sounding_zone(&self, note: u8) -> bool {
+        self.last_audio.as_ref().is_some_and(|audio| {
+            audio
+                .zone_for(note, self.params.root_note)
+                .is_some_and(|(sample, root)| plays_zone(&self.voices[0], audio, sample, root))
+        })
+    }
+
     fn release_note(&mut self, event_id: u64) {
         // Releasing the note the mono voice is playing, with another key
         // still down, falls back to that key as a pitch change: no new
@@ -1227,7 +1362,13 @@ impl Sampler {
             && self.voices[0].active
             && self.voices[0].event_id == event_id
         {
-            if let Some(winner) = self.held.winner(mooloop_core::NotePriority::Last) {
+            // Only within the sounding zone: a key held in another zone
+            // names another sample, and the voice releases instead.
+            if let Some(winner) = self
+                .held
+                .winner(mooloop_core::NotePriority::Last)
+                .filter(|winner| self.plays_in_sounding_zone(winner.note))
+            {
                 self.retarget(0, winner.event_id, winner.note, true);
                 return;
             }
@@ -2405,10 +2546,12 @@ mod tests {
         let mut map = SliceMap::new();
         map.divide_evenly(SLICE_COUNT, 0, SLICED_LEN as u32);
         Sampler::new(
-            slot(ChannelAudioSnapshot {
-                sample: Some(sample),
-                slices: Some(Arc::new(map)),
-            }),
+            slot(ChannelAudioSnapshot::for_sampler(
+                Some(sample),
+                &map,
+                KeyRange::FULL,
+                Vec::new(),
+            )),
             SamplerParams {
                 play_mode: PlayMode::Slice,
                 attack: 0.0,
@@ -2520,10 +2663,12 @@ mod tests {
              the buffer; the mismatch is not severe enough to test anything"
         );
         let mut sampler = Sampler::new(
-            slot(ChannelAudioSnapshot {
-                sample: Some(sample),
-                slices: Some(Arc::new(map)),
-            }),
+            slot(ChannelAudioSnapshot::for_sampler(
+                Some(sample),
+                &map,
+                KeyRange::FULL,
+                Vec::new(),
+            )),
             SamplerParams {
                 play_mode: PlayMode::Slice,
                 attack: 0.0,
@@ -4580,6 +4725,159 @@ mod tests {
                 let (start, end) = Sampler::resolve_loop_bounds(params, LEN, None, None);
                 assert!(start >= 0.0 && end <= LEN as f64 && end > start, "{grid:?} {a}: {start}..{end}");
             }
+        }
+    }
+
+    /// A constant buffer, so which one a voice plays is its level.
+    fn dc(level: f32, sample_rate: u32, len: usize) -> Arc<SampleData> {
+        Arc::new(SampleData {
+            frames: vec![[level, level]; len],
+            sample_rate,
+            root_note: 60,
+        })
+    }
+
+    /// A sampler whose base zone (`base`, root from the patch) plays up to
+    /// B3 and whose one extra zone (`zone`, root C5) plays from `zone_low`.
+    fn split_sampler(
+        base: &Arc<SampleData>,
+        zone: &Arc<SampleData>,
+        zone_low: u8,
+        params: SamplerParams,
+    ) -> Sampler {
+        let audio = ChannelAudioSnapshot::for_sampler(
+            Some(base.clone()),
+            &SliceMap::new(),
+            KeyRange::new(0, 59),
+            vec![ZoneAudio {
+                keys: KeyRange::new(zone_low, 127),
+                root_note: 72,
+                sample: Some(zone.clone()),
+            }],
+        );
+        Sampler::new(slot(audio), params, 48_000)
+    }
+
+    fn zone_params() -> SamplerParams {
+        SamplerParams {
+            attack: 0.0,
+            decay: 8.0,
+            sustain: 1.0,
+            output_gain: 1.0,
+            polyphony: 4,
+            ..SamplerParams::default()
+        }
+    }
+
+    /// **The split (MOO-14).** Below the split a note plays the base sample
+    /// transposed from the patch's root; above it, the zone's own sample
+    /// transposed from the zone's own root, with that sample's own rate
+    /// conversion.
+    #[test]
+    fn a_split_keyboard_plays_each_zones_sample_from_its_own_root() {
+        let base = dc(0.25, 48_000, 48_000);
+        let zone = dc(0.5, 24_000, 48_000);
+        let mut sampler = split_sampler(&base, &zone, 60, zone_params());
+
+        let low = render_note(&mut sampler, 48_000, 48, 256);
+        let voice = &sampler.voices[0];
+        assert!(Arc::ptr_eq(voice.sample.as_ref().unwrap(), &base));
+        assert!((voice.playback_rate - 0.5).abs() < 1e-9, "C3 is an octave under C4");
+        let low_level = low.l[200];
+
+        sampler.reset();
+        let high = render_note(&mut sampler, 48_000, 84, 256);
+        let voice = &sampler.voices[0];
+        assert!(Arc::ptr_eq(voice.sample.as_ref().unwrap(), &zone));
+        // An octave over the zone's C5, read from a 24 kHz file at 48 kHz.
+        assert!((voice.playback_rate - 1.0).abs() < 1e-9, "rate {}", voice.playback_rate);
+        let high_level = high.l[200];
+        assert!(
+            (high_level / low_level - 2.0).abs() < 1e-3,
+            "the zone's buffer is twice the base's: {high_level} against {low_level}"
+        );
+    }
+
+    /// A key no zone holds is silent and takes no voice from a sounding one.
+    #[test]
+    fn a_key_in_no_zone_is_silent_and_steals_nothing() {
+        let base = dc(0.25, 48_000, 48_000);
+        let zone = dc(0.5, 48_000, 48_000);
+        let mut sampler = split_sampler(&base, &zone, 72, SamplerParams { polyphony: 1, ..zone_params() });
+        render_note(&mut sampler, 48_000, 40, 64);
+        assert_eq!(sampler.active_voice_count(), 1);
+        let gap = render_note(&mut sampler, 48_000, 65, 64);
+        assert_eq!(sampler.active_voice_count(), 1, "the gap stole the sounding voice");
+        assert!(Arc::ptr_eq(sampler.voices[0].sample.as_ref().unwrap(), &base));
+        assert!(gap.l[..64].iter().all(|value| (*value - 0.25).abs() < 1e-3 || *value == 0.0));
+    }
+
+    /// Playing across the split swaps one held buffer for another, which the
+    /// snapshot keeps alive, so nothing goes through the retired ring: a
+    /// ring that filled would refuse notes, and no host drains it here.
+    #[test]
+    fn crossing_the_split_retires_nothing_and_refuses_no_note() {
+        let base = dc(0.25, 48_000, 48_000);
+        let zone = dc(0.5, 48_000, 48_000);
+        let mut sampler = split_sampler(&base, &zone, 60, SamplerParams { polyphony: 1, ..zone_params() });
+        for strike in 0..(3 * usize::from(MAX_SAMPLER_VOICES)) {
+            let note = if strike % 2 == 0 { 48 } else { 84 };
+            render_note(&mut sampler, 48_000, note, 32);
+            let expected = if strike % 2 == 0 { &base } else { &zone };
+            assert!(
+                Arc::ptr_eq(sampler.voices[0].sample.as_ref().unwrap(), expected),
+                "strike {strike} was refused"
+            );
+        }
+        assert!(sampler.pop_retired().is_none());
+    }
+
+    /// A legato note into another zone strikes that zone's sample from its
+    /// top rather than sliding the old sample to the new key.
+    #[test]
+    fn a_legato_note_into_another_zone_retriggers() {
+        let base = dc(0.25, 48_000, 480_000);
+        let zone = dc(0.5, 48_000, 480_000);
+        let params = SamplerParams {
+            polyphony: 1,
+            voice_mode: VoiceMode::Gate,
+            glide: 0.1,
+            env_trigger: EnvTrigger::Legato,
+            ..zone_params()
+        };
+        let mut sampler = split_sampler(&base, &zone, 60, params);
+        let mut list = EventList::empty();
+        list.push(on(1, 50));
+        let mut bus = StereoBus::with_capacity(4_800);
+        sampler.process(&ctx(4_800, 48_000), &mut bus, &list, None);
+        assert!(sampler.voices[0].play_pos > 1_000.0);
+        let mut list = EventList::empty();
+        list.push(on(2, 55));
+        sampler.process(&ctx(480, 48_000), &mut bus, &list, None);
+        assert!(sampler.voices[0].play_pos > 1_000.0, "a legato note within the zone slides on");
+        let mut list = EventList::empty();
+        list.push(on(3, 72));
+        sampler.process(&ctx(480, 48_000), &mut bus, &list, None);
+        assert!(Arc::ptr_eq(sampler.voices[0].sample.as_ref().unwrap(), &zone));
+        assert!(
+            sampler.voices[0].play_pos <= 480.0,
+            "the zone's sample starts from its top, read {}",
+            sampler.voices[0].play_pos
+        );
+    }
+
+    /// A sampler with no zones is exactly the old one: every key plays the
+    /// one sample, and the snapshot a v1 song publishes has nothing else in.
+    #[test]
+    fn a_sampler_with_no_zones_plays_every_key() {
+        let base = dc(0.25, 48_000, 48_000);
+        let audio = ChannelAudioSnapshot::for_sampler(Some(base), &SliceMap::new(), KeyRange::FULL, Vec::new());
+        assert!(audio.slices.is_none());
+        let mut sampler = Sampler::new(slot(audio), zone_params(), 48_000);
+        for note in [0, 60, 127] {
+            sampler.reset();
+            render_note(&mut sampler, 48_000, note, 16);
+            assert_eq!(sampler.active_voice_count(), 1, "key {note}");
         }
     }
 }

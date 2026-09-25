@@ -6,6 +6,111 @@ import { BitcrusherTrace, FilterResponseDisplay } from "device-displays.slint";
 import { EnvelopeEditor } from "envelope.slint";
 import { StepperField } from "toolbar.slint";
 
+/// One extra key zone as the ZONES page lists it (MOO-14).
+export struct SamplerZoneRow {
+    name: string,
+    low: int,
+    high: int,
+    root: int,
+    missing: bool,
+}
+
+/// The sampler's minimal key-zone editor (MOO-14): the base sample's key
+/// range, and a list of extra zones, each a file with its low and high key
+/// and its root, added from a file and removed. The mapping workspace is
+/// MOO-40.
+export component SamplerZonesPage inherits VerticalLayout {
+    in property <int> base-low: 0;
+    in property <int> base-high: 127;
+    in property <string> base-name;
+    in property <[SamplerZoneRow]> zones;
+    callback base-keys-changed(int, int);
+    callback zone-add-clicked();
+    callback zone-keys-changed(int, int, int);
+    callback zone-root-changed(int, int);
+    callback zone-remove-clicked(int);
+
+    spacing: 4px;
+    HorizontalLayout {
+        spacing: 6px;
+        Text {
+            text: root.base-name == "" ? "Sample" : root.base-name;
+            color: Theme.text; font-size: Theme.text-sm; overflow: elide;
+            vertical-alignment: center; horizontal-stretch: 1;
+        }
+        StepperField {
+            label: "LOW"; value: root.base-low; minimum: 0; maximum: 127;
+            display-text: NoteFormat.midi-name(self.value); value-width: 30px;
+            tooltip: "Lowest key"; hint: "The lowest key the sampler's own sample plays";
+            changed(v) => { root.base-keys-changed(v, max(v, root.base-high)); }
+        }
+        StepperField {
+            label: "HIGH"; value: root.base-high; minimum: 0; maximum: 127;
+            display-text: NoteFormat.midi-name(self.value); value-width: 30px;
+            tooltip: "Highest key"; hint: "The highest key the sampler's own sample plays";
+            changed(v) => { root.base-keys-changed(min(v, root.base-low), v); }
+        }
+        // The zone rows' ROOT and remove columns, held open so the key
+        // steppers line up down the page.
+        StepperField { label: "ROOT"; value: 60; visible: false; value-width: 30px; }
+        ToolButton { text: "×"; visible: false; min-width: 22px; max-width: 22px; }
+    }
+    Rectangle { height: 1px; background: Theme.border; }
+    // The list scrolls: a sampler may have as many zones as there are
+    // files to give it (`docs/CAPACITY_POLICY.md`).
+    Rectangle {
+        vertical-stretch: 1;
+        Flickable {
+            width: parent.width;
+            height: parent.height;
+            viewport-height: zone-list.preferred-height;
+            zone-list := VerticalLayout {
+                spacing: 4px;
+                for zone[index] in root.zones : HorizontalLayout {
+                    spacing: 6px;
+                    Text {
+                        text: zone.missing ? zone.name + " (missing)" : zone.name;
+                        color: zone.missing ? Theme.text-faint : Theme.text;
+                        font-size: Theme.text-sm; overflow: elide;
+                        vertical-alignment: center; horizontal-stretch: 1;
+                    }
+                    StepperField {
+                        label: "LOW"; value: zone.low; minimum: 0; maximum: 127;
+                        display-text: NoteFormat.midi-name(self.value); value-width: 30px;
+                        tooltip: "Lowest key"; hint: "The lowest key this zone plays";
+                        changed(v) => { root.zone-keys-changed(index, v, max(v, zone.high)); }
+                    }
+                    StepperField {
+                        label: "HIGH"; value: zone.high; minimum: 0; maximum: 127;
+                        display-text: NoteFormat.midi-name(self.value); value-width: 30px;
+                        tooltip: "Highest key"; hint: "The highest key this zone plays";
+                        changed(v) => { root.zone-keys-changed(index, min(v, zone.low), v); }
+                    }
+                    StepperField {
+                        label: "ROOT"; value: zone.root; minimum: 0; maximum: 127;
+                        display-text: NoteFormat.midi-name(self.value); value-width: 30px;
+                        tooltip: "Root"; hint: "The key that plays this zone's sample at its own pitch";
+                        changed(v) => { root.zone-root-changed(index, v); }
+                    }
+                    ToolButton {
+                        text: "×"; tooltip: "Remove zone"; hint: "Remove this key zone";
+                        min-width: 22px; max-width: 22px;
+                        clicked => { root.zone-remove-clicked(index); }
+                    }
+                }
+            }
+        }
+    }
+    HorizontalLayout {
+        ToolButton {
+            text: "+ ZONE"; tooltip: "Add zone"; hint: "Add a key zone from an audio file";
+            min-width: 64px; max-width: 64px; min-height: 22px; max-height: 22px;
+            clicked => { root.zone-add-clicked(); }
+        }
+        Rectangle { horizontal-stretch: 1; }
+    }
+}
+
 global SamplerDeviceIcons {
     out property <string> previous: "M 10 3 L 5 8 L 10 13";
     out property <string> next: "M 6 3 L 11 8 L 6 13";
@@ -414,6 +519,15 @@ export component SamplerDeviceFace inherits Rectangle {
     callback record-clicked();
     callback record-clip-changed(bool);
     callback record-bars-changed(int);
+    // The ZONES page (MOO-14): the base sample's keys and the extra zones.
+    in property <int> zone-base-low: 0;
+    in property <int> zone-base-high: 127;
+    in property <[SamplerZoneRow]> zones;
+    callback zone-base-keys-changed(int, int);
+    callback zone-add-clicked();
+    callback zone-keys-changed(int, int, int);
+    callback zone-root-changed(int, int);
+    callback zone-remove-clicked(int);
 
     // Maps a position normalized against the whole sample (0..1) to a
     // position normalized against the currently visible zoom window, for
@@ -431,6 +545,7 @@ export component SamplerDeviceFace inherits Rectangle {
             DevicePageButton { text: "VOICE"; active: root.page == 1; clicked => { root.page = 1; } }
             DevicePageButton { text: "TONE"; active: root.page == 2; clicked => { root.page = 2; } }
             DevicePageButton { text: "RECORD"; active: root.page == 3; clicked => { root.page = 3; } }
+            DevicePageButton { text: "ZONES"; active: root.page == 4; clicked => { root.page = 4; } }
             Rectangle { horizontal-stretch: 1; }
             // The trim belongs to the patch, not to a page, so it sits in the
             // page bar and stays reachable from all three. One control: the
@@ -1421,6 +1536,20 @@ export component SamplerDeviceFace inherits Rectangle {
                 }
                 Rectangle { horizontal-stretch: 1; }
             }
+        }
+        // Key zones (MOO-14): which keys play the sample, and extra zones
+        // that each play their own file from their own root. The mapping
+        // workspace is MOO-40.
+        if root.page == 4 : SamplerZonesPage {
+            base-name: root.sample-name;
+            base-low: root.zone-base-low;
+            base-high: root.zone-base-high;
+            zones: root.zones;
+            base-keys-changed(low, high) => { root.zone-base-keys-changed(low, high); }
+            zone-add-clicked => { root.zone-add-clicked(); }
+            zone-keys-changed(index, low, high) => { root.zone-keys-changed(index, low, high); }
+            zone-root-changed(index, note) => { root.zone-root-changed(index, note); }
+            zone-remove-clicked(index) => { root.zone-remove-clicked(index); }
         }
     }
 }

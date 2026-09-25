@@ -11,6 +11,55 @@ use mooloop_dsp::SampleData;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// Decode every key-zone file the given samplers name (MOO-14), once per
+/// path. Runs on a document worker, beside the base samples' decode. A file
+/// that is missing was already warned about by the load; one that fails to
+/// decode is warned about here, and neither is returned.
+pub fn decode_zone_files<'a>(
+    samplers: impl IntoIterator<Item = (usize, &'a mooloop_core::SamplerState)>,
+    warnings: &mut Vec<mooloop_project::AssetWarning>,
+) -> Vec<(PathBuf, Arc<SampleData>)> {
+    let mut decoded: Vec<(PathBuf, Arc<SampleData>)> = Vec::new();
+    for (channel, state) in samplers {
+        for zone in &state.zones {
+            let mooloop_core::SampleReference::File { path, .. } = &zone.sample else {
+                continue;
+            };
+            if !path.is_file() || decoded.iter().any(|(held, _)| held == path) {
+                continue;
+            }
+            match audio_file::decode(path) {
+                Ok(file) => decoded.push((path.clone(), file.sample)),
+                Err(message) => warnings.push(mooloop_project::AssetWarning {
+                    channel,
+                    path: path.clone(),
+                    message,
+                }),
+            }
+        }
+    }
+    decoded
+}
+
+/// A sampler's zone buffers in zone order, from what
+/// [`decode_zone_files`] returned: the shape an offline render takes.
+pub fn zone_buffers(
+    state: &mooloop_core::SamplerState,
+    decoded: &[(PathBuf, Arc<SampleData>)],
+) -> Vec<Option<Arc<SampleData>>> {
+    state
+        .zones
+        .iter()
+        .map(|zone| match &zone.sample {
+            mooloop_core::SampleReference::File { path, .. } => decoded
+                .iter()
+                .find(|(held, _)| held == path)
+                .map(|(_, sample)| sample.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 pub struct LoadedSample {
     pub path: PathBuf,
     pub sample: Arc<SampleData>,
@@ -37,6 +86,9 @@ pub struct LoadResult {
     /// Load into a sampler channel created on arrival (`channel` is then the
     /// index the new channel will take) rather than an existing one.
     pub new_channel: bool,
+    /// Add the file as a new key zone of `channel` (MOO-14) rather than
+    /// replace its sample.
+    pub zone: bool,
     /// `None` = dialog cancelled; `Some(Err)` = decode failed.
     pub result: Option<Result<LoadedSample, String>>,
 }
@@ -259,6 +311,15 @@ pub fn audition_preset(path: &Path, sample_rate: u32) -> Result<SampleInspection
         _ => return Err("Only instrument and channel presets can be auditioned".into()),
     }
     let kind = channel.setup.source.kind();
+    // A zoned sampler preset is auditioned with its zones (MOO-14): the
+    // render refuses a song whose zone audio it was not given.
+    let zones = match &channel.setup.source {
+        ChannelSource::Sampler(state) => {
+            let decoded = decode_zone_files([(0, state)], &mut Vec::new());
+            vec![zone_buffers(state, &decoded)]
+        }
+        _ => Vec::new(),
+    };
     let sample = match &channel.setup.source {
         ChannelSource::Sampler(state) => match &state.sample {
             mooloop_core::SampleReference::File { path, .. } => {
@@ -287,6 +348,7 @@ pub fn audition_preset(path: &Path, sample_rate: u32) -> Result<SampleInspection
                 channel,
                 &[(0, 6, root, 110), (8, 8, root + 7, 110)],
                 sample,
+                zones,
                 sample_rate,
             );
         }
@@ -301,7 +363,7 @@ pub fn audition_preset(path: &Path, sample_rate: u32) -> Result<SampleInspection
             (8, 8, 60, 100),
         ],
     };
-    render_audition(path, kind, channel, phrase, sample, sample_rate)
+    render_audition(path, kind, channel, phrase, sample, zones, sample_rate)
 }
 
 /// Render `phrase` on `channel` alone and describe the result for the
@@ -312,10 +374,14 @@ fn render_audition(
     mut channel: mooloop_core::ProjectChannel,
     phrase: &[(u32, u32, u8, u8)],
     sample: Option<Arc<SampleData>>,
+    zones: Vec<Vec<Option<Arc<SampleData>>>>,
     sample_rate: u32,
 ) -> Result<SampleInspection, String> {
         use mooloop_core::{NoteEvent, Project};
-        use mooloop_engine::{ExportFormat, ExportSpec, OfflineRenderer, RenderScope, WavEncoding};
+        use mooloop_engine::{
+            ExportFormat, ExportProgress, ExportSpec, OfflineRenderer, RenderJob, RenderScope,
+            WavEncoding,
+        };
         const STEP: u32 = mooloop_core::TICKS_PER_STEP;
         for (id, &(start, length, note, velocity)) in phrase.iter().enumerate() {
             channel.notes[0].push(NoteEvent::new(
@@ -340,18 +406,21 @@ fn render_audition(
             std::process::id(),
             NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
-        OfflineRenderer::render(
+        OfflineRenderer::render_job_with_plugins(
             &project,
             &[sample],
+            &zones,
             sample_rate,
-            &ExportSpec {
+            &RenderJob::single(&ExportSpec {
                 path: temp.clone(),
                 scope: RenderScope::Pattern { index: 0 },
                 tail_seconds: AUDITION_TAIL_S,
                 format: ExportFormat::Wav(WavEncoding::Float32),
-            },
+            }),
+            &ExportProgress::new(),
+            &mut |_| std::collections::BTreeMap::new(),
         )
-        .map_err(|error| format!("The audition did not render: {error}"))?;
+        .map_err(|failure| format!("The audition did not render: {failure}"))?;
         let decoded = audio_file::decode(&temp);
         let _ = std::fs::remove_file(&temp);
         let rendered = decoded?.sample;

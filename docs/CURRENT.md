@@ -268,6 +268,20 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   the older pitch with no new attack. The three are greyed out with more than
   one voice or in Slice mode. A patch with no glide and Retrig plays exactly as
   a one-voice sampler always did, so older songs don't change.
+  Key zones (MOO-14), on the ZONES page: the sampler's own sample plays a key
+  range (LOW and HIGH), and + ZONE adds another audio file as a zone with its
+  own key range and ROOT. A note plays the sample if its range holds the
+  note, otherwise the first zone whose range holds it, otherwise nothing. A
+  zone is pitched from its own root. A zone is removed with its x, and every
+  edit is one undo step. The first zone added to a full-keyboard sampler
+  takes the upper half of the keys. A later zone takes the keys above every
+  range, or splits the top range when there are none. Slices, the stretch
+  commit and the SAMPLE page's ROOT belong to the sampler's own sample: in
+  Slice mode the zones are ignored. Start, end, loop and stretch apply to
+  every zone. Zones embed with the song like its sample. A zone whose file is
+  missing says so on the page and plays nothing. Zones store a velocity range
+  that nothing plays yet (velocity layers). The full mapping workspace
+  (MOO-40) and SFZ import (MOO-41) are not built.
 - A mixer sharing the work surface with the step grid, behind the toolbar's
   STEPS/MIXER tab strip. It is a strip per track, master first, and a strip is
   **92 px wide with three faces**. The middle one is what you look at while

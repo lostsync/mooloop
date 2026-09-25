@@ -15,7 +15,12 @@ use mooloop_dsp::sample_analysis::{
 };
 use mooloop_core::sampler::stretch_pool_voices;
 use mooloop_core::GeneratorParams;
-use mooloop_dsp::{SampleData, StretchPool};
+use mooloop_dsp::sampler::ZoneAudio;
+use mooloop_dsp::{ChannelAudioSnapshot, SampleData, StretchPool};
+use mooloop_core::{KeyRange, SampleReference, SampleZone, SamplerState};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use mooloop_engine::StructuralCommand;
 use mooloop_core::{
     EngineCommand, NoteEvent, NoteId, SampleCommit, SamplerParams, SliceMap, SliceMarker,
@@ -884,6 +889,308 @@ impl Session {
     }
 }
 
+/// A key zone as the session holds it (MOO-14): the persisted zone, and its
+/// decoded buffer beside it, the way [`ChannelState::sample_data`] sits
+/// beside `sample_path`. `sample` is `None` for a zone whose audio is not in
+/// hand -- a file that is missing or would not decode -- which plays nothing
+/// and is reported by [`Session::missing_zones`].
+#[derive(Clone)]
+pub struct ZoneState {
+    pub zone: SampleZone,
+    pub sample: Option<Arc<SampleData>>,
+}
+
+impl ZoneState {
+    /// The zone as a voice reads it.
+    pub fn audio(&self) -> ZoneAudio {
+        ZoneAudio::new(&self.zone, self.sample.clone())
+    }
+
+    /// The file this zone names, if it names one.
+    pub fn path(&self) -> Option<&Path> {
+        match &self.zone.sample {
+            SampleReference::File { path, .. } => Some(path),
+            SampleReference::Builtin { .. } | SampleReference::Empty => None,
+        }
+    }
+
+    /// A file the zone names whose audio is not in hand.
+    pub fn is_missing(&self) -> bool {
+        self.path().is_some() && self.sample.is_none()
+    }
+}
+
+/// Every key-zone buffer the session has decoded, by the path the document
+/// names it by (MOO-14).
+///
+/// **Why a table, and why by path.** The undo history holds whole documents
+/// and each channel's *base* sample (`ProjectSnapshot::samples`), not zone
+/// audio, and a document names a zone's audio only by its file. So when an
+/// undo brings back a zone the session has since dropped, this is where its
+/// buffer is found again -- without decoding on the UI thread, which a
+/// restore must never do. Entries are the same `Arc`s the channels hold, not
+/// copies.
+///
+/// **What it assumes:** a file does not change its contents under the same
+/// path while a song is open. That holds for what the app writes itself: a
+/// recorded take gets a new name, `<date>-<time>-<channel>.wav` to the
+/// second (`take.rs`, `take_file_name`), and a song's embedded copies get
+/// fresh `NN-` names (`mooloop-project`, `unclaimed_name`). A file edited in
+/// another program while the song is open plays its old audio until the song
+/// is reopened, which is what the base sample does too.
+///
+/// **Its lifetime is the document's.** Opening or creating a document
+/// replaces the whole table with that document's decode
+/// ([`Session::admit_zone_audio`]); a kit or preset merged into the open song
+/// adds to it; undo and redo never touch it. So a long session holds the open
+/// song's zone buffers and the ones its history can reach, not every song's.
+#[derive(Default)]
+pub struct ZoneAudioTable {
+    entries: HashMap<PathBuf, Arc<SampleData>>,
+}
+
+impl ZoneAudioTable {
+    pub fn get(&self, path: &Path) -> Option<&Arc<SampleData>> {
+        self.entries.get(path)
+    }
+
+    pub fn insert(&mut self, path: PathBuf, sample: Arc<SampleData>) {
+        self.entries.insert(path, sample);
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+/// A sampler channel's engine snapshot, from the channel as the session
+/// holds it: what the per-channel publish sends.
+pub fn channel_audio(channel: &ChannelState) -> ChannelAudioSnapshot {
+    ChannelAudioSnapshot::for_sampler(
+        channel.published_sample().cloned(),
+        &channel.slices,
+        channel.keys,
+        channel.zones.iter().map(ZoneState::audio).collect(),
+    )
+}
+
+impl Session {
+    /// Take in the zone buffers a document's load decoded on its worker.
+    ///
+    /// `opens` is a song being opened or created: the table is emptied first,
+    /// because nothing in the outgoing song's history can be undone into
+    /// the new one. A kit or a preset merged into the open song adds to it.
+    pub fn admit_zone_audio(&mut self, decoded: Vec<(PathBuf, Arc<SampleData>)>, opens: bool) {
+        if opens {
+            self.zone_audio.clear();
+        }
+        for (path, sample) in decoded {
+            self.zone_audio.insert(path, sample);
+        }
+    }
+
+    /// A sampler's zones with their buffers, found in the table by path.
+    pub fn resolve_zones(&self, state: &SamplerState) -> Vec<ZoneState> {
+        state
+            .zones
+            .iter()
+            .map(|zone| ZoneState {
+                zone: zone.clone(),
+                sample: match &zone.sample {
+                    SampleReference::File { path, .. } => self.zone_audio.get(path).cloned(),
+                    SampleReference::Builtin { .. } | SampleReference::Empty => None,
+                },
+            })
+            .collect()
+    }
+
+    /// The engine snapshot for a sampler about to be installed from a
+    /// document, whose base buffer the caller has in hand. The live install
+    /// builds its channels' audio with this before `replace_project` runs,
+    /// so the two read the same table.
+    pub fn sampler_install_audio(
+        &self,
+        sample: Option<Arc<SampleData>>,
+        state: &SamplerState,
+    ) -> ChannelAudioSnapshot {
+        ChannelAudioSnapshot::for_sampler(
+            sample,
+            &state.slices,
+            state.keys,
+            self.resolve_zones(state).iter().map(ZoneState::audio).collect(),
+        )
+    }
+
+    /// Every zone that names a file whose audio the session does not have,
+    /// by channel. A missing zone is silent, and this is what says so.
+    pub fn missing_zones(&self) -> Vec<(usize, PathBuf)> {
+        self.channels
+            .iter()
+            .enumerate()
+            .flat_map(|(index, channel)| {
+                channel
+                    .zones
+                    .iter()
+                    .filter(|zone| zone.is_missing())
+                    .filter_map(move |zone| Some((index, zone.path()?.to_path_buf())))
+            })
+            .collect()
+    }
+
+    /// The per-seat zone buffers of every channel, parallel to each
+    /// sampler's `zones`, for an export (MOO-14).
+    pub fn zone_sample_snapshots(&self) -> Vec<Vec<Option<Arc<SampleData>>>> {
+        self.channels
+            .iter()
+            .map(|channel| {
+                if channel.kind() == mooloop_core::DeviceKind::Sampler {
+                    channel.zones.iter().map(|zone| zone.sample.clone()).collect()
+                } else {
+                    Vec::new()
+                }
+            })
+            .collect()
+    }
+}
+
+/// The keys a new zone takes (MOO-14): everything above the highest key any
+/// zone plays, or, when the keyboard is already covered to the top, the
+/// upper half of the highest range, which that range gives up. Returns the
+/// new zone's keys and, when a range was split, which one and what it keeps
+/// (`None` for the base).
+fn keys_for_new_zone(
+    base: KeyRange,
+    zones: &[ZoneState],
+) -> (KeyRange, Option<(Option<usize>, KeyRange)>) {
+    let top = zones
+        .iter()
+        .map(|zone| zone.zone.keys.high)
+        .chain(std::iter::once(base.high))
+        .max()
+        .unwrap_or(127);
+    if top < 127 {
+        return (KeyRange::new(top + 1, 127), None);
+    }
+    // The range that reaches the top: the last zone that does, else the base.
+    let owner = zones.iter().rposition(|zone| zone.zone.keys.high == 127);
+    let range = owner.map_or(base, |index| zones[index].zone.keys);
+    if range.low == range.high {
+        // One key: nothing to split. The new zone shares it and, being later,
+        // is never reached until the user moves one of them.
+        return (range, None);
+    }
+    let middle = range.low + (range.high - range.low).div_ceil(2);
+    (
+        KeyRange::new(middle, range.high),
+        Some((owner, KeyRange::new(range.low, middle - 1))),
+    )
+}
+
+impl Session {
+    /// Add a key zone to `channel` playing `sample`, decoded from `path`
+    /// (MOO-14). It takes the keys [`keys_for_new_zone`] finds, rooted at its
+    /// lowest key so that key plays the file at its own pitch; its buffer
+    /// joins the zone table so an undo past its removal finds it again.
+    /// `false` for a channel that is not a sampler.
+    pub fn add_zone(&mut self, channel: usize, path: PathBuf, sample: Arc<SampleData>) -> bool {
+        let Some(state) = self.channels.get_mut(channel) else {
+            return false;
+        };
+        if state.kind() != mooloop_core::DeviceKind::Sampler {
+            return false;
+        }
+        let (keys, split) = keys_for_new_zone(state.keys, &state.zones);
+        match split {
+            Some((None, kept)) => state.keys = kept,
+            Some((Some(index), kept)) => state.zones[index].zone.keys = kept,
+            None => {}
+        }
+        state.zones.push(ZoneState {
+            zone: SampleZone {
+                keys,
+                root_note: keys.low,
+                sample: SampleReference::File {
+                    path: path.clone(),
+                    embedded: false,
+                },
+                ..SampleZone::default()
+            },
+            sample: Some(sample.clone()),
+        });
+        self.zone_audio.insert(path, sample);
+        self.mark_dirty();
+        true
+    }
+
+    /// Set the base zone's keys; `low` and `high` are put in order.
+    pub fn set_base_keys(&mut self, channel: usize, low: u8, high: u8) -> bool {
+        let Some(state) = self.channels.get_mut(channel) else {
+            return false;
+        };
+        let keys = KeyRange::new(low, high).repaired();
+        if state.keys == keys {
+            return false;
+        }
+        state.keys = keys;
+        self.mark_dirty();
+        true
+    }
+
+    /// Set zone `index`'s keys; `low` and `high` are put in order.
+    pub fn set_zone_keys(&mut self, channel: usize, index: usize, low: u8, high: u8) -> bool {
+        let Some(zone) = self.zone_mut(channel, index) else {
+            return false;
+        };
+        let keys = KeyRange::new(low, high).repaired();
+        if zone.zone.keys == keys {
+            return false;
+        }
+        zone.zone.keys = keys;
+        self.mark_dirty();
+        true
+    }
+
+    /// Set zone `index`'s root key.
+    pub fn set_zone_root(&mut self, channel: usize, index: usize, root: u8) -> bool {
+        let Some(zone) = self.zone_mut(channel, index) else {
+            return false;
+        };
+        let root = root.min(127);
+        if zone.zone.root_note == root {
+            return false;
+        }
+        zone.zone.root_note = root;
+        self.mark_dirty();
+        true
+    }
+
+    /// Remove zone `index`. Its buffer stays in the zone table, which is
+    /// what an undo of this finds it in.
+    pub fn remove_zone(&mut self, channel: usize, index: usize) -> bool {
+        let Some(state) = self.channels.get_mut(channel) else {
+            return false;
+        };
+        if index >= state.zones.len() {
+            return false;
+        }
+        state.zones.remove(index);
+        self.mark_dirty();
+        true
+    }
+
+    fn zone_mut(&mut self, channel: usize, index: usize) -> Option<&mut ZoneState> {
+        self.channels.get_mut(channel)?.zones.get_mut(index)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1290,5 +1597,279 @@ mod stretch_pool_tests {
             param: mooloop_core::SAMPLER_PARAM_POLYPHONY,
         }));
         assert_eq!(tick(&mut session), vec![(0, Some(16))]);
+    }
+}
+
+#[cfg(test)]
+mod zone_tests {
+    use super::*;
+    use mooloop_core::{
+        ChannelSource, KeyRange, NoteEvent, Project, ProjectChannel, SampleReference, SampleZone,
+    };
+    use std::sync::Arc;
+
+    const RATE: u32 = 48_000;
+
+    /// A sine at `hz`, `seconds` long, at `level`.
+    fn tone(hz: f64, level: f32, seconds: f64) -> Arc<SampleData> {
+        let len = (seconds * f64::from(RATE)) as usize;
+        Arc::new(SampleData {
+            frames: (0..len)
+                .map(|n| {
+                    let value =
+                        level * (2.0 * std::f64::consts::PI * hz * n as f64 / f64::from(RATE)).sin() as f32;
+                    [value, value]
+                })
+                .collect(),
+            sample_rate: RATE,
+            root_note: 60,
+        })
+    }
+
+    fn file(name: &str) -> SampleReference {
+        SampleReference::File {
+            path: PathBuf::from(format!("/nonexistent/moo-14/{name}.wav")),
+            embedded: false,
+        }
+    }
+
+    /// One sampler: its own sample up to B3 (root C4), and one zone from C4
+    /// up (root C5), with a note in each, a bar apart.
+    fn split_song() -> Project {
+        let mut channel = ProjectChannel::sampler(0, 1);
+        let ChannelSource::Sampler(state) = &mut channel.setup.source else {
+            unreachable!()
+        };
+        state.sample = file("base");
+        state.params.root_note = 60;
+        state.params.attack = 0.0;
+        state.params.decay = 8.0;
+        state.params.sustain = 1.0;
+        state.keys = KeyRange::new(0, 59);
+        state.zones = vec![SampleZone {
+            keys: KeyRange::new(60, 127),
+            root_note: 72,
+            sample: file("zone"),
+            ..SampleZone::default()
+        }];
+        let step = mooloop_core::TICKS_PER_STEP;
+        channel.notes[0] = vec![
+            NoteEvent::new(1, 0, 4 * step, 48, 110),
+            NoteEvent::new(2, 8 * step, 4 * step, 84, 110),
+        ];
+        Project {
+            bpm: 120,
+            channels: vec![channel],
+            pattern_lengths: vec![16],
+            ..Project::default()
+        }
+    }
+
+    /// A session holding `split_song` with both buffers decoded, as a load
+    /// leaves it.
+    fn split_session(base: &Arc<SampleData>, zone: &Arc<SampleData>) -> Session {
+        let mut session = Session::default();
+        session.admit_zone_audio(
+            vec![(PathBuf::from("/nonexistent/moo-14/zone.wav"), zone.clone())],
+            true,
+        );
+        session.replace_project(&split_song(), &[Some(base.clone())]);
+        session
+    }
+
+    /// The zone's buffer arrives on the channel from the table, as the same
+    /// `Arc`, and the published snapshot carries it with its keys and root.
+    #[test]
+    fn an_installed_zone_finds_its_audio_and_publishes_it() {
+        let (base, zone) = (tone(261.63, 0.5, 1.0), tone(523.25, 0.25, 1.0));
+        let session = split_session(&base, &zone);
+        let channel = &session.channels[0];
+        assert_eq!(channel.keys, KeyRange::new(0, 59));
+        assert!(Arc::ptr_eq(channel.zones[0].sample.as_ref().unwrap(), &zone));
+        assert!(session.missing_zones().is_empty());
+        let audio = channel_audio(channel);
+        assert_eq!(audio.keys, KeyRange::new(0, 59));
+        assert_eq!(audio.zones.len(), 1);
+        assert_eq!(audio.zones[0].root_note, 72);
+        assert!(Arc::ptr_eq(audio.zones[0].sample.as_ref().unwrap(), &zone));
+        // And the document it saves is the one it installed.
+        let song = split_song();
+        let saved = session.project_snapshot(120, 0);
+        assert_eq!(
+            saved.channels[0].setup.sampler_state().unwrap().zones,
+            song.channels[0].setup.sampler_state().unwrap().zones
+        );
+    }
+
+    /// A zone whose audio is not in hand installs silent and is reported,
+    /// never installed as if it had audio.
+    #[test]
+    fn a_zone_with_no_audio_in_hand_is_reported_missing() {
+        let mut session = Session::default();
+        session.replace_project(&split_song(), &[Some(tone(261.63, 0.5, 1.0))]);
+        assert!(session.channels[0].zones[0].sample.is_none());
+        assert_eq!(
+            session.missing_zones(),
+            vec![(0, PathBuf::from("/nonexistent/moo-14/zone.wav"))]
+        );
+        assert!(channel_audio(&session.channels[0]).zones[0].sample.is_none());
+    }
+
+    /// **Undo brings a removed zone back with its audio.** Removing a zone
+    /// and undoing it restore documents, not audio; the table is what finds
+    /// the buffer again, without a decode.
+    #[test]
+    fn undoing_a_zone_removal_brings_its_audio_back() {
+        let (base, zone) = (tone(261.63, 0.5, 1.0), tone(523.25, 0.25, 1.0));
+        let mut session = split_session(&base, &zone);
+        let before = session.project_snapshot(120, 0);
+        let mut removed = before.clone();
+        removed.channels[0].setup.sampler_state_mut().unwrap().zones.clear();
+        session.replace_project(&removed, &[Some(base.clone())]);
+        assert!(session.channels[0].zones.is_empty());
+        // Undo.
+        session.replace_project(&before, &[Some(base.clone())]);
+        assert!(Arc::ptr_eq(session.channels[0].zones[0].sample.as_ref().unwrap(), &zone));
+        // And it plays: the note above the split, in the bar's second half,
+        // sounds through the real executor.
+        let project = session.project_snapshot(120, 0);
+        let played = mooloop_engine::live_check::play_audio_through_executor(
+            &project,
+            vec![channel_audio(&session.channels[0])],
+            RATE,
+            96_000,
+            256,
+        );
+        let upper = played[96_000..120_000].iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!(upper > 0.05, "the restored zone is silent: peak {upper}");
+    }
+
+    /// A new zone takes the keys above everything, or splits the top range
+    /// when the keyboard is covered: a first zone on a full-range sampler
+    /// takes the upper half and the sample keeps the lower.
+    #[test]
+    fn a_new_zone_takes_free_keys_or_splits_the_top_range() {
+        let (base, zone) = (tone(261.63, 0.5, 0.1), tone(523.25, 0.25, 0.1));
+        let mut session = Session::default();
+        session.replace_project(&Project::default(), &[Some(base)]);
+        assert!(session.add_zone(0, PathBuf::from("/z1.wav"), zone.clone()));
+        assert_eq!(session.channels[0].keys, KeyRange::new(0, 63));
+        assert_eq!(session.channels[0].zones[0].zone.keys, KeyRange::new(64, 127));
+        assert_eq!(session.channels[0].zones[0].zone.root_note, 64);
+        assert!(session.set_zone_keys(0, 0, 90, 64));
+        assert_eq!(session.channels[0].zones[0].zone.keys, KeyRange::new(64, 90));
+        assert!(session.add_zone(0, PathBuf::from("/z2.wav"), zone.clone()));
+        assert_eq!(session.channels[0].zones[1].zone.keys, KeyRange::new(91, 127));
+        assert!(session.zone_audio.get(Path::new("/z2.wav")).is_some());
+        assert!(session.remove_zone(0, 0));
+        assert_eq!(session.channels[0].zones.len(), 1);
+        assert!(session.zone_audio.get(Path::new("/z1.wav")).is_some(), "an undo needs it");
+    }
+
+    /// Opening a song replaces the table; a merged kit or preset adds to it.
+    #[test]
+    fn opening_a_song_replaces_the_zone_table_and_a_merge_adds() {
+        let mut session = Session::default();
+        let one = (PathBuf::from("/a.wav"), tone(100.0, 0.1, 0.01));
+        let two = (PathBuf::from("/b.wav"), tone(200.0, 0.1, 0.01));
+        session.admit_zone_audio(vec![one.clone()], true);
+        session.admit_zone_audio(vec![two.clone()], false);
+        assert_eq!(session.zone_audio.len(), 2);
+        session.admit_zone_audio(vec![two], true);
+        assert_eq!(session.zone_audio.len(), 1);
+        assert!(session.zone_audio.get(&one.0).is_none());
+    }
+
+    /// **An export of a two-zone song is what playback plays**, sample for
+    /// sample: the live install's snapshot through the real executor against
+    /// `document::run_export` from the same session.
+    #[test]
+    fn a_two_zone_export_matches_playback() {
+        use mooloop_engine::{
+            ExportFormat, ExportProgress, ExportSpec, RenderJob, RenderScope, WavEncoding,
+        };
+        let (base, zone) = (tone(261.63, 0.5, 1.0), tone(523.25, 0.25, 1.0));
+        let session = split_session(&base, &zone);
+        let project = session.project_snapshot(120, 0);
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("zones.wav");
+        let request = crate::document::ExportRequest {
+            project: project.clone(),
+            samples: session.sample_snapshots(),
+            zones: session.zone_sample_snapshots(),
+            job: RenderJob::single(&ExportSpec {
+                path: path.clone(),
+                scope: RenderScope::Pattern { index: 0 },
+                tail_seconds: 0.0,
+                format: ExportFormat::Wav(WavEncoding::Float32),
+            }),
+        };
+        let result = crate::document::run_export(
+            request,
+            RATE,
+            &ExportProgress::new(),
+            std::collections::BTreeMap::new(),
+        );
+        assert!(
+            matches!(result, crate::document::DocumentResult::Exported { .. }),
+            "the export failed"
+        );
+        let exported: Vec<f32> = hound::WavReader::open(&path)
+            .unwrap()
+            .samples::<f32>()
+            .map(Result::unwrap)
+            .collect();
+
+        let audio: Vec<_> = project
+            .channels
+            .iter()
+            .enumerate()
+            .map(|(index, channel)| {
+                session.sampler_install_audio(
+                    session.sample_snapshots()[index].clone(),
+                    channel.setup.sampler_state().unwrap(),
+                )
+            })
+            .collect();
+        let frames = exported.len() / 2;
+        let played = mooloop_engine::live_check::play_audio_through_executor(
+            &project, audio, RATE, frames, 256,
+        );
+        assert_eq!(played.len(), exported.len());
+        let worst = played
+            .iter()
+            .zip(&exported)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < 1e-6, "export and playback differ by {worst}");
+        // Both zones sound: the base's note in the first half-bar, the
+        // zone's in the second.
+        let half = frames / 2;
+        let loudest = |from: usize, to: usize| {
+            exported[from * 2..to * 2].iter().fold(0.0f32, |m, v| m.max(v.abs()))
+        };
+        assert!(loudest(0, half / 2) > 0.1, "the base zone is silent");
+        assert!(loudest(half, half + half / 2) > 0.05, "the upper zone is silent");
+    }
+
+    /// A save's zone paths come back to the session, and the table learns
+    /// them for the same buffer, so the next save finds each file where the
+    /// last put it and an undo still finds the audio (MOO-14).
+    #[test]
+    fn a_save_writes_zone_paths_back_and_the_table_follows() {
+        let zone = tone(523.25, 0.25, 0.1);
+        let mut session = split_session(&tone(261.63, 0.5, 0.1), &zone);
+        let saved = PathBuf::from("/song-assets/samples/00-zone.wav");
+        let session_ref = &mut session;
+        crate::channel::apply_zone_references(
+            &mut session_ref.channels,
+            &mut session_ref.zone_audio,
+            vec![vec![SampleReference::File {
+                path: saved.clone(),
+                embedded: true,
+            }]],
+        );
+        assert_eq!(session.channels[0].zones[0].path(), Some(saved.as_path()));
+        assert!(Arc::ptr_eq(session.zone_audio.get(&saved).unwrap(), &zone));
     }
 }

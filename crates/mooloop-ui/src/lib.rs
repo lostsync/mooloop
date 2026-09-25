@@ -4899,6 +4899,31 @@ impl UiState {
         }
     }
 
+    /// The sampler's ZONES page from the selected channel (MOO-14).
+    fn sync_sampler_zones(&self, window: &MainWindow) {
+        let Some(ch) = self.session.channels.get(self.session.selected) else {
+            return;
+        };
+        window.set_sampler_zone_base_low(i32::from(ch.keys.low));
+        window.set_sampler_zone_base_high(i32::from(ch.keys.high));
+        let rows: Vec<SamplerZoneRow> = ch
+            .zones
+            .iter()
+            .map(|zone| SamplerZoneRow {
+                name: zone
+                    .path()
+                    .map(browser_display_name)
+                    .unwrap_or_default()
+                    .into(),
+                low: i32::from(zone.zone.keys.low),
+                high: i32::from(zone.zone.keys.high),
+                root: i32::from(zone.zone.root_note),
+                missing: zone.is_missing(),
+            })
+            .collect();
+        window.set_sampler_zones(ModelRc::new(VecModel::from(rows)));
+    }
+
     /// What the rack draws of `effects`, the chain of `target`, given which
     /// branch each of its layers is showing (`layer_view`).
     fn rack_view(
@@ -6774,6 +6799,7 @@ impl UiState {
         window.set_loop_end(p.loop_end);
         window.set_reverse_playback(p.reverse);
         window.set_root_note(p.root_note as i32);
+        self.sync_sampler_zones(window);
         window.set_tune_semitones(p.tune_semitones);
         window.set_tune_cents(p.tune_cents);
         window.set_tune_label(tune_label(*p).into());
@@ -7248,13 +7274,29 @@ impl AppUi {
                                 report,
                                 sample_references: saved
                                     .channels
-                                    .into_iter()
+                                    .iter()
                                     .map(|channel| {
                                         channel
                                             .setup
                                             .source
                                             .sampler_state()
                                             .map(|sampler| sampler.sample.clone())
+                                    })
+                                    .collect(),
+                                zone_references: saved
+                                    .channels
+                                    .iter()
+                                    .map(|channel| {
+                                        channel.setup.source.sampler_state().map_or_else(
+                                            Vec::new,
+                                            |sampler| {
+                                                sampler
+                                                    .zones
+                                                    .iter()
+                                                    .map(|zone| zone.sample.clone())
+                                                    .collect()
+                                            },
+                                        )
                                     })
                                     .collect(),
                             })
@@ -16049,6 +16091,74 @@ impl AppUi {
                 spawn_browser_sample_load(&path, channel, source_revision, 0, true, &load_tx);
             });
         }
+        // --- The sampler's key zones (MOO-14): the ZONES page. Every edit
+        //     is one undo step, and the channel's audio is republished with
+        //     its zones, the same way a slice edit republishes its map. ---
+        macro_rules! zone_edit {
+            ($callback:ident, $label:literal, |$session:ident, $channel:ident $(, $arg:ident)*| $body:expr) => {{
+                let st = state.clone();
+                let commands = command_state.clone();
+                let weak = window.as_weak();
+                let audio_out = channel_audio_tx.clone();
+                window.$callback(move |$($arg),*| {
+                    let Some(window) = weak.upgrade() else { return };
+                    let before = project_snapshot(&st.borrow(), &window);
+                    {
+                        let mut state = st.borrow_mut();
+                        let $channel = state.session.selected;
+                        let $session = &mut state.session;
+                        if !$body {
+                            return;
+                        }
+                        state.publish_selected_audio(&audio_out);
+                        state.sync_sampler_zones(&window);
+                    }
+                    record_project_history(&commands, before, &st, &window, $label);
+                });
+            }};
+        }
+        zone_edit!(on_sampler_zone_base_keys_changed, "Sample keys", |session, channel, low, high| {
+            session.set_base_keys(channel, midi_key(low), midi_key(high))
+        });
+        zone_edit!(on_sampler_zone_keys_changed, "Zone keys", |session, channel, index, low, high| {
+            usize::try_from(index)
+                .is_ok_and(|index| session.set_zone_keys(channel, index, midi_key(low), midi_key(high)))
+        });
+        zone_edit!(on_sampler_zone_root_changed, "Zone root", |session, channel, index, root| {
+            usize::try_from(index).is_ok_and(|index| session.set_zone_root(channel, index, midi_key(root)))
+        });
+        zone_edit!(on_sampler_zone_remove_clicked, "Remove zone", |session, channel, index| {
+            usize::try_from(index).is_ok_and(|index| session.remove_zone(channel, index))
+        });
+        {
+            let st = state.clone();
+            let load_tx = load_tx.clone();
+            window.on_sampler_zone_add_clicked(move || {
+                let (channel, source_revision, request) = {
+                    let mut st = st.borrow_mut();
+                    let channel = st.session.selected;
+                    let revision = st.session.source_revision;
+                    let request = st.session.next_sample_request(channel);
+                    (channel, revision, request)
+                };
+                let tx = load_tx.clone();
+                std::thread::spawn(move || {
+                    let result = match pick_sample_dialog() {
+                        Picked::Path(path) => Some(load_sample_at_path(&path)),
+                        Picked::Cancelled => None,
+                        Picked::Unavailable(none) => Some(Err(none.one_line())),
+                    };
+                    let _ = tx.send(LoadResult {
+                        channel,
+                        source_revision,
+                        request,
+                        new_channel: false,
+                        zone: true,
+                        result,
+                    });
+                });
+            });
+        }
         {
             let st = state.clone();
             let load_tx = load_tx.clone();
@@ -16076,6 +16186,7 @@ impl AppUi {
                         source_revision,
                         request,
                         new_channel: false,
+                        zone: false,
                         result,
                     });
                 });
@@ -16101,6 +16212,7 @@ impl AppUi {
                         source_revision: target.source_revision,
                         request,
                         new_channel: false,
+                        zone: false,
                         result,
                     });
                 });
@@ -16126,6 +16238,7 @@ impl AppUi {
                         source_revision: target.source_revision,
                         request,
                         new_channel: false,
+                        zone: false,
                         result,
                     });
                 });
@@ -16413,6 +16526,8 @@ impl AppUi {
                             discard_document_messages(&pending_rx, &requeue_tx);
                             engine_backlog.discard_document_messages();
                             while sample_reset_rx.try_recv().is_ok() {}
+                            // A new song holds no key-zone audio (MOO-14).
+                            st.borrow_mut().session.admit_zone_audio(Vec::new(), true);
                             install_project_in_ui(
                                 &mut handle,
                                 default_sample_for_pump.as_ref(),
@@ -16450,6 +16565,7 @@ impl AppUi {
                             generation,
                             report,
                             sample_references,
+                            zone_references,
                         } => {
                             let mut state = st.borrow_mut();
                             if !apply_saved_song(
@@ -16459,6 +16575,7 @@ impl AppUi {
                                 revision,
                                 &path,
                                 sample_references,
+                                zone_references,
                             ) {
                                 log_info!(
                                     "project",
@@ -16641,6 +16758,7 @@ impl AppUi {
                             let ResolvedDocument {
                                 report,
                                 samples: loaded_samples,
+                                zone_audio,
                             } = document;
                             let LoadReport {
                                 document,
@@ -16702,6 +16820,11 @@ impl AppUi {
                             discard_document_messages(&pending_rx, &requeue_tx);
                             engine_backlog.discard_document_messages();
                             while sample_reset_rx.try_recv().is_ok() {}
+                            // The document's key-zone audio, decoded on the
+                            // worker (MOO-14), before the install reads it.
+                            // An opened song replaces the table; a kit or a
+                            // preset adds to the open song's.
+                            st.borrow_mut().session.admit_zone_audio(zone_audio, opens);
                             if !install_project_in_ui(
                                 &mut handle,
                                 default_sample_for_pump.as_ref(),
@@ -16903,6 +17026,17 @@ impl AppUi {
                         // can be spent before this load lands rather than
                         // after.
                         deferred_new_channel_loads.push(loaded);
+                        continue;
+                    }
+                    if load.zone {
+                        add_zone_with_history(
+                            |channel, audio| handle.set_channel_audio(channel, audio),
+                            &st,
+                            &commands,
+                            &weak,
+                            load.channel,
+                            loaded,
+                        );
                         continue;
                     }
                     load_sample_with_history(
@@ -18465,15 +18599,19 @@ fn install_project_in_ui(
             // The markers come from the project being installed, in the same
             // pass. Published separately they were a second write of half of
             // one fact, and the half that arrived first indexed the other
-            // half's buffer.
-            let slices = project
+            // half's buffer. The key zones (MOO-14) likewise, their buffers
+            // from the session's table, which `replace_project` reads too.
+            match project
                 .channels
                 .get(index)
                 .and_then(|channel| channel.setup.source.sampler_state())
-                .map(|state| state.slices.clone())
-                .filter(|slices| !slices.is_empty())
-                .map(Arc::new);
-            ChannelAudioSnapshot { sample, slices }
+            {
+                Some(sampler) => state.borrow().session.sampler_install_audio(sample, sampler),
+                None => ChannelAudioSnapshot {
+                    sample,
+                    ..ChannelAudioSnapshot::default()
+                },
+            }
         })
         .collect();
     // If the bounded realtime queue is full, leave the sample bank, the
@@ -18699,13 +18837,9 @@ fn refresh_preset_menus(state: &Rc<RefCell<UiState>>, window: &MainWindow) {
 /// the render. Both travel out of band through `ArcSwap` slots rather than on
 /// the command ring, so this is wait-free and safe to call from the UI thread.
 fn publish_channel_audio(handle: &EngineHandle, index: usize, channel: &ChannelState) {
-    handle.set_channel_audio(
-        index,
-        ChannelAudioSnapshot {
-            sample: channel.published_sample().cloned(),
-            slices: (!channel.slices.is_empty()).then(|| Arc::new(channel.slices.clone())),
-        },
-    );
+    // The session's one builder, so a sampler's key zones (MOO-14) travel
+    // with its buffer and map.
+    handle.set_channel_audio(index, mooloop_session::sampler::channel_audio(channel));
 }
 
 /// Publish a finished background load to `channel`: hand the decoded sample
@@ -18761,6 +18895,42 @@ fn load_sample_with_history(
     record_project_history(commands, before, st, &window, "Load sample");
 }
 
+/// A key from the ZONES page's steppers, which range over MIDI already.
+fn midi_key(value: i32) -> u8 {
+    value.clamp(0, 127) as u8
+}
+
+/// A decoded file becomes a new key zone on `channel` (MOO-14), as one undo
+/// step, and the channel's audio is republished with it.
+fn add_zone_with_history(
+    publish: impl FnOnce(usize, ChannelAudioSnapshot),
+    st: &Rc<RefCell<UiState>>,
+    commands: &Rc<RefCell<CommandState>>,
+    weak: &slint::Weak<MainWindow>,
+    channel: usize,
+    loaded: LoadedSample,
+) {
+    let Some(window) = weak.upgrade() else {
+        return;
+    };
+    let before = project_snapshot(&st.borrow(), &window);
+    {
+        let mut state = st.borrow_mut();
+        if !state.session.add_zone(channel, loaded.path, loaded.sample) {
+            return;
+        }
+        publish(
+            channel,
+            mooloop_session::sampler::channel_audio(&state.session.channels[channel]),
+        );
+        if channel == state.session.selected {
+            state.sync_sampler_zones(&window);
+            state.update_document_title(&window);
+        }
+    }
+    record_project_history(commands, before, st, &window, "Add zone");
+}
+
 /// [`apply_loaded_sample`] with the engine store passed in.
 fn adopt_loaded_sample(
     publish: impl FnOnce(usize, ChannelAudioSnapshot),
@@ -18783,8 +18953,11 @@ fn adopt_loaded_sample(
     // engine must not keep playing a map that names frames in audio it no
     // longer holds, and now it cannot, because the buffer and the map arrive
     // as one store.
-    publish(channel, ChannelAudioSnapshot::sample(loaded.sample.clone()));
     let mut st = st.borrow_mut();
+    // Published after the channel is updated, from it: the new file with no
+    // markers, and the key zones (MOO-14) the channel still has, which a
+    // bare `ChannelAudioSnapshot::sample` would have dropped.
+    let mut audio = None;
     if let Some(ch) = st.session.channels.get_mut(channel) {
         ch.sample_name = name;
         ch.sample_description = description;
@@ -18804,7 +18977,12 @@ fn adopt_loaded_sample(
         ch.waveform = waveform;
         ch.can_previous_sample = loaded.can_previous;
         ch.can_next_sample = loaded.can_next;
+        audio = Some(mooloop_session::sampler::channel_audio(ch));
     }
+    publish(
+        channel,
+        audio.unwrap_or_else(|| ChannelAudioSnapshot::sample(loaded.sample.clone())),
+    );
     st.session.dirty = true;
     st.session.revision = st.session.revision.wrapping_add(1);
     if channel == st.session.selected {
@@ -19157,6 +19335,7 @@ fn spawn_browser_sample_load(
             source_revision,
             request,
             new_channel,
+            zone: false,
             result: Some(load_sample_at_path(&path)),
         });
     });
@@ -19855,6 +20034,7 @@ fn apply_saved_song(
     revision: u64,
     path: &Path,
     sample_references: Vec<Option<SampleReference>>,
+    zone_references: Vec<Vec<SampleReference>>,
 ) -> bool {
     if state.session.document_generation != generation {
         return false;
@@ -19863,6 +20043,12 @@ fn apply_saved_song(
     if state.session.revision == revision {
         state.session.dirty = false;
         apply_sample_references(&mut state.session.channels, sample_references);
+        let session = &mut state.session;
+        mooloop_session::channel::apply_zone_references(
+            &mut session.channels,
+            &mut session.zone_audio,
+            zone_references,
+        );
     }
     state.update_document_title(window);
     true
@@ -21277,6 +21463,7 @@ mod tests {
             revision,
             Path::new("/tmp/slow.mooloop"),
             Vec::new(),
+            Vec::new(),
         );
 
         assert!(!applied);
@@ -21295,6 +21482,7 @@ mod tests {
             generation,
             revision,
             Path::new("/tmp/slow.mooloop"),
+            Vec::new(),
             Vec::new(),
         ));
         assert_eq!(

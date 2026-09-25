@@ -19,7 +19,6 @@ use mooloop_core::{
 use mooloop_dsp::{ChannelAudioSnapshot, IntegerDelay, StereoBus, MAX_BLOCK_SIZE};
 use crate::session::Session;
 use mooloop_engine::{AudioTapBank, CommandSink, EngineHandle, SendBank, SendSpec, StructuralCommand};
-use std::sync::Arc;
 
 /// What is *structural* about one send: where it goes and what it waits.
 ///
@@ -532,10 +531,9 @@ pub struct ChannelAudioSender(pub std::sync::mpsc::Sender<ChannelAudio>);
 pub fn publish_channel_audio_to(tx: &ChannelAudioSender, channel: usize, state: &ChannelState) {
     let _ = tx.0.send(ChannelAudio {
         channel,
-        audio: ChannelAudioSnapshot {
-            sample: state.published_sample().cloned(),
-            slices: (!state.slices.is_empty()).then(|| Arc::new(state.slices.clone())),
-        },
+        // The one builder, so the key zones (MOO-14) travel with the buffer
+        // and its map.
+        audio: crate::sampler::channel_audio(state),
     });
 }
 

@@ -176,6 +176,11 @@ pub struct Session {
     /// as [`Self::compensation_sent`]: a record of what has been said to the
     /// audio thread, not document state.
     pub sampler_stretch_sent: Vec<Option<usize>>,
+    /// Every sampler key-zone buffer in hand, by path, so an undo that brings
+    /// a zone back finds its audio without decoding (MOO-14). Replaced when a
+    /// document is opened or created, never by undo or redo; see
+    /// [`crate::sampler::ZoneAudioTable`] for what it assumes.
+    pub zone_audio: crate::sampler::ZoneAudioTable,
     /// The latest sample-load request issued for each channel, parallel to
     /// [`Self::channels`].
     ///
@@ -363,6 +368,7 @@ impl Default for Session {
             solo_silenced_sent: [false; MAX_BUSES],
             channel_solo_silenced_sent: [false; MAX_CHANNELS],
             sampler_stretch_sent: Vec::new(),
+            zone_audio: crate::sampler::ZoneAudioTable::default(),
             track_graph_sent: (mooloop_core::CompiledBusGraph::default(), Vec::new()),
             audio_graph_sent: mooloop_core::CompiledAudioGraph::default(),
             sample_request: HashMap::new(),
@@ -538,6 +544,8 @@ impl Session {
         channel.committed_sample = None;
         channel.commit = None;
         channel.slices.clear();
+        channel.keys = mooloop_core::KeyRange::FULL;
+        channel.zones.clear();
         channel.waveform.clear();
         channel.can_previous_sample = false;
         channel.can_next_sample = false;
@@ -564,6 +572,8 @@ impl Session {
                             slices: channel.slices.clone(),
                             commit: channel.commit.clone(),
                             record: channel.record,
+                            keys: channel.keys,
+                            zones: channel.zones.iter().map(|zone| zone.zone.clone()).collect(),
                         })
                     }
                     GeneratorParams::DrumSynth(params) => {
@@ -1512,6 +1522,12 @@ impl Session {
                     commit,
                     slices: sampler.map(|state| state.slices.clone()).unwrap_or_default(),
                     record: sampler.map(|state| state.record).unwrap_or_default(),
+                    keys: sampler.map(|state| state.keys).unwrap_or_default(),
+                    // Found in the session's table by path: the document
+                    // carries no audio, and a restore must not decode.
+                    zones: sampler
+                        .map(|state| self.resolve_zones(state))
+                        .unwrap_or_default(),
                     waveform,
                     can_previous_sample: can_previous,
                     can_next_sample: can_next,
@@ -1646,6 +1662,17 @@ impl Session {
         // genuinely gone loses its entry.
         self.input_monitor.retain(|id| channels.iter().any(|channel| channel.id == *id));
         self.channels = channels;
+        // A zone whose audio is not in hand installs silent, and says so:
+        // never quietly. Its file is missing, or failed to decode on load,
+        // which the load's own warnings have already named.
+        for (channel, path) in self.missing_zones() {
+            log_warn!(
+                "project",
+                "channel {}: key zone sample missing - {}",
+                channel + 1,
+                path.display()
+            );
+        }
     }
 
     /// Points the armed modulation source at `destination` at `depth`.

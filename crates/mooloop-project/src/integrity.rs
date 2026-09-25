@@ -1750,7 +1750,10 @@ fn check_modulation(doctor: &mut Doctor, who: &str, rack: &mut ModRack) {
 
 fn check_source(doctor: &mut Doctor, who: &str, source: &mut ChannelSource) {
     match source {
-        ChannelSource::Sampler(state) => check_sampler(doctor, who, &mut state.params),
+        ChannelSource::Sampler(state) => {
+            check_sampler(doctor, who, &mut state.params);
+            check_zones(doctor, who, &mut state.keys, &mut state.zones);
+        }
         ChannelSource::DrumSynth(state) => check_drum_synth(doctor, who, &mut state.params),
         ChannelSource::MonoSynth(state) => check_mono_synth(doctor, who, &mut state.params),
         ChannelSource::PolySynth(state) => check_poly_synth(doctor, who, &mut state.params),
@@ -1973,6 +1976,57 @@ fn check_sampler(doctor: &mut Doctor, who: &str, params: &mut SamplerParams) {
         ) {
             std::mem::swap(&mut params.loop_start, &mut params.loop_end);
         }
+    }
+}
+
+/// A sampler's key zones (MOO-14): every range inside MIDI and the right way
+/// round, and every root a MIDI key. A hand-edited file is the only way to
+/// get either wrong -- the editor writes neither -- so the repair keeps what
+/// was typed as far as it can: out of range is clamped, backwards is swapped.
+fn check_zones(
+    doctor: &mut Doctor,
+    who: &str,
+    keys: &mut mooloop_core::KeyRange,
+    zones: &mut [mooloop_core::SampleZone],
+) {
+    fn range(doctor: &mut Doctor, location: &str, what: &str, low: &mut u8, high: &mut u8) {
+        let found = (*low, *high);
+        let repaired = mooloop_core::KeyRange::new(*low, *high).repaired();
+        if (repaired.low, repaired.high) == found {
+            return;
+        }
+        if doctor.correct(
+            "channel.sampler.zone",
+            location,
+            format!(
+                "{what} runs from {} to {}, which is not a range of MIDI notes",
+                found.0, found.1
+            ),
+            format!("make it {} to {}", repaired.low, repaired.high),
+        ) {
+            *low = repaired.low;
+            *high = repaired.high;
+        }
+    }
+    range(doctor, who, "the sample's key range", &mut keys.low, &mut keys.high);
+    for (index, zone) in zones.iter_mut().enumerate() {
+        let location = format!("{who}, zone {}", index + 1);
+        range(doctor, &location, "the key range", &mut zone.keys.low, &mut zone.keys.high);
+        range(
+            doctor,
+            &location,
+            "the velocity range",
+            &mut zone.velocity.low,
+            &mut zone.velocity.high,
+        );
+        doctor.fit_int(
+            "channel.sampler.zone",
+            &location,
+            "the root note",
+            &mut zone.root_note,
+            0,
+            127,
+        );
     }
 }
 
@@ -3050,6 +3104,40 @@ mod tests {
         assert_eq!(codes(&diagnosis), ["channel.sampler.loop"]);
         let params = project.channels[0].setup.sampler_state().unwrap().params;
         assert_eq!((params.loop_start, params.loop_end), (0.25, 0.75));
+    }
+
+    /// A hand-edited zone map is repaired without losing a zone: a backwards
+    /// range is swapped, an out-of-MIDI one clamped, and a sane one left be
+    /// (MOO-14).
+    #[test]
+    fn a_backwards_zone_is_swapped_and_a_wild_one_clamped() {
+        use mooloop_core::{KeyRange, SampleZone, VelocityRange};
+        let mut project = Project::default();
+        let state = project.channels[0].setup.sampler_state_mut().unwrap();
+        state.keys = KeyRange::new(59, 0);
+        state.zones = vec![
+            SampleZone {
+                keys: KeyRange::new(60, 200),
+                velocity: VelocityRange { low: 100, high: 1 },
+                root_note: 140,
+                ..SampleZone::default()
+            },
+            SampleZone {
+                keys: KeyRange::new(10, 20),
+                ..SampleZone::default()
+            },
+        ];
+
+        let diagnosis = repair_project(&mut project);
+        assert!(diagnosis.is_usable(), "{diagnosis}");
+        assert_eq!(codes(&diagnosis), ["channel.sampler.zone"; 4]);
+        let state = project.channels[0].setup.sampler_state().unwrap();
+        assert_eq!(state.keys, KeyRange::new(0, 59));
+        assert_eq!(state.zones.len(), 2, "no zone was dropped");
+        assert_eq!(state.zones[0].keys, KeyRange::new(60, 127));
+        assert_eq!(state.zones[0].velocity, VelocityRange { low: 1, high: 100 });
+        assert_eq!(state.zones[0].root_note, 127);
+        assert_eq!(state.zones[1].keys, KeyRange::new(10, 20));
     }
 
     #[test]

@@ -973,6 +973,176 @@ pub fn stretch_pool_voices(params: &SamplerParams, lanes: &[Vec<AutomationLane>]
     (usize::from(params.polyphony.clamp(1, MAX_SAMPLER_VOICES)) * 2).min(all)
 }
 
+/// The keys a sampler zone answers to, as MIDI note numbers, both ends
+/// inclusive (MOO-14). The whole keyboard by default, which is what every
+/// sampler played before zones existed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct KeyRange {
+    pub low: u8,
+    pub high: u8,
+}
+
+impl KeyRange {
+    pub const FULL: Self = Self { low: 0, high: 127 };
+
+    pub fn new(low: u8, high: u8) -> Self {
+        Self { low, high }
+    }
+
+    pub fn contains(self, note: u8) -> bool {
+        (self.low..=self.high).contains(&note)
+    }
+
+    pub fn is_full(&self) -> bool {
+        *self == Self::FULL
+    }
+
+    /// Inside MIDI's range and the right way round: what the integrity pass
+    /// makes of a hand-edited file. An inverted range is swapped rather than
+    /// emptied, because both ends were typed on purpose.
+    pub fn repaired(self) -> Self {
+        let low = self.low.min(127);
+        let high = self.high.min(127);
+        Self {
+            low: low.min(high),
+            high: low.max(high),
+        }
+    }
+}
+
+impl Default for KeyRange {
+    fn default() -> Self {
+        Self::FULL
+    }
+}
+
+/// The velocities a zone answers to, both ends inclusive. Stored and saved,
+/// and **not played**: velocity layers are designed in, not built (Adam,
+/// 2026-09-23), and carrying the range from the first zone is what lets them
+/// arrive later without a format migration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct VelocityRange {
+    pub low: u8,
+    pub high: u8,
+}
+
+impl VelocityRange {
+    pub const FULL: Self = Self { low: 0, high: 127 };
+
+    pub fn is_full(&self) -> bool {
+        *self == Self::FULL
+    }
+
+    /// As [`KeyRange::repaired`].
+    pub fn repaired(self) -> Self {
+        let KeyRange { low, high } = KeyRange::new(self.low, self.high).repaired();
+        Self { low, high }
+    }
+}
+
+impl Default for VelocityRange {
+    fn default() -> Self {
+        Self::FULL
+    }
+}
+
+fn default_zone_root() -> u8 {
+    60
+}
+
+/// One extra zone of a sampler: its own sample, the keys it plays, and the
+/// key that plays that sample at its own pitch (MOO-14).
+///
+/// The sampler's existing sample is the *base* zone and is not one of these:
+/// it keeps its root in `SamplerParams::root_note`, its keys in
+/// `SamplerState::keys`, and alone owns the slices and the stretch commit,
+/// because a slice map indexes one buffer's frames and a commit is a render
+/// of one buffer. An extra zone plays its own sample pitched from its own
+/// root, stretched live like any voice, never sliced or committed. The
+/// sampler's start, end and loop points are fractions, so they apply to every
+/// zone's sample alike.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SampleZone {
+    #[serde(default)]
+    pub keys: KeyRange,
+    #[serde(default, skip_serializing_if = "VelocityRange::is_full")]
+    pub velocity: VelocityRange,
+    #[serde(default = "default_zone_root")]
+    pub root_note: u8,
+    #[serde(default)]
+    pub sample: crate::SampleReference,
+}
+
+impl Default for SampleZone {
+    fn default() -> Self {
+        Self {
+            keys: KeyRange::FULL,
+            velocity: VelocityRange::FULL,
+            root_note: default_zone_root(),
+            sample: crate::SampleReference::Empty,
+        }
+    }
+}
+
+/// Which zone a note plays, if any.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZoneChoice {
+    /// The sampler's own sample.
+    Base,
+    /// `zones[index]`.
+    Extra(usize),
+}
+
+/// The zone a pitched note plays: the base zone first, then the extra zones
+/// in order, and the first whose keys hold the note wins (MOO-14). Overlaps
+/// resolve to the first match, because stacking zones is what velocity
+/// layers are for. `None` is a note no zone holds, which is silent.
+///
+/// One rule, read by the voice lookup and by anything that shows the map.
+pub fn zone_for_note(
+    note: u8,
+    base: KeyRange,
+    zones: impl IntoIterator<Item = KeyRange>,
+) -> Option<ZoneChoice> {
+    if base.contains(note) {
+        return Some(ZoneChoice::Base);
+    }
+    zones
+        .into_iter()
+        .position(|keys| keys.contains(note))
+        .map(ZoneChoice::Extra)
+}
+
+#[cfg(test)]
+mod zone_tests {
+    use super::*;
+
+    /// A split keyboard: the base below, a zone above, and a gap that
+    /// sounds nothing.
+    #[test]
+    fn the_first_zone_holding_a_note_plays_it() {
+        let base = KeyRange::new(0, 59);
+        let zones = [KeyRange::new(60, 100), KeyRange::new(60, 127)];
+        assert_eq!(zone_for_note(59, base, zones), Some(ZoneChoice::Base));
+        assert_eq!(zone_for_note(60, base, zones), Some(ZoneChoice::Extra(0)));
+        assert_eq!(zone_for_note(101, base, zones), Some(ZoneChoice::Extra(1)));
+        assert_eq!(zone_for_note(101, base, [KeyRange::new(60, 100)]), None);
+        assert_eq!(
+            zone_for_note(0, KeyRange::FULL, zones),
+            Some(ZoneChoice::Base),
+            "a sampler with no zones plays every key, as before"
+        );
+    }
+
+    #[test]
+    fn repair_swaps_an_inverted_range_and_clamps_to_midi() {
+        assert_eq!(KeyRange::new(72, 60).repaired(), KeyRange::new(60, 72));
+        assert_eq!(KeyRange::new(10, 200).repaired(), KeyRange::new(10, 127));
+        let velocity = VelocityRange { low: 255, high: 3 }.repaired();
+        assert_eq!((velocity.low, velocity.high), (3, 127));
+    }
+}
+
 #[cfg(test)]
 mod stretch_pool_tests {
     use super::*;

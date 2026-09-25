@@ -78,7 +78,7 @@ import { MlP8DeviceFace, MlP8RouteRow } from "mlp8-device.slint";
 import { AuxInDeviceFace } from "aux-in-device.slint";
 import { Ds01Contour, Ds01DeviceFace } from "ds01-device.slint";
 import { PolyDeviceFace } from "poly-device.slint";
-import { SamplerDeviceFace } from "sampler-device.slint";
+import { SamplerDeviceFace, SamplerZoneRow } from "sampler-device.slint";
 import { SampleTrace } from "device-displays.slint";
 export { Theme }
 // The mockup tool is deliberately absent: it has its own entry point in
@@ -2133,6 +2133,10 @@ export component MainWindow inherits Window {
     in-out property <int> retrigger-mode;   // 0=Restart 1=Layer
     // The sampler's mono glide (MOO-45): seconds, GlideMode, EnvTrigger.
     in-out property <float> sampler-glide;
+    // The sampler's ZONES page (MOO-14).
+    in-out property <int> sampler-zone-base-low: 0;
+    in-out property <int> sampler-zone-base-high: 127;
+    in-out property <[SamplerZoneRow]> sampler-zones;
     in-out property <int> sampler-glide-mode: 1;
     in-out property <int> sampler-env-trigger;
     in-out property <int> choke-group;
@@ -2259,6 +2263,11 @@ export component MainWindow inherits Window {
     callback sampler-polyphony-changed(int);
     callback retrigger-mode-changed(int);
     callback sampler-glide-changed(float);
+    callback sampler-zone-base-keys-changed(int, int);
+    callback sampler-zone-add-clicked();
+    callback sampler-zone-keys-changed(int, int, int);
+    callback sampler-zone-root-changed(int, int);
+    callback sampler-zone-remove-clicked(int);
     callback sampler-glide-mode-changed(int);
     callback sampler-env-trigger-changed(int);
     callback choke-group-changed(int);
@@ -4534,6 +4543,14 @@ export component MainWindow inherits Window {
                                                 polyphony <=> root.sampler-polyphony;
                                                 retrigger-mode <=> root.retrigger-mode;
                                                 glide <=> root.sampler-glide;
+                                                zone-base-low: root.sampler-zone-base-low;
+                                                zone-base-high: root.sampler-zone-base-high;
+                                                zones: root.sampler-zones;
+                                                zone-base-keys-changed(low, high) => { root.sampler-zone-base-keys-changed(low, high); }
+                                                zone-add-clicked() => { root.sampler-zone-add-clicked(); }
+                                                zone-keys-changed(index, low, high) => { root.sampler-zone-keys-changed(index, low, high); }
+                                                zone-root-changed(index, note) => { root.sampler-zone-root-changed(index, note); }
+                                                zone-remove-clicked(index) => { root.sampler-zone-remove-clicked(index); }
                                                 glide-mode <=> root.sampler-glide-mode;
                                                 env-trigger <=> root.sampler-env-trigger;
                                                 choke-group <=> root.choke-group;

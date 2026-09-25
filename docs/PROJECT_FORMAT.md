@@ -229,6 +229,22 @@ controls and values. They default to 0, `"Legato"` and `"Retrig"`, and a
 sampler with no glide and `"Retrig"` plays exactly as one saved before they
 existed, so an older song loads unchanged.
 
+Key zones (MOO-14, 2026-09-25) add two fields beside `sample`. `keys =
+{ low, high }` is the MIDI key range the sampler's own sample, the *base
+zone*, plays. `zones` is a list of extra zones, each
+`{ keys = { low, high }, root_note, sample, velocity = { low, high } }`,
+whose `sample` is a sample reference like the base's, embedded or referenced
+by the same rules. A note plays the base zone if its keys hold it, else the
+first extra zone whose keys do, else nothing. An extra zone is pitched from
+its own `root_note`. The slices, the stretch commit and `root_note` in the
+parameters belong to the base zone alone. `velocity` is stored and
+round-tripped, but nothing plays it yet. It is there so velocity layers need
+no migration. Both fields are omitted at their defaults: a full keyboard, no
+zones, and a full velocity range. So a song written before zones loads as one
+full-range zone and saves byte-identical. On load, a range outside 0 to 127
+is clamped and an inverted one swapped (`channel.sampler.zone`), and a
+missing zone file is a sample warning, like a missing base sample.
+
 Slice mode adds `play_mode` and `slice_base_note` to the parameters, plus a
 `slices` table beside them holding the slice boundaries as `{ id, frame }`
 pairs sorted by source frame. All three default, so a song written before

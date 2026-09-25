@@ -18,7 +18,7 @@ use mooloop_core::{
     ChannelSource, EffectKind, EffectParams, EffectTarget, EngineCommand, EngineEvent, PluginSlotId, Project, MAX_BUSES,
     MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
 };
-use mooloop_dsp::{AudioNode, IntegerDelay, SampleData};
+use mooloop_dsp::{AudioNode, ChannelAudioSnapshot, IntegerDelay, SampleData};
 
 use crate::executor::{prepare_audio_thread, Executor, ExecutorIo};
 use crate::load::LoadMeters;
@@ -43,11 +43,43 @@ pub fn play_through_executor(
     frames: usize,
     block: usize,
 ) -> Vec<f32> {
+    play(
+        rig(
+            project,
+            RenderState::from_project(sample_rate, project, &[]),
+            plugins,
+            sample_rate,
+        ),
+        frames,
+        block,
+    )
+}
+
+/// [`play_through_executor`] over the channel audio a live install
+/// publishes (MOO-14): `audio` is the bank `EngineHandle::install_project`
+/// takes, in seat order, so each sampler's buffer, slice map and key zones
+/// are the ones the session built for playback. For holding an export
+/// against playback where the song's audio matters.
+pub fn play_audio_through_executor(
+    project: &Project,
+    audio: Vec<ChannelAudioSnapshot>,
+    sample_rate: u32,
+    frames: usize,
+    block: usize,
+) -> Vec<f32> {
+    let mut state = RenderState::new(sample_rate, crate::render::channel_audio_bank(audio));
+    state.load_project(project);
+    play(rig(project, state, BTreeMap::new(), sample_rate), frames, block)
+}
+
+/// Run `rig` for `frames` in callbacks of `block`, on a thread of its own,
+/// and return the master's interleaved stereo.
+fn play(rig: Rig, frames: usize, block: usize) -> Vec<f32> {
     let Rig {
         mut executor,
         mut events,
         mut reclaim,
-    } = rig(project, &[], plugins, sample_rate);
+    } = rig;
     let block = block.max(1);
     std::thread::scope(|scope| {
         scope
@@ -121,7 +153,12 @@ pub fn time_through_executor(
         mut executor,
         mut events,
         mut reclaim,
-    } = rig(project, samples, BTreeMap::new(), sample_rate);
+    } = rig(
+        project,
+        RenderState::from_project(sample_rate, project, samples),
+        BTreeMap::new(),
+        sample_rate,
+    );
     let block = block.max(1);
     std::thread::scope(|scope| {
         scope
@@ -173,7 +210,7 @@ struct Rig {
 
 fn rig(
     project: &Project,
-    samples: &[Option<Arc<SampleData>>],
+    state: RenderState,
     mut plugins: BTreeMap<PluginSlotId, Box<dyn AudioNode + Send>>,
     sample_rate: u32,
 ) -> Rig {
@@ -186,7 +223,7 @@ fn rig(
             evt_tx,
             reclaim_tx,
         },
-        Box::new(RenderState::from_project(sample_rate, project, samples)),
+        Box::new(state),
         Arc::new(AtomicU64::new(0)),
         sample_rate,
         LoadMeters::new(),

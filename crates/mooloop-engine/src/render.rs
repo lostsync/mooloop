@@ -27,6 +27,7 @@ use mooloop_dsp::console;
 use crate::voices::SequencedVoices;
 #[cfg(test)]
 use mooloop_dsp::build_effect;
+use mooloop_dsp::sampler::ZoneAudio;
 use mooloop_dsp::{
     balance_gains, buffer_allocation_key, build_effect_at_tempo, pan_gains, AudioNode, Ds01,
     Discontinuity, DrumSynth,
@@ -5461,10 +5462,28 @@ impl RenderState {
         self.modulator_meters = meters;
     }
 
+    /// A song with no key-zone audio. Only tests and the test-support
+    /// harness build one this way now; an export takes
+    /// [`Self::from_project_with_zones`] so it cannot leave zones out.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn from_project(
         sample_rate: u32,
         project: &Project,
         samples: &[Option<Arc<SampleData>>],
+    ) -> Self {
+        Self::from_project_with_zones(sample_rate, project, samples, &[])
+    }
+
+    /// [`Self::from_project`] with each sampler's key-zone buffers (MOO-14):
+    /// `zones[channel][zone]`, parallel to that channel's
+    /// `SamplerState::zones`. A zone with no buffer here is silent, which is
+    /// why an export checks it was given every one
+    /// (`OfflineRenderer::render_job_with_plugins`).
+    pub fn from_project_with_zones(
+        sample_rate: u32,
+        project: &Project,
+        samples: &[Option<Arc<SampleData>>],
+        zones: &[Vec<Option<Arc<SampleData>>>],
     ) -> Self {
         let fallback = SampleData::default_kick(sample_rate);
         let slots: ChannelAudioBank = Arc::new(
@@ -5509,14 +5528,37 @@ impl RenderState {
                     // exactly where the app was not. They are built in this
                     // same pass now, which is what makes that omission
                     // unrepresentable rather than merely fixed.
-                    let slices = project
+                    //
+                    // The key zones (MOO-14) ride the same snapshot, from
+                    // the same builder the live install uses.
+                    let state = project
                         .channels
                         .get(index)
-                        .and_then(|channel| channel.setup.source.sampler_state())
-                        .map(|state| state.slices.clone())
-                        .filter(|slices| !slices.is_empty())
-                        .map(Arc::new);
-                    let audio = ChannelAudioSnapshot { sample, slices };
+                        .and_then(|channel| channel.setup.source.sampler_state());
+                    let audio = match state {
+                        Some(state) => ChannelAudioSnapshot::for_sampler(
+                            sample,
+                            &state.slices,
+                            state.keys,
+                            state
+                                .zones
+                                .iter()
+                                .enumerate()
+                                .map(|(zone, spec)| {
+                                    let buffer = zones
+                                        .get(index)
+                                        .and_then(|channel| channel.get(zone))
+                                        .cloned()
+                                        .flatten();
+                                    ZoneAudio::new(spec, buffer)
+                                })
+                                .collect(),
+                        ),
+                        None => ChannelAudioSnapshot {
+                            sample,
+                            ..ChannelAudioSnapshot::default()
+                        },
+                    };
                     Arc::new(ArcSwapOption::from(
                         (!audio.is_empty()).then(|| Arc::new(audio)),
                     ))

@@ -63,6 +63,16 @@ pub struct SamplerState {
     /// holds the default, so a sampler saved before it is byte-identical.
     #[serde(default, skip_serializing_if = "crate::SamplerRecord::is_default")]
     pub record: crate::SamplerRecord,
+    /// The keys `sample` -- the base zone -- plays (MOO-14). Omitted when it
+    /// is the whole keyboard, so a sampler saved before zones existed loads
+    /// as one full-range zone and saves byte-identical.
+    #[serde(default, skip_serializing_if = "crate::KeyRange::is_full")]
+    pub keys: crate::KeyRange,
+    /// Extra zones, each its own sample, keys and root, looked up after the
+    /// base in order (`crate::zone_for_note`). Omitted when empty. The slices
+    /// and the commit above belong to the base zone alone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub zones: Vec<crate::SampleZone>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]

@@ -127,6 +127,10 @@ pub struct ChannelState {
     pub slices: SliceMap,
     /// The Record page's clip settings, saved with the sampler.
     pub record: mooloop_core::SamplerRecord,
+    /// The keys the base zone -- this channel's own sample -- plays (MOO-14).
+    pub keys: mooloop_core::KeyRange,
+    /// The sampler's extra key zones, each with its decoded buffer.
+    pub zones: Vec<crate::sampler::ZoneState>,
     pub waveform: Vec<f32>,
     pub can_previous_sample: bool,
     pub can_next_sample: bool,
@@ -223,6 +227,8 @@ impl ChannelState {
             commit: None,
             slices: SliceMap::default(),
             record: mooloop_core::SamplerRecord::default(),
+            keys: mooloop_core::KeyRange::FULL,
+            zones: Vec::new(),
             waveform: Vec::new(),
             can_previous_sample: false,
             can_next_sample: false,
@@ -327,6 +333,30 @@ pub fn apply_sample_references(
                 channel.sample_embedded = embedded;
             }
             None => {}
+        }
+    }
+}
+
+/// The zone half of [`apply_sample_references`] (MOO-14): after a save,
+/// each zone's file is wherever the save put it, and the next save must find
+/// it there rather than copy it in again. The buffer is the same, so the
+/// session's zone table learns the new path for it too.
+pub fn apply_zone_references(
+    channels: &mut [ChannelState],
+    table: &mut crate::sampler::ZoneAudioTable,
+    references: impl IntoIterator<Item = Vec<SampleReference>>,
+) {
+    for (channel, zones) in channels.iter_mut().zip(references) {
+        // A save of the same revision, so the same zones in the same order;
+        // anything else is left alone rather than guessed at.
+        if zones.len() != channel.zones.len() {
+            continue;
+        }
+        for (zone, reference) in channel.zones.iter_mut().zip(zones) {
+            if let (SampleReference::File { path, .. }, Some(sample)) = (&reference, &zone.sample) {
+                table.insert(path.clone(), sample.clone());
+            }
+            zone.zone.sample = reference;
         }
     }
 }

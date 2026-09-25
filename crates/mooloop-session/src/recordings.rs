@@ -76,8 +76,13 @@ pub fn referenced_paths<'a>(projects: impl IntoIterator<Item = &'a Project>) -> 
             let ChannelSource::Sampler(sampler) = &channel.setup.source else {
                 continue;
             };
-            if let SampleReference::File { path, .. } = &sampler.sample {
-                paths.insert(canonical(path));
+            // The key zones' files too (MOO-14): a take played by a zone is
+            // as much in use as one played by the base.
+            let zones = sampler.zones.iter().map(|zone| &zone.sample);
+            for reference in std::iter::once(&sampler.sample).chain(zones) {
+                if let SampleReference::File { path, .. } = reference {
+                    paths.insert(canonical(path));
+                }
             }
         }
     }
@@ -97,7 +102,14 @@ pub fn referenced_by(
     let mut paths: HashSet<PathBuf> = session
         .channels
         .iter()
-        .filter_map(|channel| channel.sample_path.as_deref().map(canonical))
+        .flat_map(|channel| {
+            channel
+                .sample_path
+                .as_deref()
+                .into_iter()
+                .chain(channel.zones.iter().filter_map(|zone| zone.path()))
+                .map(canonical)
+        })
         .collect();
     for entry in history.entries() {
         paths.extend(referenced_paths([&entry.before.project, &entry.after.project]));

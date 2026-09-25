@@ -20,6 +20,10 @@ use std::sync::Arc;
 pub struct ResolvedDocument {
     pub report: LoadReport,
     pub samples: Vec<Option<Arc<SampleData>>>,
+    /// Every key-zone file the document names, decoded here on the worker
+    /// (MOO-14), for [`Session::admit_zone_audio`] before the install. A
+    /// file that failed is not here, and is one of `report.warnings`.
+    pub zone_audio: Vec<(PathBuf, Arc<SampleData>)>,
 }
 
 /// A failure the user has to be told about in full. `message` is the plain
@@ -211,6 +215,9 @@ pub enum DocumentResult {
         generation: u64,
         report: SaveReport,
         sample_references: Vec<Option<SampleReference>>,
+        /// Each channel's key-zone references as the save left them
+        /// (MOO-14), for `apply_zone_references`.
+        zone_references: Vec<Vec<SampleReference>>,
     },
     SavedOther {
         label: &'static str,
@@ -339,6 +346,7 @@ pub fn run_export(
     match OfflineRenderer::render_job_with_plugins(
         &request.project,
         &request.samples,
+        &request.zones,
         sample_rate,
         &request.job,
         progress,
@@ -475,7 +483,31 @@ pub fn resolve_document(path: &Path) -> Result<ResolvedDocument, DocumentProblem
             Some(SampleReference::File { .. }) => samples.push(None),
         }
     }
-    Ok(ResolvedDocument { report, samples })
+    let samplers: Vec<(usize, &mooloop_core::SamplerState)> = match &report.document {
+        LoadedDocument::Song(project) => project
+            .channels
+            .iter()
+            .enumerate()
+            .filter_map(|(index, channel)| Some((index, channel.setup.source.sampler_state()?)))
+            .collect(),
+        LoadedDocument::Kit(kit) => kit
+            .channels
+            .iter()
+            .enumerate()
+            .filter_map(|(index, channel)| Some((index, channel.source.sampler_state()?)))
+            .collect(),
+        LoadedDocument::Channel(channel) => channel.source.sampler_state().map(|s| (0, s)).into_iter().collect(),
+        LoadedDocument::Generator(source) => source.sampler_state().map(|s| (0, s)).into_iter().collect(),
+        LoadedDocument::Effect(_) | LoadedDocument::EffectRun(_) => Vec::new(),
+    };
+    let mut zone_warnings = Vec::new();
+    let zone_audio = crate::sample::decode_zone_files(samplers, &mut zone_warnings);
+    report.warnings.extend(zone_warnings);
+    Ok(ResolvedDocument {
+        report,
+        samples,
+        zone_audio,
+    })
 }
 
 pub fn warning_suffix(count: usize) -> String {
@@ -541,6 +573,8 @@ pub fn log_asset_warnings(what: &str, warnings: &[AssetWarning]) {
 pub struct ExportRequest {
     pub project: Project,
     pub samples: Vec<Option<Arc<SampleData>>>,
+    /// Each sampler's key-zone buffers, parallel to its zones (MOO-14).
+    pub zones: Vec<Vec<Option<Arc<SampleData>>>>,
     /// The files to write, built from the dialog's [`RenderSettings`].
     pub job: RenderJob,
 }
@@ -628,6 +662,7 @@ impl Session {
         Ok(ExportRequest {
             project: self.project_snapshot(bpm, swing_percent),
             samples: self.sample_snapshots(),
+            zones: self.zone_sample_snapshots(),
             job,
         })
     }

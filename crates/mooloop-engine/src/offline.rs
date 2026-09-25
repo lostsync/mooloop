@@ -405,6 +405,7 @@ impl OfflineRenderer {
         match Self::render_job_with_plugins(
             project,
             samples,
+            &[],
             realtime_sample_rate,
             &job,
             progress,
@@ -432,6 +433,7 @@ impl OfflineRenderer {
         Self::render_job_with_plugins(
             project,
             samples,
+            &[],
             realtime_sample_rate,
             job,
             progress,
@@ -446,9 +448,19 @@ impl OfflineRenderer {
     /// (every export the dialog builds so far) hands its map over on the
     /// first call; a pass given an empty map plays its plugins as
     /// placeholders.
+    ///
+    /// `zones` is each sampler's key-zone audio (MOO-14), `zones[channel]`
+    /// parallel to that channel's `SamplerState::zones`. A song with a zone
+    /// that names a file must bring its buffer: without one the render is
+    /// refused rather than exported with the zone silent, since an export
+    /// that differs from playback with nothing said is the fault to avoid.
+    /// A zone whose buffer is here but `None` -- its file missing in the
+    /// session too -- renders silent, as it plays.
+    #[allow(clippy::too_many_arguments)]
     pub fn render_job_with_plugins(
         project: &Project,
         samples: &[Option<Arc<SampleData>>],
+        zones: &[Vec<Option<Arc<SampleData>>>],
         realtime_sample_rate: u32,
         job: &RenderJob,
         progress: &ExportProgress,
@@ -457,6 +469,15 @@ impl OfflineRenderer {
         let fail = |written, error| Err(JobFailure { written, error });
         if let Err(error) = job.validate() {
             return fail(Vec::new(), error);
+        }
+        if let Some(channel) = unsupplied_zones(project, zones) {
+            return fail(
+                Vec::new(),
+                ExportError::Invalid(format!(
+                    "channel {} has key zones whose audio was not given to the render",
+                    channel + 1
+                )),
+            );
         }
         // The session's rate for every format: an MP3 rendered at 48 kHz
         // from a 96 kHz session was not what was heard wherever a sound
@@ -480,7 +501,7 @@ impl OfflineRenderer {
         let mut first = None;
         for (index, pass) in job.passes.iter().enumerate() {
             let hosted = if index == 0 { plugins(0) } else { BTreeMap::new() };
-            match prepare_pass(project, samples, sample_rate, pass, hosted) {
+            match prepare_pass(project, samples, zones, sample_rate, pass, hosted) {
                 Ok((state, base, cap)) => {
                     if first.is_none() {
                         first = Some(state);
@@ -504,7 +525,7 @@ impl OfflineRenderer {
         {
             let mut state = match first.take() {
                 Some(state) => state,
-                None => match prepare_pass(project, samples, sample_rate, pass, plugins(index)) {
+                None => match prepare_pass(project, samples, zones, sample_rate, pass, plugins(index)) {
                     Ok((state, _, _)) => state,
                     Err(error) => return fail(written, error),
                 },
@@ -537,11 +558,30 @@ impl OfflineRenderer {
     }
 }
 
+/// The first channel whose sampler names a key-zone file that `zones` holds
+/// no entry for (MOO-14): an entry, even `None`, is the caller saying what
+/// that zone plays.
+fn unsupplied_zones(project: &Project, zones: &[Vec<Option<Arc<SampleData>>>]) -> Option<usize> {
+    project.channels.iter().enumerate().find_map(|(index, channel)| {
+        let state = channel.setup.source.sampler_state()?;
+        let given = zones.get(index).map_or(0, Vec::len);
+        state
+            .zones
+            .iter()
+            .enumerate()
+            .any(|(zone, spec)| {
+                matches!(spec.sample, mooloop_core::SampleReference::File { .. }) && zone >= given
+            })
+            .then_some(index)
+    })
+}
+
 /// The render state for `pass`, and its length: the bars, and the tail cap,
 /// in frames at `sample_rate`.
 fn prepare_pass(
     project: &Project,
     samples: &[Option<Arc<SampleData>>],
+    zones: &[Vec<Option<Arc<SampleData>>>],
     sample_rate: u32,
     pass: &RenderPass,
     plugins: BTreeMap<PluginSlotId, Box<dyn AudioNode + Send>>,
@@ -559,7 +599,8 @@ fn prepare_pass(
             render_project.playback_mode = PlaybackMode::Song;
         }
     }
-    let mut state = RenderState::from_project(sample_rate, &render_project, samples);
+    let mut state =
+        RenderState::from_project_with_zones(sample_rate, &render_project, samples, zones);
     state.host_plugins(&render_project, plugins);
     let base_ticks = match pass.scope {
         RenderScope::Pattern { index } => state

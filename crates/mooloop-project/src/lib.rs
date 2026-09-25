@@ -681,10 +681,46 @@ fn prepare_song_asset(
     added: &mut Vec<PathBuf>,
     warnings: &mut Vec<AssetWarning>,
 ) -> Result<(), Error> {
-    let ChannelSource::Sampler(sampler) = source else {
-        return Ok(());
-    };
-    let SampleReference::File { path, embedded } = &mut sampler.sample else {
+    for reference in sample_references_mut(source) {
+        prepare_song_reference(
+            channel,
+            reference,
+            target,
+            target_assets,
+            mode,
+            copied,
+            added,
+            warnings,
+        )?;
+    }
+    Ok(())
+}
+
+/// Every sample reference a source holds: a sampler's own, then each of its
+/// key zones' (MOO-14). The asset walkers take them all the same way, so a
+/// zone's file is embedded, referenced and resolved by exactly the base's
+/// rules.
+fn sample_references_mut(source: &mut ChannelSource) -> Vec<&mut SampleReference> {
+    match source {
+        ChannelSource::Sampler(sampler) => std::iter::once(&mut sampler.sample)
+            .chain(sampler.zones.iter_mut().map(|zone| &mut zone.sample))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_song_reference(
+    channel: usize,
+    reference: &mut SampleReference,
+    target: &Path,
+    target_assets: &Path,
+    mode: AssetMode,
+    copied: &mut HashMap<PathBuf, PathBuf>,
+    added: &mut Vec<PathBuf>,
+    warnings: &mut Vec<AssetWarning>,
+) -> Result<(), Error> {
+    let SampleReference::File { path, embedded } = reference else {
         return Ok(());
     };
 
@@ -1119,10 +1155,22 @@ fn prepare_setup_asset(
     copied: &mut HashMap<PathBuf, PathBuf>,
     warnings: &mut Vec<AssetWarning>,
 ) -> Result<(), Error> {
-    let ChannelSource::Sampler(sampler) = source else {
-        return Ok(());
-    };
-    let SampleReference::File { path, embedded } = &mut sampler.sample else {
+    for reference in sample_references_mut(source) {
+        prepare_setup_reference(channel, reference, target, staging, mode, copied, warnings)?;
+    }
+    Ok(())
+}
+
+fn prepare_setup_reference(
+    channel: usize,
+    reference: &mut SampleReference,
+    target: &Path,
+    staging: &Path,
+    mode: AssetMode,
+    copied: &mut HashMap<PathBuf, PathBuf>,
+    warnings: &mut Vec<AssetWarning>,
+) -> Result<(), Error> {
+    let SampleReference::File { path, embedded } = reference else {
         return Ok(());
     };
 
@@ -1167,11 +1215,15 @@ fn prepare_setup_asset(
             .unwrap_or_else(|| "sample.wav".into());
         // As in `prepare_song_asset`: a sample the bundle already owns keeps
         // its leaf, or the prefix accumulates on every save.
-        let relative = PathBuf::from("samples").join(if keep_owned {
+        let wanted = if keep_owned {
             name
         } else {
             format!("{channel:02}-{name}")
-        });
+        };
+        // Unclaimed rather than as wanted: a sampler's key zones (MOO-14)
+        // are several files on one channel, and two of them may share a
+        // name from two folders, which would otherwise copy over each other.
+        let relative = PathBuf::from("samples").join(unclaimed_name(&assets, &wanted));
         fs::copy(&source, staging.join(&relative))?;
         copied.insert(canonical, relative.clone());
         relative
@@ -1478,10 +1530,19 @@ fn resolve_setup_asset(
     source: &mut ChannelSource,
     warnings: &mut Vec<AssetWarning>,
 ) -> Result<(), Error> {
-    let ChannelSource::Sampler(sampler) = source else {
-        return Ok(());
-    };
-    let SampleReference::File { path, embedded } = &mut sampler.sample else {
+    for reference in sample_references_mut(source) {
+        resolve_reference(bundle, channel, reference, warnings)?;
+    }
+    Ok(())
+}
+
+fn resolve_reference(
+    bundle: &Path,
+    channel: usize,
+    reference: &mut SampleReference,
+    warnings: &mut Vec<AssetWarning>,
+) -> Result<(), Error> {
+    let SampleReference::File { path, embedded } = reference else {
         return Ok(());
     };
     if *embedded {
@@ -2254,6 +2315,125 @@ mod tests {
         let first = &project.channels[0].setup.sampler_state().unwrap().sample;
         let second = &project.channels[1].setup.sampler_state().unwrap().sample;
         assert_eq!(first, second);
+    }
+
+    /// A sampler with key zones (MOO-14) that has never been saved, with
+    /// two zone files that share a name from two folders.
+    fn zoned_project(root: &Path) -> Project {
+        use mooloop_core::{KeyRange, SampleZone};
+        let file = |folder: &str, name: &str| {
+            let dir = root.join(folder);
+            fs::create_dir_all(&dir).unwrap();
+            let path = dir.join(name);
+            fs::write(&path, format!("{folder} bytes")).unwrap();
+            SampleReference::File { path, embedded: false }
+        };
+        let mut project = Project::default();
+        let state = project.channels[0].setup.sampler_state_mut().unwrap();
+        state.sample = file("base", "kick.wav");
+        state.keys = KeyRange::new(0, 59);
+        state.zones = vec![
+            SampleZone {
+                keys: KeyRange::new(60, 71),
+                root_note: 64,
+                sample: file("low", "tone.wav"),
+                ..SampleZone::default()
+            },
+            SampleZone {
+                keys: KeyRange::new(72, 127),
+                root_note: 76,
+                sample: file("high", "tone.wav"),
+                ..SampleZone::default()
+            },
+        ];
+        project
+    }
+
+    fn zone_files(state: &mooloop_core::SamplerState) -> Vec<PathBuf> {
+        state
+            .zones
+            .iter()
+            .map(|zone| match &zone.sample {
+                SampleReference::File { path, .. } => path.clone(),
+                other => panic!("{other:?}"),
+            })
+            .collect()
+    }
+
+    /// **Every zone's file travels like the base's (MOO-14).** Embedded,
+    /// each is copied into the bundle, two files with one name stay two, and
+    /// the load resolves them to the copies with nothing repaired.
+    #[test]
+    fn a_zoned_sampler_embeds_every_zone_and_round_trips() {
+        let temp = tempdir().unwrap();
+        let project = zoned_project(temp.path());
+        let bundle = temp.path().join("song.mooloop");
+        let report = save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        let loaded = load_bundle(&bundle).unwrap();
+        assert!(loaded.repairs.is_empty(), "{:?}", loaded.repairs);
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+        let LoadedDocument::Song(song) = loaded.document else {
+            panic!("expected song")
+        };
+        let state = song.channels[0].setup.sampler_state().unwrap();
+        let original = project.channels[0].setup.sampler_state().unwrap();
+        assert_eq!(state.keys, original.keys);
+        assert_eq!(state.zones.len(), 2);
+        for (zone, was) in state.zones.iter().zip(&original.zones) {
+            assert_eq!((zone.keys, zone.velocity, zone.root_note), (was.keys, was.velocity, was.root_note));
+        }
+        let files = zone_files(state);
+        assert_ne!(files[0], files[1], "two zones' same-named files became one");
+        assert_eq!(fs::read_to_string(&files[0]).unwrap(), "low bytes");
+        assert_eq!(fs::read_to_string(&files[1]).unwrap(), "high bytes");
+        assert!(files.iter().all(|file| file.starts_with(song_assets_path(&bundle).unwrap())));
+    }
+
+    /// The same in a channel preset, whose walker names its copies on its
+    /// own and used to take one name per channel as enough.
+    #[test]
+    fn a_zoned_channel_preset_keeps_both_same_named_zone_files() {
+        let temp = tempdir().unwrap();
+        let project = zoned_project(temp.path());
+        let bundle = temp.path().join("zoned.mooloop-channel");
+        save_channel(&bundle, &project.channels[0].setup, AssetMode::Embedded).unwrap();
+        let LoadedDocument::Channel(setup) = load_bundle(&bundle).unwrap().document else {
+            panic!("expected a channel")
+        };
+        let files = zone_files(setup.sampler_state().unwrap());
+        assert_ne!(files[0], files[1]);
+        assert_eq!(fs::read_to_string(&files[0]).unwrap(), "low bytes");
+        assert_eq!(fs::read_to_string(&files[1]).unwrap(), "high bytes");
+    }
+
+    /// A missing zone file is a sample warning on load, as a missing base
+    /// file is, and the zone keeps its place in the map.
+    #[test]
+    fn a_missing_zone_file_warns_and_keeps_the_zone() {
+        let temp = tempdir().unwrap();
+        let project = zoned_project(temp.path());
+        let bundle = temp.path().join("song.mooloop");
+        save_song(&bundle, &project, AssetMode::Referenced).unwrap();
+        fs::remove_file(temp.path().join("high").join("tone.wav")).unwrap();
+        let loaded = load_bundle(&bundle).unwrap();
+        assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
+        assert!(loaded.repairs.is_empty());
+        let LoadedDocument::Song(song) = loaded.document else {
+            panic!("expected song")
+        };
+        assert_eq!(song.channels[0].setup.sampler_state().unwrap().zones.len(), 2);
+    }
+
+    /// A sampler with no zones writes neither field, so a song saved before
+    /// zones is saved byte-identical (MOO-14).
+    #[test]
+    fn a_sampler_without_zones_writes_no_zone_fields() {
+        let state = mooloop_core::SamplerState::default();
+        let text = toml::to_string(&state).unwrap();
+        assert!(!text.contains("zones") && !text.contains("keys"), "{text}");
+        let back: mooloop_core::SamplerState = toml::from_str(&text).unwrap();
+        assert_eq!(back, state);
     }
 
     #[test]

@@ -194,6 +194,11 @@ has no knob for it (MOO-217, 2026-09-24, which reverses MOO-169).
 
 ### 2.2 Item 14 — sampler key zones
 
+> **Built 2026-09-25 (MOO-14).** Key ranges and roots per zone, a minimal
+> ZONES page, the format and the export. Velocity ranges are stored and not
+> played. `docs/CURRENT.md` has what it does. What follows is the scoping as
+> it was written.
+
 Added 2026-09-14. Adam: *"sampler v2… a lot of that is done. I would say we
 should at least get key zones, if not layers."*
 

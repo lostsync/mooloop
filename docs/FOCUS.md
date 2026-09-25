@@ -529,3 +529,25 @@ In the order worth playing:
     plays should cut to it. An effect preset's click plays nothing yet: that
     is the question on MOO-227. The render path is pinned by
     `an_instrument_preset_auditions_as_a_rendered_phrase` (session).
+21. **Sampler key zones** (MOO-14). Two sine files, the sampler's own at C4
+    and a zone's at C5 an octave up and half the level. One sampler plays its
+    own up to B3 and the zone from C4, rooted at C4 and C5. It is saved
+    embedded, reopened through the app's loader and exported through the
+    app's export path:
+
+    ```sh
+    scripts/antibox --no-incremental --pull target/sampler-key-zones \
+      cargo run -p mooloop-session --example sampler_key_zones -- target/sampler-key-zones
+    ```
+
+    Play `key-zones.wav`: C3 and B3 are the louder base tone, then C4 and C6
+    the quieter zone, each at the pitch its key names. B3 to C4 should be a
+    semitone step across the split, with no jump in pitch. The binary prints
+    each note's measured pitch and level against what its zone should give.
+    Measured 2026-09-25: every note within 0.1 cent of its key (130.8,
+    246.9, 261.6 and 1046.5 Hz), and the base zone's notes 6.02 dB over the
+    zone's, the files' own difference. A song with no zones renders
+    bit-identical to `main`: the 16 WAVs of `sampler_legato_glide`,
+    `sampler_loop_seam` and `sampler_slice_detect` hash the same. Then, in the
+    app, add a zone on the ZONES page, play
+    across the split on a keyboard, and undo the add.
