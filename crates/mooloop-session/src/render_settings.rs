@@ -9,6 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
+use mooloop_core::{LoopRange, BEATS_PER_BAR, TICKS_PER_BAR, TICKS_PER_STEP};
 use mooloop_engine::{
     ExportFormat, Mp3Bitrate, RenderJob, RenderOutput, RenderPass, RenderScope, RenderTap,
     WavEncoding,
@@ -26,6 +27,7 @@ pub const MAX_TAIL_SECONDS: u32 = 30;
 #[serde(default)]
 pub struct RenderSettings {
     pub source: RenderSource,
+    #[serde(deserialize_with = "tolerant_range")]
     pub range: RenderRange,
     pub format: FileFormat,
     pub tail: TailSettings,
@@ -41,15 +43,179 @@ pub enum RenderSource {
     Master,
 }
 
-/// Which stretch of the timeline is rendered.
+/// Which stretch of the timeline is rendered (MOO-181).
+///
+/// Saved settings (MOO-190, MOO-194) must load whatever becomes of this
+/// enum, so it loads tolerantly: a variant this build does not know, or one
+/// missing its fields, is [`RenderRange::Song`], and a custom range that no
+/// longer fits the song falls back to it too ([`RenderRange::loaded`]).
+/// A custom range is held in ticks rather than as the text typed, so a
+/// change of tempo cannot move it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RenderRange {
     /// What the transport plays: the whole song in song mode, the current
     /// pattern in pattern mode. Exporting the song while the sequencer is in
     /// pattern mode would render something the user is not listening to.
     #[default]
     Transport,
+    /// The whole song, from the top to its last bar.
+    Song,
+    /// The loop selection's points, whether or not looping is switched on:
+    /// the points are kept either way.
+    Loop,
+    /// Song ticks from `start_tick` up to, not including, `end_tick`.
+    Custom { start_tick: u32, end_tick: u32 },
+    /// The current pattern, one pass.
+    Pattern,
+}
+
+/// What a range is resolved against: the song as it stands when the export
+/// is confirmed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Timeline {
+    /// What the transport plays ([`RenderRange::Transport`]).
+    pub transport: RenderScope,
+    /// The current pattern, and its length in ticks.
+    pub pattern: usize,
+    pub pattern_ticks: u32,
+    pub loop_range: LoopRange,
+    /// The song's length in ticks, a whole number of bars.
+    pub song_ticks: u32,
+}
+
+impl Timeline {
+    /// The loop selection's points, cut to the song as the transport cuts
+    /// them, or `None` when that leaves nothing. Looping need not be on.
+    pub fn loop_span(&self) -> Option<(u32, u32)> {
+        LoopRange {
+            enabled: true,
+            ..self.loop_range
+        }
+        .active(self.song_ticks)
+    }
+}
+
+impl RenderRange {
+    /// The engine's scope for this range, or why it cannot be rendered: an
+    /// empty loop selection, or a custom range that ends before it starts or
+    /// reaches past the song. Said on the card, which stays open.
+    pub fn scope(self, timeline: &Timeline) -> Result<RenderScope, SettingsProblem> {
+        match self {
+            Self::Transport => Ok(timeline.transport),
+            Self::Song => Ok(RenderScope::Song),
+            Self::Pattern => Ok(RenderScope::Pattern {
+                index: timeline.pattern,
+            }),
+            Self::Loop => timeline
+                .loop_span()
+                .map(|(start_tick, end_tick)| RenderScope::Range {
+                    start_tick,
+                    end_tick,
+                })
+                .ok_or_else(|| SettingsProblem("The song has no loop selection.".into())),
+            Self::Custom {
+                start_tick,
+                end_tick,
+            } => {
+                if end_tick <= start_tick {
+                    return Err(SettingsProblem("The range must end after it starts.".into()));
+                }
+                if end_tick > timeline.song_ticks {
+                    return Err(SettingsProblem(format!(
+                        "The song ends at {}.",
+                        format_bar_beat(timeline.song_ticks)
+                    )));
+                }
+                Ok(RenderScope::Range {
+                    start_tick,
+                    end_tick,
+                })
+            }
+        }
+    }
+
+    /// The range as saved settings should open it on this song: a custom
+    /// range the song no longer holds is the whole song, without a word.
+    pub fn loaded(self, timeline: &Timeline) -> Self {
+        match self {
+            Self::Custom { .. } if self.scope(timeline).is_err() => Self::Song,
+            other => other,
+        }
+    }
+
+    /// The ticks this range covers, for the card to show: song ticks, or
+    /// the pattern's own for a pattern. `None` when it covers nothing.
+    pub fn span(self, timeline: &Timeline) -> Option<(u32, u32)> {
+        match self.scope(timeline).ok()? {
+            RenderScope::Song => Some((0, timeline.song_ticks)),
+            RenderScope::Pattern { .. } => Some((0, timeline.pattern_ticks)),
+            RenderScope::Range {
+                start_tick,
+                end_tick,
+            } => Some((start_tick, end_tick)),
+        }
+    }
+}
+
+const TICKS_PER_BEAT: u32 = TICKS_PER_BAR / BEATS_PER_BAR;
+const SIXTEENTHS_PER_BEAT: u32 = TICKS_PER_BEAT / TICKS_PER_STEP;
+
+/// A position typed as `bar.beat` or `bar.beat.sixteenth`, each counted
+/// from 1 as the ruler counts them, in ticks from the top of the song:
+/// `3.1` is the downbeat of bar 3, and `3` is too. A beat or sixteenth
+/// outside its bar or beat is refused rather than carried.
+pub fn parse_bar_beat(text: &str) -> Option<u32> {
+    let mut parts = text.trim().split('.');
+    let mut next = |most: u32| -> Option<Option<u32>> {
+        match parts.next() {
+            None => Some(None),
+            Some(part) => {
+                let value: u32 = part.trim().parse().ok()?;
+                let index = value.checked_sub(1).filter(|index| *index < most)?;
+                Some(Some(index))
+            }
+        }
+    };
+    let bar = next(u32::MAX / TICKS_PER_BAR)??;
+    let beat = next(BEATS_PER_BAR)?.unwrap_or(0);
+    let sixteenth = next(SIXTEENTHS_PER_BEAT)?.unwrap_or(0);
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(bar * TICKS_PER_BAR + beat * TICKS_PER_BEAT + sixteenth * TICKS_PER_STEP)
+}
+
+/// A song position as [`parse_bar_beat`] reads it: `bar.beat`, with the
+/// sixteenth only when it is not the first. A position between sixteenths
+/// shows the one before it.
+pub fn format_bar_beat(tick: u32) -> String {
+    let bar = tick / TICKS_PER_BAR + 1;
+    let within = tick % TICKS_PER_BAR;
+    let beat = within / TICKS_PER_BEAT + 1;
+    let sixteenth = within % TICKS_PER_BEAT / TICKS_PER_STEP + 1;
+    if sixteenth == 1 {
+        format!("{bar}.{beat}")
+    } else {
+        format!("{bar}.{beat}.{sixteenth}")
+    }
+}
+
+/// Reads a range from saved settings, and never fails the settings over it:
+/// anything that is not a range this build knows is the whole song.
+fn tolerant_range<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<RenderRange, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Tolerant {
+        Known(RenderRange),
+        Unknown(serde::de::IgnoredAny),
+    }
+    Ok(match Tolerant::deserialize(deserializer)? {
+        Tolerant::Known(range) => range,
+        Tolerant::Unknown(_) => RenderRange::Song,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -183,9 +349,10 @@ impl RenderSettings {
         Ok(name.to_string())
     }
 
-    /// The job these settings describe, for a song named `song_name` whose
-    /// default folder is `default_folder`. The transport's scope is given
-    /// separately: the range follows it until a range is chosen (MOO-181).
+    /// The job these settings describe, rendering `scope`, for a song named
+    /// `song_name` whose default folder is `default_folder`. The scope is
+    /// the range resolved against the song ([`RenderRange::scope`]), which
+    /// the caller does because only it has the song.
     pub fn job(
         &self,
         scope: RenderScope,
@@ -202,7 +369,6 @@ impl RenderSettings {
         let stem = self.stem(song_name)?;
         let path = folder.join(format!("{stem}.{}", self.format.extension()));
         let RenderSource::Master = self.source;
-        let RenderRange::Transport = self.range;
         Ok(RenderJob {
             passes: vec![RenderPass {
                 scope,
@@ -325,11 +491,148 @@ mod tests {
         );
     }
 
+    fn timeline() -> Timeline {
+        Timeline {
+            transport: RenderScope::Pattern { index: 1 },
+            pattern: 1,
+            pattern_ticks: TICKS_PER_BAR,
+            loop_range: LoopRange {
+                start_tick: 2 * TICKS_PER_BAR,
+                end_tick: 4 * TICKS_PER_BAR,
+                enabled: false,
+            },
+            song_ticks: 8 * TICKS_PER_BAR,
+        }
+    }
+
+    /// **Each range resolves to the stretch it names** (MOO-181): the loop
+    /// selection to exactly its points, switched on or not.
+    #[test]
+    fn each_range_resolves_to_the_stretch_it_names() {
+        let timeline = timeline();
+        assert_eq!(RenderRange::Transport.scope(&timeline), Ok(timeline.transport));
+        assert_eq!(RenderRange::Song.scope(&timeline), Ok(RenderScope::Song));
+        assert_eq!(
+            RenderRange::Pattern.scope(&timeline),
+            Ok(RenderScope::Pattern { index: 1 })
+        );
+        assert_eq!(
+            RenderRange::Loop.scope(&timeline),
+            Ok(RenderScope::Range {
+                start_tick: 2 * TICKS_PER_BAR,
+                end_tick: 4 * TICKS_PER_BAR,
+            })
+        );
+        let custom = RenderRange::Custom {
+            start_tick: TICKS_PER_BAR + 96,
+            end_tick: 3 * TICKS_PER_BAR,
+        };
+        assert_eq!(
+            custom.scope(&timeline),
+            Ok(RenderScope::Range {
+                start_tick: TICKS_PER_BAR + 96,
+                end_tick: 3 * TICKS_PER_BAR,
+            })
+        );
+        assert_eq!(custom.span(&timeline), Some((TICKS_PER_BAR + 96, 3 * TICKS_PER_BAR)));
+        assert_eq!(RenderRange::Pattern.span(&timeline), Some((0, TICKS_PER_BAR)));
+    }
+
+    /// **A range that cannot be rendered is refused on the card**
+    /// (MOO-181): a custom end at or before its start, one past the song,
+    /// and a loop selection with nothing in it.
+    #[test]
+    fn an_empty_or_backwards_range_is_refused() {
+        let mut timeline = timeline();
+        for (start_tick, end_tick) in [(TICKS_PER_BAR, TICKS_PER_BAR), (TICKS_PER_BAR, 0)] {
+            let problem = RenderRange::Custom {
+                start_tick,
+                end_tick,
+            }
+            .scope(&timeline)
+            .unwrap_err();
+            assert!(problem.0.contains("end after it starts"), "{problem}");
+        }
+        let past = RenderRange::Custom {
+            start_tick: 0,
+            end_tick: 9 * TICKS_PER_BAR,
+        };
+        assert_eq!(
+            past.scope(&timeline).unwrap_err().0,
+            "The song ends at 9.1."
+        );
+        timeline.loop_range = LoopRange::default();
+        assert!(RenderRange::Loop.scope(&timeline).is_err());
+        assert_eq!(timeline.loop_span(), None);
+        // A loop reaching past the song is cut to it, as the transport cuts it.
+        timeline.loop_range.start_tick = 6 * TICKS_PER_BAR;
+        timeline.loop_range.end_tick = 12 * TICKS_PER_BAR;
+        assert_eq!(timeline.loop_span(), Some((6 * TICKS_PER_BAR, 8 * TICKS_PER_BAR)));
+    }
+
+    #[test]
+    fn bar_beat_reads_as_the_ruler_counts() {
+        let beat = TICKS_PER_BAR / BEATS_PER_BAR;
+        assert_eq!(parse_bar_beat("1.1"), Some(0));
+        assert_eq!(parse_bar_beat(" 3 "), Some(2 * TICKS_PER_BAR));
+        assert_eq!(parse_bar_beat("3.2"), Some(2 * TICKS_PER_BAR + beat));
+        assert_eq!(parse_bar_beat("3.2.3"), Some(2 * TICKS_PER_BAR + beat + 2 * TICKS_PER_STEP));
+        for refused in ["", "0", "3.5", "3.0", "3.1.5", "3.1.1.1", "x", "-1", "3."] {
+            assert_eq!(parse_bar_beat(refused), None, "{refused:?}");
+        }
+        for tick in [0, beat, TICKS_PER_BAR * 7 + 3 * beat + TICKS_PER_STEP] {
+            assert_eq!(parse_bar_beat(&format_bar_beat(tick)), Some(tick));
+        }
+        assert_eq!(format_bar_beat(2 * TICKS_PER_BAR + beat), "3.2");
+        assert_eq!(format_bar_beat(TICKS_PER_STEP), "1.1.2");
+    }
+
+    /// **Saved settings load whatever the range says** (MOO-181, for
+    /// MOO-190 and MOO-194): a range this build does not know, or one
+    /// missing its fields, is the whole song and the rest of the table
+    /// still loads; a custom range the song no longer holds opens as the
+    /// whole song; and a custom range is saved in ticks.
+    #[test]
+    fn a_range_this_build_cannot_use_loads_as_the_whole_song() {
+        for json in [
+            r#"{"range":{"kind":"marker","name":"chorus"},"tail":{"max_seconds":3}}"#,
+            r#"{"range":{"kind":"custom","start_tick":5},"tail":{"max_seconds":3}}"#,
+            r#"{"range":"loop","tail":{"max_seconds":3}}"#,
+            r#"{"range":7,"tail":{"max_seconds":3}}"#,
+        ] {
+            let settings: RenderSettings = serde_json::from_str(json).unwrap();
+            assert_eq!(settings.range, RenderRange::Song, "{json}");
+            assert_eq!(settings.tail.max_seconds, 3, "{json}");
+        }
+        let custom = RenderRange::Custom {
+            start_tick: 4 * TICKS_PER_BAR,
+            end_tick: 10 * TICKS_PER_BAR,
+        };
+        let json = serde_json::to_string(&RenderSettings {
+            range: custom,
+            ..RenderSettings::default()
+        })
+        .unwrap();
+        assert!(
+            json.contains(r#""range":{"kind":"custom","start_tick":1536,"end_tick":3840}"#),
+            "{json}"
+        );
+        let settings: RenderSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(settings.range, custom);
+        assert_eq!(settings.range.loaded(&timeline()), RenderRange::Song);
+        let fits = RenderRange::Custom {
+            start_tick: 0,
+            end_tick: TICKS_PER_BAR,
+        };
+        assert_eq!(fits.loaded(&timeline()), fits);
+    }
+
     /// The settings are a serde value, and a table missing fields still
     /// loads: what MOO-190 saves stays readable as fields are added.
     #[test]
     fn settings_round_trip_and_a_partial_table_loads() {
         let settings = RenderSettings {
+            range: RenderRange::Loop,
             format: FileFormat::Wav {
                 depth: WavDepth::Float32,
             },

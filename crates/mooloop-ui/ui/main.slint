@@ -1051,10 +1051,20 @@ export component MainWindow inherits Window {
     in-out property <float> export-progress: -1;
     in-out property <string> export-result-title;
     in-out property <string> export-result-detail;
-    // The card's Range and Output (MOO-180). The folder and name are what
-    // was typed, empty for the defaults, which Rust writes into the
-    // placeholders when the card opens.
-    in-out property <string> export-range-text;
+    // The card's Range (MOO-181): 0 whole song, 1 loop selection, 2 custom,
+    // 3 current pattern, -1 until the card has first opened and followed the
+    // transport. From and to are bar.beat, typed only for a custom range.
+    in-out property <int> export-range-index: -1;
+    in-out property <string> export-range-from;
+    in-out property <string> export-range-to;
+    in-out property <bool> export-loop-available;
+    in-out property <string> export-pattern-label: "Pattern";
+    in-out property <bool> export-range-ok: true;
+    callback export-range-picked();
+    callback export-range-edited();
+    // The card's Output (MOO-180). The folder and name are what was typed,
+    // empty for the defaults, which Rust writes into the placeholders when
+    // the card opens.
     in-out property <string> export-folder;
     in-out property <string> export-default-folder;
     in-out property <string> export-name;
@@ -8181,7 +8191,14 @@ export component MainWindow inherits Window {
         progress: root.export-progress;
         result-title: root.export-result-title;
         result-detail: root.export-result-detail;
-        range-text: root.export-range-text;
+        range-index <=> root.export-range-index;
+        range-from <=> root.export-range-from;
+        range-to <=> root.export-range-to;
+        loop-available: root.export-loop-available;
+        pattern-label: root.export-pattern-label;
+        range-ok: root.export-range-ok;
+        range-picked => { root.export-range-picked(); }
+        range-edited => { root.export-range-edited(); }
         folder <=> root.export-folder;
         default-folder: root.export-default-folder;
         file-name <=> root.export-name;

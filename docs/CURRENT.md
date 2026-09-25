@@ -579,8 +579,8 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   still names the old folder, and the loader reads this song's own instead and
   says so, which the next save writes back. Until 2026-09-14 that pair of
   renames made the song permanently unopenable.
-- Offline export of exactly one selected-pattern pass in Pattern mode or one
-  derived playlist pass in Song mode, followed by a release tail that runs
+- Offline export of one pattern pass, the song, or a range of it (below),
+  followed by a release tail that runs
   until every device has fallen silent (`RenderState::is_at_rest`, so a
   reverb's decay and a delay's last echo are waited for), capped at a
   0-30 second limit the dialog sets (10 s by default). Outputs are 24-bit
@@ -605,7 +605,19 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   for a song never saved; an empty name is the song's name. A folder that
   is not there is said on the card before anything renders, and an export
   that would replace files asks once, saying how many. Source (the master
-  mix) and Range (what the transport plays) have one answer each so far.
+  mix) has one answer so far. As of 2026-09-25 (MOO-181) Range is a choice
+  of four: the whole song, the loop selection (its points whether or not
+  looping is on; unavailable while the song has none), a custom range
+  typed as bar.beat (or bar.beat.sixteenth), which starts as the loop
+  selection, and the current pattern, one pass. The card shows the stretch
+  each covers under the choice, follows the transport (song or pattern)
+  until a range is picked, and refuses a custom range that ends at or
+  before its start or past the song, with Export disabled and the reason
+  on the card. A range renders from a locate, as playback plays from one:
+  automation and tempo-synced LFOs read what they read at its start, a
+  note that began before it is not chased, and effects start empty, so a
+  reverb from before the range is not in the file (pre-roll: open,
+  MOO-239).
   Underneath, an export is a job of passes, each pass one render handed to
   every file it writes, under one progress bar and one Cancel; cancelling
   keeps the files of passes that had finished. Every format renders at the session's rate: an MP3

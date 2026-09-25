@@ -15,6 +15,7 @@ use mooloop_dsp::{AudioNode, SampleData, MAX_BLOCK_SIZE};
 use mp3lame_encoder::{Bitrate, Builder, DualPcm, FlushGap, Quality};
 
 use crate::render::RenderState;
+use mooloop_core::EngineCommand;
 
 /// The rate an MP3 file is written at, for a render at `rate`.
 ///
@@ -36,10 +37,19 @@ fn mp3_file_rate(rate: u32) -> u32 {
     }
 }
 
+/// Which stretch of the timeline a pass renders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderScope {
+    /// One pass of a pattern, from its first tick.
     Pattern { index: usize },
+    /// The whole arrangement, from the top to the song's last bar.
     Song,
+    /// Part of the arrangement: song ticks from `start_tick` up to, not
+    /// including, `end_tick` (MOO-181). The render locates to the start the
+    /// way playback does, so automation and tempo-synced modulators read
+    /// what they read there, a note that began before the start is not
+    /// chased, and effects start empty. The range must lie inside the song.
+    Range { start_tick: u32, end_tick: u32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -545,7 +555,9 @@ fn prepare_pass(
             render_project.playback_mode = PlaybackMode::Pattern;
             render_project.current_pattern = index as u16;
         }
-        RenderScope::Song => render_project.playback_mode = PlaybackMode::Song,
+        RenderScope::Song | RenderScope::Range { .. } => {
+            render_project.playback_mode = PlaybackMode::Song;
+        }
     }
     let mut state = RenderState::from_project(sample_rate, &render_project, samples);
     state.host_plugins(&render_project, plugins);
@@ -554,6 +566,27 @@ fn prepare_pass(
             .pattern_length_ticks(index)
             .ok_or_else(|| ExportError::Invalid("pattern is out of range".into()))?,
         RenderScope::Song => state.song_length_ticks(),
+        RenderScope::Range {
+            start_tick,
+            end_tick,
+        } => {
+            if end_tick <= start_tick {
+                return Err(ExportError::Invalid(
+                    "the range must end after it starts".into(),
+                ));
+            }
+            if end_tick > state.song_length_ticks() {
+                return Err(ExportError::Invalid(
+                    "the range ends after the song does".into(),
+                ));
+            }
+            // A locate, as playback does it: the first block starts on the
+            // range's first tick and every lane resolves there.
+            state.apply_command(EngineCommand::Seek {
+                tick: f64::from(start_tick),
+            });
+            end_tick - start_tick
+        }
     };
     let base_frames = (f64::from(base_ticks) / state.ticks_per_sample()).ceil() as u64;
     let tail_cap = (f64::from(pass.tail_seconds) * f64::from(sample_rate)).round() as u64;
@@ -1456,6 +1489,212 @@ mod tests {
         .unwrap_err();
         assert!(matches!(failure.error, ExportError::Invalid(_)), "{failure:?}");
         assert!(!new.exists());
+    }
+
+    const FRAMES_PER_TICK: u64 = 250; // 48 kHz at 120 BPM, 96 PPQ.
+    const BAR: u32 = mooloop_core::TICKS_PER_BAR;
+
+    fn long_sample(frames: usize, value: impl Fn(usize) -> f32) -> Arc<SampleData> {
+        Arc::new(SampleData {
+            frames: (0..frames)
+                .map(|index| {
+                    let v = value(index);
+                    [v, v]
+                })
+                .collect(),
+            sample_rate: 48_000,
+            root_note: 60,
+        })
+    }
+
+    fn render_float(
+        project: &Project,
+        sample: &Arc<SampleData>,
+        scope: RenderScope,
+        path: &Path,
+    ) -> (RenderSummary, Vec<f32>) {
+        let summary = OfflineRenderer::render(
+            project,
+            &[Some(sample.clone())],
+            48_000,
+            &ExportSpec {
+                path: path.to_path_buf(),
+                scope,
+                tail_seconds: 0.0,
+                format: ExportFormat::Wav(WavEncoding::Float32),
+            },
+        )
+        .unwrap();
+        let left = hound::WavReader::open(path)
+            .unwrap()
+            .samples::<f32>()
+            .map(Result::unwrap)
+            .step_by(2)
+            .collect();
+        (summary, left)
+    }
+
+    fn onset(left: &[f32]) -> Option<usize> {
+        left.iter().position(|sample| sample.abs() > 1e-4)
+    }
+
+    /// **A range starts on its first tick and is exactly its length**
+    /// (MOO-181): a note on bar 3, rendered over bars 3 to 5, sounds on the
+    /// file's first frames exactly as it does in the whole song, and the
+    /// bars are `end - start` ticks of frames.
+    #[test]
+    fn a_range_starts_on_its_first_tick_and_is_exactly_its_length() {
+        let temp = tempdir().unwrap();
+        let mut project = sampler_project(1.0);
+        // One bar of pattern, played on bars 1, 3 and 5: the song is five
+        // bars and bar 3's note is the range's first.
+        project.channels[0].notes[0].clear();
+        project.channels[0].notes[0].push(NoteEvent::new(1, 0, BAR / 2, 60, 127));
+        for bar in [0, 2, 4] {
+            project.playlist.push(PatternPlacement::new(0, bar * BAR));
+        }
+        let sample = long_sample(96_000, |_| 0.5);
+
+        let (whole, whole_left) =
+            render_float(&project, &sample, RenderScope::Song, &temp.path().join("song.wav"));
+        assert_eq!(whole.base_frames, 5 * u64::from(BAR) * FRAMES_PER_TICK);
+        let range = RenderScope::Range {
+            start_tick: 2 * BAR,
+            end_tick: 4 * BAR,
+        };
+        let (summary, left) = render_float(&project, &sample, range, &temp.path().join("range.wav"));
+        assert_eq!(summary.base_frames, 2 * u64::from(BAR) * FRAMES_PER_TICK);
+        assert_eq!(left.len() as u64, summary.total_frames);
+
+        let bar_3 = (2 * u64::from(BAR) * FRAMES_PER_TICK) as usize;
+        let in_song = onset(&whole_left[bar_3..]).expect("bar 3's note sounds in the song");
+        assert_eq!(onset(&left), Some(in_song), "the range's note is not where the song's is");
+        assert!(in_song < 64, "bar 3's note starts {in_song} frames late");
+    }
+
+    /// **A range reads automation and a synced LFO where it starts, as
+    /// playing through does** (MOO-181, MOO-127).
+    ///
+    /// The range starts on beat 2 of bar 2, five beats in: a three-beat LFO
+    /// is two thirds through its cycle there, and a lane drawn from the top
+    /// is part-way up its ramp. Either one read from zero would move the
+    /// level for the whole file, so the range is held window by window
+    /// against the same stretch of the whole song.
+    #[test]
+    fn a_range_holds_synced_lfos_and_automation_at_its_start() {
+        use mooloop_core::{
+            AutomationLane, AutomationPoint, EffectSlotState, EffectTarget, FilterMode,
+            FilterParams, ModLfoParams, ModLfoWaveform, ModPolarity, ModRoute, ModTimeDivision,
+            ModulatorParams, ParamAddr, FILTER_PARAM_CUTOFF_HZ,
+        };
+        let temp = tempdir().unwrap();
+        let mut project = sampler_project(1.0);
+        project.pattern_lengths[0] = 64; // four bars
+        project.playlist.push(PatternPlacement::new(0, 0));
+        let start = BAR + BAR / mooloop_core::BEATS_PER_BAR;
+        let end = 3 * BAR;
+        let channel = &mut project.channels[0];
+        channel.notes[0].clear();
+        channel.notes[0].push(NoteEvent::new(1, 0, BAR, 60, 127));
+        channel.notes[0].push(NoteEvent::new(2, start, end - start, 60, 127));
+        let filter = |cutoff_hz| {
+            EffectSlotState::filter(FilterParams {
+                cutoff_hz,
+                resonance: 0.0,
+                mode: FilterMode::LowPass,
+                ..FilterParams::default()
+            })
+        };
+        let swept = channel.setup.push_effect(filter(1_500.0)).expect("pushed");
+        let automated = channel.setup.push_effect(filter(8_000.0)).expect("pushed");
+        channel.setup.modulation.install(
+            0,
+            ModulatorParams::Lfo(ModLfoParams {
+                tempo_sync: true,
+                rate_division: ModTimeDivision::DottedHalf,
+                waveform: ModLfoWaveform::Saw,
+                ..ModLfoParams::default()
+            }),
+        );
+        let cutoff = |device| ParamAddr::effect(EffectTarget::Channel(0), device, FILTER_PARAM_CUTOFF_HZ);
+        assert!(channel
+            .setup
+            .modulation
+            .add_route(ModRoute::to_slot(0, cutoff(swept), 0.4, ModPolarity::Bipolar))
+            .is_some());
+        let mut lane = AutomationLane::new(cutoff(automated));
+        lane.upsert(AutomationPoint::new(1, 0, 0.95));
+        lane.upsert(AutomationPoint::new(2, 4 * BAR, 0.55));
+        channel.automation[0].push(lane);
+        // A bright tone, so where the cutoffs sit is the level.
+        let sample = long_sample(4 * 96_000, |index| {
+            0.5 * (index as f32 * std::f32::consts::TAU * 2_000.0 / 48_000.0).sin()
+        });
+
+        let (_, whole) =
+            render_float(&project, &sample, RenderScope::Song, &temp.path().join("song.wav"));
+        let range = RenderScope::Range {
+            start_tick: start,
+            end_tick: end,
+        };
+        let (summary, part) = render_float(&project, &sample, range, &temp.path().join("range.wav"));
+        let from = (u64::from(start) * FRAMES_PER_TICK) as usize;
+        assert_eq!(summary.base_frames, u64::from(end - start) * FRAMES_PER_TICK);
+        let through = &whole[from..from + part.len()];
+
+        const WINDOW: usize = 2_400;
+        let rms = |block: &[f32]| {
+            let power = block.iter().map(|s| f64::from(*s).powi(2)).sum::<f64>() / block.len() as f64;
+            10.0 * power.max(1e-20).log10()
+        };
+        let mut levels = Vec::new();
+        // The first windows hold the parameters' smoothing from the state's
+        // defaults, which a locate has in playback too.
+        for (index, (ours, theirs)) in part
+            .as_chunks::<WINDOW>()
+            .0
+            .iter()
+            .zip(through.as_chunks::<WINDOW>().0)
+            .enumerate()
+            .skip(2)
+        {
+            let (ours, theirs) = (rms(&ours[..]), rms(&theirs[..]));
+            assert!(
+                (ours - theirs).abs() < 0.5,
+                "window {index}: the range reads {ours:.2} dB, playing through {theirs:.2} dB"
+            );
+            levels.push(ours);
+        }
+        let spread = levels.iter().cloned().fold(f64::MIN, f64::max)
+            - levels.iter().cloned().fold(f64::MAX, f64::min);
+        assert!(spread > 3.0, "the modulation moves the level by only {spread:.2} dB");
+    }
+
+    /// A range that is empty or runs past the song is refused, not rendered.
+    #[test]
+    fn a_range_outside_the_song_is_refused() {
+        let temp = tempdir().unwrap();
+        let mut project = audible_project();
+        project.playlist.push(PatternPlacement::new(0, 0));
+        for (start_tick, end_tick) in [(BAR, BAR), (BAR, 0), (0, 2 * BAR)] {
+            let path = temp.path().join("refused.wav");
+            let result = OfflineRenderer::render(
+                &project,
+                &[],
+                48_000,
+                &ExportSpec {
+                    path: path.clone(),
+                    scope: RenderScope::Range {
+                        start_tick,
+                        end_tick,
+                    },
+                    tail_seconds: 0.0,
+                    format: ExportFormat::Wav(WavEncoding::Float32),
+                },
+            );
+            assert!(matches!(result, Err(ExportError::Invalid(_))), "{result:?}");
+            assert!(!path.exists());
+        }
     }
 
     #[test]

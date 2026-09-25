@@ -12,7 +12,7 @@ use mooloop_dsp::SampleData;
 use mooloop_engine::{
     ExportError, ExportProgress, OfflineRenderer, RenderJob, RenderScope, RenderedFile,
 };
-use crate::render_settings::{default_export_folder, RenderSettings, SettingsProblem};
+use crate::render_settings::{default_export_folder, RenderSettings, SettingsProblem, Timeline};
 use mooloop_project::{AssetMode, AssetWarning, Issue, LoadReport, LoadedDocument, SaveReport};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -562,9 +562,12 @@ pub struct PresetSource {
 }
 
 impl Session {
-    /// What the transport plays, which is what an export renders until a
-    /// range is chosen (MOO-181): exporting the song while the sequencer is
-    /// in pattern mode would render something the user is not listening to.
+    /// What the transport plays, which is what an export's
+    /// [`RenderRange::Transport`] renders: exporting the song while the
+    /// sequencer is in pattern mode would render something the user is not
+    /// listening to.
+    ///
+    /// [`RenderRange::Transport`]: crate::render_settings::RenderRange::Transport
     pub fn export_scope(&self) -> RenderScope {
         if self.song_mode {
             RenderScope::Song
@@ -572,6 +575,24 @@ impl Session {
             RenderScope::Pattern {
                 index: self.current_pattern,
             }
+        }
+    }
+
+    /// The song as an export's range is resolved against (MOO-181): what
+    /// the transport plays, the current pattern, the loop selection and the
+    /// song's length.
+    pub fn export_timeline(&self) -> Timeline {
+        let pattern_steps = self
+            .pattern_lengths
+            .get(self.current_pattern)
+            .copied()
+            .unwrap_or(0);
+        Timeline {
+            transport: self.export_scope(),
+            pattern: self.current_pattern,
+            pattern_ticks: (pattern_steps as u32).saturating_mul(mooloop_core::TICKS_PER_STEP),
+            loop_range: self.loop_range,
+            song_ticks: self.song_length_ticks(),
         }
     }
 
@@ -598,8 +619,9 @@ impl Session {
         swing_percent: i32,
         settings: &RenderSettings,
     ) -> Result<ExportRequest, SettingsProblem> {
+        let scope = settings.range.scope(&self.export_timeline())?;
         let job = settings.job(
-            self.export_scope(),
+            scope,
             self.export_song_name().as_deref(),
             &self.export_default_folder(),
         )?;
@@ -706,6 +728,60 @@ mod tests {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(names, ["first mix.wav"], "nothing but the file is left behind");
+    }
+
+    /// **The loop selection renders exactly its points** (MOO-181), with
+    /// looping switched off, and a range the song cannot hold is said on
+    /// the card before any render.
+    #[test]
+    fn a_loop_selection_renders_exactly_its_points() {
+        use crate::render_settings::RenderRange;
+        use mooloop_core::{LoopRange, PatternPlacement, TICKS_PER_BAR};
+        use mooloop_engine::RenderScope;
+        let folder = tempfile::tempdir().unwrap();
+        let session = Session {
+            playlist: (0..4)
+                .map(|bar| PatternPlacement::new(0, bar * TICKS_PER_BAR))
+                .collect(),
+            pattern_lengths: vec![16],
+            loop_range: LoopRange {
+                start_tick: TICKS_PER_BAR + 96,
+                end_tick: 3 * TICKS_PER_BAR,
+                enabled: false,
+            },
+            ..Session::default()
+        };
+        let mut settings = RenderSettings {
+            range: RenderRange::Loop,
+            tail: TailSettings { max_seconds: 0 },
+            output: OutputSettings {
+                folder: Some(folder.path().to_path_buf()),
+                name: "loop".into(),
+            },
+            ..RenderSettings::default()
+        };
+        let request = session.export_request(120, 0, &settings).unwrap();
+        assert_eq!(
+            request.job.passes[0].scope,
+            RenderScope::Range {
+                start_tick: TICKS_PER_BAR + 96,
+                end_tick: 3 * TICKS_PER_BAR,
+            }
+        );
+        let DocumentResult::Exported { files, .. } =
+            run_export(request, 48_000, &ExportProgress::new(), Default::default())
+        else {
+            panic!("expected Exported");
+        };
+        // 672 ticks at 120 BPM and 48 kHz, 250 frames a tick.
+        assert_eq!(files[0].summary.base_frames, 672 * 250);
+
+        settings.range = RenderRange::Custom {
+            start_tick: 0,
+            end_tick: 5 * TICKS_PER_BAR,
+        };
+        let problem = session.export_request(120, 0, &settings).err().unwrap();
+        assert_eq!(problem.0, "The song ends at 5.1.");
     }
 
     /// A folder that isn't there is said on the card, before any render.

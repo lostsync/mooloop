@@ -5,6 +5,16 @@
 //! Rendering issue adds a field there and a control on the card.
 
 use super::*;
+use mooloop_session::render_settings::{
+    format_bar_beat, parse_bar_beat, RenderRange, SettingsProblem, Timeline,
+};
+use std::cell::Cell;
+
+/// The card's Range choices, by their place in the row (MOO-181).
+const RANGE_SONG: i32 = 0;
+const RANGE_LOOP: i32 = 1;
+const RANGE_CUSTOM: i32 = 2;
+const RANGE_PATTERN: i32 = 3;
 
 /// Wire the export card's callbacks on `window`, as `AppUi::new` does.
 pub(crate) fn wire(
@@ -15,18 +25,53 @@ pub(crate) fn wire(
     question: &Rc<RefCell<Option<Question>>>,
     export_sample_rate: u32,
 ) {
+    // Whether a range has been picked on the card. Until one has, the range
+    // follows the transport each time the card opens: the whole song in
+    // song mode, the current pattern in pattern mode.
+    let range_picked = Rc::new(Cell::new(false));
     {
         let st = Rc::clone(state);
         let weak = window.as_weak();
+        let range_picked = range_picked.clone();
         window.on_export_audio(move || {
             if let Some(window) = weak.upgrade() {
                 // A second export while one renders reopens the one in
                 // flight, with its progress and its Cancel.
                 if window.get_export_phase() != 1 {
                     window.set_export_phase(0);
-                    show_export_defaults(&window, &st.borrow().session);
+                    show_export_defaults(&window, &st.borrow().session, !range_picked.get());
                 }
                 window.set_export_open(true);
+            }
+        });
+    }
+    {
+        let st = Rc::clone(state);
+        let weak = window.as_weak();
+        window.on_export_range_picked(move || {
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
+            range_picked.set(true);
+            let timeline = st.borrow().session.export_timeline();
+            // A custom range starts as the loop selection, which is the
+            // stretch most likely to be wanted; with none, it starts as
+            // whatever the card was showing.
+            if window.get_export_range_index() == RANGE_CUSTOM {
+                if let Some((start, end)) = timeline.loop_span() {
+                    window.set_export_range_from(format_bar_beat(start).into());
+                    window.set_export_range_to(format_bar_beat(end).into());
+                }
+            }
+            show_export_range(&window, &timeline);
+        });
+    }
+    {
+        let st = Rc::clone(state);
+        let weak = window.as_weak();
+        window.on_export_range_edited(move || {
+            if let Some(window) = weak.upgrade() {
+                show_export_range(&window, &st.borrow().session.export_timeline());
             }
         });
     }
@@ -84,7 +129,13 @@ pub(crate) fn wire(
             let Some(window) = weak.upgrade() else {
                 return;
             };
-            let settings = export_settings(&window);
+            let settings = match export_settings(&window) {
+                Ok(settings) => settings,
+                Err(problem) => {
+                    window.set_export_problem(problem.0.into());
+                    return;
+                }
+            };
             // Checked here, with the card still up: a folder that is not
             // there is said on the card rather than after a render.
             let existing = match st.borrow().session.export_request(
@@ -173,11 +224,14 @@ pub(crate) fn wire(
 
 /// What the export card's settings say, as the session's one value
 /// (MOO-180). Folder and name come as typed: empty is the default the card
-/// shows as a placeholder, which the session resolves.
-pub(crate) fn export_settings(window: &MainWindow) -> RenderSettings {
+/// shows as a placeholder, which the session resolves. A custom range that
+/// is not bar.beat is the one thing the value cannot hold, so it is the
+/// problem instead.
+pub(crate) fn export_settings(window: &MainWindow) -> Result<RenderSettings, SettingsProblem> {
     let bitrate = window.get_export_bitrate().clamp(0, MP3_KBPS.len() as i32 - 1) as usize;
     let folder = window.get_export_folder().trim().to_string();
-    RenderSettings {
+    Ok(RenderSettings {
+        range: card_range(window)?,
         format: match window.get_export_format() {
             1 => FileFormat::Wav {
                 depth: WavDepth::Float32,
@@ -197,26 +251,76 @@ pub(crate) fn export_settings(window: &MainWindow) -> RenderSettings {
             name: window.get_export_name().to_string(),
         },
         ..RenderSettings::default()
+    })
+}
+
+/// The range the card's choice names (MOO-181).
+fn card_range(window: &MainWindow) -> Result<RenderRange, SettingsProblem> {
+    Ok(match window.get_export_range_index() {
+        RANGE_SONG => RenderRange::Song,
+        RANGE_LOOP => RenderRange::Loop,
+        RANGE_CUSTOM => {
+            let point = |text: SharedString, which: &str| {
+                parse_bar_beat(&text).ok_or_else(|| {
+                    SettingsProblem(format!("Type the range's {which} as bar.beat, like 3.1."))
+                })
+            };
+            RenderRange::Custom {
+                start_tick: point(window.get_export_range_from(), "start")?,
+                end_tick: point(window.get_export_range_to(), "end")?,
+            }
+        }
+        RANGE_PATTERN => RenderRange::Pattern,
+        _ => RenderRange::Transport,
+    })
+}
+
+/// Show the stretch the card's range covers, as bar.beat -- a custom range
+/// shows what was typed -- and whether it can be rendered. One that cannot
+/// is said on the card, and Export waits for it (MOO-181).
+fn show_export_range(window: &MainWindow, timeline: &Timeline) {
+    let range = card_range(window);
+    if window.get_export_range_index() != RANGE_CUSTOM {
+        if let Some((start, end)) = range.as_ref().ok().and_then(|range| range.span(timeline)) {
+            window.set_export_range_from(format_bar_beat(start).into());
+            window.set_export_range_to(format_bar_beat(end).into());
+        }
     }
+    let checked = range.and_then(|range| range.scope(timeline));
+    window.set_export_range_ok(checked.is_ok());
+    window.set_export_problem(checked.err().map(|problem| problem.0).unwrap_or_default().into());
 }
 
 /// The export card's defaults for the song as it is now: the folder and
-/// name an empty field stands for, and the range the transport plays.
-pub(crate) fn show_export_defaults(window: &MainWindow, session: &Session) {
+/// name an empty field stands for, and the range. The range follows the
+/// transport until one is picked (`follow_transport`); a picked one the
+/// song no longer holds -- a loop selection since cleared, a custom range
+/// past a shortened song -- is the whole song again.
+pub(crate) fn show_export_defaults(window: &MainWindow, session: &Session, follow_transport: bool) {
     let defaults = RenderSettings::default();
     let song = session.export_song_name();
     window.set_export_default_folder(session.export_default_folder().display().to_string().into());
     window.set_export_default_name(defaults.stem(song.as_deref()).unwrap_or_default().into());
-    window.set_export_range_text(
-        match session.export_scope() {
-            RenderScope::Song => "The whole song, as the transport plays it".to_string(),
-            RenderScope::Pattern { index } => {
-                format!("Pattern {}, as the transport plays it", index + 1)
-            }
+
+    let timeline = session.export_timeline();
+    let loop_available = timeline.loop_span().is_some();
+    window.set_export_loop_available(loop_available);
+    window.set_export_pattern_label(format!("Pattern {}", timeline.pattern + 1).into());
+    let index = if follow_transport {
+        match timeline.transport {
+            RenderScope::Pattern { .. } => RANGE_PATTERN,
+            _ => RANGE_SONG,
         }
-        .into(),
-    );
-    window.set_export_problem("".into());
+    } else {
+        match (window.get_export_range_index(), card_range(window)) {
+            (RANGE_LOOP, _) if !loop_available => RANGE_SONG,
+            (RANGE_CUSTOM, Ok(range)) if range.loaded(&timeline) != range => RANGE_SONG,
+            (RANGE_CUSTOM, Err(_)) => RANGE_SONG,
+            (index, _) => index,
+        }
+    };
+    window.set_export_range_index(index);
+    show_export_range(window, &timeline);
 }
 
 #[cfg(test)]
@@ -326,14 +430,140 @@ mod tests {
             Session::default().export_default_folder().display().to_string()
         );
         assert_eq!(card.window.get_export_default_name(), "mooloop-export");
-        assert!(
-            card.window.get_export_range_text().ends_with("as the transport plays it"),
-            "{}",
-            card.window.get_export_range_text()
-        );
-        let settings = export_settings(&card.window);
+        let settings = export_settings(&card.window).unwrap();
         assert_eq!(settings.output.folder, None);
         assert_eq!(settings.output.name, "");
         assert_eq!(settings.tail.max_seconds, 0);
+    }
+
+    /// The window and its session, for the range tests, which set up the
+    /// song before the card opens.
+    fn card_on(session: impl FnOnce(&mut Session)) -> (Card, Rc<RefCell<UiState>>) {
+        install_backend();
+        let window = MainWindow::new().expect("the testing backend builds a window");
+        let state = Rc::new(RefCell::new(UiState::new(None, RATE, &window)));
+        session(&mut state.borrow_mut().session);
+        let (tx, results) = channel();
+        let progress = Rc::new(RefCell::new(None));
+        let question = Rc::new(RefCell::new(None));
+        wire(&window, &state, &tx, &progress, &question, RATE);
+        window.invoke_export_audio();
+        window.set_export_tail_seconds(0);
+        (
+            Card {
+                window,
+                question,
+                results,
+            },
+            state,
+        )
+    }
+
+    fn four_bars_looping_two(session: &mut Session) {
+        use mooloop_core::{LoopRange, PatternPlacement, TICKS_PER_BAR};
+        session.song_mode = true;
+        session.current_pattern = 0;
+        session.pattern_lengths[0] = 16;
+        session.playlist = (0..4)
+            .map(|bar| PatternPlacement::new(0, bar * TICKS_PER_BAR))
+            .collect();
+        session.loop_range = LoopRange {
+            start_tick: TICKS_PER_BAR,
+            end_tick: 3 * TICKS_PER_BAR,
+            enabled: false,
+        };
+    }
+
+    /// **The range follows the transport until one is picked, and a custom
+    /// one starts as the loop selection** (MOO-181).
+    #[test]
+    fn the_range_follows_the_transport_and_custom_starts_as_the_loop() {
+        let (card, state) = card_on(four_bars_looping_two);
+        let window = &card.window;
+        assert_eq!(window.get_export_range_index(), RANGE_SONG);
+        assert!(window.get_export_loop_available());
+        assert_eq!(window.get_export_range_from(), "1.1");
+        assert_eq!(window.get_export_range_to(), "5.1");
+
+        // Pattern mode, and the card opened again, before anything is
+        // picked: the current pattern.
+        state.borrow_mut().session.song_mode = false;
+        window.invoke_export_audio();
+        assert_eq!(window.get_export_range_index(), RANGE_PATTERN);
+        assert_eq!(window.get_export_pattern_label(), "Pattern 1");
+
+        window.set_export_range_index(RANGE_CUSTOM);
+        window.invoke_export_range_picked();
+        assert_eq!(window.get_export_range_from(), "2.1");
+        assert_eq!(window.get_export_range_to(), "4.1");
+        assert!(window.get_export_range_ok());
+        let settings = export_settings(window).unwrap();
+        assert_eq!(
+            settings.range,
+            RenderRange::Custom {
+                start_tick: mooloop_core::TICKS_PER_BAR,
+                end_tick: 3 * mooloop_core::TICKS_PER_BAR,
+            }
+        );
+        // Picked, so it stays picked when the card opens again.
+        window.invoke_export_audio();
+        assert_eq!(window.get_export_range_index(), RANGE_CUSTOM);
+    }
+
+    /// **A custom range that ends at or before its start cannot be
+    /// confirmed** (MOO-181): the card says why, Export waits, and nothing
+    /// renders even if confirm is reached another way.
+    #[test]
+    fn a_backwards_custom_range_cannot_be_confirmed() {
+        let (card, _state) = card_on(four_bars_looping_two);
+        let folder = tempfile::tempdir().unwrap();
+        let window = &card.window;
+        window.set_export_folder(folder.path().display().to_string().into());
+        window.set_export_range_index(RANGE_CUSTOM);
+        window.invoke_export_range_picked();
+        for (from, to, problem) in [
+            ("3.1", "3.1", "The range must end after it starts."),
+            ("3.1", "2.3", "The range must end after it starts."),
+            ("3.1", "6.1", "The song ends at 5.1."),
+            ("3.1", "later", "Type the range's end as bar.beat, like 3.1."),
+        ] {
+            window.set_export_range_from(from.into());
+            window.set_export_range_to(to.into());
+            window.invoke_export_range_edited();
+            assert!(!window.get_export_range_ok(), "{from} to {to}");
+            assert_eq!(window.get_export_problem(), problem);
+            window.invoke_export_confirmed();
+            assert_eq!(window.get_export_phase(), 0, "{from} to {to} started a render");
+            assert!(card.results.try_recv().is_err());
+        }
+        window.set_export_range_to("4.1".into());
+        window.invoke_export_range_edited();
+        // The export takes its tempo from the window, as the app does.
+        window.set_bpm(120);
+        assert!(window.get_export_range_ok());
+        assert_eq!(window.get_export_problem(), "");
+        window.invoke_export_confirmed();
+        let written = exported(&card);
+        let reader = hound::WavReader::open(&written[0]).unwrap();
+        // One bar at 120 BPM and 48 kHz.
+        assert_eq!(reader.duration(), 96_000);
+    }
+
+    /// The loop choice is unavailable while the song has no loop selection,
+    /// and a picked one that has gone opens as the whole song.
+    #[test]
+    fn the_loop_choice_needs_a_loop_selection() {
+        let (card, state) = card_on(four_bars_looping_two);
+        let window = &card.window;
+        window.set_export_range_index(RANGE_LOOP);
+        window.invoke_export_range_picked();
+        assert_eq!(window.get_export_range_from(), "2.1");
+        assert_eq!(window.get_export_range_to(), "4.1");
+
+        state.borrow_mut().session.loop_range = mooloop_core::LoopRange::default();
+        window.invoke_export_audio();
+        assert!(!window.get_export_loop_available());
+        assert_eq!(window.get_export_range_index(), RANGE_SONG);
+        assert!(window.get_export_range_ok());
     }
 }

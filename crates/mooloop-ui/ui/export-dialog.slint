@@ -1,6 +1,6 @@
 import { LineEdit, SpinBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { SectionLabel, SegmentedControl, SelectorBank } from "controls.slint";
+import { SectionLabel, SegmentedControl, SelectorBank, ToolButton } from "controls.slint";
 
 // One of the dialog's buttons. `primary` is the accent-filled one.
 component DialogButton inherits Rectangle {
@@ -57,16 +57,46 @@ component Fixed inherits Text {
     overflow: elide;
 }
 
+// The Range choice: SegmentedControl's look, with one segment that can be
+// unavailable -- the loop selection, when the song has none (MOO-181).
+component RangeChoice inherits Rectangle {
+    in property <[string]> options;
+    in property <int> selected-index;
+    in property <int> unavailable-index: -1;
+    in property <string> hint;
+    callback selected(int);
+
+    min-height: 26px;
+    background: Theme.surface;
+    border-radius: Theme.radius-md;
+    border-width: Theme.hairline;
+    border-color: Theme.border;
+
+    HorizontalLayout {
+        spacing: 1px;
+        for option[i] in root.options : ToolButton {
+            text: option;
+            hint: root.hint;
+            active: root.selected-index == i;
+            enabled: i != root.unavailable-index;
+            horizontal-stretch: 1;
+            accessible-checkable: true;
+            accessible-checked: root.selected-index == i;
+            clicked => { root.selected(i); }
+        }
+    }
+}
+
 // The export dialog, in three phases on one card: the settings, the render
 // with its progress and a Cancel, and what the render found (MOO-125). The
 // card stays up for all three, so a render is never something that happens
 // behind a closed dialog with only the status bar to say it finished.
 //
 // The settings are five sections -- Source, Range, Format, Tail, Output --
-// each a row group under one label column (MOO-180). Source and Range have
-// one answer each today and say it; stems and channels (MOO-182, 183) grow
-// Source, the range choice (MOO-181) grows Range, and the delivery formats
-// (MOO-186) grow Format. Output is on the card itself: a folder and a name,
+// each a row group under one label column (MOO-180). Source has one answer
+// today and says it; stems and channels (MOO-182, 183) grow it, and the
+// delivery formats (MOO-186) grow Format. Range is a choice of four, with
+// the stretch it covers shown as bar.beat underneath (MOO-181). Output is on the card itself: a folder and a name,
 // with no save-file chooser, because one render can write several files.
 export component ExportDialog inherits Rectangle {
     in-out property <bool> open;
@@ -77,9 +107,19 @@ export component ExportDialog inherits Rectangle {
     // The most tail there may be. The render stops as soon as every device
     // has fallen silent, so this is a cap rather than a length.
     in-out property <int> tail-seconds: 10;
-    // What is rendered, and which stretch of it, in words.
+    // What is rendered, in words.
     in property <string> source-text: "Master mix";
-    in property <string> range-text;
+    // Which stretch of it (MOO-181): 0 the whole song, 1 the loop
+    // selection, 2 a custom range, 3 the current pattern. `range-from` and
+    // `range-to` show the stretch as bar.beat, and are typed only for a
+    // custom range; Rust fills them for the others.
+    in-out property <int> range-index;
+    in-out property <string> range-from;
+    in-out property <string> range-to;
+    in property <bool> loop-available;
+    in property <string> pattern-label: "Pattern";
+    // The range can be rendered; Export waits for it.
+    in property <bool> range-ok: true;
     // The folder typed or browsed to. Empty is `default-folder`, shown as
     // the field's placeholder: the song's own folder, or the music folder
     // for a song never saved.
@@ -99,6 +139,10 @@ export component ExportDialog inherits Rectangle {
     in property <string> result-title;
     in property <string> result-detail;
     callback accepted;
+    // A range was picked, or a custom one typed: Rust fills the fields and
+    // says whether the range can be rendered.
+    callback range-picked;
+    callback range-edited;
     callback browse-folder;
     callback cancelled;
     callback cancel-render;
@@ -111,7 +155,7 @@ export component ExportDialog inherits Rectangle {
     TouchArea { }
     Rectangle {
         width: min(parent.width - 32px, 460px);
-        height: root.phase == 0 ? 392px : root.phase == 2 ? 250px : 180px;
+        height: root.phase == 0 ? 424px : root.phase == 2 ? 250px : 180px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Theme.surface;
@@ -128,7 +172,50 @@ export component ExportDialog inherits Rectangle {
             }
             Section {
                 label: "RANGE";
-                Fixed { text: root.range-text; }
+                RangeChoice {
+                    options: ["Whole song", "Loop", "Custom", root.pattern-label];
+                    hint: "What is rendered. A note that starts before the range is not played, as when playing from a locate";
+                    selected-index: root.range-index;
+                    unavailable-index: root.loop-available ? -1 : 1;
+                    selected(index) => {
+                        root.range-index = index;
+                        root.range-picked();
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: "from";
+                        color: Theme.text-muted;
+                        font-size: Theme.text-md;
+                        vertical-alignment: center;
+                    }
+                    LineEdit {
+                        width: 80px;
+                        text <=> root.range-from;
+                        enabled: root.range-index == 2;
+                        edited => { root.range-edited(); }
+                    }
+                    Text {
+                        text: "to";
+                        color: Theme.text-muted;
+                        font-size: Theme.text-md;
+                        vertical-alignment: center;
+                    }
+                    LineEdit {
+                        width: 80px;
+                        text <=> root.range-to;
+                        enabled: root.range-index == 2;
+                        edited => { root.range-edited(); }
+                    }
+                    Text {
+                        text: "bar.beat";
+                        color: Theme.text-faint;
+                        font-size: Theme.text-md;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                }
             }
             Section {
                 label: "FORMAT";
@@ -218,7 +305,7 @@ export component ExportDialog inherits Rectangle {
                 DialogButton {
                     label: "Export";
                     primary: true;
-                    enabled: !root.browsing;
+                    enabled: !root.browsing && root.range-ok;
                     clicked => { root.accepted(); }
                 }
             }
