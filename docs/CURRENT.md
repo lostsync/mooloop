@@ -2109,6 +2109,8 @@ land on its own when it starts to matter:
   the middle. Volume is one-pole smoothed over 5 ms like the device's other
   levels, so modulating it (a kick-gated envelope pumping a pad) or dragging
   it glides instead of stepping once per 32-frame control tick (MOO-214).
+  Pan and Spread are smoothed the same way, so a route sweeping the device's
+  Pan no longer steps both channels' gains every tick (MOO-221).
 - The ML-P8 allocates its eight physical voices as *groups*. Unison at 1x, 2x,
   4x and 8x spends the pool rather than growing it, leaving 8, 4, 2 and 1 notes
   of polyphony; a note allocates a complete group and steals complete older

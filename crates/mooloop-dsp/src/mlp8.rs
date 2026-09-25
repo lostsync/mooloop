@@ -1334,10 +1334,12 @@ impl Voice {
     /// Resolve Drift, Detune, and Spread into the three per-voice multipliers
     /// the sample loop reads.
     ///
-    /// Once per render range rather than per sample. All three are patch
-    /// controls that an automation lane can sweep, and none of them is a
-    /// modulation destination — so a range boundary is the finest they can
-    /// change, and paying for them per sample would buy nothing.
+    /// Once per render range rather than per sample. Drift and Detune are
+    /// patch controls that an automation lane can sweep, and neither is a
+    /// voice modulation destination, so a range boundary is the finest they
+    /// can change. Spread and Pan arrive here already smoothed and are
+    /// re-placed a sample at a time while they move (MOO-221): a route on the
+    /// device's Pan changes it every control tick, and a step there is heard.
     fn refresh_character(&mut self, drift: f32, detune: f32, spread: f32, pan: f32) {
         // Squared magnitude, like every other depth on this device, so the
         // low half of the knob is the fine beating rather than a rounding
@@ -1349,6 +1351,14 @@ impl Voice {
             ((detune_cents + voice_cents + osc_cents) / 1200.0).exp2()
         });
         self.cutoff_scale = (drift * self.drift.cutoff * DRIFT_CUTOFF_OCTAVES).exp2();
+        self.place(spread, pan);
+    }
+
+    /// Resolve the device's Pan and Spread into this voice's position and
+    /// its pair of gains. Once a range from `refresh_character`, and once a
+    /// sample while either smoother is still moving (MOO-221).
+    #[inline]
+    fn place(&mut self, spread: f32, pan: f32) {
         // Spread widens *around* where the patch put the device, so a patch
         // that sits left stays left when it spreads. Clamped because the two
         // together can reach past the field.
@@ -1689,6 +1699,14 @@ pub struct MlP8 {
     /// One per device, advanced once a frame whether or not a voice is
     /// sounding, and it starts at the patch's value so nothing fades in.
     master_volume: Smoothed,
+    /// The device's Pan and Spread, smoothed for the same reason (MOO-221):
+    /// they were resolved into every voice's gains once a range, so a route
+    /// on Pan stepped both channels every control tick. While either moves,
+    /// each sounding voice's gains are re-resolved a sample at a time; once
+    /// both have settled, the voices read the pair cached once a range, as
+    /// they did before, bit for bit.
+    master_pan: Smoothed,
+    spread: Smoothed,
 }
 
 impl MlP8 {
@@ -1712,6 +1730,12 @@ impl MlP8 {
                 PARAM_SMOOTH_S,
                 sample_rate,
             ),
+            master_pan: Smoothed::new(
+                params.master_pan.clamp(-1.0, 1.0),
+                PARAM_SMOOTH_S,
+                sample_rate,
+            ),
+            spread: Smoothed::new(params.spread.clamp(0.0, 1.0), PARAM_SMOOTH_S, sample_rate),
         };
         synth.routes.compile(&synth.params.routes);
         synth.apply_params_to_voices();
@@ -1819,6 +1843,9 @@ impl MlP8 {
         self.chorus.reset(self.params.chorus, self.sample_rate);
         let volume = self.params.master_volume.clamp(0.0, 1.0);
         self.master_volume.reset_to(volume);
+        self.master_pan
+            .reset_to(self.params.master_pan.clamp(-1.0, 1.0));
+        self.spread.reset_to(self.params.spread.clamp(0.0, 1.0));
         self.routes.compile(&self.params.routes);
         self.apply_params_to_voices();
     }
@@ -2095,6 +2122,8 @@ impl MlP8 {
             chorus,
             bend,
             master_volume: volume,
+            master_pan,
+            spread,
             ..
         } = self;
         let params = *params;
@@ -2110,6 +2139,11 @@ impl MlP8 {
         // returns its target exactly, so an unmoving Volume renders what the
         // raw read did, bit for bit.
         volume.set_target(params.master_volume.clamp(0.0, 1.0));
+        // Pan and Spread likewise (MOO-221). The range's cached gains are
+        // resolved from where the smoothers stand now, which is the target
+        // once they have settled.
+        master_pan.set_target(params.master_pan.clamp(-1.0, 1.0));
+        spread.set_target(params.spread.clamp(0.0, 1.0));
         // With the chorus off the voices go straight onto the channel bus and
         // the finisher costs nothing at all — not a copy, not a delay line
         // write, not a branch in the sample loop. That is what "OFF is a true
@@ -2145,8 +2179,8 @@ impl MlP8 {
             voice.refresh_character(
                 params.drift.clamp(0.0, 1.0),
                 params.detune.clamp(0.0, 1.0),
-                params.spread.clamp(0.0, 1.0),
-                params.master_pan.clamp(-1.0, 1.0),
+                spread.value(),
+                master_pan.value(),
             );
         }
 
@@ -2157,10 +2191,21 @@ impl MlP8 {
             // note left it.
             let lfo_value = lfo.next_sample(&params.lfo, bpm, sr);
             let master_volume = volume.advance();
+            // One branch a sample while both rest; a voice re-resolves its
+            // gains only while one of them is moving.
+            let placing = !(master_pan.is_settled() && spread.is_settled());
+            let (pan_now, spread_now) = if placing {
+                (master_pan.advance(), spread.advance())
+            } else {
+                (0.0, 0.0)
+            };
 
             for voice in voices.iter_mut() {
                 if !voice.active {
                     continue;
+                }
+                if placing {
+                    voice.place(spread_now, pan_now);
                 }
                 voice.env.advance();
                 voice.filter_env.advance();
@@ -2643,6 +2688,16 @@ impl AudioNode for MlP8 {
                 break;
             }
             self.master_volume.advance();
+        }
+        self.master_pan
+            .set_target(self.params.master_pan.clamp(-1.0, 1.0));
+        self.spread.set_target(self.params.spread.clamp(0.0, 1.0));
+        for _ in 0..ctx.frames {
+            if self.master_pan.is_settled() && self.spread.is_settled() {
+                break;
+            }
+            self.master_pan.advance();
+            self.spread.advance();
         }
     }
 
@@ -4647,6 +4702,106 @@ mod tests {
         assert!(
             tail.iter().all(|s| s.abs() < 1.0e-4),
             "Volume 0 still sounded"
+        );
+    }
+
+    /// The device's Pan under a modulation route glides the way its Volume
+    /// does (MOO-221). A route reaches the device as one `ParamValue` per
+    /// 32-frame control tick, so a Pan resolved once a range is a staircase
+    /// with a step every tick. Pan is ramped from hard left to hard right
+    /// over 200 ms in those ticks, and each channel is held against the same
+    /// note left at the centre, sample by sample, wherever the reference is
+    /// loud enough for the ratio to mean something. No sample's gain may move
+    /// by more than a few times the ramp's own steepest slope.
+    #[test]
+    fn a_modulated_pan_glides_rather_than_stepping_at_the_control_rate() {
+        const BLOCK: usize = 512;
+        const TICK: usize = 32;
+        const RAMP_START: usize = 4 * BLOCK;
+        const RAMP_FRAMES: usize = 9_600; // 200 ms at 48 kHz
+        const TOTAL: usize = 32 * BLOCK;
+        let params = sine_bed();
+
+        let run = |ramped: bool| -> (Vec<f32>, Vec<f32>) {
+            let mut synth = MlP8::new(params, SR);
+            let (mut l, mut r) = (Vec::with_capacity(TOTAL), Vec::with_capacity(TOTAL));
+            for block in 0..TOTAL / BLOCK {
+                let mut events = EventList::empty();
+                if block == 0 {
+                    events.push(note_on(0, 1, 60));
+                }
+                if ramped {
+                    for tick in (0..BLOCK).step_by(TICK) {
+                        let frame = block * BLOCK + tick;
+                        let t = frame.saturating_sub(RAMP_START) as f32 / RAMP_FRAMES as f32;
+                        // Plain units, as the engine sends them: -1 is hard
+                        // left. The route holds hard left, then sweeps.
+                        let value = (2.0 * t - 1.0).clamp(-1.0, 1.0);
+                        events.push(TimedEvent {
+                            offset: tick as u32,
+                            event: Event::ParamValue {
+                                id: mooloop_core::mlp8::PARAM_MASTER_PAN,
+                                value,
+                            },
+                        });
+                    }
+                }
+                let mut bus = StereoBus::with_capacity(BLOCK);
+                synth.process(&ctx(BLOCK), &mut bus, &events, None);
+                l.extend_from_slice(&bus.l[..BLOCK]);
+                r.extend_from_slice(&bus.r[..BLOCK]);
+            }
+            (l, r)
+        };
+        let (centre_l, centre_r) = run(false);
+        let (panned_l, panned_r) = run(true);
+
+        // `pan_gains` is cos/sin of (pan + 1) * pi/4. Against the centre's
+        // gain its steepest slope is (pi/4) / cos(pi/4) per unit of pan, and
+        // the ramp covers two units of pan.
+        let slope = std::f32::consts::FRAC_PI_4 / std::f32::consts::FRAC_1_SQRT_2 * 2.0
+            / RAMP_FRAMES as f32;
+        for (side, reference, panned) in [
+            ("left", &centre_l, &panned_l),
+            ("right", &centre_r, &panned_r),
+        ] {
+            let peak = reference[RAMP_START..]
+                .iter()
+                .fold(0.0_f32, |a, s| a.max(s.abs()));
+            assert!(peak > 0.05, "the bed was silent");
+            let floor = peak * 0.2;
+            let mut worst = 0.0_f32;
+            let mut previous: Option<f32> = None;
+            let mut measured = 0;
+            for frame in RAMP_START - BLOCK..RAMP_START + RAMP_FRAMES {
+                if reference[frame].abs() < floor {
+                    previous = None;
+                    continue;
+                }
+                let gain = panned[frame] / reference[frame];
+                if let Some(last) = previous {
+                    worst = worst.max((gain - last).abs());
+                    measured += 1;
+                }
+                previous = Some(gain);
+            }
+            assert!(measured > RAMP_FRAMES / 4, "only {measured} pairs measured");
+            assert!(
+                worst < slope * 4.0,
+                "the {side} gain stepped by {worst} in one sample; \
+                 the ramp moves at most {slope} a sample"
+            );
+        }
+        // And it arrives: hard right, a few smoother time constants after the
+        // ramp has ended.
+        let tail = RAMP_START + RAMP_FRAMES + 8 * BLOCK..TOTAL;
+        assert!(
+            panned_l[tail.clone()].iter().all(|s| s.abs() < 1.0e-4),
+            "hard right still sounded on the left"
+        );
+        assert!(
+            panned_r[tail].iter().any(|s| s.abs() > 0.05),
+            "hard right was silent on the right"
         );
     }
 

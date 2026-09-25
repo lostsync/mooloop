@@ -25,6 +25,13 @@
 //! Measured 2026-09-24: the loudest zipper line sits 67 dB under its tone
 //! with Volume read raw, and 100 dB under it smoothed. Unpumped, the floor
 //! there is about 155 dB down.
+//!
+//! MOO-221 added a third render, `pan.wav`: the same chord with the LFO on
+//! the device's Pan instead, at full depth, so it sweeps from side to side
+//! twice a second. Pan was resolved once a range just as Volume was, so each
+//! channel's gain stepped every control tick. Its zipper lines are read the
+//! same way, on the left channel. Measured 2026-09-25: 65 dB under its tone
+//! resolved once a range, 98 dB under it smoothed.
 
 use std::path::{Path, PathBuf};
 
@@ -44,7 +51,15 @@ const CHORD: [u8; 3] = [57, 60, 64];
 /// `CONTROL_RATE_FRAMES` (32) frames.
 const ZIPPER_HZ: f32 = SAMPLE_RATE as f32 / 32.0;
 
-fn song(pumped: bool) -> Project {
+/// What the LFO drives, if anything.
+#[derive(Clone, Copy, PartialEq)]
+enum Pump {
+    None,
+    Volume,
+    Pan,
+}
+
+fn song(pump: Pump) -> Project {
     let mut params = MlP8Params::default();
     params.osc[0].wave = OscWave::Sine;
     params.attack = 0.005;
@@ -56,7 +71,7 @@ fn song(pumped: bool) -> Project {
         pad.notes[0].push(NoteEvent::new(n as u32 + 1, 0, BARS * 16 * STEP, pitch, 110));
     }
     pad.setup.channel.volume = 1.0;
-    if pumped {
+    if pump != Pump::None {
         let rack = &mut pad.setup.modulation;
         rack.install(
             0,
@@ -75,12 +90,18 @@ fn song(pumped: bool) -> Project {
             destination: ParamAddr {
                 scope: EffectTarget::Channel(0),
                 owner: ParamOwner::Source,
-                param: mooloop_core::mlp8::PARAM_MASTER_VOLUME,
+                param: if pump == Pump::Pan {
+                    mooloop_core::mlp8::PARAM_MASTER_PAN
+                } else {
+                    mooloop_core::mlp8::PARAM_MASTER_VOLUME
+                },
             },
-            depth: -0.4,
+            // Pan's range is two units wide, so 0.5 of it swings the chord
+            // from hard left to hard right.
+            depth: if pump == Pump::Pan { 0.5 } else { -0.4 },
             polarity: ModPolarity::Bipolar,
         })
-        .expect("Volume is a legal destination");
+        .expect("Volume and Pan are legal destinations");
     }
     Project {
         bpm: 120,
@@ -132,12 +153,14 @@ fn main() {
     );
     std::fs::create_dir_all(&dir).expect("the output directory");
 
-    let pumped = save_and_reopen(&song(true), &dir.join("mlp8-volume-pump.mooloop"));
+    let pumped = save_and_reopen(&song(Pump::Volume), &dir.join("mlp8-volume-pump.mooloop"));
     println!("saved and reopened the song with nothing repaired");
-    let steady = save_and_reopen(&song(false), &dir.join("mlp8-steady.mooloop"));
+    let steady = save_and_reopen(&song(Pump::None), &dir.join("mlp8-steady.mooloop"));
+    let swept = save_and_reopen(&song(Pump::Pan), &dir.join("mlp8-pan-sweep.mooloop"));
 
     let pump = render(&pumped, &dir.join("pump.wav"));
     let still = render(&steady, &dir.join("steady.wav"));
+    let pan = render(&swept, &dir.join("pan.wav"));
     // Skip the first half second: the attack, and the LFO's first cycle.
     let settle = SAMPLE_RATE as usize / 2;
     let measure = |signal: &[f32], hz: f32| {
@@ -157,16 +180,20 @@ fn main() {
         loudest
     };
     let mut worst = f32::NEG_INFINITY;
+    let mut worst_pan = f32::NEG_INFINITY;
     for pitch in CHORD {
         let hz = 440.0 * 2.0_f32.powf((f32::from(pitch) - 69.0) / 12.0);
         let level = db(lines(&pump, hz) / measure(&pump, hz));
+        let panned = db(lines(&pan, hz) / measure(&pan, hz));
         let floor = db(lines(&still, hz) / measure(&still, hz));
         println!(
             "{hz:7.1} Hz tone: its loudest zipper line is {level:7.1} dB under it pumped, \
-             {floor:7.1} dB unpumped"
+             {panned:7.1} dB with Pan swept, {floor:7.1} dB unpumped"
         );
         worst = worst.max(level);
+        worst_pan = worst_pan.max(panned);
     }
+    println!("with Pan swept, the loudest zipper sideband is {worst_pan:.1} dB under its tone");
     let peak = |s: &[f32]| s.iter().fold(0.0_f32, |p, x| p.max(x.abs()));
     println!(
         "pump peak {:.2} dBFS, steady peak {:.2} dBFS; the loudest zipper sideband is {worst:.1} dB \
