@@ -11,6 +11,11 @@ code; when you want to change something, hand it to the team that owns it.
 Read `AGENTS.md` and `docs/TEAMS.md` before routing anything. `docs/TEAMS.md`
 is the ownership map; this file only says how to use it.
 
+Before routing, list the issues carrying the `Answer` label and acknowledge
+each one as `AGENTS.md` describes (*Questions for Adam*): a comment with the
+ruling, `Answer` removed, and the issue moved to `Todo` if nothing blocks it.
+Those issues are ready for routing now.
+
 ## The team agents
 
 | Linear `Team` label | Agent |

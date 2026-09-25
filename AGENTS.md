@@ -92,13 +92,14 @@ fix in the tree, and two review runs in a row rediscovered its four open edges
 that fixed it, and that commit's message cites the issue. A closed issue with
 no commit is a claim to verify, not a fact to rely on.
 
-### Questions for Adam: the `Question` label
+### Questions for Adam: the `Q&A` labels
 
 When something needs a decision only Adam can make -- a taste call, a product
 call, a trade-off the tree cannot settle, a mock-up only he can draw -- or a
 check only he can make -- a listening pass, hardware no agent can reach --
 **ask it on an issue and add the `Question` label.** That label is how he finds
-questions. One recorded anywhere else -- a plan's open-questions section,
+questions. It belongs to the single-select `Q&A` group, whose other label is
+`Answer`: when Adam answers, he swaps `Question` for `Answer`. One recorded anywhere else -- a plan's open-questions section,
 `LOOSE_ENDS.md`, a report, the journal, a handoff message -- is one he does
 not know exists. Do not rely on assigning the issue or @-mentioning him
 instead: Claude Code reaches Linear through his own account, and Linear does
@@ -114,10 +115,18 @@ not notify anyone of their own actions.
   rather than restating it.
 - Do not stop for the answer. Carry on with whatever does not depend on it,
   and name the issue in your handoff.
-- When he answers, write the ruling into the document it governs, dated and
-  in his words as the tree already does, act on it, and **remove the label**.
-  `Question` means *waiting on Adam* and nothing else, so it comes off the
-  moment that stops being true.
+- **Look for `Answer` at the start of a session**, as well as when he says he
+  has answered something. For each issue carrying it: read his reply (the
+  newest comments), acknowledge it in a comment that restates the ruling and
+  what happens next, **remove `Answer`**, and move the issue along. If
+  nothing it is `blockedBy` is still open, that means `Backlog` to `Todo`, or
+  back to whatever state the question paused. If a blocker is still open, it
+  stays where it is and the comment names the blocker. `Answer` means
+  *answered, not yet acknowledged* and nothing else.
+- Write the ruling into the document it governs, dated and in his words as
+  the tree already does, in the change that acts on it.
+- An answer that asks something back, or does not settle the question, gets
+  a follow-up comment and goes back to `Question`.
 
 ### Unconfirmed bugs: the `Triage` label
 
@@ -157,7 +166,7 @@ that affect the decision at hand.
 | Open-ended priority or scope choice | `docs/FOCUS.md` and `docs/SCOPE.md` |
 | What is left before the feature freeze, and how big it is | `docs/SCOPE.md` |
 | Which plans are live, and what state each is in | The projects in Linear; `docs/plans/README.md` for how each got there |
-| Whether a defect is already known, or what is waiting on Adam | Linear: search the `MOO` team, and the `Question` label |
+| Whether a defect is already known, or what is waiting on Adam | Linear: search the `MOO` team, and the `Question` and `Answer` labels |
 | Broad existing user surface or known gap | `docs/CURRENT.md` |
 | A small known gap you are about to rediscover | Linear first, then `docs/LOOSE_ENDS.md` for the gaps recorded before it |
 | Which team owns a file, a finding, or a Linear issue | `docs/TEAMS.md` |

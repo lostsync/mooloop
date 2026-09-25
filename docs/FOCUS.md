@@ -4,9 +4,10 @@ Status: **the overnight sequence and a first performance pass are done
 (2026-09-25); the next sequence is Adam's call.** The Linear project
 **Performance** holds what was fixed and what is left: MOO-264 (the rest of an
 ML-P8 voice), MOO-254 (Reverb), and the repaint cost while playing (MOO-258,
-upstream Slint). Three decisions wait on Adam: raising the release CPU baseline
-to x86-64-v2 (MOO-263), whether to patch or report Slint's FemtoVG clip and
-ellipsis costs (MOO-256, MOO-258), and MOO-227's effect-preset audition.
+upstream Slint), plus MOO-263. Adam ruled on MOO-263 on 2026-09-25: *"we can
+do v2, totally"*, so Linux release builds move to x86-64-v2. Two decisions still
+wait on Adam: whether to patch or report Slint's FemtoVG clip and ellipsis
+costs (MOO-256, MOO-258), and MOO-227's effect-preset audition.
 Nothing from either push has been heard. `JOURNAL.md` has the record.
 
 `archive/ROADMAP.md` orders the whole product by dependency, and `SCOPE.md`
@@ -156,7 +157,8 @@ question (MOO-159).
 
 ## Waiting on Adam, not on work
 
-The `Question` label in Linear is the complete list, and after 2026-09-23 it
+The `Question` label in Linear is the complete list (an `Answer` label marks
+one he has answered that nobody has acknowledged yet), and after 2026-09-23 it
 is short:
 
 - **Relief beyond the first controls** (MOO-153). `d3c90211` shipped the
