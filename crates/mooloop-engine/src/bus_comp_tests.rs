@@ -74,18 +74,13 @@ fn with_section(mut project: Project, section: MasterSectionParams) -> Project {
     project
 }
 
-/// The most a host at full wet leaks of its dry copy: the equal-power law's
-/// `cos(pi/2)`, which in `f32` is -4.4e-8 rather than zero (MOO-226). Two
-/// renders of the same compressor may differ by that times the dry signal,
-/// about -147 dB under it, and by nothing else.
-const FULL_WET_LEAK: f32 = 1e-7;
-
 /// **An insert at the end of the master's chain is the master's section.**
 /// The section runs after the master's inserts and before its fader, so a
 /// Bus Comp in the last slot runs at the same point in the signal, and with
 /// the host at full wet and unity trims the two renders are the same under
-/// every voicing, to within the host's full-wet leak. Rendered with the
-/// safety limiter off, so it is the mix being compared and not the limiter.
+/// every voicing, sample for sample: the host at full wet is its device
+/// exactly since MOO-226. Rendered with the safety limiter off, so it is the
+/// mix being compared and not the limiter.
 #[test]
 fn a_bus_comp_last_on_the_masters_chain_is_the_masters_section() {
     let dry = render_mix(&drum_bus(), 2.0);
@@ -97,28 +92,30 @@ fn a_bus_comp_last_on_the_masters_chain_is_the_masters_section() {
             worst_difference(&insert.0, &dry.0) > 1e-3,
             "{voicing:?} did not compress, so this proves nothing"
         );
-        let worst = worst_difference(&insert.0, &section.0)
-            .max(worst_difference(&insert.1, &section.1));
-        println!("{voicing:?}: master-chain insert against master section, worst {worst:e}");
-        assert!(worst < FULL_WET_LEAK, "{voicing:?}: the insert and the section differ by {worst}");
+        assert!(
+            insert == section,
+            "{voicing:?}: the insert and the section differ, by up to {:e}",
+            worst_difference(&insert.0, &section.0).max(worst_difference(&insert.1, &section.1))
+        );
     }
 }
 
 /// On the drum bus, which is all the master hears here, the insert does
 /// what the master's section does over the same drums: the bus's own strip
-/// is at unity, so the reduction measured at the master is the same, to
-/// within the host's full-wet leak.
+/// is at unity, so the reduction measured at the master is the same, sample
+/// for sample.
 #[test]
 fn a_bus_comp_on_the_drum_bus_reduces_as_the_masters_section_does() {
     for voicing in BusCompVoicing::ALL {
         let params = settings(voicing);
         let insert = render_mix(&with_insert(drum_bus(), DRUMS, params), 2.0);
         let section = render_mix(&with_section(drum_bus(), params.section()), 2.0);
-        let worst = worst_difference(&insert.0, &section.0)
-            .max(worst_difference(&insert.1, &section.1));
-        println!("{voicing:?}: drum-bus insert against master section, worst {worst:e}");
         assert!(peak_of(&insert.0) > 0.05, "the drums have to be sounding");
-        assert!(worst < FULL_WET_LEAK, "{voicing:?}: the insert and the section differ by {worst}");
+        assert!(
+            insert == section,
+            "{voicing:?}: the insert and the section differ, by up to {:e}",
+            worst_difference(&insert.0, &section.0).max(worst_difference(&insert.1, &section.1))
+        );
     }
 }
 

@@ -359,7 +359,10 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   generic dry/wet blend, independent input and output trims, insertion/removal actions, and separate
   held input/output peaks; its dry path is preallocated and runs after the
   device DSP, so parallel processing works even when an effect itself has no
-  mix parameter. The dry path is delayed by the device's declared dry-path
+  mix parameter. At full wet the blend is exactly the device, sample for
+  sample (MOO-226, 2026-09-25: the equal-power law's `cos` of a quarter
+  turn is not zero in `f32`, and had added the dry copy back about 147 dB
+  down). The dry path is delayed by the device's declared dry-path
   alignment latency before the blend, so latency-introducing effects do not
   comb-filter their own dry copy; wet-only returns may retain their own
   intentional pre-delay. **Every host move ramps** (MOO-108, 2026-09-23):

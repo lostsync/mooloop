@@ -3138,11 +3138,11 @@ impl EffectChain {
                 // brings it back. A still slot takes the branches that do
                 // exactly what the flat version did.
                 let wet_moving = !ramps.wet.is_settled();
-                let (mut dry_gain, mut wet_gain) = equal_power(ramps.wet.value());
+                let (mut dry_gain, mut wet_gain) = Self::blend_gains(ramps.wet.value());
                 for frame in 0..context.frames {
                     let input_trim = dry_input.advance();
                     if wet_moving {
-                        (dry_gain, wet_gain) = equal_power(ramps.wet.advance());
+                        (dry_gain, wet_gain) = Self::blend_gains(ramps.wet.advance());
                     }
                     let trim = ramps.output.advance();
                     let active = ramps.active.advance();
@@ -3411,6 +3411,29 @@ impl EffectChain {
         }
     }
 
+    /// The host's `(dry, wet)` gains for a blend at `wet`: the equal-power
+    /// law, with its wet end exact (MOO-226).
+    ///
+    /// `smooth::equal_power` is `(cos, sin)` of a quarter turn, and `cos` of
+    /// a quarter turn in `f32` is -4.4e-8, not zero. So a slot at full wet --
+    /// every insert's default -- added its dry copy back, inverted, about
+    /// 147 dB down: inaudible, and enough that "an insert at full wet is its
+    /// device, sample for sample" could not be stated, and the Bus Comp
+    /// insert's tests had to hold it to a tolerance. The dry end is already
+    /// exact (`sin(0)` is zero).
+    ///
+    /// Snapped here, in the host, rather than in the law, which Buffer's
+    /// jumps, `DelayLine`'s read head and the sampler's loop seam share and
+    /// whose bit-identity pins would all move. Anything at or past full wet
+    /// is full wet, so a ramp arriving at 1.0 lands on the exact end.
+    fn blend_gains(wet: f32) -> (f32, f32) {
+        if wet >= 1.0 {
+            (0.0, 1.0)
+        } else {
+            equal_power(wet)
+        }
+    }
+
     /// Start the layer's next branch at `slot`, from the layer's input.
     fn start_branch(
         &mut self,
@@ -3491,10 +3514,10 @@ impl EffectChain {
         if still && mix >= 1.0 {
             return;
         }
-        let (mut dry_gain, mut wet_gain) = equal_power(mix);
+        let (mut dry_gain, mut wet_gain) = Self::blend_gains(mix);
         for frame in 0..context.frames {
             if !still {
-                (dry_gain, wet_gain) = equal_power(ramps.mix.advance() * ramps.active.advance());
+                (dry_gain, wet_gain) = Self::blend_gains(ramps.mix.advance() * ramps.active.advance());
             }
             bus.l[frame] = scratch.dry[depth].l[frame] * dry_gain + bus.l[frame] * wet_gain;
             bus.r[frame] = scratch.dry[depth].r[frame] * dry_gain + bus.r[frame] * wet_gain;
