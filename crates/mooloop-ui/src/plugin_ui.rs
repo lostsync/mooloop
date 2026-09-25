@@ -77,27 +77,33 @@ pub(crate) struct PluginCatalog {
     pub failures: Vec<(String, String)>,
 }
 
-/// Whether the browser treats `plugin` as an instrument: it says it is one,
-/// and does not also say it is an effect.
+/// Whether the browser offers `plugin` as an instrument (a new channel's
+/// source) rather than an effect.
+///
+/// Where a plugin may go is the host's rule, read from the scan
+/// (`ScannedPlugin::source_refusal` and `effect_refusal`, MOO-85), not a
+/// copy of it here (MOO-232): it is an instrument when it fits a source and
+/// either does not fit a chain or declares itself one. One that fits
+/// nowhere is shown in the role it declares, greyed with that role's reason.
 pub(crate) fn is_instrument(plugin: &ScannedPlugin) -> bool {
-    plugin.is_instrument() && !plugin.is_effect()
+    let (effect, source) = (plugin.effect_refusal().is_none(), plugin.source_refusal().is_none());
+    match (effect, source) {
+        (_, true) => !effect || plugin.is_instrument(),
+        (true, false) => false,
+        (false, false) => {
+            plugin.is_instrument() || (!plugin.is_effect() && plugin.note_inputs > 0)
+        }
+    }
 }
 
-/// Why `plugin` cannot be used, or `None` when it can.
-///
-/// An effect runs with exactly one stereo input and one stereo output
-/// (`docs/plans/plugin-hosting/00-status.md`, step 06), and the scan says so
-/// without loading anything. An instrument is offered whatever its ports:
-/// which layouts a source takes is step 10's (MOO-85), and until then the
-/// channel is made and the rack says why it is silent.
+/// Why `plugin` cannot be used in the role [`is_instrument`] gives it, or
+/// `None` when it can: the host's own reason from the scan.
 pub(crate) fn refusal(plugin: &ScannedPlugin) -> Option<String> {
-    if let Some(error) = &plugin.error {
-        return Some(format!("could not be created: {error}"));
+    if is_instrument(plugin) {
+        plugin.source_refusal()
+    } else {
+        plugin.effect_refusal()
     }
-    if !is_instrument(plugin) && (plugin.audio_inputs != [2] || plugin.audio_outputs != [2]) {
-        return Some("not stereo in and stereo out".into());
-    }
-    None
 }
 
 impl PluginCatalog {
@@ -160,7 +166,7 @@ pub(crate) fn plugin_rows(catalog: &PluginCatalog, filter: &str) -> Vec<BrowserR
         let plugin = &entry.plugin.plugin;
         // An instrument plays no notes until step 10 (MOO-85); the row says
         // so rather than let a silent channel be the first anyone hears of it.
-        let role = if entry.instrument { "Instrument (no notes yet)" } else { "FX" };
+        let role = if entry.instrument { "Instrument" } else { "FX" };
         let detail = match &entry.refusal {
             Some(reason) => reason.clone(),
             None if plugin.vendor.is_empty() => role.to_string(),

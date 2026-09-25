@@ -298,6 +298,7 @@ fn a_plugin_goes_in_a_chain_from_the_window_and_its_knob_is_saved_and_exported()
     assert!(sine.loadable, "an instrument is offered, for a new channel");
     assert!(!sine.effect, "but not as an effect");
     assert!(sine.detail.contains("Instrument"), "{}", sine.detail);
+    assert!(!sine.detail.contains("no notes"), "instruments play now (MOO-85): {}", sine.detail);
     let broken = named("broken.clap").expect("the tab lists the file that failed");
     assert!(broken.detail.contains("signal 11"), "{}", broken.detail);
 
@@ -516,6 +517,11 @@ fn an_instrument_from_the_add_channel_menu_becomes_a_new_plugin_channel() {
         "its source is the instrument picked"
     );
     assert_eq!(channel.name, "Test Sine", "named after the plugin");
+    assert!(
+        st.session.plugin_problem(slot).is_none(),
+        "the sine is hosted as the channel's source: {:?}",
+        st.session.plugin_problem(slot)
+    );
     assert_eq!(st.session.selected, before, "and selected");
     drop(st);
     assert_eq!(
