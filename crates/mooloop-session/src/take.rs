@@ -117,6 +117,9 @@ pub struct TakeView {
 pub struct TakeRecorder {
     dir: PathBuf,
     running: Vec<Running>,
+    /// What time a take is named by. The wall clock, except in the tests
+    /// that need two takes inside one second (MOO-241).
+    clock: fn() -> SystemTime,
 }
 
 impl TakeRecorder {
@@ -126,6 +129,7 @@ impl TakeRecorder {
         Self {
             dir: dir.into(),
             running: Vec::new(),
+            clock: SystemTime::now,
         }
     }
 
@@ -152,7 +156,7 @@ impl TakeRecorder {
         if let Some(why) = short_of_space(free_bytes(&self.dir), sample_rate, &self.dir) {
             return Err(why);
         }
-        let path = self.dir.join(take_file_name(name, SystemTime::now()));
+        let path = self.dir.join(take_file_name(name, (self.clock)()));
         let spec = hound::WavSpec {
             channels: 2,
             sample_rate,
@@ -1487,6 +1491,58 @@ mod tests {
             !session.input_monitor.contains(&mooloop_core::ChannelId(7)),
             "the removed channel's id must not linger in the set"
         );
+    }
+
+    /// **Two takes on one channel inside one second are two files, and
+    /// neither is cut short** (MOO-241). A take is named to the second, and
+    /// the file was opened with `WavWriter::create`, which truncates: the
+    /// second take of a second, or a take on another channel of the same
+    /// name, wrote over the first. Pinned twice: one after the other, and
+    /// the second armed while the first is still being written, which is
+    /// what a record press on a recording channel does.
+    #[test]
+    fn two_takes_in_one_second_are_two_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut recorder = TakeRecorder::new(dir.path());
+        recorder.clock = || SystemTime::UNIX_EPOCH + Duration::from_secs(1_789_000_000);
+
+        let first = run(&mut recorder, &ramp(3_000), true);
+        let second = run(&mut recorder, &ramp(1_000), true);
+        assert_ne!(first.path, second.path);
+
+        let arm = |recorder: &mut TakeRecorder| {
+            let command = recorder.arm(ChannelId(3), 0, "Kick 1", None, 48_000, 0).unwrap();
+            let StructuralCommand::StartTake { take, .. } = command else {
+                panic!("expected a take");
+            };
+            *take
+        };
+        let mut third = arm(&mut recorder);
+        third.push_for_test(&ramp(2_000));
+        let mut fourth = arm(&mut recorder);
+        fourth.push_for_test(&ramp(500));
+        third.stop();
+        fourth.stop();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut overlapped = Vec::new();
+        while overlapped.len() < 2 {
+            let (finished, failures) = recorder.collect();
+            assert!(failures.is_empty(), "{failures:?}");
+            overlapped.extend(finished);
+            assert!(Instant::now() < deadline, "the drains never finished");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        drop((third, fourth));
+        overlapped.sort_by_key(|take| take.frames);
+
+        let mut paths = vec![first.path.clone(), second.path.clone()];
+        paths.extend(overlapped.iter().map(|take| take.path.clone()));
+        let written: Vec<u32> = paths
+            .iter()
+            .map(|path| hound::WavReader::open(path).unwrap().duration())
+            .collect();
+        assert_eq!(written, [3_000, 1_000, 500, 2_000], "{paths:?}");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 4);
     }
 
     #[test]
