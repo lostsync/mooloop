@@ -442,6 +442,90 @@ impl VoiceFilter {
     // in `SvfCascade::coeffs`, which `retarget` calls.
 }
 
+/// The network controls a route can reach, as the sample loop reads them:
+/// each oscillator's four phase-modulation depths, then each one's pitch.
+const NETWORK_CONTROLS: usize = 15;
+
+/// Where oscillator `to`'s depth from `from` sits among the network
+/// controls. `from` is an oscillator (0-2) or the noise (3); `from == to` is
+/// the oscillator's self feedback.
+const fn depth_index(to: usize, from: usize) -> usize {
+    to * 4 + from
+}
+
+/// Where oscillator `n`'s pitch ratio sits among the network controls.
+const fn ratio_index(n: usize) -> usize {
+    12 + n
+}
+
+/// The destination slot each network control's routes land in.
+const NETWORK_SLOTS: [usize; NETWORK_CONTROLS] = {
+    let mut slots = [0; NETWORK_CONTROLS];
+    let mut to = 0;
+    while to < 3 {
+        let mut from = 0;
+        while from < 4 {
+            slots[depth_index(to, from)] = if from == to {
+                slot::OSC_FEEDBACK + to
+            } else if from == 3 {
+                slot::NOISE_TO_OSC + to
+            } else {
+                slot::XMOD + xmod_index(from, to)
+            };
+            from += 1;
+        }
+        slots[ratio_index(to)] = slot::OSC_SEMIS[to];
+        to += 1;
+    }
+    slots
+};
+
+/// A voice's phase-modulation depths and oscillator pitches, as the sample
+/// loop multiplies by them (MOO-255).
+///
+/// A control no route reaches is the patch's own value, taken once a range.
+/// A routed one is resolved every sample exactly as it always was (base plus
+/// offset, clamped, then `route_depth`'s curve or the pitch's `exp2`), but
+/// only the routed ones are visited, from a list made once a range, where
+/// the loop used to test twelve depths and three pitches for a route every
+/// sample. The values and the order they are summed in are the ones the
+/// loop always used, so the network renders what it did, bit for bit.
+///
+/// Resolving routed depths every 16 samples instead, as the voice filter's
+/// coefficients are, was measured and not taken: it bought about 4 µs a
+/// block more at Unison X8, and a one-millisecond strike into
+/// cross-modulation then erred 22 dB under the signal. A routed pitch at
+/// that rate erred above the signal under a fast LFO, because a pitch error
+/// accumulates into phase.
+#[derive(Clone, Copy)]
+struct NetworkControls {
+    now: [f32; NETWORK_CONTROLS],
+    /// Resolve every control through the loop as it was before MOO-255, for
+    /// the tests to hold this path to.
+    #[cfg(test)]
+    per_sample: bool,
+}
+
+impl NetworkControls {
+    fn new() -> Self {
+        Self {
+            now: [0.0; NETWORK_CONTROLS],
+            #[cfg(test)]
+            per_sample: false,
+        }
+    }
+
+    /// Take the patch's own value for every control no route reaches. Once
+    /// a range, before any sample: that is as often as the patch can move.
+    fn settle(&mut self, prep: &Prepared) {
+        for index in 0..NETWORK_CONTROLS {
+            if !prep.control_routed[index] {
+                self.now[index] = prep.control_value[index];
+            }
+        }
+    }
+}
+
 /// How much of one cycle full Slew rounds off.
 ///
 /// A fraction of the cycle rather than a time in seconds, which is the whole
@@ -1243,6 +1327,9 @@ struct Voice {
     /// read wherever the destination is used; only the slots a route actually
     /// touches are ever written or read.
     mod_offsets: [f32; MLP8_MOD_DESTS],
+    /// The phase-modulation depths and pitches the network reads, with
+    /// only the routed ones resolved per sample (MOO-255).
+    network: NetworkControls,
     /// Drift and Detune resolved into one frequency multiplier per
     /// oscillator, refreshed once per render range.
     ///
@@ -1321,6 +1408,7 @@ impl Voice {
             drive_amount: smoothed(0.0),
             feedback: smoothed(0.0),
             mod_offsets: [0.0; MLP8_MOD_DESTS],
+            network: NetworkControls::new(),
             pitch_scale: [1.0; 3],
             cutoff_scale: 1.0,
             // NaN so the first sample's `cutoff == cached_cutoff_input`
@@ -1416,7 +1504,8 @@ impl Voice {
     /// A phase-modulation amount, resolved before its curve is applied.
     ///
     /// The prepared value is returned untouched when nothing routes to this
-    /// amount, so the common case pays one branch and no `powf`.
+    /// amount. Kept as the per-sample reference [`NetworkControls`] replaced.
+    #[cfg(test)]
     #[inline]
     fn osc_depth(
         &self,
@@ -1444,6 +1533,62 @@ impl Voice {
         }
         let (min, max) = routes.bounds[slot];
         (base + self.mod_offsets[slot]).clamp(min, max)
+    }
+
+    /// Resolve the routed network controls for this sample. Called only when
+    /// a route reaches one of them, after this sample's offsets are in.
+    fn advance_network(&mut self, prep: &Prepared) {
+        for &index in &prep.routed_controls[..prep.routed_count] {
+            let index = usize::from(index);
+            let input = self.dest(prep.routes, NETWORK_SLOTS[index], prep.control_input[index]);
+            self.network.now[index] = if index < ratio_index(0) {
+                route_depth(input)
+            } else {
+                (input / 12.0).exp2() * prep.cents_ratio[index - ratio_index(0)]
+            };
+        }
+    }
+
+    /// Oscillator `to`'s phase-modulation depth from `from`, in cycles.
+    #[inline]
+    fn phase_depth(&self, prep: &Prepared, to: usize, from: usize) -> f32 {
+        #[cfg(test)]
+        if self.network.per_sample {
+            let index = depth_index(to, from);
+            let slot = if from == to {
+                slot::OSC_FEEDBACK + to
+            } else if from == 3 {
+                slot::NOISE_TO_OSC + to
+            } else {
+                slot::XMOD + xmod_index(from, to)
+            };
+            return self.osc_depth(
+                prep.routes,
+                slot,
+                prep.control_input[index],
+                prep.control_value[index],
+            );
+        }
+        let _ = prep;
+        self.network.now[depth_index(to, from)]
+    }
+
+    /// Oscillator `n`'s tuning as a ratio, before Drift, Detune and bend.
+    #[inline]
+    fn authored_ratio(&self, prep: &Prepared, n: usize) -> f32 {
+        #[cfg(test)]
+        if self.network.per_sample {
+            let routes = prep.routes;
+            let index = ratio_index(n);
+            return if routes.touched[slot::OSC_SEMIS[n]] {
+                (self.dest(routes, slot::OSC_SEMIS[n], prep.control_input[index]) / 12.0).exp2()
+                    * prep.cents_ratio[n]
+            } else {
+                prep.control_value[index]
+            };
+        }
+        let _ = prep;
+        self.network.now[ratio_index(n)]
     }
 
     /// Resolve Drift, Detune, and Spread into the three per-voice multipliers
@@ -1571,27 +1716,12 @@ struct Prepared<'a> {
     /// one part of the prepared state that is rebuilt on a topology change
     /// rather than per render range.
     routes: &'a CompiledRoutes,
-    ratio: [f32; 3],
-    /// The authored pitch offset in semitones, kept apart from the cents so a
-    /// route can move it and still be clamped through the semitone control's
-    /// own range. Only read when something routes to it.
-    semitones: [f32; 3],
-    /// The cents half of the same tuning, as a ratio. Not routable on its own
-    /// — a route reaching pitch reaches Semis, and cents stay the fine offset
-    /// the patch authored.
+    /// The cents half of each oscillator's tuning, as a ratio. Not routable
+    /// on its own — a route reaching pitch reaches Semis, and cents stay the
+    /// fine offset the patch authored.
     cents_ratio: [f32; 3],
     wave: [OscWave; 3],
     pulse_width: [f32; 3],
-    /// `xmod[from][to]`, already in cycles.
-    xmod: [[f32; 3]; 3],
-    /// The same amounts as authored percent, for the routed path: the curve
-    /// from percent to cycles has to be applied *after* the offset, or a
-    /// route would move a number that has already been squared.
-    xmod_percent: [[f32; 3]; 3],
-    feedback: [f32; 3],
-    feedback_percent: [f32; 3],
-    noise_to_osc: [f32; 3],
-    noise_to_osc_percent: [f32; 3],
     sync_master: [Option<usize>; 3],
     osc_needed: [bool; 3],
     noise_needed: bool,
@@ -1621,6 +1751,22 @@ struct Prepared<'a> {
     /// Folded into every oscillator's ratio, so the sub, which divides one
     /// of them, bends with it.
     bend: f32,
+    /// Each [`NetworkControls`] entry as the patch authors it: the value
+    /// the loop multiplies by (a depth in cycles, or a pitch ratio), the
+    /// input a route offsets (percent, or semitones), and whether a route
+    /// reaches it at all.
+    ///
+    /// A route offsets the input, not the value: a depth's curve from
+    /// percent to cycles is applied *after* the offset, or a route would
+    /// move a number that has already been squared, and a pitch's semitones
+    /// are clamped through the Semis control's own range before its `exp2`.
+    control_value: [f32; NETWORK_CONTROLS],
+    control_input: [f32; NETWORK_CONTROLS],
+    control_routed: [bool; NETWORK_CONTROLS],
+    any_network_routed: bool,
+    /// The routed ones, as indices, so a voice's sample visits only those.
+    routed_controls: [u8; NETWORK_CONTROLS],
+    routed_count: usize,
 }
 
 impl<'a> Prepared<'a> {
@@ -1655,8 +1801,8 @@ impl<'a> Prepared<'a> {
         }
         let feedback_percent = params.osc_feedback;
         let noise_to_osc_percent = params.noise_to_osc;
-        let feedback = std::array::from_fn(|n| route_depth(feedback_percent[n]));
-        let noise_to_osc = std::array::from_fn(|n| route_depth(noise_to_osc_percent[n]));
+        let feedback: [f32; 3] = std::array::from_fn(|n| route_depth(feedback_percent[n]));
+        let noise_to_osc: [f32; 3] = std::array::from_fn(|n| route_depth(noise_to_osc_percent[n]));
         let sync_master: [Option<usize>; 3] = std::array::from_fn(|n| {
             // An oscillator syncing to itself is not a topology, it is a
             // stuck phase. The UI excludes it; this makes the DSP agree
@@ -1701,19 +1847,44 @@ impl<'a> Prepared<'a> {
             || routed(slot::NOISE_LEVEL)
             || (0..3).any(|n| noise_to_osc[n] != 0.0 || routed(slot::NOISE_TO_OSC + n));
 
+        let mut control_value = [0.0_f32; NETWORK_CONTROLS];
+        let mut control_input = [0.0_f32; NETWORK_CONTROLS];
+        for to in 0..3 {
+            for from in 0..4 {
+                let index = depth_index(to, from);
+                (control_value[index], control_input[index]) = if from == to {
+                    (feedback[to], feedback_percent[to])
+                } else if from == 3 {
+                    (noise_to_osc[to], noise_to_osc_percent[to])
+                } else {
+                    (xmod[from][to], xmod_percent[from][to])
+                };
+            }
+            control_value[ratio_index(to)] = ratio[to];
+            control_input[ratio_index(to)] = semitones[to];
+        }
+        let control_routed: [bool; NETWORK_CONTROLS] =
+            std::array::from_fn(|index| routed(NETWORK_SLOTS[index]));
+        let mut routed_controls = [0_u8; NETWORK_CONTROLS];
+        let mut routed_count = 0;
+        for (index, routed) in control_routed.iter().enumerate() {
+            if *routed {
+                routed_controls[routed_count] = index as u8;
+                routed_count += 1;
+            }
+        }
+
         Self {
+            control_value,
+            control_input,
+            control_routed,
+            any_network_routed: routed_count > 0,
+            routed_controls,
+            routed_count,
             routes,
-            ratio,
-            semitones,
             cents_ratio,
             wave,
             pulse_width,
-            xmod,
-            xmod_percent,
-            feedback,
-            feedback_percent,
-            noise_to_osc,
-            noise_to_osc_percent,
             sync_master,
             osc_needed,
             noise_needed,
@@ -2258,6 +2429,7 @@ impl MlP8 {
             voice
                 .feedback
                 .set_target(params.voice_feedback.clamp(-1.0, 1.0));
+            voice.network.settle(&prepared);
             voice.refresh_character(
                 params.drift.clamp(0.0, 1.0),
                 params.detune.clamp(0.0, 1.0),
@@ -2390,6 +2562,9 @@ impl Voice {
         // there — and skipping it a block early would replace the ramp the
         // smoother exists for with a step.
         let routes = prep.routes;
+        if prep.any_network_routed {
+            self.advance_network(prep);
+        }
         let smoothed_level: [f32; 3] = std::array::from_fn(|n| self.osc_level[n].advance());
         let smoothed_sub = self.sub_level.advance();
         let smoothed_noise = self.noise_level.advance();
@@ -2422,13 +2597,7 @@ impl Voice {
         // both without a second copy of the rule. Both are exactly `1.0` when
         // their controls are at zero, so this multiply is the identity.
         let ratio: [f32; 3] = std::array::from_fn(|n| {
-            let authored = if routes.touched[slot::OSC_SEMIS[n]] {
-                (self.dest(routes, slot::OSC_SEMIS[n], prep.semitones[n]) / 12.0).exp2()
-                    * prep.cents_ratio[n]
-            } else {
-                prep.ratio[n]
-            };
-            authored * self.pitch_scale[n] * prep.bend
+            self.authored_ratio(prep, n) * self.pitch_scale[n] * prep.bend
         });
 
         let mut value = [0.0_f32; 3];
@@ -2440,30 +2609,17 @@ impl Voice {
                 continue;
             }
             // Every amount below is resolved as authored percent plus this
-            // voice's offset, and only *then* mapped through `route_depth`.
-            // Applying the offset to the already-curved value would move a
-            // number that has been squared, so an amount would mean something
-            // different at every point on the knob.
-            let mut phase_mod = self.osc_depth(
-                routes,
-                slot::OSC_FEEDBACK + index,
-                prep.feedback_percent[index],
-                prep.feedback[index],
-            ) * self.taps[index]
-                + self.osc_depth(
-                    routes,
-                    slot::NOISE_TO_OSC + index,
-                    prep.noise_to_osc_percent[index],
-                    prep.noise_to_osc[index],
-                ) * self.noise_tap;
+            // voice's offset, and only *then* mapped through `route_depth`
+            // (see `advance_network`). Applying the offset to the already-curved
+            // value would move a number that has been squared, so an amount
+            // would mean something different at every point on the knob. The
+            // sum is in the order it always was, so an unrouted patch is the
+            // same to the bit.
+            let mut phase_mod = self.phase_depth(prep, index, index) * self.taps[index]
+                + self.phase_depth(prep, index, 3) * self.noise_tap;
             for source in 0..3 {
                 if source != index {
-                    phase_mod += self.osc_depth(
-                        routes,
-                        slot::XMOD + xmod_index(source, index),
-                        prep.xmod_percent[source][index],
-                        prep.xmod[source][index],
-                    ) * self.taps[source];
+                    phase_mod += self.phase_depth(prep, index, source) * self.taps[source];
                 }
             }
             offset[index] = bound_phase(phase_mod);
@@ -2936,7 +3092,10 @@ mod tests {
         }
     }
     use crate::event::TimedEvent;
-    use mooloop_core::mlp8::{xmod_index, PARAM_FILTER_CUTOFF, PARAM_VOICE_FEEDBACK};
+    use mooloop_core::mlp8::{
+        osc_param, xmod_index, OSC_OFFSET_SEMITONES, PARAM_FILTER_CUTOFF,
+        PARAM_OSC_FEEDBACK_BASE, PARAM_VOICE_FEEDBACK, PARAM_XMOD_BASE,
+    };
     use mooloop_core::{MlP8FilterMode, MlP8Unison, SubOctave, SubSource, SyncSource};
 
     const SR: u32 = 48_000;
@@ -4682,6 +4841,118 @@ mod tests {
         }
     }
 
+    // --- MOO-255: only the routed network controls, every sample ---------
+
+    /// Render `notes` held for `held` frames of `frames`, both channels,
+    /// with every voice's network controls resolved as before MOO-255
+    /// (`per_sample`) or from the routed list.
+    fn render_routed(
+        params: MlP8Params,
+        notes: &[u8],
+        frames: usize,
+        held: usize,
+        per_sample: bool,
+    ) -> Vec<f32> {
+        let mut synth = MlP8::new(params, SR);
+        for voice in synth.voices.iter_mut() {
+            voice.network.per_sample = per_sample;
+        }
+        let mut left = Vec::with_capacity(frames);
+        let mut right = Vec::with_capacity(frames);
+        let block = 128;
+        let mut bus = StereoBus::with_capacity(block);
+        let mut rendered = 0;
+        while rendered < frames {
+            let len = block.min(frames - rendered);
+            let mut events = EventList::empty();
+            if rendered == 0 {
+                for (index, note) in notes.iter().enumerate() {
+                    events.push(note_on(0, index as u64 + 1, *note));
+                }
+            }
+            if rendered <= held && held < rendered + len {
+                for (index, note) in notes.iter().enumerate() {
+                    events.push(TimedEvent {
+                        offset: (held - rendered) as u32,
+                        event: Event::NoteOff {
+                            id: index as u64 + 1,
+                            note: *note,
+                        },
+                    });
+                }
+            }
+            bus.l[..len].fill(0.0);
+            bus.r[..len].fill(0.0);
+            synth.process(&ctx(len), &mut bus, &events, None);
+            left.extend_from_slice(&bus.l[..len]);
+            right.extend_from_slice(&bus.r[..len]);
+            rendered += len;
+        }
+        left.extend_from_slice(&right);
+        left
+    }
+
+    /// Every factory patch as a chord, plus routes into every kind of
+    /// network control, moving as fast as they can: a 1 ms envelope strike
+    /// into cross-modulation, the LFO at its top rate into a depth and a
+    /// pitch (smooth, and as sample-and-hold steps), and the gate falling on
+    /// a feedback depth.
+    fn route_cases() -> Vec<(&'static str, MlP8Params, &'static [u8])> {
+        let mut cases: Vec<(&'static str, MlP8Params, &'static [u8])> =
+            mooloop_core::mlp8_factory::patches()
+                .into_iter()
+                .map(|patch| (patch.name, patch.params, &[48u8, 55, 64][..]))
+                .collect();
+        let pair = || {
+            let mut params = init_saw();
+            params.osc[0].wave = OscWave::Sine;
+            params.osc[1] = mooloop_core::OscParams {
+                wave: OscWave::Sine,
+                semitones: 12.0,
+                level: 0.5,
+                ..mooloop_core::OscParams::default()
+            };
+            params.unison = MlP8Unison::X2;
+            params.detune = 0.3;
+            params
+        };
+        let mut strike = pair();
+        strike.attack = 0.001;
+        strike.decay = 0.08;
+        strike.sustain = 0.1;
+        route(&mut strike, MlP8ModSource::AmpEnv, dest(PARAM_XMOD_BASE + xmod_index(1, 0) as u32), 90.0);
+        cases.push(("1 ms strike into xmod", strike, &[45, 57]));
+        let mut wobble = pair();
+        wobble.lfo.rate_hz = 100.0;
+        route(&mut wobble, MlP8ModSource::Lfo, dest(PARAM_XMOD_BASE + xmod_index(1, 0) as u32), 70.0);
+        route(&mut wobble, MlP8ModSource::Lfo, dest(osc_param(1, OSC_OFFSET_SEMITONES)), 10.0);
+        cases.push(("100 Hz LFO into xmod and pitch", wobble, &[45, 57]));
+        let mut steps = wobble;
+        steps.lfo.wave = MlP8LfoWave::SampleHold;
+        cases.push(("100 Hz S&H into xmod and pitch", steps, &[45, 57]));
+        let mut gate = pair();
+        gate.osc_feedback[0] = 20.0;
+        route(&mut gate, MlP8ModSource::Gate, dest(PARAM_OSC_FEEDBACK_BASE), 60.0);
+        cases.push(("gate on feedback", gate, &[45, 57]));
+        cases
+    }
+
+    /// The network with only its routed controls visited is the one it
+    /// replaced, which tested every depth and pitch for a route every
+    /// sample, to the bit: every factory patch and every route case, through
+    /// a note's strike and its release.
+    #[test]
+    fn visiting_only_the_routed_controls_is_the_per_sample_network_bit_for_bit() {
+        for (name, params, notes) in route_cases() {
+            let reference = render_routed(params, notes, 24_000, 18_000, true);
+            let routed = render_routed(params, notes, 24_000, 18_000, false);
+            assert!(
+                reference.iter().zip(&routed).all(|(a, b)| a.to_bits() == b.to_bits()),
+                "{name}: the routed list changed a sample"
+            );
+        }
+    }
+
     /// MOO-244's acceptance: one held note at every Unison count stays
     /// within 1.5 dB of Unison 1x at mid Detune, with and without Drift, on
     /// the reference patch and on the bank's unison patch. With nothing to
@@ -5787,5 +6058,3 @@ mod tests {
         high / total.max(1.0e-12)
     }
 }
-
-

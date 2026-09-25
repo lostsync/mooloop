@@ -17855,7 +17855,14 @@ mod footprint {
         // the drive keeps its followers' coefficient and the rate it was
         // made for instead of an `exp` a sample. That takes ML-P8 past
         // DS-01, so it is now the widest source below.
-        assert_eq!(size_of::<MlP8>(), 7_040);
+        //
+        // Grew by 448 with MOO-255, 56 bytes a voice: each voice keeps the
+        // fifteen network controls its oscillators read (twelve
+        // phase-modulation depths and three pitches, 60 bytes, 4 of them in
+        // existing padding), so a sample resolves only the routed ones rather
+        // than testing all fifteen for a route. That took about 16 µs a block
+        // off Cold Metal at Unison X8, bit for bit.
+        assert_eq!(size_of::<MlP8>(), 7_488);
         // DS-01 is 6,832, and almost all of it is the eight-voice pool: a
         // voice carries six tone oscillators for its partial bank, an FM
         // modulator, four noise generators' worth of state, a state-variable
@@ -18076,7 +18083,10 @@ mod footprint {
         //
         // And by 80 for MOO-246 and MOO-249: ML-P8, at 7,040, is now the
         // widest source, 80 past DS-01's 6,960.
-        assert_eq!(per_live, 142_888);
+        //
+        // And by 448 for MOO-255: ML-P8's per-voice network controls, the
+        // widest source now 7,488.
+        assert_eq!(per_live, 143_336);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
@@ -18170,7 +18180,10 @@ mod footprint {
         //
         // MOO-246 and MOO-249 made ML-P8 the widest source, 80 bytes a live
         // channel past DS-01, 1,280 across sixteen: one more KiB boundary.
-        assert_eq!((fixed + per_live * 16) / 1024, 2_719);
+        //
+        // MOO-255's per-voice network controls: 448 bytes a live channel,
+        // exactly 7 KiB across sixteen.
+        assert_eq!((fixed + per_live * 16) / 1024, 2_726);
     }
 
 }

@@ -102,6 +102,7 @@ impl Svf {
     /// lerped, coefficient set should call this directly instead — see
     /// `effects/filter.rs`'s `process_range` and the sampler's voice
     /// filter.
+    #[inline]
     pub fn tick_with(&mut self, input: f32, coeffs: &SvfCoeffs) -> (f32, f32, f32) {
         let v3 = input - self.low;
         let v1 = coeffs.a1 * self.band + coeffs.a2 * v3;
@@ -319,6 +320,7 @@ impl SvfCascade {
     /// One sample through the cascade with coefficients already made by
     /// [`Self::coeffs`] (for the same `output` and `slope`). At 12 dB the
     /// second stage is not run.
+    #[inline]
     pub fn tick_with(
         &mut self,
         input: f32,

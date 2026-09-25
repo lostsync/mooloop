@@ -41,12 +41,18 @@ fn sine_table() -> &'static [f32; SINE_TABLE_LEN] {
 /// stand-in for it (`reports/fable-2026-09-22.md` finding 2): the error it
 /// introduces is bounded by `sine_table_thd_is_below_90_db` rather than
 /// argued from the table size alone.
+#[inline]
 fn table_sine(phase: f32) -> f32 {
     let table = sine_table();
-    let scaled = phase.rem_euclid(1.0) * SINE_TABLE_LEN as f32;
-    let index = scaled as usize % SINE_TABLE_LEN;
-    let frac = scaled - scaled.floor();
-    let next = (index + 1) % SINE_TABLE_LEN;
+    // In [0, SINE_TABLE_LEN] (the top when a tiny negative phase rounds up to
+    // a whole cycle), so the truncating cast is its floor and the mask its
+    // wrap: one conversion, where `as usize`, `%` and `floor` were three
+    // (MOO-255). `the_masked_table_read_is_the_old_one_bit_for_bit` pins it.
+    let scaled = wrap_unit(phase) * SINE_TABLE_LEN as f32;
+    let whole = scaled as i32;
+    let index = whole as usize & (SINE_TABLE_LEN - 1);
+    let frac = scaled - whole as f32;
+    let next = (index + 1) & (SINE_TABLE_LEN - 1);
     table[index] + (table[next] - table[index]) * frac
 }
 
@@ -149,7 +155,7 @@ impl Osc {
         let phase = self.phase;
         let advanced = phase + dt;
         self.last_phase = phase;
-        self.phase = advanced.fract();
+        self.phase = fast_fract(advanced);
         let boundary_dt = if core::mem::take(&mut self.after_sync) {
             0.0
         } else {
@@ -157,7 +163,7 @@ impl Osc {
         };
         OscStep {
             value: wave_value(
-                (phase + phase_offset).rem_euclid(1.0),
+                wrap_unit(phase + phase_offset),
                 wave,
                 pulse_width,
                 dt,
@@ -191,13 +197,13 @@ impl Osc {
         let phase = self.phase;
         let advanced = phase + dt;
         self.last_phase = phase;
-        self.phase = advanced.fract();
+        self.phase = fast_fract(advanced);
         let boundary_dt = if core::mem::take(&mut self.after_sync) {
             0.0
         } else {
             dt
         };
-        let read = (phase + phase_offset).rem_euclid(1.0);
+        let read = wrap_unit(phase + phase_offset);
         let mix = mix.clamp(0.0, 1.0);
         let a = wave_value(read, waves.0, pulse_width, dt, boundary_dt);
         let value = if mix <= 0.0 {
@@ -230,20 +236,64 @@ impl Osc {
         sample_rate: u32,
     ) -> f32 {
         let dt = increment(freq_hz, sample_rate);
-        let at_reset = (self.last_phase + frac * dt).rem_euclid(1.0);
+        let at_reset = wrap_unit(self.last_phase + frac * dt);
         // Measured on the *naive* waveform, which is what passing `dt = 0`
         // asks for: the PolyBLEP residuals already in `wave_value` correct the
         // oscillator's own wrap, and a reset that lands on one would otherwise
         // read a value that has been corrected once and correct it again.
         let naive = |phase: f32| wave_value(phase, wave, pulse_width, 0.0, 0.0);
-        let before = naive((at_reset + phase_offset).rem_euclid(1.0));
-        let after = naive(phase_offset.rem_euclid(1.0));
+        let before = naive(wrap_unit(at_reset + phase_offset));
+        let after = naive(wrap_unit(phase_offset));
         // The remainder of the sample after the reset, so the slave's next
         // read sits where a continuous-time reset would have left it.
-        self.phase = ((1.0 - frac) * dt).fract();
+        self.phase = fast_fract((1.0 - frac) * dt);
         self.last_phase = 0.0;
         self.after_sync = true;
         after - before
+    }
+}
+
+/// Past this magnitude every `f32` is a whole number, and below it every
+/// whole number fits an `i32`, so a truncating cast is exact.
+const EXACT_CAST: f32 = 8_388_608.0;
+
+/// `x.trunc()`, bit for bit, without the call.
+///
+/// The x86-64 baseline the release build targets has no SSE4.1, so
+/// `trunc`, `floor`, `fract` and `rem_euclid` are each a call into libm, and
+/// a sine read made four of them a sample (MOO-255). A truncating cast is
+/// one instruction each way; `copysign` gives `-0.0` for a negative
+/// fraction exactly as `trunc` does. NaN, infinities and anything already
+/// whole take the library path.
+#[inline(always)]
+fn fast_trunc(x: f32) -> f32 {
+    if x.abs() < EXACT_CAST {
+        (x as i32 as f32).copysign(x)
+    } else {
+        x.trunc()
+    }
+}
+
+/// `x.fract()`, bit for bit: `x - x.trunc()`, as the standard library
+/// defines it.
+#[inline(always)]
+fn fast_fract(x: f32) -> f32 {
+    x - fast_trunc(x)
+}
+
+/// `x.rem_euclid(1.0)`, bit for bit.
+///
+/// `x % 1.0` is `x - trunc(x)` exactly, carrying the sign of `x` even when
+/// it is zero; the `copysign` restores that one case (`-2.0 % 1.0` is
+/// `-0.0`, where the subtraction gives `+0.0`). The negative case then adds
+/// one, rounded once, as `rem_euclid` does.
+#[inline(always)]
+fn wrap_unit(x: f32) -> f32 {
+    let r = (x - fast_trunc(x)).copysign(x);
+    if r < 0.0 {
+        r + 1.0
+    } else {
+        r
     }
 }
 
@@ -261,6 +311,7 @@ fn increment(freq_hz: f32, sample_rate: u32) -> f32 {
 /// only the residual at the *cycle boundary*, separately, so a sample that
 /// follows a sync reset can decline that one correction while the pulse's
 /// width edge keeps its own.
+#[inline(always)]
 fn wave_value(phase: f32, wave: OscWave, pulse_width: f32, dt: f32, boundary_dt: f32) -> f32 {
     match wave {
         OscWave::Sine => table_sine(phase),
@@ -270,7 +321,7 @@ fn wave_value(phase: f32, wave: OscWave, pulse_width: f32, dt: f32, boundary_dt:
             let width = clamp_param(pulse_width, 0.05, 0.95);
             let mut value = if phase < width { 1.0 } else { -1.0 };
             value += polyblep(phase, boundary_dt);
-            value -= polyblep((phase - width).rem_euclid(1.0), dt);
+            value -= polyblep(wrap_unit(phase - width), dt);
             value
         }
     }
@@ -297,6 +348,7 @@ impl Default for Osc {
 }
 
 /// PolyBLEP residual to subtract/add at discontinuities.
+#[inline]
 fn polyblep(t: f32, dt: f32) -> f32 {
     if t < dt {
         let t = t / dt;
@@ -341,6 +393,71 @@ impl Noise {
 mod tests {
     use super::*;
     use crate::testkit::{alias_db, cents, coherent_amplitude, db, dominant_hz, frames_for, RATES};
+
+    /// The table read with one conversion and a mask is the one it replaced,
+    /// with `rem_euclid`, `as usize`, `%` and `floor`, to the bit (MOO-255):
+    /// at every table entry and between them, either side of zero and of a
+    /// whole cycle, and far from either.
+    #[test]
+    fn the_masked_table_read_is_the_old_one_bit_for_bit() {
+        fn old(phase: f32) -> f32 {
+            let table = sine_table();
+            let scaled = phase.rem_euclid(1.0) * SINE_TABLE_LEN as f32;
+            let index = scaled as usize % SINE_TABLE_LEN;
+            let frac = scaled - scaled.floor();
+            let next = (index + 1) % SINE_TABLE_LEN;
+            table[index] + (table[next] - table[index]) * frac
+        }
+        let mut phases = vec![0.0f32, -0.0, 1.0, -1.0, 1.0e-9, -1.0e-9, -1.0e-30, 3.75, -3.75];
+        for entry in 0..=SINE_TABLE_LEN * 4 {
+            let phase = entry as f32 / (SINE_TABLE_LEN * 4) as f32;
+            phases.extend([phase, -phase, phase.next_up(), phase.next_down(), phase + 2.0, phase - 4.0]);
+        }
+        for phase in phases {
+            assert_eq!(table_sine(phase).to_bits(), old(phase).to_bits(), "phase {phase:e}");
+        }
+    }
+
+    /// The inline wrap, fraction and truncation are the library's, to the
+    /// bit, across every magnitude an oscillator sees and past where the
+    /// cast would stop being exact (MOO-255).
+    #[test]
+    fn the_inline_rounding_is_the_librarys_bit_for_bit() {
+        let mut values = vec![
+            0.0f32, -0.0, 1.0, -1.0, 2.0, -2.0, 0.5, -0.5, 1.0e-9, -1.0e-9, 0.999_999_94,
+            -0.999_999_94, 8_388_607.5, -8_388_607.5, 8_388_608.0, -8_388_608.0, 1.0e10,
+            -1.0e10, f32::MAX, f32::MIN, f32::MIN_POSITIVE, -f32::MIN_POSITIVE,
+            f32::INFINITY, f32::NEG_INFINITY, f32::NAN, 2_147_483_648.0, -2_147_483_648.0,
+            4.0e9, -4.0e9, 16_777_216.0, -16_777_217.0,
+        ];
+        // Just either side of whole numbers, and phases that land exactly
+        // on 1.0 (or on a whole number) from an increment.
+        for whole in -8i32..=8 {
+            let w = whole as f32;
+            values.extend([w.next_down(), w, w.next_up()]);
+        }
+        for step in [0.25f32, 0.1, 1.0 / 3.0, 0.009_166_667] {
+            let mut phase = 0.0f32;
+            for _ in 0..400 {
+                phase += step;
+                values.extend([phase, -phase, 1.0 - phase, phase - 1.0]);
+            }
+        }
+        // Every float in a spread of exponents, by bit pattern.
+        let mut bits = 0x2000_0000u32;
+        while bits < 0x4c00_0000 {
+            let x = f32::from_bits(bits);
+            values.push(x);
+            values.push(-x);
+            bits += 0x0000_9e37;
+        }
+        let same = |a: f32, b: f32| a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan());
+        for x in values {
+            assert!(same(fast_trunc(x), x.trunc()), "trunc({x:e})");
+            assert!(same(fast_fract(x), x.fract()), "fract({x:e})");
+            assert!(same(wrap_unit(x), x.rem_euclid(1.0)), "rem_euclid({x:e})");
+        }
+    }
 
     #[test]
     fn all_waves_stay_bounded() {
