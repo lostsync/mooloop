@@ -225,8 +225,10 @@ fn every_source_kind() -> Vec<DeviceKind> {
             | DeviceKind::MlP8
             | DeviceKind::Ds01
             | DeviceKind::AuxIn => {}
-            // No face of its own yet: a plugin's face is step 08's
-            // (MOO-83), which adds it here when it draws one (MOO-84).
+            // No source face yet (MOO-84): step 08 (MOO-83) drew the face
+            // of a plugin *effect*; a plugin instrument's editor shows none
+            // until its parameters can be driven (MOO-85, MOO-229), and it
+            // is added here when it draws one.
             DeviceKind::Plugin => {}
         }
     }

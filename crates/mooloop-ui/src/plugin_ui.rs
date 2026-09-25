@@ -60,7 +60,10 @@ pub(crate) fn plugin_units(visible_params: usize) -> i32 {
 #[derive(Clone, Debug)]
 pub(crate) struct CatalogEntry {
     pub plugin: ScannedPlugin,
-    /// Why it cannot go in a chain, or `None` when it can.
+    /// An instrument: picked, it becomes a new channel's source (MOO-84's
+    /// `Session::set_plugin_source`) rather than a device in a chain.
+    pub instrument: bool,
+    /// Why it cannot be used, or `None` when it can.
     pub refusal: Option<String>,
 }
 
@@ -74,20 +77,24 @@ pub(crate) struct PluginCatalog {
     pub failures: Vec<(String, String)>,
 }
 
-/// Why `plugin` cannot be inserted as an effect, or `None` when it can.
+/// Whether the browser treats `plugin` as an instrument: it says it is one,
+/// and does not also say it is an effect.
+pub(crate) fn is_instrument(plugin: &ScannedPlugin) -> bool {
+    plugin.is_instrument() && !plugin.is_effect()
+}
+
+/// Why `plugin` cannot be used, or `None` when it can.
 ///
-/// The host runs exactly one stereo input and one stereo output
-/// (`docs/plans/plugin-hosting/00-status.md`, step 06), and the scan says
-/// so without loading anything. An instrument is a channel's source, which
-/// is step 09's; the browser shows it and says so rather than hiding it.
-pub(crate) fn effect_refusal(plugin: &ScannedPlugin) -> Option<String> {
+/// An effect runs with exactly one stereo input and one stereo output
+/// (`docs/plans/plugin-hosting/00-status.md`, step 06), and the scan says so
+/// without loading anything. An instrument is offered whatever its ports:
+/// which layouts a source takes is step 10's (MOO-85), and until then the
+/// channel is made and the rack says why it is silent.
+pub(crate) fn refusal(plugin: &ScannedPlugin) -> Option<String> {
     if let Some(error) = &plugin.error {
         return Some(format!("could not be created: {error}"));
     }
-    if plugin.is_instrument() && !plugin.is_effect() {
-        return Some("instrument: not yet a channel source".into());
-    }
-    if plugin.audio_inputs != [2] || plugin.audio_outputs != [2] {
+    if !is_instrument(plugin) && (plugin.audio_inputs != [2] || plugin.audio_outputs != [2]) {
         return Some("not stereo in and stereo out".into());
     }
     None
@@ -111,7 +118,8 @@ impl PluginCatalog {
             }
             let chosen = cache.resolve(&found.plugin).unwrap_or(found).clone();
             entries.push(CatalogEntry {
-                refusal: effect_refusal(&chosen),
+                instrument: is_instrument(&chosen),
+                refusal: refusal(&chosen),
                 plugin: chosen,
             });
         }
@@ -150,10 +158,13 @@ pub(crate) fn plugin_rows(catalog: &PluginCatalog, filter: &str) -> Vec<BrowserR
     let mut rows = Vec::new();
     for entry in &catalog.entries {
         let plugin = &entry.plugin.plugin;
+        // An instrument plays no notes until step 10 (MOO-85); the row says
+        // so rather than let a silent channel be the first anyone hears of it.
+        let role = if entry.instrument { "Instrument (no notes yet)" } else { "FX" };
         let detail = match &entry.refusal {
             Some(reason) => reason.clone(),
-            None if plugin.vendor.is_empty() => "FX".to_string(),
-            None => format!("{} · FX", plugin.vendor),
+            None if plugin.vendor.is_empty() => role.to_string(),
+            None => format!("{} · {role}", plugin.vendor),
         };
         let haystack = format!("{} {} {} {}", plugin.name, plugin.vendor, plugin.id, detail);
         if !matches(filter, &haystack) {
@@ -167,7 +178,7 @@ pub(crate) fn plugin_rows(catalog: &PluginCatalog, filter: &str) -> Vec<BrowserR
             expanded: false,
             detail: detail.into(),
             loadable: entry.refusal.is_none(),
-            effect: entry.refusal.is_none(),
+            effect: entry.refusal.is_none() && !entry.instrument,
         });
     }
     for (name, reason) in &catalog.failures {
@@ -435,16 +446,84 @@ fn default_position(st: &UiState) -> usize {
     }
 }
 
+/// The window's engine queues, as a plugin verb needs them.
+#[derive(Clone)]
+pub(crate) struct Queues {
+    pub(crate) tx: EngineCommandSender,
+    pub(crate) stx: StructuralCommandSender,
+    /// A new channel's sample state is reset through this, as every add is.
+    pub(crate) reset_tx: std::sync::mpsc::Sender<usize>,
+}
+
+/// A new channel whose source is the instrument `entry`, selected, as one
+/// undo step ("Plugin channel added"): the add and the source together, so
+/// one Ctrl+Z takes the channel away rather than leaving an empty one.
+pub(crate) fn add_plugin_channel(
+    state: &Rc<RefCell<UiState>>,
+    commands: &Rc<RefCell<CommandState>>,
+    window: &MainWindow,
+    entry: &CatalogEntry,
+    queues: &Queues,
+) -> bool {
+    let name = entry.plugin.plugin.name.clone();
+    if commands.borrow().project_edit_pending {
+        return false;
+    }
+    let snapshot = crate::project_snapshot(&state.borrow(), window);
+    let Some(index) = crate::add_channel_unrecorded(
+        state,
+        window,
+        &queues.stx,
+        &queues.reset_tx,
+        mooloop_core::DeviceKind::Plugin,
+    ) else {
+        window.set_status_message(format!("{name} could not be added: the rack is full").into());
+        return false;
+    };
+    let slot = {
+        let mut st = state.borrow_mut();
+        let mut sink = QueuedSink {
+            tx: &queues.tx,
+            stx: &queues.stx,
+            sample_rate: st.audio_sample_rate,
+        };
+        let slot = st
+            .session
+            .set_plugin_source(index, entry.plugin.plugin.clone(), &mut sink);
+        // Named after the plugin rather than "Plugin 2": the channel's row
+        // is the only thing that says which instrument it is.
+        st.session.rename_channel(index as i32, &name);
+        slot
+    };
+    {
+        let st = state.borrow();
+        if let Some(mut row) = st.rows.row_data(index) {
+            row.name = st.session.channels[index].name.as_str().into();
+            st.rows.set_row_data(index, row);
+        }
+        st.sync_mixer(window);
+        st.refresh_editor(window);
+    }
+    crate::record_project_history(commands, snapshot, state, window, "Plugin channel added");
+    let problem = slot.and_then(|slot| state.borrow().session.plugin_problem(slot));
+    window.set_status_message(match problem {
+        None => format!("Added {name} on a new channel. It plays no notes until CLAP instruments land").into(),
+        Some(error) => format!("Added {name} on a new channel, but it is not playing: {error}").into(),
+    });
+    state.borrow().update_document_title(window);
+    true
+}
+
 /// Put the plugin whose id is `id` in the chain the rack shows, before row
-/// `before`, or where [`default_position`] says, as one undo step.
+/// `before`, or where [`default_position`] says, as one undo step. An
+/// instrument goes on a new channel instead ([`add_plugin_channel`]).
 pub(crate) fn add_plugin(
     state: &Rc<RefCell<UiState>>,
     commands: &Rc<RefCell<CommandState>>,
     window: &MainWindow,
     id: &str,
     before: Option<usize>,
-    tx: &EngineCommandSender,
-    stx: &StructuralCommandSender,
+    queues: &Queues,
 ) -> bool {
     let entry = state.borrow().plugin_catalog.find(id).cloned();
     let Some(entry) = entry else {
@@ -453,9 +532,13 @@ pub(crate) fn add_plugin(
     };
     let name = entry.plugin.plugin.name.clone();
     if let Some(reason) = &entry.refusal {
-        window.set_status_message(format!("{name} cannot go in a chain: {reason}").into());
+        window.set_status_message(format!("{name} cannot be used: {reason}").into());
         return false;
     }
+    if entry.instrument {
+        return add_plugin_channel(state, commands, window, &entry, queues);
+    }
+    let (tx, stx) = (&queues.tx, &queues.stx);
     let position = {
         let mut st = state.borrow_mut();
         let aimed = st.plugin_insert_before.take();
@@ -520,7 +603,13 @@ pub(crate) fn wire(
     commands: &Rc<RefCell<CommandState>>,
     tx: &EngineCommandSender,
     stx: &StructuralCommandSender,
+    reset_tx: &std::sync::mpsc::Sender<usize>,
 ) {
+    let queues = Queues {
+        tx: tx.clone(),
+        stx: stx.clone(),
+        reset_tx: reset_tx.clone(),
+    };
     {
         // A knob on a plugin face: the value half of the edit. The plugin
         // holds the value, so the song has it once its state is captured;
@@ -573,12 +662,25 @@ pub(crate) fn wire(
     {
         let st = state.clone();
         let commands = commands.clone();
-        let tx = tx.clone();
-        let stx = stx.clone();
+        let queues = queues.clone();
         let weak = window.as_weak();
         window.on_browser_plugin_added(move |id, before| {
             let Some(window) = weak.upgrade() else { return };
-            add_plugin(&st, &commands, &window, &id, usize::try_from(before).ok(), &tx, &stx);
+            add_plugin(&st, &commands, &window, &id, usize::try_from(before).ok(), &queues);
+        });
+    }
+    {
+        // The add-channel menu's "Add Plugin…": the instrument is chosen in
+        // the browser, which makes the channel.
+        let st = state.clone();
+        let weak = window.as_weak();
+        window.on_add_plugin_channel_requested(move || {
+            let Some(window) = weak.upgrade() else { return };
+            st.borrow_mut().plugin_insert_before = None;
+            show_plugin_browser(&st, &window);
+            window.set_status_message(
+                "Pick an instrument: double-click it or press Enter to add it on a new channel".into(),
+            );
         });
     }
 }

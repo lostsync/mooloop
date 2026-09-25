@@ -152,6 +152,7 @@ struct Harness {
     tx: EngineCommandSender,
     stx: StructuralCommandSender,
     dir: tempfile::TempDir,
+    _reset_rx: mpsc::Receiver<usize>,
 }
 
 impl Harness {
@@ -217,7 +218,9 @@ fn harness_with(project: &Project) -> Harness {
     let tx = EngineCommandSender(sender.clone());
     let stx = StructuralCommandSender(sender);
     let commands = Rc::new(RefCell::new(CommandState::default()));
-    plugin_ui::wire(&window, &state, &commands, &tx, &stx);
+    // Held for the harness's life: a dropped receiver fails the send.
+    let (reset_tx, reset_rx) = mpsc::channel::<usize>();
+    plugin_ui::wire(&window, &state, &commands, &tx, &stx, &reset_tx);
     Harness {
         window,
         state,
@@ -230,6 +233,7 @@ fn harness_with(project: &Project) -> Harness {
         tx,
         stx,
         dir,
+        _reset_rx: reset_rx,
     }
 }
 
@@ -291,7 +295,9 @@ fn a_plugin_goes_in_a_chain_from_the_window_and_its_knob_is_saved_and_exported()
     let gain = named("Test Gain").expect("the tab lists the test gain");
     assert!(gain.loadable, "an effect can go in a chain");
     let sine = named("Test Sine").expect("the tab lists the instrument");
-    assert!(!sine.loadable, "an instrument is not an effect: {}", sine.detail);
+    assert!(sine.loadable, "an instrument is offered, for a new channel");
+    assert!(!sine.effect, "but not as an effect");
+    assert!(sine.detail.contains("Instrument"), "{}", sine.detail);
     let broken = named("broken.clap").expect("the tab lists the file that failed");
     assert!(broken.detail.contains("signal 11"), "{}", broken.detail);
 
@@ -457,4 +463,64 @@ fn the_plugin_filter_matches_names_vendors_and_reasons() {
     assert_eq!(names("instrument"), ["Test Sine"]);
     assert_eq!(names("signal"), ["broken.clap"]);
     assert!(names("nothing like it").is_empty());
+}
+
+/// **An instrument from the window: the add-channel menu's "Add Plugin…",
+/// then a double-click in the browser, makes a new channel whose source is
+/// that plugin**, as one undo step (MOO-83 on MOO-84). The row is pressed in
+/// the real window: the menu it sits in is where MOO-53 shipped a row that
+/// closed before it reported.
+#[test]
+fn an_instrument_from_the_add_channel_menu_becomes_a_new_plugin_channel() {
+    let mut h = harness_with(&drum_loop());
+    h.window.invoke_move_view(view::STEPS, 0);
+    h.window.invoke_show_view(view::STEPS);
+    let before = h.state.borrow().session.channels.len();
+
+    let add = controls(&h.window, AccessibleRole::Button)
+        .into_iter()
+        .find(|button| button.label == "Add channel")
+        .expect("the channel rack draws its + button");
+    click(&h.window, add.centre);
+    let row = controls(&h.window, AccessibleRole::Button)
+        .into_iter()
+        .find(|row| row.label == "Add Plugin…")
+        .expect("the add-channel menu offers a plugin");
+    click(&h.window, row.centre);
+    assert_eq!(h.window.get_browser_tab(), 2, "the row opened the PLUGINS tab");
+    assert_eq!(
+        h.state.borrow().session.channels.len(),
+        before,
+        "the row itself adds no channel: the plugin is chosen first"
+    );
+
+    let at = controls(&h.window, AccessibleRole::ListItem)
+        .into_iter()
+        .find(|row| row.label == "Test Sine")
+        .expect("the browser draws the instrument's row")
+        .centre;
+    click(&h.window, at);
+    click(&h.window, at);
+    h.tick();
+
+    let st = h.state.borrow();
+    assert_eq!(st.session.channels.len(), before + 1, "a channel was added");
+    let channel = &st.session.channels[before];
+    assert_eq!(channel.kind(), mooloop_core::DeviceKind::Plugin);
+    let mooloop_core::GeneratorParams::Plugin(slot) = channel.generator_params() else {
+        panic!("the new channel's source is not a plugin");
+    };
+    assert_eq!(
+        st.session.plugins.get(&slot).map(|saved| saved.plugin.id.as_str()),
+        Some(test_plugin::SINE_ID),
+        "its source is the instrument picked"
+    );
+    assert_eq!(channel.name, "Test Sine", "named after the plugin");
+    assert_eq!(st.session.selected, before, "and selected");
+    drop(st);
+    assert_eq!(
+        labels(&h.commands.borrow()),
+        ["Plugin channel added"],
+        "the channel and its source are one undo step"
+    );
 }

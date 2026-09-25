@@ -1853,6 +1853,9 @@ export component MainWindow inherits Window {
     // The insert menu's "Plugin…" row: open the browser's PLUGINS tab, aimed
     // at the row a plugin picked there should land before.
     callback add-plugin-requested(int);
+    // The add-channel menu's "Add Plugin…": open the browser's PLUGINS tab,
+    // where an instrument picked becomes a new channel's source.
+    callback add-plugin-channel-requested();
     // A plugin from the browser: its id, and the row it lands before, or -1
     // for where a double-click puts it (after the selected device, else at
     // the end of the chain, unless the menu row aimed it somewhere).
@@ -4074,6 +4077,7 @@ export component MainWindow inherits Window {
                                         AddSourceButton {
                                             enabled: !root.project-edit-pending && root.channels.length < root.max-channels;
                                             picked(i) => { root.add-channel-clicked(i); }
+                                            plugin-picked => { root.add-plugin-channel-requested(); }
                                         }
                                         FlatButton {
                                             text: "−";

@@ -21,6 +21,13 @@ export component MenuRow inherits Rectangle {
 
     height: 24px;
     background: touch.has-hover && root.enabled ? Theme.surface-active : transparent;
+    // A row is a command: a screen reader, and a test walking the tree by
+    // role (`window_probe.rs`), find it as the button it behaves as.
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-checkable: root.checked;
+    accessible-checked: root.checked;
 
     Text {
         x: 26px;

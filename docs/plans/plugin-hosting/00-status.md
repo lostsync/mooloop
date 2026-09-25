@@ -1268,14 +1268,24 @@ from the list the song remembers, greyed, with the reason as a badge.
   each slot keeps one parameter model for its life, updated row by row, and
   the plugin is asked for a value's text only when the value moved. A
   republished model would rebuild the knobs and drop a drag.
-- **Instruments stay out.** An instrument is listed, greyed ("not yet a
-  channel source"); step 09 (MOO-84) had not landed when this did.
+- **Instruments, second commit, after step 09 (MOO-84) landed.** The
+  add-channel menu's **Add Plugin…** (its own `MenuRow` after the
+  `SourceKinds` rows, so `SOURCE_KINDS_IN_PICKER_ORDER` is unchanged) opens
+  the PLUGINS tab; an instrument picked there adds a channel and calls
+  `Session::set_plugin_source` on it, as one undo step, named after the
+  plugin. It plays no notes until step 10, and the row says so. The CLAP
+  opener still refuses anything but one stereo input and one stereo output
+  (`ClapOpener::open`, `check_ports`), so the test sine and any instrument
+  with no audio input make a channel whose plugin is refused, with the
+  reason in the status bar: step 10 decides which port layouts a source
+  takes. `MenuRow` is an accessible button now, so a menu row can be found
+  by role and pressed (`an_instrument_from_the_add_channel_menu_…`).
 
 **The tests.** `ui/src/plugin_ui_tests.rs`, in the real window through
 `window_probe.rs`, with the handlers `AppUi::new` wires (`plugin_ui::wire`)
 and the in-repo test gain found through a scanner cache: the join's
-"Plugin…", the tab's rows (the instrument and a crashed file greyed with
-their reasons), a click that only selects and a double-click that inserts;
+"Plugin…", the tab's rows (the instrument offered but not as an effect, a crashed file
+greyed with its reason), a click that only selects and a double-click that inserts;
 the face's Gain knob reading the plugin's "0.0 dB"; a wheel turn inside a
 gesture recorded as one "Plugin Edit" only after the gesture closes, however
 long it waited; the command carrying the plugin's id; then saved, reopened

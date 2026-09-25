@@ -2118,6 +2118,24 @@ fn add_channel_with_history(
     source: DeviceKind,
 ) -> Option<usize> {
     let before = project_snapshot(&state.borrow(), window);
+    let index = add_channel_unrecorded(state, window, tx, reset_tx, source)?;
+    // `after` is taken from the live session, which the incremental add has
+    // already mutated -- there is no hand-built snapshot to get wrong. A click
+    // carries no gesture token, so this never coalesces into the entry below
+    // it and the add is its own undo step.
+    record_project_history(commands, before, state, window, "Add channel");
+    Some(index)
+}
+
+/// The add itself, for a caller that records it as part of something larger:
+/// a plugin channel is an add and a source in one undo step (MOO-83).
+fn add_channel_unrecorded(
+    state: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    tx: &StructuralCommandSender,
+    reset_tx: &std::sync::mpsc::Sender<usize>,
+    source: DeviceKind,
+) -> Option<usize> {
     let index = {
         let mut st = state.borrow_mut();
         // A full rack adds nothing, so it records nothing either.
@@ -2154,11 +2172,6 @@ fn add_channel_with_history(
     };
     let _ = reset_tx.send(index);
     let _ = tx.add_channel(index, source);
-    // `after` is taken from the live session, which the incremental add has
-    // already mutated -- there is no hand-built snapshot to get wrong. A click
-    // carries no gesture token, so this never coalesces into the entry below
-    // it and the add is its own undo step.
-    record_project_history(commands, before, state, window, "Add channel");
     Some(index)
 }
 
@@ -3195,13 +3208,13 @@ fn device_kind_label(kind: DeviceKind) -> &'static str {
 /// concern in the model. Public because `tests/source_kind_menu.rs` needs the
 /// same eight kinds to hold `SourceKinds.labels` against.
 ///
-/// **`DeviceKind::Plugin` (8) is deliberately not here** (MOO-84). A plugin
-/// instrument is made by choosing a plugin, and the browser that chooses one
-/// is step 08 of `docs/plans/plugin-hosting/` (MOO-83), which adds its row
-/// to the picker. A "Plugin" row before then would make a channel with an
-/// empty, silent source and no way to fill it. Until then a plugin channel
-/// comes from a song file or `Session::set_plugin_source`, and its number
-/// is appended after the eight so none of theirs moves.
+/// **`DeviceKind::Plugin` (8) is not one of these rows** (MOO-84, MOO-83). A
+/// plugin instrument is made by choosing a plugin, so the picker's plugin row
+/// is its own, "Add Plugin…" after these (`AddSourceButton.plugin-picked`),
+/// and it opens the browser's PLUGINS tab, where an instrument picked becomes
+/// a new channel's source (`plugin_ui::add_plugin_channel`). A "Plugin" row
+/// here would make a channel with an empty, silent source and no way to fill
+/// it. Its number is appended after the eight so none of theirs moves.
 pub const SOURCE_KINDS_IN_PICKER_ORDER: [DeviceKind; 8] = [
     DeviceKind::Sampler,
     DeviceKind::DrumSynth,
@@ -12163,7 +12176,14 @@ impl AppUi {
         //
         // Hosted plugins first: the browser's PLUGINS tab, the insert
         // menu's "Plugin…" row and the plugin face (MOO-83).
-        plugin_ui::wire(&window, &state, &command_state, &cmd_tx, &structural_tx);
+        plugin_ui::wire(
+            &window,
+            &state,
+            &command_state,
+            &cmd_tx,
+            &structural_tx,
+            &sample_reset_tx,
+        );
         {
             let tx = cmd_tx.clone();
             let stx = structural_tx.clone();

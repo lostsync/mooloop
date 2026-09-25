@@ -92,6 +92,10 @@ export component AddSourceButton inherits ToolButton {
     // The chosen row's position in `SourceKinds.labels` -- the number
     // `device_kind_from_int` decodes on the Rust side.
     callback picked(int);
+    // The "Add Plugin…" row (MOO-83): a plugin channel is made by choosing
+    // a plugin, so the row opens the browser's PLUGINS tab rather than
+    // adding a channel with nothing in it.
+    callback plugin-picked();
 
     text: "+";
     tooltip: "Add channel";
@@ -141,6 +145,13 @@ export component AddSourceButton inherits ToolButton {
                         // for the fifth.
                         selected => { root.picked(i); }
                     }
+                }
+                // Not a `SourceKinds` row: it adds no channel itself. The
+                // same rule as above -- report, and let `close-policy`
+                // dismiss the menu (MOO-53).
+                MenuRow {
+                    text: "Add Plugin…";
+                    selected => { root.plugin-picked(); }
                 }
             }
         }

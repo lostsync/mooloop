@@ -2208,13 +2208,14 @@ land on its own when it starts to matter:
   opened, which is how a scan that finished after startup shows up), one row
   per plugin with its vendor, filtered like the presets by name, vendor or
   what the row says. A plugin that cannot go in a chain is greyed with the
-  reason: an instrument (channel sources are step 09), one that is not
-  stereo in and stereo out, one the factory could not create; so is each
+  reason: an effect that is not stereo in and stereo out, or one the
+  factory could not create; so is each
   file that failed to scan, with why. A double-click, Enter or a drop puts
   the plugin in the chain: a drop before the join it lands on, otherwise
   before the join the menu was opened from, otherwise after the selected
   device (and the run a selected container holds), otherwise at the end.
-  Adding it is one undo step ("Plugin added").
+  Adding it is one undo step ("Plugin added"). An instrument goes on a new
+  channel instead (below).
 - **A plugin with no GUI has a face** (MOO-83): its parameters, in the
   plugin's order and under its own names, as the knobs every native device
   uses, with the plugin's own text for each value ("7.2 dB"). One unit wide
@@ -2277,17 +2278,22 @@ land on its own when it starts to matter:
   without it. A saved state the plugin refuses opens it with its defaults,
   and the song keeps the refused state unchanged.
 - **A channel's instrument can be a hosted plugin** (MOO-84, plugin-hosting
-  09), with no way to choose one from the window yet: the plugin browser that
-  makes a plugin channel is step 08 (MOO-83), and a fresh Interface team takes
-  it after this push. Until then a plugin channel comes from a song file that
-  names one (`source.type = "plugin"`, `PROJECT_FORMAT.md`), or from the
-  session call `Session::set_plugin_source(channel, plugin)`, which tests and
-  the acceptance cases use. The channel is silent until the plugin opens, and
+  09). From the window: the channel rack's `+` menu ends in **Add Plugin…**,
+  which opens the browser's PLUGINS tab, and a double-click or Enter on an
+  instrument there (listed as "Instrument (no notes yet)") adds a new
+  channel, named after the plugin and selected, whose source is that plugin,
+  as one undo step ("Plugin channel added", MOO-83). A plugin channel also
+  comes from a song file that names one (`source.type = "plugin"`,
+  `PROJECT_FORMAT.md`), or from the session call
+  `Session::set_plugin_source(channel, plugin)`. **Today the host opens only
+  a plugin with one stereo input and one stereo output**, as for an effect,
+  so an instrument with no audio input is refused and its channel says why
+  in the status bar; which layouts a source takes is step 10's. The channel is silent until the plugin opens, and
   stays silent, keeping its slot and state, while the plugin is missing. It is
   in an export, it survives an edit that keeps the channel, and a restart or a
   new sample rate pulls the plugin out and puts the next processor back. Not
   yet: a plugin channel's editor shows no face (its number is 8, after the
-  eight native kinds, and the add-channel menu does not offer it); a restart
+  eight native kinds; "Add Plugin…" is its own row, not one of the eight); a restart
   cuts a sounding instrument rather than fading it; the plugin's own latency
   is not compensated; and its parameters take no lanes or routes. Which notes
   a plugin instrument hears, and how, is step 10 (MOO-85).
