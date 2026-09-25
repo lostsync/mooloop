@@ -602,8 +602,14 @@ export component PositionReadout inherits Rectangle {
         font-size: ToolbarMetrics.value-size;
         horizontal-alignment: center;
         vertical-alignment: center;
-        width: 100%;
-        height: 100%;
+        // The readout's own size, spelled rather than `100%`: a child at
+        // 100% hands its constraints up to the parent, so the text's width
+        // was re-measured, and the toolbar's layout re-solved, every tick
+        // the position moved (MOO-258). The readout is a fixed size anyway.
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
     }
     readout-touch := TouchArea {}
 }

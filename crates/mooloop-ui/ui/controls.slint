@@ -1711,7 +1711,10 @@ export component TimeDivisionKnob inherits Rectangle {
                     : root.tempo-sync ? Theme.focus : Theme.text-faint;
                 font-size: Theme.text-sm;
                 horizontal-alignment: center;
-                overflow: elide;
+                // Not elided: the longest it can say is "1/64T", which fits
+                // any knob this is drawn on, and an elided Text shapes a
+                // fresh "…" on every draw whether it overflows or not
+                // (MOO-258).
             }
         }
     }
