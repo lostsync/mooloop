@@ -65,6 +65,15 @@ impl NullDriver {
     pub(crate) fn reason(&self) -> &str {
         &self.reason
     }
+
+    /// A handle on the thread's life, for a test: the thread's closure owns
+    /// a clone of `running` until the thread returns, so once this driver is
+    /// dropped the flag is freed exactly when the thread has exited. No new
+    /// state, and no hook in the loop.
+    #[cfg(test)]
+    pub(crate) fn thread_liveness(&self) -> std::sync::Weak<AtomicBool> {
+        Arc::downgrade(&self.running)
+    }
 }
 
 impl Drop for NullDriver {
@@ -288,11 +297,39 @@ mod tests {
 
     /// Dropping the handle stops the null driver's thread rather than leaving
     /// it rendering for nobody.
+    ///
+    /// It asserts that the thread *exits*, not how fast the machine is: a
+    /// 1 s bound on the drop failed on a starved macOS runner with the thread
+    /// stopping correctly (MOO-231). The thread owns a clone of the driver's
+    /// `running` flag until it returns, so the flag outliving the driver
+    /// means the thread is still alive. The deadline is one only a hung
+    /// thread misses.
+    ///
+    /// The drop runs on a thread of its own, so a drop that never returns (a
+    /// thread never told to stop, joined anyway) fails at the deadline rather
+    /// than hanging the suite. What drops there is the driver the handle
+    /// owns, which is the whole of what dropping the handle does to the
+    /// thread: `EngineHandle` has no `Drop` of its own, and the driver is
+    /// what can be sent to another thread on every platform.
     #[test]
     fn dropping_the_handle_stops_the_thread() {
-        let handle = EngineHandle::without_device("test");
-        let started = Instant::now();
+        let mut handle = EngineHandle::without_device("test");
+        let crate::Driver::Null(driver) = std::mem::replace(&mut handle.driver, crate::Driver::Closed)
+        else {
+            panic!("an engine with no device runs on the null driver");
+        };
+        let thread = driver.thread_liveness();
+        assert!(thread.upgrade().is_some(), "the thread is running");
         drop(handle);
-        assert!(started.elapsed() < Duration::from_secs(1));
+        let dropper = std::thread::spawn(move || drop(driver));
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while thread.upgrade().is_some() {
+            assert!(
+                Instant::now() < deadline,
+                "the null driver's thread was still running 30 s after its driver was dropped"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        dropper.join().expect("dropping the driver did not panic");
     }
 }
