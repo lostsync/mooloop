@@ -227,9 +227,197 @@ pub fn inspect_sample(path: &Path) -> Result<SampleInspection, String> {
     })
 }
 
+/// How long an instrument preset's audition runs, in sixteenths at 120 BPM:
+/// one bar of phrase, then the render's tail.
+const AUDITION_STEPS: u32 = 16;
+/// The audition's tail after the bar, so a long release is heard ending.
+const AUDITION_TAIL_S: f32 = 1.0;
+
+/// What a click on an instrument preset in the browser plays (MOO-227): the
+/// preset rendered offline on a throwaway one-channel song, as a sample the
+/// browser's preview voice plays like any other file.
+///
+/// Rendered rather than hosted live because the preview voice already plays
+/// a buffer, bypassing the song's chains and mute, and a render needs no new
+/// realtime path: nothing reaches the channel's own chain, nothing is
+/// recorded, and the song is untouched. The phrase depends on the kind: a
+/// bar of hits for the drum devices, a rising arpeggio into a held chord
+/// for everything pitched, and the root and its fifth for a sampler.
+///
+/// A channel preset is auditioned with its inserts, which are part of what
+/// it is. An effect preset has no audition yet: what it should sound like is
+/// Adam's question on MOO-227.
+pub fn audition_preset(path: &Path, sample_rate: u32) -> Result<SampleInspection, String> {
+    use mooloop_core::{ChannelSource, DeviceKind, ProjectChannel};
+    use mooloop_project::LoadedDocument;
+
+    let report = mooloop_project::load_bundle(path).map_err(|error| error.to_string())?;
+    let mut channel = ProjectChannel::sampler(0, 1);
+    match report.document {
+        LoadedDocument::Generator(source) => channel.setup.source = *source,
+        LoadedDocument::Channel(setup) => channel.setup = *setup,
+        _ => return Err("Only instrument and channel presets can be auditioned".into()),
+    }
+    let kind = channel.setup.source.kind();
+    let sample = match &channel.setup.source {
+        ChannelSource::Sampler(state) => match &state.sample {
+            mooloop_core::SampleReference::File { path, .. } => {
+                Some(audio_file::decode(path)?.sample)
+            }
+            _ => return Err("This sampler preset has no sample to play".into()),
+        },
+        ChannelSource::AuxIn(_) | ChannelSource::Plugin(_) => {
+            return Err(format!("A {} preset has nothing to audition", kind.label()));
+        }
+        _ => None,
+    };
+    // (start sixteenth, length in sixteenths, note, velocity)
+    let phrase: &[(u32, u32, u8, u8)] = match kind {
+        DeviceKind::DrumSynth | DeviceKind::Ds01 => {
+            &[(0, 2, 60, 120), (4, 2, 60, 90), (8, 2, 60, 120), (12, 1, 60, 70), (14, 2, 60, 100)]
+        }
+        DeviceKind::Sampler => {
+            let root = match &channel.setup.source {
+                ChannelSource::Sampler(state) => state.params.root_note.min(120),
+                _ => 60,
+            };
+            return render_audition(
+                path,
+                kind,
+                channel,
+                &[(0, 6, root, 110), (8, 8, root + 7, 110)],
+                sample,
+                sample_rate,
+            );
+        }
+        _ => &[
+            (0, 2, 48, 110),
+            (2, 2, 52, 100),
+            (4, 2, 55, 100),
+            (6, 2, 60, 110),
+            (8, 8, 48, 100),
+            (8, 8, 52, 100),
+            (8, 8, 55, 100),
+            (8, 8, 60, 100),
+        ],
+    };
+    render_audition(path, kind, channel, phrase, sample, sample_rate)
+}
+
+/// Render `phrase` on `channel` alone and describe the result for the
+/// browser's info pane. [`audition_preset`]'s second half.
+fn render_audition(
+    path: &Path,
+    kind: mooloop_core::DeviceKind,
+    mut channel: mooloop_core::ProjectChannel,
+    phrase: &[(u32, u32, u8, u8)],
+    sample: Option<Arc<SampleData>>,
+    sample_rate: u32,
+) -> Result<SampleInspection, String> {
+        use mooloop_core::{NoteEvent, Project};
+        use mooloop_engine::{ExportFormat, ExportSpec, OfflineRenderer, RenderScope, WavEncoding};
+        const STEP: u32 = mooloop_core::TICKS_PER_STEP;
+        for (id, &(start, length, note, velocity)) in phrase.iter().enumerate() {
+            channel.notes[0].push(NoteEvent::new(
+                id as u32 + 1,
+                start * STEP,
+                length * STEP,
+                note,
+                velocity,
+            ));
+        }
+        let project = Project {
+            bpm: 120,
+            channels: vec![channel],
+            pattern_lengths: vec![AUDITION_STEPS as u16],
+            ..Project::default()
+        };
+        // A render writes a file, so the audition goes through one in the
+        // temporary directory and is read straight back.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let temp = std::env::temp_dir().join(format!(
+            "mooloop-audition-{}-{}.wav",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        OfflineRenderer::render(
+            &project,
+            &[sample],
+            sample_rate,
+            &ExportSpec {
+                path: temp.clone(),
+                scope: RenderScope::Pattern { index: 0 },
+                tail_seconds: AUDITION_TAIL_S,
+                format: ExportFormat::Wav(WavEncoding::Float32),
+            },
+        )
+        .map_err(|error| format!("The audition did not render: {error}"))?;
+        let decoded = audio_file::decode(&temp);
+        let _ = std::fs::remove_file(&temp);
+        let rendered = decoded?.sample;
+        Ok(SampleInspection {
+            name: browser_display_name(path),
+            stats: format!(
+                "{} preset · audition\n{:.2} s",
+                kind.label(),
+                sample_duration(&rendered)
+            ),
+            peaks: waveform_peaks(&rendered, BROWSER_INFO_BINS),
+            sample: rendered,
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A click on an instrument preset plays it (MOO-227): the preset is
+    /// rendered offline to a sample the browser's preview voice plays, a bar
+    /// of phrase plus a tail, with sound in it and the song untouched. An
+    /// effect preset says it has no audition rather than playing nothing.
+    #[test]
+    fn an_instrument_preset_auditions_as_a_rendered_phrase() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("pad.mooloop");
+        let source = mooloop_core::ChannelSource::MlP8(mooloop_core::MlP8State::default());
+        mooloop_project::save_generator_preset(
+            &path,
+            &source,
+            mooloop_project::PresetInfo {
+                name: "Pad".into(),
+                category: String::new(),
+                tags: Vec::new(),
+            },
+            mooloop_project::AssetMode::Referenced,
+        )
+        .unwrap();
+        let audition = audition_preset(&path, 48_000).expect("the preset auditions");
+        let seconds = sample_duration(&audition.sample);
+        // The bar is 2 s at 120 BPM; the export ends its tail once the
+        // render has fallen silent, so a short release adds little.
+        assert!((1.9..3.5).contains(&seconds), "the audition lasted {seconds} s");
+        let peak = audition
+            .sample
+            .frames
+            .iter()
+            .fold(0.0_f32, |p, f| p.max(f[0].abs()).max(f[1].abs()));
+        assert!(peak > 0.01, "the audition was silent");
+        assert!(audition.stats.contains("ML-P8"), "{}", audition.stats);
+
+        let effect = temp.path().join("delay.mooloop");
+        mooloop_project::save_effect_preset(
+            &effect,
+            &mooloop_core::EffectSlotState::new(mooloop_core::EffectKind::Drive.default_params()),
+            mooloop_project::PresetInfo {
+                name: "Delay".into(),
+                category: String::new(),
+                tags: Vec::new(),
+            },
+            mooloop_project::AssetMode::Referenced,
+        )
+        .unwrap();
+        assert!(audition_preset(&effect, 48_000).is_err());
+    }
 
     #[test]
     fn inspect_sample_reports_header_stats_and_peaks() {

@@ -521,3 +521,11 @@ In the order worth playing:
     attacks, so level can't tell the two apart, and only listening will say
     whether Retrig's restart from the top of the sample is heard. Then, in the app,
     set a sampler to one voice, turn Glide up, and play legato on a keyboard.
+20. **A click on an instrument preset** (MOO-227). There's no render for
+    this: it's the browser. With autoplay on, open the PRESETS tab and click
+    an ML-P8, an ML-M1 and a DS-01 preset in turn. Each should play a short
+    phrase (an arpeggio into a chord, or a bar of hits) without changing the
+    song or its undo history, and a click on a second preset while the first
+    plays should cut to it. An effect preset's click plays nothing yet: that
+    is the question on MOO-227. The render path is pinned by
+    `an_instrument_preset_auditions_as_a_rendered_phrase` (session).

@@ -15789,13 +15789,41 @@ impl AppUi {
         {
             let browser_info_tx = browser_info_tx.clone();
             let inspecting = browser_inspecting.clone();
+            let st = state.clone();
             window.on_browser_row_previewed(move |path| {
                 let path = PathBuf::from(path.to_string());
                 *inspecting.borrow_mut() = Some(path.clone());
                 let tx = browser_info_tx.clone();
+                // A preset row auditions its preset (MOO-227): rendered off
+                // this thread into a sample, which then takes the same road
+                // as an inspected file -- the info pane, and the preview voice
+                // when autoplay is on. The song is not touched.
+                //
+                // Only an instrument or channel preset: what an effect
+                // preset's audition sounds like is Adam's question (MOO-227),
+                // so a click on one only selects it. The UI thread does the
+                // catalog lookup and nothing else; the render runs on the
+                // worker, and a result for a row no longer selected is
+                // dropped where every inspection's is (`browser_inspecting`).
+                let slot = st.borrow().preset_catalog.iter().find_map(|group| {
+                    group
+                        .presets
+                        .iter()
+                        .any(|preset| preset.path == path)
+                        .then_some(group.slot)
+                });
+                let is_preset = match slot {
+                    Some(PresetSlot::Generator(_) | PresetSlot::Channel) => true,
+                    Some(_) => return,
+                    None => false,
+                };
                 std::thread::spawn(move || {
-                    let result =
-                        inspect_sample(&path).map_err(|error| (path.display().to_string(), error));
+                    let result = if is_preset {
+                        mooloop_session::sample::audition_preset(&path, sample_rate)
+                    } else {
+                        inspect_sample(&path)
+                    }
+                    .map_err(|error| (path.display().to_string(), error));
                     let _ = tx.send((path, result));
                 });
             });

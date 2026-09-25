@@ -467,7 +467,13 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   and tags shown when they say something its group does not. **A click
   selects a preset; a double-click, Enter or a drop onto the rack loads it**
   (MOO-9, 2026-09-24), and a right-click offers Load and, for an effect
-  preset, Add as New Device. A **filter** field above both tabs narrows the
+  preset, Add as New Device. The click also **auditions an instrument or
+  channel preset** (MOO-227): the preset is rendered offline, off the UI
+  thread, into a short phrase (a bar of hits for the drum devices, an
+  arpeggio into a chord for the pitched ones, root and fifth for a sampler)
+  and played through the preview voice when autoplay is on, like a clicked
+  sample. The song is not touched. An effect preset's click only selects: what
+  its audition should sound like is open (MOO-227). A **filter** field above both tabs narrows the
   tree by words: presets by name, category, tags and group, opening every
   group that has a match; samples by file name, searched through every folder
   under every location rather than only the open ones (bounded, on the UI
