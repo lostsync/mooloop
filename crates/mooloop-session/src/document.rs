@@ -13,7 +13,8 @@ use mooloop_engine::{
     ExportError, ExportProgress, OfflineRenderer, RenderJob, RenderScope, RenderedFile,
 };
 use crate::render_settings::{
-    default_export_folder, ExportTrack, RenderSettings, SettingsProblem, Timeline,
+    default_export_folder, ExportChannel, ExportParts, ExportTrack, RenderSettings,
+    SettingsProblem, Timeline,
 };
 use mooloop_project::{AssetMode, AssetWarning, Issue, LoadReport, LoadedDocument, SaveReport};
 use std::path::{Path, PathBuf};
@@ -657,6 +658,28 @@ impl Session {
             .collect()
     }
 
+    /// The song's channels, as a channel export names them (MOO-183).
+    pub fn export_channels(&self) -> Vec<ExportChannel> {
+        self.channels
+            .iter()
+            .enumerate()
+            .map(|(index, channel)| ExportChannel {
+                id: channel.id,
+                index: index as u8,
+                name: channel.name.clone(),
+            })
+            .collect()
+    }
+
+    /// The song's tracks and channels, which a stem export names its files
+    /// after.
+    pub fn export_parts(&self) -> ExportParts {
+        ExportParts {
+            tracks: self.export_tracks(),
+            channels: self.export_channels(),
+        }
+    }
+
     /// The folder an export writes to when none is chosen: the song's own,
     /// or the music folder for a song never saved.
     pub fn export_default_folder(&self) -> PathBuf {
@@ -676,7 +699,7 @@ impl Session {
             scope,
             self.export_song_name().as_deref(),
             &self.export_default_folder(),
-            &self.export_tracks(),
+            &self.export_parts(),
         )?;
         Ok(ExportRequest {
             project: self.project_snapshot(bpm, swing_percent),

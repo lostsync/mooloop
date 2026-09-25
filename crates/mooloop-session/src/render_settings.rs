@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use mooloop_core::file_names;
 use mooloop_core::{
-    LoopRange, TrackId, BEATS_PER_BAR, MASTER_BUS, TICKS_PER_BAR, TICKS_PER_STEP,
+    ChannelId, LoopRange, TrackId, BEATS_PER_BAR, MASTER_BUS, TICKS_PER_BAR, TICKS_PER_STEP,
 };
 use mooloop_engine::{
     ExistingFile, ExportFormat, Mp3Bitrate, OutputChannels, RenderJob, RenderOutput, RenderPass, RenderScope, RenderTap,
@@ -62,6 +62,34 @@ pub enum RenderSource {
         #[serde(default)]
         skip_silent: bool,
     },
+    /// Channels straight out (MOO-183): each checked channel's own output
+    /// -- its source, rack, fader and pan, and nothing the mixer does after
+    /// -- to its own file, all in one pass. Named by durable identity, as
+    /// tracks are.
+    Channels {
+        channels: Vec<ChannelId>,
+        #[serde(default)]
+        with_master: bool,
+        #[serde(default)]
+        skip_silent: bool,
+    },
+}
+
+/// A channel as an export sees it (MOO-183).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportChannel {
+    pub id: ChannelId,
+    /// Its index in the song's channels, which the engine's tap names.
+    pub index: u8,
+    pub name: String,
+}
+
+/// The song's tracks and channels, which a stem export names its files
+/// after (MOO-182, MOO-183).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ExportParts {
+    pub tracks: Vec<ExportTrack>,
+    pub channels: Vec<ExportChannel>,
 }
 
 /// A track as an export sees it: the song's own, at its place in the bank.
@@ -539,16 +567,17 @@ impl RenderSettings {
 
     /// The job these settings describe, rendering `scope`, for a song named
     /// `song_name` whose default folder is `default_folder` and whose tracks
-    /// are `tracks`. The scope is the range resolved against the song
-    /// ([`RenderRange::scope`]), which the caller does because only it has
-    /// the song.
+    /// and channels are `parts`. The scope is the range resolved against the
+    /// song ([`RenderRange::scope`]), which the caller does because only it
+    /// has the song.
     pub fn job(
         &self,
         scope: RenderScope,
         song_name: Option<&str>,
         default_folder: &Path,
-        tracks: &[ExportTrack],
+        parts: &ExportParts,
     ) -> Result<RenderJob, SettingsProblem> {
+        let tracks = parts.tracks.as_slice();
         let folder = self.folder(default_folder);
         if !folder.is_dir() {
             return Err(SettingsProblem(format!(
@@ -591,6 +620,28 @@ impl RenderSettings {
                 }
                 outputs
             }
+            RenderSource::Channels {
+                channels: checked,
+                with_master,
+                skip_silent,
+            } => {
+                let mut outputs = Vec::new();
+                if *with_master {
+                    outputs.push(output(&stem, RenderTap::Master, false));
+                }
+                let channels = parts.channels.as_slice();
+                for channel in channels.iter().filter(|channel| checked.contains(&channel.id)) {
+                    outputs.push(output(
+                        &format!("{stem}-{}", channel_file_name(channel, channels)),
+                        RenderTap::Channel(channel.index),
+                        *skip_silent,
+                    ));
+                }
+                if outputs.is_empty() {
+                    return Err(SettingsProblem("Check at least one channel.".into()));
+                }
+                outputs
+            }
         };
         // Every file of the job, stems included, takes the one number
         // (MOO-188).
@@ -629,6 +680,33 @@ pub fn number_outputs(outputs: &mut [RenderOutput], taken: impl Fn(&Path) -> boo
 /// number added when another track has the same name, so no two stems of
 /// one export share a file.
 fn stem_name(track: &ExportTrack, tracks: &[ExportTrack]) -> String {
+    part_name(
+        &track.name,
+        "track",
+        u32::from(track.index),
+        tracks.iter().map(|other| other.name.as_str()),
+    )
+}
+
+/// [`stem_name`] for a channel: its number is counted from 1, as the rack
+/// shows it.
+fn channel_file_name(channel: &ExportChannel, channels: &[ExportChannel]) -> String {
+    part_name(
+        &channel.name,
+        "channel",
+        u32::from(channel.index) + 1,
+        channels.iter().map(|other| other.name.as_str()),
+    )
+}
+
+/// A part's name as a file name can hold it, `<kind> <number>` for one with
+/// none, and its number added when another part of the same kind shares it.
+fn part_name<'a>(
+    name: &str,
+    kind: &str,
+    number: u32,
+    all: impl Iterator<Item = &'a str>,
+) -> String {
     let clean = |name: &str| -> String {
         let replaced: String = name
             .chars()
@@ -638,17 +716,16 @@ fn stem_name(track: &ExportTrack, tracks: &[ExportTrack]) -> String {
             .trim_matches(|c: char| c == '-' || c.is_whitespace())
             .to_string()
     };
-    let name = clean(&track.name);
+    let name = clean(name);
     if name.is_empty() {
-        return format!("track {}", track.index);
+        return format!("{kind} {number}");
     }
-    let shared = tracks
-        .iter()
-        .filter(|other| clean(&other.name).eq_ignore_ascii_case(&name))
+    let shared = all
+        .filter(|other| clean(other).eq_ignore_ascii_case(&name))
         .count()
         > 1;
     if shared {
-        format!("{name} {}", track.index)
+        format!("{name} {number}")
     } else {
         name
     }
@@ -714,7 +791,7 @@ mod tests {
             ..RenderSettings::default()
         };
         let job = settings
-            .job(RenderScope::Song, Some("song"), Path::new("/nowhere"), &[])
+            .job(RenderScope::Song, Some("song"), Path::new("/nowhere"), &ExportParts::default())
             .unwrap();
         let output = only_output(&job);
         assert_eq!(output.path, temp.path().join("take two.mp3"));
@@ -729,11 +806,11 @@ mod tests {
         let temp = tempdir().unwrap();
         let settings = RenderSettings::default();
         let job = settings
-            .job(RenderScope::Pattern { index: 2 }, Some("ok then"), temp.path(), &[])
+            .job(RenderScope::Pattern { index: 2 }, Some("ok then"), temp.path(), &ExportParts::default())
             .unwrap();
         assert_eq!(only_output(&job).path, temp.path().join("ok then.wav"));
 
-        let untitled = settings.job(RenderScope::Song, None, temp.path(), &[]).unwrap();
+        let untitled = settings.job(RenderScope::Song, None, temp.path(), &ExportParts::default()).unwrap();
         assert_eq!(
             only_output(&untitled).path,
             temp.path().join(format!("{UNTITLED_EXPORT_NAME}.wav"))
@@ -745,12 +822,12 @@ mod tests {
         let temp = tempdir().unwrap();
         let mut settings = RenderSettings::default();
         settings.output.name = "sub/take".into();
-        assert!(settings.job(RenderScope::Song, None, temp.path(), &[]).is_err());
+        assert!(settings.job(RenderScope::Song, None, temp.path(), &ExportParts::default()).is_err());
 
         settings.output.name = "take".into();
         settings.output.folder = Some(temp.path().join("not here"));
         let problem = settings
-            .job(RenderScope::Song, None, temp.path(), &[])
+            .job(RenderScope::Song, None, temp.path(), &ExportParts::default())
             .unwrap_err();
         assert!(problem.0.contains("doesn't exist"), "{problem}");
     }
@@ -922,7 +999,7 @@ mod tests {
             channels: Channels::Mono,
             ..RenderSettings::default()
         };
-        let job = settings.job(RenderScope::Song, None, temp.path(), &[]).unwrap();
+        let job = settings.job(RenderScope::Song, None, temp.path(), &ExportParts::default()).unwrap();
         let output = only_output(&job);
         assert_eq!(output.channels, OutputChannels::Mono);
         assert!(output.dither);
@@ -990,16 +1067,80 @@ mod tests {
             },
             ..RenderSettings::default()
         };
-        let job = settings.job(RenderScope::Song, None, Path::new("/nowhere"), &[]).unwrap();
+        let job = settings.job(RenderScope::Song, None, Path::new("/nowhere"), &ExportParts::default()).unwrap();
         assert_eq!(only_output(&job).path, temp.path().join("mix-001.wav"));
         assert!(job.existing_targets().is_empty());
 
         settings.output.replace_existing = true;
-        let job = settings.job(RenderScope::Song, None, Path::new("/nowhere"), &[]).unwrap();
+        let job = settings.job(RenderScope::Song, None, Path::new("/nowhere"), &ExportParts::default()).unwrap();
         let output = only_output(&job);
         assert_eq!(output.path, temp.path().join("mix.wav"));
         assert_eq!(output.existing, ExistingFile::Replace);
         assert_eq!(job.existing_targets(), [temp.path().join("mix.wav")]);
+    }
+
+    fn parts(tracks: Vec<ExportTrack>) -> ExportParts {
+        ExportParts {
+            tracks,
+            channels: Vec::new(),
+        }
+    }
+
+    /// **Channels straight out: one file a checked channel, named after the
+    /// song and the channel, on one pass** (MOO-183).
+    #[test]
+    fn channel_stems_write_one_file_a_checked_channel() {
+        let temp = tempdir().unwrap();
+        let channel = |index: u8, name: &str| ExportChannel {
+            id: ChannelId(u32::from(index) + 10),
+            index,
+            name: name.into(),
+        };
+        let parts = ExportParts {
+            tracks: Vec::new(),
+            channels: vec![channel(0, "Kick"), channel(1, "Hat"), channel(2, ""), channel(3, "hat")],
+        };
+        let settings = RenderSettings {
+            source: RenderSource::Channels {
+                channels: [10, 11, 12, 13].map(ChannelId).to_vec(),
+                with_master: false,
+                skip_silent: false,
+            },
+            ..RenderSettings::default()
+        };
+        let job = settings.job(RenderScope::Song, Some("mix"), temp.path(), &parts).unwrap();
+        assert_eq!(job.passes.len(), 1);
+        let named: Vec<_> = job.passes[0]
+            .outputs
+            .iter()
+            .map(|output| {
+                (
+                    output.path.file_name().unwrap().to_string_lossy().into_owned(),
+                    output.tap,
+                )
+            })
+            .collect();
+        assert_eq!(
+            named,
+            [
+                ("mix-Kick.wav".to_string(), RenderTap::Channel(0)),
+                ("mix-Hat 2.wav".to_string(), RenderTap::Channel(1)),
+                ("mix-channel 3.wav".to_string(), RenderTap::Channel(2)),
+                ("mix-hat 4.wav".to_string(), RenderTap::Channel(3)),
+            ]
+        );
+        let none = RenderSettings {
+            source: RenderSource::Channels {
+                channels: Vec::new(),
+                with_master: false,
+                skip_silent: false,
+            },
+            ..RenderSettings::default()
+        };
+        assert_eq!(
+            none.job(RenderScope::Song, None, temp.path(), &parts).unwrap_err().0,
+            "Check at least one channel."
+        );
     }
 
     fn bank() -> Vec<ExportTrack> {
@@ -1038,7 +1179,7 @@ mod tests {
             ..RenderSettings::default()
         };
         let job = settings
-            .job(RenderScope::Song, Some("ok then"), temp.path(), &tracks)
+            .job(RenderScope::Song, Some("ok then"), temp.path(), &parts(tracks.clone()))
             .unwrap();
         assert_eq!(job.passes.len(), 1, "stems are one pass");
         let outputs = &job.passes[0].outputs;
@@ -1071,7 +1212,9 @@ mod tests {
             },
             ..RenderSettings::default()
         };
-        let problem = none.job(RenderScope::Song, None, temp.path(), &tracks).unwrap_err();
+        let problem = none
+            .job(RenderScope::Song, None, temp.path(), &parts(tracks))
+            .unwrap_err();
         assert_eq!(problem.0, "Check at least one track.");
     }
 

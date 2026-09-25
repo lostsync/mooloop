@@ -194,8 +194,9 @@ its job.
 ### Stems have no guard
 
 A track stem (`RenderTap::Track`, MOO-182) is the track's own output,
-taken before it reaches the master, so the master's output guard and
-safety limiter never see it. Its sink does a guard's bookkeeping without
+taken before it reaches the master, and a channel stem
+(`RenderTap::Channel`, MOO-183) is taken before the mixer altogether, so
+the master's output guard and safety limiter never see either. Its sink does a guard's bookkeeping without
 the limiting: a non-finite sample is written as silence and counted, and a
 sample over full scale is counted in the file's own `RenderSummary::overs`
 and written as it is. A float stem keeps it; a PCM stem clamps it and

@@ -653,7 +653,12 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   solo-silenced track's stem is silence, and with Skip silent it is not
   written (that is logged; the result card does not list it). No limiter
   runs on a stem: an over is written as it is in float, clamped in PCM,
-  and counted per file, so float is the format for stems. As of 2026-09-25 (MOO-181) Range is a choice
+  and counted per file, so float is the format for stems. As of 2026-09-25
+  (MOO-183), Source also has **Channels**: every channel is listed and
+  checked, and each checked one's own output (its source, rack, fader and
+  pan, bypassing the mixer) goes to `<name>-<channel name>` in the same
+  single pass. A channel on a muted track still renders; a muted channel
+  renders silence. As of 2026-09-25 (MOO-181) Range is a choice
   of four: the whole song, the loop selection (its points whether or not
   looping is on; unavailable while the song has none), a custom range
   typed as bar.beat (or bar.beat.sixteenth), which starts as the loop

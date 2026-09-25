@@ -51,6 +51,10 @@ const RANGE_LOOP: i32 = 1;
 const RANGE_CUSTOM: i32 = 2;
 const RANGE_PATTERN: i32 = 3;
 
+/// The card's Source choices (MOO-182, MOO-183).
+const SOURCE_TRACKS: i32 = 1;
+const SOURCE_CHANNELS: i32 = 2;
+
 /// Wire the export card's callbacks on `window`, as `AppUi::new` does.
 pub(crate) fn wire(
     window: &MainWindow,
@@ -127,14 +131,20 @@ pub(crate) fn wire(
     }
     {
         let weak = window.as_weak();
-        window.on_export_tracks_all(move |checked| {
+        window.on_export_parts_all(move |checked| {
             if let Some(window) = weak.upgrade() {
-                let rows: Vec<ExportTrackRow> = window
-                    .get_export_tracks()
-                    .iter()
-                    .map(|row| ExportTrackRow { checked, ..row })
-                    .collect();
-                window.set_export_tracks(ModelRc::from(Rc::new(VecModel::from(rows))));
+                let all = |model: ModelRc<ExportTrackRow>| {
+                    let rows: Vec<ExportTrackRow> =
+                        model.iter().map(|row| ExportTrackRow { checked, ..row }).collect();
+                    ModelRc::from(Rc::new(VecModel::from(rows)))
+                };
+                match window.get_export_source() {
+                    SOURCE_TRACKS => window.set_export_tracks(all(window.get_export_tracks())),
+                    SOURCE_CHANNELS => {
+                        window.set_export_channels(all(window.get_export_channels()));
+                    }
+                    _ => {}
+                }
             }
         });
     }
@@ -342,7 +352,7 @@ pub(crate) fn show_output_preview(window: &MainWindow, session: &Session) {
         RenderScope::Song,
         session.export_song_name().as_deref(),
         &session.export_default_folder(),
-        &session.export_tracks(),
+        &session.export_parts(),
     );
     let preview = job.ok().and_then(|job| {
         let paths: Vec<&Path> = job.paths().collect();
@@ -388,18 +398,31 @@ fn show_export_tracks(window: &MainWindow, session: &Session) {
 
 /// What the card's Source says (MOO-182).
 fn card_source(window: &MainWindow) -> RenderSource {
-    if window.get_export_source() != 1 {
-        return RenderSource::Master;
-    }
-    RenderSource::Tracks {
-        tracks: window
-            .get_export_tracks()
-            .iter()
-            .filter(|row| row.checked)
-            .map(|row| mooloop_core::TrackId(row.id as u32))
-            .collect(),
-        with_master: window.get_export_with_master(),
-        skip_silent: window.get_export_skip_silent(),
+    let checked = |model: ModelRc<ExportTrackRow>| -> Vec<u32> {
+        model.iter().filter(|row| row.checked).map(|row| row.id as u32).collect()
+    };
+    let (with_master, skip_silent) = (
+        window.get_export_with_master(),
+        window.get_export_skip_silent(),
+    );
+    match window.get_export_source() {
+        SOURCE_TRACKS => RenderSource::Tracks {
+            tracks: checked(window.get_export_tracks())
+                .into_iter()
+                .map(mooloop_core::TrackId)
+                .collect(),
+            with_master,
+            skip_silent,
+        },
+        SOURCE_CHANNELS => RenderSource::Channels {
+            channels: checked(window.get_export_channels())
+                .into_iter()
+                .map(mooloop_core::ChannelId)
+                .collect(),
+            with_master,
+            skip_silent,
+        },
+        _ => RenderSource::Master,
     }
 }
 
@@ -472,6 +495,31 @@ pub(crate) fn show_export_memory(window: &MainWindow, export: &ExportSettings) {
     window.set_export_number_existing(!export.replace_existing);
 }
 
+/// The card's channel checklist (MOO-183): every channel in rack order. A
+/// channel the card already listed keeps its check, and one it has not
+/// seen is checked -- a channel export starts as every part of the song.
+fn show_export_channels(window: &MainWindow, session: &Session) {
+    let was: std::collections::HashMap<i32, bool> = window
+        .get_export_channels()
+        .iter()
+        .map(|row| (row.id, row.checked))
+        .collect();
+    let rows: Vec<ExportTrackRow> = session
+        .export_channels()
+        .into_iter()
+        .map(|channel| {
+            let id = channel.id.0 as i32;
+            ExportTrackRow {
+                id,
+                name: channel.name.into(),
+                checked: was.get(&id).copied().unwrap_or(true),
+                depth: 0,
+            }
+        })
+        .collect();
+    window.set_export_channels(ModelRc::from(Rc::new(VecModel::from(rows))));
+}
+
 /// The range the card's choice names (MOO-181).
 fn card_range(window: &MainWindow) -> Result<RenderRange, SettingsProblem> {
     Ok(match window.get_export_range_index() {
@@ -521,6 +569,7 @@ pub(crate) fn show_export_defaults(window: &MainWindow, session: &Session, follo
     window.set_export_default_name(defaults.stem(song.as_deref()).unwrap_or_default().into());
 
     show_export_tracks(window, session);
+    show_export_channels(window, session);
 
     let timeline = session.export_timeline();
     let loop_available = timeline.loop_span().is_some();
@@ -779,12 +828,12 @@ mod tests {
         );
 
         window.set_export_source(1);
-        window.invoke_export_tracks_all(false);
+        window.invoke_export_parts_all(false);
         assert!(window.get_export_tracks().iter().all(|row| !row.checked));
         window.invoke_export_confirmed();
         assert_eq!(window.get_export_problem(), "Check at least one track.");
 
-        window.invoke_export_tracks_all(true);
+        window.invoke_export_parts_all(true);
         window.set_export_with_master(true);
         window.set_export_wav_depth(2);
         window.invoke_export_confirmed();
@@ -793,6 +842,50 @@ mod tests {
             .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, ["song.wav", "song-Drums.wav", "song-Bus.wav", "song-Keys.wav"]);
+    }
+
+    /// **Channels straight out from the card: every channel listed and
+    /// checked, one file a checked channel** (MOO-183).
+    #[test]
+    fn the_channel_checklist_exports_one_file_a_checked_channel() {
+        let (card, state) = card_on(|session| {
+            for (channel, name) in session.channels.iter_mut().zip(["Kick", "Hat", "Bass"]) {
+                channel.name = name.into();
+            }
+        });
+        let names: Vec<String> = state
+            .borrow()
+            .session
+            .channels
+            .iter()
+            .map(|channel| channel.name.clone())
+            .collect();
+        assert!(!names.is_empty(), "the test song has no channels");
+        let window = &card.window;
+        let rows: Vec<(String, bool)> = window
+            .get_export_channels()
+            .iter()
+            .map(|row| (row.name.to_string(), row.checked))
+            .collect();
+        assert_eq!(rows, names.iter().map(|name| (name.clone(), true)).collect::<Vec<_>>());
+
+        let folder = tempfile::tempdir().unwrap();
+        window.set_export_folder(folder.path().display().to_string().into());
+        window.set_export_name("song".into());
+        window.set_bpm(120);
+        window.set_export_source(SOURCE_CHANNELS);
+        window.invoke_export_parts_all(false);
+        window.invoke_export_confirmed();
+        assert_eq!(window.get_export_problem(), "Check at least one channel.");
+
+        window.invoke_export_parts_all(true);
+        window.invoke_export_confirmed();
+        let written: Vec<_> = exported(&card)
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        let expected: Vec<_> = names.iter().map(|name| format!("song-{name}.wav")).collect();
+        assert_eq!(written, expected);
     }
 
     /// The window and its session, for the range tests, which set up the

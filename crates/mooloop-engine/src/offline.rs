@@ -249,6 +249,13 @@ pub enum RenderTap {
     /// limiter runs on it: a non-finite sample is written as silence and
     /// counted, an over is counted, and a PCM file clamps it.
     Track(u8),
+    /// A channel's own output, by its index in the song's channels
+    /// (MOO-183): its source, its rack, its fader and pan, and nothing the
+    /// mixer does after -- the track's rack, sends and buses, and the
+    /// master are all left out, so a channel whose track is muted still
+    /// renders. Silence while the channel itself is muted or
+    /// solo-silenced. Guarded the way a track stem is.
+    Channel(u8),
 }
 
 /// One file a job writes: where, from which tap, in which format.
@@ -747,13 +754,16 @@ fn render_pass(
     // A stem of a track the song does not have, or of the master's own bus
     // (which is the master tap, with its guard), is a defective job.
     for output in &pass.outputs {
-        if let RenderTap::Track(track) = output.tap {
-            if track == mooloop_core::MASTER_BUS || usize::from(track) >= state.track_count() {
-                return Err((
-                    Vec::new(),
-                    ExportError::Invalid(format!("the song has no track {track} to render")),
-                ));
-            }
+        let missing = match output.tap {
+            RenderTap::Master => None,
+            RenderTap::Track(track) => (track == mooloop_core::MASTER_BUS
+                || usize::from(track) >= state.track_count())
+            .then(|| format!("the song has no track {track} to render")),
+            RenderTap::Channel(channel) => (usize::from(channel) >= state.live_channel_count())
+                .then(|| format!("the song has no channel {channel} to render")),
+        };
+        if let Some(missing) = missing {
+            return Err((Vec::new(), ExportError::Invalid(missing)));
         }
     }
 
@@ -812,7 +822,7 @@ fn render_pass(
         // so its sink counted its own.
         let (overs, non_finite) = match output.tap {
             RenderTap::Master => (state.output_overs(), state.output_non_finite()),
-            RenderTap::Track(_) => (overs, non_finite),
+            RenderTap::Track(_) | RenderTap::Channel(_) => (overs, non_finite),
         };
         let summary = RenderSummary {
             sample_rate,
@@ -1172,7 +1182,7 @@ impl Sink {
             },
             stem: match output.tap {
                 RenderTap::Master => [Vec::new(), Vec::new()],
-                RenderTap::Track(_) => {
+                RenderTap::Track(_) | RenderTap::Channel(_) => {
                     [vec![0.0; OFFLINE_BLOCK_FRAMES], vec![0.0; OFFLINE_BLOCK_FRAMES]]
                 }
             },
@@ -1191,9 +1201,14 @@ impl Sink {
                 self.audible |= is_audible(left, right);
                 self.write(left, right)
             }
-            RenderTap::Track(track) => {
+            RenderTap::Track(_) | RenderTap::Channel(_) => {
+                let source = match self.tap {
+                    RenderTap::Track(track) => state.track_output(usize::from(track)),
+                    RenderTap::Channel(channel) => state.channel_output(usize::from(channel)),
+                    RenderTap::Master => None,
+                };
                 let [mut left, mut right] = std::mem::take(&mut self.stem);
-                match state.track_output(usize::from(track)) {
+                match source {
                     Some(bus) => {
                         left[..frames].copy_from_slice(&bus.l[..frames]);
                         right[..frames].copy_from_slice(&bus.r[..frames]);
@@ -2522,6 +2537,92 @@ mod tests {
         assert!(peak > 1.0, "the stem was limited to {peak}");
         let limited = mooloop_dsp::testkit::peak(&wav_channels(&mix)[0]);
         assert!(limited <= 1.0, "the master was not limited: {limited}");
+    }
+
+    /// Two drum channels on one track with nothing on it, at unity: the
+    /// track's output is its input.
+    fn one_track_two_channels() -> Project {
+        let mut project = two_track_project();
+        for channel in &mut project.channels {
+            channel.setup.channel.bus = 1;
+        }
+        project.buses[1].bus.volume = 1.0;
+        project
+    }
+
+    fn channel_stem(path: &Path, channel: u8) -> RenderOutput {
+        RenderOutput::new(
+            path.to_path_buf(),
+            RenderTap::Channel(channel),
+            ExportFormat::Wav(WavEncoding::Float32),
+        )
+    }
+
+    /// **Two channels feeding one track, summed, are that track's input**
+    /// (MOO-183): each channel file is its source, rack, fader and pan, and
+    /// nothing after.
+    #[test]
+    fn two_channel_stems_sum_to_their_tracks_input() {
+        let temp = tempdir().unwrap();
+        let project = one_track_two_channels();
+        let paths = ["track.wav", "kick.wav", "snare.wav"].map(|name| temp.path().join(name));
+        let job = RenderJob {
+            passes: vec![pattern_pass(
+                1.0,
+                vec![
+                    stem(&paths[0], 1),
+                    channel_stem(&paths[1], 0),
+                    channel_stem(&paths[2], 1),
+                ],
+            )],
+        };
+        let files =
+            OfflineRenderer::render_job(&project, &[], 48_000, &job, &ExportProgress::new()).unwrap();
+        assert_eq!(files.len(), 3);
+        let [track, kick, snare] = paths.map(|path| wav_channels(&path));
+        assert!(mooloop_dsp::testkit::peak(&kick[0]) > 0.01, "the kick channel is silent");
+        assert!(mooloop_dsp::testkit::peak(&snare[0]) > 0.01, "the snare channel is silent");
+        let mut worst = 0.0f32;
+        for side in 0..2 {
+            assert_eq!(kick[side].len(), track[side].len());
+            for ((&t, &k), &s) in track[side].iter().zip(&kick[side]).zip(&snare[side]) {
+                worst = worst.max((t - (k + s)).abs());
+            }
+        }
+        assert!(worst < 1e-6, "the channels summed are {worst} from their track's input");
+    }
+
+    /// **A channel renders with its track muted, since the mixer is
+    /// bypassed; a muted channel renders silence** (MOO-183).
+    #[test]
+    fn a_channel_stem_bypasses_its_tracks_mute_but_not_its_own() {
+        let temp = tempdir().unwrap();
+        let mut project = one_track_two_channels();
+        project.buses[1].bus.muted = true;
+        project.channels[1].setup.channel.muted = true;
+        let (kick, snare) = (temp.path().join("kick.wav"), temp.path().join("snare.wav"));
+        let job = RenderJob {
+            passes: vec![pattern_pass(
+                0.0,
+                vec![channel_stem(&kick, 0), channel_stem(&snare, 1)],
+            )],
+        };
+        OfflineRenderer::render_job(&project, &[], 48_000, &job, &ExportProgress::new()).unwrap();
+        assert!(
+            mooloop_dsp::testkit::peak(&wav_channels(&kick)[0]) > 0.01,
+            "a channel on a muted track rendered silence"
+        );
+        assert!(
+            wav_channels(&snare).iter().flatten().all(|sample| *sample == 0.0),
+            "a muted channel rendered sound"
+        );
+        let missing = RenderJob {
+            passes: vec![pattern_pass(0.0, vec![channel_stem(&temp.path().join("x.wav"), 9)])],
+        };
+        let failure =
+            OfflineRenderer::render_job(&project, &[], 48_000, &missing, &ExportProgress::new())
+                .unwrap_err();
+        assert!(matches!(failure.error, ExportError::Invalid(_)), "{failure:?}");
     }
 
     /// A stem of a track the song does not have, or of the master's own

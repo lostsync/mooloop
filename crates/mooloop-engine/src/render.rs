@@ -5186,6 +5186,11 @@ pub(crate) struct RenderState {
     /// Samples that reached the guard above 0 dBFS and were limited, since
     /// this state was built. See [`Self::output_overs`].
     output_overs: u64,
+    /// Which channels reached their output in the last block: what a take
+    /// of a channel and an export's channel stem (MOO-183) may read. A
+    /// muted, faded or sleeping channel's buffer holds stale or pre-fader
+    /// audio, and what either should hear from it is silence.
+    channels_heard: [bool; MAX_CHANNELS],
 }
 
 /// How long a preview that is stopped or replaced takes to fade out. Long
@@ -5345,6 +5350,7 @@ impl RenderState {
             output_guard: OutputGuard::new(sample_rate),
             output_non_finite: 0,
             output_overs: 0,
+            channels_heard: [false; MAX_CHANNELS],
         };
         // The sequencer starts with one channel, so the graph starts with
         // storage for one. `live_channels` tolerates the two disagreeing, but
@@ -9555,6 +9561,7 @@ impl RenderState {
             let master = &mut self.buses[MASTER_BUS as usize].bus;
             OutputGuard::scrub(&mut master.l[..frames], &mut master.r[..frames])
         };
+        self.channels_heard = heard;
         self.advance_takes(&spans[..span_count], ticks_per_sample, &heard);
         self.render_preview(frames);
         // **The output guard, last of all** (MOO-93). Everything that reaches
@@ -9645,6 +9652,21 @@ impl RenderState {
 
     pub fn master(&self) -> &StereoBus {
         &self.buses[MASTER_BUS as usize].bus
+    }
+
+    /// A channel's own output this block, the way a take of a channel reads
+    /// it: its source, its rack, its fader and pan -- nothing the mixer does
+    /// after. `None` while it did not reach its output (muted or
+    /// solo-silenced once faded, asleep) and for a channel that does not
+    /// exist. An export's channel stems read this (MOO-183).
+    pub fn channel_output(&self, channel: usize) -> Option<&StereoBus> {
+        (*self.channels_heard.get(channel)? && channel < self.live_channels())
+            .then(|| &self.strips[channel].bus)
+    }
+
+    /// How many channels the render plays.
+    pub fn live_channel_count(&self) -> usize {
+        self.live_channels()
     }
 
     /// How many tracks the render has, the master included.

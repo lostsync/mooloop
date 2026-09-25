@@ -46,14 +46,38 @@ component Section inherits HorizontalLayout {
     }
 }
 
-// One track on the Source's checklist (MOO-182). `id` is the track's
-// durable identity, which Rust reads back; `depth` indents a bus's feeders
-// under it.
+// One track or channel on the Source's checklist (MOO-182, MOO-183). `id`
+// is its durable identity, which Rust reads back; `depth` indents a bus's
+// feeders under it, and is 0 for every channel.
 export struct ExportTrackRow {
     id: int,
     name: string,
     checked: bool,
     depth: int,
+}
+
+// A checklist of tracks or channels, scrolling in a fixed height.
+component PartList inherits Rectangle {
+    in-out property <[ExportTrackRow]> rows;
+    height: 112px;
+    background: Theme.background;
+    border-radius: Theme.radius-md;
+    border-width: Theme.hairline;
+    border-color: Theme.border;
+    ScrollView {
+        VerticalLayout {
+            padding: 4px;
+            spacing: 0px;
+            for row[i] in root.rows: HorizontalLayout {
+                padding-left: row.depth * 16px;
+                CheckBox {
+                    text: row.name;
+                    checked: row.checked;
+                    toggled => { root.rows[i].checked = self.checked; }
+                }
+            }
+        }
+    }
 }
 
 // The Range choice: SegmentedControl's look, with one segment that can be
@@ -115,10 +139,12 @@ export component ExportDialog inherits Rectangle {
     // The most tail there may be. The render stops as soon as every device
     // has fallen silent, so this is a cap rather than a length.
     in-out property <int> tail-seconds: 10;
-    // What is rendered (MOO-182): 0 the master mix, 1 tracks, each checked
-    // track to its own file, with the master too if `with-master`.
+    // What is rendered: 0 the master mix, 1 tracks (MOO-182), 2 channels
+    // straight out (MOO-183), each checked one to its own file, with the
+    // master too if `with-master`.
     in-out property <int> source-index;
     in-out property <[ExportTrackRow]> tracks;
+    in-out property <[ExportTrackRow]> channels;
     in-out property <bool> with-master;
     in-out property <bool> skip-silent;
     // Which stretch of it (MOO-181): 0 the whole song, 1 the loop
@@ -164,8 +190,8 @@ export component ExportDialog inherits Rectangle {
     callback range-picked;
     callback range-edited;
     callback browse-folder;
-    // All or None on the track checklist.
-    callback tracks-all(bool);
+    // All or None on the checklist that is showing.
+    callback parts-all(bool);
     callback cancelled;
     callback cancel-render;
     callback dismissed;
@@ -177,8 +203,8 @@ export component ExportDialog inherits Rectangle {
     TouchArea { }
     Rectangle {
         width: min(parent.width - 32px, 460px);
-        // A checklist adds its list and its option row (MOO-182).
-        height: root.phase == 0 ? (root.source-index == 1 ? 616px : 460px)
+        // A checklist adds its list and its option row (MOO-182, MOO-183).
+        height: root.phase == 0 ? (root.source-index != 0 ? 616px : 460px)
             : root.phase == 2 ? 250px : 180px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
@@ -193,45 +219,26 @@ export component ExportDialog inherits Rectangle {
             Section {
                 label: "SOURCE";
                 SegmentedControl {
-                    options: ["Master mix", "Tracks"];
-                    hint: "Tracks writes each checked track's own output, after its fader and before what it feeds, to its own file: no limiter runs on a stem, so float is the safe format";
+                    options: ["Master mix", "Tracks", "Channels"];
+                    hint: "Tracks writes each checked track's own output, after its fader and before what it feeds; Channels writes each checked channel before the mixer. No limiter runs on either, so float is the safe format";
                     selected-index: root.source-index;
                     selected(index) => { root.source-index = index; }
                 }
-                if root.source-index == 1: Rectangle {
-                    height: 112px;
-                    background: Theme.background;
-                    border-radius: Theme.radius-md;
-                    border-width: Theme.hairline;
-                    border-color: Theme.border;
-                    ScrollView {
-                        VerticalLayout {
-                            padding: 4px;
-                            spacing: 0px;
-                            for row[i] in root.tracks: HorizontalLayout {
-                                padding-left: row.depth * 16px;
-                                CheckBox {
-                                    text: row.name;
-                                    checked: row.checked;
-                                    toggled => { root.tracks[i].checked = self.checked; }
-                                }
-                            }
-                        }
-                    }
-                }
-                if root.source-index == 1: HorizontalLayout {
+                if root.source-index == 1: PartList { rows <=> root.tracks; }
+                if root.source-index == 2: PartList { rows <=> root.channels; }
+                if root.source-index != 0: HorizontalLayout {
                     spacing: 6px;
                     ToolButton {
                         text: "All";
                         width: 36px;
-                        hint: "Check every track";
-                        clicked => { root.tracks-all(true); }
+                        hint: "Check every one";
+                        clicked => { root.parts-all(true); }
                     }
                     ToolButton {
                         text: "None";
                         width: 44px;
-                        hint: "Uncheck every track";
-                        clicked => { root.tracks-all(false); }
+                        hint: "Uncheck every one";
+                        clicked => { root.parts-all(false); }
                     }
                     CheckBox {
                         text: "+ master";
