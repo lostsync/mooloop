@@ -595,6 +595,119 @@ fn moving_a_containers_mix_is_continuous() {
     );
 }
 
+/// The sine through a low-pass inside a chain container, rows
+/// `[Chain, Filter]`, with the box's host controls set by `configure`.
+fn contained_filtered_sine(configure: impl FnOnce(&mut EffectSlotState)) -> RenderState {
+    let mut channel = sine_channel();
+    channel
+        .setup
+        .push_effect(EffectSlotState::new(EffectParams::Filter(FilterParams {
+            cutoff_hz: 150.0,
+            resonance: 0.0,
+            mode: FilterMode::LowPass,
+            ..FilterParams::default()
+        })))
+        .expect("room");
+    let setup = &mut channel.setup;
+    let mut container = EffectSlotState::of_kind(EffectKind::Chain);
+    configure(&mut container);
+    mooloop_core::wrap_in_container(&mut setup.effects, &mut setup.next_device_id, 0..1, container)
+        .expect("wrapped");
+    render_of(vec![channel])
+}
+
+/// A container's trims are heard since MOO-210, so moving one is a
+/// transition like a leaf's, and ramps like one. The input trim is taken at
+/// half Mix, where it is on both sides of the blend.
+#[test]
+fn moving_a_containers_trims_is_continuous() {
+    let mut render = contained_filtered_sine(|container| {
+        container
+            .params
+            .set(mooloop_core::CONTAINER_PARAM_MIX, 0.5)
+            .expect("a mix");
+    });
+    assert_continuous(
+        "a container's input trim from unity to a quarter",
+        step_across(
+            &mut render,
+            LEAD,
+            |render| {
+                render.apply_command(EngineCommand::SetEffectInputTrim {
+                    target: FX,
+                    slot: 0,
+                    input_trim: 0.25,
+                })
+            },
+            TAIL,
+        ),
+    );
+    let mut render = contained_filtered_sine(|_| {});
+    assert_continuous(
+        "a container's output trim from unity to a quarter",
+        step_across(
+            &mut render,
+            LEAD,
+            |render| {
+                render.apply_command(EngineCommand::SetEffectOutputTrim {
+                    target: FX,
+                    slot: 0,
+                    output_trim: 0.25,
+                })
+            },
+            TAIL,
+        ),
+    );
+}
+
+/// Bypassing a trimmed box, and bringing it back. Its bypassed path is
+/// untrimmed, so the trims have to fade with the bypass rather than drop
+/// off when the run stops being called (MOO-210).
+#[test]
+fn bypassing_a_trimmed_container_is_continuous() {
+    // Mild enough that the sine stays well above the check's floor while
+    // trimmed, and still a 28% step if the trims dropped off unfaded.
+    let trimmed = |container: &mut EffectSlotState| {
+        container.input_trim = 0.8;
+        container.output_trim = 0.9;
+    };
+    let mut render = contained_filtered_sine(trimmed);
+    assert_continuous(
+        "bypassing a trimmed container",
+        step_across(
+            &mut render,
+            LEAD,
+            |render| {
+                render.apply_command(EngineCommand::SetEffectBypassed {
+                    target: FX,
+                    slot: 0,
+                    bypassed: true,
+                })
+            },
+            TAIL,
+        ),
+    );
+    let mut render = contained_filtered_sine(|container| {
+        trimmed(container);
+        container.bypassed = true;
+    });
+    assert_continuous(
+        "un-bypassing a trimmed container",
+        step_across(
+            &mut render,
+            LEAD,
+            |render| {
+                render.apply_command(EngineCommand::SetEffectBypassed {
+                    target: FX,
+                    slot: 0,
+                    bypassed: false,
+                })
+            },
+            TAIL,
+        ),
+    );
+}
+
 /// The sine through a layer of two chain branches, each holding the same
 /// low-pass: rows `[Layer, Chain, Filter, Chain, Filter]`, so the branch
 /// heads are rows 1 and 3 (containers/09).

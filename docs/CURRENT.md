@@ -1853,8 +1853,15 @@ land on its own when it starts to matter:
   whole run, delayed to match that run's latency — the wet/dry that a
   *single* device has always had, applied to a group. It really is the one
   control: the shell's own dry/wet is not offered on a container row, because
-  a box has no node to be wet with. Bypassing a container skips its run
-  without moving the channel in time. **Nothing in the
+  a box has no node to be wet with. **Its two trims are heard** (MOO-210,
+  2026-09-25; before it they were drawn, saved and undone and multiplied
+  nothing): the input trim on what enters the box, so on both sides of its
+  Mix, and the output trim on what leaves it, after the blend, as a device's
+  are. Both ramp, and a bypassed box is its input with neither on it; a
+  bypass fades them with the Mix. Songs keep their saved trims, so one that
+  saved a box trimmed away from unity reopens at that level (none of Adam's
+  did). Bypassing a container skips its run without moving the channel in
+  time. **Nothing in the
   interface**: a device's left rail wraps it in a container, a container's
   right rail unwraps it, and dragging a device onto a row already inside a box
   puts it in that box. **Containers nest four deep and the wrap button goes

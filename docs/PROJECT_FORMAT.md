@@ -618,6 +618,15 @@ before any of them existed still loads:
   `state.solo` (default false), added 2026-09-23 (`containers/09`). Mute and
   solo act only when the container is a branch of a layer. Every file written
   before them reads as unity, unmuted and unsoloed, which is how it sounded.
+- A container row's own `input_trim` and `output_trim` (the host fields
+  every row carries) have always been saved and are **heard since
+  2026-09-25** (MOO-210): the input trim before the run and its dry copy,
+  the output trim after the blend. No field changed and nothing migrates.
+  A file that saved a box's trim away from unity therefore reopens at that
+  level rather than at the level it used to play at, which is deliberate:
+  the saved value is what the knob showed, and silently resetting it would
+  change the file behind the face. None of the fifteen songs Adam had on
+  the build box that day held a container with a non-unity trim.
 - `channels[].setup.modulation` is that channel's `ModRack`. Only occupied
   slots are written, each with its slot index, its durable `id`, and its
   module parameters. Routes persist their durable `source` id alone; the

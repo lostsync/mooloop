@@ -1054,6 +1054,96 @@ fn a_branchs_level_and_the_layers_gain_scale_what_they_say() {
     );
 }
 
+/// `render`, every sample scaled by `gain`.
+fn scaled(render: &[f32], gain: f32) -> Vec<f32> {
+    render.iter().map(|sample| sample * gain).collect()
+}
+
+/// **A container's output trim is heard** (MOO-210). It was drawn on the
+/// box's OUT rail, saved and undone, and multiplied nothing.
+///
+/// Exact, not close: the trim is the last thing on the box, after the blend,
+/// and everything downstream of it on this channel is a linear gain, so a
+/// trim of a half is the untrimmed render halved to the bit. The run is the
+/// Drive chain, so the trim is shown to come after a nonlinearity rather
+/// than before it -- a trim on the way in would not halve the output.
+#[test]
+fn a_containers_output_trim_scales_what_leaves_it() {
+    let mut boxed = three_device_chain();
+    wrap(&mut boxed, 0..3, 1.0);
+    let mut trimmed = boxed.clone();
+    trimmed.channels[0].setup.effects[0].output_trim = 0.5;
+    for block in [64, 128, 512] {
+        let reference = render_blocks(&boxed, 0.5, block);
+        assert!(peak_of(&reference) > 1.0e-4, "the reference render was silent");
+        assert_eq!(
+            render_blocks(&trimmed, 0.5, block),
+            scaled(&reference, 0.5),
+            "a container's output trim of a half did not halve it, at block {block}"
+        );
+    }
+}
+
+/// And the input trim, on what enters the box -- so on **both** sides of its
+/// Mix, as a leaf's input trim is on its dry path too. Around a `Moo`
+/// Preamp at unity, which is the identity to the bit, so the box's run is
+/// linear and a trim of a half halves the render at any Mix.
+#[test]
+fn a_containers_input_trim_is_on_both_sides_of_its_mix() {
+    for mix in [1.0, 0.5, 0.0] {
+        let mut boxed = drum_through(&[EffectKind::Preamp], &[]);
+        wrap(&mut boxed, 0..1, mix);
+        let reference = render_blocks(&boxed, 0.5, 128);
+        assert!(peak_of(&reference) > 1.0e-4, "the reference render was silent");
+        let mut trimmed = boxed.clone();
+        trimmed.channels[0].setup.effects[0].input_trim = 0.5;
+        assert_eq!(
+            render_blocks(&trimmed, 0.5, 128),
+            scaled(&reference, 0.5),
+            "a container's input trim of a half did not halve it at Mix {mix}"
+        );
+    }
+}
+
+/// An empty box is a clean branch with a fader, and its trims are faders on
+/// it too.
+#[test]
+fn an_empty_containers_trims_scale_its_input() {
+    let dry = render_blocks(&drum_through(&[], &[]), 0.5, 128);
+    let mut empty = drum_through(&[], &[]);
+    {
+        let setup = &mut empty.channels[0].setup;
+        let mut chain = EffectSlotState::of_kind(EffectKind::Chain);
+        chain.input_trim = 0.5;
+        chain.output_trim = 0.25;
+        setup.effects = vec![chain];
+        mooloop_core::assign_device_ids(&mut setup.effects, &mut setup.next_device_id);
+    }
+    assert_eq!(
+        render_blocks(&empty, 0.5, 128),
+        scaled(&dry, 0.125),
+        "an empty box's trims were not an eighth"
+    );
+}
+
+/// A bypassed box is its input, trims and all: they are the box's, and a
+/// box out of the path has none of itself on the signal.
+#[test]
+fn a_bypassed_containers_trims_are_not_heard() {
+    let mut bypassed = three_device_chain();
+    wrap(&mut bypassed, 0..3, 1.0);
+    bypassed.channels[0].setup.effects[0].bypassed = true;
+    let reference = render_blocks(&bypassed, 0.5, 128);
+    let mut trimmed = bypassed.clone();
+    trimmed.channels[0].setup.effects[0].input_trim = 0.25;
+    trimmed.channels[0].setup.effects[0].output_trim = 0.5;
+    assert_eq!(
+        render_blocks(&trimmed, 0.5, 128),
+        reference,
+        "a bypassed container's trims reached the signal"
+    );
+}
+
 /// **The case the layer exists for, and 09's acceptance render.** A drum
 /// loop on a track whose chain is a layer: a clean branch (an empty chain)
 /// beside a Drive → Bitcrush branch, the drum's transients kept by the clean

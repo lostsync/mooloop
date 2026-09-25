@@ -1416,6 +1416,20 @@ impl EffectSlot {
         self.ramps.output.reset_to(self.output_trim);
     }
 
+    /// Jump a container's leaf wet/dry to its control. Its Mix is the blend
+    /// it uses instead; its trims are heard (MOO-210) and ramp like a leaf's.
+    fn settle_container_wet(&mut self) {
+        self.ramps.wet.reset_to(self.wet_dry);
+    }
+
+    /// Jump a container's trims to their controls, for a box whose run is
+    /// not being blended -- out of the path, or nested past the cap -- where
+    /// a move has nothing to ramp along.
+    fn settle_container_trims(&mut self) {
+        self.ramps.input.reset_to(self.input_trim);
+        self.ramps.output.reset_to(self.output_trim);
+    }
+
     /// Whether every ramp has arrived at its control -- judged against the
     /// controls rather than against where the ramps were last aimed, so a
     /// move made while the chain slept still counts as one to make.
@@ -2819,34 +2833,59 @@ impl EffectChain {
                 // through the equal-power crossfade, not even bit-exact -- a
                 // transparent node blended at unity still leaks a cos(pi/2)
                 // of the dry.
+                if let Some(state) = self.slots[slot].as_mut() {
+                    state.events.clear();
+                    state.settle_container_wet();
+                }
+                let children = self.container_children(slot);
+                // **A container's trims are heard** (MOO-210): its input
+                // trim here, on what enters the run and so on both sides of
+                // its Mix, and its output trim in `close_run`, after the
+                // blend -- where a leaf has them. They were drawn, saved and
+                // undone for months and multiplied nothing. A box out of the
+                // path is left alone, and one fading out fades its trims to
+                // unity with it (`apply_container_trim`).
+                if children > 0 && !self.bypassed(slot) && depth < MAX_CONTAINER_DEPTH {
+                    if let Some(state) = self.slots[slot].as_deref_mut() {
+                        let active = state.ramps.active;
+                        Self::apply_container_trim(&mut state.ramps.input, active, bus, context.frames);
+                    }
+                }
                 let (left, right) = bus.peak(context.frames);
                 self.note_input_level(slot, left.max(right), context.frames);
                 if let Some((meters, _, target)) = device_display {
                     meters.publish_input(target, slot + 1, left, right);
                 }
-                if let Some(state) = self.slots[slot].as_mut() {
-                    state.events.clear();
-                    state.settle_leaf_ramps();
-                }
-                let children = self.container_children(slot);
                 if children == 0 {
-                    // Everything but its Level, which ramps below.
+                    // Everything but its Level and trims, which ramp below.
                     let bypassed = self.bypassed(slot);
                     if let Some(state) = self.slots[slot].as_mut() {
-                        let level = state.ramps.level;
+                        let HostRamps { level, input, output, .. } = state.ramps;
                         state.settle_ramps();
                         if !bypassed {
                             state.ramps.level = level;
+                            state.ramps.input = input;
+                            state.ramps.output = output;
                         }
                     }
                     // An empty box is a row that does nothing, so what comes
-                    // out of it is what went in -- at its Level, which is
-                    // what makes an empty chain a *clean branch* with a fader
-                    // (`containers/09`). Its Mix blends the input with
-                    // itself, which is the identity it always was here, and
-                    // bypassed it is the identity whatever its Level.
+                    // out of it is what went in -- at its Level and its two
+                    // trims, which is what makes an empty chain a *clean
+                    // branch* with a fader (`containers/09`). Its Mix blends
+                    // the input with itself, which is the identity it always
+                    // was here, and bypassed it is the identity whatever its
+                    // Level. Its bypass is settled, so the trims' fade is
+                    // too.
                     if !bypassed {
+                        if let Some(state) = self.slots[slot].as_deref_mut() {
+                            let active = state.ramps.active;
+                            Self::apply_container_trim(&mut state.ramps.input, active, bus, context.frames);
+                        }
                         self.apply_run_level(slot, bus, context);
+                        if let Some(state) = self.slots[slot].as_deref_mut() {
+                            let active = state.ramps.active;
+                            Self::apply_container_trim(&mut state.ramps.output, active, bus, context.frames);
+                        }
                     }
                     if let Some((meters, _, target)) = device_display {
                         let (left, right) = bus.peak(context.frames);
@@ -2889,6 +2928,7 @@ impl EffectChain {
                     if let Some(state) = self.slots[slot].as_mut() {
                         let level = state.container_level();
                         state.ramps.level.reset_to(level);
+                        state.settle_container_trims();
                     }
                     skip_until = open_run.end;
                     continue;
@@ -3190,8 +3230,15 @@ impl EffectChain {
                 bus.r[..context.frames].copy_from_slice(&branches.sum[depth].r[..context.frames]);
             }
         }
+        // The bypass fade as it stands before the blend advances it, so the
+        // output trim below fades along the same samples the blend did.
+        let active = self.slot(run.slot).map(|state| state.ramps.active);
         self.apply_run_level(run.slot, bus, context);
         self.blend_run(run, depth, bus, context);
+        // The box's output trim, after the blend, as a leaf's is (MOO-210).
+        if let (Some(active), Some(state)) = (active, self.slots[run.slot].as_deref_mut()) {
+            Self::apply_container_trim(&mut state.ramps.output, active, bus, context.frames);
+        }
         // The box's OUT is what leaves the far end of its run, taken after
         // the blend. It used to be published at the container's own row from
         // the peak going *in*, which is the one number it certainly is not:
@@ -3320,6 +3367,45 @@ impl EffectChain {
         }
         for frame in 0..context.frames {
             let gain = level.advance();
+            bus.l[frame] *= gain;
+            bus.r[frame] *= gain;
+        }
+    }
+
+    /// One of a container's trims on the bus (MOO-210): `trim`'s gain, faded
+    /// toward unity as the box's bypass (`active`, a copy advanced here and
+    /// discarded -- the blend advances the real one) takes it out of the path.
+    ///
+    /// A leaf's trims are inside the crossfade its bypass runs against the
+    /// untrimmed dry path, so they fade with it. A container's bypass is its Mix
+    /// fading to its dry copy and then the run being skipped; a trim applied
+    /// flat would still be on the signal at the end of that fade and gone the
+    /// block after, which is a step. So the gain is `1 + (trim - 1) * active`:
+    /// the trim itself while the box is in, unity once it is out.
+    ///
+    /// A still trim with the box still and in is one multiply a sample, and a
+    /// still unity one is nothing at all, so every container that was never
+    /// trimmed renders exactly as it did.
+    fn apply_container_trim(trim: &mut Smoothed, mut active: Smoothed, bus: &mut StereoBus, frames: usize) {
+        let gain = |trim: f32, active: f32| {
+            if active == 1.0 {
+                trim
+            } else {
+                1.0 + (trim - 1.0) * active
+            }
+        };
+        if trim.is_settled() && active.is_settled() {
+            let gain = gain(trim.value(), active.value());
+            if gain != 1.0 {
+                for frame in 0..frames {
+                    bus.l[frame] *= gain;
+                    bus.r[frame] *= gain;
+                }
+            }
+            return;
+        }
+        for frame in 0..frames {
+            let gain = gain(trim.advance(), active.advance());
             bus.l[frame] *= gain;
             bus.r[frame] *= gain;
         }
