@@ -2015,578 +2015,14 @@ mod render_tests {
     }
 }
 
-
-/// The stretcher and its reader exactly as they were before MOO-248
-/// (8e570c4f), kept so the tests can hold the new ones to them sample for
-/// sample in the same process. Pinned hashes would not do: the Hann table
-/// and any test tone come from the platform's `cos` and `sin`, which differ
-/// in the last bit between x86-64 and aarch64.
-#[cfg(test)]
-#[allow(dead_code, unused_imports, clippy::all)]
-mod before_moo248 {
-    use super::{
-        capacity_frames, hann_table, region_span, searches, window_frames, wrap_index,
-        GRAIN_DEFAULT_FRAMES, GRAIN_MAX_FRAMES, GRAIN_MIN_FRAMES, HANN_TABLE, MARGIN, MAX_RATIO,
-        MIN_RATIO, SCRATCH, SHIFT,
-    };
-    use crate::interpolate::{Region, SincTable};
-    use mooloop_core::StretchMode;
-
-    pub struct Stretcher {
-        sample_rate: u32,
-        mode: StretchMode,
-        grain_frames: u32,
-        /// Active geometry, re-derived only when mode or grain size changes, and
-        /// only at a hop boundary.
-        window: usize,
-        hop: usize,
-        overlap: usize,
-        /// Half-width of the similarity search. Equal to the hop, which is what
-        /// the spike measured; a wider search costs linearly and did not improve
-        /// any metric. Zero in `Grain`, which is the mode's whole definition.
-        search: usize,
-        /// Decimation of the correlation sum. The search still visits every
-        /// candidate offset — this only thins the inner product at each one.
-        corr_decim: usize,
-        /// Pending geometry, applied at the next hop. Changing the window
-        /// mid-window would leave the accumulator holding half of one envelope
-        /// and half of another, which clicks.
-        pending: Option<(StretchMode, u32)>,
-        hann: Vec<f32>,
-        /// Overlap-add accumulator, used as a ring so a completed hop can be
-        /// drained without shifting the tail down.
-        acc: Vec<[f32; 2]>,
-        head: usize,
-        /// One hop of finished output, drained a frame at a time by `next_frame`.
-        ready: Vec<[f32; 2]>,
-        ready_pos: usize,
-        ready_len: usize,
-        /// The natural continuation of the previous segment: what the next window
-        /// would have to look like for the join to be seamless.
-        nat: Vec<f32>,
-        /// Mid-channel candidates for this hop's search, read once so the inner
-        /// loop is a flat scan rather than `2 * search + overlap` region lookups.
-        search_buf: Vec<f32>,
-        analysis_pos: f64,
-        prev_chosen: i64,
-        ratio: f64,
-        first_frame: bool,
-    }
-
-    impl Stretcher {
-        pub fn new(mode: StretchMode, sample_rate: u32) -> Self {
-            let capacity = capacity_frames(sample_rate);
-            let window = window_frames(mode, sample_rate, GRAIN_DEFAULT_FRAMES);
-            let hop = window / 2;
-            let mut stretcher = Self {
-                sample_rate,
-                mode,
-                grain_frames: GRAIN_DEFAULT_FRAMES,
-                window,
-                hop,
-                overlap: window - hop,
-                search: if searches(mode) { hop } else { 0 },
-                corr_decim: 2,
-                pending: None,
-                hann: hann_table(),
-                acc: vec![[0.0; 2]; capacity],
-                head: 0,
-                ready: vec![[0.0; 2]; capacity / 2],
-                ready_pos: 0,
-                ready_len: 0,
-                nat: vec![0.0; capacity / 2],
-                search_buf: vec![0.0; capacity + capacity / 2 + 1],
-                analysis_pos: 0.0,
-                prev_chosen: 0,
-                ratio: 1.0,
-                first_frame: true,
-            };
-            stretcher.apply_geometry(mode, GRAIN_DEFAULT_FRAMES);
-            stretcher
-        }
-
-        /// Algorithmic latency, in output frames. Always zero — see the module
-        /// header. Present so the node contract has something honest to report
-        /// rather than callers assuming it.
-        pub fn latency_frames(&self) -> usize {
-            0
-        }
-
-        /// Frames past the nominal analysis position the stretcher may read.
-        ///
-        /// This is a region bound, not latency: it says how close to the end of a
-        /// non-looping region the analysis pointer can get before the search
-        /// starts finding silence rather than material.
-        pub fn lookahead_frames(&self) -> usize {
-            self.window + self.search
-        }
-
-        /// Heap bytes held per voice.
-        ///
-        /// Sized to the worst-case window rather than the active one, because
-        /// mode and grain size are live controls. That is why this is several
-        /// times the figure in #13's original budget: the budget was written when
-        /// the window was fixed at construction.
-        pub fn state_bytes(&self) -> usize {
-            self.hann.capacity() * 4
-                + self.acc.capacity() * 8
-                + self.ready.capacity() * 8
-                + self.nat.capacity() * 4
-                + self.search_buf.capacity() * 4
-        }
-
-        pub fn mode(&self) -> StretchMode {
-            self.mode
-        }
-
-        pub fn grain_frames(&self) -> u32 {
-            self.grain_frames
-        }
-
-        /// Active window length in frames. In `Grain` this is what sets the
-        /// repetition rate, at `sample_rate / (window / 2)`.
-        pub fn window(&self) -> usize {
-            self.window
-        }
-
-        /// Frequency of the grain repetition, in Hz. Meaningless in the
-        /// transparent modes, where the search is actively suppressing it.
-        pub fn rattle_hz(&self) -> f64 {
-            self.sample_rate as f64 / self.hop as f64
-        }
-
-        /// Switch mode. Takes effect at the next hop boundary.
-        pub fn set_mode(&mut self, mode: StretchMode) {
-            self.queue_geometry(mode, self.target().1);
-        }
-
-        /// Set the grain window, in frames. Free and continuous by design: this
-        /// is a timbre, and sweeping it is the point. Clamped to
-        /// [`GRAIN_MIN_FRAMES`]..=[`GRAIN_MAX_FRAMES`], and ignored by the
-        /// transparent modes, whose window sizing is a correctness rule rather
-        /// than a preference.
-        pub fn set_grain_frames(&mut self, frames: u32) {
-            self.queue_geometry(self.target().0, frames);
-        }
-
-        /// The geometry the stretcher is heading for: whatever is queued, or the
-        /// active geometry if nothing is. Both setters read through this so that
-        /// changing one control cannot silently discard a change to the other
-        /// that has not landed yet -- a mode switch and a grain sweep arriving in
-        /// the same block is the normal case, not an edge case.
-        fn target(&self) -> (StretchMode, u32) {
-            self.pending.unwrap_or((self.mode, self.grain_frames))
-        }
-
-        fn queue_geometry(&mut self, mode: StretchMode, grain_frames: u32) {
-            let grain_frames = grain_frames.clamp(GRAIN_MIN_FRAMES, GRAIN_MAX_FRAMES);
-            if mode == self.mode && grain_frames == self.grain_frames {
-                self.pending = None;
-                return;
-            }
-            self.pending = Some((mode, grain_frames));
-        }
-
-        fn apply_geometry(&mut self, mode: StretchMode, grain_frames: u32) {
-            let window = window_frames(mode, self.sample_rate, grain_frames);
-            self.mode = mode;
-            self.grain_frames = grain_frames;
-            self.window = window;
-            self.hop = window / 2;
-            self.overlap = window - self.hop;
-            self.search = if searches(mode) { self.hop } else { 0 };
-            self.pending = None;
-        }
-
-        /// Output frames per input frame. `1.5` is longer and slower.
-        ///
-        /// Takes effect at the next overlap-add hop rather than the next frame:
-        /// a window already being laid down is finished under the ratio it
-        /// started with. The spike measured live ratio changes as click-free, so
-        /// there is deliberately no crossfade or declick here. The hop
-        /// quantization means an automated ratio moves in steps of one hop, which
-        /// is also a gentle lowpass on a fast sweep.
-        pub fn set_ratio(&mut self, ratio: f64) {
-            if ratio.is_finite() {
-                self.ratio = ratio.clamp(MIN_RATIO, MAX_RATIO);
-            }
-        }
-
-        pub fn ratio(&self) -> f64 {
-            self.ratio
-        }
-
-        /// Restart at an absolute input frame. Allocation- and drop-free, so a
-        /// note-on can call it.
-        pub fn reset(&mut self, start_frame: f64) {
-            for frame in self.acc.iter_mut() {
-                *frame = [0.0, 0.0];
-            }
-            if let Some((mode, grain)) = self.pending.take() {
-                self.apply_geometry(mode, grain);
-            }
-            self.head = 0;
-            self.ready_pos = 0;
-            self.ready_len = 0;
-            self.analysis_pos = start_frame;
-            self.prev_chosen = start_frame as i64;
-            self.first_frame = true;
-        }
-
-        /// Where the analysis pointer currently sits, in input frames. This is
-        /// what a playhead display should follow: it is the position in the
-        /// source that the output is currently speaking from.
-        pub fn analysis_pos(&self) -> f64 {
-            self.analysis_pos
-        }
-
-        /// Produce the next output frame.
-        ///
-        /// Per-frame rather than per-block because the sampler voice loop is
-        /// per-frame — envelopes, the filter, and the shaper all advance around
-        /// this call. Output is identical regardless of how the caller groups its
-        /// pulls, because a whole overlap-add hop is computed at once and then
-        /// drained; block size cannot change the arithmetic.
-        pub fn next_frame(&mut self, frames: &[[f32; 2]], region: Region) -> [f32; 2] {
-            if frames.is_empty() {
-                return [0.0, 0.0];
-            }
-            if self.ready_pos >= self.ready_len {
-                self.produce_hop(frames, region);
-            }
-            let frame = self.ready[self.ready_pos];
-            self.ready_pos += 1;
-            frame
-        }
-
-        /// Read one frame through the region's edge policy, so the stretcher sees
-        /// exactly what the band-limited reader in [`crate::interpolate`] would
-        /// see at the same index — a forward loop wraps, a ping-pong mirrors, a
-        /// one-shot ends in silence.
-        #[inline]
-        fn frame_at(frames: &[[f32; 2]], region: Region, index: i64) -> [f32; 2] {
-            region.frame(frames, index).unwrap_or([0.0, 0.0])
-        }
-
-        #[inline]
-        fn mid_at(frames: &[[f32; 2]], region: Region, index: i64) -> f32 {
-            let frame = Self::frame_at(frames, region, index);
-            0.5 * (frame[0] + frame[1])
-        }
-
-        /// Hann weight at `offset` within a window of `window` frames, read from
-        /// the shared prototype. Linear interpolation between table points; the
-        /// prototype is fine enough that the residual is far below the COLA
-        /// tolerance the overlap-add needs.
-        #[inline]
-        fn window_weight(&self, offset: usize, window: usize) -> f32 {
-            let position = offset as f32 / window as f32 * HANN_TABLE as f32;
-            let index = position as usize;
-            let fraction = position - index as f32;
-            let low = self.hann[index];
-            let high = self.hann[index + 1];
-            low + (high - low) * fraction
-        }
-
-        /// Compute one overlap-add hop into `ready`.
-        fn produce_hop(&mut self, frames: &[[f32; 2]], region: Region) {
-            // A queued mode or grain change lands here, between windows. Applying
-            // it mid-window would leave the accumulator holding half of one
-            // envelope and half of another.
-            if let Some((mode, grain)) = self.pending.take() {
-                self.apply_geometry(mode, grain);
-            }
-
-            let window = self.window;
-            let hop = self.hop;
-            let overlap = self.overlap;
-            let search = self.search as i64;
-
-            // Keep the analysis pointer inside a looping region. Without this the
-            // pointer walks off the end of a loop and the search reads silence,
-            // so a looped stretch would fade out over one pass instead of
-            // repeating.
-            if let Some(span) = region_span(region) {
-                let end = region.end;
-                while self.analysis_pos >= end {
-                    self.analysis_pos -= span;
-                    self.prev_chosen -= span as i64;
-                }
-            }
-
-            let nominal = self.analysis_pos.round() as i64;
-
-            let chosen = if self.first_frame || !searches(self.mode) {
-                // `Grain` never searches: the splice lands wherever the analysis
-                // pointer says, which is what makes the repetition periodic and
-                // the rattle pitched. On the first frame there is also nothing to
-                // continue from, and searching would only move the very first
-                // frame of playback away from where the caller asked to start.
-                nominal
-            } else {
-                // What the previous segment was about to become, had it kept
-                // playing. The best candidate is the one that continues this.
-                let nat_start = self.prev_chosen + hop as i64;
-                for offset in 0..overlap {
-                    self.nat[offset] =
-                        Self::mid_at(frames, region, nat_start + offset as i64);
-                }
-                let base = nominal - search;
-                let span = 2 * self.search + overlap + 1;
-                for offset in 0..span {
-                    self.search_buf[offset] =
-                        Self::mid_at(frames, region, base + offset as i64);
-                }
-                base + self.best_offset() as i64
-            };
-
-            // Lay the window down into the accumulator ring. The first hop skips
-            // the rising half so a one-shot's initial transient is played at full
-            // amplitude rather than faded in from nothing.
-            for offset in 0..window {
-                let weight = if self.first_frame && offset < overlap {
-                    1.0
-                } else {
-                    self.window_weight(offset, window)
-                };
-                let frame = Self::frame_at(frames, region, chosen + offset as i64);
-                let slot = wrap_index(self.head + offset, window);
-                self.acc[slot][0] += weight * frame[0];
-                self.acc[slot][1] += weight * frame[1];
-            }
-            self.first_frame = false;
-
-            // Drain the completed hop and clear it, so the ring is zeroed for the
-            // window that will overlap into it next time.
-            for offset in 0..hop {
-                let slot = wrap_index(self.head + offset, window);
-                self.ready[offset] = self.acc[slot];
-                self.acc[slot] = [0.0, 0.0];
-            }
-            self.head = wrap_index(self.head + hop, window);
-            self.ready_pos = 0;
-            self.ready_len = hop;
-
-            self.prev_chosen = chosen;
-            // Fractional, so duration error never accumulates.
-            self.analysis_pos += hop as f64 / self.ratio;
-        }
-
-        /// Index into `search_buf` of the candidate whose leading `overlap` frames
-        /// best continue the previous segment.
-        ///
-        /// Normalized by the candidate's own energy but not by `nat`'s, since
-        /// `nat` is fixed across the scan and cannot change the argmax. Without
-        /// the candidate normalization the search would simply pick the loudest
-        /// nearby moment rather than the best-matching one.
-        fn best_offset(&self) -> usize {
-            let overlap = self.overlap;
-            let step = self.corr_decim.max(1);
-            let last = 2 * self.search;
-            let mut best_offset = 0;
-            let mut best_score = f32::NEG_INFINITY;
-            for candidate in 0..=last {
-                let mut correlation = 0.0f32;
-                let mut energy = 1.0e-9f32;
-                let mut offset = 0;
-                while offset < overlap {
-                    let value = self.search_buf[candidate + offset];
-                    correlation += value * self.nat[offset];
-                    energy += value * value;
-                    offset += step;
-                }
-                let score = correlation / energy.sqrt();
-                if score > best_score {
-                    best_score = score;
-                    best_offset = candidate;
-                }
-            }
-            best_offset
-        }
-    }
-
-    pub struct StretchReader {
-        stretcher: Stretcher,
-        /// A window on the stretched stream. `scratch[0]` is stretched frame
-        /// `base`.
-        scratch: Vec<[f32; 2]>,
-        base: i64,
-        /// Next stretched frame the stretcher has yet to hand over.
-        produced: i64,
-        /// Fractional read position in the stretched stream.
-        pos: f64,
-        /// Where in the *source* the frame being handed out right now came from.
-        ///
-        /// Not the same as the stretcher's analysis pointer, which is the
-        /// production frontier: it runs ahead by up to a whole hop plus the
-        /// scratch fill, because a hop is computed before any of it is consumed.
-        /// Using the frontier as a playhead puts the cursor ahead of what is
-        /// audible, and -- worse -- using it for end-of-region detection ends a
-        /// one-shot early and drops its tail. So this integrates at *consumption*
-        /// time instead: each output frame eats `rate` stretched frames, and each
-        /// stretched frame is `1 / ratio` of a source frame.
-        source_pos: f64,
-    }
-
-    impl StretchReader {
-        pub fn new(mode: StretchMode, sample_rate: u32) -> Self {
-            let mut reader = Self {
-                stretcher: Stretcher::new(mode, sample_rate),
-                scratch: vec![[0.0; 2]; SCRATCH],
-                base: 0,
-                produced: 0,
-                pos: 0.0,
-                source_pos: 0.0,
-            };
-            reader.reset(0.0);
-            reader
-        }
-
-        pub fn stretcher(&self) -> &Stretcher {
-            &self.stretcher
-        }
-
-        pub fn stretcher_mut(&mut self) -> &mut Stretcher {
-            &mut self.stretcher
-        }
-
-        /// Zero, and for the same reason the stretcher's is. See the type docs.
-        pub fn latency_frames(&self) -> usize {
-            0
-        }
-
-        pub fn state_bytes(&self) -> usize {
-            self.stretcher.state_bytes() + self.scratch.capacity() * 8
-        }
-
-        /// The stretcher's production frontier. Ahead of what is sounding; use
-        /// [`Self::source_pos`] for anything the listener or the user sees.
-        pub fn analysis_pos(&self) -> f64 {
-            self.stretcher.analysis_pos()
-        }
-
-        /// Where in the source the frame just handed out came from. This is the
-        /// playhead, and it is what end-of-region detection must compare.
-        pub fn source_pos(&self) -> f64 {
-            self.source_pos
-        }
-
-        /// Restart at an absolute input frame. Allocation- and drop-free.
-        ///
-        /// The window is placed so the read position starts `MARGIN` frames into
-        /// it, leaving the kernel room to reach backwards into the zeroed frames
-        /// that precede the start.
-        pub fn reset(&mut self, start_frame: f64) {
-            self.stretcher.reset(start_frame);
-            for frame in self.scratch.iter_mut() {
-                *frame = [0.0, 0.0];
-            }
-            self.base = -MARGIN;
-            self.produced = 0;
-            self.pos = 0.0;
-            self.source_pos = start_frame;
-        }
-
-        /// Produce one output frame at `rate`, where 1.0 is the source's own
-        /// pitch and 2.0 is an octave up.
-        pub fn read(&mut self, frames: &[[f32; 2]], region: Region, rate: f64) -> [f32; 2] {
-            if frames.is_empty() || !rate.is_finite() || rate <= 0.0 {
-                // Reverse under stretch is not supported and the UI disables it;
-                // producing silence is better than letting a negative rate walk
-                // the window backwards past material already discarded.
-                return [0.0, 0.0];
-            }
-            self.ensure(self.pos.ceil() as i64 + MARGIN, frames, region);
-            let local = self.pos - self.base as f64;
-            let frame = SincTable::shared().read(
-                &self.scratch,
-                local,
-                rate,
-                Region::whole(SCRATCH),
-            );
-            self.pos += rate;
-            self.source_pos += rate / self.stretcher.ratio();
-            if let Some(span) = region_span(region) {
-                while self.source_pos >= region.end {
-                    self.source_pos -= span;
-                }
-            }
-            frame
-        }
-
-        /// Slide and refill the window so stretched frames up to `upto` are valid.
-        fn ensure(&mut self, upto: i64, frames: &[[f32; 2]], region: Region) {
-            while upto >= self.base + SCRATCH as i64 {
-                self.scratch.copy_within(SHIFT.., 0);
-                for slot in self.scratch[SCRATCH - SHIFT..].iter_mut() {
-                    *slot = [0.0, 0.0];
-                }
-                self.base += SHIFT as i64;
-            }
-            while self.produced < self.base + SCRATCH as i64 {
-                let frame = self.stretcher.next_frame(frames, region);
-                let slot = self.produced - self.base;
-                // Frames that fell behind the window as it slid are simply
-                // dropped: the read position never goes backwards.
-                if (0..SCRATCH as i64).contains(&slot) {
-                    self.scratch[slot as usize] = frame;
-                }
-                self.produced += 1;
-            }
-        }
-    }
-}
-
-/// MOO-248 holds the stretcher to its output from before the splice search
-/// was spread over the hop: the search and the overlap-add do the same
-/// arithmetic on the same frames, only earlier, so every case below renders
-/// sample for sample what [`before_moo248`] renders, in the same process.
+/// MOO-248 pinned the stretcher's output bit for bit before spreading the
+/// splice search over the hop: the search and the overlap-add do the same
+/// arithmetic on the same frames, only earlier, so every case below must hash
+/// exactly as it did when each hop was computed in one call.
 #[cfg(test)]
 mod bit_identity {
     use super::*;
     use crate::interpolate::RegionEdge;
-
-    /// What a case needs of a stretcher, so one script drives the new one
-    /// and the one from before MOO-248 alike.
-    trait Stretches {
-        fn make(mode: StretchMode, sample_rate: u32) -> Self;
-        fn ratio_to(&mut self, ratio: f64);
-        fn reset_at(&mut self, frame: f64);
-        fn current_mode(&self) -> StretchMode;
-        fn mode_to(&mut self, mode: StretchMode);
-        fn grain_to(&mut self, frames: u32);
-        fn next(&mut self, frames: &[[f32; 2]], region: Region) -> [f32; 2];
-    }
-
-    macro_rules! stretches {
-        ($type:ty) => {
-            impl Stretches for $type {
-                fn make(mode: StretchMode, sample_rate: u32) -> Self {
-                    <$type>::new(mode, sample_rate)
-                }
-                fn ratio_to(&mut self, ratio: f64) {
-                    self.set_ratio(ratio)
-                }
-                fn reset_at(&mut self, frame: f64) {
-                    self.reset(frame)
-                }
-                fn current_mode(&self) -> StretchMode {
-                    self.mode()
-                }
-                fn mode_to(&mut self, mode: StretchMode) {
-                    self.set_mode(mode)
-                }
-                fn grain_to(&mut self, frames: u32) {
-                    self.set_grain_frames(frames)
-                }
-                fn next(&mut self, frames: &[[f32; 2]], region: Region) -> [f32; 2] {
-                    self.next_frame(frames, region)
-                }
-            }
-        };
-    }
-    stretches!(Stretcher);
-    stretches!(before_moo248::Stretcher);
 
     const SR: u32 = 48_000;
 
@@ -2623,62 +2059,49 @@ mod bit_identity {
 
     /// One case: a mode, a ratio, a region, and what changes mid-render
     /// (every `change` frames, by `step`'s index), pulled in blocks of 128.
-    fn run_with<S: Stretches>(mode: StretchMode, ratio: f64, reg: Region, changes: u32) -> u64 {
+    fn run(mode: StretchMode, ratio: f64, reg: Region, changes: u32) -> u64 {
         let frames = source(60_000);
-        let mut stretcher = S::make(mode, SR);
-        stretcher.ratio_to(ratio);
-        stretcher.reset_at(reg.start.max(0.0) + 17.0);
+        let mut stretcher = Stretcher::new(mode, SR);
+        stretcher.set_ratio(ratio);
+        stretcher.reset(reg.start.max(0.0) + 17.0);
         let mut out = Vec::with_capacity(40_000);
         let mut reg = reg;
         for block in 0..(40_000 / 128) {
             if changes & 1 != 0 && block % 23 == 22 {
-                stretcher.ratio_to(0.4 + (block % 7) as f64 * 0.6);
+                stretcher.set_ratio(0.4 + (block % 7) as f64 * 0.6);
             }
             if changes & 2 != 0 && block % 41 == 40 {
-                let next = match stretcher.current_mode() {
+                let next = match stretcher.mode() {
                     StretchMode::Music => StretchMode::Drums,
                     StretchMode::Drums => StretchMode::Grain,
                     _ => StretchMode::Music,
                 };
-                stretcher.mode_to(next);
+                stretcher.set_mode(next);
             }
             if changes & 4 != 0 && block % 5 == 4 {
-                stretcher.grain_to(200 + (block as u32 * 37) % 1500);
+                stretcher.set_grain_frames(200 + (block as u32 * 37) % 1500);
             }
             if changes & 8 != 0 && block % 17 == 16 {
                 // A loop end that moves, as a modulated loop does.
                 reg.end = 30_000.0 + (block % 9) as f64 * 1_234.5;
             }
             for _ in 0..128 {
-                out.push(stretcher.next(&frames, reg));
+                out.push(stretcher.next_frame(&frames, reg));
             }
         }
         hash(&out)
     }
 
-    /// A case's output from the new stretcher and from the one before
-    /// MOO-248, hashed.
-    fn run(mode: StretchMode, ratio: f64, reg: Region, changes: u32) -> (u64, u64) {
-        (
-            run_with::<Stretcher>(mode, ratio, reg, changes),
-            run_with::<before_moo248::Stretcher>(mode, ratio, reg, changes),
-        )
-    }
-
-    fn reader(mode: StretchMode, ratio: f64, rate: f64, reg: Region) -> (u64, u64) {
+    fn reader(mode: StretchMode, ratio: f64, rate: f64, reg: Region) -> u64 {
         let frames = source(60_000);
         let mut reader = StretchReader::new(mode, SR);
         reader.stretcher_mut().set_ratio(ratio);
         reader.reset(reg.start);
-        let new: Vec<_> = (0..30_000).map(|_| reader.read(&frames, reg, rate)).collect();
-        let mut reader = before_moo248::StretchReader::new(mode, SR);
-        reader.stretcher_mut().set_ratio(ratio);
-        reader.reset(reg.start);
-        let old: Vec<_> = (0..30_000).map(|_| reader.read(&frames, reg, rate)).collect();
-        (hash(&new), hash(&old))
+        let out: Vec<_> = (0..30_000).map(|_| reader.read(&frames, reg, rate)).collect();
+        hash(&out)
     }
 
-    fn cases() -> Vec<(&'static str, (u64, u64))> {
+    fn cases() -> Vec<(&'static str, u64)> {
         let whole = region(0.0, 60_000.0, RegionEdge::Silent);
         let wrap = region(1_000.0, 30_000.0, RegionEdge::Wrap);
         let short = region(2_000.0, 3_100.0, RegionEdge::Wrap);
@@ -2765,10 +2188,31 @@ mod bit_identity {
         }
     }
 
+    /// Hashes taken from the tree before MOO-248 (8e570c4f).
+    const PINNED: &[(&str, u64)] = &[
+        ("music x2 whole", 0x36b80430d7872885),
+        ("music x0.5 whole", 0x2a669b54e16c7337),
+        ("drums x1.37 wrap", 0x210d55c1c7490989),
+        ("grain x3 wrap sweep", 0x17261422c7436b1d),
+        ("music x8 short loop", 0xf574a223b5c904aa),
+        ("music x1.5 mirror", 0x577346cceea4959e),
+        ("music x1.5 fade pre-roll", 0x63a0663d401b0a18),
+        ("drums x2 fade head", 0x12b7f08a9e031924),
+        ("music ratio changes", 0x652f46e1063fe28c),
+        ("mode switches and sweeps", 0x51cfdec73dfd874b),
+        ("moving loop end", 0xd06ac476834ca5d5),
+        ("everything moves", 0xe00b6f42ae92ff9d),
+        ("reader music x2 rate 1.5", 0x5d0dbdfe4a062c42),
+        ("reader drums x0.6 rate 0.7", 0x7ea6f298f9c94e4a),
+    ];
+
     #[test]
     fn the_stretcher_output_is_bit_identical_to_before_the_search_was_spread() {
-        for (name, (new, old)) in cases() {
-            assert_eq!(new, old, "{name} changed");
+        let got = cases();
+        assert_eq!(got.len(), PINNED.len());
+        for ((name, hash), (pinned_name, pinned)) in got.iter().zip(PINNED) {
+            assert_eq!(name, pinned_name);
+            assert_eq!(hash, pinned, "{name} changed");
         }
     }
 }

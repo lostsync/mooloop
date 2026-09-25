@@ -146,33 +146,37 @@ pub const OVERSAMPLER_LATENCY_FRAMES: usize = OVERSAMPLER_LATENCY_U32 as usize;
 /// decimator keeps only the even 2x samples, and its kernel's nonzero taps
 /// fall on the even samples plus the centre, which lands on one odd sample.
 /// That is 34 multiplies a frame where the 32-tap full-rate version did 64.
-/// Both histories are doubled buffers (each sample written twice, `N` apart),
-/// so a convolution reads one contiguous slice in order and vectorises, with
-/// no `%` per tap.
+/// **A block at a time** (MOO-253). [`Oversampler2x::process_block`] runs up
+/// to [`OVERSAMPLE_CHUNK`] frames through each stage in turn, over the
+/// history and the chunk laid end to end in one scratch buffer: the upsampler
+/// for every frame, then the caller's nonlinearity over all the 2x samples
+/// at once, then the decimator. Each stage is a loop over frames with no
+/// ring index and no call per sample, which is what lets the shaper and the
+/// dot products vectorise.
 ///
 /// Construction allocates nothing beyond the struct itself and computes the
-/// kernel once; [`Oversampler2x::process`] is allocation-free and safe on the
-/// realtime thread.
+/// kernel once; processing is allocation-free (the scratch is on the stack)
+/// and safe on the realtime thread.
 pub struct Oversampler2x {
     /// `kernel[2t]` in the order a history slice runs, oldest first: entry
     /// `i` weighs the sample `BRANCH_TAPS - 1 - i` frames old.
     branch: [f32; BRANCH_TAPS],
     /// The centre tap.
     centre: f32,
-    /// The last `BRANCH_TAPS` inputs, twice over.
-    up_history: [f32; 2 * BRANCH_TAPS],
-    /// The last `BRANCH_TAPS` even 2x samples after the nonlinearity, twice
-    /// over.
-    down_history: [f32; 2 * BRANCH_TAPS],
-    /// Where the next input and the next even sample are written; both
-    /// histories advance together, once a frame.
-    pos: usize,
-    /// The odd 2x samples after the nonlinearity, of the last
-    /// `CENTRE_FRAMES + 1` frames: the decimator's centre tap reads the one
-    /// about to be overwritten.
+    /// The last `BRANCH_TAPS - 1` inputs, oldest first.
+    up_history: [f32; BRANCH_TAPS - 1],
+    /// The last `BRANCH_TAPS - 1` even 2x samples after the nonlinearity,
+    /// oldest first.
+    even_history: [f32; BRANCH_TAPS - 1],
+    /// The last `CENTRE_FRAMES + 1` odd 2x samples after the nonlinearity,
+    /// oldest first: the decimator's centre tap reads the oldest.
     odd_history: [f32; CENTRE_FRAMES + 1],
-    odd_pos: usize,
 }
+
+/// The most frames [`Oversampler2x::process_block`] runs through its stages
+/// at once; a longer slice is taken this many at a time. It sizes the
+/// scratch buffers on the stack.
+pub const OVERSAMPLE_CHUNK: usize = 64;
 
 impl Default for Oversampler2x {
     fn default() -> Self {
@@ -190,53 +194,78 @@ impl Oversampler2x {
         Self {
             branch,
             centre: kernel[CENTRE],
-            up_history: [0.0; 2 * BRANCH_TAPS],
-            down_history: [0.0; 2 * BRANCH_TAPS],
-            pos: 0,
+            up_history: [0.0; BRANCH_TAPS - 1],
+            even_history: [0.0; BRANCH_TAPS - 1],
             odd_history: [0.0; CENTRE_FRAMES + 1],
-            odd_pos: 0,
         }
     }
 
     /// Drop all filter state. Call when a chain is reset, not per block.
     pub fn reset(&mut self) {
-        self.up_history = [0.0; 2 * BRANCH_TAPS];
-        self.down_history = [0.0; 2 * BRANCH_TAPS];
-        self.pos = 0;
+        self.up_history = [0.0; BRANCH_TAPS - 1];
+        self.even_history = [0.0; BRANCH_TAPS - 1];
         self.odd_history = [0.0; CENTRE_FRAMES + 1];
-        self.odd_pos = 0;
     }
 
-    /// Run one input sample through `f` at twice the sample rate.
+    /// Run one input sample through `f` at twice the sample rate. The same
+    /// arithmetic as [`Self::process_block`] on a one-frame slice, so the two
+    /// agree to the bit.
     pub fn process<F: FnMut(f32) -> f32>(&mut self, input: f32, mut f: F) -> f32 {
-        let pos = self.pos;
-        self.up_history[pos] = input;
-        self.up_history[pos + BRANCH_TAPS] = input;
-        // Oldest first, ending with `input`.
-        let inputs = &self.up_history[pos + 1..pos + 1 + BRANCH_TAPS];
+        let mut io = [input];
+        self.process_block(&mut io, |even, odd| {
+            even[0] = f(even[0]);
+            odd[0] = f(odd[0]);
+        });
+        io[0]
+    }
+
+    /// Run `io` through the oversampler in place. `shape` is handed each
+    /// chunk's 2x samples as two equal slices, the even ones (on the input
+    /// frames) and the odd ones (between them), already at the path's gain,
+    /// and shapes both in place; frame `k` of the chunk is `even[k]` then
+    /// `odd[k]` in time.
+    pub fn process_block<F: FnMut(&mut [f32], &mut [f32])>(&mut self, io: &mut [f32], mut shape: F) {
+        for chunk in io.chunks_mut(OVERSAMPLE_CHUNK) {
+            self.process_chunk(chunk, &mut shape);
+        }
+    }
+
+    fn process_chunk<F: FnMut(&mut [f32], &mut [f32])>(&mut self, io: &mut [f32], shape: &mut F) {
+        const UP: usize = BRANCH_TAPS - 1;
+        const ODD: usize = CENTRE_FRAMES + 1;
+        let frames = io.len();
 
         // Upsample. Zero-stuffing halves the signal's energy, so the kernel's
         // gain is doubled here to compensate.
-        let even = dot(inputs, &self.branch);
-        let odd = inputs[BRANCH_TAPS - 1 - CENTRE_FRAMES] * self.centre;
-        let shaped_even = f(even * 2.0);
-        let shaped_odd = f(odd * 2.0);
+        let mut inputs = [0.0f32; UP + OVERSAMPLE_CHUNK];
+        inputs[..UP].copy_from_slice(&self.up_history);
+        inputs[UP..UP + frames].copy_from_slice(io);
+        let mut even = [0.0f32; OVERSAMPLE_CHUNK];
+        let mut odd = [0.0f32; OVERSAMPLE_CHUNK];
+        for k in 0..frames {
+            // Oldest first, ending with frame `k`'s input.
+            let window = &inputs[k..k + BRANCH_TAPS];
+            even[k] = dot(window, &self.branch) * 2.0;
+            odd[k] = window[BRANCH_TAPS - 1 - CENTRE_FRAMES] * self.centre * 2.0;
+        }
+        self.up_history.copy_from_slice(&inputs[frames..frames + UP]);
+
+        shape(&mut even[..frames], &mut odd[..frames]);
 
         // Decimate: keep the even 2x sample, low-passed. Its even taps read
-        // the even history, and its centre tap the odd sample
-        // `CENTRE_FRAMES + 1` frames back, which is the one in the odd ring
-        // this frame replaces.
-        self.down_history[pos] = shaped_even;
-        self.down_history[pos + BRANCH_TAPS] = shaped_even;
-        let evens = &self.down_history[pos + 1..pos + 1 + BRANCH_TAPS];
-        let output = dot(evens, &self.branch) + self.odd_history[self.odd_pos] * self.centre;
-        self.odd_history[self.odd_pos] = shaped_odd;
-        self.odd_pos += 1;
-        if self.odd_pos == self.odd_history.len() {
-            self.odd_pos = 0;
+        // the even samples, and its centre tap the odd sample
+        // `CENTRE_FRAMES + 1` frames back.
+        let mut evens = [0.0f32; UP + OVERSAMPLE_CHUNK];
+        evens[..UP].copy_from_slice(&self.even_history);
+        evens[UP..UP + frames].copy_from_slice(&even[..frames]);
+        let mut odds = [0.0f32; ODD + OVERSAMPLE_CHUNK];
+        odds[..ODD].copy_from_slice(&self.odd_history);
+        odds[ODD..ODD + frames].copy_from_slice(&odd[..frames]);
+        for (k, output) in io.iter_mut().enumerate() {
+            *output = dot(&evens[k..k + BRANCH_TAPS], &self.branch) + odds[k] * self.centre;
         }
-        self.pos = if pos + 1 == BRANCH_TAPS { 0 } else { pos + 1 };
-        output
+        self.even_history.copy_from_slice(&evens[frames..frames + UP]);
+        self.odd_history.copy_from_slice(&odds[frames..frames + ODD]);
     }
 }
 
@@ -315,6 +344,22 @@ pub fn shape_oversampled(curve: DriveCurve, x: f32) -> f32 {
         DriveCurve::Soft => fast_tanh(x),
         DriveCurve::Tape => (fast_tanh(x + TAPE_BIAS) - TAPE_BIAS_DC) / (1.0 + TAPE_BIAS_DC),
         DriveCurve::Hard | DriveCurve::Fold => shape(curve, x),
+    }
+}
+
+/// [`shape_oversampled`] over a slice, each sample pre-gained by its own
+/// `gain`: `samples[k] = shape_oversampled(curve, samples[k] * gains[k])`,
+/// with the curve chosen once for the slice rather than per sample, so the
+/// loop vectorises (MOO-253).
+pub fn shape_oversampled_slice(curve: DriveCurve, samples: &mut [f32], gains: &[f32]) {
+    let pairs = samples.iter_mut().zip(gains);
+    match curve {
+        DriveCurve::Soft => pairs.for_each(|(x, g)| *x = fast_tanh(*x * g)),
+        DriveCurve::Tape => pairs.for_each(|(x, g)| {
+            *x = (fast_tanh(*x * g + TAPE_BIAS) - TAPE_BIAS_DC) / (1.0 + TAPE_BIAS_DC)
+        }),
+        DriveCurve::Hard => pairs.for_each(|(x, g)| *x = (*x * g).clamp(-1.0, 1.0)),
+        DriveCurve::Fold => pairs.for_each(|(x, g)| *x = fold(*x * g)),
     }
 }
 
@@ -860,6 +905,45 @@ mod tests {
                 let null_db = 10.0 * (diff / power).log10();
                 println!("{sr} Hz {curve:?}: the two paths differ by {null_db:.1} dB");
                 assert!(null_db < -50.0, "{sr} Hz {curve:?}: only {null_db:.1} dB apart");
+            }
+        }
+    }
+
+    /// A block at a time and a sample at a time are the same arithmetic,
+    /// so they agree to the bit, however the input is cut (MOO-253).
+    #[test]
+    fn a_block_at_a_time_matches_a_sample_at_a_time() {
+        let input = sine(1_234.0, 0.9, 48_000, 1_000);
+        let shaped = |x: f32| shape_oversampled(DriveCurve::Tape, x * 3.0);
+        let mut one = Oversampler2x::new();
+        let expected: Vec<f32> = input.iter().map(|&x| one.process(x, shaped)).collect();
+        for cut in [1usize, 7, 64, 65, 200] {
+            let mut blocks = Oversampler2x::new();
+            let mut output = input.clone();
+            for part in output.chunks_mut(cut) {
+                blocks.process_block(part, |even, odd| {
+                    for x in even.iter_mut().chain(odd.iter_mut()) {
+                        *x = shaped(*x);
+                    }
+                });
+            }
+            for (k, (got, want)) in output.iter().zip(&expected).enumerate() {
+                assert_eq!(got.to_bits(), want.to_bits(), "cut {cut}, frame {k}");
+            }
+        }
+    }
+
+    /// The slice shaper is `shape_oversampled` per sample, to the bit.
+    #[test]
+    fn the_slice_shaper_matches_the_sample_shaper() {
+        let xs: Vec<f32> = (0..400).map(|k| (k as f32 - 200.0) * 0.013).collect();
+        let gains: Vec<f32> = (0..400).map(|k| 1.0 + (k % 9) as f32).collect();
+        for curve in [DriveCurve::Soft, DriveCurve::Hard, DriveCurve::Fold, DriveCurve::Tape] {
+            let mut slice = xs.clone();
+            shape_oversampled_slice(curve, &mut slice, &gains);
+            for k in 0..xs.len() {
+                let want = shape_oversampled(curve, xs[k] * gains[k]);
+                assert_eq!(slice[k].to_bits(), want.to_bits(), "{curve:?} at {k}");
             }
         }
     }

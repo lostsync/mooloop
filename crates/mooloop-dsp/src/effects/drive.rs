@@ -15,7 +15,8 @@ use crate::event::EventList;
 use crate::filter::OnePoleLp;
 use crate::node::{AudioNode, ProcessContext};
 use crate::shaper::{
-    reference_drive_compensation, shape_oversampled, Oversampler2x, OVERSAMPLER_LATENCY_FRAMES,
+    reference_drive_compensation, shape_oversampled_slice, Oversampler2x, OVERSAMPLE_CHUNK,
+    OVERSAMPLER_LATENCY_FRAMES,
 };
 use crate::smooth::Smoothed;
 use super::{process_param_split, RangeProcessor};
@@ -111,40 +112,64 @@ impl DriveEffect {
 }
 
 impl RangeProcessor for DriveEffect {
+    /// A chunk at a time (MOO-253): the four lags and the compensation are
+    /// read out per frame first, exactly as the per-frame loop read them,
+    /// then each channel goes through its oversampler as one block, the
+    /// shaper over every 2x sample of the chunk at once, and the tilt and the
+    /// mix per frame after.
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         let curve = self.params.curve;
-
-        for i in start..end {
-            let drive = self.drive.advance();
-            let tone = self.tone.advance();
-            let mix = self.mix.advance();
-            let output = self.output.advance();
-            if (curve, drive) != self.compensation_for {
-                self.compensation = reference_drive_compensation(curve, drive);
-                self.compensation_for = (curve, drive);
+        let mut from = start;
+        while from < end {
+            let to = end.min(from + OVERSAMPLE_CHUNK);
+            let frames = to - from;
+            let mut drive = [0.0f32; OVERSAMPLE_CHUNK];
+            let mut tone = [0.0f32; OVERSAMPLE_CHUNK];
+            let mut mix = [0.0f32; OVERSAMPLE_CHUNK];
+            let mut output = [0.0f32; OVERSAMPLE_CHUNK];
+            let mut compensation = [0.0f32; OVERSAMPLE_CHUNK];
+            for k in 0..frames {
+                drive[k] = self.drive.advance();
+                tone[k] = self.tone.advance();
+                mix[k] = self.mix.advance();
+                output[k] = self.output.advance();
+                if (curve, drive[k]) != self.compensation_for {
+                    self.compensation = reference_drive_compensation(curve, drive[k]);
+                    self.compensation_for = (curve, drive[k]);
+                }
+                compensation[k] = self.compensation;
             }
-            let compensation = self.compensation;
-            let (dry_l, dry_r) = (bus.l[i], bus.r[i]);
+            let drive = &drive[..frames];
+            let shape = |even: &mut [f32], odd: &mut [f32]| {
+                shape_oversampled_slice(curve, even, drive);
+                shape_oversampled_slice(curve, odd, drive);
+            };
+            let mut wet_l = [0.0f32; OVERSAMPLE_CHUNK];
+            let mut wet_r = [0.0f32; OVERSAMPLE_CHUNK];
+            wet_l[..frames].copy_from_slice(&bus.l[from..to]);
+            wet_r[..frames].copy_from_slice(&bus.r[from..to]);
+            self.left.process_block(&mut wet_l[..frames], shape);
+            self.right.process_block(&mut wet_r[..frames], shape);
 
-            let wet_l =
-                self.left.process(dry_l, |x| shape_oversampled(curve, x * drive)) * compensation;
-            let wet_r =
-                self.right.process(dry_r, |x| shape_oversampled(curve, x * drive)) * compensation;
+            for k in 0..frames {
+                let i = from + k;
+                let (dry_l, dry_r) = (bus.l[i], bus.r[i]);
+                let wet_l = Self::tilt(&mut self.tone_lp_l, wet_l[k] * compensation[k], tone[k]);
+                let wet_r = Self::tilt(&mut self.tone_lp_r, wet_r[k] * compensation[k], tone[k]);
 
-            let wet_l = Self::tilt(&mut self.tone_lp_l, wet_l, tone);
-            let wet_r = Self::tilt(&mut self.tone_lp_r, wet_r, tone);
+                let aligned_l = self.dry_l[self.dry_pos];
+                let aligned_r = self.dry_r[self.dry_pos];
+                self.dry_l[self.dry_pos] = dry_l;
+                self.dry_r[self.dry_pos] = dry_r;
+                self.dry_pos += 1;
+                if self.dry_pos == OVERSAMPLER_LATENCY_FRAMES {
+                    self.dry_pos = 0;
+                }
 
-            let aligned_l = self.dry_l[self.dry_pos];
-            let aligned_r = self.dry_r[self.dry_pos];
-            self.dry_l[self.dry_pos] = dry_l;
-            self.dry_r[self.dry_pos] = dry_r;
-            self.dry_pos += 1;
-            if self.dry_pos == OVERSAMPLER_LATENCY_FRAMES {
-                self.dry_pos = 0;
+                bus.l[i] = (aligned_l + (wet_l - aligned_l) * mix[k]) * output[k];
+                bus.r[i] = (aligned_r + (wet_r - aligned_r) * mix[k]) * output[k];
             }
-
-            bus.l[i] = (aligned_l + (wet_l - aligned_l) * mix) * output;
-            bus.r[i] = (aligned_r + (wet_r - aligned_r) * mix) * output;
+            from = to;
         }
     }
 
@@ -491,7 +516,8 @@ mod tests {
                 let mix = reference.mix.advance();
                 let output = reference.output.advance();
                 let compensation = reference_drive_compensation(curve, drive);
-                let wet = reference.left.process(x, |v| shape_oversampled(curve, v * drive)) * compensation;
+                let wet = reference.left.process(x, |v| crate::shaper::shape_oversampled(curve, v * drive))
+                    * compensation;
                 let wet = DriveEffect::tilt(&mut reference.tone_lp_l, wet, tone);
                 let aligned = dry[dry_pos];
                 dry[dry_pos] = x;
