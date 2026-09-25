@@ -1028,5 +1028,12 @@ Before committing UI work, answer all of these:
   property of one device?
 - Was the result inspected from a software-rendered screenshot rather than
   accepted from code alone?
+- Is anything hidden with `visible:` that is repeated, or hidden most of the
+  time? Build it with `if` (or repeat only what is drawn) instead. Slint lowers
+  `visible:` to a 0x0 clip item, and FemtoVG tessellates every hidden one as a
+  degenerate circle on every frame, about 0.1 ms each: the knobs' hidden route
+  dots and arcs were most of a 100 ms frame (MOO-256). `if` builds and drops
+  an instance when it flips, so something that flips at tick rate (a playhead,
+  a step highlight) keeps one element and changes its colour or position.
 
 If any answer is wrong, the UI is not done.

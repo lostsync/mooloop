@@ -94,25 +94,31 @@ export component PluginDeviceFace inherits EffectDeviceShell {
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
-            for param[i] in root.params : ParameterKnob {
+            // A knob off this page is not built at all, rather than built
+            // and hidden: a hidden element is a 0x0 clip that FemtoVG
+            // tessellates on every frame (MOO-256), and a big plugin has a
+            // hundred off-page knobs. Slint takes no `if` as a `for` body,
+            // so each parameter gets a bare cell the size of the grid.
+            for param[i] in root.params : cell := Rectangle {
                 property <int> on-page: i - root.shown-page * root.per-page;
-                visible: self.on-page >= 0 && self.on-page < root.per-page;
-                x: mod(max(self.on-page, 0), root.columns) * root.cell-width
-                    + (root.cell-width - self.width) / 2;
-                y: floor(max(self.on-page, 0) / root.columns) * 84px;
-                width: min(root.cell-width, 69px);
-                diameter: 36px;
-                label: param.name;
-                tooltip: param.name;
-                value: param.value;
-                default-value: param.default-value;
-                // A stepped parameter lands on its positions and nowhere
-                // between them, as a lane on it does.
-                step: param.steps > 1 ? 1 / (param.steps - 1) : 0;
-                value-text: param.text;
-                enabled: param.enabled;
-                modulation-allowed: false;
-                changed(v) => { root.param-changed(param.index, v); }
+                if cell.on-page >= 0 && cell.on-page < root.per-page : ParameterKnob {
+                    x: mod(max(cell.on-page, 0), root.columns) * root.cell-width
+                        + (root.cell-width - self.width) / 2;
+                    y: floor(max(cell.on-page, 0) / root.columns) * 84px;
+                    width: min(root.cell-width, 69px);
+                    diameter: 36px;
+                    label: param.name;
+                    tooltip: param.name;
+                    value: param.value;
+                    default-value: param.default-value;
+                    // A stepped parameter lands on its positions and nowhere
+                    // between them, as a lane on it does.
+                    step: param.steps > 1 ? 1 / (param.steps - 1) : 0;
+                    value-text: param.text;
+                    enabled: param.enabled;
+                    modulation-allowed: false;
+                    changed(v) => { root.param-changed(param.index, v); }
+                }
             }
         }
 

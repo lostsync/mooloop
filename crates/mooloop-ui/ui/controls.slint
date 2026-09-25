@@ -724,13 +724,18 @@ component KnobFace inherits Rectangle {
 
     // Value arc. Bipolar knobs grow outward from 12 o'clock in whichever
     // direction the value sits, so "no modulation" reads as an empty ring.
-    Path {
+    //
+    // **`if`, never `visible:`, for anything a control hides** (MOO-256).
+    // Slint turns a `visible:` binding into a 0x0 clip item, and FemtoVG
+    // tessellates every hidden one as a degenerate zero-radius circle, about
+    // 8,000 recursive bezier steps each, on every frame. The knobs' hidden
+    // arcs and dots were most of a 100 ms frame on a real song.
+    if !root.modulation-armed
+        && (root.bipolar ? abs(root.clamped - 0.5) > 0.002 : root.clamped > 0.002) : Path {
         width: 100%;
         height: 100%;
         viewbox-width: 100;
         viewbox-height: 100;
-        visible: !root.modulation-armed
-            && (root.bipolar ? abs(root.clamped - 0.5) > 0.002 : root.clamped > 0.002);
         commands: root.arc-commands(root.origin-angle, root.value-angle);
         stroke: root.active-fill;
         stroke-width: root.diameter * 0.09;
@@ -822,8 +827,9 @@ component KnobFace inherits Rectangle {
     // Assigned-route count, in the 90-degree gap the track leaves at the
     // bottom. One dot per route so the count is readable at a glance, capped
     // at the per-channel modulator limit so the row cannot outgrow the knob.
-    for index in [0, 1, 2, 3] : Rectangle {
-        visible: !root.modulation-armed && index < root.dots;
+    // Repeated only as many times as there are dots to draw, rather than
+    // four hidden ones (see the value arc on why hiding costs, MOO-256).
+    for index in (root.modulation-armed ? 0 : root.dots) : Rectangle {
         width: root.diameter * 0.09;
         height: self.width;
         x: parent.width / 2
