@@ -81,9 +81,16 @@ fn main() {
         "last tick       : {last_tick} (~{} expected after 4 s at 120 bpm)",
         4 * 120 * 96 / 60
     );
-    println!("max peak        : {max_peak:.4}");
+    println!("max peak        : {max_peak:.4} (~0.07 expected)");
 
-    let ok = saw_playing && last_tick > 500 && position_events > 100 && max_peak > 0.1;
+    // The builtin kick peaks at 0.278, and a fresh sampler's output trim is
+    // the generator reference, -12 dB (`default_output_gain`, 2026-08-31), so
+    // a healthy engine meters about 0.07 here. The line was 0.1 from before
+    // that trim existed and failed the v0.1.5 tag's verify job on a correct
+    // engine. This is a presence check, so it sits 6 dB under the expected
+    // peak: well clear of silence, and not a calibration test.
+    const MIN_PEAK: f32 = 0.035;
+    let ok = saw_playing && last_tick > 500 && position_events > 100 && max_peak > MIN_PEAK;
     if ok {
         println!("RESULT: PASS — audio engine produces output end-to-end");
     } else {
