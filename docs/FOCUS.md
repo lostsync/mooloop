@@ -1,9 +1,11 @@
 # Focus
 
-Status: **the 2026-09-25 sequence is queued** (21 issues in Todo, three
-lanes, below), for an overnight run of team orchestration. The 2026-09-24
-sequence is done. Its record is in `JOURNAL.md`, and MOO-219 still waits on
-Adam. Nothing from either day has been heard.
+Status: **performance is the current focus (2026-09-25).** Adam: *"i
+really feel like performance has tanked."* The Linear project **Performance**
+holds the findings and fixes. Two surveys are measuring: what costs most on
+`main`, and whether and when it got slower. Fixes land highest value first.
+The overnight sequence below is done, apart from MOO-227's effect half, which
+waits on Adam. Nothing from it has been heard.
 
 `archive/ROADMAP.md` orders the whole product by dependency, and `SCOPE.md`
 says what 0.2.0 is. This document is narrower: it names the active sequence
@@ -38,12 +40,12 @@ Two siblings, kept because they outlived the plans they came from:
   key zones, which are new ways to play a sample, and lane 3 opens on the
   oldest defect Adam reported himself.
 
-## The sequence, 2026-09-25 (overnight)
+## The sequence, 2026-09-25 (overnight): done
 
-Three lanes, each worked top to bottom. Every issue is in **Todo**, and its
-Linear description is the work order. Each lane's teams come from the issues'
-labels. Land each issue as it verifies, because the next one in the lane
-often builds on it.
+All of it is on `main` and closed, except MOO-227's effect-preset audition,
+which is a `Question` for Adam. The night also found and fixed MOO-241 (two
+takes in one second overwrote each other) and filed MOO-237, MOO-238,
+MOO-239, MOO-240 and MOO-242. The lanes as they were queued:
 
 **Lane 1, Rendering (0.2.0, all of it).** Export becomes a job that can write
 several files.
