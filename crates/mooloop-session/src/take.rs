@@ -156,15 +156,29 @@ impl TakeRecorder {
         if let Some(why) = short_of_space(free_bytes(&self.dir), sample_rate, &self.dir) {
             return Err(why);
         }
-        let path = self.dir.join(take_file_name(name, (self.clock)()));
         let spec = hound::WavSpec {
             channels: 2,
             sample_rate,
             bits_per_sample: 32,
             sample_format: hound::SampleFormat::Float,
         };
-        let writer = hound::WavWriter::create(&path, spec)
-            .map_err(|error| format!("could not create {}: {error}", path.display()))?;
+        // A take is named to the second, so a second take in the same second
+        // on the same channel, or one on another channel of the same name,
+        // wants a name already taken. It gets the next free one; it must never
+        // open the first take's file, which `WavWriter::create` truncated
+        // (MOO-241).
+        let wanted = take_file_name(name, (self.clock)());
+        let (path, file) = mooloop_core::file_names::create_unclaimed(&self.dir, &wanted)
+            .map_err(|error| {
+                format!("could not create {}: {error}", self.dir.join(&wanted).display())
+            })?;
+        let writer = match hound::WavWriter::new(std::io::BufWriter::new(file), spec) {
+            Ok(writer) => writer,
+            Err(error) => {
+                let _ = std::fs::remove_file(&path);
+                return Err(format!("could not create {}: {error}", path.display()));
+            }
+        };
         let (producer, consumer) = rtrb::RingBuffer::new(sample_rate as usize * RING_SECONDS);
         let status = TakeStatus::new();
         let peaks: TakePeaks = Arc::new(Mutex::new(Vec::new()));
@@ -828,7 +842,9 @@ fn repair_header(path: &Path) -> std::io::Result<bool> {
 }
 
 /// `<date>-<time>-<channel>.wav`, in UTC, with anything a file system might
-/// object to in the channel's name replaced.
+/// object to in the channel's name replaced. The name a take wants: one
+/// already taken is counted on from (`kick.wav`, `kick-2.wav`), in
+/// [`TakeRecorder::arm`].
 fn take_file_name(channel: &str, when: SystemTime) -> String {
     let seconds = when
         .duration_since(SystemTime::UNIX_EPOCH)

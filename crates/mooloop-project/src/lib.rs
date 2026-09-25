@@ -873,18 +873,7 @@ fn resolved_path(path: &Path) -> PathBuf {
 /// back -- so a new file can arrive under a name an old one already has. It
 /// must never be copied over it.
 fn unclaimed_name(directory: &Path, wanted: &str) -> String {
-    if !directory.join(wanted).exists() {
-        return wanted.to_string();
-    }
-    let (stem, extension) = match wanted.rsplit_once('.') {
-        Some((stem, extension)) if !stem.is_empty() => (stem, Some(extension)),
-        _ => (wanted, None),
-    };
-    (2..)
-        .map(|n| match extension {
-            Some(extension) => format!("{stem}-{n}.{extension}"),
-            None => format!("{stem}-{n}"),
-        })
+    mooloop_core::file_names::candidates(wanted)
         .find(|candidate| !directory.join(candidate).exists())
         .expect("an unbounded search finds a free name")
 }
