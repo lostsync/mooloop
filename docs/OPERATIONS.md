@@ -796,7 +796,9 @@ laptop's numbers are its own.
 
 A take is written, as it records, into a **recordings folder** as a 32-bit
 float stereo WAV named `<UTC date>-<time>-<channel>.wav`
-(`mooloop_session::take::TakeRecorder`). The folder is the recorder's to be
+(`mooloop_session::take::TakeRecorder`); a second take that wants a name
+already there, in the same second, gets `-2`, `-3` before the extension, and
+never opens the first one's file (MOO-241). The folder is the recorder's to be
 told; the interface points it at `settings::recordings_dir()`, which since
 2026-09-23 is **`$XDG_DATA_HOME/mooloop/recordings`** (`~/.local/share/...`)
 on Linux and beside the settings on macOS and Windows; `$MOOLOOP_DATA_DIR`
