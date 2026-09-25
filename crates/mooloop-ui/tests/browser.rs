@@ -99,11 +99,12 @@ const ROW_X: f32 = 960.0 - 260.0 + 40.0;
 /// A row column for the PRESETS tab: far enough right to clear the tab strip,
 /// which starts 8px into a 260px sidebar and, with three tabs since MOO-83's
 /// PLUGINS, runs about two hundred -- the column at 150 ran through PLUGINS
-/// and the scan stopped in the header. A one-row list draws no scrollbar, so
-/// the sidebar's right edge is clear. The header's autoplay arm, preview trim
-/// and add-folder button are all sample-side, so on this tab there is nothing
-/// hoverable above the rows out here.
-const PRESET_ROW_X: f32 = 960.0 - 260.0 + 238.0;
+/// and the scan stopped in the header -- and short of the scroll view's bar,
+/// which takes the sidebar's right-hand 20px or so and swallows a press. The
+/// header's autoplay arm, preview trim and add-folder button are all
+/// sample-side, so on this tab there is nothing hoverable above the rows out
+/// here.
+const PRESET_ROW_X: f32 = 960.0 - 260.0 + 215.0;
 
 /// Right-button press + release at `at`, the way a context click arrives.
 fn right_click(window: &slint::Window, at: LogicalPosition) {
