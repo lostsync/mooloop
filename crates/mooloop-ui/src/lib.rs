@@ -4300,6 +4300,14 @@ struct UiState {
     /// `Cell` because `sync_effects` takes `&self`, and that is the one
     /// function every rack edit already calls.
     effect_spectra_stale: std::cell::Cell<bool>,
+    /// The chain the rack was showing when the spectrum subscriptions were
+    /// last synced (MOO-240). A display is analyzed only while its chain is
+    /// on screen, so when `session.effect_target` stops matching this the
+    /// subscriptions are out of date, however the target was moved: channel
+    /// selection, a bus, the mixer, or a load. Comparing is how the pump
+    /// notices without a flag at every one of those sites. `None` until the
+    /// first sync.
+    effect_spectra_synced_for: std::cell::Cell<Option<EffectTarget>>,
     /// Which branch each layer is showing in the rack, by the layer's
     /// identity on its chain: `containers/09`'s selection. View state -- not
     /// saved, not in undo, never sent to the engine. A layer with no entry,
@@ -4445,6 +4453,7 @@ impl UiState {
             plugin_insert_before: None,
             plugin_faces: plugin_ui::PluginFaces::default(),
             effect_spectra_stale: std::cell::Cell::new(false),
+            effect_spectra_synced_for: std::cell::Cell::new(None),
             layer_selection: HashMap::new(),
             bus_meters_stale: false,
             automation_point_model,
@@ -17810,11 +17819,12 @@ impl AppUi {
                 // held inside the block, and the block below is one edit away
                 // from touching `st` again.
                 // Slot numbers may have moved under the engine's spectrum
-                // subscriptions since the last tick. Cheap and idempotent, so
+                // subscriptions since the last tick, or the rack may be
+                // showing another chain (MOO-240). Cheap and idempotent, so
                 // it rides the same once-a-tick handoff as the meters rather
                 // than being called from each of the nineteen places that
                 // re-sync the rack.
-                let rack_may_have_moved = st.borrow().effect_spectra_stale.replace(false);
+                let rack_may_have_moved = effect_spectra_out_of_date(&st.borrow());
                 if rack_may_have_moved {
                     sync_effect_spectrum_subscriptions(&st.borrow(), &handle);
                 }
@@ -18735,23 +18745,59 @@ fn install_project_in_ui(
 /// returns, so the only stage that can be stale next time is the one a single
 /// removal vacates. A project install is the one edit that can shorten a
 /// chain by more than that, and `DeviceTelemetry::clear_spectra` runs there.
+///
+/// **Only the chain the rack is showing subscribes** (MOO-240). The pump reads
+/// a spectrum for `session.effect_target` alone, so a display left on across
+/// ten channels used to run ten analyzers for one face. Every other chain is
+/// told `false` for each of its stages, which is also what unsubscribes the
+/// chain the rack has just left.
 fn sync_effect_spectrum_subscriptions(state: &UiState, handle: &EngineHandle) {
-    let sync = |target: EffectTarget, effects: &[mooloop_core::EffectSlotState]| {
-        for (slot, enabled) in spectrum_subscription_plan(effects) {
-            handle.set_effect_spectrum_enabled(target, slot, enabled);
-        }
-    };
+    for (target, slot, enabled) in spectrum_subscriptions(state) {
+        handle.set_effect_spectrum_enabled(target, slot, enabled);
+    }
+    state
+        .effect_spectra_synced_for
+        .set(Some(state.session.effect_target));
+}
 
-    for (channel, setup) in state.session.channels.iter().enumerate() {
-        sync(EffectTarget::Channel(channel as u8), &setup.effects);
-    }
-    for (bus, setup) in state.session.buses.iter().enumerate() {
-        sync(EffectTarget::Bus(bus as u8), &setup.effects);
-    }
+/// Whether the pump has to re-sync the spectrum subscriptions this tick:
+/// the rack was edited (`effect_spectra_stale`, raised by `sync_effects`,
+/// which every rack edit and every display toggle calls), or it is showing a
+/// different chain from the one they were synced for. Clears the flag. Two
+/// loads and a compare, no allocation, so it can run every tick.
+fn effect_spectra_out_of_date(state: &UiState) -> bool {
+    let edited = state.effect_spectra_stale.replace(false);
+    let moved = state.effect_spectra_synced_for.get() != Some(state.session.effect_target);
+    edited || moved
+}
+
+/// Every stage of every chain, and whether it should be publishing a
+/// spectrum: the channels, then the buses (the master among them).
+fn spectrum_subscriptions(
+    state: &UiState,
+) -> impl Iterator<Item = (EffectTarget, u8, bool)> + '_ {
+    let showing = state.session.effect_target;
+    let channels = state
+        .session
+        .channels
+        .iter()
+        .enumerate()
+        .map(|(channel, setup)| (EffectTarget::Channel(channel as u8), &setup.effects[..]));
+    let buses = state
+        .session
+        .buses
+        .iter()
+        .enumerate()
+        .map(|(bus, setup)| (EffectTarget::Bus(bus as u8), &setup.effects[..]));
+    channels.chain(buses).flat_map(move |(target, effects)| {
+        spectrum_subscription_plan(effects, target == showing)
+            .map(move |(slot, enabled)| (target, slot, enabled))
+    })
 }
 
 /// What every stage of one chain should be publishing, the vacated tail
-/// included.
+/// included. `showing` is whether the rack is showing this chain: a chain
+/// off screen wants nothing, whatever its devices ask for.
 ///
 /// Split out from the call above so the part that decides can be read back:
 /// the whole defect was a walk that only ever said `true`, and the only way
@@ -18759,6 +18805,7 @@ fn sync_effect_spectrum_subscriptions(state: &UiState, handle: &EngineHandle) {
 /// says.
 fn spectrum_subscription_plan(
     effects: &[mooloop_core::EffectSlotState],
+    showing: bool,
 ) -> impl Iterator<Item = (u8, bool)> + '_ {
     /// Whether this slot holds a device that is asking to be analyzed.
     fn wanted(effect: Option<&mooloop_core::EffectSlotState>) -> bool {
@@ -18775,7 +18822,7 @@ fn spectrum_subscription_plan(
     }
 
     let past_the_end = effects.len().min(mooloop_core::MAX_EFFECTS_PER_CHANNEL - 1);
-    (0..=past_the_end).map(move |slot| (slot as u8, wanted(effects.get(slot))))
+    (0..=past_the_end).map(move |slot| (slot as u8, showing && wanted(effects.get(slot))))
 }
 
 fn preset_menu_label(preset: &PresetSummary) -> slint::SharedString {
@@ -20589,7 +20636,7 @@ mod tests {
         // A delay, then the EQ whose analyzer is on: three answers for a
         // two-device chain.
         let chain = vec![slot(EffectKind::Delay), analyzing];
-        let plan: Vec<(u8, bool)> = super::spectrum_subscription_plan(&chain).collect();
+        let plan: Vec<(u8, bool)> = super::spectrum_subscription_plan(&chain, true).collect();
         assert_eq!(
             plan,
             vec![(0, false), (1, true), (2, false)],
@@ -20599,12 +20646,112 @@ mod tests {
         // The EQ is deleted. The plan's job is to say `false` for slot 1,
         // which is the stage the engine is still publishing into.
         let shortened = vec![chain[0]];
-        let after: Vec<(u8, bool)> = super::spectrum_subscription_plan(&shortened).collect();
+        let after: Vec<(u8, bool)> = super::spectrum_subscription_plan(&shortened, true).collect();
         assert_eq!(after, vec![(0, false), (1, false)]);
 
         // An empty chain still answers, because a chain can be emptied.
-        let empty: Vec<(u8, bool)> = super::spectrum_subscription_plan(&[]).collect();
+        let empty: Vec<(u8, bool)> = super::spectrum_subscription_plan(&[], true).collect();
         assert_eq!(empty, vec![(0, false)]);
+    }
+
+    /// A chain the rack is not showing wants nothing, the slot past its end
+    /// included: that `false` is what unsubscribes the chain the rack has
+    /// just left (MOO-240).
+    #[test]
+    fn a_chain_off_screen_subscribes_nothing() {
+        let mut analyzing = mooloop_core::EffectSlotState::of_kind(mooloop_core::EffectKind::Eq);
+        if let mooloop_core::EffectParams::Eq(eq) = &mut analyzing.params {
+            eq.analyzer_enabled = true;
+        }
+        let chain = vec![analyzing];
+        let plan: Vec<(u8, bool)> = super::spectrum_subscription_plan(&chain, false).collect();
+        assert_eq!(plan, vec![(0, false), (1, false)]);
+    }
+
+    /// **Only the shown chain's displays subscribe** (MOO-240): two channels
+    /// and a bus, each with a Preamp whose display is on, and the master with
+    /// an EQ analyzer on. Whichever of the four the rack shows is the one
+    /// subscribed, and the pump notices every move between them, as well as a
+    /// rack edit on the one it is showing.
+    #[test]
+    fn only_the_chain_the_rack_shows_subscribes_its_displays() {
+        use mooloop_core::{EffectKind, EffectParams, EffectSlotState, MASTER_BUS};
+
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().expect("the testing backend builds a window");
+        let state = Rc::new(RefCell::new(UiState::new(None, 48_000, &window)));
+        let display = || {
+            let mut slot = EffectSlotState::of_kind(EffectKind::Preamp);
+            if let EffectParams::Preamp(preamp) = &mut slot.params {
+                preamp.display_enabled = true;
+            }
+            slot
+        };
+        let mut analyzer = EffectSlotState::of_kind(EffectKind::Eq);
+        if let EffectParams::Eq(eq) = &mut analyzer.params {
+            eq.analyzer_enabled = true;
+        }
+        {
+            let mut st = state.borrow_mut();
+            while st.session.channels.len() < 2 {
+                let index = st.session.channels.len();
+                st.session.channels.push(
+                    ChannelState::new(index).with_id(mooloop_core::ChannelId(index as u32)),
+                );
+            }
+            for channel in &mut st.session.channels[..2] {
+                channel.effects = vec![display()];
+            }
+            while st.session.buses.len() < 2 {
+                let index = st.session.buses.len();
+                st.session.buses.push(mooloop_core::mixer::BusSetup::new(index));
+            }
+            st.session.buses[1].effects = vec![display()];
+            st.session.buses[MASTER_BUS as usize].effects = vec![analyzer];
+        }
+
+        let subscribed = |state: &UiState| -> Vec<EffectTarget> {
+            spectrum_subscriptions(state)
+                .filter(|&(_, _, enabled)| enabled)
+                .map(|(target, _, _)| target)
+                .collect()
+        };
+        // What `sync_effect_spectrum_subscriptions` records, without an
+        // engine to tell.
+        let synced = |state: &UiState| {
+            state
+                .effect_spectra_synced_for
+                .set(Some(state.session.effect_target));
+        };
+
+        {
+            let st = state.borrow();
+            assert!(effect_spectra_out_of_date(&st), "nothing has been synced yet");
+        }
+        for shown in [
+            EffectTarget::Channel(0),
+            EffectTarget::Channel(1),
+            EffectTarget::Bus(1),
+            EffectTarget::Bus(MASTER_BUS),
+            EffectTarget::Channel(0),
+        ] {
+            state.borrow_mut().session.effect_target = shown;
+            let st = state.borrow();
+            assert!(
+                effect_spectra_out_of_date(&st),
+                "the rack moved to {shown:?} and the pump did not notice"
+            );
+            assert_eq!(subscribed(&st), vec![shown], "showing {shown:?}");
+            synced(&st);
+            assert!(!effect_spectra_out_of_date(&st), "nothing moved since the sync");
+        }
+
+        // A display toggled, or a device added or removed, on the chain on
+        // screen still raises the flag the pump acts on.
+        let st = state.borrow();
+        st.sync_effects();
+        assert!(effect_spectra_out_of_date(&st), "a rack edit on the shown chain");
+        assert!(!effect_spectra_out_of_date(&st), "the flag is cleared once acted on");
     }
 
     /// The published defaults reach each oscillator's *own* resting value.
