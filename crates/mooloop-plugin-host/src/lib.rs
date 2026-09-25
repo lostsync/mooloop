@@ -21,6 +21,7 @@
 
 pub mod clap;
 pub mod instance;
+pub mod notes;
 pub mod scan;
 
 pub use instance::{
@@ -76,6 +77,26 @@ pub fn host_info() -> HostInfo {
 pub unsafe fn load_entry(path: &Path) -> Result<PluginEntry, clack_host::entry::PluginEntryError> {
     // SAFETY: the caller's contract, above.
     unsafe { PluginEntry::load(path) }
+}
+
+/// The CLAP features the plugin `id` in `entry` declares (`instrument`,
+/// `audio-effect`, ...), or none when the factory does not list it. What
+/// the scanner records, read again when the plugin opens, so where it may
+/// go is decided the same way on both sides (MOO-85).
+pub(crate) fn load_features(entry: &PluginEntry, id: &std::ffi::CStr) -> Vec<String> {
+    let Some(factory) = entry.get_plugin_factory() else {
+        return Vec::new();
+    };
+    factory
+        .plugin_descriptors()
+        .find(|descriptor| descriptor.id() == Some(id))
+        .map(|descriptor| {
+            descriptor
+                .features()
+                .map(|feature| feature.to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The [`HostHandlers`] every spike instance runs under.

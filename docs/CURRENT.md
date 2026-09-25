@@ -2295,8 +2295,21 @@ land on its own when it starts to matter:
   yet: a plugin channel's editor shows no face (its number is 8, after the
   eight native kinds; "Add Plugin…" is its own row, not one of the eight); a restart
   cuts a sounding instrument rather than fading it; the plugin's own latency
-  is not compensated; and its parameters take no lanes or routes. Which notes
-  a plugin instrument hears, and how, is step 10 (MOO-85).
+  is not compensated; and its parameters take no lanes or routes.
+- **A CLAP instrument plays its channel's notes** (MOO-85, plugin-hosting
+  10), from the pattern, a keyboard or an audition, each at its own frame,
+  live and in an export alike. Where a plugin may go is its own word: one
+  that declares itself an instrument (or declares neither and takes notes)
+  can be a channel's source if it has a note input and one output of one or
+  two channels (a mono one is heard on both sides); an audio input, if it
+  has one, is fed silence. One that declares itself an effect goes in a
+  chain, with a stereo input and output; one that declares both goes in
+  either. Put anywhere else, it is refused with the reason and the song
+  keeps it. A choke releases every note it holds, a stop resets it, and a
+  note-off for a note it is no longer holding is dropped. Notes a plugin
+  plays of its own are counted, not routed. Plugins that take only MIDI get
+  MIDI note messages. The plugin browser marks what will open where from the
+  same rule.
 - **Plugins are found at startup** (MOO-80). At startup, on a thread of
   its own, mooloop looks for CLAP plugins in `~/.clap`, `/usr/lib/clap`,
   `/usr/lib64/clap`, `/usr/local/lib/clap` (inside a Flatpak also

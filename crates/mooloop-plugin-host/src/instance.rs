@@ -194,6 +194,25 @@ pub trait HostedInstance {
         false
     }
 
+    /// Whether it may be a device on a chain: [`crate::scan::effect_refusal`]
+    /// on what it declared when it opened (MOO-85). The session refuses a
+    /// plugin in a place it does not fit.
+    fn fits_effect(&self) -> bool {
+        true
+    }
+
+    /// Whether it may be a channel's source: [`crate::scan::source_refusal`]
+    /// on what it declared when it opened (MOO-85).
+    fn fits_source(&self) -> bool {
+        false
+    }
+
+    /// How many notes the plugin sent out of its own. They are counted, not
+    /// routed (plugin-hosting step 10, the plan's "Deliberately not").
+    fn generated_notes(&self) -> u64 {
+        0
+    }
+
     /// The rate and block ceiling the next processor is built for. The one
     /// that is out keeps its own until it comes back.
     fn set_audio_config(&mut self, config: AudioConfig) {

@@ -105,6 +105,61 @@ pub struct ScannedPlugin {
     pub error: Option<String>,
 }
 
+/// Why a plugin with these CLAP `features` and audio ports (channels per
+/// port) cannot be a device on a chain, or `None` when it can (MOO-85).
+///
+/// **The role is the plugin's own word, and the ports only what the host
+/// can wire.** A plugin says what it is with its features (`audio-effect`,
+/// `instrument`), and ports cannot say it for it: vocoders, MIDI-triggered
+/// gates and tempo-synced effects take notes, and many instruments have a
+/// sidechain or audio input. So an effect is one that declares
+/// `audio-effect` -- or declares neither role and takes no notes -- with
+/// one stereo input and one stereo output, the one layout a chain wires. A
+/// note input is allowed and gets no notes: a chain carries none. A plugin
+/// that declares both roles may go in either place.
+pub fn effect_refusal(features: &[String], audio_inputs: &[u32], audio_outputs: &[u32]) -> Option<String> {
+    let has = |feature: &str| features.iter().any(|f| f == feature);
+    let effect = has("audio-effect") || (!has("instrument") && audio_inputs == [2]);
+    if !effect {
+        return Some("an instrument: it plays as a channel's source".into());
+    }
+    if audio_inputs != [2] || audio_outputs != [2] {
+        return Some("not stereo in and stereo out".into());
+    }
+    None
+}
+
+/// Why a plugin with these `features`, audio ports and note inputs cannot
+/// be a channel's source, or `None` when it can (MOO-85). The role as
+/// [`effect_refusal`] reads it: `instrument`, or a note input when it
+/// declares neither role. What the host wires for a source: a note input,
+/// one output of one or two channels (mono is copied to both sides), and at
+/// most one audio input of one or two, which is fed silence: a channel's
+/// source has nothing upstream of it.
+pub fn source_refusal(
+    features: &[String],
+    audio_inputs: &[u32],
+    audio_outputs: &[u32],
+    note_inputs: u32,
+) -> Option<String> {
+    let has = |feature: &str| features.iter().any(|f| f == feature);
+    let neither = !has("instrument") && !has("audio-effect");
+    let instrument = has("instrument") || (neither && note_inputs > 0);
+    if !instrument {
+        return Some("an effect: it goes in a chain, not as a channel's source".into());
+    }
+    if note_inputs == 0 {
+        return Some("it takes no notes".into());
+    }
+    if !matches!(audio_outputs, [1] | [2]) {
+        return Some(format!("its outputs are {audio_outputs:?}; one of 1 or 2 channels is hosted"));
+    }
+    if !matches!(audio_inputs, [] | [1] | [2]) {
+        return Some(format!("its inputs are {audio_inputs:?}; at most one of 1 or 2 channels is hosted"));
+    }
+    None
+}
+
 impl ScannedPlugin {
     /// Whether it declares the given feature string.
     pub fn has_feature(&self, feature: &str) -> bool {
@@ -119,6 +174,26 @@ impl ScannedPlugin {
     /// Whether it is an audio effect.
     pub fn is_effect(&self) -> bool {
         self.has_feature("audio-effect")
+    }
+
+    /// Why it cannot be a device on a chain, or `None` when it can
+    /// (MOO-85): [`effect_refusal`] on what the scan recorded, or the reason
+    /// it failed to scan.
+    pub fn effect_refusal(&self) -> Option<String> {
+        if let Some(error) = &self.error {
+            return Some(format!("could not be created: {error}"));
+        }
+        effect_refusal(&self.features, &self.audio_inputs, &self.audio_outputs)
+    }
+
+    /// Why it cannot be a channel's source, or `None` when it can (MOO-85):
+    /// [`source_refusal`] on what the scan recorded, or the reason it failed
+    /// to scan. `None` is what a browser offers as an instrument.
+    pub fn source_refusal(&self) -> Option<String> {
+        if let Some(error) = &self.error {
+            return Some(format!("could not be created: {error}"));
+        }
+        source_refusal(&self.features, &self.audio_inputs, &self.audio_outputs, self.note_inputs)
     }
 
     /// Whether it could be created when it was scanned.
@@ -890,6 +965,48 @@ mod tests {
             has_gui: true,
             error: None,
         }
+    }
+
+    /// MOO-85: the role from the features, the ports only for what can be
+    /// wired, each place's reason, and a plugin that declares both roles
+    /// going in either place.
+    #[test]
+    fn a_plugins_places_come_from_its_features_and_what_its_ports_can_wire() {
+        let plugin = |features: &[&str], ins: &[u32], outs: &[u32], notes: u32| ScannedPlugin {
+            features: features.iter().map(|f| (*f).to_owned()).collect(),
+            audio_inputs: ins.to_vec(),
+            audio_outputs: outs.to_vec(),
+            note_inputs: notes,
+            ..sample_plugin()
+        };
+        let places = |p: &ScannedPlugin| (p.effect_refusal().is_none(), p.source_refusal().is_none());
+
+        // A plain effect, and one taking MIDI (a vocoder, a gated effect).
+        assert_eq!(places(&plugin(&["audio-effect"], &[2], &[2], 0)), (true, false));
+        assert_eq!(places(&plugin(&["audio-effect"], &[2], &[2], 1)), (true, false));
+        // A synth; one with a sidechain input fed silence; a mono one.
+        assert_eq!(places(&plugin(&["instrument"], &[], &[2], 1)), (false, true));
+        assert_eq!(places(&plugin(&["instrument"], &[2], &[2], 1)), (false, true));
+        assert_eq!(places(&plugin(&["instrument"], &[], &[1], 1)), (false, true));
+        // Both roles: either place.
+        assert_eq!(places(&plugin(&["instrument", "audio-effect"], &[2], &[2], 1)), (true, true));
+        // Neither role: a note input makes it an instrument, none an effect.
+        assert_eq!(places(&plugin(&[], &[], &[2], 1)), (false, true));
+        assert_eq!(places(&plugin(&[], &[2], &[2], 0)), (true, false));
+        // What the host cannot wire, with the reason.
+        let no_notes = plugin(&["instrument"], &[], &[2], 0);
+        assert_eq!(no_notes.source_refusal().as_deref(), Some("it takes no notes"));
+        let multi_out = plugin(&["instrument"], &[], &[2, 2, 2], 1);
+        assert!(multi_out.source_refusal().is_some_and(|why| why.contains("outputs")));
+        let sidechained = plugin(&["audio-effect"], &[2, 2], &[2], 0);
+        assert_eq!(sidechained.effect_refusal().as_deref(), Some("not stereo in and stereo out"));
+        let synth = plugin(&["instrument"], &[], &[2], 1);
+        assert_eq!(synth.effect_refusal().as_deref(), Some("an instrument: it plays as a channel's source"));
+        let failed = ScannedPlugin {
+            error: Some("boom".into()),
+            ..synth
+        };
+        assert!(failed.source_refusal().is_some_and(|why| why.contains("boom")));
     }
 
     #[test]

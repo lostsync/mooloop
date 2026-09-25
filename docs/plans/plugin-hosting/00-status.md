@@ -6,7 +6,7 @@ mirror this file step-for-step the way MOO-5/16/30 do. The GitHub issue
 numbers below (`#10`, `#26`-`#30`) predate Adam's move away from GitHub
 issues; MOO-11 is the live tracking issue.
 
-**Written 2026-09-16.** Steps 01 (the spike), 02 (the neutral contract), 03 (parameters belong to an instance), 04 (the plugin rack), 05 (the scanner) and 06 (a headless CLAP effect in a chain) landed on 2026-09-23, as did MOO-56's one boxed source slot, which closes blocker 4 below. Step 07 (parameters, automation, modulation and state) landed on 2026-09-24, and so did steps 08 (the plugin browser, the menu row and the generic face) and 09 (a channel source that is a hosted plugin). Adam asked for it directly:
+**Written 2026-09-16.** Steps 01 (the spike), 02 (the neutral contract), 03 (parameters belong to an instance), 04 (the plugin rack), 05 (the scanner) and 06 (a headless CLAP effect in a chain) landed on 2026-09-23, as did MOO-56's one boxed source slot, which closes blocker 4 below. Step 07 (parameters, automation, modulation and state) landed on 2026-09-24, and so did steps 08 (the plugin browser, the menu row and the generic face) and 09 (a channel source that is a hosted plugin), and step 10 (CLAP instruments) on 2026-09-25. Adam asked for it directly:
 *"let's go ahead and plan out how we'll add CLAP support. Later we'll add
 VST/3 and AU. instrument support as well."* `SCOPE.md` already put CLAP in
 for 0.2.0 (item 9). This plan is outside the `FOCUS.md` sequence for the same
@@ -536,7 +536,7 @@ words. **Do not reopen this as a version-bump question.**
 | 07 | Parameters, automation, modulation and state round-trip | #28 | session, project | **done 2026-09-24** (MOO-82) |
 | 08 | Plugin browser, the menu row, and the face for plugins without a GUI | #28 | **UI build**, drafted with `slint-sketch` | **done 2026-09-24** (MOO-83; remainder MOO-228, MOO-229) |
 | 09 | A channel source that is a boxed node | #29 | core, engine, session | **done 2026-09-24** (MOO-84) |
-| 10 | CLAP instruments | #29 | plugin-host, engine | not started |
+| 10 | CLAP instruments | #29 | plugin-host, engine | **done 2026-09-25** (MOO-85) |
 | 11 | Plugin GUIs in their own windows | #30 | plugin-host, **UI build** | not started |
 | 12 | VST3 | — | plugin-host | outline only |
 | 13 | AU (macOS, optional) | — | plugin-host | outline only |
@@ -1193,6 +1193,68 @@ has the processor swapped in by slot, a restart pulls it out and puts the
 next one back; a missing plugin makes a silent source with the reason kept.
 Project: `a_song_whose_source_is_a_plugin_round_trips` (no repairs, equal,
 the second save byte-identical).
+
+## Step 10, recorded 2026-09-25 (MOO-85)
+
+**What landed.** A CLAP instrument plays as a channel's source, the
+processor inside step 09's `HostedSource`.
+
+- **Where a plugin may go is its features, and the ports are what the
+  host can wire** (the orchestrator's ruling, corrected twice on the way).
+  `mooloop_plugin_host::scan::{effect_refusal, source_refusal}` are the one
+  rule: an effect declares `audio-effect` (or neither role and no note
+  input) and has one stereo input and output, a note input allowed and fed
+  nothing; a source declares `instrument` (or neither role and a note
+  input) and has a note input, one output of one or two channels (mono
+  copied to both sides) and at most one audio input of one or two, fed
+  silence. A plugin that declares both goes in either place. The scan
+  answers it from the cache (`ScannedPlugin::effect_refusal`,
+  `source_refusal`, what the browser marks with), `ClapInstance` answers it
+  again at open from the features its factory declares
+  (`HostedInstance::fits_effect`, `fits_source`), and the session refuses a
+  plugin in the wrong place with the reason and does not reopen it until
+  the catalogue changes. Ports alone could not decide it: vocoders and
+  MIDI-gated effects take notes, and many instruments have a sidechain.
+- **Notes cross at their frame.** `ClapProcessor` turns `NoteOn`/`NoteOff`/
+  `Choke` into CLAP note events through `notes::NoteTable` (128 rows,
+  allocated with the processor; the oldest note released when full; a
+  plugin's `note_end` frees its row; a note-off for a note it is not
+  holding is dropped, never sent as a wildcard; a choke releases every held
+  note, oldest first). MIDI-only plugins get `0x90`/`0x80`. The block is cut
+  at every note as MOO-82 cut it at every parameter change, so a plugin that
+  reads its events once a call still starts each note on its frame. A stop
+  (CLAP `reset`) clears the table. Notes a plugin sends are counted
+  (`HostedInstance::generated_notes`), not routed.
+- **The input is the bus**, which `HostedSource` clears: an effect hears its
+  signal, a source's input silence. No special case in the processor.
+
+**The tests.** Engine (`plugin_instrument_tests.rs`, the test sine): the
+export and the executor at 512 and 64 frames the same to the sample over
+the bar, every note on its frame, and two looped passes the same at both
+sizes with a note held across the loop point; a note-off after a choke does
+not release a newer note on its key; a stop silences it and makes a
+pre-stop note-off stale. Host: `notes.rs` unit tests, and
+`scan::tests::a_plugins_places_come_from_its_features_and_what_its_ports_can_wire`.
+Session (`tests/clap_instrument.rs`, through the scan cache): the sine as a
+source plays its channel's pattern into an export, saves, reopens present
+(the same export) and missing (silence, slot kept); an effect as a source
+and an instrument as an effect are refused with a reason and never
+reopened. The case is `examples/clap_instrument_case.rs` (FOCUS listening
+item 18).
+
+**The real plugins on the laptop.** LSP's *Sampler Stereo* (instrument,
+stereo in and out, a note input) is accepted as a source, opens and plays,
+and is silent: it has no sample loaded, and its sample is a file path in
+LSP's own state. *Trigger MIDI* declares itself an effect and is refused as
+a source. The multisamplers have several outputs and are refused. No synth
+is installed; Surge XT and Dexed are still the plan's manual case.
+
+**Not here.** An instrument's parameters have no address yet: a lane or
+route on one needs a `DeviceId` for the source slot (MOO-74's open point,
+Control's `ParamOwner::PluginParam` resolution for sources). Note
+expression, MPE, several outputs and routing generated notes stay in
+"Deliberately not". MOO-230 (a restart cuts a sounding instrument) is open.
+Adding an instrument from the window is Interface's (MOO-83's follow-up).
 
 ## Found after step 07: the swap fades (MOO-213, 2026-09-24)
 

@@ -847,6 +847,12 @@ impl crate::session::Session {
         for event in self.plugin_rack.service(&self.plugins, &named, config) {
             match event {
                 RackEvent::Install { slot, node } => {
+                    if self.misplaced(slot) {
+                        // Dropped here: the instance is retired and not
+                        // opened again until the catalogue changes.
+                        drop(node);
+                        continue;
+                    }
                     if let Some(channel) = self.plugin_source_channel(slot) {
                         // Refused (the channel moved on), the processor comes
                         // back on the reclaim ring and the rack tries again.
@@ -950,12 +956,14 @@ impl crate::session::Session {
                 Ok((node, params))
             });
         let node: Box<dyn AudioNode + Send> = match opened {
-            Ok((node, params)) => {
+            Ok((node, params)) if !self.misplaced(slot) => {
                 if let Some(state) = self.plugins.get_mut(&slot) {
                     state.params = params;
                 }
                 node
             }
+            // An instrument: refused, and retired by `misplaced`.
+            Ok(_) => Box::new(PluginPlaceholder::new(slot)),
             Err(error) => {
                 log_warn!("plugin", "{}: {error}", plugin.name);
                 self.plugin_rack.record_problem(slot, error);
@@ -1116,6 +1124,34 @@ impl crate::session::Session {
         }
     }
 
+    /// Whether the plugin hosted in `slot` is in a place it cannot play: an
+    /// instrument on a chain, or an effect as a channel's source (MOO-85).
+    /// When it is, the instance is retired and the reason kept for
+    /// [`Self::plugin_problem`]; the device plays its placeholder, the
+    /// channel silence, and the song keeps the slot as it is.
+    fn misplaced(&mut self, slot: PluginSlotId) -> bool {
+        let Some((effect, source)) = self
+            .plugin_rack
+            .instance(slot)
+            .map(|instance| (instance.fits_effect(), instance.fits_source()))
+        else {
+            return false;
+        };
+        let error = match (self.plugin_source_channel(slot).is_some(), effect, source) {
+            (true, _, false) => HostError::Incompatible(
+                "not an instrument: a channel's source is a plugin that declares itself one, takes notes and has one output"
+                    .into(),
+            ),
+            (false, false, _) => HostError::Incompatible(
+                "an instrument: it plays as a channel's source, not in a chain".into(),
+            ),
+            _ => return false,
+        };
+        self.plugin_rack.remove(slot);
+        self.plugin_rack.record_problem(slot, error);
+        true
+    }
+
     /// Take plugin `slot`'s processor back from the engine: the placeholder
     /// into its device's place, or, for a channel's source, nothing -- the
     /// source goes silent, as a missing instrument is.
@@ -1168,12 +1204,14 @@ impl crate::session::Session {
                 Ok((node, params))
             });
         let source = match opened {
-            Ok((node, params)) => {
+            Ok((node, params)) if !self.misplaced(slot) => {
                 if let Some(state) = self.plugins.get_mut(&slot) {
                     state.params = params;
                 }
                 HostedSource::with_processor(slot, node)
             }
+            // An effect: refused, and retired by `misplaced`.
+            Ok(_) => HostedSource::new(slot),
             Err(error) => {
                 log_warn!("plugin", "{}: {error}", plugin.name);
                 self.plugin_rack.record_problem(slot, error);
@@ -1295,6 +1333,8 @@ pub(crate) mod tests {
         pub generation: AtomicU64,
         /// The rate the last processor was built for.
         pub built_rate: AtomicU32,
+        /// It says it is an instrument (MOO-85): only a source may host it.
+        pub instrument: AtomicBool,
     }
 
     /// The rack's test double: a plugin with no library behind it.
@@ -1380,6 +1420,12 @@ pub(crate) mod tests {
             self.probe.requests.take()
         }
         fn on_main_thread(&mut self) {}
+        fn fits_effect(&self) -> bool {
+            !self.probe.instrument.load(Ordering::SeqCst)
+        }
+        fn fits_source(&self) -> bool {
+            self.probe.instrument.load(Ordering::SeqCst)
+        }
         fn set_audio_config(&mut self, config: AudioConfig) {
             self.config = config;
         }
@@ -1937,6 +1983,8 @@ pub(crate) mod tests {
         session.replace_project(&project, &[]);
         let mut sink = Sink::default();
         session.service_plugins(&mut sink);
+        // The effect is hosted; the next plugin opened is an instrument.
+        probe.instrument.store(true, Ordering::SeqCst);
         let slot = session.set_plugin_source(1, fake_ref(), &mut sink).expect("a channel 1");
         assert_ne!(slot, effect_slot);
         assert_eq!(sink.sources, [(1, GeneratorParams::Plugin(slot), true)]);
@@ -1956,6 +2004,7 @@ pub(crate) mod tests {
         song.channels[0].setup.effects.retain(|effect| effect.params != EffectParams::Plugin(effect_slot));
         song.plugins.remove(&effect_slot);
         let probe = Arc::new(FakeProbe::default());
+        probe.instrument.store(true, Ordering::SeqCst);
         let mut reopened = crate::session::Session::default();
         reopened.set_plugin_opener(Box::new(FakeOpener(Arc::clone(&probe))));
         reopened.replace_project(&song, &[]);

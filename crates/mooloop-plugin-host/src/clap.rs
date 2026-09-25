@@ -41,6 +41,7 @@ use std::time::{Duration, Instant, SystemTime};
 use clack_extensions::audio_ports::{AudioPortInfoBuffer, PluginAudioPorts};
 use clack_extensions::latency::{HostLatency, HostLatencyImpl, PluginLatency};
 use clack_extensions::log::{HostLog, HostLogImpl, LogSeverity};
+use clack_extensions::note_ports::{NoteDialects, NotePortInfoBuffer, PluginNotePorts};
 use clack_extensions::params::{
     HostParams, HostParamsImplMainThread, HostParamsImplShared, ParamClearFlags, ParamInfoBuffer,
     ParamInfoFlags, ParamRescanFlags, PluginParams,
@@ -48,7 +49,10 @@ use clack_extensions::params::{
 use clack_extensions::state::{HostState, HostStateImpl, PluginState as ClapStateExt};
 use clack_extensions::tail::PluginTail;
 use clack_extensions::thread_check::{HostThreadCheck, HostThreadCheckImpl};
-use clack_host::events::event_types::{ParamModEvent, ParamValueEvent, TransportEvent, TransportFlags};
+use clack_host::events::event_types::{
+    MidiEvent, NoteOffEvent, NoteOnEvent, ParamModEvent, ParamValueEvent, TransportEvent,
+    TransportFlags,
+};
 use clack_host::events::io::{OutputEventBuffer, TryPushError};
 use clack_host::events::spaces::CoreEventSpace;
 use clack_host::events::EventFlags;
@@ -60,6 +64,7 @@ use mooloop_dsp::{AudioNode, Event, EventList, HostedParam, ProcessContext, Ster
 
 pub use crate::instance::PluginParamEvent;
 use crate::instance::{AudioConfig, HostError, HostedInstance, Lifeline, PluginOpener};
+use crate::notes::{HeldNote, NoteTable, NOTE_ROWS};
 use crate::scan::PluginCache;
 use crate::{RequestFlags, Requests};
 
@@ -198,6 +203,33 @@ struct ProcessorFlags {
     failed: AtomicBool,
     /// Parameter events from the plugin the ring had no room for.
     dropped_events: AtomicU64,
+    /// Note-ons and note-offs the plugin sent of its own (step 10: counted,
+    /// not routed).
+    generated_notes: AtomicU64,
+}
+
+/// How a plugin takes notes, from its first note input port: CLAP's own
+/// note events where it supports them, MIDI bytes where it supports only
+/// those (step 10's order of preference), or not at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Notes {
+    None,
+    Clap,
+    Midi,
+}
+
+/// The ports a plugin was accepted with, and where it may go (MOO-85): the
+/// places are [`crate::scan::effect_refusal`] and `source_refusal` on its
+/// own features and ports, the same rule the browser reads from the scan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Layout {
+    /// Channels of the one audio input, or 0 for none. A source's input is
+    /// fed the source's bus, which the source clears: silence.
+    in_channels: u32,
+    out_channels: u32,
+    notes: Notes,
+    effect: bool,
+    source: bool,
 }
 
 /// A hosted CLAP plugin's control-thread half.
@@ -209,6 +241,7 @@ pub struct ClapInstance {
     requests: Arc<RequestFlags>,
     flags: Arc<ProcessorFlags>,
     events_out: Option<rtrb::Consumer<PluginParamEvent>>,
+    layout: Layout,
     instance: PluginInstance<ClapHost>,
 }
 
@@ -216,9 +249,11 @@ impl ClapInstance {
     /// Load `plugin` from the library at `path`, create it, and load `state`
     /// into it. It is not activated until [`HostedInstance::build_processor`].
     ///
-    /// Refused as [`HostError::Incompatible`] unless its audio ports are one
-    /// stereo input and one stereo output. Sidechains and other layouts are
-    /// in the plan's "Deliberately not" list.
+    /// Refused as [`HostError::Incompatible`] unless its ports are an
+    /// effect's (one stereo input, one stereo output) or an instrument's (no
+    /// audio input, one output of one or two channels, and a note input).
+    /// Sidechains, several outputs and other layouts are in the plan's
+    /// "Deliberately not" list. Where each may go is the session's call.
     pub fn open(
         path: &Path,
         plugin: &PluginRef,
@@ -248,7 +283,8 @@ impl ClapInstance {
             &crate::host_info(),
         )
         .map_err(|error| HostError::Plugin(format!("{} could not be created: {error}", plugin.id)))?;
-        check_ports(&mut instance)?;
+        let features = crate::load_features(&entry, &id);
+        let layout = check_ports(&mut instance, &features)?;
         let mut hosted = Self {
             plugin: plugin.clone(),
             params: Vec::new(),
@@ -257,6 +293,7 @@ impl ClapInstance {
             requests,
             flags: Arc::new(ProcessorFlags::default()),
             events_out: None,
+            layout,
             instance,
         };
         if !state.is_empty() {
@@ -317,35 +354,58 @@ impl ClapInstance {
     }
 }
 
-/// Refuse any layout but one stereo input and one stereo output.
-fn check_ports(instance: &mut PluginInstance<ClapHost>) -> Result<(), HostError> {
+/// Accept an effect's ports or an instrument's (see [`Layout`]), and refuse
+/// everything else. [`crate::scan::ScannedPlugin::effect_refusal`] and
+/// `source_refusal` say the same from the scan, without loading anything.
+fn check_ports(instance: &mut PluginInstance<ClapHost>, features: &[String]) -> Result<Layout, HostError> {
     let Some(ports) = instance
         .plugin_shared_handle()
         .get_extension::<PluginAudioPorts>()
     else {
         return Err(HostError::Incompatible("it declares no audio ports".into()));
     };
+    let note_ports = instance
+        .plugin_shared_handle()
+        .get_extension::<PluginNotePorts>();
     let handle = instance.plugin_handle();
-    for is_input in [true, false] {
-        let side = if is_input { "input" } else { "output" };
-        let count = ports.count(&handle, is_input);
-        if count != 1 {
-            return Err(HostError::Incompatible(format!(
-                "it has {count} audio {side} ports; only one stereo {side} is hosted"
-            )));
-        }
+    let notes = note_ports
+        .and_then(|note_ports| {
+            let mut buffer = NotePortInfoBuffer::new();
+            note_ports
+                .get(&handle, 0, true, &mut buffer)
+                .map(|info| info.supported_dialects)
+        })
+        .map_or(Notes::None, |dialects| {
+            if dialects.contains(NoteDialects::CLAP) {
+                Notes::Clap
+            } else if dialects.contains(NoteDialects::MIDI) {
+                Notes::Midi
+            } else {
+                Notes::None
+            }
+        });
+    let channels = |is_input: bool, index: u32| {
         let mut buffer = AudioPortInfoBuffer::new();
-        let channels = ports
-            .get(&handle, 0, is_input, &mut buffer)
-            .map(|info| info.channel_count)
-            .unwrap_or(0);
-        if channels != 2 {
-            return Err(HostError::Incompatible(format!(
-                "its main {side} has {channels} channels, not 2"
-            )));
-        }
+        ports
+            .get(&handle, index, is_input, &mut buffer)
+            .map_or(0, |info| info.channel_count)
+    };
+    let ins: Vec<u32> = (0..ports.count(&handle, true)).map(|index| channels(true, index)).collect();
+    let outs: Vec<u32> = (0..ports.count(&handle, false)).map(|index| channels(false, index)).collect();
+    // The note input the host wires is one it can speak to.
+    let note_inputs = u32::from(notes != Notes::None);
+    let as_effect = crate::scan::effect_refusal(features, &ins, &outs);
+    let as_source = crate::scan::source_refusal(features, &ins, &outs, note_inputs);
+    if let (Some(effect), Some(source)) = (&as_effect, &as_source) {
+        return Err(HostError::Incompatible(format!("as an effect, {effect}; as a source, {source}")));
     }
-    Ok(())
+    Ok(Layout {
+        in_channels: ins.first().copied().unwrap_or(0),
+        out_channels: outs.first().copied().unwrap_or(2),
+        notes,
+        effect: as_effect.is_none(),
+        source: as_source.is_none(),
+    })
 }
 
 impl Drop for ClapInstance {
@@ -458,6 +518,18 @@ impl HostedInstance for ClapInstance {
         self.flags.failed.load(Ordering::Relaxed)
     }
 
+    fn fits_effect(&self) -> bool {
+        self.layout.effect
+    }
+
+    fn fits_source(&self) -> bool {
+        self.layout.source
+    }
+
+    fn generated_notes(&self) -> u64 {
+        self.flags.generated_notes.load(Ordering::Relaxed)
+    }
+
     fn set_audio_config(&mut self, config: AudioConfig) {
         self.config = config;
     }
@@ -521,13 +593,15 @@ impl HostedInstance for ClapInstance {
             tail,
             tail_frames: 0,
             latency: self.latency,
+            layout: self.layout,
+            notes: NoteTable::new(),
             in_l: vec![0.0; frames],
             in_r: vec![0.0; frames],
             out_l: vec![0.0; frames],
             out_r: vec![0.0; frames],
             inputs: AudioPorts::with_capacity(2, 1),
             outputs: AudioPorts::with_capacity(2, 1),
-            events: EventBuffer::with_capacity(EVENTS_IN),
+            events: EventBuffer::with_capacity(EVENTS_IN + NOTE_ROWS),
             events_out: producer,
             flags,
             at_rest: false,
@@ -559,6 +633,11 @@ pub struct ClapProcessor {
     tail: Option<PluginTail>,
     tail_frames: u32,
     latency: u32,
+    /// The ports it was accepted with: whether it has an input to copy the
+    /// bus into, how many output channels to hand it, how it takes notes.
+    layout: Layout,
+    /// The notes it is holding, by mooloop's id and its own (MOO-85).
+    notes: NoteTable,
     in_l: Vec<f32>,
     in_r: Vec<f32>,
     out_l: Vec<f32>,
@@ -577,6 +656,9 @@ pub struct ClapProcessor {
 struct ParamOut<'a> {
     ring: &'a mut rtrb::Producer<PluginParamEvent>,
     dropped: &'a AtomicU64,
+    /// The notes the processor holds: a plugin's `note_end` frees its row.
+    notes: &'a mut NoteTable,
+    generated: &'a AtomicU64,
 }
 
 impl OutputEventBuffer for ParamOut<'_> {
@@ -594,8 +676,20 @@ impl OutputEventBuffer for ParamOut<'_> {
             Some(CoreEventSpace::ParamGestureEnd(event)) => event
                 .param_id()
                 .map(|id| PluginParamEvent::GestureEnd { id: id.get() }),
-            // Notes and everything else an effect might emit are not routed
-            // anywhere (the plan's "Deliberately not").
+            // A voice the plugin finished on its own: its row is free, and a
+            // later note-off for it is stale.
+            Some(CoreEventSpace::NoteEnd(event)) => {
+                if let clack_host::events::Match::Specific(note_id) = event.pckn().note_id {
+                    self.notes.ended(note_id);
+                }
+                None
+            }
+            // Notes the plugin plays of its own are counted, not routed
+            // (the plan's "Deliberately not"), and so is everything else.
+            Some(CoreEventSpace::NoteOn(_) | CoreEventSpace::NoteOff(_) | CoreEventSpace::Midi(_)) => {
+                self.generated.fetch_add(1, Ordering::Relaxed);
+                None
+            }
             _ => None,
         };
         let Some(item) = item else {
@@ -649,6 +743,71 @@ impl ClapProcessor {
     }
 }
 
+/// Push `event`, a note, onto `events` at `at` in the plugin's dialect,
+/// through the note table: a note-on gets the plugin's id for it (and a
+/// full table first releases its oldest note), a note-off only reaches a
+/// note the plugin is holding, and a choke releases every one. Returns how
+/// many events it pushed; never more than `room`, so the buffer never grows.
+fn push_note(
+    events: &mut EventBuffer,
+    notes: &mut NoteTable,
+    dialect: Notes,
+    at: u32,
+    event: Event,
+    room: usize,
+) -> usize {
+    let mut pushed = 0;
+    let off = |events: &mut EventBuffer, note: HeldNote, pushed: &mut usize| {
+        if *pushed >= room {
+            return;
+        }
+        match dialect {
+            Notes::Clap => events.push(&NoteOffEvent::new(
+                at,
+                Pckn::new(0u16, 0u16, u16::from(note.key), note.note_id),
+                0.0,
+            )),
+            Notes::Midi => events.push(&MidiEvent::new(at, 0, [0x80, note.key & 0x7f, 0])),
+            Notes::None => return,
+        }
+        *pushed += 1;
+    };
+    match event {
+        Event::NoteOn { id, note, velocity } => {
+            let (held, evicted) = notes.start(id, note);
+            if let Some(evicted) = evicted {
+                off(events, evicted, &mut pushed);
+            }
+            if pushed < room {
+                match dialect {
+                    Notes::Clap => events.push(&NoteOnEvent::new(
+                        at,
+                        Pckn::new(0u16, 0u16, u16::from(note), held.note_id),
+                        f64::from(velocity.min(127)) / 127.0,
+                    )),
+                    Notes::Midi => events.push(&MidiEvent::new(
+                        at,
+                        0,
+                        [0x90, note & 0x7f, velocity.clamp(1, 127)],
+                    )),
+                    Notes::None => return pushed,
+                }
+                pushed += 1;
+            }
+        }
+        // A note-off for a note the plugin is not holding is dropped, never
+        // sent as a wildcard that would release every voice on its key.
+        Event::NoteOff { id, .. } => {
+            if let Some(held) = notes.stop(id) {
+                off(events, held, &mut pushed);
+            }
+        }
+        Event::Choke => notes.release_all(|held| off(events, held, &mut pushed)),
+        _ => {}
+    }
+    pushed
+}
+
 fn peak(samples: &[f32]) -> f32 {
     samples.iter().fold(0.0f32, |peak, s| peak.max(s.abs()))
 }
@@ -699,6 +858,9 @@ impl AudioNode for ClapProcessor {
             if let Some(PluginAudioProcessor::Started(processor)) = self.processor.as_mut() {
                 processor.reset();
             }
+            // A reset plugin holds no voices, so a note-off for one it held
+            // is stale from here.
+            self.notes.clear();
             self.at_rest = false;
         }
     }
@@ -728,6 +890,9 @@ impl AudioNode for ClapProcessor {
             }
         };
 
+        // The bus is the input: an effect's signal, or, as a channel's
+        // source, the silence `HostedSource` cleared it to -- a source has
+        // nothing upstream of it.
         self.in_l[..frames].copy_from_slice(&bus.l[..frames]);
         self.in_r[..frames].copy_from_slice(&bus.r[..frames]);
         let input_peak = peak(&self.in_l[..frames]).max(peak(&self.in_r[..frames]));
@@ -757,8 +922,8 @@ impl AudioNode for ClapProcessor {
         self.modulated[..still_count].copy_from_slice(&still[..still_count]);
         self.modulated_count = still_count;
 
-        // **The block is cut at every frame a parameter changes on**, and
-        // each piece is its own process call. CLAP lets a plugin apply its
+        // **The block is cut at every frame a parameter changes on, and at
+        // every note** (MOO-85), and each piece is its own process call. CLAP lets a plugin apply its
         // events at their frames, and many read them once a call instead
         // (LSP's do): cut this way, such a plugin hears each value from its
         // own frame, so what it plays no longer depends on the callback's
@@ -773,7 +938,17 @@ impl AudioNode for ClapProcessor {
         let mut cuts = [0u32; EVENTS_IN + 1];
         let mut cut_count = 1;
         for timed in events_in.iter() {
-            let is_param = matches!(timed.event, Event::ParamValue { .. } | Event::ParamMod { .. });
+            // Notes too: a plugin that reads its events once a call would
+            // otherwise start a note at the top of whatever block it fell
+            // in, and the note's frame would depend on the callback.
+            let is_param = matches!(
+                timed.event,
+                Event::ParamValue { .. }
+                    | Event::ParamMod { .. }
+                    | Event::NoteOn { .. }
+                    | Event::NoteOff { .. }
+                    | Event::Choke
+            );
             if is_param
                 && (timed.offset as usize) < frames
                 && timed.offset > cuts[cut_count - 1]
@@ -832,6 +1007,17 @@ impl AudioNode for ClapProcessor {
                         Pckn::match_all(),
                         f64::from(amount),
                     )),
+                    event @ (Event::NoteOn { .. } | Event::NoteOff { .. } | Event::Choke) => {
+                        pushed += push_note(
+                            &mut self.events,
+                            &mut self.notes,
+                            self.layout.notes,
+                            at,
+                            event,
+                            EVENTS_IN - pushed,
+                        );
+                        continue;
+                    }
                     _ => continue,
                 }
                 pushed += 1;
@@ -846,19 +1032,33 @@ impl AudioNode for ClapProcessor {
             let transport = Self::transport(&piece_ctx);
             let (in_l, in_r) = (&mut self.in_l[start..end], &mut self.in_r[start..end]);
             let (out_l, out_r) = (&mut self.out_l[start..end], &mut self.out_r[start..end]);
-            let inputs = self.inputs.with_input_buffers([AudioPortBuffer {
-                latency: 0,
-                channels: AudioPortBufferType::f32_input_only(
-                    [InputChannel::variable(in_l), InputChannel::variable(in_r)].into_iter(),
-                ),
-            }]);
+            // A plugin with no input port gets no input buffers.
+            let in_channels = self.layout.in_channels as usize;
+            let inputs = if in_channels > 0 {
+                self.inputs.with_input_buffers([AudioPortBuffer {
+                    latency: 0,
+                    channels: AudioPortBufferType::f32_input_only(
+                        [InputChannel::variable(in_l), InputChannel::variable(in_r)]
+                            .into_iter()
+                            .take(in_channels),
+                    ),
+                }])
+            } else {
+                InputAudioBuffers::empty()
+            };
+            // A mono instrument gets one channel, copied to both below.
+            let out_channels = self.layout.out_channels as usize;
             let mut outputs = self.outputs.with_output_buffers([AudioPortBuffer {
                 latency: 0,
-                channels: AudioPortBufferType::f32_output_only([out_l, out_r].into_iter()),
+                channels: AudioPortBufferType::f32_output_only(
+                    [out_l, out_r].into_iter().take(out_channels),
+                ),
             }]);
             let mut out = ParamOut {
                 ring: &mut self.events_out,
                 dropped: &self.flags.dropped_events,
+                notes: &mut self.notes,
+                generated: &self.flags.generated_notes,
             };
             let events = &self.events;
             let steady_time = self.steady_time;
@@ -882,6 +1082,10 @@ impl AudioNode for ClapProcessor {
                     return;
                 }
             };
+        }
+        if self.layout.out_channels == 1 {
+            let (mono, right) = (&self.out_l[..frames], &mut self.out_r[..frames]);
+            right.copy_from_slice(mono);
         }
         let (out_l, out_r) = (&self.out_l[..frames], &self.out_r[..frames]);
         if out_l.iter().chain(out_r).any(|sample| !sample.is_finite()) {
@@ -990,11 +1194,9 @@ impl PluginOpener for ClapOpener {
         let Some(found) = self.cache.resolve(plugin) else {
             return Err(HostError::Missing);
         };
-        if found.audio_inputs != [2] || found.audio_outputs != [2] {
-            return Err(HostError::Incompatible(format!(
-                "its audio ports are {:?} in and {:?} out; only one stereo input and one stereo output are hosted",
-                found.audio_inputs, found.audio_outputs
-            )));
+        // Where it may go is the session's call; here it must fit one.
+        if let (Some(_), Some(as_source)) = (found.effect_refusal(), found.source_refusal()) {
+            return Err(HostError::Incompatible(as_source));
         }
         let path = found.path.clone();
         Ok(Box::new(ClapInstance::open(&path, plugin, state, config)?))

@@ -487,3 +487,25 @@ In the order worth playing:
     export's level to the knob's gain within 0.1%:
     `scripts/antibox --no-incremental cargo test -p mooloop-ui --lib plugin_ui`.
     The face has only been seen with the software renderer (`slint-sketch`).
+18. **A CLAP instrument playing its channel's pattern** (MOO-85,
+    plugin-hosting 10). A one-bar melody of six notes, the note on the last
+    step held across the loop point, played by the in-repo test sine as the
+    channel's source and exported the way the app exports:
+
+    ```sh
+    scripts/antibox --no-incremental --pull target/clap-instrument \
+      cargo run -p mooloop-session --example clap_instrument_case -- target/clap-instrument
+    ```
+
+    Play `instrument.wav`. Each note should start clean on its step, with no
+    click, and release over 50 ms; `missing.wav` is the same song with the
+    plugin missing, and is silence. The binary prints each note's first
+    sounding frame against the pattern's: all six landed on their frame on
+    2026-09-25. `instrument.mooloop` is the song. A real instrument through
+    the same path: `clap_instrument_case <dir> --real <clap id>` on the
+    laptop opens one through `~/.config/mooloop/plugins.toml` and writes
+    `real.wav`. No installed plugin makes sound this way yet: LSP's *Sampler
+    Stereo* is accepted, opens and plays, and is silent without a sample
+    loaded into it; its *Trigger MIDI* declares itself an effect and is
+    refused as a source; Airwindows has no instruments. Surge XT or Dexed
+    would be the real case.

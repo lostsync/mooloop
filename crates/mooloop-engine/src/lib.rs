@@ -197,6 +197,8 @@ mod plugin_automation_tests;
 #[cfg(test)]
 mod plugin_source_tests;
 #[cfg(test)]
+mod plugin_instrument_tests;
+#[cfg(test)]
 mod sampler_tests;
 #[cfg(test)]
 mod soak_tests;
