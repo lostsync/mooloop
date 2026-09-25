@@ -3345,6 +3345,8 @@ dependencies = [
  "mooloop-test-plugin",
  "rtrb",
  "rustix 1.1.4",
+ "serde",
+ "serde_json",
  "symphonia",
  "tempfile",
  "trash",
