@@ -1701,7 +1701,14 @@ land on its own when it starts to matter:
   is the default and is bit-identical to no device at all, which makes the
   preamp the way to put an automatable gain stage in the middle of a chain;
   it is deliberately not oversampled, so it adds no latency and can sit
-  anywhere. A bitcrush that is deliberately not oversampled either, a stereo delay with damped cross-feedable feedback and
+  anywhere. Its band display draws what the stage *added* (two analyzers,
+  dry against wet), and **it analyzes only while the window is drawing it**
+  (MOO-233, 2026-09-25): the saved switch means "show it when I look", so
+  a song saved with displays on costs nothing headless, in an export, or
+  unsubscribed. Every spectrum analyzer (this one and the EQ's) spreads its
+  band bank across its hop rather than running it in one callback, so no
+  callback pays for a whole bank; three Preamps with the display on had put
+  a millisecond spike into Adam's `deep`. A bitcrush that is deliberately not oversampled either, a stereo delay with damped cross-feedable feedback and
   digital/tape/reverse responses to a moving delay time. Its Time control is
   a knob with a sync lamp: dark, it sweeps free milliseconds; lit, it steps
   the same twenty-one-entry musical grid the modulators use, `4/1` down to

@@ -1543,13 +1543,16 @@ pub struct PreampParams {
     pub mix: f32,
     /// Output trim, applied after the blend.
     pub output_db: f32,
-    /// Whether the band display is running.
+    /// Whether the band display is switched on: "draw it when I look".
     ///
     /// Not a [`ParamDescriptor`] parameter, for the same reason the EQ's
     /// analyzer is not one: it is a view setting that happens to be worth
-    /// saving, and automating it would automate nothing audible. It gates
-    /// both halves at once -- the engine subscription the UI takes out, and
-    /// the two analyzers the node otherwise runs for nobody.
+    /// saving, and automating it would automate nothing audible. The window
+    /// subscribes to the engine's telemetry for it, and the node runs its two
+    /// analyzers only while it is on **and** that subscription is held
+    /// (MOO-233). On the flag alone they ran for nobody -- headless, in an
+    /// export, on every channel -- and were the largest source of callback
+    /// spikes in Adam's songs.
     pub display_enabled: bool,
 }
 

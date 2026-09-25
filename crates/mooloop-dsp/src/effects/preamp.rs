@@ -79,6 +79,10 @@ pub struct PreampEffect {
     wet: Box<SpectrumAnalyzer>,
     /// The last deviation computed, waiting for the host to take it.
     pending_display: Option<[f32; SPECTRUM_BINS]>,
+    /// Whether the window is drawing this device's display now, as the host
+    /// says every block. The saved `display_enabled` is only what the face
+    /// asks for; this is whether anybody is looking.
+    subscribed: bool,
 }
 
 impl PreampEffect {
@@ -96,7 +100,19 @@ impl PreampEffect {
             dry: Box::new(SpectrumAnalyzer::new()),
             wet: Box::new(SpectrumAnalyzer::new()),
             pending_display: None,
+            subscribed: false,
         }
+    }
+
+    /// Whether the analyzers run this block: the display is switched on
+    /// *and* the window is drawing it (MOO-233).
+    ///
+    /// On the saved flag alone, a song with its displays left on ran two
+    /// Goertzel banks per Preamp for nobody -- on every channel, selected or
+    /// not, headless, and in an export -- and that was the largest source of
+    /// callback spikes in Adam's songs.
+    fn analyzing(&self) -> bool {
+        self.params.display_enabled && self.subscribed
     }
 
     /// Per-band decibels gained between what arrived and what left, **after
@@ -148,7 +164,7 @@ impl PreampEffect {
 
 impl RangeProcessor for PreampEffect {
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
-        let watching = self.params.display_enabled;
+        let watching = self.analyzing();
         for i in start..end {
             let drive = self.drive.advance();
             let mix = self.mix.advance();
@@ -236,6 +252,19 @@ impl AudioNode for PreampEffect {
         self.pending_display.take()
     }
 
+    /// A store and, on the edge that starts the analysis, a restart of both
+    /// rings together: what they hold is from whenever somebody last looked,
+    /// and a first frame drawn from it would be stale. Resetting both on the
+    /// same block keeps them in lockstep, which [`Self::deviation`] needs.
+    fn set_display_subscribed(&mut self, subscribed: bool) {
+        if subscribed && !self.subscribed {
+            self.dry.reset();
+            self.wet.reset();
+            self.pending_display = None;
+        }
+        self.subscribed = subscribed;
+    }
+
     /// `Moo` is memoryless — the stage is skipped outright — so it is at rest
     /// as soon as its trims have stopped moving. Any other voicing has filter
     /// state that has to drain, which is what `tail_frames` is for.
@@ -260,17 +289,19 @@ impl AudioNode for PreampEffect {
             self.mix.set_time(PARAM_SMOOTH_S, ctx.sample_rate);
             self.output.set_time(PARAM_SMOOTH_S, ctx.sample_rate);
         }
-        if self.params.display_enabled {
+        let analyzing = self.analyzing();
+        if analyzing {
             self.dry.prepare(ctx.sample_rate);
             self.wet.prepare(ctx.sample_rate);
         }
         let frames = ctx.frames.min(bus.capacity());
         process_param_split(self, bus, events_in, frames);
 
-        // Both rings advance together and are the same length, so they come
-        // due on the same sample. Taking one without the other would compare
+        // Both rings advance together and are the same length, and each
+        // spends its credit on the same bands on the same call, so they
+        // finish a pass together. Taking one without the other would compare
         // this block's output against the previous block's input.
-        if self.params.display_enabled {
+        if analyzing {
             if let (Some(dry), Some(wet)) = (self.dry.take(), self.wet.take()) {
                 self.pending_display = Some(Self::deviation(&dry, &wet));
             }
@@ -452,6 +483,7 @@ mod tests {
     /// Run enough blocks for both rings to fill and a hop to come due.
     fn deviation_of(params: PreampParams, hz: f32, amplitude: f32) -> [f32; SPECTRUM_BINS] {
         let mut node = PreampEffect::new(params, SAMPLE_RATE);
+        node.set_display_subscribed(true);
         let frames = 512;
         let mut phase = 0.0f32;
         let step = std::f32::consts::TAU * hz / SAMPLE_RATE as f32;
@@ -556,11 +588,148 @@ mod tests {
         };
         assert!(!params.display_enabled, "the fixture proves nothing if it is on");
         let mut node = PreampEffect::new(params, SAMPLE_RATE);
+        node.set_display_subscribed(true);
         assert!(!node.provides_display_spectrum());
         for _ in 0..16 {
             let mut bus = tone(512);
             node.process(&context(512), &mut bus, &EventList::empty(), None);
             assert!(node.take_display_spectrum().is_none());
         }
+    }
+
+    /// A logarithmic sweep from 40 Hz to 12 kHz at the operating level, in
+    /// blocks of uneven length, so a hop's bands are run across several
+    /// blocks of different sizes and the signal changes under them.
+    fn sweep_blocks() -> Vec<StereoBus> {
+        let amplitude = mooloop_core::db_to_linear(mooloop_core::REFERENCE_PEAK_DBFS);
+        let total = SAMPLE_RATE as usize / 2;
+        let mut phase = 0.0f32;
+        let mut blocks = Vec::new();
+        let mut done = 0;
+        for length in [64usize, 100, 128, 37, 256, 511].iter().cycle() {
+            if done >= total {
+                break;
+            }
+            let frames = (*length).min(total - done);
+            let mut bus = StereoBus::with_capacity(frames);
+            for i in 0..frames {
+                let t = (done + i) as f32 / total as f32;
+                let hz = 40.0 * (12_000.0f32 / 40.0).powf(t);
+                phase += std::f32::consts::TAU * hz / SAMPLE_RATE as f32;
+                bus.l[i] = amplitude * phase.sin();
+                bus.r[i] = amplitude * phase.sin();
+            }
+            blocks.push(bus);
+            done += frames;
+        }
+        blocks
+    }
+
+    /// **The saved flag asks; subscription answers** (MOO-233). A song
+    /// saved with its display on runs no analysis until the window is
+    /// drawing it -- which headless, and in an export, is never.
+    #[test]
+    fn a_saved_display_waits_for_somebody_to_look() {
+        let params = PreampParams {
+            voicing: PreampVoicing::Iron,
+            drive_db: 12.0,
+            display_enabled: true,
+            ..PreampParams::default()
+        };
+        let mut node = PreampEffect::new(params, SAMPLE_RATE);
+        // Still owns the stage, so the host's generic analyzer stays out.
+        assert!(node.provides_display_spectrum());
+        for _ in 0..32 {
+            let mut bus = tone(512);
+            node.process(&context(512), &mut bus, &EventList::empty(), None);
+            assert!(node.take_display_spectrum().is_none(), "published unsubscribed");
+        }
+
+        // Looked at, it publishes -- and the rings start from what arrives
+        // now, not from whatever they held.
+        node.set_display_subscribed(true);
+        let mut frames = 0;
+        let published = (0..32).any(|_| {
+            let mut bus = tone(512);
+            node.process(&context(512), &mut bus, &EventList::empty(), None);
+            frames += 512;
+            node.take_display_spectrum().is_some()
+        });
+        assert!(published, "nothing published {frames} frames after subscribing");
+
+        // And looked away from, it stops again.
+        node.set_display_subscribed(false);
+        for _ in 0..32 {
+            let mut bus = tone(512);
+            node.process(&context(512), &mut bus, &EventList::empty(), None);
+            assert!(node.take_display_spectrum().is_none(), "published after unsubscribing");
+        }
+    }
+
+    /// Nothing audible depends on whether anybody is looking, because an
+    /// export never is: subscribed and unsubscribed render the same bits.
+    #[test]
+    fn looking_at_the_display_does_not_change_the_sound() {
+        let params = PreampParams {
+            voicing: PreampVoicing::Iron,
+            drive_db: 12.0,
+            mix: 0.7,
+            display_enabled: true,
+            ..PreampParams::default()
+        };
+        let mut watched = PreampEffect::new(params, SAMPLE_RATE);
+        watched.set_display_subscribed(true);
+        let mut unwatched = PreampEffect::new(params, SAMPLE_RATE);
+        let mut frames = 0;
+        let mut published = 0;
+        for (mut a, mut b) in sweep_blocks().into_iter().zip(sweep_blocks()) {
+            let length = a.capacity();
+            watched.process(&context(length), &mut a, &EventList::empty(), None);
+            unwatched.process(&context(length), &mut b, &EventList::empty(), None);
+            published += usize::from(watched.take_display_spectrum().is_some());
+            for i in 0..length {
+                assert_eq!(a.l[i].to_bits(), b.l[i].to_bits(), "left differs at {}", frames + i);
+                assert_eq!(a.r[i].to_bits(), b.r[i].to_bits(), "right differs at {}", frames + i);
+            }
+            frames += length;
+        }
+        assert!(published > 0, "the watched node never analyzed, so this proved nothing");
+    }
+
+    /// **The two analyzers stay in lockstep while their work is spread.**
+    ///
+    /// `SpectrumAnalyzer::take` runs a pass over several blocks, each band
+    /// on the ring as it is then, so the deviation is only honest if the dry
+    /// and wet analyzers run band *k* on windows ending at the same sample.
+    /// At `Moo` and unity the two see the same samples, so any band that
+    /// reads non-zero while a sweep moves under uneven blocks is the pair
+    /// drifting apart.
+    #[test]
+    fn a_transparent_stage_deviates_nowhere_under_a_sweep() {
+        let mut node = PreampEffect::new(
+            PreampParams {
+                display_enabled: true,
+                ..PreampParams::default()
+            },
+            SAMPLE_RATE,
+        );
+        node.set_display_subscribed(true);
+        let mut frames_published = 0;
+        for mut bus in sweep_blocks() {
+            let length = bus.capacity();
+            node.process(&context(length), &mut bus, &EventList::empty(), None);
+            if let Some(deviation) = node.take_display_spectrum() {
+                frames_published += 1;
+                for (band, value) in deviation.iter().enumerate() {
+                    assert_eq!(
+                        *value, 0.0,
+                        "band {band} ({:.0} Hz) deviated at unity",
+                        band_hz(band)
+                    );
+                }
+            }
+        }
+        // Half a second is about eleven hops, less the fill and first pass.
+        assert!(frames_published >= 8, "only {frames_published} frames published");
     }
 }

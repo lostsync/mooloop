@@ -53,10 +53,12 @@ const SPECTRUM_MIN_WINDOW: usize = 512;
 ///
 /// This costs what it sounds like it costs -- about 2.4x the multiply-
 /// accumulates of a flat 512 -- and it is affordable for the reason the
-/// analyzer was always affordable: it runs once a hop, and only for a device
-/// whose display is subscribed.
+/// analyzer was always affordable: the bank runs once a hop, spread across
+/// it, and only for a device whose display is subscribed.
 const SPECTRUM_PERIODS: f32 = 8.0;
 
+/// How often a fresh display vector is published, in samples. It is also the
+/// time one pass over the bank is spread across: see [`SpectrumAnalyzer::take`].
 const SPECTRUM_HOP: usize = 2_048;
 /// Level a band reads as zero. Public because a consumer that *compares* two
 /// spectra has to undo the normalization to get back to decibels, and
@@ -66,6 +68,17 @@ pub const SPECTRUM_FLOOR_DB: f32 = -84.0;
 /// Rolling, low-rate spectrum analyzer. It is deliberately inexpensive:
 /// values are calculated once per hop, with a fixed Goertzel bank over a
 /// mono sum, and only when a device display subscribes to it.
+///
+/// **The bank is paid for as it goes, never all at once** (MOO-233). Run
+/// whole in the callback a hop fell due on, it made every sixteenth
+/// 128-frame callback pay for about sixty thousand multiply-accumulates --
+/// and since every analyzer starts at frame 0 with the same hop, every
+/// device's bank fell on the *same* callback. Three Preamps with their
+/// displays on put a 1 ms spike into a 2.7 ms budget. So each sample
+/// written earns a fixed share of one pass over the bank, and [`Self::take`]
+/// runs as many bands as have been earned. The load is flat: a callback
+/// pays in proportion to its length, whichever analyzer it is and whenever
+/// it started, so there is no phase to stagger.
 ///
 /// **Each band reads its own depth into the ring.** That is free here in a
 /// way it would not be under an FFT: a Goertzel bin is an independent pass
@@ -80,7 +93,18 @@ pub struct SpectrumAnalyzer {
     windows: [usize; SPECTRUM_BINS],
     write: usize,
     filled: usize,
-    since_publish: usize,
+    /// Samples written since the last [`Self::take`], waiting to be turned
+    /// into credit.
+    unpaid: usize,
+    /// Work earned and not yet spent, in band-window samples times
+    /// [`SPECTRUM_HOP`], so a sample's share of the bank is an integer.
+    credit: u64,
+    /// What one pass over the bank costs, in band-window samples.
+    bank_cost: u64,
+    /// The next band the pass will run.
+    next_band: usize,
+    /// The pass in progress. Bands below `next_band` are this pass's.
+    levels: [f32; SPECTRUM_BINS],
     sample_rate: u32,
 }
 
@@ -92,7 +116,11 @@ impl SpectrumAnalyzer {
             windows: [SPECTRUM_MIN_WINDOW; SPECTRUM_BINS],
             write: 0,
             filled: 0,
-            since_publish: SPECTRUM_HOP,
+            unpaid: 0,
+            credit: 0,
+            bank_cost: 0,
+            next_band: 0,
+            levels: [0.0; SPECTRUM_BINS],
             sample_rate: 0,
         }
     }
@@ -101,7 +129,9 @@ impl SpectrumAnalyzer {
         self.samples.fill(0.0);
         self.write = 0;
         self.filled = 0;
-        self.since_publish = SPECTRUM_HOP;
+        self.unpaid = 0;
+        self.credit = 0;
+        self.next_band = 0;
     }
 
     fn configure(&mut self, sample_rate: u32) {
@@ -123,6 +153,7 @@ impl SpectrumAnalyzer {
                 .next_power_of_two()
                 .clamp(SPECTRUM_MIN_WINDOW, SPECTRUM_WINDOW);
         }
+        self.bank_cost = self.windows.iter().map(|window| *window as u64).sum();
     }
 
     /// Ingest one device input block. Returns a fresh normalized display vector
@@ -157,40 +188,69 @@ impl SpectrumAnalyzer {
         self.samples[self.write] = sample;
         self.write = (self.write + 1) % SPECTRUM_WINDOW;
         self.filled = (self.filled + 1).min(SPECTRUM_WINDOW);
-        self.since_publish = self.since_publish.saturating_add(1);
+        self.unpaid = self.unpaid.saturating_add(1);
     }
 
-    /// A fresh display vector, if the window is full and a hop has passed.
+    /// Run the bands the samples written since the last call have paid for,
+    /// and return a fresh display vector if that finished a pass.
+    ///
+    /// Call it once per block. One pass costs [`SPECTRUM_HOP`] samples'
+    /// worth of credit, so a vector is published about once a hop once the
+    /// ring is full, and a block's share of the work is in proportion to its
+    /// length. Credit is capped at one pass: a caller that skips `take` for a
+    /// while gets one pass when it comes back, not a backlog.
+    ///
+    /// **Each band reads the ring as it is when that band runs**, so the
+    /// bands of one vector come from windows ending at different samples
+    /// within the hop. For a display refreshed twenty times a second that is
+    /// invisible. Two analyzers written in lockstep run the same bands on the
+    /// same call, so a device comparing two of them compares like with like.
     pub fn take(&mut self) -> Option<[f32; SPECTRUM_BINS]> {
-        if self.filled < SPECTRUM_WINDOW || self.since_publish < SPECTRUM_HOP {
+        let unpaid = core::mem::take(&mut self.unpaid) as u64;
+        if self.filled < SPECTRUM_WINDOW || self.bank_cost == 0 {
             return None;
         }
-        self.since_publish = 0;
-        Some(self.analyze())
+        let full_pass = self.bank_cost * SPECTRUM_HOP as u64;
+        self.credit = (self.credit + unpaid * self.bank_cost).min(full_pass);
+        let mut published = None;
+        loop {
+            let price = self.windows[self.next_band] as u64 * SPECTRUM_HOP as u64;
+            if self.credit < price {
+                break;
+            }
+            self.credit -= price;
+            self.levels[self.next_band] = self.band(self.next_band);
+            self.next_band += 1;
+            if self.next_band == SPECTRUM_BINS {
+                self.next_band = 0;
+                published = Some(self.levels);
+                // One pass per call at most, so the cap above holds even for
+                // a block longer than a hop.
+                break;
+            }
+        }
+        published
     }
 
-    fn analyze(&self) -> [f32; SPECTRUM_BINS] {
-        let mut levels = [0.0; SPECTRUM_BINS];
-        for (bin, level) in levels.iter_mut().enumerate() {
-            let coefficient = self.coefficients[bin];
-            let window = self.windows[bin];
-            // `write` points at the oldest sample, so a window that ends at
-            // the newest one starts `window` back from there.
-            let start = (self.write + SPECTRUM_WINDOW - window) % SPECTRUM_WINDOW;
-            let mut q1 = 0.0;
-            let mut q2 = 0.0;
-            for offset in 0..window {
-                let sample = self.samples[(start + offset) % SPECTRUM_WINDOW];
-                let q0 = sample + coefficient * q1 - q2;
-                q2 = q1;
-                q1 = q0;
-            }
-            let power =
-                (q1 * q1 + q2 * q2 - coefficient * q1 * q2) / (window * window) as f32;
-            let db = 10.0 * power.max(1e-12).log10();
-            *level = ((db - SPECTRUM_FLOOR_DB) / -SPECTRUM_FLOOR_DB).clamp(0.0, 1.0);
+    /// One band's normalized level over its own window, ending at the newest
+    /// sample.
+    fn band(&self, bin: usize) -> f32 {
+        let coefficient = self.coefficients[bin];
+        let window = self.windows[bin];
+        // `write` points at the oldest sample, so a window that ends at the
+        // newest one starts `window` back from there.
+        let start = (self.write + SPECTRUM_WINDOW - window) % SPECTRUM_WINDOW;
+        let mut q1 = 0.0;
+        let mut q2 = 0.0;
+        for offset in 0..window {
+            let sample = self.samples[(start + offset) % SPECTRUM_WINDOW];
+            let q0 = sample + coefficient * q1 - q2;
+            q2 = q1;
+            q1 = q0;
         }
-        levels
+        let power = (q1 * q1 + q2 * q2 - coefficient * q1 * q2) / (window * window) as f32;
+        let db = 10.0 * power.max(1e-12).log10();
+        ((db - SPECTRUM_FLOOR_DB) / -SPECTRUM_FLOOR_DB).clamp(0.0, 1.0)
     }
 }
 
@@ -385,5 +445,71 @@ mod tests {
             "the top band read {top:.3} against the peak's {:.3}",
             spectrum[peak]
         );
+    }
+
+    /// Feed `blocks` blocks of `frames` of a 1 kHz tone, calling `take`
+    /// after each, and report the most band-window samples any one call ran
+    /// and how many vectors were published.
+    fn spread(frames: usize, blocks: usize) -> (u64, usize) {
+        let sample_rate = 48_000;
+        let mut analyzer = SpectrumAnalyzer::new();
+        analyzer.prepare(sample_rate);
+        let mut worst = 0u64;
+        let mut published = 0;
+        let mut n = 0usize;
+        for _ in 0..blocks {
+            for _ in 0..frames {
+                let t = n as f32 / sample_rate as f32;
+                analyzer.write((core::f32::consts::TAU * 1_000.0 * t).sin() * 0.5);
+                n += 1;
+            }
+            let before = analyzer.next_band;
+            let publishes = analyzer.take().is_some();
+            published += usize::from(publishes);
+            let after = if publishes { SPECTRUM_BINS } else { analyzer.next_band };
+            let ran: u64 = (before..after).map(|bin| analyzer.windows[bin] as u64).sum();
+            worst = worst.max(ran);
+        }
+        (worst, published)
+    }
+
+    /// **No callback pays for the bank** (MOO-233). Run whole, one call in
+    /// sixteen at 128 frames paid for all of it, and every analyzer's due
+    /// call was the same one. Spread, a call runs about its own length's
+    /// share of a pass, give or take one band.
+    #[test]
+    fn a_block_pays_only_its_share_of_the_bank() {
+        let mut analyzer = SpectrumAnalyzer::new();
+        analyzer.prepare(48_000);
+        let bank = analyzer.bank_cost;
+        for frames in [64usize, 128, 256] {
+            let (worst, published) = spread(frames, 40 * SPECTRUM_HOP / frames);
+            let share = bank * frames as u64 / SPECTRUM_HOP as u64;
+            assert!(
+                worst <= share + SPECTRUM_WINDOW as u64,
+                "{frames}-frame blocks: one call ran {worst} band-samples, \
+                 against a share of {share} and a whole bank of {bank}"
+            );
+            assert!(
+                worst * 4 < bank,
+                "{frames}-frame blocks: one call ran {worst} of the bank's {bank}"
+            );
+            // Forty hops, less the fill and the first pass.
+            assert!(
+                (37..=39).contains(&published),
+                "{frames}-frame blocks published {published} vectors in forty hops"
+            );
+        }
+    }
+
+    /// A block longer than a hop still gets one pass, not a backlog, so a
+    /// huge buffer size costs a bank a block rather than a pile of them.
+    #[test]
+    fn a_long_block_runs_one_pass_at_most() {
+        let (worst, published) = spread(8_192, 8);
+        let mut analyzer = SpectrumAnalyzer::new();
+        analyzer.prepare(48_000);
+        assert!(worst <= analyzer.bank_cost, "one call ran {worst}");
+        assert_eq!(published, 8, "one vector per call once the ring is full");
     }
 }

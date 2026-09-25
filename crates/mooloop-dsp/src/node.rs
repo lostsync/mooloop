@@ -439,6 +439,21 @@ pub trait AudioNode {
         None
     }
 
+    /// Whether anyone is drawing this node's display right now.
+    ///
+    /// **Called from the callback, on every node the effect host holds,
+    /// every block, before `process`**, with whether the engine's telemetry
+    /// has this stage subscribed -- and with `false` where there is no
+    /// telemetry at all, as in an export. So an implementation must be a
+    /// store and nothing more: no allocation, no work.
+    ///
+    /// It gates display work only. A saved "display on" setting is what the
+    /// window *asks* for; this is whether the window is asking now. A node
+    /// that runs analysis for its own display (the preamp, MOO-233) runs it
+    /// only while both are true -- and nothing audible may depend on it,
+    /// since an export is never subscribed.
+    fn set_display_subscribed(&mut self, _subscribed: bool) {}
+
     /// Tell this node that time stopped being continuous.
     ///
     /// Called once per discontinuity, before the node is handed the block's

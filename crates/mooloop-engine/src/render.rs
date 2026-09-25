@@ -2781,6 +2781,15 @@ impl EffectChain {
             if returning {
                 self.restart_returning(slot);
             }
+            // Whether anybody is drawing this row's display, told to its
+            // node before it runs (MOO-233). A device with its own analysis
+            // runs it only while this is true; with no telemetry, as in an
+            // export, nobody is.
+            let subscribed = device_display
+                .is_some_and(|(_, telemetry, target)| telemetry.spectrum_enabled(target, slot + 1));
+            if let Some(node) = self.nodes[slot].as_mut() {
+                node.set_display_subscribed(subscribed);
+            }
             if let Some((_, telemetry, target)) = device_display {
                 // A device that publishes its own display spectrum owns the
                 // stage; feeding the generic analyzer as well would burn a
