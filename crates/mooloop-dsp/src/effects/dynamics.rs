@@ -278,7 +278,22 @@ pub struct CompressorEffect {
     /// blend, which runs a compressor and its own input 3 dB hot.
     mix: Smoothed,
     block: DynamicsBlock,
+    /// A detector level below which the gain computer is certain to say 0 dB
+    /// (MOO-252): the linear form of `threshold - knee / 2`, lowered by
+    /// [`QUIET_MARGIN`] so that no rounding in the `log10` the exact path
+    /// takes could put a level under it on the other side of the knee.
+    /// Below it the sample skips the `log10` and the `powf`, and its gain is
+    /// the `1.0 * makeup` those two would have produced, to the bit.
+    quiet_below: f32,
+    /// The `(threshold_db, knee_db)` [`Self::quiet_below`] was worked out
+    /// for. A NaN threshold matches nothing, so the first sample computes it.
+    quiet_for: (f32, f32),
 }
+
+/// How far under the knee's lower edge [`CompressorEffect::quiet_below`]
+/// sits, as a level ratio: about 0.009 dB, thousands of times what `log10`
+/// and the gain computer's arithmetic can round by.
+const QUIET_MARGIN: f32 = 0.999;
 
 impl CompressorEffect {
     pub fn new(params: CompressorParams, sample_rate: u32) -> Self {
@@ -297,6 +312,8 @@ impl CompressorEffect {
             makeup,
             mix: smoothed(params.mix.clamp(0.0, 1.0)),
             block: DynamicsBlock::new(),
+            quiet_below: 0.0,
+            quiet_for: (f32::NAN, f32::NAN),
         }
     }
 
@@ -341,10 +358,26 @@ impl RangeProcessor for CompressorEffect {
             }
             let makeup = self.makeup;
             let envelope = self.detector.process(linked_peak(bus.l[i], bus.r[i]));
-            let reduction_db =
-                compressor_gain_db(linear_to_db_unfloored(envelope), threshold_db, ratio, knee_db);
+            if (threshold_db, knee_db) != self.quiet_for {
+                let edge_db = threshold_db - knee_db.max(0.0) * 0.5;
+                self.quiet_below = db_to_linear_unfloored(edge_db) * QUIET_MARGIN;
+                self.quiet_for = (threshold_db, knee_db);
+            }
+            // Under the knee the gain computer says 0 dB and `10^0` is 1, so
+            // a quiet sample's gain is `makeup` exactly: skip the `log10` and
+            // the `powf` that would say so (MOO-252).
+            let (reduction_db, gain) = if envelope < self.quiet_below {
+                (0.0, makeup)
+            } else {
+                let reduction_db = compressor_gain_db(
+                    linear_to_db_unfloored(envelope),
+                    threshold_db,
+                    ratio,
+                    knee_db,
+                );
+                (reduction_db, db_to_linear_unfloored(reduction_db) * makeup)
+            };
             self.block.observe(envelope, reduction_db);
-            let gain = db_to_linear_unfloored(reduction_db) * makeup;
             // At a mix of one this is the gain exactly, so a compressor
             // that was never given a mix sounds as it always did.
             let mix = self.mix.advance();
@@ -1502,6 +1535,205 @@ mod tests {
                 "at {i}: {} where half of each is {expected}",
                 half[i]
             );
+        }
+    }
+
+    /// The compressor's sample loop as it was before MOO-252: a `log10` and
+    /// a `powf` every sample, whatever the level. Kept to hold the device to
+    /// it, bit for bit, and to time the two against each other.
+    struct CompressorBefore {
+        effect: CompressorEffect,
+    }
+
+    impl CompressorBefore {
+        fn new(params: CompressorParams) -> Self {
+            Self {
+                effect: CompressorEffect::new(params, 48_000),
+            }
+        }
+
+        fn process(&mut self, bus: &mut StereoBus, frames: usize) {
+            let e = &mut self.effect;
+            let knee_db = e.params.knee_db;
+            for i in 0..frames {
+                let threshold_db = e.threshold_db.advance();
+                let ratio = e.ratio.advance();
+                let makeup_db = e.makeup_db.advance();
+                if !e.makeup_db.is_settled() {
+                    e.makeup = db_to_linear_unfloored(makeup_db);
+                }
+                let makeup = e.makeup;
+                let envelope = e.detector.process(linked_peak(bus.l[i], bus.r[i]));
+                let reduction_db = compressor_gain_db(
+                    linear_to_db_unfloored(envelope),
+                    threshold_db,
+                    ratio,
+                    knee_db,
+                );
+                e.block.observe(envelope, reduction_db);
+                let gain = db_to_linear_unfloored(reduction_db) * makeup;
+                let mix = e.mix.advance();
+                let gain = if mix == 1.0 { gain } else { (1.0 - mix) + gain * mix };
+                bus.l[i] *= gain;
+                bus.r[i] *= gain;
+            }
+        }
+    }
+
+    /// Kick-like bursts, a decaying 60 Hz sine every half second peaking at
+    /// the operating level, over a quiet pad: in and out of compression the
+    /// way a real channel is.
+    fn pumping_input(frames: usize) -> Vec<f32> {
+        (0..frames)
+            .map(|i| {
+                let t = (i % 24_000) as f32 / 48_000.0;
+                let kick = 0.25 * (-t * 12.0).exp() * (t * 60.0 * core::f32::consts::TAU).sin();
+                let pad = 0.02 * (i as f32 * 220.0 / 48_000.0 * core::f32::consts::TAU).sin();
+                kick + pad
+            })
+            .collect()
+    }
+
+    /// The factory settings the comparisons use.
+    fn compressor_rows() -> [(&'static str, CompressorParams); 3] {
+        [
+            ("default", CompressorParams::default()),
+            (
+                "Gentle Glue",
+                CompressorParams {
+                    threshold_db: -20.0,
+                    ratio: 2.0,
+                    attack_ms: 30.0,
+                    release_ms: 250.0,
+                    knee_db: 12.0,
+                    makeup_db: 2.0,
+                    ..CompressorParams::default()
+                },
+            ),
+            (
+                "hard knee, 8:1",
+                CompressorParams {
+                    threshold_db: -24.0,
+                    ratio: 8.0,
+                    knee_db: 0.0,
+                    ..CompressorParams::default()
+                },
+            ),
+        ]
+    }
+
+    /// **Skipping the gain computer under the knee changes nothing, to the
+    /// bit** (MOO-252): the device against the per-sample loop, on bursts
+    /// that go in and out of compression, with the threshold and knee moved
+    /// mid-block, at each setting above.
+    #[test]
+    fn a_quiet_sample_skips_the_gain_computer_bit_for_bit() {
+        let frames = 48_000;
+        let input = pumping_input(frames);
+        for (label, params) in compressor_rows() {
+            let mut now = StereoBus::with_capacity(frames);
+            now.l[..frames].copy_from_slice(&input);
+            now.r[..frames].copy_from_slice(&input);
+            let mut before = StereoBus::with_capacity(frames);
+            before.l[..frames].copy_from_slice(&input);
+            before.r[..frames].copy_from_slice(&input);
+            let moves = [
+                (9_000u32, COMP_PARAM_THRESHOLD_DB, -30.0f32),
+                (21_000, COMP_PARAM_KNEE_DB, 3.0),
+                (33_000, COMP_PARAM_THRESHOLD_DB, -12.0),
+            ];
+            let mut events = EventList::empty();
+            for (offset, id, value) in moves {
+                assert!(events.push(TimedEvent {
+                    offset,
+                    event: Event::ParamValue { id, value },
+                }));
+            }
+            CompressorEffect::new(params, 48_000).process(&context(frames), &mut now, &events, None);
+            let mut reference = CompressorBefore::new(params);
+            let mut from = 0usize;
+            for (offset, id, value) in moves {
+                let mut part = StereoBus::with_capacity(frames);
+                let to = offset as usize;
+                part.l[..to - from].copy_from_slice(&before.l[from..to]);
+                part.r[..to - from].copy_from_slice(&before.r[from..to]);
+                reference.process(&mut part, to - from);
+                before.l[from..to].copy_from_slice(&part.l[..to - from]);
+                before.r[from..to].copy_from_slice(&part.r[..to - from]);
+                reference.effect.apply_param(id, value);
+                from = to;
+            }
+            let mut part = StereoBus::with_capacity(frames);
+            part.l[..frames - from].copy_from_slice(&before.l[from..frames]);
+            part.r[..frames - from].copy_from_slice(&before.r[from..frames]);
+            reference.process(&mut part, frames - from);
+            before.l[from..frames].copy_from_slice(&part.l[..frames - from]);
+            for i in 0..frames {
+                assert_eq!(
+                    now.l[i].to_bits(),
+                    before.l[i].to_bits(),
+                    "{label} at {i}: {} against {}",
+                    now.l[i],
+                    before.l[i]
+                );
+            }
+        }
+    }
+
+    /// **What a compressor costs, before and after MOO-252**, per 128-frame
+    /// block, in one run, round-robin, each block's fastest of `REPS` passes
+    /// (default 7), on the bursts above.
+    ///
+    /// ```sh
+    /// cargo test -p mooloop-dsp --release --lib -- compressor_cost --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "measures wall time; run deliberately in release"]
+    fn compressor_cost() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        const BLOCK: usize = 128;
+        const BLOCKS: usize = 750;
+        enum Device {
+            Now(Box<CompressorEffect>),
+            Before(Box<CompressorBefore>),
+        }
+        let reps = std::env::var("REPS")
+            .ok()
+            .and_then(|reps| reps.parse().ok())
+            .unwrap_or(7usize)
+            .max(1);
+        let input = pumping_input(BLOCK * BLOCKS);
+        let mut rows: Vec<(String, Device)> = Vec::new();
+        for (label, params) in compressor_rows() {
+            rows.push((format!("{label}, before"), Device::Before(Box::new(CompressorBefore::new(params)))));
+            rows.push((format!("{label}, after"), Device::Now(Box::new(CompressorEffect::new(params, 48_000)))));
+        }
+        let mut best = vec![vec![u128::MAX; BLOCKS]; rows.len()];
+        let mut bus = StereoBus::with_capacity(BLOCK);
+        for _ in 0..reps {
+            for (row, (_, device)) in rows.iter_mut().enumerate() {
+                for (block, best) in best[row].iter_mut().enumerate() {
+                    let chunk = &input[block * BLOCK..(block + 1) * BLOCK];
+                    bus.l[..BLOCK].copy_from_slice(chunk);
+                    bus.r[..BLOCK].copy_from_slice(chunk);
+                    let start = Instant::now();
+                    match device {
+                        Device::Now(effect) => {
+                            effect.process(&context(BLOCK), &mut bus, &EventList::empty(), None)
+                        }
+                        Device::Before(before) => before.process(&mut bus, BLOCK),
+                    }
+                    black_box(&bus);
+                    *best = (*best).min(start.elapsed().as_nanos());
+                }
+            }
+        }
+        println!("{reps} passes, {BLOCKS} blocks of {BLOCK}, each block's fastest pass");
+        for ((label, _), best) in rows.iter().zip(&best) {
+            let us = best.iter().sum::<u128>() as f64 / BLOCKS as f64 / 1_000.0;
+            println!("{label:<28} {us:7.2} us/block");
         }
     }
 }
