@@ -21,6 +21,8 @@ mod rack_fold_tests;
 #[cfg(test)]
 mod rack_join_tests;
 mod export_ui;
+#[cfg(test)]
+mod modulation_offsets_tests;
 mod plugin_ui;
 mod pump_profile;
 #[cfg(test)]
@@ -2915,6 +2917,55 @@ fn eq_overlay_view<T: Copy + Default>(ids: &[Option<u32>; EQ_FACE_CONTROLS], ful
         .collect()
 }
 
+/// What one `refresh_modulation_offsets` wrote, for the tests that hold it to
+/// writing nothing when nothing moved (MOO-257).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct ModulationOffsetsRefresh {
+    /// Offset models (the source's, or an insert's) with any value changed.
+    values_moved: usize,
+    /// Insert rows replaced whole with `set_row_data`, which re-evaluates
+    /// every binding on that face. Only a row whose model could not take the
+    /// values in place: a new row, or its parameter count changed.
+    rows_written: usize,
+}
+
+/// How [`write_offsets`] brought a model to its values.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum OffsetsWrite {
+    /// Already equal: nothing was touched.
+    Unchanged,
+    /// The model is a `VecModel` of the same length and took the changed
+    /// entries itself, so only the bindings reading those entries move.
+    InPlace,
+    /// A different length, or not a `VecModel`: the caller has to hand over
+    /// a new model.
+    Replace,
+}
+
+/// Bring `model` to `values` by touching only what differs.
+fn write_offsets(model: &ModelRc<f32>, values: &[f32]) -> OffsetsWrite {
+    if model.row_count() == values.len()
+        && values
+            .iter()
+            .enumerate()
+            .all(|(index, value)| model.row_data(index) == Some(*value))
+    {
+        return OffsetsWrite::Unchanged;
+    }
+    let Some(vec) = model.as_any().downcast_ref::<VecModel<f32>>() else {
+        return OffsetsWrite::Replace;
+    };
+    if vec.row_count() != values.len() {
+        return OffsetsWrite::Replace;
+    }
+    for (index, value) in values.iter().enumerate() {
+        if vec.row_data(index) != Some(*value) {
+            vec.set_row_data(index, *value);
+        }
+    }
+    OffsetsWrite::InPlace
+}
+
 /// The parameter id a face's control number names, for one effect.
 ///
 /// For every kind but the EQ a face already sends the id -- the ids are dense
@@ -5372,10 +5423,10 @@ impl UiState {
     /// the effect rows. Called on the pump tick, so it touches only the
     /// offsets: rebuilding the rows here would fight the meter and spectrum
     /// updates landing on the same models.
-    fn refresh_modulation_offsets(&self, window: &MainWindow) {
+    fn refresh_modulation_offsets(&self, window: &MainWindow) -> ModulationOffsetsRefresh {
         let scope = EffectTarget::Channel(self.session.selected as u8);
         let Some(channel) = self.session.channels.get(self.session.selected) else {
-            return;
+            return ModulationOffsetsRefresh::default();
         };
         // Each grid tile's meter, touched in place: rebuilding the source
         // rows on the pump tick would fight selection and the add menu for
@@ -5410,18 +5461,32 @@ impl UiState {
                 self.modulation_outlet_model.set_row_data(index, row);
             }
         }
-        window.set_source_modulation_offsets(self.destination_offsets(
+        // Only what moved is written, and in place (MOO-257). This runs every
+        // tick an LFO moves, stopped included, and it used to replace the
+        // source's model and `set_row_data` every insert's whole row, which
+        // re-evaluated every binding on every face and kept the window
+        // repainting with nothing else changing.
+        let mut refresh = ModulationOffsetsRefresh::default();
+        let source = self.session.destination_offsets(
             channel.generator_params().kind().descriptors(),
             |param| ParamAddr {
                 scope,
                 owner: ParamOwner::Source,
                 param,
             },
-        ));
+        );
+        match write_offsets(&window.get_source_modulation_offsets(), &source) {
+            OffsetsWrite::Unchanged => {}
+            OffsetsWrite::InPlace => refresh.values_moved += 1,
+            OffsetsWrite::Replace => {
+                window.set_source_modulation_offsets(source.as_slice().into());
+                refresh.values_moved += 1;
+            }
+        }
         // The insert rack only carries this channel's overlays when it is
         // pointed at this channel, exactly as `sync_effects` decides.
         if self.session.effect_target != scope {
-            return;
+            return refresh;
         }
         for (slot, effect) in channel.effects.iter().enumerate() {
             let Some(mut row) = self.effect_slot_model.row_data(slot) else {
@@ -5432,12 +5497,24 @@ impl UiState {
                 .destination_offsets(effect.kind().descriptors(), |param| {
                     ParamAddr::effect(scope, effect.id, param)
                 });
-            row.modulation_offsets = match effect.params.eq() {
-                Some(eq) => eq_overlay_view(&eq_face_ids(eq), &offsets).as_slice().into(),
-                None => offsets.as_slice().into(),
+            let offsets = match effect.params.eq() {
+                Some(eq) => eq_overlay_view(&eq_face_ids(eq), &offsets),
+                None => offsets,
             };
-            self.effect_slot_model.set_row_data(slot, row);
+            match write_offsets(&row.modulation_offsets, &offsets) {
+                OffsetsWrite::Unchanged => {}
+                // The row's own model took the new values; the row itself,
+                // and every other binding on the face, is untouched.
+                OffsetsWrite::InPlace => refresh.values_moved += 1,
+                OffsetsWrite::Replace => {
+                    row.modulation_offsets = offsets.as_slice().into();
+                    self.effect_slot_model.set_row_data(slot, row);
+                    refresh.rows_written += 1;
+                    refresh.values_moved += 1;
+                }
+            }
         }
+        refresh
     }
 
     /// Rebuild the channel-owned source collection and destination inspector.
