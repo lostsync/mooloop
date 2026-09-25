@@ -1245,6 +1245,23 @@ impl Voice {
         self.clear_loop();
     }
 
+    /// Start the voice's recursive state over after a non-finite sample
+    /// (MOO-201), keeping its note, its envelopes and its place in the pool.
+    ///
+    /// The feedback tap and its DC blocker, the oscillators' one-sample taps
+    /// and the glide all feed themselves, so one NaN in any of them would
+    /// otherwise circulate for as long as the note is held. The filter
+    /// resets itself (MOO-174), but its next input would come from the loop
+    /// again. Restarting the oscillators' phases is a discontinuity, and it
+    /// is taken only where the alternative is a channel the effect host has
+    /// to silence.
+    #[cold]
+    fn recover(&mut self, drift: f32) {
+        self.restart(drift);
+        self.glide.jump_to(self.target_freq);
+        self.current_freq = self.target_freq;
+    }
+
     /// Forget what the feedback loop was holding.
     ///
     /// Separate from [`Self::restart`] because it happens in two places that
@@ -2252,8 +2269,15 @@ impl MlP8 {
                 } else {
                     voice.spread_gain
                 };
-                let sample =
+                let mut sample =
                     shaped * voice.env.level() * amp * voice_level * VOICE_OUTPUT_REFERENCE;
+                // One compare a voice-sample. A fault is this sample's
+                // silence and a fresh start for the voice's loops, rather
+                // than a channel the host silences until the song reloads.
+                if !sample.is_finite() {
+                    voice.recover(params.drift.clamp(0.0, 1.0));
+                    sample = 0.0;
+                }
                 target.l[frame - offset] += sample * gain_l;
                 target.r[frame - offset] += sample * gain_r;
                 if publishing {
@@ -4265,6 +4289,65 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A NaN that gets into a voice's feedback loop does not stay there
+    /// (MOO-201). The loop's one-sample tap and its DC blocker feed
+    /// themselves, so a single non-finite sample used to circulate for as
+    /// long as the note was held, and the effect host silenced the channel
+    /// for all of it. Poisoned mid-note, the device must be finite again
+    /// within a block, and the next note must sound.
+    #[test]
+    fn a_nan_in_the_voice_feedback_loop_clears_within_a_block() {
+        const BLOCK: usize = 512;
+        let mut params = filter_bed();
+        params.filter_resonance = 0.6;
+        params.drive = 0.3;
+        params.voice_feedback = 0.5;
+        let mut synth = MlP8::new(params, SR);
+        let block = |synth: &mut MlP8, events: EventList| -> StereoBus {
+            let mut bus = StereoBus::with_capacity(BLOCK);
+            synth.process(&ctx(BLOCK), &mut bus, &events, None);
+            bus
+        };
+        let mut first = EventList::empty();
+        first.push(note_on(0, 1, 45));
+        block(&mut synth, first);
+        block(&mut synth, EventList::empty());
+
+        let mut poisoned = 0;
+        for voice in synth.voices.iter_mut().filter(|v| v.active) {
+            voice.feedback_tap = f32::NAN;
+            poisoned += 1;
+        }
+        assert!(poisoned > 0, "no voice was sounding to poison");
+
+        // The block the fault lands in may be lost; the one after may not.
+        block(&mut synth, EventList::empty());
+        let held = block(&mut synth, EventList::empty());
+        assert!(
+            held.l.iter().chain(&held.r).all(|s| s.is_finite()),
+            "the held note was still non-finite a block after the fault"
+        );
+        assert!(
+            held.l.iter().any(|s| s.abs() > 1.0e-3),
+            "the held note went silent rather than recovering"
+        );
+
+        // And the next note, on whatever slot it gets, plays.
+        let mut next = EventList::empty();
+        next.push(note_off(0, 1, 45));
+        next.push(note_on(0, 2, 52));
+        block(&mut synth, next);
+        let after = block(&mut synth, EventList::empty());
+        assert!(
+            after.l.iter().chain(&after.r).all(|s| s.is_finite()),
+            "the next note was non-finite"
+        );
+        assert!(
+            after.l.iter().any(|s| s.abs() > 1.0e-3),
+            "the next note was silent"
+        );
     }
 
     /// Eight held notes must not hear each other. The filter and the feedback

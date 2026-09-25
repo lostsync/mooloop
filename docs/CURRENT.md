@@ -784,6 +784,10 @@ compressor, limiter and Buffer also clear their own state if a non-finite
 value gets in, one pass over the block, the way MOO-174 made the shared
 filters do. So a device that blows up costs one block of silence downstream,
 where it used to silence every device after it until the song was reloaded.
+The sources that feed themselves do the same (MOO-201): an ML-P8 voice whose
+output goes non-finite restarts its feedback loop, oscillator taps and glide,
+losing that one sample, and a DS-01 body mode that blows up comes to rest
+instead of ringing NaN into every later hit.
 
 The engine preallocates channel strips, pattern storage, event lists, and audio
 buses. A driver-independent render state owns transport, scheduling,

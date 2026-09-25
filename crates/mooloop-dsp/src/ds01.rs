@@ -532,6 +532,20 @@ impl Resonator {
 
     fn tick(&mut self, input: f32) -> f32 {
         let out = input + self.a1 * self.y1 + self.a2 * self.y2;
+        // The mode feeds itself, and a strike deliberately does not clear it,
+        // so a non-finite sample would ring for good: every later hit on the
+        // voice would be NaN too (MOO-201). The same rule as the shared
+        // filters' (MOO-174): the state comes to rest. This sample is what a
+        // resonator at rest makes of the input, rather than silence, because
+        // a strike is one sample long and would otherwise be lost with it.
+        if !out.is_finite() {
+            self.reset();
+            if input.is_finite() {
+                self.y1 = input;
+                return input;
+            }
+            return 0.0;
+        }
         self.y2 = self.y1;
         self.y1 = out;
         out
@@ -2755,6 +2769,40 @@ mod tests {
                 "a 0.3 s body decayed in {time} s (all: {measured:?})"
             );
         }
+    }
+
+    /// A NaN in a body mode does not ring on (MOO-201). The resonators feed
+    /// themselves and a strike leaves them ringing, so a poisoned mode used
+    /// to make every later hit on its voice non-finite, and the effect host
+    /// silenced the channel. Poisoned mid-ring, the device is finite again
+    /// within a block, and the next hit sounds.
+    #[test]
+    fn a_nan_in_the_body_resonators_clears_within_a_block() {
+        const BLOCK: usize = 512;
+        let mut node = Ds01::new(body_only(220.0, 0.0, 2.0, 0.0), SR);
+        let mut first = EventList::empty();
+        first.push(note_on(0, 60, 127));
+        let struck = peak(&render(&mut node, BLOCK, &first));
+        for voice in node.voices.iter_mut() {
+            for mode in voice.body.modes.iter_mut() {
+                mode.y1 = f32::NAN;
+            }
+        }
+        render(&mut node, BLOCK, &EventList::empty());
+        let ringing = render(&mut node, BLOCK, &EventList::empty());
+        assert!(
+            ringing.iter().all(|s| s.is_finite()),
+            "the body was still non-finite a block after the fault"
+        );
+        let mut again = EventList::empty();
+        again.push(note_on(0, 60, 127));
+        let next = render(&mut node, BLOCK, &again);
+        assert!(next.iter().all(|s| s.is_finite()), "the next hit was non-finite");
+        assert!(
+            peak(&next) > struck * 0.5,
+            "the next hit peaked at {} where the first did at {struck}",
+            peak(&next)
+        );
     }
 
     /// Damping is high-frequency loss: it shortens the modes above the
