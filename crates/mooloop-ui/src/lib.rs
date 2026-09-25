@@ -87,7 +87,7 @@ use mooloop_core::{
     MAX_CHANNELS, MAX_MODULATORS_PER_CHANNEL,
     MAX_MOD_ROUTES_PER_CHANNEL,
     MOD_STEP_MAX_STEPS,
-    MAX_SAMPLER_VOICES, MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO,
+    MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO,
     MIN_STRETCH_GRAIN, MIN_STRETCH_RATIO,
     MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS,
     MAX_POLY_VOICES, STRIP_DESCRIPTORS,
@@ -95,7 +95,7 @@ use mooloop_core::{
 };
 use mooloop_dsp::{
     buffer_allocation_key, build_effect_at_tempo, ChannelAudioSnapshot, Ds01, DrumSynth,
-    IntegerDelay, SampleData, SpectrumAnalyzer, StretchPool,
+    IntegerDelay, SampleData, SpectrumAnalyzer,
 };
 use mooloop_engine::{
     CommandSink, ContainerScratch, EffectSlot, EngineHandle, ExportError, ExportProgress,
@@ -13989,7 +13989,6 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 {
                     let mut st = st.borrow_mut();
-                    let ch = st.session.selected;
                     let committed = match st.session.commit_stretch(window.get_bpm() as f64) {
                         Ok(committed) => committed,
                         Err(no_sample) => {
@@ -14005,12 +14004,10 @@ impl AppUi {
                     let _ = tx.send(committed.command);
                     // The stretch is in the audio now and the patch no longer asks for
                     // it, so the pool goes back the way it came rather than holding
-                    // ~1.6 MB for a stretcher that will not run. Same reconciliation
-                    // the ON toggle does.
-                    let _ = stx.send(StructuralCommand::SetSamplerStretch {
-                        channel: ch as u8,
-                        pool: None,
-                    });
+                    // memory for a stretcher that will not run. The pump's reconcile
+                    // would do it next tick; doing it here keeps it beside the edit.
+                    st.session
+                        .sync_sampler_stretch(sample_rate, |command| stx.send(command));
                     window.set_status_message(
                         format!("Committed the stretch at {:.2}x", committed.ratio).into(),
                     );
@@ -14032,8 +14029,7 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 {
                     let mut st = st.borrow_mut();
-                    let ch = st.session.selected;
-                    let Some((params, command)) = st.session.revert_stretch() else {
+                    let Some((_params, command)) = st.session.revert_stretch() else {
                         return;
                     };
                     st.publish_selected_audio(&audio_out);
@@ -14043,14 +14039,9 @@ impl AppUi {
                     // provisioned a pool, because its patch did not ask for one.
                     // Without this, revert after a reload put the switch on and played
                     // unstretched.
-                    let _ = stx.send(StructuralCommand::SetSamplerStretch {
-                        channel: ch as u8,
-                        pool: Some(Box::new(StretchPool::new(
-                            params.stretch_mode,
-                            sample_rate,
-                            MAX_SAMPLER_VOICES as usize,
-                        ))),
-                    });
+                    // Sized from Voices by the one rule (MOO-7).
+                    st.session
+                        .sync_sampler_stretch(sample_rate, |command| stx.send(command));
                     window.set_status_message("Reverted to the source sample".into());
                 }
                 st.borrow().refresh_editor(&window);
@@ -14086,6 +14077,7 @@ impl AppUi {
             let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
+            let stx = structural_tx.clone();
             window.on_sampler_polyphony_changed(move |value| {
                 let Some(window) = weak.upgrade() else { return };
                 with_gesture_history(&st, &commands, &window, "Polyphony", || {
@@ -14099,6 +14091,10 @@ impl AppUi {
                         channel: channel_index as u8,
                         params: channel.sampler_params(),
                     });
+                    // A stretching sampler's pool follows Voices (MOO-7), sent
+                    // right behind the parameter so the two land together.
+                    st.session
+                        .sync_sampler_stretch(sample_rate, |command| stx.send(command));
                     true
                 });
             });
@@ -14151,9 +14147,9 @@ impl AppUi {
         }
 
         // Mode, ratio and grain are ordinary parameters. The enable is not:
-        // the pool it needs is ~1.6 MB and must be built here rather than on
-        // the audio thread, so it rides a structural command alongside the
-        // parameter write. The two can arrive in either order -- a sampler
+        // the pool it needs (about 100 KB a voice, sized from Voices since
+        // MOO-7) must be built here rather than on the audio thread, so it
+        // rides a structural command alongside the parameter write. The two can arrive in either order -- a sampler
         // whose intent is on but whose pool has not landed plays unstretched.
         {
             let commands = command_state.clone();
@@ -14198,16 +14194,10 @@ impl AppUi {
                         channel: channel_index as u8,
                         params,
                     });
-                    let _ = stx.send(StructuralCommand::SetSamplerStretch {
-                        channel: channel_index as u8,
-                        pool: on.then(|| {
-                            Box::new(StretchPool::new(
-                                params.stretch_mode,
-                                sample_rate,
-                                MAX_SAMPLER_VOICES as usize,
-                            ))
-                        }),
-                    });
+                    // The pool follows Voices (MOO-7); the reconcile builds it at
+                    // the size the patch asks for, or takes it back.
+                    st.session
+                        .sync_sampler_stretch(sample_rate, |command| stx.send(command));
                     true
                 });
             });
@@ -17266,6 +17256,17 @@ impl AppUi {
                 // or was sent, their text, and whether it is running (MOO-83).
                 st.borrow_mut().refresh_plugin_faces();
                 st.borrow_mut().session.sync_compensation(&mut handle);
+                // And each stretching sampler's pool, which follows Voices
+                // (MOO-7). Voices has several doors on this thread -- the
+                // stepper, a MIDI-learned binding, a preset load -- and one
+                // reconcile here is the one that cannot be forgotten. A tick
+                // with nothing changed compares a number a channel.
+                {
+                    let sample_rate = handle.sample_rate();
+                    st.borrow_mut()
+                        .session
+                        .sync_sampler_stretch(sample_rate, |command| handle.send_structural(command));
+                }
                 // Beside it and for the same reasons: an edge's fate is a
                 // property of every channel at once, so deriving and diffing
                 // once a tick cannot be forgotten the way a per-edit call site

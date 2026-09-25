@@ -1,5 +1,7 @@
 //! Sampler device parameters. Pure data so the bridge can carry them.
 
+use crate::automation::AutomationLane;
+use crate::modulation::ParamOwner;
 use crate::time::BEATS_PER_BAR;
 
 pub const MAX_SAMPLER_VOICES: u8 = 16;
@@ -914,6 +916,99 @@ impl SamplerParams {
 /// Clamp helper used by both DSP (defensive) and UI (input validation).
 pub fn clamp01(x: f32) -> f32 {
     x.clamp(0.0, 1.0)
+}
+
+/// How many voices' time-stretch state a sampler needs: the size of its
+/// stretch pool, and 0 when it does not stretch (MOO-7).
+///
+/// The pool follows Voices (Adam, 2026-09-23: "size the pool to Voices, with
+/// a structural resize"), at **twice** Voices. A steal hands the stolen voice
+/// to an idle slot above the count to fade out (MOO-110), and a stretching
+/// voice fading without a reader would jump to unstretched playback for its
+/// last 5 ms. Twice the count is enough for every held voice to be stolen at
+/// once, which is what restriking a whole chord does. Capped at the voice
+/// array. At the default single voice that is 2 readers, about 200 KB, where
+/// every stretching sampler used to hold 16, about 1.6 MB.
+///
+/// Voices is a stepped parameter, so no modulation route can reach it
+/// (`ModDestinationDescriptor::for_param` refuses stepped destinations), and
+/// a MIDI-learned binding moves it on the control thread, where the session
+/// reconciles the pool like any other edit. An automation lane is the one
+/// path that changes it on the audio thread, where nothing can allocate, so
+/// a channel with a lane on Voices gets the whole array.
+pub fn stretch_pool_voices(params: &SamplerParams, lanes: &[Vec<AutomationLane>]) -> usize {
+    if !params.stretch_enabled {
+        return 0;
+    }
+    let all = usize::from(MAX_SAMPLER_VOICES);
+    let lane_on_voices = lanes.iter().flatten().any(|lane| {
+        lane.target.owner == ParamOwner::Source
+            && lane.target.param == crate::generator::SAMPLER_PARAM_POLYPHONY
+    });
+    if lane_on_voices {
+        return all;
+    }
+    (usize::from(params.polyphony.clamp(1, MAX_SAMPLER_VOICES)) * 2).min(all)
+}
+
+#[cfg(test)]
+mod stretch_pool_tests {
+    use super::*;
+    use crate::{DeviceKind, EffectTarget, ModDestinationDescriptor, ParamAddr};
+
+    fn voices(polyphony: u8) -> SamplerParams {
+        SamplerParams {
+            polyphony,
+            stretch_enabled: true,
+            ..SamplerParams::default()
+        }
+    }
+
+    /// The pool follows Voices at twice the count, so a whole chord can be
+    /// stolen and still fade out stretched, and never exceeds the voice
+    /// array. A sampler that does not stretch holds none (MOO-7).
+    #[test]
+    fn the_pool_is_twice_voices_and_none_when_not_stretching() {
+        assert_eq!(stretch_pool_voices(&voices(1), &[]), 2);
+        assert_eq!(stretch_pool_voices(&voices(4), &[]), 8);
+        assert_eq!(stretch_pool_voices(&voices(8), &[]), 16);
+        assert_eq!(stretch_pool_voices(&voices(16), &[]), 16);
+        let off = SamplerParams {
+            stretch_enabled: false,
+            ..voices(4)
+        };
+        assert_eq!(stretch_pool_voices(&off, &[]), 0);
+    }
+
+    /// A lane on Voices changes it on the audio thread, which cannot grow a
+    /// pool, so the pool covers everything the lane can reach. A lane on
+    /// anything else changes nothing.
+    #[test]
+    fn a_lane_on_voices_sizes_the_pool_to_every_voice() {
+        let lane = |param| {
+            AutomationLane::new(ParamAddr {
+                scope: EffectTarget::Channel(0),
+                owner: ParamOwner::Source,
+                param,
+            })
+        };
+        let on_voices = vec![vec![], vec![lane(crate::generator::SAMPLER_PARAM_POLYPHONY)]];
+        assert_eq!(stretch_pool_voices(&voices(2), &on_voices), 16);
+        let elsewhere = vec![vec![lane(crate::generator::SAMPLER_PARAM_START)]];
+        assert_eq!(stretch_pool_voices(&voices(2), &elsewhere), 4);
+    }
+
+    /// The claim `stretch_pool_voices` rests on for routes: Voices is a
+    /// stepped destination, and a stepped destination refuses modulation,
+    /// so no route can move it on the audio thread. If Voices ever becomes
+    /// modulatable, this fails and the pool has to cover routes too.
+    #[test]
+    fn no_modulation_route_can_reach_voices() {
+        let descriptor = DeviceKind::Sampler
+            .descriptor(crate::generator::SAMPLER_PARAM_POLYPHONY)
+            .expect("the sampler has a Voices parameter");
+        assert!(!ModDestinationDescriptor::for_param(descriptor).allowed);
+    }
 }
 
 #[cfg(test)]

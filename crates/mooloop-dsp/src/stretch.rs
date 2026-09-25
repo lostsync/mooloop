@@ -795,6 +795,20 @@ impl StretchPool {
         }
     }
 
+    /// Take over `displaced`'s readers for every voice both pools cover,
+    /// giving it this pool's fresh ones in exchange (MOO-7).
+    ///
+    /// A resize arrives while voices are sounding, and a fresh reader under a
+    /// sounding voice has no history: the voice would jump. Swapping the
+    /// structs moves their heap pointers and nothing else, so this is
+    /// realtime-safe, and `displaced` still leaves holding a pool's worth of
+    /// readers for the control thread to drop.
+    pub fn adopt_readers(&mut self, displaced: &mut StretchPool) {
+        for (mine, theirs) in self.readers.iter_mut().zip(displaced.readers.iter_mut()) {
+            std::mem::swap(mine, theirs);
+        }
+    }
+
     /// Total heap held, so the memory cost of enabling stretch on a sampler
     /// is a number someone can look up rather than estimate.
     pub fn state_bytes(&self) -> usize {

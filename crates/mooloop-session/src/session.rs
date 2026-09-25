@@ -168,6 +168,14 @@ pub struct Session {
     /// [`Self::compensation_sent`]: a record of what has been said to the
     /// audio thread, not document state.
     pub audio_graph_sent: mooloop_core::CompiledAudioGraph,
+    /// The stretch pool size each sampler channel was last sent, parallel to
+    /// [`Self::channels`], so the pump's reconcile resizes a pool only when
+    /// Voices, the STRETCH switch or a lane on Voices changes what it wants
+    /// (MOO-7, `Self::sync_sampler_stretch`). `None` is "not known": empty
+    /// after a load or an undo, which install pools of their own. Same status
+    /// as [`Self::compensation_sent`]: a record of what has been said to the
+    /// audio thread, not document state.
+    pub sampler_stretch_sent: Vec<Option<usize>>,
     /// The latest sample-load request issued for each channel, parallel to
     /// [`Self::channels`].
     ///
@@ -354,6 +362,7 @@ impl Default for Session {
             console_sums_sent: [false; MAX_BUSES],
             solo_silenced_sent: [false; MAX_BUSES],
             channel_solo_silenced_sent: [false; MAX_CHANNELS],
+            sampler_stretch_sent: Vec::new(),
             track_graph_sent: (mooloop_core::CompiledBusGraph::default(), Vec::new()),
             audio_graph_sent: mooloop_core::CompiledAudioGraph::default(),
             sample_request: HashMap::new(),
@@ -1612,6 +1621,10 @@ impl Session {
         // trusted to say what the engine already knows.
         self.solo_silenced_sent = [false; MAX_BUSES];
         self.channel_solo_silenced_sent = [false; MAX_CHANNELS];
+        // Same for the stretch pools: `ChannelStrip::load_source` built each
+        // sampler's own, sized by the same rule (MOO-7), so this side
+        // re-derives and re-sends rather than trust sizes for the old song.
+        self.sampler_stretch_sent.clear();
         // Same for the audio edges: `RenderState::load_project` compiles and
         // allocates its own, so this side must re-derive rather than trust a
         // plan for the document that just left.

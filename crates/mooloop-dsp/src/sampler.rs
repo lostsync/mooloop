@@ -670,10 +670,23 @@ impl Sampler {
         self.stretch.is_some()
     }
 
+    /// How many voices the installed stretch pool covers, 0 with none
+    /// (MOO-7: the pool follows Voices rather than covering all sixteen).
+    pub fn stretch_voices(&self) -> usize {
+        self.stretch.as_ref().map_or(0, |pool| pool.len())
+    }
+
     /// Install prepared stretch state, returning whatever it displaced so the
     /// caller can hand it back for off-thread disposal. Realtime-safe: this
     /// moves boxes, it does not allocate or drop.
-    pub fn install_stretch(&mut self, pool: Box<StretchPool>) -> Option<Box<StretchPool>> {
+    ///
+    /// A pool replacing another one (Voices changed, MOO-7) takes over the
+    /// displaced pool's readers for every voice both cover, so a sounding
+    /// voice keeps stretching through the resize without a jump.
+    pub fn install_stretch(&mut self, mut pool: Box<StretchPool>) -> Option<Box<StretchPool>> {
+        if let Some(displaced) = self.stretch.as_mut() {
+            pool.adopt_readers(displaced);
+        }
         self.stretch.replace(pool)
     }
 
@@ -933,10 +946,21 @@ impl Sampler {
     /// voice and its stretch reader move together, by swap: nothing is
     /// allocated or dropped. With no idle slot anywhere the voice is cut, as
     /// every steal was before.
+    ///
+    /// With a stretch pool the slot is taken from those the pool covers when
+    /// one is idle, since the pool follows Voices rather than covering all
+    /// sixteen (MOO-7): a stretching voice moved onto a slot with no reader
+    /// would play its fade unstretched, a jump in pitch or time.
     fn hand_off(&mut self, index: usize) {
-        let Some(spare) = (0..self.voices.len())
+        let idle = |slot: &usize| *slot != index && !self.voices[*slot].active;
+        let covered = self
+            .stretch
+            .as_ref()
+            .map_or(0, |pool| pool.len().min(self.voices.len()));
+        let Some(spare) = (0..covered)
             .rev()
-            .find(|&slot| slot != index && !self.voices[slot].active)
+            .find(idle)
+            .or_else(|| (0..self.voices.len()).rev().find(idle))
         else {
             return;
         };
@@ -2679,6 +2703,74 @@ mod tests {
         }
     }
 
+    fn note(id: u64, note: u8) -> EventList {
+        let mut events = EventList::empty();
+        events.push(TimedEvent {
+            offset: 0,
+            event: Event::NoteOn {
+                id,
+                note,
+                velocity: 127,
+            },
+        });
+        events
+    }
+
+    /// A pool resized under a sounding voice (Voices changed, MOO-7) keeps
+    /// that voice's reader: the resized sampler renders exactly what one
+    /// left alone does. A fresh reader would restart the stretcher's
+    /// history mid-note, which is a jump.
+    #[test]
+    fn a_resized_pool_keeps_a_sounding_voice_stretching() {
+        let sr = 48_000;
+        let frames = 1_024;
+        let pool = |voices| Box::new(StretchPool::new(mooloop_core::StretchMode::Music, sr, voices));
+        let play = |resize: bool| -> Vec<f32> {
+            let mut sampler = sampler_with_frames(sr, 48_000, stretching_params(2.0));
+            assert!(sampler.install_stretch(pool(2)).is_none());
+            let mut bus = StereoBus::with_capacity(frames);
+            sampler.process(&ctx(frames, sr), &mut bus, &note(1, 60), None);
+            if resize {
+                assert!(sampler.install_stretch(pool(4)).is_some());
+                assert_eq!(sampler.stretch_voices(), 4);
+            }
+            let mut bus = StereoBus::with_capacity(frames);
+            sampler.process(&ctx(frames, sr), &mut bus, &EventList::empty(), None);
+            bus.l[..frames].to_vec()
+        };
+        let left_alone = play(false);
+        assert!(left_alone.iter().any(|s| s.abs() > 1.0e-3), "the note was silent");
+        assert_eq!(play(true), left_alone, "the resize moved a sounding voice");
+    }
+
+    /// With a pool that follows Voices, a stolen voice fades out on a slot
+    /// the pool covers, so its last few milliseconds stay stretched (MOO-7).
+    /// Before, it went to the highest idle slot, which a pool of two does
+    /// not reach.
+    #[test]
+    fn a_stolen_voice_fades_on_a_slot_with_a_reader() {
+        let sr = 48_000;
+        let frames = 256;
+        let mut sampler = sampler_with_frames(sr, 48_000, stretching_params(2.0));
+        assert!(sampler
+            .install_stretch(Box::new(StretchPool::new(
+                mooloop_core::StretchMode::Music,
+                sr,
+                2,
+            )))
+            .is_none());
+        let mut bus = StereoBus::with_capacity(frames);
+        sampler.process(&ctx(frames, sr), &mut bus, &note(1, 60), None);
+        // One voice, so this steals it.
+        sampler.process(&ctx(64, sr), &mut bus, &note(2, 64), None);
+        let positions = sampler.voice_positions();
+        assert!(!positions[0].is_nan(), "the new note is not on slot 0");
+        assert!(!positions[1].is_nan(), "the stolen voice is not fading on slot 1");
+        assert!(
+            positions[2..].iter().all(|p| p.is_nan()),
+            "the stolen voice went past the pool: {positions:?}"
+        );
+    }
     /// A note at offset K must produce exact silence before K and signal
     /// after — the point of segment-based processing.
     #[test]

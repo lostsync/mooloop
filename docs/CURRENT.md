@@ -1173,6 +1173,15 @@ sampler does (`docs/plans/archive/audio-recording/`, steps 02-05, 2026-09-18):
 
 ### Sampler Slicing And Stretch
 
+A stretching sampler holds stretch state for twice its Voices count (two
+voices, about 200 KB, at the default of one), rather than for all sixteen
+(MOO-7). Changing Voices resizes it within a pump tick, whether the change
+came from the stepper, a MIDI-learned control, a preset or an undo, and the
+voices already sounding keep their state through the resize. The spare half
+is where a stolen voice fades out. A channel with an automation lane on
+Voices holds all sixteen, because a lane moves Voices on the audio thread,
+where nothing can be allocated.
+
 Known gaps left open by the 2026-09 slice/commit push, each small enough to
 land on its own when it starts to matter:
 

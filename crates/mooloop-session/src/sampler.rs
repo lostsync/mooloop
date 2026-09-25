@@ -13,7 +13,10 @@ use mooloop_dsp::sample_analysis::{
     detect_onsets, fraction_from_frame, frame_from_fraction, snap_to_zero_crossing,
     snap_window_frames, OnsetSettings, SnapResult, DEFAULT_SNAP_WINDOW_MS,
 };
-use mooloop_dsp::SampleData;
+use mooloop_core::sampler::stretch_pool_voices;
+use mooloop_core::GeneratorParams;
+use mooloop_dsp::{SampleData, StretchPool};
+use mooloop_engine::StructuralCommand;
 use mooloop_core::{
     EngineCommand, NoteEvent, NoteId, SampleCommit, SamplerParams, SliceMap, SliceMarker,
     StretchMode, MAX_PATTERN_STEPS, MAX_SLICES, TICKS_PER_BAR, TICKS_PER_STEP,
@@ -820,6 +823,67 @@ impl Session {
     }
 }
 
+
+/// Keeping each sampler's stretch pool the size its patch and lanes ask for
+/// (MOO-7).
+///
+/// The pool follows Voices (`mooloop_core::sampler::stretch_pool_voices`),
+/// and Voices has more than one front door on the control thread: the face's
+/// stepper, a MIDI-learned binding, a preset or kit load, the STRETCH switch,
+/// a commit and a revert. Deriving and diffing once a pump tick is what
+/// cannot be forgotten by the next door somebody adds, the reason the
+/// compensation, console and solo plans are reconciled the same way. An
+/// automation lane is the one path on the audio thread, and the helper sizes
+/// a channel with a lane on Voices for every voice.
+///
+/// An undo or a load installs pools of its own (`ChannelStrip::load_source`
+/// sizes them with the same helper), and `replace_project` forgets this
+/// mirror, so the first tick after it re-sends each stretching channel's
+/// pool once. The engine's install keeps the readers the two pools share, so
+/// the duplicate costs an allocation and changes nothing that sounds.
+impl Session {
+    /// Send a pool (or its removal) for every channel whose wanted size is
+    /// not what was last sent, through `send`; a refused send is retried next
+    /// tick. On a tick where nothing changed, this is one comparison a
+    /// channel and allocates nothing: the lanes are only walked for a sampler
+    /// that stretches.
+    pub fn sync_sampler_stretch(
+        &mut self,
+        sample_rate: u32,
+        mut send: impl FnMut(StructuralCommand) -> bool,
+    ) {
+        if self.sampler_stretch_sent.len() != self.channels.len() {
+            self.sampler_stretch_sent.resize(self.channels.len(), None);
+        }
+        for (index, channel) in self.channels.iter().enumerate() {
+            let GeneratorParams::Sampler(params) = channel.generator_params() else {
+                // Not a sampler: its source was rebuilt without a pool, so
+                // there is nothing to take back.
+                self.sampler_stretch_sent[index] = Some(0);
+                continue;
+            };
+            let wanted = stretch_pool_voices(&params, &channel.automation);
+            let sent = self.sampler_stretch_sent[index];
+            if sent == Some(wanted) || (sent.is_none() && wanted == 0) {
+                self.sampler_stretch_sent[index] = Some(wanted);
+                continue;
+            }
+            let Ok(channel_index) = u8::try_from(index) else {
+                continue;
+            };
+            let pool = (wanted > 0).then(|| {
+                Box::new(StretchPool::new(params.stretch_mode, sample_rate, wanted))
+            });
+            if send(StructuralCommand::SetSamplerStretch {
+                channel: channel_index,
+                pool,
+            }) {
+                self.sampler_stretch_sent[index] = Some(wanted);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1096,5 +1160,135 @@ mod tests {
         assert_eq!(markers.len(), 1);
         assert!((markers[0] - 0.75).abs() < 1.0e-3);
         assert!(session.remove_slice(5).is_none());
+    }
+}
+
+#[cfg(test)]
+mod stretch_pool_tests {
+    use super::*;
+    use mooloop_core::{
+        ControlBinding, ControlSource, ControlTarget, EffectTarget, MidiChannelFilter, MidiKind,
+        MidiMessage, MidiPortFilter, MidiPortId, MidiPortInfo, ParamAddr, ParamOwner,
+    };
+
+    /// What the reconciler sent this tick, as pool sizes (`None` for a
+    /// removal) by channel.
+    fn tick(session: &mut Session) -> Vec<(u8, Option<usize>)> {
+        let mut sent = Vec::new();
+        session.sync_sampler_stretch(48_000, |command| {
+            if let StructuralCommand::SetSamplerStretch { channel, pool } = command {
+                sent.push((channel, pool.map(|pool| pool.len())));
+            }
+            true
+        });
+        sent
+    }
+
+    fn stretching(session: &mut Session, voices: u8) {
+        let params = session.channels[0]
+            .sampler_params_mut()
+            .expect("the default channel is a sampler");
+        params.stretch_enabled = true;
+        params.polyphony = voices;
+    }
+
+    /// The pool follows Voices (MOO-7): twice the count, resent only when it
+    /// changes, and taken back when stretching stops. A tick with nothing
+    /// changed sends nothing.
+    #[test]
+    fn the_pool_follows_voices_and_only_when_it_changes() {
+        let mut session = Session::default();
+        assert!(tick(&mut session).is_empty(), "a sampler that does not stretch got a pool");
+        stretching(&mut session, 1);
+        assert_eq!(tick(&mut session), vec![(0, Some(2))]);
+        assert!(tick(&mut session).is_empty(), "an unchanged tick sent a pool");
+        stretching(&mut session, 4);
+        assert_eq!(tick(&mut session), vec![(0, Some(8))]);
+        session.channels[0]
+            .sampler_params_mut()
+            .expect("a sampler")
+            .stretch_enabled = false;
+        assert_eq!(tick(&mut session), vec![(0, None)]);
+    }
+
+    /// A refused send is not recorded as sent, so the next tick tries again.
+    #[test]
+    fn a_refused_send_is_retried() {
+        let mut session = Session::default();
+        stretching(&mut session, 2);
+        session.sync_sampler_stretch(48_000, |_| false);
+        assert_eq!(tick(&mut session), vec![(0, Some(4))]);
+    }
+
+    /// An undo or a load replaces the engine's sources wholesale, so the
+    /// mirror is forgotten and the next tick re-sends what the song wants.
+    #[test]
+    fn replacing_the_project_resends_the_pool() {
+        let mut session = Session::default();
+        stretching(&mut session, 3);
+        assert_eq!(tick(&mut session), vec![(0, Some(6))]);
+        let project = session.project_snapshot(120, 0);
+        session.replace_project(&project, &[]);
+        assert_eq!(tick(&mut session), vec![(0, Some(6))]);
+    }
+
+    /// A MIDI-learned binding on Voices moves it on the control thread,
+    /// through the session, and the pool follows it like any other edit.
+    #[test]
+    fn a_midi_learned_voices_binding_resizes_the_pool() {
+        let mut session = Session::default();
+        stretching(&mut session, 1);
+        assert_eq!(tick(&mut session), vec![(0, Some(2))]);
+        let voices = ParamAddr {
+            scope: EffectTarget::Channel(0),
+            owner: ParamOwner::Source,
+            param: mooloop_core::SAMPLER_PARAM_POLYPHONY,
+        };
+        session.control_map.bind(ControlBinding::new(
+            ControlSource::Cc {
+                port: MidiPortFilter::Any,
+                channel: MidiChannelFilter::Omni,
+                controller: 7,
+            },
+            ControlTarget::Param(session.param_key(voices).expect("channel 0 has an identity")),
+        ));
+        let ports = vec![MidiPortInfo {
+            id: MidiPortId(0),
+            name: "keys".to_owned(),
+        }];
+        session.resolve_control_map(&ports);
+        let cc = |value| MidiMessage {
+            offset: 0,
+            port: MidiPortId(0),
+            channel: 0,
+            kind: MidiKind::ControlChange {
+                controller: 7,
+                value,
+            },
+        };
+        // Pickup: the first message catches the control where Voices is,
+        // and the second takes it to the top.
+        session.apply_control_input(&cc(0), &ports, false);
+        session.apply_control_input(&cc(127), &ports, false);
+        let voices_now = session.channels[0].sampler_params().polyphony;
+        assert!(voices_now > 1, "the binding did not move Voices");
+        assert_eq!(
+            tick(&mut session),
+            vec![(0, Some(stretch_pool_voices(&session.channels[0].sampler_params(), &[])))]
+        );
+    }
+
+    /// A lane on Voices moves it on the audio thread, where no pool can be
+    /// built, so the channel is given one for every voice at once.
+    #[test]
+    fn a_lane_on_voices_gets_every_voice() {
+        let mut session = Session::default();
+        stretching(&mut session, 1);
+        session.channels[0].automation[0].push(mooloop_core::AutomationLane::new(ParamAddr {
+            scope: EffectTarget::Channel(0),
+            owner: ParamOwner::Source,
+            param: mooloop_core::SAMPLER_PARAM_POLYPHONY,
+        }));
+        assert_eq!(tick(&mut session), vec![(0, Some(16))]);
     }
 }

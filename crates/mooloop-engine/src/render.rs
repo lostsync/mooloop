@@ -4198,6 +4198,7 @@ impl ChannelStrip {
     fn load_source(
         &mut self,
         source: &ChannelSource,
+        lanes: &[Vec<mooloop_core::AutomationLane>],
         audio_slot: ChannelAudioSlot,
         sample_rate: u32,
     ) -> Box<dyn SourceNode + Send> {
@@ -4205,13 +4206,16 @@ impl ChannelStrip {
         let mut node = build_source(&params, audio_slot, sample_rate);
         // Reconcile intent with state, so a saved project plays stretched
         // from its first note rather than after a round trip through the
-        // structural queue.
+        // structural queue. Sized by the rule the session's reconciler uses
+        // (MOO-7), from Voices and the channel's lanes, so the two agree
+        // about what an undo or a load installed.
         if let (GeneratorParams::Sampler(sampler), Some(node)) = (params, node.as_sampler_mut()) {
-            if sampler.stretch_enabled {
+            let voices = mooloop_core::sampler::stretch_pool_voices(&sampler, lanes);
+            if voices > 0 {
                 node.install_stretch(Box::new(StretchPool::new(
                     sampler.stretch_mode,
                     sample_rate,
-                    MAX_SAMPLER_VOICES as usize,
+                    voices,
                 )));
             }
         }
@@ -5815,7 +5819,12 @@ impl RenderState {
             if let Some(channel) = project.channels.get(index) {
                 // Dropped here, on the control thread, like everything else
                 // this function displaces.
-                drop(strip.load_source(&channel.setup.source, audio_slot, self.sample_rate));
+                drop(strip.load_source(
+                    &channel.setup.source,
+                    &channel.automation,
+                    audio_slot,
+                    self.sample_rate,
+                ));
                 strip.output.muted = channel.setup.channel.muted;
                 strip.output.set_volume(channel.setup.channel.volume);
                 strip.output.set_pan(channel.setup.channel.pan);
@@ -11636,10 +11645,42 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         let render = RenderState::from_project(48_000, &project, &[]);
         assert!(render.strips[0].source.as_sampler().expect("a sampler channel").has_stretch());
         assert!(render.strips[0].source.as_sampler().expect("a sampler channel").wants_stretch());
+        // Sized from Voices (MOO-7): the default single voice, twice over,
+        // so a steal can fade out stretched.
+        assert_eq!(
+            render.strips[0].source.as_sampler().expect("a sampler channel").stretch_voices(),
+            2
+        );
         // Channels the project does not describe are not provisioned because
         // they are not built at all -- a stronger statement than "built and
         // left empty", and the one the graph actually makes now.
         assert_eq!(render.strips.len(), 1);
+    }
+
+    /// An undo or a load sizes the pool the way the session's reconciler
+    /// does (MOO-7): twice Voices, or every voice when a lane drives Voices,
+    /// because a lane moves it on the audio thread where no pool can grow.
+    #[test]
+    fn loading_a_project_sizes_the_stretch_pool_from_voices_and_lanes() {
+        let mut project = synth_project(ProjectChannel::sampler(0, 1));
+        if let Some(state) = project.channels[0].setup.sampler_state_mut() {
+            state.params.stretch_enabled = true;
+            state.params.polyphony = 3;
+        }
+        let render = RenderState::from_project(48_000, &project, &[]);
+        let sampler = render.strips[0].source.as_sampler().expect("a sampler channel");
+        assert_eq!(sampler.stretch_voices(), 6);
+
+        project.channels[0].automation[0].push(mooloop_core::AutomationLane::new(
+            mooloop_core::ParamAddr {
+                scope: mooloop_core::EffectTarget::Channel(0),
+                owner: mooloop_core::ParamOwner::Source,
+                param: mooloop_core::SAMPLER_PARAM_POLYPHONY,
+            },
+        ));
+        let render = RenderState::from_project(48_000, &project, &[]);
+        let sampler = render.strips[0].source.as_sampler().expect("a sampler channel");
+        assert_eq!(sampler.stretch_voices(), usize::from(MAX_SAMPLER_VOICES));
     }
 
     /// The inverse, which is the part that actually saves the memory: a
