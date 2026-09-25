@@ -17680,7 +17680,14 @@ mod footprint {
         // Grew by 8 with MOO-214: the device's Volume is a `Smoothed` (12
         // bytes, 4 of them landing in the bend's padding), because read raw
         // it stepped once per control tick and zippered under modulation.
-        assert_eq!(size_of::<MlP8>(), 6_160);
+        //
+        // Grew by 304 with MOO-235: the finishing chorus's shared
+        // `ModulationEffect` keeps its phaser's control-rate coefficients
+        // (the value, step and target of twelve stages on two channels, 288
+        // bytes), a countdown, a primed flag, and the Tone its cutoff was
+        // last set for. That is what took the phaser from an `exp2` and a
+        // `tan` per stage per sample to one every 8 samples.
+        assert_eq!(size_of::<MlP8>(), 6_464);
         // DS-01 is 6,832, and almost all of it is the eight-voice pool: a
         // voice carries six tone oscillators for its partial bank, an FM
         // modulator, four noise generators' worth of state, a state-variable
