@@ -17527,6 +17527,9 @@ impl AppUi {
                     // The round trip moves with the buffer size, so it is read
                     // again at the same cadence as the ports.
                     st.borrow_mut().input_latency_frames = handle.input_latency_frames();
+                    // And the playback half, which recorded MIDI is stamped
+                    // earlier by (MOO-209): an atomic store.
+                    handle.set_capture_latency(handle.playback_latency_frames());
                     let changed = st.borrow().midi_ports != ports;
                     if changed {
                         let mut state = st.borrow_mut();

@@ -494,10 +494,18 @@ impl JackDriver {
         let capture = client
             .port_by_name(&self.own.in_l)
             .map_or(0, |port| port.get_latency_range(LatencyType::Capture).1);
-        let playback = client
+        capture.saturating_add(self.playback_latency_frames())
+    }
+
+    /// Frames between a block leaving `out_l` and the player hearing it, as
+    /// JACK reports the port's playback latency. Recorded MIDI is stamped
+    /// this much earlier (MOO-209), because the player plays to what they
+    /// hear.
+    pub(crate) fn playback_latency_frames(&self) -> u32 {
+        self.client
+            .as_client()
             .port_by_name(&self.own.out_l)
-            .map_or(0, |port| port.get_latency_range(LatencyType::Playback).1);
-        capture.saturating_add(playback)
+            .map_or(0, |port| port.get_latency_range(LatencyType::Playback).1)
     }
 
     pub(crate) fn available_output_targets(&self) -> Vec<OutputTarget> {

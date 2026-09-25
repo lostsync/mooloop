@@ -741,6 +741,11 @@ impl Driver {
         self.platform().map_or(0, PlatformDriver::input_latency_frames)
     }
 
+    /// What the player hears is this late (MOO-209). None on no device.
+    fn playback_latency_frames(&self) -> u32 {
+        self.platform().map_or(0, PlatformDriver::playback_latency_frames)
+    }
+
     fn available_output_targets(&self) -> Vec<OutputTarget> {
         self.platform()
             .map_or_else(Vec::new, PlatformDriver::available_output_targets)
@@ -866,6 +871,10 @@ fn start(opening: Result<Opening, String>, config: AudioConfig, shared: &SharedC
             reason.unwrap_or_else(|| NO_DEVICE.to_owned()),
         )),
     };
+    // Every start, the reconnect's included: a new device is a new latency.
+    shared
+        .capture_latency
+        .store(driver.playback_latency_frames(), Ordering::Relaxed);
     Started {
         driver,
         cmd_tx,
@@ -899,6 +908,10 @@ struct SharedCells {
     /// `buffer_midi`: a renderer built for an install starts with them.
     claimed_notes: mooloop_core::ClaimedNotes,
     keyboard_channel: Arc<AtomicU8>,
+    /// The driver's playback latency in frames, which a recorded note is
+    /// stamped earlier by (MOO-209). An atomic like `keyboard_channel`,
+    /// because it moves with the buffer size and is not document state.
+    capture_latency: Arc<AtomicU32>,
     playhead_meters: Arc<PlayheadMeters>,
     modulator_meters: Arc<ModulatorMeters>,
     preview_gain: Arc<AtomicU32>,
@@ -913,6 +926,7 @@ impl SharedCells {
             buffer_midi: None,
             claimed_notes: mooloop_core::ClaimedNotes::default(),
             keyboard_channel: Arc::new(AtomicU8::new(render::NO_KEYBOARD_CHANNEL)),
+            capture_latency: Arc::new(AtomicU32::new(0)),
             playhead_meters: PlayheadMeters::new(),
             modulator_meters: ModulatorMeters::new(),
             preview_gain: Arc::new(AtomicU32::new(
@@ -931,6 +945,7 @@ impl SharedCells {
         drop(render.set_buffer_midi(self.buffer_midi.map(Box::new)));
         drop(render.set_claimed_notes(Box::new(self.claimed_notes.clone())));
         render.attach_keyboard_channel(self.keyboard_channel.clone());
+        render.attach_capture_latency(self.capture_latency.clone());
         render.attach_playhead_meters(self.playhead_meters.clone());
         render.attach_modulator_meters(self.modulator_meters.clone());
         render.attach_preview_gain(self.preview_gain.clone());
@@ -1884,6 +1899,21 @@ impl EngineHandle {
         self.shared.keyboard_channel.store(channel, Ordering::Relaxed);
     }
 
+    /// The driver's playback latency: how long after a block is rendered it
+    /// is heard. 0 with no device.
+    pub fn playback_latency_frames(&self) -> u32 {
+        self.driver.playback_latency_frames()
+    }
+
+    /// Stamp recorded MIDI `frames` earlier, so a note lands where the
+    /// player heard the song rather than where the engine was rendering it
+    /// (MOO-209). An atomic store, cheap enough for every pump tick; the
+    /// engine sets it from the driver on every start, and the pump refreshes
+    /// it when the buffer size may have moved.
+    pub fn set_capture_latency(&self, frames: u32) {
+        self.shared.capture_latency.store(frames, Ordering::Relaxed);
+    }
+
     /// Install the MIDI mapping that drives a buffer insert, or clear it.
     /// Built here and sent down the ordered stream; the one it displaces
     /// comes back through the reclaim ring. Returns whether it was queued.
@@ -2226,6 +2256,69 @@ mod install_tests {
             matches!(recorded[..], [EngineEvent::RecordedNote { note: 60, .. }]),
             "an armed session records through the installed renderer, got {recorded:?}"
         );
+    }
+
+    /// The capture latency reaches a renderer an install builds, not only
+    /// the one the engine started with: `SharedCells::attach` is the one
+    /// list, and a cell outside it is silently lost at the first install
+    /// (JOURNAL 2026-09-17's routing cell). MOO-209.
+    #[test]
+    fn an_installed_renderer_stamps_notes_by_the_capture_latency() {
+        use mooloop_core::EngineEvent;
+
+        let shared = SharedCells::new();
+        let mut project = Project::default();
+        project.channels.push(ProjectChannel::sampler(1, 1));
+        project.pattern_lengths = vec![4];
+        let input = InputState {
+            record_armed: true,
+            ..InputState::default()
+        };
+        let record = |latency: u32| {
+            shared.capture_latency.store(latency, Ordering::Relaxed);
+            let bank = render::channel_audio_bank(Vec::new());
+            let (mut render, cells) = prepare_render_state(&shared, 48_000, bank, &project, &input);
+            cells.keyboard_channel.store(0, Ordering::Relaxed);
+            let key = |offset, kind| MidiMessage {
+                offset,
+                port: MidiPortId::FIRST,
+                channel: 0,
+                kind,
+            };
+            render.play();
+            // 140 blocks of 256 and 160 is 36 000 frames: tick 48 of the
+            // 96-tick pattern.
+            for _ in 0..140 {
+                render.process_block(256);
+            }
+            render.apply_midi(&[key(
+                160,
+                MidiKind::NoteOn {
+                    note: 60,
+                    velocity: 100,
+                },
+            )]);
+            render.process_block(256);
+            render.apply_midi(&[key(0, MidiKind::NoteOff { note: 60 })]);
+            render.process_block(256);
+            let recorded: Vec<_> = std::iter::from_fn(|| render.pop_outgoing()).collect();
+            let [EngineEvent::RecordedNote { start_tick, .. }] = recorded[..] else {
+                panic!("expected one recorded note, got {recorded:?}");
+            };
+            start_tick
+        };
+        assert_eq!(record(0), 48, "no latency, no change");
+        assert_eq!(record(2400), 38, "2400 frames is 9.6 ticks earlier");
+    }
+
+    /// Nothing with no device is compensated: the null driver reports no
+    /// playback latency, and the engine it starts carries none. MOO-209.
+    #[test]
+    fn no_device_means_no_capture_latency() {
+        assert_eq!(SharedCells::new().capture_latency.load(Ordering::Relaxed), 0);
+        let handle = EngineHandle::without_device("no device, for a test");
+        assert_eq!(handle.playback_latency_frames(), 0);
+        assert_eq!(handle.shared.capture_latency.load(Ordering::Relaxed), 0);
     }
 
     /// An install carries the incoming project's routing as its own: the

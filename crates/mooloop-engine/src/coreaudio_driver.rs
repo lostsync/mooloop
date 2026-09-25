@@ -674,6 +674,17 @@ impl CoreAudioDriver {
         output + state.input_buffer * (INPUT_PREFILL_BUFFERS as u32 + 1)
     }
 
+    /// An estimate, like [`Self::input_latency_frames`]: one output buffer,
+    /// the part of the path this driver can see. Recorded MIDI is stamped
+    /// this much earlier (MOO-209). 0 with no output stream.
+    ///
+    /// It undercounts: the device's own latency, its safety offset and the
+    /// stream's latency are HAL properties this cpal-based driver does not
+    /// read yet (open: MOO-237).
+    pub(crate) fn playback_latency_frames(&self) -> u32 {
+        self.buffer_size()
+    }
+
     /// Frames of input read as silence, and frames of input dropped, since the
     /// engine started. See [`Shared::input_underruns`].
     fn input_drift(&self) -> (u64, u64) {

@@ -711,6 +711,15 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   removal happens in the 8 ms pump, so an old note still sounds if the
   playhead reaches it before the pump does. A take, removals and all, is one
   undo step. The mode is not saved, like the arm.
+  A recorded note is stamped earlier by the driver's playback latency, so it
+  lands where the player heard the song rather than where the engine was
+  rendering it (MOO-209, 2026-09-25): JACK's reported playback latency on the
+  output port, or one output buffer on Core Audio (an undercount that leaves
+  out the device's own latency; open: MOO-237), read again once a second.
+  With no device nothing moves. In pattern mode a note pulled before the
+  pattern's top folds into the end of the pass before; in song mode one
+  pulled off the front of a placement, where no placement of the pattern
+  plays, lands on that placement's start.
   The transport follows an external Start,
   Continue, Stop or Song Position without any mapping, because a device that
   sends Start is asking for exactly one thing. Start plays from the

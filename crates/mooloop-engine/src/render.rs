@@ -4923,6 +4923,9 @@ pub(crate) struct RenderState {
     /// The channel a MIDI keyboard plays, or [`NO_KEYBOARD_CHANNEL`]. Shared
     /// with the control layer, which follows the editor's selection with it.
     keyboard_channel: Arc<AtomicU8>,
+    /// The driver's playback latency in frames, shared with the control
+    /// layer: a recorded note is stamped this much earlier (MOO-209).
+    capture_latency: Arc<AtomicU32>,
     /// How each channel takes MIDI input. Rebuilt by the control layer when a
     /// channel's setting changes or a port appears, and swapped in whole.
     midi_routing: Box<MidiRouting>,
@@ -5196,6 +5199,7 @@ impl RenderState {
             buffer_midi: None,
             buffer_cc: BufferCcState::default(),
             keyboard_channel: Arc::new(AtomicU8::new(NO_KEYBOARD_CHANNEL)),
+            capture_latency: Arc::new(AtomicU32::new(0)),
             midi_routing: Box::new(MidiRouting::default()),
             claimed_notes: Box::default(),
             audio_input_routing: Box::new(AudioInputRouting::default()),
@@ -7826,6 +7830,13 @@ impl RenderState {
         self.keyboard_channel = channel;
     }
 
+    /// Share the control layer's capture latency cell (MOO-209). An atomic
+    /// for the keyboard channel's reason: it follows the driver, which
+    /// changes it from outside any command.
+    pub(crate) fn attach_capture_latency(&mut self, frames: Arc<AtomicU32>) {
+        self.capture_latency = frames;
+    }
+
     /// Install the MIDI routing, returning the table it displaces. Same
     /// transport as [`Self::set_buffer_midi`].
     pub(crate) fn set_midi_routing(&mut self, routing: Box<MidiRouting>) -> Box<MidiRouting> {
@@ -8272,8 +8283,24 @@ impl RenderState {
         else {
             return;
         };
-        let Some((pattern, start_tick)) =
-            self.sequencer.recording_tick(self.tick_at(message.offset))
+        // Where the player heard the song when they played, not where the
+        // engine was rendering it: what they hear left the ports the
+        // driver's playback latency after it was rendered (MOO-209). In
+        // pattern mode a start before the pattern's top folds into the pass
+        // before, as the sequencer folds everything. In song mode one that
+        // falls where no placement of the pattern was playing lands on the
+        // start of the placement it was played in, rather than being lost.
+        let played = self.tick_at(message.offset);
+        let latency = f64::from(self.capture_latency.load(Ordering::Relaxed))
+            * self.transport.ticks_per_sample();
+        let Some((pattern, start_tick)) = self
+            .sequencer
+            .recording_tick(played - latency)
+            .or_else(|| {
+                self.sequencer
+                    .recording_tick(played)
+                    .map(|(pattern, _)| (pattern, 0))
+            })
         else {
             return;
         };
@@ -10673,6 +10700,96 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             tick: f64::from(TICKS_PER_BAR + 48),
         });
         assert_eq!(tap(&mut render, 0), vec![], "the selected pattern is not playing");
+    }
+
+    /// A recorded note is stamped earlier by the driver's playback latency,
+    /// because the player played to what they heard (MOO-209). In pattern
+    /// mode a start pulled before the top folds into the pass before; in
+    /// song mode one pulled off the front of the placement lands on its
+    /// start.
+    #[test]
+    fn a_recorded_note_is_stamped_where_the_player_heard_the_song() {
+        use mooloop_core::{
+            EngineEvent, MidiChannelFilter, MidiInputRoute, MidiKind, MidiMessage, MidiPortId,
+            MidiRouteSource, PlaybackMode, TICKS_PER_BAR,
+        };
+
+        // 2400 frames at 120 bpm and 48 kHz is 9.6 ticks.
+        const LATENCY: u32 = 2400;
+        let rig = |song: bool| {
+            let mut render = two_channel_render();
+            let _ = render.set_midi_routing(Box::new(MidiRouting {
+                routes: vec![MidiInputRoute {
+                    source: MidiRouteSource::AllPorts,
+                    channel: MidiChannelFilter::Omni,
+                }],
+            }));
+            render.attach_capture_latency(Arc::new(AtomicU32::new(LATENCY)));
+            render.apply_command(EngineCommand::SetPatternLength {
+                pattern: 0,
+                length_steps: 4,
+            });
+            if song {
+                render.apply_command(EngineCommand::SetPlaylistPlacement {
+                    pattern: 0,
+                    start_tick: TICKS_PER_BAR,
+                    on: true,
+                });
+                render.apply_command(EngineCommand::SetPlaybackMode(PlaybackMode::Song));
+            }
+            render.set_record_armed(true);
+            render.play();
+            render
+        };
+        // Run `blocks` blocks of 256, press `offset` into the next, and
+        // return the start tick reported.
+        let tap = |render: &mut RenderState, blocks: usize, offset: u32| {
+            for _ in 0..blocks {
+                render.process_block(256);
+            }
+            let message = |offset, kind| MidiMessage {
+                offset,
+                port: MidiPortId::FIRST,
+                channel: 0,
+                kind,
+            };
+            render.apply_midi(&[message(
+                offset,
+                MidiKind::NoteOn {
+                    note: 60,
+                    velocity: 90,
+                },
+            )]);
+            render.process_block(256);
+            render.apply_midi(&[message(0, MidiKind::NoteOff { note: 60 })]);
+            render.process_block(256);
+            let recorded: Vec<_> = std::iter::from_fn(|| render.pop_outgoing()).collect();
+            let [EngineEvent::RecordedNote { start_tick, .. }] = recorded[..] else {
+                panic!("expected exactly one recorded note, got {recorded:?}");
+            };
+            start_tick
+        };
+
+        // 36 000 frames is tick 144, or 48 of the 96-tick pattern; heard
+        // 9.6 ticks earlier, at 38.4.
+        let mut render = rig(false);
+        assert_eq!(tap(&mut render, 140, 160), 38);
+
+        // 25 000 frames is tick 100, 4 into the second pass; heard at 90.4,
+        // in the pass before.
+        let mut render = rig(false);
+        assert_eq!(tap(&mut render, 97, 168), 90, "folds into the pass before");
+
+        // Tick 388 is 4 into the placement at 384; heard at 378.4, where no
+        // placement of the pattern plays, so it lands on the placement's
+        // start. 97 000 frames is 378 blocks of 256 and 232.
+        let mut render = rig(true);
+        assert_eq!(tap(&mut render, 378, 232), 0, "clamped to the placement's start");
+
+        // Deep enough into the placement, the latency is simply subtracted:
+        // tick 432 (108 000 frames: 421 blocks and 224) is heard at 422.4.
+        let mut render = rig(true);
+        assert_eq!(tap(&mut render, 421, 224), 38);
     }
 
     /// A recorded note names the pattern it was folded into, and that is the
