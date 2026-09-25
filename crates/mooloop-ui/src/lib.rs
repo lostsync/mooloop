@@ -6783,6 +6783,9 @@ impl UiState {
             VoiceMode::Gate => 1,
         });
         window.set_sampler_polyphony(p.polyphony as i32);
+        window.set_sampler_glide(p.glide);
+        window.set_sampler_glide_mode(p.glide_mode.to_index());
+        window.set_sampler_env_trigger(p.env_trigger.to_index());
         window.set_retrigger_mode(match p.retrigger_mode {
             RetriggerMode::Restart => 0,
             RetriggerMode::Layer => 1,
@@ -14113,6 +14116,76 @@ impl AppUi {
                     let channel = &mut st.session.channels[channel_index];
                     if let Some(p) = channel.sampler_params_mut() {
                         p.retrigger_mode = retrigger_mode_from_int(value);
+                    }
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: channel_index as u8,
+                        params: channel.sampler_params(),
+                    });
+                    true
+                });
+            });
+        }
+
+        // Mono glide and legato (MOO-45): three ordinary parameters.
+        {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_sampler_glide_changed(move |value| {
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Glide", || {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    if let Some(p) = channel.sampler_params_mut() {
+                        p.glide = value.clamp(0.0, 2.0);
+                    }
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: channel_index as u8,
+                        params: channel.sampler_params(),
+                    });
+                    true
+                });
+            });
+        }
+
+        {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_sampler_glide_mode_changed(move |value| {
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Glide mode", || {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    if let Some(p) = channel.sampler_params_mut() {
+                        p.glide_mode = mooloop_core::mlm1::GlideMode::from_index(value);
+                    }
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: channel_index as u8,
+                        params: channel.sampler_params(),
+                    });
+                    true
+                });
+            });
+        }
+
+        {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_sampler_env_trigger_changed(move |value| {
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Env trigger", || {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    if let Some(p) = channel.sampler_params_mut() {
+                        p.env_trigger = mooloop_core::mlm1::EnvTrigger::from_index(value);
                     }
                     let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                         channel: channel_index as u8,

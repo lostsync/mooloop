@@ -68,6 +68,12 @@ pub const SAMPLER_PARAM_SLICE_BASE_NOTE: u32 = 35;
 pub const SAMPLER_PARAM_LOOP_FADE: u32 = 36;
 /// What the loop's bounds snap to (MOO-47), a `LoopQuantize` position.
 pub const SAMPLER_PARAM_LOOP_GRID: u32 = 37;
+/// Portamento time in seconds (MOO-45), the synths' Glide range.
+pub const SAMPLER_PARAM_GLIDE: u32 = 38;
+/// When a note glides, a `GlideMode` position (MOO-45).
+pub const SAMPLER_PARAM_GLIDE_MODE: u32 = 39;
+/// Whether an overlapping note restarts, an `EnvTrigger` position (MOO-45).
+pub const SAMPLER_PARAM_ENV_TRIGGER: u32 = 40;
 
 /// Envelope stages share this range across every generator. Exponential, so
 /// the fast end where percussion lives gets most of the travel.
@@ -231,7 +237,7 @@ static DRUM_DESCRIPTORS: [ParamDescriptor; 20] = [
     unit(DRUM_PARAM_HAT_METALLIC, "Hat metallic", 0.5),
 ];
 
-static SAMPLER_DESCRIPTORS: [ParamDescriptor; 38] = [
+static SAMPLER_DESCRIPTORS: [ParamDescriptor; 41] = [
     unit(SAMPLER_PARAM_START, "Start", 0.0),
     unit(SAMPLER_PARAM_END, "End", 1.0),
     stepped(SAMPLER_PARAM_REVERSE, "Reverse", 2, 0.0),
@@ -394,6 +400,20 @@ static SAMPLER_DESCRIPTORS: [ParamDescriptor; 38] = [
     // under an LFO is never what was meant. Approved by Control 2026-09-24
     // (MOO-47).
     stepped(SAMPLER_PARAM_LOOP_GRID, "Loop grid", LoopQuantize::ALL.len() as u16, 0.0),
+    // Mono glide (MOO-45), with the range, positions and defaults of the
+    // synths' own Glide, Glide mode and Env trig, so the sampler and ML-M1
+    // read and automate the same way.
+    ParamDescriptor {
+        id: SAMPLER_PARAM_GLIDE,
+        name: "Glide",
+        unit: "s",
+        min: 0.0,
+        max: 2.0,
+        curve: ParamCurve::Linear,
+        default: 0.0,
+    },
+    stepped(SAMPLER_PARAM_GLIDE_MODE, "Glide mode", 2, 1.0),
+    stepped(SAMPLER_PARAM_ENV_TRIGGER, "Env trig", 2, 0.0),
 ];
 
 // --- Shared synth voice ----------------------------------------------------
@@ -1051,6 +1071,9 @@ impl GeneratorParams {
                 SAMPLER_PARAM_SLICE_BASE_NOTE => f32::from(p.slice_base_note),
                 SAMPLER_PARAM_LOOP_FADE => p.loop_crossfade_ms,
                 SAMPLER_PARAM_LOOP_GRID => p.loop_quantize.to_index() as f32,
+                SAMPLER_PARAM_GLIDE => p.glide,
+                SAMPLER_PARAM_GLIDE_MODE => p.glide_mode.to_index() as f32,
+                SAMPLER_PARAM_ENV_TRIGGER => p.env_trigger.to_index() as f32,
                 _ => return None,
             }),
             Self::MonoSynth(p) => {
@@ -1228,6 +1251,13 @@ impl GeneratorParams {
                 }
                 SAMPLER_PARAM_LOOP_GRID => {
                     p.loop_quantize = LoopQuantize::from_index(value.round() as i32)
+                }
+                SAMPLER_PARAM_GLIDE => p.glide = value.clamp(0.0, 2.0),
+                SAMPLER_PARAM_GLIDE_MODE => {
+                    p.glide_mode = crate::mlm1::GlideMode::from_index(value.round() as i32)
+                }
+                SAMPLER_PARAM_ENV_TRIGGER => {
+                    p.env_trigger = crate::mlm1::EnvTrigger::from_index(value.round() as i32)
                 }
                 _ => return None,
             },

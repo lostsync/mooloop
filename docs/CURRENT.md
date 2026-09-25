@@ -259,6 +259,15 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   where the synths' default patches do, while projects saved before the trim
   existed load at unity. Voice controls cover one-shot/gated playback, 1-16
   voices, restart/layer retriggering, and 16 cross-channel choke groups.
+  At one voice in Pitched mode the sampler also glides and plays legato
+  (MOO-45), with the ML-M1's controls: Glide (0-2 s), GLIDE MODE (Always also
+  slides into a release tail, Legato only between held notes) and ENV TRIG
+  (Retrig restarts the sample and envelopes on every note; Legato only moves
+  the pitch of the note already sounding, so a line keeps its place in the
+  sample). Releasing the newest key while an older one is held falls back to
+  the older pitch with no new attack. The three are greyed out with more than
+  one voice or in Slice mode. A patch with no glide and Retrig plays exactly as
+  a one-voice sampler always did, so older songs don't change.
 - A mixer sharing the work surface with the step grid, behind the toolbar's
   STEPS/MIXER tab strip. It is a strip per track, master first, and a strip is
   **92 px wide with three faces**. The middle one is what you look at while

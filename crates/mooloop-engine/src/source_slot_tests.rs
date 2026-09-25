@@ -82,6 +82,13 @@ fn patch(kind: DeviceKind) -> GeneratorParams {
         if matches!(descriptor.curve, ParamCurve::Stepped(_)) {
             continue;
         }
+        // The sampler's Glide (MOO-45) arrived after these fingerprints were
+        // taken, and nudging it switches the one-voice patch into mono glide,
+        // a different instrument rather than a moved knob. Left at its
+        // default, the patch is the one the fingerprints describe.
+        if kind == DeviceKind::Sampler && descriptor.id == mooloop_core::generator::SAMPLER_PARAM_GLIDE {
+            continue;
+        }
         let value = descriptor.default + 0.1 * (descriptor.max - descriptor.default);
         let _ = params.set(descriptor.id, value);
     }

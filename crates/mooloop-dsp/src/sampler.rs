@@ -28,6 +28,10 @@ use crate::taps::AudioTaps;
 use crate::scale::cutoff_hz_from_normalized;
 use crate::voice_filter::{env_octaves, VoiceCutoff};
 use crate::smooth::Smoothed;
+use crate::glide::Glide;
+use crate::heldnotes::{HeldNote, HeldNotes};
+use crate::synth_voice::{note_to_freq, MIN_GLIDE_S};
+use mooloop_core::mlm1::{EnvTrigger, GlideMode};
 use mooloop_core::sampler::LoopQuantize;
 use mooloop_core::{
     clamp01, EnvTimes, LoopMode, PlayMode, RetriggerMode, SamplerParams, SliceMap, VoiceMode,
@@ -285,6 +289,12 @@ impl AdsrEnv {
 
 const CHOKE_RELEASE_S: f32 = 0.005;
 
+/// How many frames a gliding voice reads at one rate before it takes the
+/// glide's next pitch (MOO-45): the engine's control tick, 0.67 ms at 48
+/// kHz. A rate that moves in steps this small is a slide to the ear, and a
+/// patch with no glide never splits its segments for it.
+const GLIDE_STEP: usize = 32;
+
 /// How long a voice takes to leave when something takes its place: a
 /// steal, or a Voices count lowered underneath it (MOO-110). The choke's
 /// fade, because it is the same event -- a voice told to go now -- and
@@ -318,6 +328,13 @@ struct Voice {
     /// every segment so a tune edit reaches an already-sounding voice. See
     /// `SamplerParams::retune_live`.
     key_pitch_ratio: f64,
+    /// The note's pitch, sliding (MOO-45). Rests at the struck note, so it
+    /// costs a branch a segment; only a mono glide ever moves it, and then
+    /// `key_pitch_ratio` follows it once a [`GLIDE_STEP`].
+    glide: Glide,
+    /// `key_pitch_ratio` per Hz of `glide`: the sample-rate ratio over the
+    /// root key's frequency, fixed at the trigger.
+    glide_base: f64,
     /// The source-frame span this voice was given at note-on, in
     /// [`PlayMode::Slice`]; `None` in `Pitched`, where the region is the
     /// whole answer.
@@ -359,6 +376,8 @@ impl Voice {
             play_pos: 0.0,
             playback_rate: 1.0,
             key_pitch_ratio: 1.0,
+            glide: Glide::new(note_to_freq(60)),
+            glide_base: 1.0 / f64::from(note_to_freq(60)),
             slice: None,
             direction: 1.0,
             env: AdsrEnv::new(sample_rate),
@@ -382,6 +401,8 @@ impl Voice {
         self.play_pos = 0.0;
         self.playback_rate = 1.0;
         self.key_pitch_ratio = 1.0;
+        self.glide.jump_to(note_to_freq(60));
+        self.glide_base = 1.0 / f64::from(note_to_freq(60));
         self.slice = None;
         self.direction = 1.0;
         self.env = AdsrEnv::new(sample_rate);
@@ -543,6 +564,11 @@ pub struct Sampler {
     /// multiplier on each voice's head rather than a retrigger, so a bend
     /// moves a sounding note.
     bend: f64,
+    /// The keys held down, newest last, for the mono modes (MOO-45): which
+    /// note an overlap legatos from, and which one releasing the newest
+    /// falls back to. Fixed size and keyed by event id, so a stale NoteOff
+    /// can only remove its own note.
+    held: HeldNotes,
 }
 
 impl Sampler {
@@ -597,6 +623,7 @@ impl Sampler {
             bpm: 120.0,
             was_playing: false,
             bend: 1.0,
+            held: HeldNotes::new(),
             output_gain: Smoothed::new(
                 clamp_output_gain(params.output_gain),
                 OUTPUT_GAIN_SMOOTHING_S,
@@ -869,6 +896,7 @@ impl Sampler {
             voice.reset(self.params, self.sample_rate);
         }
         self.next_age = 1;
+        self.held.clear();
         // Every voice is silent now, so there is nothing for the trim to
         // click against: start the next patch at its own level rather than
         // ramping there from the last one's.
@@ -975,7 +1003,65 @@ impl Sampler {
         leaving.filter_env.fade_within(fade);
     }
 
+    /// Whether the held-note stack, legato and glide apply (MOO-45): one
+    /// pitched voice at a time, with a glide time or Legato envelopes asked
+    /// for. In Slice mode a note chooses material rather than a pitch, so
+    /// there is nothing to slide between.
+    ///
+    /// The last condition is what keeps every song saved before this
+    /// sounding as it did. A one-voice sampler is the default, and falling
+    /// back to a still-held key on release would move the pitch of an
+    /// overlapping one-shot that used to play out untouched. A patch opts in
+    /// by turning Glide up or Env trig to Legato.
+    fn is_mono(&self) -> bool {
+        self.params.polyphony <= 1
+            && self.params.play_mode == PlayMode::Pitched
+            && (self.params.glide > MIN_GLIDE_S || self.params.env_trigger == EnvTrigger::Legato)
+    }
+
+    /// Move the voice in `index` to `note` without restarting anything: not
+    /// its envelopes, not its place in the sample, not its level (MOO-45).
+    /// A legato note and a fallback to a still-held key are both this.
+    fn retarget(&mut self, index: usize, event_id: u64, note: u8, glide: bool) {
+        let time = self.params.glide;
+        let sample_rate = self.sample_rate;
+        let voice = &mut self.voices[index];
+        let hz = note_to_freq(note);
+        voice.event_id = event_id;
+        voice.midi_note = note;
+        if glide && time > MIN_GLIDE_S {
+            voice.glide.slide_to(hz, time, sample_rate);
+        } else {
+            voice.glide.jump_to(hz);
+            voice.key_pitch_ratio = f64::from(hz) * voice.glide_base;
+        }
+    }
+
     fn trigger(&mut self, event_id: u64, note: u8, velocity: u8) {
+        // One voice, pitched: the held stack decides what an overlap means
+        // (MOO-45). Slot 0 is the sounding voice, because a single voice
+        // always starts there and a steal moves the old one elsewhere.
+        let mono = self.is_mono();
+        let overlapping = mono && !self.held.is_empty();
+        if mono {
+            self.held.push(HeldNote {
+                event_id,
+                note,
+                velocity,
+            });
+        }
+        let sounding = mono && self.voices[0].active;
+        if sounding && overlapping && self.params.env_trigger == EnvTrigger::Legato {
+            self.retarget(0, event_id, note, true);
+            return;
+        }
+        // Where a retriggered mono note slides from: the pitch the sounding
+        // voice has reached. `Always` slides into a release tail too;
+        // `Legato` only from a note still held.
+        let slide_from = (sounding
+            && (overlapping || self.params.glide_mode == GlideMode::Always)
+            && self.params.glide > MIN_GLIDE_S)
+            .then(|| self.voices[0].glide.hz());
         // One load, both fields. The buffer and the map that indexes it are
         // one fact; reading them separately let a note-on land between two
         // stores and play new audio against old markers.
@@ -1093,6 +1179,18 @@ impl Sampler {
         };
         voice.slice = slice;
         voice.key_pitch_ratio = key_pitch_ratio;
+        // The glide rests on the struck note. `key_pitch_ratio` keeps its
+        // exact value above, so a patch that never glides plays what it did.
+        let struck_hz = note_to_freq(note.min(127));
+        voice.glide_base = sample_rate_ratio / f64::from(note_to_freq(self.params.root_note.min(127)));
+        match slide_from {
+            Some(from) => {
+                voice.glide.jump_to(from);
+                voice.glide.slide_to(struck_hz, self.params.glide, self.sample_rate);
+                voice.key_pitch_ratio = f64::from(from) * voice.glide_base;
+            }
+            None => voice.glide.jump_to(struck_hz),
+        }
         voice.playback_rate = key_pitch_ratio * tuning_ratio(self.params);
         voice.direction = if self.params.reverse { -1.0 } else { 1.0 };
         voice.velocity_amp = f32::from(velocity) / 127.0;
@@ -1120,6 +1218,20 @@ impl Sampler {
     }
 
     fn release_note(&mut self, event_id: u64) {
+        // Releasing the note the mono voice is playing, with another key
+        // still down, falls back to that key as a pitch change: no new
+        // attack, and a glide if there is one (MOO-45). A NoteOff for a key
+        // the stack no longer holds is stale and changes nothing here.
+        if self.held.remove(event_id)
+            && self.is_mono()
+            && self.voices[0].active
+            && self.voices[0].event_id == event_id
+        {
+            if let Some(winner) = self.held.winner(mooloop_core::NotePriority::Last) {
+                self.retarget(0, winner.event_id, winner.note, true);
+                return;
+            }
+        }
         let mode = self.params.voice_mode;
         for voice in self
             .voices
@@ -1142,6 +1254,7 @@ impl Sampler {
     }
 
     fn release_all(&mut self) {
+        self.held.clear();
         for voice in self.voices.iter_mut().filter(|voice| voice.active) {
             if !voice.env.is_releasing() {
                 voice.env.release();
@@ -1151,6 +1264,7 @@ impl Sampler {
     }
 
     pub fn choke(&mut self) {
+        self.held.clear();
         for voice in self.voices.iter_mut().filter(|voice| voice.active) {
             voice.loop_enabled = false;
             voice.env.release_with(CHOKE_RELEASE_S);
@@ -1659,7 +1773,39 @@ impl Sampler {
         }
     }
 
+    /// Render `start..end`, in [`GLIDE_STEP`] pieces while a voice is
+    /// gliding (MOO-45).
+    ///
+    /// A voice reads its sample at one rate for a whole segment, so a slide
+    /// is a rate that changes between pieces: each gliding voice takes the
+    /// pitch its glide has reached at the start of a piece. With nothing
+    /// gliding, which is every patch that has no glide, this is one
+    /// `any` over the voices and the range renders exactly as it did.
     fn render_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
+        let gliding = |voices: &[Voice]| voices.iter().any(|v| v.active && v.glide.is_sliding());
+        if !gliding(&self.voices) {
+            self.render_span(bus, start, end);
+            return;
+        }
+        let tuning = tuning_ratio(self.params);
+        let mut pos = start;
+        while pos < end {
+            let next = (pos + GLIDE_STEP).min(end);
+            for voice in self.voices.iter_mut().filter(|v| v.active && v.glide.is_sliding()) {
+                voice.key_pitch_ratio = f64::from(voice.glide.hz()) * voice.glide_base;
+                voice.playback_rate = voice.key_pitch_ratio * tuning;
+                voice.glide.skip(next - pos);
+                if !voice.glide.is_sliding() {
+                    // Arrived: land on the note exactly for what follows.
+                    voice.key_pitch_ratio = f64::from(voice.glide.hz()) * voice.glide_base;
+                }
+            }
+            self.render_span(bus, pos, next);
+            pos = next;
+        }
+    }
+
+    fn render_span(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         let params = self.params;
         // Functions of `params` alone -- same formulas `shape_frame` used to
         // recompute per hold-window refresh (bit reduction) and per sample
@@ -2771,6 +2917,246 @@ mod tests {
             "the stolen voice went past the pool: {positions:?}"
         );
     }
+
+    // --- Mono, legato and glide (MOO-45) -----------------------------------
+
+    const MONO_LEN: usize = 480_000;
+
+    /// A ten-second sampler held at full level, one voice, gated, with the
+    /// glide controls given. Its sample is a ramp, so a voice's position is
+    /// how far it has read and its advance per block is its rate.
+    fn mono(glide: f32, env_trigger: EnvTrigger, glide_mode: GlideMode) -> Sampler {
+        sampler_with_frames(
+            48_000,
+            MONO_LEN,
+            SamplerParams {
+                attack: 0.0,
+                decay: 8.0,
+                sustain: 1.0,
+                output_gain: 1.0,
+                voice_mode: VoiceMode::Gate,
+                polyphony: 1,
+                glide,
+                env_trigger,
+                glide_mode,
+                ..SamplerParams::default()
+            },
+        )
+    }
+
+    fn on(id: u64, note: u8) -> TimedEvent {
+        TimedEvent {
+            offset: 0,
+            event: Event::NoteOn {
+                id,
+                note,
+                velocity: 127,
+            },
+        }
+    }
+
+    fn off(id: u64, note: u8) -> TimedEvent {
+        TimedEvent {
+            offset: 0,
+            event: Event::NoteOff { id, note },
+        }
+    }
+
+    /// Render one block of `frames` with `events` and report slot 0's
+    /// position in source frames (NaN when it is idle).
+    fn step(sampler: &mut Sampler, frames: usize, events: &[TimedEvent]) -> f64 {
+        let mut list = EventList::empty();
+        for event in events {
+            list.push(*event);
+        }
+        let mut bus = StereoBus::with_capacity(frames);
+        sampler.process(&ctx(frames, 48_000), &mut bus, &list, None);
+        f64::from(sampler.voice_positions()[0]) * MONO_LEN as f64
+    }
+
+    /// Legato: an overlapping note moves the sounding voice's pitch and
+    /// nothing else. The read head carries on from where it was (no
+    /// retrigger), and the rate slides an octave up over the glide time
+    /// rather than jumping.
+    #[test]
+    fn an_overlapping_legato_note_glides_without_retriggering() {
+        let mut sampler = mono(0.1, EnvTrigger::Legato, GlideMode::Legato);
+        let before = step(&mut sampler, 4_800, &[on(1, 60)]);
+        assert!((before - 4_800.0).abs() < 2.0, "unity rate read {before}");
+        // An octave up, while 60 is still held.
+        let first = step(&mut sampler, 480, &[on(2, 72)]) - before;
+        assert!(
+            first > 480.0 && first < 600.0,
+            "the first 10 ms of a 100 ms octave slide read {first} frames: it jumped or restarted"
+        );
+        step(&mut sampler, 4_800, &[]);
+        let a = step(&mut sampler, 960, &[]);
+        let b = step(&mut sampler, 960, &[]);
+        assert!(
+            ((b - a) - 1_920.0).abs() < 2.0,
+            "after the slide the rate is {} frames a block, not an octave up",
+            b - a
+        );
+        assert!(sampler.voices[0].env.level > 0.99, "the envelope restarted");
+        assert_eq!(sampler.sounding_voice_count(), 1, "legato started a second voice");
+    }
+
+    /// Legato only glides between notes that overlap. A note after a
+    /// release starts fresh: from the top of the sample, at its own pitch.
+    #[test]
+    fn a_note_after_a_release_starts_fresh_and_does_not_glide() {
+        let mut sampler = mono(0.1, EnvTrigger::Legato, GlideMode::Legato);
+        step(&mut sampler, 4_800, &[on(1, 60)]);
+        step(&mut sampler, 480, &[off(1, 60)]);
+        let fresh = step(&mut sampler, 480, &[on(2, 72)]);
+        assert!(
+            (fresh - 960.0).abs() < 4.0,
+            "a fresh note read {fresh} frames of its first 10 ms, not an octave up from the top"
+        );
+    }
+
+    /// Releasing the newest key while an older one is held falls back to the
+    /// older pitch without a new attack, and a NoteOff for the key that was
+    /// legato'd away from releases nothing.
+    #[test]
+    fn releasing_the_newest_key_falls_back_and_a_stale_note_off_is_ignored() {
+        let mut sampler = mono(0.0, EnvTrigger::Legato, GlideMode::Legato);
+        step(&mut sampler, 480, &[on(1, 60)]);
+        step(&mut sampler, 480, &[on(2, 72)]);
+        // The stale one: key 60's NoteOff while 72 sounds.
+        let a = step(&mut sampler, 480, &[off(1, 60)]);
+        let b = step(&mut sampler, 480, &[]);
+        assert!(((b - a) - 960.0).abs() < 2.0, "the stale NoteOff moved the voice");
+        assert!(!sampler.voices[0].env.is_releasing(), "the stale NoteOff released it");
+
+        // Now hold 60 again under 72, and let go of 72.
+        let mut sampler = mono(0.0, EnvTrigger::Legato, GlideMode::Legato);
+        step(&mut sampler, 480, &[on(1, 60)]);
+        step(&mut sampler, 480, &[on(2, 72)]);
+        let a = step(&mut sampler, 480, &[off(2, 72)]);
+        let b = step(&mut sampler, 480, &[]);
+        assert!(((b - a) - 480.0).abs() < 2.0, "did not fall back to 60's rate: {}", b - a);
+        assert!(!sampler.voices[0].env.is_releasing(), "the fallback released the voice");
+        assert!(b > 1_440.0, "the fallback restarted the sample");
+
+        // Letting go of the last key releases, as Gate says.
+        step(&mut sampler, 480, &[off(1, 60)]);
+        assert!(sampler.voices[0].env.is_releasing(), "the last key did not release");
+    }
+
+    /// Env trig at Retrig: an overlapping note starts again from the top
+    /// with fresh envelopes, but still slides from the old pitch.
+    #[test]
+    fn a_retriggered_overlap_restarts_the_sample_and_still_glides() {
+        let mut sampler = mono(0.1, EnvTrigger::Retrig, GlideMode::Legato);
+        step(&mut sampler, 4_800, &[on(1, 60)]);
+        let first = step(&mut sampler, 480, &[on(2, 72)]);
+        assert!(
+            first > 480.0 && first < 600.0,
+            "a retriggered note read {first} frames of its first 10 ms: \
+             it did not restart, or it did not slide"
+        );
+    }
+
+    /// Stop clears the held keys, so the next note is a fresh start rather
+    /// than a legato from a key the transport already let go of.
+    #[test]
+    fn stopping_clears_the_held_keys() {
+        let mut sampler = mono(0.1, EnvTrigger::Legato, GlideMode::Legato);
+        step(&mut sampler, 4_800, &[on(1, 60)]);
+        let mut bus = StereoBus::with_capacity(64);
+        let stopped = ProcessContext {
+            playing: false,
+            ..ctx(64, 48_000)
+        };
+        sampler.process(&stopped, &mut bus, &EventList::empty(), None);
+        assert!(sampler.held.is_empty(), "stop left keys held");
+    }
+
+    /// With more than one voice, glide and legato do nothing: a second note
+    /// is a second voice at its own pitch, as it always was.
+    #[test]
+    fn a_polyphonic_patch_ignores_glide() {
+        let mut sampler = mono(0.1, EnvTrigger::Legato, GlideMode::Legato);
+        sampler.set_params(SamplerParams {
+            polyphony: 2,
+            ..sampler.params
+        });
+        step(&mut sampler, 480, &[on(1, 60)]);
+        step(&mut sampler, 480, &[on(2, 72)]);
+        assert_eq!(sampler.sounding_voice_count(), 2);
+    }
+
+    /// Overlapping notes on a one-voice sampler with default parameters,
+    /// released newest first and oldest first, render bit for bit what they
+    /// rendered before mono glide existed (MOO-45). The figure is the render's
+    /// hash on `main` at `0a447701`, taken with this same test.
+    #[test]
+    fn a_one_voice_default_patch_renders_as_it_did_before_glide() {
+        let sr = 48_000;
+        let frames = 256;
+        let mut sampler = sampler_with_frames(
+            sr,
+            48_000,
+            SamplerParams {
+                voice_mode: VoiceMode::Gate,
+                ..SamplerParams::default()
+            },
+        );
+        let script: [&[(u64, u8, bool)]; 8] = [
+            &[(1, 60, true)],
+            &[(2, 67, true)],
+            &[(2, 67, false)],
+            &[(3, 72, true)],
+            &[(1, 60, false)],
+            &[(4, 64, true)],
+            &[(3, 72, false), (4, 64, false)],
+            &[],
+        ];
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for block in script {
+            let mut events = EventList::empty();
+            for &(id, note, down) in block {
+                events.push(TimedEvent {
+                    offset: 17,
+                    event: if down {
+                        Event::NoteOn {
+                            id,
+                            note,
+                            velocity: 100,
+                        }
+                    } else {
+                        Event::NoteOff { id, note }
+                    },
+                });
+            }
+            let mut bus = StereoBus::with_capacity(frames);
+            sampler.process(&ctx(frames, sr), &mut bus, &events, None);
+            for sample in bus.l[..frames].iter().chain(&bus.r[..frames]) {
+                hash ^= u64::from(sample.to_bits());
+                hash = hash.wrapping_mul(0x0100_0000_01b3);
+            }
+        }
+        assert_eq!(hash, DEFAULT_OVERLAP_HASH, "the render changed: {hash:#x}");
+    }
+
+    const DEFAULT_OVERLAP_HASH: u64 = 0xffb6_5de3_81f2_92c9;
+
+    /// A one-voice patch that has not asked for glide or legato is the
+    /// sampler every song saved before them has: releasing the newer of two
+    /// overlapping notes does not move the older one's pitch.
+    #[test]
+    fn a_default_patch_keeps_its_old_overlap_behaviour() {
+        let mut sampler = mono(0.0, EnvTrigger::Retrig, GlideMode::Legato);
+        step(&mut sampler, 480, &[on(1, 60)]);
+        step(&mut sampler, 480, &[on(2, 72)]);
+        step(&mut sampler, 480, &[off(2, 72)]);
+        assert!(
+            sampler.voices[0].env.is_releasing(),
+            "the newest note's release was turned into a fallback"
+        );
+    }
+
     /// A note at offset K must produce exact silence before K and signal
     /// after — the point of segment-based processing.
     #[test]

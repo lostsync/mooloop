@@ -500,3 +500,24 @@ In the order worth playing:
     loaded into it; its *Trigger MIDI* declares itself an effect and is
     refused as a source; Airwindows has no instruments. Surge XT or Dexed
     would be the real case.
+19. **The sampler's mono glide and legato** (MOO-45). A long sine sampled
+    at A3 plays a one-voice line whose first four notes overlap and whose
+    last starts after a gap, rendered three ways: Glide 80 ms with Env trig
+    Legato, the same with Retrig, and no glide (how every older song plays):
+
+    ```sh
+    scripts/antibox --no-incremental --pull target/sampler-legato-glide \
+      cargo run -p mooloop-engine --example sampler_legato_glide -- target/sampler-legato-glide
+    ```
+
+    Play `legato.wav`: the overlapping notes should slide into each other
+    with no new attack, and the note after the gap should start fresh at its
+    own pitch. `retrig.wav` slides the same way but restarts each note.
+    `none.wav` steps. The binary prints how long each render's first slide
+    takes and how far its level dips across it. Measured 2026-09-25: the 80 ms glide's first slide takes 75 ms
+    in both glided renders (the measure's floor is about 15 ms, which is what
+    `none.wav`'s plain step reads). The level dip across the overlap is
+    0.3 dB in both: a Retrig note fades the stolen voice out while the new one
+    attacks, so level can't tell the two apart, and only listening will say
+    whether Retrig's restart from the top of the sample is heard. Then, in the app,
+    set a sampler to one voice, turn Glide up, and play legato on a keyboard.

@@ -221,6 +221,14 @@ sample's musical length, `stretch_bars` bars over the playback region. It
 defaults to `"off"`, so a song written before it existed loops where it
 always did.
 
+`glide`, `glide_mode` and `env_trigger` (MOO-45, 2026-09-25) are the
+sampler's mono glide: the portamento time in seconds (0 to 2), when a note
+glides (`"Always"` or `"Legato"`), and whether an overlapping note restarts
+(`"Retrig"`) or only changes pitch (`"Legato"`). They are the ML-M1's own
+controls and values. They default to 0, `"Legato"` and `"Retrig"`, and a
+sampler with no glide and `"Retrig"` plays exactly as one saved before they
+existed, so an older song loads unchanged.
+
 Slice mode adds `play_mode` and `slice_base_note` to the parameters, plus a
 `slices` table beside them holding the slice boundaries as `{ id, frame }`
 pairs sorted by source frame. All three default, so a song written before

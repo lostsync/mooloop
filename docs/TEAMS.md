@@ -223,8 +223,9 @@ Files marked *shared* are split in the table above.
   `engine/examples/mlp8_volume_pump.rs` (MOO-214),
   `engine/examples/sampler_loop_seam.rs` (MOO-43),
   `engine/examples/sampler_fit_freeze.rs` (MOO-39),
-  `engine/examples/sampler_loop_grid.rs` (MOO-47) and
-  `engine/examples/sampler_slice_detect.rs` (MOO-44)
+  `engine/examples/sampler_loop_grid.rs` (MOO-47),
+  `engine/examples/sampler_slice_detect.rs` (MOO-44) and
+  `engine/examples/sampler_legato_glide.rs` (MOO-45)
 - `ui/ui/`: `sampler-device.slint`, `drum-device.slint`, `ds01-device.slint`,
   `mono-device.slint`, `poly-device.slint`, `mlm1-device.slint`,
   `mlp8-device.slint`, `aux-in-device.slint`, `device-oscillator.slint`,

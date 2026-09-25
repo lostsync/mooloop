@@ -812,6 +812,25 @@ pub struct SamplerParams {
     /// see its siblings.
     #[serde(default)]
     pub filter_env: Option<EnvTimes>,
+    /// Portamento time in seconds, 0 to 2 (MOO-45). Heard only when the
+    /// sampler plays one voice at a time (Voices 1, Pitched): which of
+    /// several voices a slide would come from has no one answer, so the face
+    /// disables it otherwise rather than inventing polyphonic portamento.
+    ///
+    /// The three glide fields default to what a song saved before them
+    /// played: no glide, and every note restarting its envelopes.
+    #[serde(default)]
+    pub glide: f32,
+    /// When a note glides: `Always` also slides into a release tail,
+    /// `Legato` only between notes that overlap. ML-M1's control, on Adam's
+    /// ruling (2026-09-23), so the two instruments read the same way.
+    #[serde(default)]
+    pub glide_mode: crate::mlm1::GlideMode,
+    /// Whether an overlapping note restarts the envelopes and the sample
+    /// (`Retrig`), or only moves the pitch of the note already sounding
+    /// (`Legato`), keeping its envelopes and its place in the sample.
+    #[serde(default)]
+    pub env_trigger: crate::mlm1::EnvTrigger,
 }
 
 fn default_retune_live() -> bool {
@@ -880,6 +899,9 @@ impl Default for SamplerParams {
             play_mode: PlayMode::Pitched,
             slice_base_note: DEFAULT_SLICE_BASE_NOTE,
             filter_env: None,
+            glide: 0.0,
+            glide_mode: crate::mlm1::GlideMode::default(),
+            env_trigger: crate::mlm1::EnvTrigger::default(),
         }
     }
 }
@@ -1014,6 +1036,33 @@ mod stretch_pool_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A patch saved before mono glide existed (MOO-45) loads with no glide
+    /// and every note retriggering, which is how it played; one saved with
+    /// them comes back with them.
+    #[test]
+    fn glide_fields_default_for_an_old_patch_and_round_trip() {
+        let old = SamplerParams::default();
+        let mut table = toml::Value::try_from(old).unwrap();
+        let fields = table.as_table_mut().unwrap();
+        for key in ["glide", "glide_mode", "env_trigger"] {
+            assert!(fields.remove(key).is_some(), "{key} was not written");
+        }
+        let loaded: SamplerParams = table.try_into().unwrap();
+        assert_eq!(loaded.glide, 0.0);
+        assert_eq!(loaded.glide_mode, crate::mlm1::GlideMode::Legato);
+        assert_eq!(loaded.env_trigger, crate::mlm1::EnvTrigger::Retrig);
+
+        let gliding = SamplerParams {
+            glide: 0.25,
+            glide_mode: crate::mlm1::GlideMode::Always,
+            env_trigger: crate::mlm1::EnvTrigger::Legato,
+            ..SamplerParams::default()
+        };
+        let text = toml::to_string(&gliding).unwrap();
+        let back: SamplerParams = toml::from_str(&text).unwrap();
+        assert_eq!(back, gliding);
+    }
 
     /// A patch saved before the filter envelope existed carries no field for
     /// it, and has to come back following whatever amplitude envelope it was
