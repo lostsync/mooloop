@@ -639,3 +639,24 @@ In the order worth playing:
     exception is Furnace Stab. Its feedback loop turns the smallest change
     in rounding into a different waveform (only 29 dB under), but its
     octave bands stay within 0.35 dB, so it is the one to listen to.
+26. **The starter kit** (MOO-267). A new song now opens with four DS-01
+    channels from the Machine Kick, Machine Snare, Machine Hat and Machine
+    Open Hat factory patches, voiced as plain 80s drum machine sounds from
+    what the 808, 909 and LinnDrum are known to do. Nobody has heard them. A
+    two-bar beat at 120 BPM (kick on 1 and 3, snare on 2 and 4, closed hats
+    on the eighths, one open hat that the next closed hat chokes), then each
+    hit on its own:
+
+    ```sh
+    scripts/antibox --no-incremental --pull target/starter-kit-audition \
+      cargo run -p mooloop-engine --example starter_kit_audition -- target/starter-kit-audition
+    ```
+
+    Play `starter-kit-80s.wav`, then `kick.wav`, `snare.wav`,
+    `closed-hat.wav` and `open-hat.wav`. Measured 2026-09-25, each hit alone
+    at velocity 110 through the starter's mixer: kick peak -12.4 dBFS, 40 dB
+    down after 299 ms; snare -11.2 dBFS, 143 ms; closed hat -19.6 dBFS,
+    38 ms; open hat -19.6 dBFS, 394 ms. The choke cuts the open hat to
+    silence where it would still be at -68 dBFS. Whether they sound like a
+    drum machine, and whether the balance is right, is the listen. Every
+    value is in `crates/mooloop-core/src/ds01_factory.rs`.

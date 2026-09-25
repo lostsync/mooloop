@@ -81,7 +81,7 @@ fn source_setup(name: &str, params: GeneratorParams) -> ChannelSetup {
 /// send. Not yet in it: a container holding devices, and a binding on a
 /// parameter (it needs a `ParamKey`).
 fn maximal_project() -> Project {
-    let mut project = Project::starter_kit(0x5eed);
+    let mut project = Project::starter_kit();
     project.bpm = 97;
     project.swing_percent = 61;
     // Not `beats_per_bar`: the integrity pass holds it to 4 until the engine
@@ -219,16 +219,20 @@ fn maximal_project() -> Project {
             max: 0.8,
         },
     ];
-    // The starter kit's sends into its reverb, one of them switched off and
-    // at a level: the state a send can be in that a default one is not.
-    let send: &mut AuxSend = project
-        .buses
-        .iter_mut()
-        .flat_map(|track| track.sends.iter_mut())
-        .next()
-        .expect("the starter kit sends to its reverb");
-    send.level = 0.4;
-    send.enabled = false;
+    // A return track and a send into it from Drums, switched off and at a
+    // level: the state a send can be in that a default one is not. Built
+    // here because the starter kit no longer carries a Reverb return
+    // (MOO-267).
+    let mut return_track = mooloop_core::BusSetup::new(project.buses.len());
+    return_track.bus.name = "Return".into();
+    let return_index = project.buses.len() as u8;
+    project.buses.push(return_track);
+    project.assign_track_ids();
+    project.buses[1].sends.push(AuxSend {
+        level: 0.4,
+        enabled: false,
+        ..AuxSend::new(return_index)
+    });
     // A hosted plugin nobody here has installed: its slot, a sparse
     // parameter list, a state, the device that names it, and a lane on one
     // of its parameters (`docs/plans/plugin-hosting/`, steps 02 and 03).

@@ -45,6 +45,13 @@ dropped about 9.6 dB). Turn that channel up to match.
 
 ### Instruments
 
+- A new song opens with the same plain 80s drum machine kit every time: four
+  DS-01 channels (Kick, Snare, Closed Hat, Open Hat) on one Drums track, with
+  the closed hat choking the open one. The tight, tuned-up randomised snare,
+  the empty Bass track and the Reverb send are gone. The four patches are
+  also DS-01 factory patches (Machine Kick, Machine Snare, Machine Hat and
+  Machine Open Hat); the browser lists them on a fresh install, since a bank
+  already seeded by an earlier version is not rewritten.
 - ML-P8 Unison thickens a note without making it louder. The group shares
   one note's level, so existing songs that used Unison will play quieter.
 - ML-P8 Volume, Pan and Spread glide under modulation instead of zippering.

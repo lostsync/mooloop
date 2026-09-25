@@ -512,7 +512,7 @@ mod tests {
     }
 
     fn edited_song() -> Project {
-        let mut project = Project::starter_kit(7);
+        let mut project = Project::starter_kit();
         project.bpm = 97;
         project
     }

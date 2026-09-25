@@ -2,11 +2,15 @@
 //! song it was, and survives being saved again by this build.
 //!
 //! Each `tests/fixtures/songs/<tag>/` holds what that release's own
-//! `save_song` wrote for one fixed document: `Project::starter_kit(7)` at
-//! 131 BPM and 58% swing, its channels renamed `corpus 0`, `corpus 1`, ...
-//! They were written by building the release's `mooloop-project` on the build
-//! box, never by this tree, so a format change that forgets an old song
-//! fails here. Add a directory when a release is tagged.
+//! `save_song` wrote for one fixed document: that release's
+//! `Project::starter_kit(7)` (a seeded four-piece v1 drum synth kit on Drums,
+//! Bass and Reverb tracks) at 131 BPM and 58% swing, its channels renamed
+//! `corpus 0`, `corpus 1`, ... They were written by building the release's
+//! `mooloop-project` on the build box, never by this tree, so a format change
+//! that forgets an old song fails here. Add a directory when a release is
+//! tagged; from 0.1.5 the starter kit takes no seed (`Project::starter_kit()`,
+//! four DS-01 channels on one Drums track), and the files already here stay
+//! as their releases wrote them.
 
 use mooloop_project::{load_bundle, save_song, AssetMode, LoadedDocument};
 use std::path::{Path, PathBuf};

@@ -2674,14 +2674,14 @@ mod tests {
 
     #[test]
     fn a_starter_kit_needs_nothing() {
-        let project = Project::starter_kit(7);
+        let project = Project::starter_kit();
         let diagnosis = inspect_project(&project);
         assert!(diagnosis.is_clean(), "{diagnosis}");
     }
 
     #[test]
     fn repairing_a_clean_song_changes_nothing() {
-        let mut project = Project::starter_kit(3);
+        let mut project = Project::starter_kit();
         let before = project.clone();
         assert!(repair_project(&mut project).is_clean());
         assert_eq!(project, before);

@@ -1,6 +1,6 @@
 //! The DS-01 factory bank.
 //!
-//! Seventeen patches, defined here as data rather than as files, for the same
+//! Twenty-one patches, defined here as data rather than as files, for the same
 //! two reasons `mlm1_factory` gives. The DSP tests need the same values the
 //! preset seeder writes — a bank that only existed as TOML would have to be
 //! parsed back to be tested, and the thing under test would be the parser.
@@ -38,12 +38,17 @@ pub struct Ds01FactoryPatch {
 
 /// How many patches the bank ships. Named because the seeder's test asserts
 /// the count and a bank that quietly shrank would otherwise still pass.
-pub const BANK_SIZE: usize = 17;
+pub const BANK_SIZE: usize = 21;
 
-/// The bank, in the order it should be presented: kicks, snares, hands,
-/// toms, metal, and the two that are neither.
+/// The bank, in the order it should be presented: the four-piece machine kit
+/// a new song opens with, then kicks, snares, hands, toms, metal, and the two
+/// that are neither.
 pub fn patches() -> [Ds01FactoryPatch; BANK_SIZE] {
     [
+        machine_kick(),
+        machine_snare(),
+        machine_hat(),
+        machine_open_hat(),
         sub_kick(),
         kit_kick(),
         dnb_kick(),
@@ -75,6 +80,143 @@ fn base() -> Ds01Params {
 /// the bank shapes its layers with one, because a drum is a hit.
 const fn env(decay: f32) -> Ds01EnvParams {
     Ds01EnvParams::one_shot(decay)
+}
+
+/// The kit a new song opens with: each channel's name, and the patch it
+/// wears. `crate::Project::starter_kit` builds its channels from this, in
+/// this order, and the interface labels each channel's generator with the
+/// patch's name, so the two cannot disagree about which is which.
+///
+/// Adam, 2026-09-25: *"just normal 80s drum machine sounds"* -- a plain
+/// four-piece in 808/909/LinnDrum territory, neutral rather than a clone of
+/// any one machine, and the same kit in every new song. Voiced from what
+/// those machines are known to do, not by ear; the values are a starting
+/// point to adjust by listening.
+pub fn starter_kit() -> [(&'static str, Ds01FactoryPatch); 4] {
+    [
+        ("Kick", machine_kick()),
+        ("Snare", machine_snare()),
+        ("Closed Hat", machine_hat()),
+        ("Open Hat", machine_open_hat()),
+    ]
+}
+
+/// A round kick: a sine at 55 Hz with a modest sweep (14 semitones, over
+/// 50 ms) down into it, a medium decay, and only a trace of click on the
+/// front.
+fn machine_kick() -> Ds01FactoryPatch {
+    Ds01FactoryPatch {
+        name: "Machine Kick",
+        category: "DS-01",
+        tags: &["kick", "machine", "80s"],
+        description: "A round drum machine kick: a sine with a modest pitch drop and a medium decay.",
+        params: Ds01Params {
+            tone_pitch: 55.0,
+            pitch: Ds01PitchEnvParams {
+                attack: 0.0,
+                decay: 0.05,
+                curve: 0.0,
+                depth: 14.0,
+            },
+            noise_level: 0.15,
+            filter_morph: 0.5,
+            filter_cutoff: 2_500.0,
+            noise_env: env(0.006),
+            amp: env(0.6),
+            level: 1.0,
+            ..base()
+        },
+    }
+}
+
+/// A mid-tuned snare where the noise leads. The shell is the body layer at
+/// 185 Hz, heavily damped so its upper modes die first, and shorter than the
+/// noise. The tone layer is off: it has no envelope of its own, so it would
+/// ring for the whole amp envelope, which is the tuned ring this patch is
+/// not. The noise is white and high-passed, as the 808's and 909's is.
+fn machine_snare() -> Ds01FactoryPatch {
+    Ds01FactoryPatch {
+        name: "Machine Snare",
+        category: "DS-01",
+        tags: &["snare", "machine", "80s"],
+        description: "A mid-tuned drum machine snare: bright noise over a low, short shell.",
+        params: Ds01Params {
+            tone_level: 0.0,
+            noise_level: 1.0,
+            noise_color: Ds01NoiseColor::White,
+            filter_morph: 1.0,
+            filter_cutoff: 1_200.0,
+            filter_res: 0.1,
+            body_level: 0.7,
+            body_pitch: 185.0,
+            body_ratio: 0.3,
+            body_decay: 0.15,
+            body_damping: 0.8,
+            body_excite: 0.0,
+            pitch: Ds01PitchEnvParams {
+                depth: 0.0,
+                ..base().pitch
+            },
+            level: 0.7,
+            amp: env(0.6),
+            noise_env: env(0.6),
+            ..base()
+        },
+    }
+}
+
+/// The machine hats: six square partials and metal noise, high-passed, the
+/// way the 808 builds its hats, in choke group 1 so the closed one cuts the
+/// open one. One patch at two decays, like the bank's own pair.
+fn machine_hat_at(
+    name: &'static str,
+    amp_decay: f32,
+    noise_decay: f32,
+    description: &'static str,
+) -> Ds01FactoryPatch {
+    Ds01FactoryPatch {
+        name,
+        category: "DS-01",
+        tags: &["hat", "machine", "80s", "choke"],
+        description,
+        params: Ds01Params {
+            level: 0.45,
+            tone_level: 0.5,
+            tone_pitch: 400.0,
+            tone_wave: 1.0,
+            tone_partials: 6,
+            tone_spread: 1.0,
+            noise_level: 0.7,
+            noise_color: Ds01NoiseColor::Metal,
+            filter_cutoff: 7_000.0,
+            choke_group: 1,
+            amp: env(amp_decay),
+            noise_env: env(noise_decay),
+            pitch: Ds01PitchEnvParams {
+                depth: 0.0,
+                ..base().pitch
+            },
+            ..base()
+        },
+    }
+}
+
+fn machine_hat() -> Ds01FactoryPatch {
+    machine_hat_at(
+        "Machine Hat",
+        0.09,
+        0.07,
+        "A short drum machine closed hat, in choke group 1 with Machine Open Hat.",
+    )
+}
+
+fn machine_open_hat() -> Ds01FactoryPatch {
+    machine_hat_at(
+        "Machine Open Hat",
+        0.9,
+        0.8,
+        "The machine hat left open, for Machine Hat to choke.",
+    )
 }
 
 fn sub_kick() -> Ds01FactoryPatch {
@@ -518,6 +660,39 @@ mod tests {
             );
         }
         assert_ne!(tom_low().params.tune, tom_high().params.tune);
+    }
+
+    /// The starter kit's hats are one patch at two decays, and the closed
+    /// one chokes the open one: the same group, and a nonzero one.
+    #[test]
+    fn the_machine_hats_choke_each_other_and_differ_only_in_decay() {
+        let closed = machine_hat().params;
+        let open = machine_open_hat().params;
+        assert_ne!(closed.choke_group, 0);
+        assert_eq!(closed.choke_group, open.choke_group);
+        assert!(closed.amp.decay < open.amp.decay);
+        assert_eq!(
+            Ds01Params {
+                amp: open.amp,
+                noise_env: open.noise_env,
+                ..closed
+            },
+            open
+        );
+    }
+
+    /// The starter kit is four patches from this bank, not four written
+    /// beside it, so the browser shows exactly what a new song opens with.
+    #[test]
+    fn the_starter_kit_is_drawn_from_the_bank() {
+        let bank = patches();
+        for (_, patch) in starter_kit() {
+            assert!(
+                bank.iter().any(|shipped| shipped == &patch),
+                "{} is not in the bank",
+                patch.name
+            );
+        }
     }
 
     /// And the ghost is the tight snare plus two matrix rows and the three

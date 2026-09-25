@@ -166,7 +166,7 @@ fn a_fold_survives_undoing_an_unrelated_edit() {
 #[test]
 fn a_fold_changes_nothing_that_is_heard() {
     let render = |collapsed: bool| {
-        let mut project = Project::starter_kit(7);
+        let mut project = Project::starter_kit();
         let mut drive = EffectSlotState::drive(mooloop_core::DriveParams::default());
         drive.collapsed = collapsed;
         project.channels[0].setup.effects.push(drive);

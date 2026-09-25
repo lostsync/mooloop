@@ -147,7 +147,7 @@ use mooloop_session::roll::NoteEdit;
 use mooloop_session::steps::StepEdit;
 use mooloop_session::take::{FinishedTake, TakeRecorder};
 use mooloop_session::project::{
-    fresh_starter_seed, normalize_project_pattern_banks, HistoryMove, ProjectEdit, ProjectSnapshot,
+    normalize_project_pattern_banks, HistoryMove, ProjectEdit, ProjectSnapshot,
 };
 use mooloop_dsp::sample_analysis::OnsetSettings;
 use mooloop_session::sampler::{
@@ -7085,7 +7085,7 @@ impl AppUi {
             st.session
                 .set_plugin_opener(mooloop_session::plugin_rack::clap_opener(plugin_cache_path()));
         }
-        let starter = Project::starter_kit(fresh_starter_seed());
+        let starter = Project::starter_kit();
         let starter_samples = vec![None; starter.channels.len()];
         install_project_in_ui(
             &mut handle,
@@ -7097,6 +7097,7 @@ impl AppUi {
             // Startup: there is nothing playing to keep.
             false,
         );
+        wear_starter_kit_presets(&mut state.borrow_mut(), &window);
         state.borrow().update_document_title(&window);
         state.borrow().sync_pattern_menu(&window);
         state.borrow().sync_mixer(&window);
@@ -7241,7 +7242,7 @@ impl AppUi {
                     return;
                 }
                 spawn_document_worker(tx.clone(), "create a new song", move || {
-                    DocumentResult::NewSong(Project::starter_kit(fresh_starter_seed()))
+                    DocumentResult::NewSong(Project::starter_kit())
                 });
             });
         }
@@ -16627,6 +16628,7 @@ impl AppUi {
                                 false,
                             );
                             let mut state = st.borrow_mut();
+                            wear_starter_kit_presets(&mut state, &window);
                             state.session.bundle_path = None;
                             state.session.dirty = false;
                             state.session.revision = state.session.revision.wrapping_add(1);
@@ -16644,7 +16646,7 @@ impl AppUi {
                                 commands.history.clear();
                                 sync_command_availability(&window, &commands);
                             }
-                            window.set_status_message("New randomized kit".into());
+                            window.set_status_message("New song".into());
                         }
                         DocumentResult::SavedSong {
                             path,
@@ -18703,6 +18705,25 @@ fn engine_backlog_notice(stopped: bool, waiting: usize) -> String {
     } else {
         format!("Audio is behind: {edits} waiting to reach the engine")
     }
+}
+
+/// Labels each channel of a freshly installed starter kit with the factory
+/// patch it was built from (MOO-267), the way a generator loaded from the
+/// browser wears its preset's name.
+///
+/// Every label the previous song left goes first: a new song replaced every
+/// device, so they describe devices that are no longer there, and the maps
+/// are keyed by channel and device identities the new song mints again.
+fn wear_starter_kit_presets(state: &mut UiState, window: &MainWindow) {
+    state.session.source_preset_names.clear();
+    state.session.effect_preset_names.clear();
+    for (channel, (_, patch)) in mooloop_core::ds01_factory::starter_kit().iter().enumerate() {
+        state.session.set_source_preset_name(channel as u8, patch.name);
+    }
+    let selected = state.session.selected as u8;
+    let label = state.session.source_preset_name(selected).unwrap_or_default();
+    window.set_source_preset_name(label.into());
+    state.sync_effects();
 }
 
 fn install_project_in_ui(

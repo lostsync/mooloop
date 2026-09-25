@@ -2332,33 +2332,22 @@ mod tests {
         assert_eq!(setup.sends[0].tap, SendTap::PostFader);
     }
 
-    /// The starter song's last third: a Reverb track two others send to, and
-    /// nothing anywhere that says "return".
+    /// The starter song is one Drums track into the master, and nothing
+    /// else. It used to carry a Reverb return two tracks sent to; Adam,
+    /// 2026-09-25, took it out along with the empty Bass track. What is left
+    /// to hold is that the one track is an ordinary one that compiles.
     #[test]
-    fn the_starter_song_has_a_reverb_send() {
-        let project = crate::Project::starter_kit(7);
-        let reverb = project
+    fn the_starter_song_is_one_drums_track_into_the_master() {
+        let project = crate::Project::starter_kit();
+        let drums = project
             .buses
             .iter()
-            .position(|track| track.bus.name == "Reverb")
-            .expect("the starter song has a reverb track");
-        let feeding: Vec<usize> = project
-            .buses
-            .iter()
-            .enumerate()
-            .filter(|(_, track)| track.sends.iter().any(|send| send.target as usize == reverb))
-            .map(|(index, _)| index)
-            .collect();
-        assert_eq!(feeding.len(), 2, "two tracks send to it");
-        assert!(
-            project.buses[reverb].effects.len() == 1,
-            "the return carries the device that makes it one"
-        );
-        // Fully wet, because the dry path is already in the mix through each
-        // track's own output.
-        assert_eq!(project.buses[reverb].effects[0].wet_dry, 1.0);
-        // And it is an ordinary track in every other way -- nothing marks it.
-        assert_eq!(project.buses[reverb].bus.output, MASTER_BUS);
+            .position(|track| track.bus.name == "Drums")
+            .expect("the starter song has a drums track");
+        assert_eq!(project.buses.len(), 2, "the master and Drums, nothing else");
+        assert_eq!(project.buses[drums].bus.output, MASTER_BUS);
+        assert!(project.buses.iter().all(|track| track.sends.is_empty()));
+        assert!(send_edges(&project.buses).is_empty());
         assert!(compile_bus_graph(&project.buses).is_some());
     }
 

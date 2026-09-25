@@ -6,12 +6,12 @@ use crate::structure::{
     mint_channel_id, rescope_lanes, rescope_lanes_for_track, ChannelEdit, TrackEdit,
 };
 use crate::{
-    default_buses, BusSetup, Channel, ChannelId, DeviceKind, Ds01Params, DrumMode,
+    default_buses, BusSetup, Channel, ChannelId, DeviceKind, Ds01Params,
     DrumSynthParams, EffectTarget,
-    KickCharacter, AutomationLane, LoopRange, ModRack, MAX_CHANNELS, MonoSynthParams, MlM1Params, MlP8Params, NoteEvent, NoteId,
+    AutomationLane, LoopRange, ModRack, MAX_CHANNELS, MonoSynthParams, MlM1Params, MlP8Params, NoteEvent, NoteId,
     PatternPlacement,
     PlaybackMode, PolySynthParams,
-    SampleCommit, SamplerParams, SliceMap, SnareCharacter, DEFAULT_STEPS, STARTER_LOOP_BARS,
+    SampleCommit, SamplerParams, SliceMap, DEFAULT_STEPS, STARTER_LOOP_BARS,
     TICKS_PER_BAR,
 };
 
@@ -1821,59 +1821,37 @@ impl Project {
         self.reseat_channel_references();
     }
 
-    /// Creates a concise, deterministic four-piece drum kit ready for sequencing.
-    pub fn starter_kit(seed: u64) -> Self {
-        let mut random = StarterRandom::new(seed);
-        let mut kick = DrumSynthParams::preset(DrumMode::Kick);
-        kick.kick_character = KickCharacter::Punch;
-        kick.decay = random.range(0.18, 0.32);
-        kick.punch = random.range(0.45, 0.7);
-        kick.kick_start_hz = random.range(145.0, 185.0);
-        kick.kick_end_hz = random.range(42.0, 58.0);
-        kick.kick_sweep = random.range(0.035, 0.065);
-        kick.kick_click = random.range(0.35, 0.6);
-        kick.drive = random.range(0.02, 0.14);
-
-        let mut snare = DrumSynthParams::preset(DrumMode::Snare);
-        snare.snare_character = SnareCharacter::Snap;
-        snare.decay = random.range(0.10, 0.18);
-        snare.punch = random.range(0.45, 0.72);
-        snare.snare_tone_hz = random.range(150.0, 220.0);
-        snare.snare_tone2_hz = random.range(280.0, 520.0);
-        snare.snare_tone2_mix = random.range(0.14, 0.34);
-        snare.snare_noise_mix = random.range(0.52, 0.76);
-        snare.snare_noise_decay = random.range(0.07, 0.14);
-        snare.snare_noise_color = random.range(0.54, 0.82);
-        snare.drive = random.range(0.0, 0.1);
-
-        let mut closed_hat = DrumSynthParams::preset(DrumMode::Hat);
-        closed_hat.choke_group = 1;
-        closed_hat.decay = random.range(0.025, 0.07);
-        closed_hat.hat_hp_hz = random.range(6_500.0, 10_500.0);
-        closed_hat.hat_metallic = random.range(0.35, 0.7);
-
-        let mut open_hat = DrumSynthParams::preset(DrumMode::Hat);
-        open_hat.choke_group = 1;
-        open_hat.decay = random.range(0.25, 0.52);
-        open_hat.hat_hp_hz = random.range(6_000.0, 9_500.0);
-        open_hat.hat_metallic = random.range(0.3, 0.68);
-
+    /// The song File > New opens: a four-piece drum machine kit on one
+    /// Drums track, with an empty pattern and the first two bars marked as a
+    /// loop.
+    ///
+    /// Adam, 2026-09-25, replacing the seeded kit this used to build: *"i
+    /// just want to put the default song back to a simple 4 piece kit i
+    /// think, just normal 80s drum machine sounds."* His rulings with it:
+    /// DS-01, with new patches rather than a retuned v1 drum synth; **the
+    /// same kit every time**, so there is no seed and nothing is randomised;
+    /// and a Drums track only, with no Bass track and no Reverb send.
+    ///
+    /// The kit it replaced drew every parameter from ranges that leaned to a
+    /// tight, tuned-up snare. That was a personal taste (*"just because i
+    /// like the deftones snare sound lol"*), not a product rule, and it
+    /// should not come back as one.
+    ///
+    /// The four patches are [`crate::ds01_factory::starter_kit`], which the
+    /// browser also lists as ordinary factory patches, so each channel can be
+    /// labelled with the preset it came from.
+    pub fn starter_kit() -> Self {
         let mut project = Self {
-            channels: [
-                ("Kick", kick),
-                ("Snare", snare),
-                ("Closed Hat", closed_hat),
-                ("Open Hat", open_hat),
-            ]
-            .into_iter()
-            .map(|(name, params)| ProjectChannel {
-                id: ChannelId::UNASSIGNED,
-                setup: ChannelSetup::drum_synth_with_params(name, params),
-                notes: vec![Vec::new()],
-                automation: vec![Vec::new()],
-                next_note_id: 1,
-            })
-            .collect(),
+            channels: crate::ds01_factory::starter_kit()
+                .into_iter()
+                .map(|(name, patch)| ProjectChannel {
+                    id: ChannelId::UNASSIGNED,
+                    setup: ChannelSetup::ds01_with_params(name, patch.params),
+                    notes: vec![Vec::new()],
+                    automation: vec![Vec::new()],
+                    next_note_id: 1,
+                })
+                .collect(),
             buses: starter_tracks(),
             // The first two bars, marked and switched off. The strip above
             // the bar numbers is where a loop is made and nothing says so, so
@@ -1901,78 +1879,23 @@ impl Project {
 /// The track a starter kit's drums are grouped onto.
 const DRUM_TRACK: u8 = 1;
 
-/// The track the starter kit's second voice would land on.
-const BASS_TRACK: u8 = 2;
-
-/// The track the starter kit's two others send to, which is what makes it a
-/// return. Nothing about the track itself says so.
-const REVERB_TRACK: u8 = 3;
-
-/// The tracks a new song opens with.
+/// The tracks a new song opens with: the master, and one Drums track the four
+/// drum channels are grouped onto.
 ///
-/// Adam's sketch, and the reason he wanted channel grouping at all: *"a drum
-/// kit, grouped, sent to mixer track 1, and then a monosynth or something on
-/// mixer 2, and maybe one track set up as a reverb send -- a reasonable,
-/// modest default that sort of also demonstrates what can be done just by
-/// already having had it done to it."*
-///
-/// A blank project teaches nothing; this one shows a group, a bus and a send
-/// by having already done them.
-///
-/// **Reverb is not a fourth kind of track.** It is an ordinary track with a
-/// Reverb device on it that two other tracks send to, which is what makes it
-/// an effects return -- `docs/TERMINOLOGY.md`. Nothing here creates a "send"
-/// or a "return"; two tracks route to a third and the third is thereby one.
-///
-/// The send is post-fader, so pulling Drums down takes its reverb with it,
-/// and the device is fully wet, because the dry path is already in the mix
-/// through each track's own output. Turning the wet/dry knob down on it would
-/// be the mistake the arrangement exists to avoid.
+/// The grouping is what is left of Adam's older sketch, and the reason he
+/// wanted channel grouping at all: *"a drum kit, grouped, sent to mixer track
+/// 1"*. The rest of that sketch -- *"and then a monosynth or something on
+/// mixer 2, and maybe one track set up as a reverb send"* -- was an example
+/// of what a default could show, and it was built literally: an empty Bass
+/// track and a Reverb return every new song carried. Adam, 2026-09-25: a
+/// Drums track only. The Bass track and the Reverb send are gone.
 fn starter_tracks() -> Vec<crate::BusSetup> {
     let mut tracks = default_buses();
-    for name in ["Drums", "Bass", "Reverb"] {
-        let mut track = crate::BusSetup::new(tracks.len());
-        track.bus.name = name.into();
-        tracks.push(track);
-    }
-    tracks[REVERB_TRACK as usize].push_effect(crate::EffectSlotState {
-        id: crate::DeviceId::default(),
-        params: crate::EffectParams::Reverb(crate::ReverbParams::default()),
-        bypassed: false,
-        // Fully wet: the dry signal reaches the master by each track's own
-        // output, so a return that passed any of it through would double it.
-        wet_dry: 1.0,
-        input_trim: 1.0,
-        output_trim: 1.0,
-        collapsed: false,
-    });
-    for track in [DRUM_TRACK, BASS_TRACK] {
-        tracks[track as usize]
-            .sends
-            .push(crate::AuxSend::new(REVERB_TRACK));
-    }
+    let mut drums = crate::BusSetup::new(tracks.len());
+    drums.bus.name = "Drums".into();
+    tracks.push(drums);
+    debug_assert_eq!(tracks.len(), usize::from(DRUM_TRACK) + 1);
     tracks
-}
-
-struct StarterRandom(u64);
-
-impl StarterRandom {
-    fn new(seed: u64) -> Self {
-        Self(seed)
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut value = self.0;
-        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        value ^ (value >> 31)
-    }
-
-    fn range(&mut self, min: f32, max: f32) -> f32 {
-        let unit = (self.next_u64() >> 40) as f32 / ((1_u64 << 24) - 1) as f32;
-        min + (max - min) * unit
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -2279,7 +2202,7 @@ mod tests {
     /// every one of them identified.
     #[test]
     fn the_starter_kit_identifies_its_tracks() {
-        let project = Project::starter_kit(1);
+        let project = Project::starter_kit();
         let ids: std::collections::HashSet<_> =
             project.buses.iter().map(|track| track.id).collect();
         assert_eq!(ids.len(), project.buses.len(), "{:?}", project.buses);
@@ -2466,13 +2389,9 @@ mod tests {
     }
 
     #[test]
-    fn starter_kit_is_deterministic_and_musically_shaped() {
-        let first = Project::starter_kit(42);
-        let repeated = Project::starter_kit(42);
-        let varied = Project::starter_kit(43);
-
-        assert_eq!(first, repeated);
-        assert_ne!(first, varied);
+    fn starter_kit_is_the_same_four_piece_machine_kit_every_time() {
+        let first = Project::starter_kit();
+        assert_eq!(first, Project::starter_kit(), "a new song is not randomised");
         assert_eq!(
             first
                 .channels
@@ -2484,25 +2403,38 @@ mod tests {
         assert!(first
             .channels
             .iter()
-            .all(|channel| channel.setup.kind() == DeviceKind::DrumSynth));
-        assert!(first
+            .all(|channel| channel.notes == vec![Vec::new()]));
+        // Each channel is the factory patch it is labelled with, value for
+        // value, so the label the interface puts on it is true.
+        for (channel, (name, patch)) in first
             .channels
             .iter()
-            .all(|channel| channel.notes == vec![Vec::new()]));
+            .zip(crate::ds01_factory::starter_kit())
+        {
+            assert_eq!(channel.setup.channel.name, name);
+            assert_eq!(channel.setup.kind(), DeviceKind::Ds01);
+            assert_eq!(channel.setup.ds01_state().unwrap().params, patch.params);
+        }
+        // The closed hat chokes the open one.
+        let hat = |index: usize| first.channels[index].setup.ds01_state().unwrap().params;
+        assert_ne!(hat(2).choke_group, 0);
+        assert_eq!(hat(2).choke_group, hat(3).choke_group);
+    }
 
-        let kick = first.channels[0].setup.drum_synth_state().unwrap().params;
-        let snare = first.channels[1].setup.drum_synth_state().unwrap().params;
-        let closed_hat = first.channels[2].setup.drum_synth_state().unwrap().params;
-        let open_hat = first.channels[3].setup.drum_synth_state().unwrap().params;
-        assert_eq!(kick.mode, DrumMode::Kick);
-        assert_eq!(snare.mode, DrumMode::Snare);
-        assert_eq!(closed_hat.mode, DrumMode::Hat);
-        assert_eq!(open_hat.mode, DrumMode::Hat);
-        assert_eq!(kick.kick_character, KickCharacter::Punch);
-        assert_eq!(snare.snare_character, SnareCharacter::Snap);
-        assert_eq!(closed_hat.choke_group, 1);
-        assert_eq!(open_hat.choke_group, 1);
-        assert!(closed_hat.decay < open_hat.decay);
+    /// One Drums track and the master, and nothing else: no Bass track, no
+    /// Reverb return, no sends (Adam, 2026-09-25). All four drums are on it.
+    #[test]
+    fn the_starter_kit_groups_its_drums_onto_one_track_and_sends_nowhere() {
+        let project = Project::starter_kit();
+        let names: Vec<_> = project.buses.iter().map(|track| track.bus.name.as_str()).collect();
+        assert_eq!(names.len(), 2, "{names:?}");
+        assert_eq!(names[1], "Drums");
+        assert!(project.buses.iter().all(|track| track.sends.is_empty()));
+        assert!(project.buses.iter().all(|track| track.effects.is_empty()));
+        assert!(project
+            .channels
+            .iter()
+            .all(|channel| channel.setup.channel.bus == DRUM_TRACK));
     }
 
     #[test]

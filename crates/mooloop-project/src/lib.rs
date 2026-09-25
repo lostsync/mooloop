@@ -3260,14 +3260,14 @@ mod tests {
     fn synth_sources_round_trip_without_sample_assets() {
         let temp = tempdir().unwrap();
         let bundle = temp.path().join("starter.mooloop");
-        let project = Project::starter_kit(7);
+        let project = Project::starter_kit();
 
         let report = save_song(&bundle, &project, AssetMode::Embedded).unwrap();
         assert!(report.warnings.is_empty());
         assert!(bundle.is_file());
         assert!(!song_assets_path(&bundle).unwrap().exists());
         let manifest = fs::read_to_string(&bundle).unwrap();
-        assert!(manifest.contains("type = \"drum_synth\""));
+        assert!(manifest.contains("type = \"ds01\""));
         assert_eq!(
             load_bundle(&bundle).unwrap().document,
             LoadedDocument::Song(project)
@@ -3484,11 +3484,15 @@ id = "default_kick"
         project.swing_percent = 76;
         assert!(matches!(validate_project(&project), Err(Error::InvalidDocument(_))));
 
-        let mut project = Project::starter_kit(1);
+        let mut project = Project::starter_kit();
         project.channels[0].setup.channel.kind = mooloop_core::DeviceKind::Sampler;
         assert!(matches!(validate_project(&project), Err(Error::InvalidDocument(_))));
 
-        let mut project = Project::starter_kit(1);
+        // The v1 drum synth's choke group, which is the one validation
+        // bounds. The starter kit used to be four of them; it is DS-01 now,
+        // so the channel is made a v1 drum synth here.
+        let mut project = Project::starter_kit();
+        project.channels[0].setup = mooloop_core::ChannelSetup::drum_synth("Kick");
         project.channels[0]
             .setup
             .drum_synth_state_mut()

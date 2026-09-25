@@ -5,9 +5,7 @@ use crate::history::Entry as HistoryEntry;
 use mooloop_core::{ChannelId, Project};
 use mooloop_dsp::SampleData;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// A complete, UI-owned project snapshot. Samples stay beside the serializable
 /// project because restoring an edit must never decode audio on the UI thread.
@@ -80,18 +78,6 @@ pub fn normalize_project_pattern_banks(project: &mut Project) {
         channel.notes.resize_with(pattern_count, Vec::new);
         channel.automation.resize_with(pattern_count, Vec::new);
     }
-}
-
-pub fn fresh_starter_seed() -> u64 {
-    static SEQUENCE: AtomicU64 = AtomicU64::new(1);
-    let clock = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64;
-    clock
-        ^ SEQUENCE
-            .fetch_add(1, Ordering::Relaxed)
-            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
 }
 
 #[derive(Clone, Copy)]

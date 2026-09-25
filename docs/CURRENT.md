@@ -124,9 +124,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   2-4 even hits), and Stretch (drag a step sideways to set note length). The
   whole run of steps shares one hit area, because a per-cell one cannot follow
   a drag past the cell the press landed in.
-- The complete 256-channel addressable bank. A new song starts with a lightly
-  randomized four-channel drum kit (kick, snare, closed hat, and open hat);
-  creating another new song generates a new variation. Channels can use any of
+- The complete 256-channel addressable bank. A new song starts with the same
+  four-channel DS-01 drum machine kit every time (Kick, Snare, Closed Hat and
+  Open Hat, from the factory patches Machine Kick, Machine Snare, Machine Hat
+  and Machine Open Hat, whose names each channel's generator wears), grouped
+  onto one `Drums` track (MOO-267). Channels can use any of
   six sources — the sampler, the v1 drum synth, the DS-01, the ML-M1, the
   ML-P8, or Aux In, which plays another channel's published audio outlet —
   and every rack row exposes solo and mute, output volume, and constant-power
@@ -367,8 +369,8 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   source, an outlet and a level is the whole device: two pickers, a Level
   knob, and a line saying where the signal is tapped from or why the
   subscription was refused. Replacing a source does not change the channel's notes or
-  mixer state. Closed and open hats share a choke group in the generated
-  starter kit.
+  mixer state. The starter kit's closed and open hats share a choke group, so
+  the closed hat cuts the open one.
 - Every insert runs inside a shared device host. The host owns bypass, a
   generic dry/wet blend, independent input and output trims, insertion/removal actions, and separate
   held input/output peaks; its dry path is preallocated and runs after the
@@ -1524,8 +1526,8 @@ land on its own when it starts to matter:
   feeds says nothing about its siblings on that track. `channel.solo` is in
   the shortcut registry with no default chord (`docs/ACTIONS.md`).
 - **The mixer is a list of tracks, and a track is made because somebody made
-  it.** A new song opens with the master; the starter kit adds `Drums` and
-  `Bass`, with its four drum channels grouped onto the first. `+` in the mixer
+  it.** A new song opens with the master; the starter kit adds `Drums`, with
+  its four drum channels grouped onto it. `+` in the mixer
   adds a track, and a track's device face renames it or removes it. Both are
   undoable, and a rename is one undo step however many characters it took.
   Removing one falls anything routed to it back to the master rather
@@ -1548,8 +1550,8 @@ land on its own when it starts to matter:
   **A send is a route, not a kind of track.** The track at the far end is an
   ordinary track that happens to be fed by sends, which is what makes it an
   effects return; there is no return object and nothing to create. The starter
-  kit opens with one: `Reverb`, fully wet, fed post-fader by `Drums` and
-  `Bass`.
+  kit no longer opens with one (MOO-267): a return is a track with a reverb on
+  it that another track sends to.
 
   Two tap points: **post-fader** (the default, so the send follows the track's
   fader) and **pre-fader** (after the track's devices, before its fader, so it
