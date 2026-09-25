@@ -1,11 +1,13 @@
 # Focus
 
-Status: **performance is the current focus (2026-09-25).** Adam: *"i
-really feel like performance has tanked."* The Linear project **Performance**
-holds the findings and fixes. Two surveys are measuring: what costs most on
-`main`, and whether and when it got slower. Fixes land highest value first.
-The overnight sequence below is done, apart from MOO-227's effect half, which
-waits on Adam. Nothing from it has been heard.
+Status: **the overnight sequence and a first performance pass are done
+(2026-09-25); the next sequence is Adam's call.** The Linear project
+**Performance** holds what was fixed and what is left: MOO-264 (the rest of an
+ML-P8 voice), MOO-254 (Reverb), and the repaint cost while playing (MOO-258,
+upstream Slint). Three decisions wait on Adam: raising the release CPU baseline
+to x86-64-v2 (MOO-263), whether to patch or report Slint's FemtoVG clip and
+ellipsis costs (MOO-256, MOO-258), and MOO-227's effect-preset audition.
+Nothing from either push has been heard. `JOURNAL.md` has the record.
 
 `archive/ROADMAP.md` orders the whole product by dependency, and `SCOPE.md`
 says what 0.2.0 is. This document is narrower: it names the active sequence

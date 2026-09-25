@@ -1785,6 +1785,42 @@ Three things are worth keeping from how it went.
 
 None of it has been heard. `FOCUS.md` lists eighteen passes.
 
+## Sep 25 (overnight, then performance) — the audio was fine; the window was drawing nothing, expensively
+
+The overnight sequence landed whole: Rendering end to end (a job with a folder
+and a name, ranges, 16-bit with per-output dither, stems from tracks and from
+channels, numbered names, remembered settings), the sampler's instrument side
+(unison and legato, key zones, the stretch pool following Voices, preset
+audition), and the timing lane (MIDI loop-record with Replace, playback-latency
+compensation). MOO-241 was found on the way: two takes in one second shared a
+file name and the second truncated the first.
+
+Then Adam: *"performance has tanked."* Two surveys and a regression hunt said
+different things, and both were right. The audio thread was 9-20% slower than
+09-14, almost all of it from two 09-23 correctness fixes: the effect-host ramps
+stepping four smoothers per sample while settled (MOO-260), and a NaN-aware
+`StereoBus::peak` that branched per sample and ran once per slot (MOO-262).
+Both kept their fixes and gave the time back, and songs are now slightly faster
+than 09-14. Per-device waste went too: the phaser, Drive's oversampler, the
+stretcher's single-callback splice search (a dropout on its own), sampler
+voices, ML-P8's per-sample filter coefficients.
+
+But on the laptop the window was using a whole core at 7-10 fps, stopped or
+playing. Slint lowers every `visible: false` element to a 0x0 clip that FemtoVG
+tessellates as a degenerate circle, about 8,000 steps a frame each. Every knob
+carries four mostly-hidden modulation dots, and the plugin face builds a knob
+per parameter. Swapping `visible:` for `if` (MOO-256) was pixel-identical and
+took frames from ~110 ms to ~40. A running LFO had rewritten every rack row every
+tick since 08-29 (MOO-257), and per-tick values lived in rows that carry text
+(MOO-261, MOO-258). Stopped, housey now idles at 1.9% of a core. Playing is at
+24-30 fps with the pump at ~250 µs a tick, still saturated by the repaint itself.
+
+Three lessons worth keeping: hash pins of DSP output are not portable (x86 and
+aarch64 `sin` differ in the last bit, and it broke macOS CI twice); a stale file
+in one team's worktree can silently revert another team's landing (hence
+`git diff --stat` before every push); and the box updates `Cargo.lock` without
+telling anyone, so rung 4 runs `--locked`.
+
 ## Open threads
 
 Refreshed 2026-09-02, with the September documentation audit's threads merged in on 2026-09-04 and Adam's 2026-09-05 list merged in after that. Four of the six threads listed here in August are closed: modulation drives things now, the buffer device exists, undo and clipboard are real, and the convolution reverb that needed an IR loader was replaced outright by an FDN hall — so `StereoIr` is no longer the boundary anything is waiting on.
