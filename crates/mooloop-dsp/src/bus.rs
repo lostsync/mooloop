@@ -85,22 +85,42 @@ impl StereoBus {
     /// peak -- could put the broken device to sleep (MOO-93). Infinity is the
     /// honest reading of a sample with no magnitude, it is above every
     /// threshold anything compares a peak with, and it survives the
-    /// `max(0.0)` every meter publish takes.
+    /// `max(0.0)` every meter publish takes. The effect host's non-finite
+    /// input check (MOO-176) is this same answer.
+    ///
+    /// It runs once per effect slot and once per strip every block, so it is
+    /// a branch-free integer fold that vectorises (MOO-262); see
+    /// [`abs_peak`].
     pub fn peak(&self, frames: usize) -> (f32, f32) {
-        fn magnitude(sample: f32) -> f32 {
-            if sample.is_nan() {
-                f32::INFINITY
-            } else {
-                sample.abs()
-            }
-        }
-        let mut pl = 0.0f32;
-        let mut pr = 0.0f32;
-        for i in 0..frames {
-            pl = pl.max(magnitude(self.l[i]));
-            pr = pr.max(magnitude(self.r[i]));
-        }
-        (pl, pr)
+        (abs_peak(&self.l[..frames]), abs_peak(&self.r[..frames]))
+    }
+}
+
+/// The largest `|sample|` in `samples`: `0.0` when it is empty, and
+/// `INFINITY` when any sample is a NaN or an infinity.
+///
+/// Folds the **bit patterns**, not the floats. With the sign bit cleared, an
+/// IEEE-754 `f32` orders the same as its bits read as an integer, from `+0`
+/// through the subnormals and normals to `+inf` at `0x7f80_0000`, and every
+/// NaN sits above that. So an integer `max` over the magnitudes' bits finds
+/// the largest magnitude exactly -- the same bits the `f32::max` fold of
+/// `abs()` returned, for every finite block -- and any NaN pushes the result
+/// past infinity's pattern, where it is read back as `INFINITY`. The masked
+/// bits never set bit 31, so the fold is a signed `max`, which SSE2 does as a
+/// compare and a blend. There is no branch and no NaN rule in the loop to
+/// stop LLVM vectorising it, which the NaN-aware float fold MOO-93
+/// introduced did.
+pub fn abs_peak(samples: &[f32]) -> f32 {
+    const MAGNITUDE: u32 = 0x7fff_ffff;
+    const INFINITY_BITS: i32 = 0x7f80_0000;
+    let mut max = 0i32;
+    for sample in samples {
+        max = max.max((sample.to_bits() & MAGNITUDE) as i32);
+    }
+    if max > INFINITY_BITS {
+        f32::INFINITY
+    } else {
+        f32::from_bits(max as u32)
     }
 }
 
@@ -155,6 +175,90 @@ mod tests {
         bus.l[0] = 0.5;
         bus.l[1] = f32::NAN;
         assert_eq!(bus.peak(4).0, f32::INFINITY);
+    }
+
+    /// The fold `peak` used from MOO-93 to MOO-262, kept only to say that
+    /// the integer fold answers exactly what it did.
+    fn float_fold(samples: &[f32]) -> f32 {
+        samples.iter().fold(0.0f32, |peak, &sample| {
+            peak.max(if sample.is_nan() { f32::INFINITY } else { sample.abs() })
+        })
+    }
+
+    /// Bit-identical to the float fold on finite input, at every length up
+    /// to 300, over random bit patterns (so subnormals, huge values, both
+    /// zeros and both signs turn up), audio-range values, and near-silence.
+    #[test]
+    fn the_integer_fold_reads_every_finite_block_as_the_float_fold_did() {
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut block = vec![0.0f32; 300];
+        for round in 0..4_000 {
+            let len = (next() % 301) as usize;
+            for sample in &mut block[..len] {
+                let bits = next() as u32;
+                *sample = match round % 3 {
+                    // Anything finite at all: clearing an exponent bit
+                    // turns an infinity or a NaN into a large finite value.
+                    0 => {
+                        let value = f32::from_bits(bits);
+                        if value.is_finite() {
+                            value
+                        } else {
+                            f32::from_bits(bits & 0xbfff_ffff)
+                        }
+                    }
+                    1 => (bits as i32 as f32) / (i32::MAX as f32) * 2.0,
+                    _ => match bits % 8 {
+                        0 => -0.0,
+                        1 => f32::from_bits(bits >> 9),
+                        2 => -f32::from_bits(bits >> 9),
+                        _ => 0.0,
+                    },
+                };
+            }
+            let expected = float_fold(&block[..len]);
+            assert!(expected.is_finite());
+            let got = abs_peak(&block[..len]);
+            assert_eq!(got.to_bits(), expected.to_bits(), "round {round}, {len} samples");
+        }
+        assert_eq!(abs_peak(&[]).to_bits(), 0.0f32.to_bits());
+        assert_eq!(abs_peak(&[-0.0, -0.0]).to_bits(), 0.0f32.to_bits());
+        assert_eq!(abs_peak(&[f32::MAX, -f32::MAX]), f32::MAX);
+        assert_eq!(abs_peak(&[-f32::from_bits(1)]), f32::from_bits(1));
+    }
+
+    /// Every NaN pattern -- quiet, signalling, negative, any payload -- and
+    /// both infinities read as `INFINITY`, wherever in the block they fall
+    /// and whatever else is in it, as they did through the float fold.
+    #[test]
+    fn every_nan_pattern_and_infinity_reads_as_an_infinite_peak() {
+        let specials = [
+            f32::NAN,
+            -f32::NAN,
+            f32::from_bits(0x7f80_0001),
+            f32::from_bits(0xffff_ffff),
+            f32::from_bits(0x7fc0_1234),
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+        ];
+        for special in specials {
+            for at in [0, 1, 63, 127] {
+                let mut bus = StereoBus::with_capacity(128);
+                bus.l[..128].fill(0.75);
+                bus.r[..128].fill(-f32::MAX);
+                bus.l[at] = special;
+                bus.r[at] = special;
+                let bits = special.to_bits();
+                assert_eq!(bus.peak(128), (f32::INFINITY, f32::INFINITY), "{bits:#x} at {at}");
+                assert_eq!(float_fold(&bus.l[..128]), f32::INFINITY, "{bits:#x} at {at}");
+            }
+        }
     }
 
     #[test]
