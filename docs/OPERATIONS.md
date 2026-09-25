@@ -792,6 +792,35 @@ figures in the `Sep 5 (last)` entry of `docs/JOURNAL.md` are what it said on
 the build box, and are the comparison to beat rather than to reproduce -- the
 laptop's numbers are its own.
 
+## Measuring what the UI thread costs
+
+`MOOLOOP_PROFILE_UI` (`crates/mooloop-ui/src/pump_profile.rs`) times the 8 ms
+pump section by section, every frame Slint renders (`BeforeRendering` to
+`AfterRendering`, where bindings, layout and drawing run), and every thread's
+CPU from `/proc/self/task/*/schedstat`, so the UI thread's share reads beside
+the audio thread's. It prints to stderr and costs nothing when unset.
+
+```sh
+MOOLOOP_PROFILE_UI=1 mooloop song.mooloop          # a report every 5 s
+MOOLOOP_PROFILE_UI=scenario mooloop song.mooloop   # scripted run, then quit
+```
+
+`scenario` is for measuring a song with nobody at the window: stopped on the
+saved layout, then playing on it, on the mixer, the rack, the playlist and the
+steps, then stopped on the mixer and the rack, each for
+`MOOLOOP_PROFILE_UI_PHASE_SECS` (default 15), and it quits. Only the song is
+read, but the layout and settings are saved on quit, so point
+`MOOLOOP_CONFIG_DIR`/`MOOLOOP_STATE_DIR` at a copy. Judge it on a release
+binary (`scripts/antibox --release-bin --keep-symbols`, which keeps `perf`
+symbols) in a real GPU window. Headless sway keeps it off the desktop
+(`WLR_BACKENDS=headless sway -c <config>` with an `exec` line), and
+`PIPEWIRE_REMOTE=none` gives the null driver, so nothing sounds.
+
+What to read: `frames/s` equal to `ticks/s` while nothing visible changes
+means something is marking the window dirty every tick, and FemtoVG repaints
+the whole window each time. The 2026-09-25 survey's figures are on MOO-256
+and MOO-257.
+
 ## Recordings
 
 A take is written, as it records, into a **recordings folder** as a 32-bit

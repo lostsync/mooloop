@@ -22,6 +22,7 @@ mod rack_fold_tests;
 mod rack_join_tests;
 mod export_ui;
 mod plugin_ui;
+mod pump_profile;
 #[cfg(test)]
 mod plugin_ui_tests;
 #[cfg(test)]
@@ -16349,10 +16350,17 @@ impl AppUi {
         let mut last_device_target: Option<usize> = None;
         let plugins_closing_in = plugins_closing.clone();
         let mut plugins_close_sent = false;
+        // MOOLOOP_PROFILE_UI: what each tick and each frame costs (off by
+        // default; see `pump_profile.rs`).
+        let profile_mode = pump_profile::requested();
+        let profile = pump_profile::PumpProfile::new(profile_mode.as_deref());
+        let profile_in = profile.clone();
         pump.start(
             TimerMode::Repeated,
             std::time::Duration::from_millis(PUMP_INTERVAL_MS),
             move || {
+                let profile = &profile_in;
+                profile.borrow_mut().begin();
                 // Quitting with hosted plugins (MOO-81): the window has gone
                 // and `AppUi::run` is waiting here for every plugin to
                 // retire. Pull each processor back, let the engine hand them
@@ -17122,6 +17130,7 @@ impl AppUi {
                 if let Some(window) = weak.upgrade() {
                     st.borrow().publish_take(&window);
                 }
+                profile.borrow_mut().lap(pump_profile::Section::Inbox);
                 let mut forwarded = 0usize;
                 let mut document_title_needs_refresh = false;
                 // Held messages first, then the queue, and each only if the
@@ -17417,6 +17426,7 @@ impl AppUi {
                         }
                     }
                 }
+                profile.borrow_mut().lap(pump_profile::Section::Forward);
                 // After the drain, so a chain edit queued this tick is already
                 // in the model the plan is derived from. Sends nothing unless
                 // the plan actually moved, which is every tick but the few
@@ -17434,7 +17444,9 @@ impl AppUi {
                 // Every plugin face follows its plugin: the values it reports
                 // or was sent, their text, and whether it is running (MOO-83).
                 st.borrow_mut().refresh_plugin_faces();
+                profile.borrow_mut().lap(pump_profile::Section::Plugins);
                 st.borrow_mut().session.sync_compensation(&mut handle);
+                profile.borrow_mut().lap(pump_profile::Section::SyncCompensation);
                 // And each stretching sampler's pool, which follows Voices
                 // (MOO-7). Voices has several doors on this thread -- the
                 // stepper, a MIDI-learned binding, a preset load -- and one
@@ -17446,12 +17458,14 @@ impl AppUi {
                         .session
                         .sync_sampler_stretch(sample_rate, |command| handle.send_structural(command));
                 }
+                profile.borrow_mut().lap(pump_profile::Section::SyncStretch);
                 // Beside it and for the same reasons: an edge's fate is a
                 // property of every channel at once, so deriving and diffing
                 // once a tick cannot be forgotten the way a per-edit call site
                 // can. Allocates the taps only when the plan says somebody is
                 // listening.
                 st.borrow_mut().session.sync_audio_graph(&mut handle);
+                profile.borrow_mut().lap(pump_profile::Section::SyncAudioGraph);
                 // And beside both, for the third time and the same reason:
                 // which buses need a console accumulator is a property of
                 // every strip's switch and every route at once. Allocates a
@@ -17469,6 +17483,7 @@ impl AppUi {
                 // over the other address space: a bank with nothing soloed
                 // derives all false and sends nothing.
                 st.borrow_mut().session.sync_channel_solo(&mut handle);
+                profile.borrow_mut().lap(pump_profile::Section::SyncConsoleSolo);
                 // And the track graph, which is the fourth of these and the
                 // one that used to be sent from the edit that caused it.
                 // Routing stopped being one `u8` per track when a send became
@@ -17478,6 +17493,7 @@ impl AppUi {
                 // compensation a send's arrival moves has already been sent
                 // for the generation this schedule belongs to.
                 st.borrow_mut().session.sync_track_graph(&mut handle);
+                profile.borrow_mut().lap(pump_profile::Section::SyncTrackGraph);
                 // Which keys the control map takes from the instruments: its
                 // pads, and every key while a learn gesture waits (MOO-129).
                 // Derived and diffed here like the plans above, because a
@@ -17495,6 +17511,7 @@ impl AppUi {
                     let Some(window) = weak.upgrade() else { return };
                     st.borrow().update_document_title(&window);
                 }
+                profile.borrow_mut().lap(pump_profile::Section::Claimed);
                 let Some(w) = weak.upgrade() else { return };
                 let mut saw_nonzero = false;
                 for ev in handle.drain() {
@@ -17549,6 +17566,7 @@ impl AppUi {
                         }
                     }
                 }
+                profile.borrow_mut().lap(pump_profile::Section::Events);
                 // Positions before the notes they came with: a note is never
                 // removed by the position that reported it (MOO-234).
                 if !positions.is_empty() {
@@ -17654,6 +17672,7 @@ impl AppUi {
                     controller_moved_at
                         .is_none_or(|moved| moved.elapsed() >= CONTROLLER_IDLE),
                 );
+                profile.borrow_mut().lap(pump_profile::Section::Control);
                 let now = std::time::Instant::now();
                 let elapsed = now.duration_since(last_meter_update).as_secs_f32();
                 last_meter_update = now;
@@ -17780,6 +17799,7 @@ impl AppUi {
                         }
                     }
                 }
+                profile.borrow_mut().lap(pump_profile::Section::Seconds);
                 // Bus peaks come from the shared atomic array, not the event
                 // ring. Always drain them, even while the mixer is hidden, so
                 // a strip does not open showing a peak from minutes ago; only
@@ -17975,6 +17995,7 @@ impl AppUi {
                     }
                     effect_faults_seen = effect_faults;
                 }
+                profile.borrow_mut().lap(pump_profile::Section::Meters);
                 // Device meters address channels and buses in one space: a
                 // bus's chain publishes at MAX_CHANNELS + bus index (see
                 // DeviceMeters). Poll whichever chain the rack is showing.
@@ -18141,6 +18162,7 @@ impl AppUi {
                         }
                     }
                 }
+                profile.borrow_mut().lap(pump_profile::Section::DeviceRows);
                 {
                     // A playhead only means anything for the selected
                     // channel's sampler; otherwise leave it empty so no
@@ -18184,6 +18206,8 @@ impl AppUi {
                         state.refresh_modulation_offsets(&w);
                     }
                 }
+                profile.borrow_mut().lap(pump_profile::Section::Playhead);
+                profile.borrow_mut().end();
 
                 let (mp, sp, cf) = stats_in.get();
                 let new_mp = if saw_nonzero { mp.max(1.0) } else { mp };
@@ -18191,6 +18215,75 @@ impl AppUi {
                 stats_in.set((new_mp, new_sp, cf + forwarded));
             },
         );
+
+        // --- MOOLOOP_PROFILE_UI: frame timing, and the scripted run ---
+        if profile.borrow().enabled() {
+            let frames = profile.clone();
+            let notifier = window.window().set_rendering_notifier(move |state, _| match state {
+                slint::RenderingState::BeforeRendering => frames.borrow_mut().frame_begin(),
+                slint::RenderingState::AfterRendering => frames.borrow_mut().frame_end(),
+                _ => {}
+            });
+            if let Err(error) = notifier {
+                eprintln!("ui-profile: frames are not timed on this renderer: {error:?}");
+            }
+        }
+        if profile_mode.as_deref() == Some("scenario") {
+            let phase = std::env::var("MOOLOOP_PROFILE_UI_PHASE_SECS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(15);
+            // (play?, view to show) and the phase it starts; each runs
+            // `phase` seconds after the one before, the first after a settle
+            // for the song to load.
+            let steps = [
+                (None, "stopped, saved layout"),
+                (Some((true, None)), "playing, saved layout"),
+                (Some((true, Some(view::MIXER))), "playing, mixer"),
+                (Some((true, Some(view::DEVICES))), "playing, device rack"),
+                (Some((true, Some(view::PLAYLIST))), "playing, playlist"),
+                (Some((true, Some(view::STEPS))), "playing, steps"),
+                (Some((false, Some(view::MIXER))), "stopped, mixer"),
+                (Some((false, Some(view::DEVICES))), "stopped, device rack"),
+            ];
+            let settle = 8;
+            let count = steps.len() as u64;
+            for (index, (action, name)) in steps.into_iter().enumerate() {
+                let weak = window.as_weak();
+                let profile = profile.clone();
+                slint::Timer::single_shot(
+                    std::time::Duration::from_secs(settle + phase * index as u64),
+                    move || {
+                        let Some(w) = weak.upgrade() else { return };
+                        if let Some((play, view)) = action {
+                            if play && !w.get_playing() {
+                                w.invoke_play_clicked();
+                            } else if !play && w.get_playing() {
+                                w.invoke_stop_clicked();
+                            }
+                            if let Some(view) = view {
+                                w.invoke_show_view(view);
+                            }
+                        }
+                        profile.borrow_mut().enter(name);
+                    },
+                );
+            }
+            let weak = window.as_weak();
+            let profile = profile.clone();
+            slint::Timer::single_shot(
+                std::time::Duration::from_secs(settle + phase * count),
+                move || {
+                    profile.borrow_mut().enter("end");
+                    if let Some(w) = weak.upgrade() {
+                        if w.get_playing() {
+                            w.invoke_stop_clicked();
+                        }
+                    }
+                    slint::quit_event_loop().ok();
+                },
+            );
+        }
 
         // --- Optional autodrive self-test (MOOLOOP_AUTODRIVE=1) ---
         // Drives the actual Slint callbacks (as if the user clicked), then

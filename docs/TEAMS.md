@@ -302,7 +302,7 @@ Files marked *shared* are split in the table above.
 
 - `ui/src/`: `lib.rs` (*shared*), `actions.rs`, `gestures.rs`, `settings.rs`
   (*shared*), `status_bar.rs`, `channel_colors.rs`, `mockup.rs`, `theme/`,
-  `typed_value.rs`
+  `typed_value.rs`, `pump_profile.rs` (`MOOLOOP_PROFILE_UI`)
 - `ui/build.rs`, `ui/examples/`, `ui/tests/common/`
 - `ui/ui/`: `main.slint` (*shared*), `controls.slint`, `toolbar.slint`,
   `menubar.slint`, `channel-sidebar.slint`, `appearance-dialog.slint`,
