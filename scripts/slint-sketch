@@ -79,6 +79,16 @@ if [[ -z "$SRC" ]]; then
   exit 2
 fi
 
+ROOT="$(git rev-parse --show-toplevel)"
+UI="$ROOT/crates/mooloop-ui/ui"
+[[ -d "$UI" ]] || { echo "slint-sketch: no $UI -- run this inside the repo" >&2; exit 1; }
+
+# The Slint the workspace builds against, read from the lockfile rather than
+# written down here, so an upgrade cannot leave the install hint or the version
+# check below naming the old one. Empty if the lockfile has no `slint` entry.
+PIN="$(awk '$0 == "name = \"slint\"" { getline; gsub(/^version = "|"$/, ""); print; exit }' \
+  "$ROOT/Cargo.lock" 2>/dev/null || true)"
+
 # `cargo install` puts this in ~/.cargo/bin, which is not always on PATH --
 # look there before giving up, so a working install is never reported missing.
 VIEWER="$(command -v slint-viewer || true)"
@@ -86,24 +96,29 @@ if [[ -z "$VIEWER" && -x "$HOME/.cargo/bin/slint-viewer" ]]; then
   VIEWER="$HOME/.cargo/bin/slint-viewer"
 fi
 if [[ -z "$VIEWER" ]]; then
-  cat >&2 <<'MISSING'
+  cat >&2 <<MISSING
 slint-sketch: slint-viewer not found.
 
 Install it (lean build -- no skia, no zeroconf, no Android):
 
-  cargo install slint-viewer --version 1.17.1 \
+  cargo install slint-viewer --version ${PIN:-<the slint version in Cargo.lock>} \\
     --no-default-features --features renderer-software
 
-Match the version to the Slint the workspace pins, so the viewer parses the
+That is the Slint the workspace pins (Cargo.lock), so the viewer parses the
 same dialect the build does. Add --features backend-winit,renderer-femtovg as
 well if you want --watch.
 MISSING
   exit 127
 fi
 
-ROOT="$(git rev-parse --show-toplevel)"
-UI="$ROOT/crates/mooloop-ui/ui"
-[[ -d "$UI" ]] || { echo "slint-sketch: no $UI -- run this inside the repo" >&2; exit 1; }
+# A viewer older than the pin fails on newer syntax with a parse error that
+# says nothing about versions (1.17.1 on 1.18's `content-height`, 2026-09-26),
+# so name the mismatch first. A warning, not a stop: most sketches still parse,
+# and the viewer's own error follows when one does not.
+FOUND="$("$VIEWER" --version 2>/dev/null | awk '{ print $NF; exit }' || true)"
+if [[ -n "$PIN" && -n "$FOUND" && "$FOUND" != "$PIN" ]]; then
+  echo "slint-sketch: warning: $VIEWER is $FOUND, but the workspace pins Slint $PIN (cargo install slint-viewer --version $PIN ...)" >&2
+fi
 
 SCRATCH="${TMPDIR:-/tmp}/mooloop-slint-sketch"
 mkdir -p "$SCRATCH"
