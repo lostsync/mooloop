@@ -278,7 +278,11 @@ jobs:
           mkdir -p unpack/deb unpack/rpm unpack/appimage
           dpkg-deb -x dist/*.deb unpack/deb
           same_file deb unpack/deb/usr/bin/mooloop
-          (cd unpack/rpm && rpm2cpio ../../dist/*.rpm | cpio -idm --quiet)
+          # Focal's rpm2cpio (rpm 4.14) writes a cargo-generate-rpm payload
+          # out whole and then exits 1, silently; Fedora's rpm2cpio exits 0
+          # and `rpm -K` passes the same file. Its status is not the check:
+          # the byte-for-byte compare below is, and a short payload fails it.
+          (cd unpack/rpm && { rpm2cpio ../../dist/*.rpm || true; } | cpio -idm --quiet)
           same_file rpm unpack/rpm/usr/bin/mooloop
           (cd unpack/appimage && "../../dist/Mooloop-${VERSION}-x86_64.AppImage" --appimage-extract >/dev/null)
           in_appimage=unpack/appimage/squashfs-root/usr/bin/mooloop
