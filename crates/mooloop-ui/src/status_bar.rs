@@ -16,7 +16,7 @@
 //! two properties by hand and get it wrong.
 
 use crate::{MainWindow, NoticeLevel};
-use mooloop_engine::load::{LoadSnapshot, RealtimeStatus};
+use mooloop_engine::load::{HotSpot, LoadSnapshot, RealtimeStatus, Site};
 
 /// How much a status-bar message weighs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,7 +76,11 @@ pub fn withdraw(window: &MainWindow, text: &str) {
 /// counting it twice would make the number mean less. Added to what the
 /// readout shows rather than to a running total here, so clicking the
 /// readout back to zero sticks.
-pub fn show_audio_load(window: &MainWindow, load: &LoadSnapshot, xruns: u32) {
+///
+/// `hot_spot` is [`hot_spot_text`] for the window's slow callback, or empty
+/// when it had none. It replaces what the readout shows and otherwise holds,
+/// like the dropout count, until the readout is clicked (MOO-236).
+pub fn show_audio_load(window: &MainWindow, load: &LoadSnapshot, xruns: u32, hot_spot: &str) {
     if load.blocks == 0 {
         // Nothing rendered: the other fields are meaningless, and a number
         // left over from the last live window would say the audio is fine.
@@ -92,4 +96,34 @@ pub fn show_audio_load(window: &MainWindow, load: &LoadSnapshot, xruns: u32) {
         window.set_audio_dropouts(window.get_audio_dropouts().saturating_add(dropouts));
     }
     window.set_audio_time_shared(load.realtime == RealtimeStatus::TimeShared);
+    if !hot_spot.is_empty() {
+        window.set_audio_hot_spot(hot_spot.into());
+    }
+}
+
+/// Where a slow callback's time went, short enough for the status bar
+/// (MOO-236): `bar 12.3 · Bass 41%, Drums 22%`, each site's share of the
+/// block's budget. `name` says what a site is called in the song; the
+/// position is `render_settings::format_bar_beat`'s, as the export card
+/// writes one.
+pub fn hot_spot_text(spot: &HotSpot, name: impl Fn(Site) -> String) -> String {
+    let position = mooloop_session::render_settings::format_bar_beat(
+        u32::try_from(spot.tick).unwrap_or(u32::MAX),
+    );
+    let share = |nanos: u64| {
+        (nanos.saturating_mul(100) + spot.budget_nanos / 2)
+            .checked_div(spot.budget_nanos)
+            .unwrap_or(0)
+    };
+    let sites: Vec<String> = spot
+        .sites
+        .iter()
+        .flatten()
+        .map(|&(site, nanos)| format!("{} {}%", name(site), share(u64::from(nanos))))
+        .collect();
+    if sites.is_empty() {
+        format!("bar {position} · {}%", share(spot.work_nanos))
+    } else {
+        format!("bar {position} · {}", sites.join(", "))
+    }
 }

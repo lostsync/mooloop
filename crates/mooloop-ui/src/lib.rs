@@ -17837,12 +17837,44 @@ impl AppUi {
                     // and sleeps between blocks, and nobody hears either.
                     let audio = handle.audio_state();
                     let heard = audio == mooloop_engine::AudioState::Running;
+                    // Where the window's last slow callback went (MOO-236),
+                    // named as the song names its channels and tracks, and
+                    // logged once a window rather than once a callback.
+                    let hot_spot = load
+                        .hot_spot
+                        .filter(|_| heard)
+                        .map(|spot| {
+                            let state = st.borrow();
+                            let session = &state.session;
+                            let text = status_bar::hot_spot_text(&spot, |site| match site {
+                                mooloop_engine::load::Site::Channel(index) => session
+                                    .channels
+                                    .get(usize::from(index))
+                                    .map_or_else(|| format!("Channel {}", index + 1), |c| c.name.clone()),
+                                mooloop_engine::load::Site::Bus(index) => session
+                                    .buses
+                                    .get(usize::from(index))
+                                    .map_or_else(|| format!("Track {index}"), |b| b.bus.name.clone()),
+                            });
+                            log_warn!(
+                                "audio",
+                                "{} callback(s) in the last second passed {}% of their budget; \
+                                 the last took {:.0}% of a {}-frame block, at {}",
+                                load.hot_spots,
+                                mooloop_engine::load::HOT_SPOT_SHARE_PERCENT,
+                                spot.work_nanos as f64 / spot.budget_nanos.max(1) as f64 * 100.0,
+                                spot.frames,
+                                text
+                            );
+                            text
+                        })
+                        .unwrap_or_default();
                     // The same window, on screen: the log below is where the
                     // detail goes, and nobody reads it while playing. With no
                     // audio heard the readout goes blank rather than showing
                     // the null driver's timing as though it were the song's.
                     if heard {
-                        status_bar::show_audio_load(&w, &load, xruns_this_window);
+                        status_bar::show_audio_load(&w, &load, xruns_this_window, &hot_spot);
                     } else {
                         w.set_audio_load(-1.0);
                         w.set_audio_time_shared(false);

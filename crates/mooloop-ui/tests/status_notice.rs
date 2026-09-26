@@ -10,8 +10,8 @@
 //! the defect was about what the user sees: a property that said "error"
 //! while the text drew muted would pass a property check.
 
-use mooloop_engine::load::{LoadSnapshot, RealtimeStatus};
-use mooloop_ui::status_bar::{notify, show_audio_load, withdraw, Severity};
+use mooloop_engine::load::{HotSpot, LoadSnapshot, RealtimeStatus, Site};
+use mooloop_ui::status_bar::{hot_spot_text, notify, show_audio_load, withdraw, Severity};
 use mooloop_ui::{MainWindow, NoticeLevel, Theme};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{Color, ComponentHandle, LogicalPosition, LogicalSize};
@@ -191,6 +191,8 @@ fn window_with(blocks: u32, over_budget: u32, realtime: RealtimeStatus) -> LoadS
         peak_period: 1.0,
         realtime,
         faults: 0,
+        hot_spot: None,
+        hot_spots: 0,
     }
 }
 
@@ -201,16 +203,16 @@ fn an_xrun_raises_a_visible_count_that_a_click_resets() {
     let right_half = WIDTH as usize / 2;
     assert_eq!(ui.get_audio_load(), -1.0, "no window read yet");
 
-    show_audio_load(&ui, &window_with(750, 0, RealtimeStatus::Realtime), 0);
+    show_audio_load(&ui, &window_with(750, 0, RealtimeStatus::Realtime), 0, "");
     assert_eq!(ui.get_audio_dropouts(), 0);
     assert!((ui.get_audio_load() - 0.23).abs() < 1e-6);
     assert_eq!(pixels_near(&ui, warning, right_half, WIDTH as usize), 0);
 
     // One driver xrun and the block that caused it: one dropout, not two.
-    show_audio_load(&ui, &window_with(750, 1, RealtimeStatus::Realtime), 1);
+    show_audio_load(&ui, &window_with(750, 1, RealtimeStatus::Realtime), 1, "");
     assert_eq!(ui.get_audio_dropouts(), 1);
     // And the next window adds to it rather than replacing it.
-    show_audio_load(&ui, &window_with(750, 0, RealtimeStatus::Realtime), 2);
+    show_audio_load(&ui, &window_with(750, 0, RealtimeStatus::Realtime), 2, "");
     assert_eq!(ui.get_audio_dropouts(), 3);
     assert!(
         pixels_near(&ui, warning, right_half, WIDTH as usize) > 0,
@@ -230,22 +232,105 @@ fn an_xrun_raises_a_visible_count_that_a_click_resets() {
     click_at(&ui, (chips_left - 16.0, BAR_MIDDLE));
     assert_eq!(ui.get_audio_dropouts(), 0, "clicking the readout resets the count");
     // And a later window counts from there.
-    show_audio_load(&ui, &window_with(750, 1, RealtimeStatus::Realtime), 0);
+    show_audio_load(&ui, &window_with(750, 1, RealtimeStatus::Realtime), 0, "");
     assert_eq!(ui.get_audio_dropouts(), 1);
 }
 
 #[test]
 fn a_time_shared_callback_raises_a_badge_and_a_stopped_one_clears_the_load() {
     let ui = harness();
-    show_audio_load(&ui, &window_with(750, 0, RealtimeStatus::TimeShared), 0);
+    show_audio_load(&ui, &window_with(750, 0, RealtimeStatus::TimeShared), 0, "");
     assert!(ui.get_audio_time_shared());
-    show_audio_load(&ui, &window_with(750, 0, RealtimeStatus::Realtime), 0);
+    show_audio_load(&ui, &window_with(750, 0, RealtimeStatus::Realtime), 0, "");
     assert!(!ui.get_audio_time_shared());
 
     // A window with no blocks is an engine that is not running, and every
     // other field of it is meaningless; the last live number must not stay
     // up saying the audio is fine.
-    show_audio_load(&ui, &window_with(0, 0, RealtimeStatus::Realtime), 0);
+    show_audio_load(&ui, &window_with(0, 0, RealtimeStatus::Realtime), 0, "");
     assert_eq!(ui.get_audio_load(), -1.0);
 }
 
+/// **A slow callback says where it was and what took it** (MOO-236): the
+/// text names the bar and each site's share of the budget, is drawn in
+/// amber beside the readout, holds through a quiet window, and a click on
+/// the readout clears it with the dropouts.
+#[test]
+fn a_slow_callback_names_its_bar_and_channels_until_the_readout_is_clicked() {
+    // 2.67 ms, a 128-frame block at 48 kHz; bar 3, beat 2 at 96 PPQ.
+    let spot = HotSpot {
+        tick: 2 * 384 + 96,
+        frames: 128,
+        work_nanos: 2_400_000,
+        budget_nanos: 2_666_666,
+        sites: [
+            Some((Site::Channel(1), 1_093_333)),
+            Some((Site::Bus(0), 586_666)),
+            None,
+        ],
+    };
+    let text = hot_spot_text(&spot, |site| match site {
+        Site::Channel(index) => format!("Ch{index}"),
+        Site::Bus(_) => "Master".to_owned(),
+    });
+    assert_eq!(text, "bar 3.2 · Ch1 41%, Master 22%");
+    let unnamed = HotSpot { sites: [None; 3], ..spot };
+    assert_eq!(hot_spot_text(&unnamed, |_| String::new()), "bar 3.2 · 90%");
+
+    let ui = harness();
+    let warning = ui.global::<Theme>().get_warning();
+    let right_half = WIDTH as usize / 2;
+    let chips_left = WIDTH - BAR_RIGHT_INSET - 4.0 * 26.0;
+    // The right end of the readout, "DSP n%", and everything right of it.
+    let readout_end = (chips_left - 40.0) as usize;
+    show_audio_load(&ui, &window_with(750, 0, RealtimeStatus::Realtime), 0, "");
+    assert_eq!(ui.get_audio_hot_spot(), "");
+    assert_eq!(pixels_near(&ui, warning, right_half, WIDTH as usize), 0, "nothing amber yet");
+    let readout_before = bar_pixels(&ui, readout_end, WIDTH as usize);
+
+    show_audio_load(&ui, &window_with(750, 0, RealtimeStatus::Realtime), 0, &text);
+    assert_eq!(ui.get_audio_hot_spot(), text.as_str());
+    assert!(pixels_near(&ui, warning, right_half, WIDTH as usize) > 0, "the hot spot is drawn in amber");
+    // It sits beside the readout in a box of its own width: the readout does
+    // not move when it appears, nor when a longer one replaces it.
+    assert!(
+        bar_pixels(&ui, readout_end, WIDTH as usize) == readout_before,
+        "the readout moved when the hot spot appeared"
+    );
+    let long = "bar 118.4.3 · A channel with a very long name 61%, Another long one 30%, Master 4%";
+    show_audio_load(&ui, &window_with(750, 0, RealtimeStatus::Realtime), 0, long);
+    assert!(
+        bar_pixels(&ui, readout_end, WIDTH as usize) == readout_before,
+        "the readout moved for a longer hot spot"
+    );
+    // Elided into its box: nothing amber left of it.
+    assert_eq!(
+        pixels_near(&ui, warning, 0, (chips_left - 360.0) as usize),
+        0,
+        "a long hot spot spilled out of its box"
+    );
+    show_audio_load(&ui, &window_with(750, 0, RealtimeStatus::Realtime), 0, &text);
+    // A quiet window after it leaves it up.
+    show_audio_load(&ui, &window_with(750, 0, RealtimeStatus::Realtime), 0, "");
+    assert_eq!(ui.get_audio_hot_spot(), text.as_str());
+
+    click_at(&ui, (chips_left - 16.0, BAR_MIDDLE));
+    assert_eq!(ui.get_audio_hot_spot(), "", "clicking the readout clears it");
+    assert_eq!(pixels_near(&ui, warning, right_half, WIDTH as usize), 0);
+
+    // And a click on the hot spot itself clears it too: it is part of the
+    // readout.
+    show_audio_load(&ui, &window_with(750, 0, RealtimeStatus::Realtime), 0, &text);
+    click_at(&ui, (chips_left - 150.0, BAR_MIDDLE));
+    assert_eq!(ui.get_audio_hot_spot(), "", "clicking the hot spot clears it");
+}
+
+/// The status bar's pixels between `x0` and `x1`, row by row.
+fn bar_pixels(ui: &MainWindow, x0: usize, x1: usize) -> Vec<u8> {
+    let snapshot = ui.window().take_snapshot().unwrap();
+    let width = snapshot.width() as usize;
+    let bytes = snapshot.as_bytes();
+    (BAR_TOP..BAR_BOTTOM.min(snapshot.height() as usize))
+        .flat_map(|y| bytes[(y * width + x0) * 4..(y * width + x1.min(width)) * 4].to_vec())
+        .collect()
+}

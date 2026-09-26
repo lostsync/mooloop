@@ -54,6 +54,8 @@ pub(crate) struct Executor {
     /// When the previous callback was entered, so the gap between wake-ups
     /// can be measured. `None` before the first block of a run.
     last_entered: Option<Instant>,
+    /// See [`Self::set_hot_spot_percent`].
+    hot_spot_percent: u64,
     /// Whether the scheduling policy of this thread has been asked for yet.
     /// The answer cannot change without the driver making a new thread, and
     /// a driver that does calls [`Executor::begin_run`], so it is asked once
@@ -94,6 +96,7 @@ impl Executor {
             sample_rate,
             load,
             last_entered: None,
+            hot_spot_percent: crate::load::HOT_SPOT_SHARE_PERCENT,
             checked_scheduling: false,
         }
     }
@@ -413,6 +416,9 @@ impl Executor {
         self.render.apply_midi(&self.midi_scratch[..midi_len]);
 
         self.render.load_input(in_l, in_r, frames);
+        // Every callback, because an install hands over a state built with
+        // it off: one compare when it is already on.
+        self.render.set_site_timing(true);
         let report = self.render.process_block(frames);
         // Finished preview samples return to the UI thread for disposal,
         // the same ownership round trip displaced effect nodes take. The
@@ -498,8 +504,28 @@ impl Executor {
             .saturating_mul(1_000_000_000)
             .checked_div(u64::from(self.sample_rate))
             .unwrap_or(0);
-        self.load
-            .record(entered.elapsed().as_nanos() as u64, budget, period);
+        let work = entered.elapsed().as_nanos() as u64;
+        self.load.record(work, budget, period);
+        // A callback past its share says where it was and what it spent
+        // (MOO-236): after the work is measured, so the record costs only the
+        // blocks that already ran long, and never allocates or waits.
+        if budget > 0 && work.saturating_mul(100) > budget.saturating_mul(self.hot_spot_percent) {
+            self.load.publish_hot_spot(&crate::load::HotSpot {
+                tick: report.position_tick,
+                frames: frames as u32,
+                work_nanos: work,
+                budget_nanos: budget,
+                sites: self.render.costliest_sites(),
+            });
+        }
+    }
+
+    /// The share of a callback's budget, in percent, past which it
+    /// publishes where its time went. [`crate::load::HOT_SPOT_SHARE_PERCENT`]
+    /// unless a test wants every block published.
+    #[cfg(test)]
+    pub(crate) fn set_hot_spot_percent(&mut self, percent: u64) {
+        self.hot_spot_percent = percent;
     }
 }
 

@@ -1060,6 +1060,10 @@ export component MainWindow inherits Window {
     in-out property <float> audio-load-peak;
     in-out property <int> audio-dropouts;
     in-out property <bool> audio-time-shared;
+    // Where the last slow callback's time went (MOO-236), as
+    // `status_bar::hot_spot_text` writes it, or empty. Held until the
+    // readout is clicked, like the dropout count.
+    in-out property <string> audio-hot-spot;
     in-out property <bool> save-error-open;
     in-out property <string> save-error-title;
     in-out property <string> save-error-detail;
@@ -8081,6 +8085,10 @@ export component MainWindow inherits Window {
                     ? "Audio has not rendered a block in the last second"
                     : "Audio load over the last second: \{Math.round(root.audio-load * 100)}% on average, \{Math.round(root.audio-load-peak * 100)}% in the worst block"
                         + (root.audio-dropouts > 0 ? ". Click to reset the dropout count" : "")
+                        + (root.audio-hot-spot != ""
+                            ? ". The last slow callback, and the channels and tracks that took most of it: "
+                                + root.audio-hot-spot + (root.audio-dropouts > 0 ? "" : ". Click to clear it")
+                            : "")
                         + (root.audio-time-shared
                             ? ". The audio thread is not realtime, so it drops out whenever the machine is busy"
                             : "");
@@ -8153,7 +8161,7 @@ export component MainWindow inherits Window {
                     color: Theme.text-muted;
                     font-size: Theme.text-lg;
                     x: notice.visible ? notice.x + notice.width + 12px : 8px;
-                    width: max(0px, readout.x - 12px - self.x);
+                    width: max(0px, (hot-spot.visible ? hot-spot.x : readout.x) - 12px - self.x);
                     vertical-alignment: center;
                     overflow: elide;
                 }
@@ -8185,12 +8193,33 @@ export component MainWindow inherits Window {
                         vertical-alignment: center;
                     }
                 }
+                // Where the last slow callback's time went (MOO-236). Beside
+                // the readout rather than in it, and a fixed width rather than
+                // its text's: a new string, which comes at most once a
+                // second, elides into the same box instead of re-measuring
+                // the layout, and the readout never moves for it. Only the
+                // hint line's right edge gives way while it shows.
+                hot-spot := Text {
+                    visible: root.audio-hot-spot != "";
+                    x: readout.x - 12px - self.width;
+                    width: 240px;
+                    height: parent.height;
+                    text: root.audio-hot-spot;
+                    color: Theme.warning;
+                    font-size: Theme.text-lg;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                // The hot spot is part of the readout: hovering it explains
+                // it, and a click clears it with the dropouts.
                 readout-touch := TouchArea {
-                    x: readout.x;
-                    width: readout.width;
+                    x: hot-spot.visible ? hot-spot.x : readout.x;
+                    width: readout.x + readout.width - self.x;
                     height: parent.height;
                     clicked => {
                         root.audio-dropouts = 0;
+                        root.audio-hot-spot = "";
                     }
                 }
 

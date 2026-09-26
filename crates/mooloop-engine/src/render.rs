@@ -46,6 +46,7 @@ use mooloop_dsp::strip::Strip;
 
 use crate::meters::{BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters};
 use crate::sequencer::Sequencer;
+use crate::site_times::SiteTimes;
 use crate::transport::{BlockSpan, Transport};
 use crate::{PreviewCommand, StructuralCommand, StructuralReclaim};
 
@@ -5310,6 +5311,10 @@ pub(crate) struct RenderState {
     /// compared were not simply the same render twice: a skip mechanism that
     /// never fires would pass every one of them.
     slept_strip_blocks: u64,
+    /// Where each block's time went, channel by channel and bus by bus, for
+    /// the executor to publish when a callback runs long (MOO-236). Off
+    /// unless the executor turns it on.
+    site_times: SiteTimes,
     /// Deferred commands refused for want of a slot, since this state was
     /// built. The per-channel lists count their own refusals
     /// (`EventList::refused`), which is what reaches the sequencer's note
@@ -5438,6 +5443,7 @@ impl RenderState {
             strip_pin: STRIP_PIN,
             skip_idle: true,
             slept_strip_blocks: 0,
+            site_times: SiteTimes::new(),
             refused_events: 0,
             sequencer: Sequencer::new(1, 1, DEFAULT_STEPS as usize, mooloop_core::Ppq::DEFAULT),
             strips,
@@ -9041,11 +9047,15 @@ impl RenderState {
         // one: a muted or sleeping channel's buffer holds stale or pre-fader
         // audio, and what a take of it should hear is silence.
         let mut heard = [false; MAX_CHANNELS];
+        self.site_times.begin(active_channels);
         for slot in 0..MAX_CHANNELS {
             let index = self.audio.graph.order()[slot] as usize;
             if index >= active_channels {
                 continue;
             }
+            // This channel's time runs from here to the next site's lap.
+            self.site_times
+                .lap(Some(crate::load::Site::Channel(index as u8)));
             let ticks = modulator_ticks[index];
             // Published before the mute check: a muted channel's modulators
             // still run, so its knobs should still animate rather than freeze
@@ -9477,6 +9487,8 @@ impl RenderState {
             self.sends.emit(producer, &mut self.buses, frames, muted);
         }
 
+        // What happens between the walks is no strip's.
+        self.site_times.lap(None);
         // Walk the compiled schedule. Every bus is guaranteed to appear after
         // everything feeding it, so one pass suffices whatever the routing
         // looks like; the master sorts last and keeps its audio, since it is
@@ -9492,6 +9504,9 @@ impl RenderState {
             let Some(strip) = self.buses.get_mut(index) else {
                 continue;
             };
+            // This bus's time runs from here to the next site's lap
+            // (MOO-236); nothing else in the walk changes for it.
+            self.site_times.lap(Some(crate::load::Site::Bus(index as u8)));
             // Before `is_resting` asks whether its ramps have arrived.
             strip.aim();
             // Everything feeding this bus has already run -- that is what the
@@ -9707,6 +9722,7 @@ impl RenderState {
                 self.sends.reset(producer);
             }
         }
+        self.site_times.lap(None);
         // After the walk on purpose: the preview bypasses every chain, so it
         // is heard raw and does not move the mixer's meters.
         // After every strip and track has rendered, so each source buffer
@@ -9888,6 +9904,22 @@ impl RenderState {
     #[cfg(test)]
     pub fn unlimit_output(&mut self) {
         self.output_guard = OutputGuard::without_limit(self.sample_rate);
+    }
+
+    /// Time each channel and bus in every block (MOO-236). The executor
+    /// turns it on; an export leaves it off.
+    pub(crate) fn set_site_timing(&mut self, enabled: bool) {
+        if self.site_times.enabled() != enabled {
+            self.site_times.set_enabled(enabled);
+        }
+    }
+
+    /// The last block's dearest channels and buses, dearest first, with
+    /// what each took in nanoseconds. Empty while timing is off.
+    pub(crate) fn costliest_sites(
+        &self,
+    ) -> [Option<(crate::load::Site, u32)>; crate::load::HOT_SPOT_SITES] {
+        self.site_times.costliest()
     }
 
     /// Channel-blocks skipped since this state was built. See the field.

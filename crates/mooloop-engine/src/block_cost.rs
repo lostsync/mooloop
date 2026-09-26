@@ -1709,3 +1709,59 @@ fn device_cost() {
         );
     }
 }
+
+/// **What timing every channel and bus costs** (MOO-236): the claim is under
+/// 1% of a 128-frame block with 32 channels.
+///
+/// Thirty-two ML-P8 channels, each holding a note for the whole measured
+/// stretch, rendered with site timing off and on. Each pass builds both
+/// states fresh and times them block by block, alternately, so the two see
+/// the same blocks under the same load on a shared box; each block's figure
+/// is its minimum over the passes, and the overhead is the mean difference
+/// of those minima. Timing on also covers the costliest-three pick, which
+/// the executor makes only on a block that ran long: it is run on every
+/// block here, so the figure is an upper bound.
+#[test]
+#[ignore = "measures wall time; run deliberately in release"]
+fn site_timing_cost() {
+    const FRAMES: usize = 128;
+    const CHANNELS: usize = 32;
+    // 180 blocks is 480 ms, inside the half-second note, so every channel is
+    // sounding in every measured block.
+    const BLOCKS: usize = 180;
+    const PASSES: usize = 25;
+    let project = loaded_project(CHANNELS);
+    // Each block's minimum, timing off and on.
+    let mut best = [[u64::MAX; 2]; BLOCKS];
+    for _ in 0..PASSES {
+        // Boxed: two render states side by side are a lot of stack.
+        let mut states = [false, true].map(|timed| {
+            let mut render = Box::new(RenderState::from_project(SAMPLE_RATE, &project, &[]));
+            render.set_site_timing(timed);
+            render.play();
+            render
+        });
+        for block in &mut best {
+            for (index, render) in states.iter_mut().enumerate() {
+                let started = Instant::now();
+                render.process_block(FRAMES);
+                if index == 1 {
+                    std::hint::black_box(render.costliest_sites());
+                }
+                block[index] = block[index].min(started.elapsed().as_nanos() as u64);
+            }
+        }
+    }
+    let mean = |index: usize| best.iter().map(|block| block[index]).sum::<u64>() as f64 / BLOCKS as f64;
+    let budget = FRAMES as f64 / SAMPLE_RATE as f64 * 1e9;
+    let (off, on) = (mean(0), mean(1));
+    println!();
+    println!("  {CHANNELS} channels, {FRAMES}-frame blocks, per-block min of {PASSES} interleaved passes");
+    println!("  timing off {:>9.0} ns/block  {:>6.2}% of budget", off, off / budget * 100.0);
+    println!("  timing on  {:>9.0} ns/block  {:>6.2}% of budget", on, on / budget * 100.0);
+    println!(
+        "  overhead   {:>9.0} ns/block  {:>6.3}% of budget",
+        on - off,
+        (on - off) / budget * 100.0
+    );
+}

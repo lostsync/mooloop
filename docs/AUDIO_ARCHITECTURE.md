@@ -250,6 +250,19 @@ through the reclaim ring by `load_full`. Recorded 2026-09-20 from
 `reports/fable-2026-09-20.md` finding 1; corrected 2026-09-21 from
 `reports/fable-2026-09-21.md` finding 9.
 
+**The callback times itself, and says where a slow block went** (MOO-236,
+2026-09-26). Reading the monotonic clock is allowed: `Instant::now` is a
+vDSO read on Linux and `mach_absolute_time` on macOS, with no system call,
+lock or allocation. The executor reads it on entry and exit
+(`LoadMeters::record`), and the block loop reads it once as each channel's
+and each bus's turn begins (`site_times.rs`, lap timing: a site's time runs
+to the next lap, so a strip's early `continue` needs no second read). A
+block past `HOT_SPOT_SHARE_PERCENT` of its budget picks its three dearest
+sites and writes them, with the song position, into one seqlock slot of
+atomics in `LoadMeters`, overwriting a record the GUI has not read. Offline
+renders leave the timing off. Measured with `block_cost::site_timing_cost`;
+`soak_tests.rs` publishes on every block and still sees no allocation.
+
 ## DSP Node Contract
 
 `AudioNode` is the small realtime interface, not the whole object model. Its

@@ -462,6 +462,17 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   it clears when the driver promotes the thread after its first block and
   appears if the thread is demoted mid-session. It shows "DSP –" while no audio is heard, rather than the null
   driver's timing. Hovering either segment explains it in the hint line.
+  As of 2026-09-26 (MOO-236) **a slow callback says where it was**: a
+  callback that uses more than 60% of its budget
+  (`load::HOT_SPOT_SHARE_PERCENT`) records the song position and the three
+  channels or tracks that took most of it, timed on the audio thread with
+  one clock read per strip (`engine/src/site_times.rs`). The readout shows
+  the last one in amber beside it, "bar 12.3 · Bass 41%, Drums 22%", each
+  figure a share of the block's budget, in a fixed-width box that elides
+  rather than moving the bar, with the explanation in the hint line on
+  hover; it holds until the readout is clicked, and
+  the log gets one line a second while it keeps happening. An export does
+  not time anything.
   `status_bar::notify` in `ui/src/status_bar.rs` is the one door.
 - **An edit the engine's command ring has no room for waits instead of
   being lost** (MOO-134). The pump asks `EngineHandle::command_room()` before

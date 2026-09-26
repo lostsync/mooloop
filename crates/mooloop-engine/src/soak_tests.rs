@@ -381,6 +381,7 @@ fn soak_at(frames: usize, blocks: usize) -> f32 {
     let (mut cmd_tx, cmd_rx) = rtrb::RingBuffer::new(256);
     let (evt_tx, mut evt_rx) = rtrb::RingBuffer::new(1024);
     let (reclaim_tx, mut reclaim_rx) = rtrb::RingBuffer::new(256);
+    let load = LoadMeters::new();
     let mut executor = Executor::new(
         ExecutorIo {
             cmd_rx,
@@ -390,8 +391,11 @@ fn soak_at(frames: usize, blocks: usize) -> f32 {
         Box::new(render),
         Arc::new(AtomicU64::new(0)),
         SAMPLE_RATE,
-        LoadMeters::new(),
+        load.clone(),
     );
+    // Every block publishes where its time went (MOO-236), so the counted
+    // window covers the record's path, which only a slow block takes live.
+    executor.set_hot_spot_percent(0);
 
     let mut out_l = vec![0.0f32; frames];
     let mut out_r = vec![0.0f32; frames];
@@ -463,6 +467,8 @@ fn soak_at(frames: usize, blocks: usize) -> f32 {
             drop(reclaim);
         }
     }
+    let spot = load.take().hot_spot.expect("every block published a hot spot");
+    assert!(spot.sites[0].is_some(), "the soak's blocks timed no site: {spot:?}");
     loudest
 }
 

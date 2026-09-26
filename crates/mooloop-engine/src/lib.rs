@@ -166,6 +166,7 @@ mod null_driver;
 mod offline;
 mod render;
 mod sequencer;
+mod site_times;
 mod take;
 mod transport;
 mod voices;

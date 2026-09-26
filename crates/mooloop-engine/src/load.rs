@@ -87,12 +87,158 @@ pub struct LoadSnapshot {
     pub faults: u32,
     /// How the callback thread is scheduled.
     pub realtime: RealtimeStatus,
+    /// The latest callback in the window that passed
+    /// [`HOT_SPOT_SHARE_PERCENT`] of its budget, and where its time went
+    /// (MOO-236); `None` when none did.
+    pub hot_spot: Option<HotSpot>,
+    /// How many callbacks in the window passed it.
+    pub hot_spots: u32,
 }
 
 impl LoadSnapshot {
     /// Whether this window contains anything a musician would have heard.
     pub fn had_trouble(&self) -> bool {
         self.over_budget > 0 || self.late_wakeups > 0
+    }
+}
+
+/// Where a callback's time went (MOO-236): a channel's strip (its source and
+/// chain, fader and sends) or a bus's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Site {
+    Channel(u8),
+    Bus(u8),
+}
+
+impl Site {
+    /// Packed for an atomic: the kind in bit 8, the index below, and zero
+    /// for "no site", which is why the kind bits start at one.
+    fn code(self) -> u32 {
+        match self {
+            Self::Channel(index) => 0x100 | u32::from(index),
+            Self::Bus(index) => 0x200 | u32::from(index),
+        }
+    }
+
+    fn from_code(code: u32) -> Option<Self> {
+        let index = (code & 0xFF) as u8;
+        match code >> 8 {
+            1 => Some(Self::Channel(index)),
+            2 => Some(Self::Bus(index)),
+            _ => None,
+        }
+    }
+}
+
+/// How many of a slow callback's costliest sites a [`HotSpot`] names.
+pub const HOT_SPOT_SITES: usize = 3;
+
+/// The share of its budget past which a callback publishes a [`HotSpot`]:
+/// well before it is heard, so the record is there on the callbacks that
+/// lead up to a dropout as well as on the dropout itself.
+pub const HOT_SPOT_SHARE_PERCENT: u64 = 60;
+
+/// One callback that ran long, and where (MOO-236).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HotSpot {
+    /// The song position at the block's start, in ticks.
+    pub tick: u64,
+    /// The block's length.
+    pub frames: u32,
+    /// The whole callback's work, and its budget, in nanoseconds.
+    pub work_nanos: u64,
+    pub budget_nanos: u64,
+    /// The costliest sites, dearest first, with what each took in
+    /// nanoseconds; `None` past the last one timed.
+    pub sites: [Option<(Site, u32)>; HOT_SPOT_SITES],
+}
+
+/// A single-slot seqlock: the audio thread overwrites, the GUI reads the
+/// latest. Every field is an atomic, so a torn read is a retry rather than
+/// undefined behaviour, and the writer never waits on anything.
+struct HotSpotSlot {
+    /// Even when stable, odd while the audio thread is writing. Zero means
+    /// nothing has been written since the last take.
+    sequence: AtomicU64,
+    tick: AtomicU64,
+    frames: AtomicU32,
+    work_nanos: AtomicU64,
+    budget_nanos: AtomicU64,
+    sites: [AtomicU32; HOT_SPOT_SITES],
+    site_nanos: [AtomicU32; HOT_SPOT_SITES],
+    /// Records written since the last take: the one read is the latest.
+    written: AtomicU32,
+}
+
+impl HotSpotSlot {
+    fn new() -> Self {
+        Self {
+            sequence: AtomicU64::new(0),
+            tick: AtomicU64::new(0),
+            frames: AtomicU32::new(0),
+            work_nanos: AtomicU64::new(0),
+            budget_nanos: AtomicU64::new(0),
+            sites: std::array::from_fn(|_| AtomicU32::new(0)),
+            site_nanos: std::array::from_fn(|_| AtomicU32::new(0)),
+            written: AtomicU32::new(0),
+        }
+    }
+
+    fn write(&self, spot: &HotSpot) {
+        // Odd: a reader that sees this, or sees it change, reads again.
+        let sequence = self.sequence.load(Ordering::Relaxed);
+        self.sequence.store(sequence.wrapping_add(1) | 1, Ordering::Relaxed);
+        std::sync::atomic::fence(Ordering::Release);
+        self.tick.store(spot.tick, Ordering::Relaxed);
+        self.frames.store(spot.frames, Ordering::Relaxed);
+        self.work_nanos.store(spot.work_nanos, Ordering::Relaxed);
+        self.budget_nanos.store(spot.budget_nanos, Ordering::Relaxed);
+        for (index, site) in spot.sites.iter().enumerate() {
+            let (code, nanos) = site.map_or((0, 0), |(site, nanos)| (site.code(), nanos));
+            self.sites[index].store(code, Ordering::Relaxed);
+            self.site_nanos[index].store(nanos, Ordering::Relaxed);
+        }
+        // Even again, and never zero, which means "empty".
+        let done = (sequence | 1).wrapping_add(1).max(2);
+        self.sequence.store(done, Ordering::Release);
+        self.written.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The latest record and how many were written since the last take,
+    /// then empty. A few retries at most: the writer holds the slot for a
+    /// dozen stores, once a callback at most.
+    fn take(&self) -> (Option<HotSpot>, u32) {
+        let written = self.written.swap(0, Ordering::Relaxed);
+        for _ in 0..64 {
+            let before = self.sequence.load(Ordering::Acquire);
+            if before == 0 {
+                return (None, written);
+            }
+            if before & 1 == 1 {
+                std::hint::spin_loop();
+                continue;
+            }
+            let mut sites = [None; HOT_SPOT_SITES];
+            for (index, site) in sites.iter_mut().enumerate() {
+                *site = Site::from_code(self.sites[index].load(Ordering::Relaxed))
+                    .map(|site| (site, self.site_nanos[index].load(Ordering::Relaxed)));
+            }
+            let spot = HotSpot {
+                tick: self.tick.load(Ordering::Relaxed),
+                frames: self.frames.load(Ordering::Relaxed),
+                work_nanos: self.work_nanos.load(Ordering::Relaxed),
+                budget_nanos: self.budget_nanos.load(Ordering::Relaxed),
+                sites,
+            };
+            std::sync::atomic::fence(Ordering::Acquire);
+            if self.sequence.load(Ordering::Relaxed) == before {
+                // Empty it for the next window, unless a new record landed
+                // in between, which the next take reads instead.
+                let _ = self.sequence.compare_exchange(before, 0, Ordering::Relaxed, Ordering::Relaxed);
+                return (Some(spot), written);
+            }
+        }
+        (None, written)
     }
 }
 
@@ -124,6 +270,8 @@ pub struct LoadMeters {
     /// different question from the window's and must not be answered by
     /// whoever last drained it.
     callbacks: AtomicU64,
+    /// The latest callback that ran long, and where (MOO-236).
+    hot_spot: HotSpotSlot,
 }
 
 impl LoadMeters {
@@ -140,7 +288,15 @@ impl LoadMeters {
             realtime: AtomicU32::new(RealtimeStatus::Unknown.code()),
             thread: AtomicU64::new(0),
             callbacks: AtomicU64::new(0),
+            hot_spot: HotSpotSlot::new(),
         })
+    }
+
+    /// Publish a callback that ran long, over the last one if the GUI has
+    /// not read it. Called from the audio thread: relaxed stores into one
+    /// slot, no allocation, no lock, never a wait.
+    pub fn publish_hot_spot(&self, spot: &HotSpot) {
+        self.hot_spot.write(spot);
     }
 
     /// Callbacks since the engine started, including those that panicked.
@@ -238,6 +394,7 @@ impl LoadMeters {
         let peak_work = self.peak_work_permille.swap(0, Ordering::Relaxed);
         let peak_period = self.peak_period_permille.swap(0, Ordering::Relaxed);
         let faults = self.faults.swap(0, Ordering::Relaxed);
+        let (hot_spot, hot_spots) = self.hot_spot.take();
         LoadSnapshot {
             blocks,
             mean_load: if budget == 0 {
@@ -251,6 +408,8 @@ impl LoadMeters {
             peak_period: peak_period as f32 / 1000.0,
             faults,
             realtime: self.realtime(),
+            hot_spot,
+            hot_spots,
         }
     }
 }
@@ -541,5 +700,58 @@ mod tests {
         assert_eq!(snapshot.blocks, 1);
         assert_eq!(snapshot.late_wakeups, 0);
         assert_eq!(snapshot.peak_period, 0.0);
+    }
+
+    fn spot(tick: u64) -> HotSpot {
+        HotSpot {
+            tick,
+            frames: 128,
+            work_nanos: BUDGET,
+            budget_nanos: BUDGET,
+            sites: [Some((Site::Channel(3), 900)), Some((Site::Bus(255), 400)), None],
+        }
+    }
+
+    /// **The GUI reads the latest record once, with how many there were**
+    /// (MOO-236), and a window with none reads none.
+    #[test]
+    fn a_hot_spot_is_the_latest_record_and_is_read_once() {
+        let meters = LoadMeters::new();
+        assert_eq!(meters.take().hot_spot, None);
+        meters.publish_hot_spot(&spot(10));
+        meters.publish_hot_spot(&spot(20));
+        let snapshot = meters.take();
+        assert_eq!(snapshot.hot_spot, Some(spot(20)));
+        assert_eq!(snapshot.hot_spots, 2);
+        let next = meters.take();
+        assert_eq!((next.hot_spot, next.hot_spots), (None, 0));
+    }
+
+    /// A reader racing the writer never sees half of one record and half of
+    /// another: every record read is one that was written whole.
+    #[test]
+    fn a_hot_spot_is_never_torn() {
+        let meters = LoadMeters::new();
+        let writer = {
+            let meters = meters.clone();
+            std::thread::spawn(move || {
+                for tick in 0..200_000u64 {
+                    let mut record = spot(tick);
+                    record.frames = tick as u32;
+                    record.work_nanos = tick * 3;
+                    meters.publish_hot_spot(&record);
+                }
+            })
+        };
+        let mut read = 0;
+        while !writer.is_finished() {
+            if let Some(record) = meters.take().hot_spot {
+                assert_eq!(u64::from(record.frames), record.tick, "{record:?}");
+                assert_eq!(record.work_nanos, record.tick * 3, "{record:?}");
+                read += 1;
+            }
+        }
+        writer.join().unwrap();
+        assert!(read > 0, "the reader never caught a record");
     }
 }
