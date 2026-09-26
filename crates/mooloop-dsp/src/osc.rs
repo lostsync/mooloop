@@ -16,11 +16,16 @@ use crate::scale::clamp_param;
 /// Entries per cycle in [`sine_table`]. Large enough that linear
 /// interpolation between neighbouring entries holds a 440 Hz table sine
 /// under -90 dB THD (`sine_table_thd_is_below_90_db`), small enough that the
-/// table (8 KB, `f32`) and the one-time build cost are both trivial. Built
-/// once, process-wide, the way [`crate::interpolate::SincTable`] is.
+/// table (16 KB, an `f32` pair an entry) and the one-time build cost are both
+/// trivial. Built once, process-wide, the way
+/// [`crate::interpolate::SincTable`] is.
 const SINE_TABLE_LEN: usize = 2048;
 
-static SINE_TABLE: OnceLock<[f32; SINE_TABLE_LEN]> = OnceLock::new();
+/// Each entry and the step to the next one (`[sin, next - sin]`), so a read
+/// is one load and a multiply-add where it was two loads and a subtract
+/// (MOO-264). The step is the same `f32` subtraction the read used to make,
+/// done once here, so the read is the same to the bit.
+static SINE_TABLE: OnceLock<[[f32; 2]; SINE_TABLE_LEN]> = OnceLock::new();
 
 /// The process-wide sine table, built on first call.
 ///
@@ -28,9 +33,14 @@ static SINE_TABLE: OnceLock<[f32; SINE_TABLE_LEN]> = OnceLock::new();
 /// `SincTable::shared` is forced at device construction — so no
 /// `next_sample`/`next_step` call on the audio thread is ever the one that
 /// builds it.
-fn sine_table() -> &'static [f32; SINE_TABLE_LEN] {
+fn sine_table() -> &'static [[f32; 2]; SINE_TABLE_LEN] {
     SINE_TABLE.get_or_init(|| {
-        std::array::from_fn(|index| ((index as f32 / SINE_TABLE_LEN as f32) * TAU).sin())
+        let sine: [f32; SINE_TABLE_LEN] =
+            std::array::from_fn(|index| ((index as f32 / SINE_TABLE_LEN as f32) * TAU).sin());
+        std::array::from_fn(|index| {
+            let next = sine[(index + 1) & (SINE_TABLE_LEN - 1)];
+            [sine[index], next - sine[index]]
+        })
     })
 }
 
@@ -43,17 +53,28 @@ fn sine_table() -> &'static [f32; SINE_TABLE_LEN] {
 /// argued from the table size alone.
 #[inline]
 fn table_sine(phase: f32) -> f32 {
+    table_sine_wrapped(wrap_unit(phase))
+}
+
+/// [`table_sine`] for a phase already folded by [`wrap_unit`] (or
+/// [`wrap_near`], its equal): `[0, 1]`, or `-0.0`.
+///
+/// Folding it again changed nothing but `1.0`, which it turned into `0.0`,
+/// and both read entry 0 at a fraction of zero, so the second fold every
+/// oscillator's sine paid is gone (MOO-264).
+/// `a_folded_phase_reads_the_table_as_a_refolded_one_bit_for_bit` pins it.
+#[inline(always)]
+fn table_sine_wrapped(phase: f32) -> f32 {
     let table = sine_table();
     // In [0, SINE_TABLE_LEN] (the top when a tiny negative phase rounds up to
     // a whole cycle), so the truncating cast is its floor and the mask its
     // wrap: one conversion, where `as usize`, `%` and `floor` were three
     // (MOO-255). `the_masked_table_read_is_the_old_one_bit_for_bit` pins it.
-    let scaled = wrap_unit(phase) * SINE_TABLE_LEN as f32;
+    let scaled = phase * SINE_TABLE_LEN as f32;
     let whole = scaled as i32;
-    let index = whole as usize & (SINE_TABLE_LEN - 1);
+    let [value, step] = table[whole as usize & (SINE_TABLE_LEN - 1)];
     let frac = scaled - whole as f32;
-    let next = (index + 1) & (SINE_TABLE_LEN - 1);
-    table[index] + (table[next] - table[index]) * frac
+    value + step * frac
 }
 
 /// One oscillator step: the waveform value, and where inside this sample the
@@ -155,7 +176,7 @@ impl Osc {
         let phase = self.phase;
         let advanced = phase + dt;
         self.last_phase = phase;
-        self.phase = fast_fract(advanced);
+        self.phase = step_fract(advanced);
         let boundary_dt = if core::mem::take(&mut self.after_sync) {
             0.0
         } else {
@@ -163,7 +184,7 @@ impl Osc {
         };
         OscStep {
             value: wave_value(
-                wrap_unit(phase + phase_offset),
+                wrap_near(phase + phase_offset),
                 wave,
                 pulse_width,
                 dt,
@@ -197,13 +218,13 @@ impl Osc {
         let phase = self.phase;
         let advanced = phase + dt;
         self.last_phase = phase;
-        self.phase = fast_fract(advanced);
+        self.phase = step_fract(advanced);
         let boundary_dt = if core::mem::take(&mut self.after_sync) {
             0.0
         } else {
             dt
         };
-        let read = wrap_unit(phase + phase_offset);
+        let read = wrap_near(phase + phase_offset);
         let mix = mix.clamp(0.0, 1.0);
         let a = wave_value(read, waves.0, pulse_width, dt, boundary_dt);
         let value = if mix <= 0.0 {
@@ -253,6 +274,45 @@ impl Osc {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Test-only: run this thread's oscillators the way they ran before
+    /// MOO-264, so the new path is pinned against the old one in-process and
+    /// the two are timed in one run.
+    static BEFORE_MOO264: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+#[inline(always)]
+fn before_moo264() -> bool {
+    BEFORE_MOO264.with(core::cell::Cell::get)
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+const fn before_moo264() -> bool {
+    false
+}
+
+/// The sine read before MOO-264, for [`before_moo264`]: folded a second
+/// time, and two loads and a subtract.
+#[cfg(test)]
+fn old_table_sine(phase: f32) -> f32 {
+    let table = sine_table();
+    let scaled = wrap_unit(phase) * SINE_TABLE_LEN as f32;
+    let whole = scaled as i32;
+    let index = whole as usize & (SINE_TABLE_LEN - 1);
+    let frac = scaled - whole as f32;
+    let next = (index + 1) & (SINE_TABLE_LEN - 1);
+    table[index][0] + (table[next][0] - table[index][0]) * frac
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn old_table_sine(phase: f32) -> f32 {
+    table_sine(phase)
+}
+
 /// Past this magnitude every `f32` is a whole number, and below it every
 /// whole number fits an `i32`, so a truncating cast is exact.
 const EXACT_CAST: f32 = 8_388_608.0;
@@ -297,6 +357,50 @@ fn wrap_unit(x: f32) -> f32 {
     }
 }
 
+/// [`fast_fract`], bit for bit, for the `(0, 2)` a phase lands in after one
+/// step: a compare and a subtract, where the fraction is two conversions and
+/// a sign copy on every oscillator's sample-to-sample chain (MOO-264).
+/// Anything else, zero included, takes [`fast_fract`] itself.
+#[inline(always)]
+fn step_fract(x: f32) -> f32 {
+    if before_moo264() {
+        return fast_fract(x);
+    }
+    if x > 0.0 && x < 2.0 {
+        // `x - 1.0` is exact over [1, 2), as `x - trunc(x)` is, and over
+        // (0, 1) the fraction is `x - 0.0`, which is `x`.
+        x - if x >= 1.0 { 1.0 } else { 0.0 }
+    } else {
+        fast_fract(x)
+    }
+}
+
+/// [`wrap_unit`], bit for bit, for the `(-1, 2)` a read position lands in
+/// unless phase modulation pushes it further: a compare and an add, where
+/// the fold is two conversions and two sign copies on the read's chain
+/// (MOO-264). Anything else takes [`wrap_unit`] itself.
+#[inline(always)]
+fn wrap_near(x: f32) -> f32 {
+    if before_moo264() {
+        return wrap_unit(x);
+    }
+    if x > -1.0 && x < 2.0 {
+        // `wrap_unit`'s own arithmetic on each piece, with its truncation
+        // known: over (-1, 0) it is `x + 1.0`, rounded once; over [1, 2)
+        // it is `x - 1.0`, exact; and over [0, 1) it is `x`, `-0.0`
+        // included.
+        if x < 0.0 {
+            x + 1.0
+        } else if x >= 1.0 {
+            x - 1.0
+        } else {
+            x
+        }
+    } else {
+        wrap_unit(x)
+    }
+}
+
 /// Per-sample phase increment, with the frequency held inside the band the
 /// oscillators are correct over.
 fn increment(freq_hz: f32, sample_rate: u32) -> f32 {
@@ -314,14 +418,15 @@ fn increment(freq_hz: f32, sample_rate: u32) -> f32 {
 #[inline(always)]
 fn wave_value(phase: f32, wave: OscWave, pulse_width: f32, dt: f32, boundary_dt: f32) -> f32 {
     match wave {
-        OscWave::Sine => table_sine(phase),
+        OscWave::Sine if before_moo264() => old_table_sine(phase),
+        OscWave::Sine => table_sine_wrapped(phase),
         OscWave::Triangle => 4.0 * (phase - 0.5).abs() - 1.0,
         OscWave::Saw => 2.0 * phase - 1.0 - polyblep(phase, boundary_dt),
         OscWave::Pulse => {
             let width = clamp_param(pulse_width, 0.05, 0.95);
             let mut value = if phase < width { 1.0 } else { -1.0 };
             value += polyblep(phase, boundary_dt);
-            value -= polyblep(wrap_unit(phase - width), dt);
+            value -= polyblep(wrap_near(phase - width), dt);
             value
         }
     }
@@ -406,7 +511,7 @@ mod tests {
             let index = scaled as usize % SINE_TABLE_LEN;
             let frac = scaled - scaled.floor();
             let next = (index + 1) % SINE_TABLE_LEN;
-            table[index] + (table[next] - table[index]) * frac
+            table[index][0] + (table[next][0] - table[index][0]) * frac
         }
         let mut phases = vec![0.0f32, -0.0, 1.0, -1.0, 1.0e-9, -1.0e-9, -1.0e-30, 3.75, -3.75];
         for entry in 0..=SINE_TABLE_LEN * 4 {
@@ -421,8 +526,10 @@ mod tests {
     /// The inline wrap, fraction and truncation are the library's, to the
     /// bit, across every magnitude an oscillator sees and past where the
     /// cast would stop being exact (MOO-255).
-    #[test]
-    fn the_inline_rounding_is_the_librarys_bit_for_bit() {
+    /// Every magnitude an oscillator sees, past where the cast would stop
+    /// being exact, either side of every whole number near zero, and the
+    /// phases an increment lands on.
+    fn rounding_cases() -> Vec<f32> {
         let mut values = vec![
             0.0f32, -0.0, 1.0, -1.0, 2.0, -2.0, 0.5, -0.5, 1.0e-9, -1.0e-9, 0.999_999_94,
             -0.999_999_94, 8_388_607.5, -8_388_607.5, 8_388_608.0, -8_388_608.0, 1.0e10,
@@ -451,6 +558,12 @@ mod tests {
             values.push(-x);
             bits += 0x0000_9e37;
         }
+        values
+    }
+
+    #[test]
+    fn the_inline_rounding_is_the_librarys_bit_for_bit() {
+        let values = rounding_cases();
         let same = |a: f32, b: f32| a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan());
         for x in values {
             assert!(same(fast_trunc(x), x.trunc()), "trunc({x:e})");
@@ -766,6 +879,295 @@ mod tests {
             let value = a.next_sample();
             assert!((-1.0..1.0).contains(&value));
             assert_eq!(value, b.next_sample());
+        }
+    }
+
+    // --- MOO-264: the cheaper folds and table read, against the old ones --
+
+    /// Run `f` with this thread's oscillators on the path before MOO-264.
+    fn before<T>(f: impl FnOnce() -> T) -> T {
+        BEFORE_MOO264.with(|flag| flag.set(true));
+        let out = f();
+        BEFORE_MOO264.with(|flag| flag.set(false));
+        out
+    }
+
+    /// The one-step fraction and the near fold are the full ones, to the
+    /// bit, everywhere: inside the ranges they shortcut and outside them.
+    #[test]
+    fn the_near_folds_are_the_full_ones_bit_for_bit() {
+        let same = |a: f32, b: f32| a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan());
+        let mut values = rounding_cases();
+        for edge in [-1.0f32, 0.0, 1.0, 2.0] {
+            values.extend([edge.next_down(), edge, edge.next_up(), -edge]);
+        }
+        for x in values {
+            assert!(same(step_fract(x), fast_fract(x)), "step_fract({x:e})");
+            assert!(same(wrap_near(x), wrap_unit(x)), "wrap_near({x:e})");
+        }
+    }
+
+    /// A phase folded once reads the table as the phase folded twice did,
+    /// with the old two loads and a subtract, to the bit: every table entry
+    /// and between them, either side of zero and of a whole cycle, and far
+    /// from either.
+    #[test]
+    fn a_folded_phase_reads_the_table_as_a_refolded_one_bit_for_bit() {
+        let mut phases = rounding_cases();
+        for entry in 0..=SINE_TABLE_LEN * 4 {
+            let phase = entry as f32 / (SINE_TABLE_LEN * 4) as f32;
+            phases.extend([phase, -phase, phase.next_up(), phase.next_down(), phase + 2.0, phase - 4.0]);
+        }
+        for phase in phases.into_iter().filter(|phase| phase.is_finite()) {
+            let old = before(|| old_table_sine(phase));
+            assert_eq!(table_sine_wrapped(wrap_near(phase)).to_bits(), old.to_bits(), "phase {phase:e}");
+            assert_eq!(table_sine(phase).to_bits(), old.to_bits(), "phase {phase:e}");
+        }
+    }
+
+    /// Every way an oscillator is driven, as a sample list: each wave at
+    /// every rate, across the keyboard and past both clamps, with phase
+    /// modulation from none to far past a cycle, pulse widths to both
+    /// stops, the morph, and hard sync from a master at another pitch.
+    fn drive_everything() -> Vec<f32> {
+        let mut out = Vec::new();
+        let waves = [OscWave::Sine, OscWave::Triangle, OscWave::Saw, OscWave::Pulse];
+        let mut rng = Noise::new(0x264);
+        for sr in RATES {
+            for (w, &wave) in waves.iter().enumerate() {
+                for freq in [0.0f32, 8.0, 55.0, 440.0, 3_520.0, 17_000.0, sr as f32] {
+                    for depth in [0.0f32, 0.3, 1.7, 6.0] {
+                        let mut osc = Osc::new();
+                        let mut master = Osc::new();
+                        let mut slave = Osc::new();
+                        osc.reset_to(-1.0e-9);
+                        for n in 0..600 {
+                            let offset = depth * rng.next_sample();
+                            let width = 0.5 + 0.5 * rng.next_sample();
+                            let step = osc.next_step(freq, wave, width, offset, sr);
+                            out.push(step.value);
+                            out.push(step.wrap.unwrap_or(-1.0));
+                            let morph = osc.next_step_morph(
+                                freq * 0.5,
+                                (wave, waves[(w + 1) % 4]),
+                                (n % 7) as f32 / 6.0,
+                                width,
+                                offset,
+                                sr,
+                            );
+                            out.push(morph.value);
+                            let wrap = master.next_step(freq * 0.37 + 1.0, OscWave::Saw, 0.5, 0.0, sr);
+                            let own = slave.next_step(freq, wave, width, offset, sr);
+                            out.push(own.value);
+                            if let Some(frac) = wrap.wrap {
+                                out.push(slave.sync_reset(frac, freq, wave, width, offset, sr));
+                            }
+                            out.push(slave.phase());
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// An oscillator on the new folds and table read is the old one to the
+    /// bit, however it is driven.
+    #[test]
+    fn every_oscillator_path_is_the_old_one_bit_for_bit() {
+        let old = before(drive_everything);
+        let new = drive_everything();
+        assert_eq!(old.len(), new.len());
+        for (index, (a, b)) in old.iter().zip(&new).enumerate() {
+            assert_eq!(a.to_bits(), b.to_bits(), "sample {index}: {a} became {b}");
+        }
+    }
+
+    use crate::bus::StereoBus;
+    use crate::event::{Event, EventList, TimedEvent};
+    use crate::node::{AudioNode, ProcessContext};
+
+    /// Every device built on [`Osc`], with the patches that reach every
+    /// wave, phase modulation and sync: ML-P8's bank at its own unison and
+    /// at X8, ML-M1's bank, DS-01's bank and starter kit, and the v1 poly,
+    /// mono and drum synths with each wave.
+    fn oscillator_devices(sr: u32) -> Vec<(String, Box<dyn AudioNode>)> {
+        use crate::drumsynth::DrumSynth;
+        use crate::ds01::Ds01;
+        use crate::mlm1::MlM1;
+        use crate::mlp8::MlP8;
+        use crate::monosynth::MonoSynth;
+        use crate::polysynth::PolySynth;
+        use mooloop_core::{DrumMode, DrumSynthParams, MlP8Unison, MonoSynthParams, PolySynthParams};
+        let mut devices: Vec<(String, Box<dyn AudioNode>)> = Vec::new();
+        for patch in mooloop_core::mlp8_factory::patches() {
+            devices.push((format!("ML-P8 {}", patch.name), Box::new(MlP8::new(patch.params, sr))));
+            let wide = mooloop_core::MlP8Params { unison: MlP8Unison::X8, ..patch.params };
+            devices.push((format!("ML-P8 {} X8", patch.name), Box::new(MlP8::new(wide, sr))));
+        }
+        for patch in mooloop_core::mlm1_factory::patches() {
+            devices.push((format!("ML-M1 {}", patch.name), Box::new(MlM1::new(patch.params, sr))));
+        }
+        for patch in mooloop_core::ds01_factory::patches() {
+            devices.push((format!("DS-01 {}", patch.name), Box::new(Ds01::new(patch.params, sr))));
+        }
+        for (name, patch) in mooloop_core::ds01_factory::starter_kit() {
+            devices.push((format!("DS-01 kit {name}"), Box::new(Ds01::new(patch.params, sr))));
+        }
+        for wave in [OscWave::Sine, OscWave::Triangle, OscWave::Saw, OscWave::Pulse] {
+            let mut poly = PolySynthParams::default();
+            let mut mono = MonoSynthParams::default();
+            for (index, osc) in poly.osc.iter_mut().chain(mono.osc.iter_mut()).enumerate() {
+                osc.wave = wave;
+                osc.level = 0.5;
+                osc.semitones = (index % 3) as f32 * 7.0;
+                osc.pulse_width = 0.3;
+            }
+            devices.push((format!("PolySynth {wave:?}"), Box::new(PolySynth::new(poly, sr))));
+            devices.push((format!("MonoSynth {wave:?}"), Box::new(MonoSynth::new(mono, sr))));
+        }
+        for mode in [DrumMode::Kick, DrumMode::Snare, DrumMode::Hat] {
+            let params = DrumSynthParams { mode, ..DrumSynthParams::default() };
+            devices.push((format!("DrumSynth {mode:?}"), Box::new(DrumSynth::new(params, sr))));
+        }
+        devices
+    }
+
+    /// Three notes struck, held for most of `frames` and released, in
+    /// 128-frame blocks; both channels.
+    fn render_device(device: &mut dyn AudioNode, sr: u32, frames: usize) -> Vec<f32> {
+        let block = 128;
+        let held = frames * 3 / 4;
+        let notes = [36u8, 57, 64];
+        let mut bus = StereoBus::with_capacity(block);
+        let mut out = Vec::with_capacity(frames * 2);
+        let mut rendered = 0;
+        while rendered < frames {
+            let len = block.min(frames - rendered);
+            let mut events = EventList::empty();
+            for (index, &note) in notes.iter().enumerate() {
+                let id = index as u64 + 1;
+                if rendered == 0 {
+                    events.push(TimedEvent { offset: index as u32 * 5, event: Event::NoteOn { id, note, velocity: 100 } });
+                }
+                if rendered <= held && held < rendered + len {
+                    events.push(TimedEvent { offset: (held - rendered) as u32, event: Event::NoteOff { id, note } });
+                }
+            }
+            bus.l[..len].fill(0.0);
+            bus.r[..len].fill(0.0);
+            let ctx = ProcessContext {
+                sample_rate: sr,
+                frames: len,
+                playing: true,
+                bpm: 120.0,
+                position_ticks: 0.0,
+                position_frames: rendered as u64,
+            };
+            device.process(&ctx, &mut bus, &events, None);
+            out.extend_from_slice(&bus.l[..len]);
+            out.extend_from_slice(&bus.r[..len]);
+            rendered += len;
+        }
+        out
+    }
+
+    /// Every device built on the oscillator sounds the same to the bit on
+    /// the new folds and table read, at every rate. A change to a primitive
+    /// changes every device on it, so each one is rendered, not argued.
+    #[test]
+    fn every_oscillator_device_is_the_old_one_bit_for_bit() {
+        for sr in RATES {
+            let frames = sr as usize / 3;
+            let old: Vec<_> = before(|| {
+                oscillator_devices(sr)
+                    .into_iter()
+                    .map(|(name, mut device)| (name, render_device(device.as_mut(), sr, frames)))
+                    .collect()
+            });
+            let new = oscillator_devices(sr);
+            assert_eq!(old.len(), new.len());
+            for ((name, old), (_, mut device)) in old.into_iter().zip(new) {
+                assert!(old.iter().any(|sample| *sample != 0.0), "{name} at {sr}: silence proves nothing");
+                let now = render_device(device.as_mut(), sr, frames);
+                let moved = old.iter().zip(&now).position(|(a, b)| a.to_bits() != b.to_bits());
+                assert_eq!(moved, None, "{name} at {sr} Hz: MOO-264 moved a sample");
+            }
+        }
+    }
+
+    /// **What MOO-264's oscillator changes save**, in microseconds a
+    /// 128-frame block at 48 kHz, old and new interleaved in one run so a
+    /// shared machine's noise lands on both: every pass renders every
+    /// (device, path) pair once, and each block's cost is its fastest over
+    /// the passes. One note at Unison X8 for ML-P8, as `device_cost` plays
+    /// it, held three quarters of two seconds. The test build carries the
+    /// path switch, so these read a little above `device_cost`.
+    ///
+    /// ```sh
+    /// REPS=15 cargo test -p mooloop-dsp --release oscillator_path_cost -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "measures wall time; run deliberately in release"]
+    fn oscillator_path_cost() {
+        use crate::mlm1::MlM1;
+        use crate::mlp8::MlP8;
+        use mooloop_core::{MlP8Params, MlP8Unison};
+        use std::time::Instant;
+        let sr = 48_000;
+        let reps = std::env::var("REPS").ok().and_then(|reps| reps.parse().ok()).unwrap_or(7usize).max(1);
+        let block = 128;
+        let blocks = 2 * sr as usize / block;
+        let held_blocks = blocks * 3 / 4;
+        let make = |name: &str| -> Box<dyn AudioNode> {
+            if let Some(patch) = mooloop_core::mlp8_factory::patches().into_iter().find(|p| p.name == name) {
+                return Box::new(MlP8::new(MlP8Params { unison: MlP8Unison::X8, ..patch.params }, sr));
+            }
+            let patch = mooloop_core::mlm1_factory::patches().into_iter().find(|p| p.name == name).expect("a factory patch");
+            Box::new(MlM1::new(patch.params, sr))
+        };
+        let names = ["Cold Metal", "Init Saw", "Servo Pad", "Furnace Stab", "Wide Machine", "Round Bass"];
+        let mut fastest = vec![[vec![f64::MAX; blocks], vec![f64::MAX; blocks]]; names.len()];
+        let mut bus = StereoBus::with_capacity(block);
+        for _ in 0..reps {
+            for (d, name) in names.iter().enumerate() {
+                for (path, old) in [(0usize, true), (1, false)] {
+                    BEFORE_MOO264.with(|flag| flag.set(old));
+                    let mut device = make(name);
+                    for (index, slot) in fastest[d][path].iter_mut().enumerate() {
+                        let mut events = EventList::empty();
+                        if index == 0 {
+                            events.push(TimedEvent { offset: 0, event: Event::NoteOn { id: 1, note: 60, velocity: 100 } });
+                        }
+                        if index == held_blocks {
+                            events.push(TimedEvent { offset: 0, event: Event::NoteOff { id: 1, note: 60 } });
+                        }
+                        bus.l[..block].fill(0.0);
+                        bus.r[..block].fill(0.0);
+                        let ctx = ProcessContext {
+                            sample_rate: sr,
+                            frames: block,
+                            playing: true,
+                            bpm: 120.0,
+                            position_ticks: 0.0,
+                            position_frames: (index * block) as u64,
+                        };
+                        let start = Instant::now();
+                        device.process(&ctx, &mut bus, &events, None);
+                        let spent = start.elapsed().as_secs_f64() * 1.0e6;
+                        std::hint::black_box(&bus);
+                        *slot = slot.min(spent);
+                    }
+                }
+            }
+        }
+        BEFORE_MOO264.with(|flag| flag.set(false));
+        println!("us per 128-frame block, fastest of {reps} passes, mean over {blocks} blocks (ML-P8 at Unison X8)");
+        println!("{:<22} {:>9} {:>9} {:>7}", "device", "before", "now", "saved");
+        for (d, name) in names.iter().enumerate() {
+            let mean = |path: usize| fastest[d][path].iter().sum::<f64>() / blocks as f64;
+            let (old, new) = (mean(0), mean(1));
+            println!("{name:<22} {old:>9.1} {new:>9.1} {:>6.1}%", 100.0 * (old - new) / old);
         }
     }
 }
