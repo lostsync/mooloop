@@ -2395,8 +2395,8 @@ land on its own when it starts to matter:
   opened, which is how a scan that finished after startup shows up), one row
   per plugin with its vendor, filtered like the presets by name, vendor or
   what the row says. A plugin that cannot go in a chain is greyed with the
-  reason: an effect that is not stereo in and stereo out, or one the
-  factory could not create; so is each
+  reason: an effect whose ports are not one input and one output of one or
+  two channels, or one the factory could not create; so is each
   file that failed to scan, with why. A double-click, Enter or a drop puts
   the plugin in the chain: a drop before the join it lands on, otherwise
   before the join the menu was opened from, otherwise after the selected
@@ -2429,9 +2429,13 @@ land on its own when it starts to matter:
   rereading the cache when a scan rewrites it. It loads the plugin with its
   saved state and activates it at the engine's rate. On the next pump tick it
   swaps the plugin's processor into the device, which played as a
-  pass-through until then. Only a plugin with one stereo input and one stereo
-  output is hosted. Anything else is refused as incompatible, and so is a
-  sidechain. The plugin is heard live, and **it is in an export**: the export
+  pass-through until then. A plugin with one input and one output, each
+  mono or stereo, is hosted. As of 2026-09-26 (MOO-266) a **mono effect
+  runs**, like a TRS cable into a TS jack, with no setting: a mono input
+  hears the chain as `(L + R) / 2`, so a centred signal passes at unity and
+  a hard-panned one comes through 6 dB down, and a mono output is copied to
+  both sides. The dry path and wet/dry stay stereo. Anything else is
+  refused as incompatible, and so is a sidechain. The plugin is heard live, and **it is in an export**: the export
   renders with second instances opened from the live ones' state. A plugin
   that reports an error or a non-finite sample, or panics, is passed through
   from that block on. A song whose plugin is **missing** opens, plays that

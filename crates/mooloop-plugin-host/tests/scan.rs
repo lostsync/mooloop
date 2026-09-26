@@ -119,19 +119,14 @@ fn a_crashing_or_hanging_plugin_costs_one_child_and_is_never_relaunched() {
 
     assert_eq!(summary.candidates, 5, "{summary:?}");
     assert_eq!(summary.launched, 5, "{summary:?}");
-    assert_eq!(summary.plugins, 4, "{summary:?}");
+    assert_eq!(summary.plugins, test_plugin::PLUGIN_IDS.len(), "{summary:?}");
     assert_eq!(summary.failed, 4, "{summary:?}");
     // The hang is cut off at the timeout rather than waited out.
     assert!(took < TIMEOUT * 3, "the scan took {took:?}");
 
     let mut ids: Vec<&str> = cache.plugins().map(|p| p.plugin.id.as_str()).collect();
     ids.sort_unstable();
-    let mut expected = vec![
-        test_plugin::GAIN_ID,
-        test_plugin::GAIN_GUI_ID,
-        test_plugin::SINE_ID,
-        test_plugin::SINE_GUI_ID,
-    ];
+    let mut expected = test_plugin::PLUGIN_IDS.to_vec();
     expected.sort_unstable();
     assert_eq!(ids, expected);
     assert!(cache.plugins().all(|p| p.path == canonical(&good)));

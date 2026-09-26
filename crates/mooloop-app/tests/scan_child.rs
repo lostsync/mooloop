@@ -80,15 +80,9 @@ fn the_shipped_binary_scans_a_plugin_and_touches_nothing_else() {
     };
     let mut ids: Vec<&str> = plugins.iter().map(|p| p.plugin.id.as_str()).collect();
     ids.sort_unstable();
-    assert_eq!(
-        ids,
-        [
-            mooloop_test_plugin::GAIN_ID,
-            mooloop_test_plugin::GAIN_GUI_ID,
-            mooloop_test_plugin::SINE_ID,
-            mooloop_test_plugin::SINE_GUI_ID,
-        ]
-    );
+    let mut expected = mooloop_test_plugin::PLUGIN_IDS.to_vec();
+    expected.sort_unstable();
+    assert_eq!(ids, expected);
 }
 
 /// A file that is not a plugin is a report of a failure, not a crash.

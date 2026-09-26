@@ -704,3 +704,19 @@ In the order worth playing:
     scripts/antibox --no-incremental cargo test -p mooloop-engine --lib -- \
       a_range_holds_the_reverb_from_before_it a_note_held_into_a_range
     ```
+29. **A mono CLAP effect in a chain** (MOO-266). A mono effect now runs:
+    the chain reaches it as `(L + R) / 2` and its output goes to both sides,
+    so a centred sound should come out at the level it went in, not twice
+    as loud, and a hard-panned one 6 dB down on both sides. In the app, open
+    the browser's PLUGINS tab: LSP's `_mono` plugins are no longer greyed.
+    Put `Filter Mono` on a centred drum loop with the filter open, and A/B it
+    against bypass: the level should not move. Then the same with the loop
+    panned hard left. The offline case is step 06's binary with a mono id:
+
+    ```sh
+    bin/clap_effect_case --plugin /usr/lib64/clap/lsp-plugins.clap \
+      --id in.lsp-plug.filter_mono --out clap-case-mono
+    ```
+
+    The measured version is
+    `scripts/antibox --no-incremental cargo test -p mooloop-engine --lib -- plugin_mono`.

@@ -1321,6 +1321,33 @@ also pins that the held note is not struck again). Both fail by a
 full-crest step (0.177 against a bound of 0.007) with the hold switched off.
 The dsp side is `hosted_source::tests`.
 
+## Found after step 10: mono effects (MOO-266, 2026-09-26)
+
+Adam found mono plugins greyed out in the browser: `effect_refusal` took
+only `[2]` in and `[2]` out. **A chain now takes one input and one output
+of one or two channels each**, in any mix, with no setting, like a TRS
+cable into a TS jack (Adam leaned toward summing; the issue records it):
+
+- A mono input is fed **`(L + R) / 2`**, the sum at -6 dB, in
+  `ClapProcessor::process`. A centred signal passes at unity and a source
+  panned hard to one side comes through 6 dB down. `(L + R) * 0.707` keeps
+  the power of uncorrelated material but raises a centred signal by 3 dB,
+  the "twice as loud" direction Adam wanted to avoid.
+- A mono output is copied to both sides, as a mono instrument's already
+  was.
+- The slot's dry path and wet/dry blend stay stereo; only the plugin's
+  own signal is mono.
+- A plugin with neither role and a mono input is an effect, as one with a
+  stereo input was. Anything else (a sidechain's second input, a surround
+  output) is refused naming its ports.
+
+The test plugin gained the gain in three layouts (`GAIN_MONO_ID`,
+`GAIN_MONO_IN_ID`, `GAIN_MONO_OUT_ID`) and a `PLUGIN_IDS` list the scan
+tests read. Pinned by `plugin_mono_tests` in `mooloop-engine` (a centred
+signal at unity, hard left at -6.02 dB on both sides, each mixed layout,
+and a centred drum loop through the mono gain in a chain unchanged) and by
+`scan.rs`'s place-rule test.
+
 ## Step 08, recorded 2026-09-24 (MOO-83)
 
 **What landed.** A plugin goes in a chain from the window. The join's menu
@@ -1407,7 +1434,7 @@ build today.
 These are kept from #10, plus one addition.
 
 - Multi-output instruments, sidechain inputs, and port layouts other than
-  stereo. (Sidechain waits for the typed-edge work `FOCUS.md` names.)
+  mono and stereo (mono effects arrived with MOO-266). (Sidechain waits for the typed-edge work `FOCUS.md` names.)
 - Note expression and MPE, and routing notes that a plugin generates.
 - Graph-wide plugin delay compensation beyond what the chain already does.
 - Crash isolation while processing.

@@ -113,18 +113,23 @@ pub struct ScannedPlugin {
 /// `instrument`), and ports cannot say it for it: vocoders, MIDI-triggered
 /// gates and tempo-synced effects take notes, and many instruments have a
 /// sidechain or audio input. So an effect is one that declares
-/// `audio-effect` -- or declares neither role and takes no notes -- with
-/// one stereo input and one stereo output, the one layout a chain wires. A
-/// note input is allowed and gets no notes: a chain carries none. A plugin
-/// that declares both roles may go in either place.
+/// `audio-effect` -- or declares neither role and has an audio input --
+/// with one input and one output of one or two channels each, the layouts a
+/// chain wires. A mono input is fed the chain's `(L + R) / 2` and a mono
+/// output goes to both sides, like a TRS cable into a TS jack, with no
+/// setting (MOO-266). A note input is allowed and gets no notes: a chain
+/// carries none. A plugin that declares both roles may go in either place.
 pub fn effect_refusal(features: &[String], audio_inputs: &[u32], audio_outputs: &[u32]) -> Option<String> {
     let has = |feature: &str| features.iter().any(|f| f == feature);
-    let effect = has("audio-effect") || (!has("instrument") && audio_inputs == [2]);
+    let effect = has("audio-effect") || (!has("instrument") && matches!(audio_inputs, [1] | [2]));
     if !effect {
         return Some("an instrument: it plays as a channel's source".into());
     }
-    if audio_inputs != [2] || audio_outputs != [2] {
-        return Some("not stereo in and stereo out".into());
+    if !matches!(audio_inputs, [1] | [2]) {
+        return Some(format!("its inputs are {audio_inputs:?}; one input of 1 or 2 channels is hosted"));
+    }
+    if !matches!(audio_outputs, [1] | [2]) {
+        return Some(format!("its outputs are {audio_outputs:?}; one output of 1 or 2 channels is hosted"));
     }
     None
 }
@@ -988,6 +993,12 @@ mod tests {
         assert_eq!(places(&plugin(&["instrument"], &[], &[2], 1)), (false, true));
         assert_eq!(places(&plugin(&["instrument"], &[2], &[2], 1)), (false, true));
         assert_eq!(places(&plugin(&["instrument"], &[], &[1], 1)), (false, true));
+        // Mono effects (MOO-266): every mix of one and two channels, by
+        // feature or by an input and no role.
+        for (ins, outs) in [([1], [1]), ([1], [2]), ([2], [1])] {
+            assert_eq!(places(&plugin(&["audio-effect"], &ins, &outs, 0)), (true, false));
+            assert_eq!(places(&plugin(&[], &ins, &outs, 0)), (true, false));
+        }
         // Both roles: either place.
         assert_eq!(places(&plugin(&["instrument", "audio-effect"], &[2], &[2], 1)), (true, true));
         // Neither role: a note input makes it an instrument, none an effect.
@@ -999,7 +1010,17 @@ mod tests {
         let multi_out = plugin(&["instrument"], &[], &[2, 2, 2], 1);
         assert!(multi_out.source_refusal().is_some_and(|why| why.contains("outputs")));
         let sidechained = plugin(&["audio-effect"], &[2, 2], &[2], 0);
-        assert_eq!(sidechained.effect_refusal().as_deref(), Some("not stereo in and stereo out"));
+        assert_eq!(
+            sidechained.effect_refusal().as_deref(),
+            Some("its inputs are [2, 2]; one input of 1 or 2 channels is hosted")
+        );
+        let surround = plugin(&["audio-effect"], &[2], &[6], 0);
+        assert_eq!(
+            surround.effect_refusal().as_deref(),
+            Some("its outputs are [6]; one output of 1 or 2 channels is hosted")
+        );
+        let generator = plugin(&["audio-effect"], &[], &[2], 0);
+        assert!(generator.effect_refusal().is_some_and(|why| why.contains("inputs are []")));
         let synth = plugin(&["instrument"], &[], &[2], 1);
         assert_eq!(synth.effect_refusal().as_deref(), Some("an instrument: it plays as a channel's source"));
         let failed = ScannedPlugin {

@@ -224,8 +224,11 @@ enum Notes {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Layout {
     /// Channels of the one audio input, or 0 for none. A source's input is
-    /// fed the source's bus, which the source clears: silence.
+    /// fed the source's bus, which the source clears: silence. A mono input
+    /// is fed `(L + R) / 2` (MOO-266).
     in_channels: u32,
+    /// Channels of the one audio output. A mono output is copied to both
+    /// sides.
     out_channels: u32,
     notes: Notes,
     effect: bool,
@@ -893,9 +896,19 @@ impl AudioNode for ClapProcessor {
         // The bus is the input: an effect's signal, or, as a channel's
         // source, the silence `HostedSource` cleared it to -- a source has
         // nothing upstream of it.
-        self.in_l[..frames].copy_from_slice(&bus.l[..frames]);
-        self.in_r[..frames].copy_from_slice(&bus.r[..frames]);
-        let input_peak = peak(&self.in_l[..frames]).max(peak(&self.in_r[..frames]));
+        let input_peak = peak(&bus.l[..frames]).max(peak(&bus.r[..frames]));
+        if self.layout.in_channels == 1 {
+            // A mono input hears the sum at -6 dB (MOO-266): a centred
+            // signal (L = R) passes at unity and a hard-panned one 6 dB
+            // down. The -3 dB sum would raise a centred signal by 3 dB.
+            let (left, right) = (&bus.l[..frames], &bus.r[..frames]);
+            for ((mono, &l), &r) in self.in_l[..frames].iter_mut().zip(left).zip(right) {
+                *mono = (l + r) * 0.5;
+            }
+        } else {
+            self.in_l[..frames].copy_from_slice(&bus.l[..frames]);
+            self.in_r[..frames].copy_from_slice(&bus.r[..frames]);
+        }
 
         // A route that was offsetting a parameter last block and names it no
         // more leaves the plugin's offset where it was, because CLAP's

@@ -2,12 +2,15 @@
 //!
 //! CI cannot install third-party plugins, so every plugin-hosting step's
 //! automated tests run against this one library. It exports one CLAP entry
-//! whose factory holds four plugins:
+//! whose factory holds seven plugins, [`PLUGIN_IDS`]:
 //!
 //! | id | what |
 //! | --- | --- |
 //! | [`GAIN_ID`] | stereo gain effect; `gain` (dB, modulatable), `latency` (stepped), `fail`, `nudge` (moves its own gain) |
 //! | [`GAIN_GUI_ID`] | the same, declaring the `gui` extension |
+//! | [`GAIN_MONO_ID`] | the gain with one mono input and one mono output (MOO-266) |
+//! | [`GAIN_MONO_IN_ID`] | the gain with a mono input and a stereo output: both outputs are the input |
+//! | [`GAIN_MONO_OUT_ID`] | the gain with a stereo input and a mono output: the output is the left input |
 //! | [`SINE_ID`] | one sine voice per note id, with a release tail |
 //! | [`SINE_GUI_ID`] | the same, declaring the `gui` extension |
 //!
@@ -54,6 +57,24 @@ pub const GAIN_GUI_ID: &str = "mooloop.test.gain.gui";
 pub const SINE_ID: &str = "mooloop.test.sine";
 /// The sine instrument, declaring the `gui` extension.
 pub const SINE_GUI_ID: &str = "mooloop.test.sine.gui";
+/// The gain, mono in and mono out (MOO-266).
+pub const GAIN_MONO_ID: &str = "mooloop.test.gain.mono";
+/// The gain, mono in and stereo out (MOO-266).
+pub const GAIN_MONO_IN_ID: &str = "mooloop.test.gain.mono-in";
+/// The gain, stereo in and mono out (MOO-266).
+pub const GAIN_MONO_OUT_ID: &str = "mooloop.test.gain.mono-out";
+
+/// Every plugin the factory lists, in its order: a test that checks what a
+/// scan found reads this rather than its own copy.
+pub const PLUGIN_IDS: [&str; 7] = [
+    GAIN_ID,
+    GAIN_GUI_ID,
+    SINE_ID,
+    SINE_GUI_ID,
+    GAIN_MONO_ID,
+    GAIN_MONO_IN_ID,
+    GAIN_MONO_OUT_ID,
+];
 
 /// A copy of this library whose file name ends in this aborts the process
 /// as its entry initialises.
@@ -96,12 +117,14 @@ impl Entry for TestEntry {
 }
 
 struct TestFactory {
-    descriptors: [PluginDescriptor; 4],
+    descriptors: [PluginDescriptor; PLUGIN_IDS.len()],
 }
 
 impl TestFactory {
     fn new() -> Self {
-        use clack_plugin::plugin::features::{AUDIO_EFFECT, INSTRUMENT, STEREO, SYNTHESIZER, UTILITY};
+        use clack_plugin::plugin::features::{
+            AUDIO_EFFECT, INSTRUMENT, MONO, STEREO, SYNTHESIZER, UTILITY,
+        };
 
         let version = env!("CARGO_PKG_VERSION");
         let describe = |id: &str, name: &str| {
@@ -117,6 +140,9 @@ impl TestFactory {
                 describe(SINE_ID, "Test Sine").with_features([INSTRUMENT, SYNTHESIZER, STEREO]),
                 describe(SINE_GUI_ID, "Test Sine (GUI)")
                     .with_features([INSTRUMENT, SYNTHESIZER, STEREO]),
+                describe(GAIN_MONO_ID, "Test Gain (mono)").with_features([AUDIO_EFFECT, UTILITY, MONO]),
+                describe(GAIN_MONO_IN_ID, "Test Gain (mono in)").with_features([AUDIO_EFFECT, UTILITY]),
+                describe(GAIN_MONO_OUT_ID, "Test Gain (mono out)").with_features([AUDIO_EFFECT, UTILITY]),
             ],
         }
     }
@@ -160,12 +186,25 @@ impl PluginFactoryImpl for TestFactory {
                 sine::SineShared::new,
                 sine::SineMain::new,
             ),
-            _ => PluginInstance::new::<sine::SinePlugin<true>>(
+            3 => PluginInstance::new::<sine::SinePlugin<true>>(
                 host_info,
                 descriptor,
                 sine::SineShared::new,
                 sine::SineMain::new,
             ),
+            _ => {
+                let (inputs, outputs) = match index {
+                    4 => (1, 1),
+                    5 => (1, 2),
+                    _ => (2, 1),
+                };
+                PluginInstance::new::<gain::GainPlugin<false>>(
+                    host_info,
+                    descriptor,
+                    move |host| gain::GainShared::with_ports(host, inputs, outputs),
+                    gain::GainMain::new,
+                )
+            }
         })
     }
 }

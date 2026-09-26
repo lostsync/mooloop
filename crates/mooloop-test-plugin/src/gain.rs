@@ -14,6 +14,10 @@
 //!   the host as a gesture (begin, value, end) at that frame -- what a
 //!   plugin's GUI does. Its id is above `i32::MAX` on purpose (MOO-82).
 //!
+//! The same gain comes in three mono layouts (MOO-266): mono in and out,
+//! mono in and stereo out (both outputs are the one input), and stereo in
+//! and mono out (the output is the left input, the right is ignored).
+//!
 //! The gain also takes CLAP parameter modulation: a `ParamMod` on `gain` is
 //! an offset in dB over the gain's value, clamped with it into the range,
 //! and it holds until the next one. `get_value` reports the value without it.
@@ -101,10 +105,21 @@ pub struct GainShared<'a> {
     active: AtomicBool,
     /// The latency step the running processor was built with.
     active_latency_step: AtomicU32,
+    /// Channels of the one input port and of the one output port.
+    ports: [u32; 2],
 }
 
 impl<'a> GainShared<'a> {
     pub(crate) fn new(host: HostSharedHandle<'a>) -> Result<Self, PluginError> {
+        Self::with_ports(host, 2, 2)
+    }
+
+    /// The gain with `inputs` channels in and `outputs` out, each 1 or 2.
+    pub(crate) fn with_ports(
+        host: HostSharedHandle<'a>,
+        inputs: u32,
+        outputs: u32,
+    ) -> Result<Self, PluginError> {
         Ok(Self {
             services: HostServices::new(host),
             gain_db: AtomicF64::new(GAIN_DB_DEFAULT),
@@ -115,6 +130,7 @@ impl<'a> GainShared<'a> {
             fail: AtomicBool::new(false),
             active: AtomicBool::new(false),
             active_latency_step: AtomicU32::new(0),
+            ports: [inputs, outputs],
         })
     }
 
@@ -276,15 +292,28 @@ impl<'a> PluginAudioProcessor<'a, GainShared<'a>, GainMain<'a>> for GainProcesso
             .into_f32()
             .ok_or(PluginError::Message("gain: expected f32 buffers"))?;
 
+        // An output with no input beside it (the mono-in layout's right)
+        // is the first input; an input with no output (the mono-out
+        // layout's right) is not heard. Ports of unequal widths are never
+        // in place, so the first input is always an `InputOutput`'s.
         let mut buffers: [Option<&mut [f32]>; 2] = [None, None];
+        let mut first_input: Option<&[f32]> = None;
         for (pair, slot) in channels.iter_mut().zip(buffers.iter_mut()) {
             *slot = match pair {
                 ChannelPair::InPlace(buffer) => Some(buffer),
                 ChannelPair::InputOutput(input, output) => {
                     output.copy_from_slice(input);
+                    first_input.get_or_insert(input);
                     Some(output)
                 }
-                ChannelPair::InputOnly(_) | ChannelPair::OutputOnly(_) => None,
+                ChannelPair::OutputOnly(output) => {
+                    match first_input {
+                        Some(input) => output.copy_from_slice(input),
+                        None => output.fill(0.0),
+                    }
+                    Some(output)
+                }
+                ChannelPair::InputOnly(_) => None,
             };
         }
 
@@ -328,15 +357,21 @@ impl PluginAudioPortsImpl for GainMain<'_> {
         1
     }
 
-    fn get(&self, index: u32, _is_input: bool, writer: &mut AudioPortInfoWriter) {
+    fn get(&self, index: u32, is_input: bool, writer: &mut AudioPortInfoWriter) {
         if index == 0 {
+            let [inputs, outputs] = self.shared.ports;
+            let channel_count = if is_input { inputs } else { outputs };
             writer.set(&AudioPortInfo {
                 id: ClapId::new(0),
                 name: b"main",
-                channel_count: 2,
+                channel_count,
                 flags: AudioPortFlags::IS_MAIN,
-                port_type: Some(AudioPortType::STEREO),
-                in_place_pair: Some(ClapId::new(0)),
+                port_type: Some(if channel_count == 1 {
+                    AudioPortType::MONO
+                } else {
+                    AudioPortType::STEREO
+                }),
+                in_place_pair: (inputs == outputs).then(|| ClapId::new(0)),
             });
         }
     }

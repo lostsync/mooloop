@@ -198,6 +198,8 @@ mod output_guard_tests;
 #[cfg(test)]
 mod plugin_host_tests;
 #[cfg(test)]
+mod plugin_mono_tests;
+#[cfg(test)]
 mod plugin_automation_tests;
 #[cfg(test)]
 mod plugin_source_tests;

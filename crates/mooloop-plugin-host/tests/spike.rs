@@ -154,10 +154,7 @@ fn one_the_gain_loads_describes_itself_and_runs_any_block_size() {
         .plugin_descriptors()
         .filter_map(|d| d.id().map(|id| id.to_string_lossy().into_owned()))
         .collect();
-    assert_eq!(
-        ids,
-        [test_plugin::GAIN_ID, test_plugin::GAIN_GUI_ID, test_plugin::SINE_ID, test_plugin::SINE_GUI_ID]
-    );
+    assert_eq!(ids, test_plugin::PLUGIN_IDS);
     let gain = factory
         .plugin_descriptors()
         .find(|d| d.id().is_some_and(|id| id.to_bytes() == test_plugin::GAIN_ID.as_bytes()))
