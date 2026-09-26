@@ -96,7 +96,16 @@ pub enum DeviceKind {
 }
 
 impl DeviceKind {
-    /// The name this device wears in the interface.
+    /// The short name this device wears in the interface: its model number
+    /// where it has one ("DS-SX", "ML-M1"), otherwise its plain name
+    /// ("Sampler", "Aux In"). This is the form used where room is tight --
+    /// new channel names, the automation and MIDI lists, a folded device --
+    /// and [`Self::title`] is the form used where there is room.
+    ///
+    /// `DrumSynth` read "Drum Synth" until 2026-09-26, when it was given a
+    /// model number of its own (see [`Self::nickname`] for the ruling).
+    /// Channels already saved as "Drum Synth 1" keep that name: a channel's
+    /// name is the user's text once it exists, and is never re-derived.
     ///
     /// These are product names, not on-disk identifiers -- `kind_slug` in
     /// `mooloop-ui`'s settings is the frozen thing, and `serde`'s renames
@@ -112,7 +121,7 @@ impl DeviceKind {
     pub fn label(self) -> &'static str {
         match self {
             Self::Sampler => "Sampler",
-            Self::DrumSynth => "Drum Synth",
+            Self::DrumSynth => "DS-SX",
             Self::MonoSynth => "Mono Synth",
             Self::PolySynth => "Poly Synth",
             Self::MlM1 => "ML-M1",
@@ -120,6 +129,52 @@ impl DeviceKind {
             Self::Ds01 => "DS-01",
             Self::AuxIn => "Aux In",
             Self::Plugin => "Plugin",
+        }
+    }
+
+    /// The device's own name, where it has one: the word that goes in front
+    /// of its model number in [`Self::title`].
+    ///
+    /// Adam's ruling, 2026-09-26, in his words: the names are *"Munotone
+    /// ML-M1, Polyneight ML-P8, Dominic DS-01"*; and of the v1 Drum Synth,
+    /// *"it's the easy sub kick machine - let's be nerds and name it the
+    /// Gitdum DS-SX - layers of word play there lol"*. Where each form
+    /// shows: **both where there's room, the model number where it's
+    /// tight**. The Add menu, source picker, preset browser and device
+    /// header read [`Self::title`]; new channel names, the automation and
+    /// MIDI lists and a folded device read [`Self::label`].
+    ///
+    /// The Sampler, the retired Mono and Poly Synths, Aux In and Plugin have
+    /// no nickname: their plain name is already their whole name.
+    ///
+    /// Like [`Self::label`], a product name and not an on-disk identifier.
+    pub fn nickname(self) -> Option<&'static str> {
+        match self {
+            Self::DrumSynth => Some("Gitdum"),
+            Self::MlM1 => Some("Munotone"),
+            Self::MlP8 => Some("Polyneight"),
+            Self::Ds01 => Some("Dominic"),
+            Self::Sampler | Self::MonoSynth | Self::PolySynth | Self::AuxIn | Self::Plugin => None,
+        }
+    }
+
+    /// The device's full name: its [`Self::nickname`] and its model number
+    /// together ("Munotone ML-M1") where it has both, otherwise the same
+    /// string as [`Self::label`]. The form used where there is room; see
+    /// [`Self::nickname`] for Adam's 2026-09-26 ruling on which form shows
+    /// where.
+    ///
+    /// Written out rather than formatted so it stays `&'static str`; the
+    /// unit test holds each one to the nickname, a space and the label.
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::DrumSynth => "Gitdum DS-SX",
+            Self::MlM1 => "Munotone ML-M1",
+            Self::MlP8 => "Polyneight ML-P8",
+            Self::Ds01 => "Dominic DS-01",
+            Self::Sampler | Self::MonoSynth | Self::PolySynth | Self::AuxIn | Self::Plugin => {
+                self.label()
+            }
         }
     }
 
@@ -136,6 +191,26 @@ impl DeviceKind {
     /// [`Self::label`] is what stops it recurring.
     pub fn default_channel_name(self, index: usize) -> String {
         format!("{} {}", self.label(), index + 1)
+    }
+
+    /// Whether `name` is a name this kind gave a channel at `index` without
+    /// anybody typing it: today's [`Self::default_channel_name`], or the one
+    /// it gave before a rename of [`Self::label`].
+    ///
+    /// The one rename so far is the Drum Synth's, 2026-09-26: a song saved
+    /// before it has channels called "Drum Synth 3" that nobody chose. They
+    /// keep that name on load, since a stored name is never re-derived, but a
+    /// source change asks this question to decide whether the name follows
+    /// the device, and "Drum Synth 3" should follow it as "DS-SX 3" would.
+    pub fn is_default_channel_name(self, name: &str, index: usize) -> bool {
+        if name == self.default_channel_name(index) {
+            return true;
+        }
+        let former = match self {
+            Self::DrumSynth => "Drum Synth",
+            _ => return false,
+        };
+        name == format!("{former} {}", index + 1)
     }
 }
 
@@ -261,20 +336,31 @@ mod tests {
 
     /// Every kind's interface name, listed rather than derived, so a ninth
     /// device cannot be added without someone writing down what it is called.
+    ///
+    /// The table is Adam's 2026-09-26 ruling (see `DeviceKind::nickname`).
     #[test]
     fn every_kind_has_an_interface_name() {
-        for (kind, label) in [
-            (DeviceKind::Sampler, "Sampler"),
-            (DeviceKind::DrumSynth, "Drum Synth"),
-            (DeviceKind::MonoSynth, "Mono Synth"),
-            (DeviceKind::PolySynth, "Poly Synth"),
-            (DeviceKind::MlM1, "ML-M1"),
-            (DeviceKind::MlP8, "ML-P8"),
-            (DeviceKind::Ds01, "DS-01"),
-            (DeviceKind::AuxIn, "Aux In"),
-            (DeviceKind::Plugin, "Plugin"),
+        for (kind, label, nickname, title) in [
+            (DeviceKind::Sampler, "Sampler", None, "Sampler"),
+            (DeviceKind::DrumSynth, "DS-SX", Some("Gitdum"), "Gitdum DS-SX"),
+            (DeviceKind::MonoSynth, "Mono Synth", None, "Mono Synth"),
+            (DeviceKind::PolySynth, "Poly Synth", None, "Poly Synth"),
+            (DeviceKind::MlM1, "ML-M1", Some("Munotone"), "Munotone ML-M1"),
+            (DeviceKind::MlP8, "ML-P8", Some("Polyneight"), "Polyneight ML-P8"),
+            (DeviceKind::Ds01, "DS-01", Some("Dominic"), "Dominic DS-01"),
+            (DeviceKind::AuxIn, "Aux In", None, "Aux In"),
+            (DeviceKind::Plugin, "Plugin", None, "Plugin"),
         ] {
-            assert_eq!(kind.label(), label);
+            assert_eq!(kind.label(), label, "{kind:?} label");
+            assert_eq!(kind.nickname(), nickname, "{kind:?} nickname");
+            assert_eq!(kind.title(), title, "{kind:?} title");
+            // The written-out title is the nickname and the label, never a
+            // third spelling that drifts from either.
+            let derived = match kind.nickname() {
+                Some(n) => format!("{n} {}", kind.label()),
+                None => kind.label().to_owned(),
+            };
+            assert_eq!(kind.title(), derived, "{kind:?} title agrees");
         }
     }
 
@@ -283,8 +369,20 @@ mod tests {
     /// the two drifted copies did not have.
     #[test]
     fn a_default_channel_name_is_its_label_and_its_slot() {
-        assert_eq!(DeviceKind::DrumSynth.default_channel_name(0), "Drum Synth 1");
+        assert_eq!(DeviceKind::DrumSynth.default_channel_name(0), "DS-SX 1");
         assert_eq!(DeviceKind::MlP8.default_channel_name(7), "ML-P8 8");
+    }
+
+    /// A name the Drum Synth gave a channel before it became the DS-SX is
+    /// still one nobody typed -- in its own slot only, and for that kind only.
+    #[test]
+    fn a_default_name_from_before_the_drum_synth_rename_is_still_a_default() {
+        assert!(DeviceKind::DrumSynth.is_default_channel_name("DS-SX 3", 2));
+        assert!(DeviceKind::DrumSynth.is_default_channel_name("Drum Synth 3", 2));
+        assert!(!DeviceKind::DrumSynth.is_default_channel_name("Drum Synth 3", 0));
+        assert!(!DeviceKind::DrumSynth.is_default_channel_name("Kick", 2));
+        assert!(!DeviceKind::Ds01.is_default_channel_name("Drum Synth 3", 2));
+        assert!(DeviceKind::Ds01.is_default_channel_name("DS-01 3", 2));
     }
 
     /// Nothing soloed silences nothing, which is the case that has to cost

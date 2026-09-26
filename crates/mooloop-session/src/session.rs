@@ -519,7 +519,11 @@ impl Session {
         // The colour is not consulted for the same reason it is not reset
         // below: it was chosen or it was not, and a source change is not a
         // statement about either.
-        let named_by_user = channel.name != channel.kind().default_channel_name(index);
+        //
+        // "Still a default" includes one given before a device's label was
+        // renamed (the Drum Synth's "Drum Synth 3", 2026-09-26): nobody typed
+        // that either.
+        let named_by_user = !channel.kind().is_default_channel_name(&channel.name, index);
         if !named_by_user {
             channel.name = kind.default_channel_name(index);
         }

@@ -261,6 +261,21 @@ mod tests {
         assert_eq!(session.channels[0].name, DeviceKind::Ds01.default_channel_name(0));
     }
 
+    /// A song saved before the Drum Synth became the DS-SX (2026-09-26) has
+    /// channels called "Drum Synth 1" that nobody named. The name stays as
+    /// saved, but it is still a default, so a source change moves it on.
+    #[test]
+    fn a_drum_synth_default_from_before_its_rename_still_follows_its_device() {
+        let mut session = Session::default();
+        session.select_channel(0);
+        session.change_selected_source(DeviceKind::DrumSynth);
+        session.channels[0].name = "Drum Synth 1".into();
+
+        session.change_selected_source(DeviceKind::Ds01);
+
+        assert_eq!(session.channels[0].name, DeviceKind::Ds01.default_channel_name(0));
+    }
+
     /// A colour is content the same way a name is, and it is content the
     /// channel keeps: a source change is not a statement about it either.
     #[test]

@@ -108,7 +108,7 @@ Three of the eight tags were chosen rather than inherited from serde's
 | Generator | `source.type` |
 | --- | --- |
 | Sampler | `sampler` |
-| v1 drum synth | `drum_synth` |
+| v1 drum synth (the Gitdum DS-SX since 2026-09-26) | `drum_synth` — the interface name changed and the tag did not; a channel saved as "Drum Synth 1" keeps that name |
 | v1 mono synth | `mono_synth` |
 | v1 poly synth | `poly_synth` |
 | ML-M1 | `ml1` — the device shipped under the wrong name and the tag is an on-disk identifier, so it was frozen rather than corrected |

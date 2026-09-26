@@ -3505,6 +3505,36 @@ mod tests {
         );
     }
 
+    /// The Drum Synth became the DS-SX on 2026-09-26 in the interface only.
+    /// A song saved before then, with a channel it named "Drum Synth 1", loads
+    /// with that name and that tag, and saves back to the same bytes: a
+    /// device's label is not an on-disk identifier, and a stored channel
+    /// name is never re-derived from it.
+    #[test]
+    fn a_drum_synth_channel_named_before_the_rename_round_trips_untouched() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("before-ds-sx.mooloop");
+        let mut project = Project::starter_kit();
+        let drum = 0;
+        project.channels[drum].setup = ChannelSetup::drum_synth("Drum Synth 1");
+        assert_eq!(project.channels[drum].setup.kind(), DeviceKind::DrumSynth);
+
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+        let first = fs::read(&bundle).unwrap();
+        let manifest = String::from_utf8(first.clone()).unwrap();
+        assert!(manifest.contains("name = \"Drum Synth 1\""));
+        assert!(manifest.contains("type = \"drum_synth\""));
+        assert!(!manifest.contains("DS-SX"), "the new label leaked into the file");
+
+        let LoadedDocument::Song(loaded) = load_bundle(&bundle).unwrap().document else {
+            panic!("expected song")
+        };
+        assert_eq!(loaded.channels[drum].setup.channel.name, "Drum Synth 1");
+        assert_eq!(loaded, project);
+        save_song(&bundle, &loaded, AssetMode::Embedded).unwrap();
+        assert_eq!(fs::read(&bundle).unwrap(), first, "a load and save changed the bytes");
+    }
+
     #[test]
     fn legacy_sampler_source_shape_remains_loadable() {
         let temp = tempdir().unwrap();
