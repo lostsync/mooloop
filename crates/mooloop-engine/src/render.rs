@@ -17974,7 +17974,10 @@ mod footprint {
         // existing padding), so a sample resolves only the routed ones rather
         // than testing all fifteen for a route. That took about 16 µs a block
         // off Cold Metal at Unison X8, bit for bit.
-        assert_eq!(size_of::<MlP8>(), 7_488);
+        //
+        // Grew by 16 with MOO-245: the finishing chorus's Modulation block
+        // gained a Width parameter and its smoother.
+        assert_eq!(size_of::<MlP8>(), 7_504);
         // DS-01 is 6,832, and almost all of it is the eight-voice pool: a
         // voice carries six tone oscillators for its partial bank, an FM
         // modulator, four noise generators' worth of state, a state-variable
@@ -18198,7 +18201,9 @@ mod footprint {
         //
         // And by 448 for MOO-255: ML-P8's per-voice network controls, the
         // widest source now 7,488.
-        assert_eq!(per_live, 143_336);
+        //
+        // And by 16 for MOO-245: the chorus's Width, 7,504.
+        assert_eq!(per_live, 143_352);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
