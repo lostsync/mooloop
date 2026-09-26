@@ -3112,6 +3112,8 @@ dependencies = [
  "mooloop-project",
  "mooloop-test-plugin",
  "mp3lame-encoder",
+ "objc2-core-audio",
+ "objc2-core-foundation",
  "rtrb",
  "tempfile",
  "toml",

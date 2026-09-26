@@ -28,6 +28,12 @@ jack = { workspace = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 cpal = { workspace = true }
 midir = { workspace = true }
+# The HAL property reads cpal does not expose: the output and input devices'
+# latency, safety offset, buffer and stream latency (MOO-237). Both are crates
+# cpal is built on, asked for with features cpal already enables, so they add
+# no package to the lock.
+objc2-core-audio = { version = "0.3", default-features = false, features = ["std", "AudioHardware"] }
+objc2-core-foundation = "0.3.1"
 
 # Only to ask the callback thread whether the realtime scheduling its driver
 # requested on its behalf was actually granted: `sched_getscheduler` on Linux,

@@ -810,8 +810,13 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   A recorded note is stamped earlier by the driver's playback latency, so it
   lands where the player heard the song rather than where the engine was
   rendering it (MOO-209, 2026-09-25): JACK's reported playback latency on the
-  output port, or one output buffer on Core Audio (an undercount that leaves
-  out the device's own latency; open: MOO-237), read again once a second.
+  output port, or on Core Audio the output device's latency, safety offset,
+  IO buffer and stream latency as the HAL reports them, summed (one output
+  buffer if any of those reads fails; MOO-237, 2026-09-26), read again once
+  a second. Core Audio's number is logged each time an output stream opens
+  (`output latency on ...` in the diagnostic log). Its input latency, which
+  starts an audio take late, adds the input device's latency, safety offset
+  and stream latency the same way.
   With no device nothing moves. In pattern mode a note pulled before the
   pattern's top folds into the end of the pass before; in song mode one
   pulled off the front of a placement, where no placement of the pattern

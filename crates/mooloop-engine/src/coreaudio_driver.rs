@@ -45,7 +45,9 @@ use mooloop_core::{MidiPortId, MidiPortInfo};
 use mooloop_dsp::MAX_BLOCK_SIZE;
 use rtrb::{Consumer, Producer, RingBuffer};
 
-use crate::driver::{AudioConfig, OutputTarget};
+use crate::driver::{
+    coreaudio_input_latency, coreaudio_playback_latency, AudioConfig, DeviceLatency, OutputTarget,
+};
 use crate::executor::Executor;
 use crate::handoff::{Held, Parked};
 use crate::Error;
@@ -653,36 +655,48 @@ impl CoreAudioDriver {
         lock(&self.state).input_name.clone()
     }
 
-    /// An estimate, where JACK's is a measurement.
-    ///
-    /// JACK asks the server for the capture and playback latencies it actually
-    /// knows. cpal reports neither, and the two streams are not even on one
-    /// clock, so what can honestly be said is the path through this driver: a
-    /// buffer out, the ring's prefill, and a buffer in. A take from the input
-    /// is started that much after its bar line, so it is right to within the
-    /// device's own converter delay rather than to the sample.
+    /// The round trip a take from the input is started late by: the whole
+    /// playback latency ([`Self::playback_latency_frames`]), the input
+    /// device's own latency, safety offset and stream latency as the HAL
+    /// reports them, and the path through this driver's ring, a buffer in and
+    /// the prefill (MOO-237). The two streams are not on one clock, so this
+    /// is what the devices say rather than a measurement of the loop. 0 with
+    /// no input stream.
     pub(crate) fn input_latency_frames(&self) -> u32 {
-        let state = lock(&self.state);
-        if state.input_stream.is_none() {
-            return 0;
-        }
-        let output = state
-            .stream
-            .as_ref()
-            .and_then(|stream| stream.buffer_size().ok())
-            .unwrap_or(state.input_buffer);
-        output + state.input_buffer * (INPUT_PREFILL_BUFFERS as u32 + 1)
+        let (route, output_buffer, input_buffer) = {
+            let state = lock(&self.state);
+            if state.input_stream.is_none() {
+                return 0;
+            }
+            let output_buffer = state
+                .stream
+                .as_ref()
+                .and_then(|stream| stream.buffer_size().ok())
+                .unwrap_or(state.input_buffer);
+            (state.route.clone(), output_buffer, state.input_buffer)
+        };
+        let playback = coreaudio_playback_latency(output_latency(&route), output_buffer);
+        let input = hal::device(hal::Direction::Input, None)
+            .and_then(|device| hal::latency(device, hal::Direction::Input));
+        coreaudio_input_latency(playback, input, input_buffer, INPUT_PREFILL_BUFFERS as u32)
     }
 
-    /// An estimate, like [`Self::input_latency_frames`]: one output buffer,
-    /// the part of the path this driver can see. Recorded MIDI is stamped
-    /// this much earlier (MOO-209). 0 with no output stream.
-    ///
-    /// It undercounts: the device's own latency, its safety offset and the
-    /// stream's latency are HAL properties this cpal-based driver does not
-    /// read yet (open: MOO-237).
+    /// The output device's latency as the HAL reports it: its own latency,
+    /// safety offset, IO buffer and stream latency, summed (MOO-237).
+    /// Recorded MIDI is stamped this much earlier (MOO-209). Read afresh on
+    /// each call, a handful of property reads, so a stream following the
+    /// system default follows it here too. When a read fails, one buffer of
+    /// the running stream, the estimate this replaced. 0 with no output
+    /// stream.
     pub(crate) fn playback_latency_frames(&self) -> u32 {
-        self.buffer_size()
+        let (route, stream_buffer) = {
+            let state = lock(&self.state);
+            let Some(stream) = state.stream.as_ref() else {
+                return 0;
+            };
+            (state.route.clone(), stream.buffer_size().unwrap_or(0))
+        };
+        coreaudio_playback_latency(output_latency(&route), stream_buffer)
     }
 
     /// Frames of input read as silence, and frames of input dropped, since the
@@ -1035,10 +1049,55 @@ impl CoreAudioDriver {
             self.shared.lost.store(true, Ordering::Relaxed);
             return Err(format!("could not start {:?}: {e}", route.device));
         }
+        let stream_buffer = stream.buffer_size().unwrap_or(0);
         state.stream = Some(stream);
         state.route = route.clone();
         state.buffer_size = buffer_size;
+        log_output_latency(route, stream_buffer, self.sample_rate);
         Ok(())
+    }
+}
+
+/// The HAL's latency for the output device `route` plays through: the
+/// system default's when it names the default, else the device its UID
+/// names. `None` when the device or any of the four properties could not be
+/// read.
+fn output_latency(route: &Route) -> Option<DeviceLatency> {
+    let uid = if route.device == SYSTEM_DEFAULT {
+        None
+    } else {
+        Some(route.device.parse::<cpal::DeviceId>().ok()?.id().to_owned())
+    };
+    let device = hal::device(hal::Direction::Output, uid.as_deref())?;
+    hal::latency(device, hal::Direction::Output)
+}
+
+/// Say what the output latency is each time a stream opens, so the number
+/// recorded MIDI is shifted by (MOO-209) can be held against what Audio MIDI
+/// Setup or a HAL listing says for the same device (MOO-237).
+fn log_output_latency(route: &Route, stream_buffer: u32, sample_rate: u32) {
+    let ms = |frames: u32| f64::from(frames) * 1000.0 / f64::from(sample_rate.max(1));
+    match output_latency(route) {
+        Some(hal) => mooloop_core::log_info!(
+            "audio",
+            "output latency on {:?}: {} frames ({:.1} ms) = device {} + safety offset {} + \
+             buffer {} + stream {}",
+            route.device,
+            hal.frames(),
+            ms(hal.frames()),
+            hal.device,
+            hal.safety_offset,
+            hal.buffer,
+            hal.stream
+        ),
+        None => mooloop_core::log_info!(
+            "audio",
+            "output latency on {:?}: the HAL would not say; counting one buffer, {} frames \
+             ({:.1} ms)",
+            route.device,
+            stream_buffer,
+            ms(stream_buffer)
+        ),
     }
 }
 
@@ -1196,6 +1255,189 @@ fn error_callback(shared: Arc<Shared>) -> impl FnMut(cpal::Error) + Send + 'stat
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Core Audio's own account of one direction of a device, read from the HAL:
+/// the four properties whose sum is the device's latency (MOO-237). Read on
+/// the control thread, a handful of property reads, whenever a latency is
+/// asked for, so a stream that follows the system default follows it here
+/// too.
+mod hal {
+    use std::ffi::c_void;
+    use std::mem::size_of;
+    use std::ptr::{null, NonNull};
+
+    use objc2_core_audio::{
+        kAudioDevicePropertyBufferFrameSize, kAudioDevicePropertyLatency,
+        kAudioDevicePropertySafetyOffset, kAudioDevicePropertyStreams,
+        kAudioHardwarePropertyDefaultInputDevice, kAudioHardwarePropertyDefaultOutputDevice,
+        kAudioHardwarePropertyTranslateUIDToDevice, kAudioObjectPropertyElementMain,
+        kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyScopeInput,
+        kAudioObjectPropertyScopeOutput, kAudioObjectSystemObject, kAudioStreamPropertyLatency,
+        AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize, AudioObjectID,
+        AudioObjectPropertyAddress, AudioObjectPropertyScope, AudioObjectPropertySelector,
+    };
+    use objc2_core_foundation::CFString;
+
+    use crate::driver::DeviceLatency;
+
+    /// `kAudioObjectUnknown`: what a lookup that found nothing answers.
+    const UNKNOWN: AudioObjectID = 0;
+
+    fn address(
+        selector: AudioObjectPropertySelector,
+        scope: AudioObjectPropertyScope,
+    ) -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress {
+            mSelector: selector,
+            mScope: scope,
+            mElement: kAudioObjectPropertyElementMain,
+        }
+    }
+
+    /// The first of `device`'s streams in `scope`: an AudioStreamID, which
+    /// is an AudioObjectID. The list is read whole, sized first, rather than
+    /// trusting the HAL to truncate a list into a one-element buffer.
+    fn first_stream(device: AudioObjectID, scope: AudioObjectPropertyScope) -> Option<AudioObjectID> {
+        let address = address(kAudioDevicePropertyStreams, scope);
+        let mut size = 0u32;
+        // SAFETY: the address and the size are live for the call; no
+        // qualifier.
+        let status = unsafe {
+            AudioObjectGetPropertyDataSize(device, NonNull::from(&address), 0, null(), NonNull::from(&mut size))
+        };
+        let count = size as usize / size_of::<AudioObjectID>();
+        if status != 0 || count == 0 {
+            return None;
+        }
+        let mut streams = vec![UNKNOWN; count];
+        let mut size = (count * size_of::<AudioObjectID>()) as u32;
+        // SAFETY: `streams` holds `size` bytes of AudioObjectIDs, which is
+        // what this selector writes; the size is live for the call.
+        let status = unsafe {
+            AudioObjectGetPropertyData(
+                device,
+                NonNull::from(&address),
+                0,
+                null(),
+                NonNull::from(&mut size),
+                NonNull::new(streams.as_mut_ptr())?.cast(),
+            )
+        };
+        let written = size as usize / size_of::<AudioObjectID>();
+        (status == 0 && written > 0)
+            .then(|| streams[0])
+            .filter(|stream| *stream != UNKNOWN)
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub(super) enum Direction {
+        Output,
+        Input,
+    }
+
+    impl Direction {
+        fn scope(self) -> AudioObjectPropertyScope {
+            match self {
+                Direction::Output => kAudioObjectPropertyScopeOutput,
+                Direction::Input => kAudioObjectPropertyScopeInput,
+            }
+        }
+    }
+
+    /// One property of `object` that is a single `T`, or `None` when the HAL
+    /// refused it.
+    ///
+    /// # Safety
+    ///
+    /// `T` must be the type the HAL documents for `selector`, and
+    /// `qualifier` must be what that selector expects, or empty.
+    unsafe fn read<T: Copy + Default>(
+        object: AudioObjectID,
+        selector: AudioObjectPropertySelector,
+        scope: AudioObjectPropertyScope,
+        qualifier: Option<(*const c_void, u32)>,
+    ) -> Option<T> {
+        let address = address(selector, scope);
+        let mut value = T::default();
+        let mut size = size_of::<T>() as u32;
+        let (qualifier_size, qualifier_data) = match qualifier {
+            Some((data, size)) => (size, data),
+            None => (0, null()),
+        };
+        // SAFETY: the address, the size and the out-pointer are all live for
+        // the call, the size is `T`'s, and the caller vouches for `T` and the
+        // qualifier.
+        let status = unsafe {
+            AudioObjectGetPropertyData(
+                object,
+                NonNull::from(&address),
+                qualifier_size,
+                qualifier_data,
+                NonNull::from(&mut size),
+                NonNull::from(&mut value).cast(),
+            )
+        };
+        (status == 0 && size as usize == size_of::<T>()).then_some(value)
+    }
+
+    /// The device a route names: the system's current default for its
+    /// direction when `uid` is `None`, else the device with that UID.
+    pub(super) fn device(direction: Direction, uid: Option<&str>) -> Option<AudioObjectID> {
+        let system = kAudioObjectSystemObject as AudioObjectID;
+        let id = match uid {
+            None => {
+                let selector = match direction {
+                    Direction::Output => kAudioHardwarePropertyDefaultOutputDevice,
+                    Direction::Input => kAudioHardwarePropertyDefaultInputDevice,
+                };
+                // SAFETY: the default device selectors answer an AudioObjectID
+                // and take no qualifier.
+                unsafe { read::<AudioObjectID>(system, selector, kAudioObjectPropertyScopeGlobal, None) }?
+            }
+            Some(uid) => {
+                let uid = CFString::from_str(uid);
+                let reference: *const CFString = &*uid;
+                // SAFETY: TranslateUIDToDevice's qualifier is a CFStringRef,
+                // passed by pointer: `reference` is one, and `uid` keeps it
+                // alive for the call. It answers an AudioObjectID.
+                unsafe {
+                    read::<AudioObjectID>(
+                        system,
+                        kAudioHardwarePropertyTranslateUIDToDevice,
+                        kAudioObjectPropertyScopeGlobal,
+                        Some((
+                            std::ptr::from_ref(&reference).cast(),
+                            size_of::<*const CFString>() as u32,
+                        )),
+                    )
+                }?
+            }
+        };
+        (id != UNKNOWN).then_some(id)
+    }
+
+    /// The four latency properties of `device` in `direction`, or `None` if
+    /// the HAL would not give every one of them.
+    pub(super) fn latency(device: AudioObjectID, direction: Direction) -> Option<DeviceLatency> {
+        let scope = direction.scope();
+        let first_stream = first_stream(device, scope)?;
+        // SAFETY: each of these selectors answers a UInt32 and takes no
+        // qualifier.
+        unsafe {
+            Some(DeviceLatency {
+                device: read::<u32>(device, kAudioDevicePropertyLatency, scope, None)?,
+                safety_offset: read::<u32>(device, kAudioDevicePropertySafetyOffset, scope, None)?,
+                buffer: read::<u32>(device, kAudioDevicePropertyBufferFrameSize, scope, None)?,
+                stream: read::<u32>(
+                    first_stream,
+                    kAudioStreamPropertyLatency,
+                    kAudioObjectPropertyScopeGlobal,
+                    None,
+                )?,
+            })
+        }
+    }
 }
 
 #[cfg(test)]

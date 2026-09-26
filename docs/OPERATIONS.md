@@ -768,6 +768,24 @@ scripts/linux-check clippy -p mooloop-engine --all-targets -- -D warnings
 ```
 
 It needs `rustup target add x86_64-unknown-linux-gnu` and `brew install zig`.
+
+The other way round, **the Mac build can be checked from the build box**
+without a Mac, as long as nothing has to link: `cargo check` and `cargo
+clippy`, not `test`. The box's pinned toolchain has the
+`aarch64-apple-darwin` std (added 2026-09-26 for MOO-237), and cpal's Core
+Audio bindings are pure Rust. The one obstacle is `mp3lame-sys`, whose build
+script runs autoconf with a C compiler for the target. A wrapper on the box
+that drops `-arch` and `-mmacosx-version-min=` and calls the host `cc` gets
+past it; the objects it builds are never linked. MOO-237 was verified this
+way, with the wrapper at `/tmp/moo237/cc` (not kept, so recreate it):
+
+```sh
+scripts/antibox --no-incremental env CC_aarch64_apple_darwin=/tmp/moo237/cc \
+  cargo clippy --locked --target aarch64-apple-darwin -p mooloop-engine --all-targets -- -D warnings
+```
+
+Count the `Checking mooloop-engine` line in the log before trusting a green
+run. CI's macOS job is still the check that counts.
 `scripts/cargo-capped` finds no memory cgroup on macOS and runs Cargo uncapped,
 so builds stay one at a time there too. `scripts/antibox` works from a Mac that
 can reach the box, but what it builds are Linux binaries: build locally to run
