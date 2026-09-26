@@ -426,9 +426,13 @@ fn render_audition(
         let rendered = decoded?.sample;
         Ok(SampleInspection {
             name: browser_display_name(path),
+            // The full name: the preset browser has the room for it (Adam,
+            // 2026-09-26, both where there's room, the model number where
+            // it's tight), and the 260px pane fits "Polyneight ML-P8 preset
+            // · audition" at 9px.
             stats: format!(
                 "{} preset · audition\n{:.2} s",
-                kind.label(),
+                kind.title(),
                 sample_duration(&rendered)
             ),
             peaks: waveform_peaks(&rendered, BROWSER_INFO_BINS),
@@ -471,7 +475,11 @@ mod tests {
             .iter()
             .fold(0.0_f32, |p, f| p.max(f[0].abs()).max(f[1].abs()));
         assert!(peak > 0.01, "the audition was silent");
-        assert!(audition.stats.contains("ML-P8"), "{}", audition.stats);
+        assert!(
+            audition.stats.starts_with("Polyneight ML-P8 preset"),
+            "{}",
+            audition.stats
+        );
 
         let effect = temp.path().join("delay.mooloop");
         mooloop_project::save_effect_preset(

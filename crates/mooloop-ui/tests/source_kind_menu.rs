@@ -12,7 +12,10 @@
 //!
 //! The markup now spells the list once, in `SourceKinds.labels`, and this
 //! reads that list out of the production `.slint` and holds it against
-//! `DeviceKind::label()`. It parses rather than evaluates, so it needs no
+//! `DeviceKind::label()`. Since 2026-09-26 each kind also has a full name,
+//! `DeviceKind::title()` ("Munotone ML-M1"), spelled in `SourceKinds.titles`
+//! at the same positions, and this holds that list the same way (MOO-140).
+//! It parses rather than evaluates, so it needs no
 //! backend. It also checks the *wiring*, not just the strings: a row built
 //! from the list still has to send its own index to `add-channel-clicked`,
 //! which is the number `device_kind_from_int` decodes, and the popup still
@@ -23,17 +26,50 @@ use mooloop_ui::{device_kind_to_int, RETIRED_SOURCE_KINDS, SOURCE_KINDS_IN_PICKE
 const MAIN_SLINT: &str = include_str!("../ui/main.slint");
 const CHANNEL_RACK_SLINT: &str = include_str!("../ui/channel-rack.slint");
 
-/// The strings in `SourceKinds.labels`, in the order the markup lists them.
-fn markup_source_labels() -> Vec<&'static str> {
-    let declaration = "out property <[string]> labels:";
-    let start = CHANNEL_RACK_SLINT
-        .find(declaration)
-        .expect("channel-rack.slint declares SourceKinds.labels");
+/// The strings of the `SourceKinds` list declared as
+/// `out property <[string]> {name}:`, in the order the markup lists them.
+///
+/// It reads `channel-rack.slint` itself, the file the application compiles,
+/// and it wants exactly one such declaration there: a second would leave this
+/// holding one copy while the interface might read the other.
+fn markup_source_strings(name: &str) -> Vec<&'static str> {
+    let declaration = format!("out property <[string]> {name}:");
+    let mut hits = CHANNEL_RACK_SLINT.match_indices(declaration.as_str());
+    let (start, _) = hits
+        .next()
+        .unwrap_or_else(|| panic!("channel-rack.slint declares SourceKinds.{name}"));
+    assert!(
+        hits.next().is_none(),
+        "channel-rack.slint declares `{declaration}` more than once"
+    );
     let rest = &CHANNEL_RACK_SLINT[start + declaration.len()..];
     let end = rest
         .find("];")
-        .expect("SourceKinds.labels is a closed array literal");
+        .unwrap_or_else(|| panic!("SourceKinds.{name} is a closed array literal"));
     rest[..end].split('"').skip(1).step_by(2).collect()
+}
+
+/// `SourceKinds.labels`: each kind's model number, or its plain name.
+fn markup_source_labels() -> Vec<&'static str> {
+    markup_source_strings("labels")
+}
+
+/// `SourceKinds.titles`: each kind's name and model number together.
+fn markup_source_titles() -> Vec<&'static str> {
+    markup_source_strings("titles")
+}
+
+/// `markup` with its `//` comments taken out, so a check reads what the
+/// markup does rather than what its comments say about it. The `+` menu's
+/// width note quotes "Add Munotone ML-M1" to say why the popup is as wide as
+/// it is; a mention is not a row, and a wiring check that a comment could
+/// satisfy is no check.
+fn code_only(markup: &str) -> String {
+    markup
+        .lines()
+        .map(|line| line.find("//").map_or(line, |at| &line[..at]))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The text of the block opened by `marker`, up to its matching brace.
@@ -87,6 +123,39 @@ fn the_markup_source_list_is_the_rust_labels_in_picker_order() {
             labels.get(index).copied(),
             Some(kind.label()),
             "SourceKinds.labels[{index}] should be {kind:?}'s label"
+        );
+    }
+}
+
+/// The titles in the markup are the Rust titles, at the labels' positions:
+/// `SourceKinds.titles[i]` is `title()` of the kind whose number is `i`.
+///
+/// Adam's ruling, 2026-09-26: **both where there's room, the model number
+/// where it's tight.** The `+` menu reads `titles` and the picker chip reads
+/// `labels`, so the two are one list spelled twice. A kind in one and not
+/// the other, or a title left behind by a rename of its label (a
+/// "Drum Synth" beside "DS-SX"), is the fault this catches.
+#[test]
+fn the_markup_source_titles_are_the_rust_titles_in_picker_order() {
+    let titles = markup_source_titles();
+    assert_eq!(
+        titles.len(),
+        SOURCE_KINDS_IN_PICKER_ORDER.len(),
+        "SourceKinds.titles lists {} sources, DeviceKind has {}",
+        titles.len(),
+        SOURCE_KINDS_IN_PICKER_ORDER.len()
+    );
+    assert_eq!(
+        titles.len(),
+        markup_source_labels().len(),
+        "SourceKinds.titles and SourceKinds.labels must hold the same positions"
+    );
+    for kind in SOURCE_KINDS_IN_PICKER_ORDER {
+        let index = device_kind_to_int(kind) as usize;
+        assert_eq!(
+            titles.get(index).copied(),
+            Some(kind.title()),
+            "SourceKinds.titles[{index}] should be {kind:?}'s title"
         );
     }
 }
@@ -158,10 +227,10 @@ fn the_channel_source_picker_reads_the_one_list() {
 /// did nothing is exactly what happened on MOO-53.
 #[test]
 fn the_add_channel_menu_offers_the_list_and_sends_its_own_row() {
-    let menu = block(
+    let menu = code_only(&block(
         CHANNEL_RACK_SLINT,
         "export component AddSourceButton inherits ToolButton {",
-    );
+    ));
     assert!(
         menu.contains("for label[i] in SourceKinds.labels"),
         "the add-channel menu should repeat over SourceKinds.labels"
@@ -174,12 +243,19 @@ fn the_add_channel_menu_offers_the_list_and_sends_its_own_row() {
         menu.contains("root.picked(i)"),
         "each add-channel row should send its own index"
     );
+    assert!(
+        menu.contains("\"Add \" + SourceKinds.titles[i]"),
+        "each add-channel row should name its source by SourceKinds.titles, \
+         since a menu has the room for the full name"
+    );
     for kind in SOURCE_KINDS_IN_PICKER_ORDER {
-        let hand_written = format!("\"Add {}\"", kind.label());
-        assert!(
-            !menu.contains(&hand_written),
-            "the add-channel menu still spells {hand_written} by hand"
-        );
+        for name in [kind.label(), kind.title()] {
+            let hand_written = format!("\"Add {name}\"");
+            assert!(
+                !menu.contains(&hand_written),
+                "the add-channel menu still spells {hand_written} by hand"
+            );
+        }
     }
 }
 
@@ -272,11 +348,13 @@ fn the_source_device_header_reads_the_one_list() {
         "the source device header should take its name from SourceKinds.labels"
     );
     for kind in SOURCE_KINDS_IN_PICKER_ORDER {
-        let hand_written = format!("\"{}\"", kind.label());
-        assert!(
-            !header.contains(&hand_written),
-            "the source device header still spells {hand_written} by hand"
-        );
+        for name in [kind.label(), kind.title()] {
+            let hand_written = format!("\"{name}\"");
+            assert!(
+                !header.contains(&hand_written),
+                "the source device header still spells {hand_written} by hand"
+            );
+        }
     }
 }
 
@@ -293,4 +371,17 @@ fn main_slint_names_no_source_kind_of_its_own() {
         "main.slint spells a source kind's label; it should read \
          SourceKinds.labels instead"
     );
+    // A kind's full name has one spelling too. Only the kinds with a
+    // nickname: the rest have a title that is their label, and a short
+    // label ("Sampler") is a word the interface uses for other things.
+    for kind in SOURCE_KINDS_IN_PICKER_ORDER {
+        if kind.nickname().is_some() {
+            let hand_written = format!("\"{}\"", kind.title());
+            assert!(
+                !MAIN_SLINT.contains(&hand_written),
+                "main.slint spells {hand_written}; it should read \
+                 SourceKinds.titles instead"
+            );
+        }
+    }
 }
