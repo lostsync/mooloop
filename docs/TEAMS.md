@@ -249,7 +249,10 @@ Files marked *shared* are split in the table above.
 - `engine/src/`: the tests `buffer_workflow_tests.rs`, `container_tests.rs`,
   `settled_host_tests.rs` (a settled insert against the per-sample blend, MOO-260),
   `bus_comp_tests.rs`, and the Bus Comp insert's acceptance render
-  `engine/examples/bus_comp_insert.rs` (MOO-216)
+  `engine/examples/bus_comp_insert.rs` (MOO-216), and the inserts' listening
+  renders `engine/examples/phaser_sweep.rs` (MOO-235),
+  `engine/examples/drive_curves.rs` (MOO-250) and
+  `engine/examples/modulation_feedback.rs` (MOO-200)
 - `ui/ui/`: `bitcrush-device.slint`, `buffer-device.slint`, `bus-comp-device.slint`,
   `compressor-device.slint`, `container-device.slint`, `delay-device.slint`,
   `drive-device.slint`, `eq-device.slint`, `filter-device.slint`,

@@ -886,10 +886,11 @@ mod tests {
     ///
     /// What these numbers say: the feedback devices are resonant. A steady
     /// sine that lands on a reverb or plate mode builds up to about +14 dB,
-    /// and the flanger and phaser at full feedback approach `1 / (1 - 0.92)`,
-    /// +22 dB, which is what a comb at that feedback does. The master's
-    /// safety limiter (MOO-93) protects the speakers. The next device and the
-    /// meters see this. The modulation effect's case is MOO-200.
+    /// and the Modulation device's loop would reach `1 / (1 - 0.92)`, +22 dB,
+    /// at full feedback, which is what a comb at that feedback does, if its
+    /// output were not trimmed to hold the peak at +12 dB (MOO-200). The
+    /// master's safety limiter (MOO-93) protects the speakers. The next
+    /// device and the meters see the rest.
     fn gain_bounds() -> Vec<(&'static str, EffectParams, f32)> {
         use mooloop_core::*;
         let modulation = |mode: i32, feedback: f32| {
@@ -929,14 +930,6 @@ mod tests {
                 }),
                 12.0,
             ),
-            // Measured +16.4, +21.6, +12.8, +21.3, +21.0, +1.8 and +9.4 dB.
-            ("chorus at full feedback", modulation(0, 0.92), 18.0),
-            ("flanger at full feedback", modulation(1, 0.92), 23.0),
-            ("flanger at full negative feedback", modulation(1, -0.92), 15.0),
-            ("phaser at full feedback", modulation(2, 0.92), 23.0),
-            ("phaser at full negative feedback", modulation(2, -0.92), 23.0),
-            ("ensemble at full feedback", modulation(3, 0.92), 4.0),
-            ("ADT at full feedback", modulation(4, 0.92), 11.0),
             // Silent at the reference level (one bit rounds it to zero) and
             // unity at full scale.
             (
@@ -989,6 +982,25 @@ mod tests {
             // A band's gain is the user's to set; flat, it adds nothing.
             ("EQ as it arrives", EffectParams::Eq(EqParams::default()), 0.1),
         ];
+        // Every Modulation mode at the trim's knee and at both ends of the
+        // Feedback knob (MOO-200). The ceiling is `RESONANCE_CEILING`, 4 or
+        // +12.04 dB, and the half dB over it is for a sweeping delay, which
+        // is not quite a static comb. Before the trim these read up to +21.6
+        // (flanger), +21.3 (phaser), +16.4 (chorus), +16.2 (ensemble, 81 Hz)
+        // and +14.3 dB (ADT, 164 Hz). Measured 2026-09-26 with it: +12.02 dB
+        // was the most, the phaser at 0.75.
+        const MODULATION_CASES: [[&str; 3]; 5] = [
+            ["chorus at the knee", "chorus at full feedback", "chorus at full negative feedback"],
+            ["flanger at the knee", "flanger at full feedback", "flanger at full negative feedback"],
+            ["phaser at the knee", "phaser at full feedback", "phaser at full negative feedback"],
+            ["ensemble at the knee", "ensemble at full feedback", "ensemble at full negative feedback"],
+            ["ADT at the knee", "ADT at full feedback", "ADT at full negative feedback"],
+        ];
+        for (mode, names) in MODULATION_CASES.iter().enumerate() {
+            for (name, feedback) in names.iter().zip([0.75, 0.92, -0.92]) {
+                bounds.push((name, modulation(mode as i32, feedback), 12.5));
+            }
+        }
         // Level-compensated at the reference level (+1.4 dB at 5 kHz was
         // the most) and under unity at full scale. The Tone tilt is the
         // user's: at full treble it lifts 1 kHz by about 15 dB.
@@ -1052,6 +1064,40 @@ mod tests {
             }
         }
         assert!(past.is_empty(), "past their bounds:\n{}", past.join("\n"));
+    }
+
+    /// **The Modulation device's gain across the spectrum** (MOO-200), for
+    /// choosing its bounds: every mode at four feedback settings, the
+    /// loudest steady sine over 48 frequencies from 40 Hz to 10 kHz, at the
+    /// reference level. `gain_bounds` samples four frequencies; this is the
+    /// fuller picture. Slow, so ignored:
+    /// `cargo test -p mooloop-dsp --release --lib modulation_gain_table -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn modulation_gain_table() {
+        use mooloop_core::{ModulationMode, ModulationParams};
+        for mode in 0..5 {
+            let mut row = format!("{:>9}", format!("{:?}", ModulationMode::from_index(mode)));
+            for feedback in [0.5f32, 0.75, 0.92, -0.92] {
+                let params = EffectParams::Modulation(ModulationParams {
+                    mode: ModulationMode::from_index(mode),
+                    depth: 1.0,
+                    feedback,
+                    color: 1.0,
+                    ..ModulationParams::default()
+                });
+                let (mut worst, mut at) = (f32::MIN, 0.0f32);
+                for step in 0..48 {
+                    let freq = 40.0 * 250.0f32.powf(step as f32 / 47.0);
+                    let gain = peak_gain_db(params, crate::shaper::DRIVE_REFERENCE_LINEAR, freq);
+                    if gain > worst {
+                        (worst, at) = (gain, freq);
+                    }
+                }
+                row.push_str(&format!("  fb {feedback:+.2}: {worst:+6.2} dB at {at:6.0} Hz"));
+            }
+            println!("{row}");
+        }
     }
 
     /// Every kind is either in [`gain_bounds`] or says where its bound lives.

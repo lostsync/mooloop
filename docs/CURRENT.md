@@ -1831,7 +1831,11 @@ land on its own when it starts to matter:
   bounded fractional stereo ring; Phaser uses a stereo all-pass cascade
   whose coefficients are worked out every 8 samples and followed in a
   straight line between (MOO-235), which costs about a fifth of doing it
-  every sample: less than Chorus up to 8 stages, and about the same at 12. The
+  every sample: less than Chorus up to 8 stages, and about the same at 12.
+  Past Feedback 75% (either sign) every mode's wet output is trimmed by
+  `min(1, 4 * (1 - |fb|))`, so a feedback resonance peaks at +12 dB instead
+  of the +22 dB a loop at 92% reaches (MOO-200); the loop itself is not
+  touched, so a flanger at full feedback rings as long as it did. The
   generic host supplies their dry/wet blend, so the DSP returns the processed
   signal only. The reverb runs eight modulated delay lines through a Hadamard
   feedback matrix behind a diffused, pre-delayed input, each line's return

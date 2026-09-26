@@ -668,3 +668,27 @@ In the order worth playing:
     silence where it would still be at -68 dBFS. Whether they sound like a
     drum machine, and whether the balance is right, is the listen. Every
     value is in `crates/mooloop-core/src/ds01_factory.rs`.
+27. **The Modulation device at high feedback** (MOO-200). Past Feedback 75%
+    the wet output is now trimmed so a feedback resonance peaks at +12 dB,
+    where it reached +22 dB at the knob's end (92%). Below 75% nothing
+    changed, and no factory preset goes that high (Jet Flange is 70%). At
+    92% the wet is 9.9 dB quieter than it was, at 85% 4.4 dB. The loop is
+    untouched, so the claim is that a flanger at full feedback still
+    sounds like a jet, only not 22 dB louder. A sustained ML-P8 saw chord at
+    half wet, two bars each of a Flanger at 50%, 75%, 92% and -92%, a
+    Phaser at 92%, then dry:
+
+    ```sh
+    scripts/antibox --no-incremental --pull target/modulation-feedback \
+      cargo run -p mooloop-engine --example modulation_feedback -- target/modulation-feedback
+    ```
+
+    Play `modulation-feedback.wav`. There's no old build in the render; the
+    old level is the new one plus the trim. The measured version is
+    `every_insert_kind_stays_under_its_gain_bound` (every mode at 75% and
+    ±92%, bound +12.5 dB; +12.02 dB was the most) and
+    `a_flanger_at_full_feedback_still_rings` (80 ms on, the ring is
+    -21 dB from its first echoes at 92%, against -47 dB at 75%), both in
+    mooloop-dsp. Songs with a Modulation device above 75% feedback play
+    quieter than they were mixed; whether the jet still sounds right is the
+    listen.

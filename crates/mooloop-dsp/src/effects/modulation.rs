@@ -46,6 +46,11 @@ const PHASER_CONTROL_FRAMES: u32 = 8;
 /// whose log is a straight line in `color`.
 const PHASER_LOG2_BASE_HZ: f32 = 7.781_359_7;
 const PHASER_LOG2_COLOR_SPAN: f32 = 4.807_355;
+/// The most a feedback resonance may lift a steady tone, as a gain: 4, or
+/// +12 dB (MOO-200). A comb or an all-pass loop with feedback `fb` peaks at
+/// `1 / (1 - |fb|)`, which reaches 4 at `|fb| = 0.75` and +22 dB at the
+/// knob's end, 0.92. See [`resonance_trim`].
+const RESONANCE_CEILING: f32 = 4.0;
 
 pub struct ModulationEffect {
     params: ModulationParams,
@@ -226,7 +231,8 @@ impl ModulationEffect {
             input_l + feedback * (self.feedback_l * (1.0 - cross) + self.feedback_r * cross),
             input_r + feedback * (self.feedback_r * (1.0 - cross) + self.feedback_l * cross),
         );
-        self.tone_filter(wet_l, wet_r, tone)
+        let trim = resonance_trim(feedback);
+        self.tone_filter(wet_l * trim, wet_r * trim, tone)
     }
 
     /// One sample of the all-pass cascade, at the control-rate coefficients
@@ -254,7 +260,8 @@ impl ModulationEffect {
         }
         self.feedback_l = left;
         self.feedback_r = right;
-        self.tone_filter(left, right, tone)
+        let trim = resonance_trim(feedback);
+        self.tone_filter(left * trim, right * trim, tone)
     }
 
     /// Called once a sample before [`Self::phaser_sample`], and before the
@@ -337,6 +344,31 @@ impl ModulationEffect {
         }
         (self.tone_l.next_sample(left), self.tone_r.next_sample(right))
     }
+}
+
+/// How far to turn the wet signal down so a feedback resonance peaks no
+/// higher than [`RESONANCE_CEILING`] (MOO-200): `min(1, 4 * (1 - |fb|))`.
+///
+/// Unity up to `|fb| = 0.75`, so moderate feedback, every factory preset
+/// and ML-P8's finishing chorus sound exactly as they did. Past it the trim
+/// follows the loop's own peak down, so the resonance keeps sharpening all
+/// the way to the knob's end, and rings just as long, but its peak stays at
+/// +12 dB: at 0.92 the trim is 0.32, -9.9 dB. It scales the wet output only,
+/// never the loop, so the loop's character is untouched; a
+/// linear trim bounds the gain at every input level, where a `tanh` knee in
+/// the loop (the Delay's, MOO-124) would leave a quiet input its +22 dB and
+/// distort a loud one. Lowering the knob's top to 0.75 would bound it too,
+/// and take the jet with it.
+///
+/// Every mode takes it. Chorus, Flange and Phaser feed back one tap or one
+/// cascade, so their loop peaks at the whole `|fb|`. Ensemble and ADT feed
+/// back an average of taps at different delays, which agree at low
+/// frequencies, so they get most of the way there too: untrimmed at full
+/// feedback, +16 and +14 dB around 50 to 160 Hz (`modulation_gain_table`,
+/// 2026-09-26).
+#[inline]
+fn resonance_trim(feedback: f32) -> f32 {
+    (RESONANCE_CEILING * (1.0 - feedback.abs())).min(1.0)
 }
 
 fn ring_frames(sample_rate: u32) -> usize {
@@ -797,7 +829,8 @@ mod tests {
         );
     }
 
-    /// The phaser as it was before MOO-235, sample by sample: every stage's
+    /// The phaser as it was before MOO-235 (with MOO-200's output trim,
+    /// which came later and is not what it checks), sample by sample: every stage's
     /// coefficient from an `exp2` and a `tan` each sample, and the tone
     /// filter's cutoff from a `powf` and two `exp` each sample. Kept here as
     /// the reference the control-rate phaser is measured against, for its
@@ -874,6 +907,9 @@ mod tests {
             }
             self.feedback_l = left;
             self.feedback_r = right;
+            // MOO-200's trim, which is not what this reference is for.
+            let trim = resonance_trim(feedback);
+            let (left, right) = (left * trim, right * trim);
             let hz = TONE_MIN_HZ * (TONE_MAX_HZ / TONE_MIN_HZ).powf(tone);
             self.tone_l.set_cutoff(hz, SR);
             self.tone_r.set_cutoff(hz, SR);
@@ -1100,5 +1136,62 @@ mod tests {
                 us / chorus
             );
         }
+    }
+
+    /// **The trim leaves moderate feedback alone and caps the resonance**
+    /// (MOO-200): unity up to `|fb| = 0.75`, and the loop's peak
+    /// `1 / (1 - |fb|)` times the trim never past +12 dB, either sign.
+    #[test]
+    fn resonance_trim_is_unity_below_the_knee_and_caps_the_peak() {
+        for step in -92..=92 {
+            let fb = step as f32 / 100.0;
+            let trim = resonance_trim(fb);
+            if fb.abs() <= 0.75 {
+                assert_eq!(trim, 1.0, "feedback {fb} was trimmed");
+            }
+            let peak = trim / (1.0 - fb.abs());
+            assert!(peak <= RESONANCE_CEILING * 1.000_1, "feedback {fb} peaks at {peak}");
+        }
+        assert!((resonance_trim(0.92) - 0.32).abs() < 1.0e-5);
+    }
+
+    /// RMS of the flanger's impulse response in `[from_ms, to_ms)`, at a
+    /// fixed delay (depth 0, the slowest rate), in dB.
+    fn flanger_ring_db(feedback: f32, from_ms: f32, to_ms: f32) -> f32 {
+        let frames = SR as usize / 8;
+        let mut bus = StereoBus::with_capacity(frames);
+        bus.l[0] = 1.0;
+        bus.r[0] = 1.0;
+        let mut effect = ModulationEffect::new(
+            ModulationParams {
+                mode: ModulationMode::Flange,
+                rate_hz: 0.02,
+                depth: 0.0,
+                color: 1.0,
+                feedback,
+                tone: 1.0,
+                ..ModulationParams::default()
+            },
+            SR,
+        );
+        effect.process(&context(frames), &mut bus, &EventList::empty(), None);
+        let at = |ms: f32| (ms * SR as f32 / 1_000.0) as usize;
+        crate::testkit::db(crate::testkit::rms(&bus.l[at(from_ms)..at(to_ms)]))
+    }
+
+    /// **The jet survives the trim** (MOO-200). A flanger at full feedback
+    /// still rings: 80 ms on, its impulse response has fallen far less from
+    /// its first echoes than at the trim's knee, because the trim scales the
+    /// output and never the loop. Lowering the knob's top would fail this.
+    #[test]
+    fn a_flanger_at_full_feedback_still_rings() {
+        let decay = |fb: f32| flanger_ring_db(fb, 85.0, 105.0) - flanger_ring_db(fb, 5.0, 25.0);
+        let (full, knee) = (decay(0.92), decay(0.75));
+        println!("80 ms of ring: {full:.1} dB at 0.92, {knee:.1} dB at 0.75");
+        assert!(full > -30.0, "the full-feedback flanger stopped ringing: {full:.1} dB");
+        assert!(
+            full > knee + 12.0,
+            "past the knee the ring should keep lengthening: {full:.1} against {knee:.1} dB"
+        );
     }
 }
