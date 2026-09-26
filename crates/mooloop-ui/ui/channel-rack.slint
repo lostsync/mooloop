@@ -62,10 +62,20 @@ export global ChannelDrag {
 // the ML-M1, the ML-P8, the DS-01 or Aux In but never started as one. Both
 // read this now, and `tests/source_kind_menu.rs` holds it against
 // `DeviceKind::label()` -- the guard a list spelled in markup had never had.
+//
+// Two forms of each name, Adam's ruling of 2026-09-26: **both where there's
+// room, the model number where it's tight.** `labels` is `label()`, the
+// model number ("ML-M1"), for the picker chip and anywhere narrow; `titles`
+// is `title()`, the name and model together ("Munotone ML-M1"), for the `+`
+// menu and anywhere with room. The same positions in both.
 export global SourceKinds {
     out property <[string]> labels: [
-        "Sampler", "Drum Synth", "Mono Synth", "Poly Synth",
+        "Sampler", "DS-SX", "Mono Synth", "Poly Synth",
         "ML-M1", "ML-P8", "DS-01", "Aux In"
+    ];
+    out property <[string]> titles: [
+        "Sampler", "Gitdum DS-SX", "Mono Synth", "Poly Synth",
+        "Munotone ML-M1", "Polyneight ML-P8", "Dominic DS-01", "Aux In"
     ];
     // The sources no longer offered, by the same positions. A new channel
     // cannot start as one and a channel cannot be switched to one; a song
@@ -108,7 +118,14 @@ export component AddSourceButton inherits ToolButton {
     menu := PopupWindow {
         x: 0px;
         y: root.height + 2px;
-        width: 156px;
+        // Wide enough for the longest title, at any type scale. A row's
+        // text starts past `MenuRow`'s 26px gutter and stops 8px short of
+        // its edge, and the frame pads 4px each side: 42px that stay put.
+        // The text scales with `Theme.text-xl`, so the room for it does
+        // too. "Add Munotone ML-M1" is the widest, about 10.5 of them
+        // (116px at 11px); 13 leaves it a margin, which the fixed 156px it
+        // replaced did not -- that elided the ML-M1's row at 1.0.
+        width: 42px + 13 * Theme.text-xl;
         // As tall as the rows it has. The 108px it held was four of them, so
         // a fifth source would have been drawn outside the menu it was in.
         height: frame.preferred-height;
@@ -128,9 +145,14 @@ export component AddSourceButton inherits ToolButton {
                 // A retired source is an empty layout rather than a row:
                 // this layout has no spacing, so it takes no room, and each
                 // row still reports its position in `SourceKinds.labels`.
+                //
+                // The rows read the titles ("Add Munotone ML-M1"), since a
+                // menu has the room. The loop still runs over `labels`, the
+                // list whose positions are the kinds' numbers; `titles`
+                // holds the same positions.
                 for label[i] in SourceKinds.labels : VerticalLayout {
                     if !SourceKinds.retired[i] : MenuRow {
-                        text: "Add " + label;
+                        text: "Add " + SourceKinds.titles[i];
                         // Report, and let `close-policy` dismiss the menu.
                         //
                         // Closing it here first is the whole of MOO-53:

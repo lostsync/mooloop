@@ -17,12 +17,20 @@
 //!
 //! Coordinates are computed rather than searched, for the reason
 //! `first_click.rs` records: the `ElementHandle` search API needs a build
-//! with debug info, and this control has fixed geometry anyway.
+//! with debug info, and this control has fixed geometry anyway. The one test
+//! that reads what a row *says* walks the open popup's item tree by
+//! accessible role instead, as `src/window_probe.rs` does, which every build
+//! carries.
 
+use i_slint_core::accessibility::AccessibleStringProperty;
+use i_slint_core::item_tree::ItemRc;
+use i_slint_core::items::AccessibleRole;
+use i_slint_core::window::{PopupWindowLocation, WindowInner};
 use mooloop_ui::{device_kind_to_int, RETIRED_SOURCE_KINDS, SOURCE_KINDS_IN_PICKER_ORDER};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize};
 use std::cell::RefCell;
+use std::ops::ControlFlow;
 use std::rc::Rc;
 
 slint::slint! {
@@ -181,5 +189,95 @@ fn choosing_a_row_closes_the_menu() {
         *picked.borrow(),
         vec![0],
         "the menu was still open after a row was chosen"
+    );
+}
+
+/// Every row of the open menu, top to bottom, as its text and its middle in
+/// window coordinates. A `MenuRow` is `accessible-role: button` with its text
+/// as its label, so this reads what a user reads.
+fn open_menu_rows(window: &slint::Window) -> Vec<(String, (f32, f32))> {
+    let inner = WindowInner::from_pub(window);
+    let popups = inner.active_popups();
+    assert_eq!(popups.len(), 1, "the + should have opened exactly one menu");
+    let popup = &popups[0];
+    let offset = match popup.location {
+        PopupWindowLocation::ChildWindow(at) => (at.x, at.y),
+        _ => (0.0, 0.0),
+    };
+    let mut rows = Vec::new();
+    ItemRc::new_root(popup.component.clone()).visit_descendants(|item| {
+        if item.accessible_role() == AccessibleRole::Button && item.is_visible() {
+            let geometry = item.geometry();
+            let origin = item.map_to_window(geometry.origin);
+            let label = item
+                .accessible_string_property(AccessibleStringProperty::Label)
+                .map(|text| text.to_string())
+                .unwrap_or_default();
+            rows.push((
+                label,
+                (
+                    offset.0 + origin.x + geometry.size.width / 2.0,
+                    offset.1 + origin.y + geometry.size.height / 2.0,
+                ),
+            ));
+        }
+        ControlFlow::<()>::Continue(())
+    });
+    rows
+}
+
+/// **Each row names its source by `DeviceKind::title()`, and adds the kind it
+/// names.**
+///
+/// MOO-275: the menu has room, so it reads "Add Munotone ML-M1" where the
+/// picker chip reads "ML-M1" (Adam, 2026-09-26: *both where there's room, the
+/// model number where it's tight*). A row's text comes from
+/// `SourceKinds.titles` and the number it reports from its position in
+/// `SourceKinds.labels`: two lists, and this holds them together from the
+/// outside. Each row is clicked where it is actually drawn and has to report
+/// the kind whose title it shows. A `titles` list out of step with `labels`
+/// would put one kind's name on another kind's row, and every other test in
+/// this file would still pass.
+#[test]
+fn every_row_reads_its_sources_title_and_adds_that_source() {
+    let ui = harness();
+    let picked: Rc<RefCell<Vec<i32>>> = Rc::new(RefCell::new(Vec::new()));
+    let seen = picked.clone();
+    ui.on_picked(move |index| seen.borrow_mut().push(index));
+
+    click(ui.window(), BUTTON);
+    let rows = open_menu_rows(ui.window());
+
+    let offered: Vec<_> = SOURCE_KINDS_IN_PICKER_ORDER
+        .into_iter()
+        .filter(|kind| !RETIRED_SOURCE_KINDS.contains(kind))
+        .collect();
+    let mut expected: Vec<String> = offered
+        .iter()
+        .map(|kind| format!("Add {}", kind.title()))
+        .collect();
+    expected.push("Add Plugin…".to_owned());
+    let texts: Vec<&str> = rows.iter().map(|(text, _)| text.as_str()).collect();
+    assert_eq!(
+        texts, expected,
+        "the + menu's rows should read each offered source's title, in picker order"
+    );
+
+    // Dismiss the menu that was opened only to be read, then choose each
+    // source row where it was drawn.
+    click(ui.window(), (250.0, 310.0));
+    for ((text, centre), kind) in rows.iter().zip(&offered) {
+        click(ui.window(), BUTTON);
+        click(ui.window(), *centre);
+        assert_eq!(
+            picked.borrow().last().copied(),
+            Some(device_kind_to_int(*kind)),
+            "the row reading `{text}` added some other source"
+        );
+    }
+    assert_eq!(
+        picked.borrow().len(),
+        offered.len(),
+        "a click meant only to dismiss the menu chose a source"
     );
 }
