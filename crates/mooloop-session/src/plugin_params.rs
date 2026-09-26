@@ -166,6 +166,117 @@ impl Session {
     }
 }
 
+/// One plugin parameter a lane or a route on the selected channel can name,
+/// as the lane menu and the modulation shelf show it (MOO-228).
+///
+/// `missing` is Adam's MOO-74 case: a lane or route names an id the plugin's
+/// list no longer has. It is kept and saved, plays nothing, and is named by
+/// its id, the only name left for it; it reads normally again the moment the
+/// list has the id back.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PluginDestination {
+    pub address: ParamAddr,
+    /// "Test Gain 2": the plugin's name and its place in the chain, the way
+    /// a native insert is "Filter 2".
+    pub device: String,
+    pub name: String,
+    pub missing: bool,
+    /// Whether a new lane may be opened on it ([`Session::lane_allowed`]).
+    pub lane_allowed: bool,
+}
+
+impl Session {
+    /// Every plugin parameter on the selected channel's own chain, device by
+    /// device in chain order, each device's listed parameters first in the
+    /// plugin's order (hidden ones left out) and then, marked missing, every
+    /// id a lane or route on it names that the list no longer has.
+    pub fn plugin_destinations(&self) -> Vec<PluginDestination> {
+        let mut rows = Vec::new();
+        let scope = EffectTarget::Channel(self.selected as u8);
+        let Some(channel) = self.channels.get(self.selected) else {
+            return rows;
+        };
+        for (position, effect) in channel.effects.iter().enumerate() {
+            let EffectParams::Plugin(slot) = effect.params else {
+                continue;
+            };
+            let Some(saved) = self.plugins.get(&slot) else {
+                continue;
+            };
+            let device = format!("{} {}", saved.plugin.name, position + 1);
+            for info in saved.params.iter().filter(|info| !info.hidden) {
+                let address = ParamAddr::plugin_param(scope, effect.id, info.id);
+                rows.push(PluginDestination {
+                    address,
+                    device: device.clone(),
+                    name: info.name.clone(),
+                    missing: false,
+                    lane_allowed: info.automatable,
+                });
+            }
+            // The ids something still names and the list does not: every
+            // pattern's lanes and every route, in the order they are found.
+            let named = channel
+                .automation
+                .iter()
+                .flatten()
+                .map(|lane| lane.target)
+                .chain(channel.modulation.destinations());
+            for address in named {
+                let ParamOwner::PluginParam { device: owner } = address.owner else {
+                    continue;
+                };
+                if owner != effect.id
+                    || address.scope != scope
+                    || saved.param(address.param).is_some()
+                    || rows.iter().any(|row| row.address == address)
+                {
+                    continue;
+                }
+                rows.push(PluginDestination {
+                    address,
+                    device: device.clone(),
+                    name: format!("Parameter {}", address.param),
+                    missing: true,
+                    lane_allowed: false,
+                });
+            }
+        }
+        rows
+    }
+
+    /// The live modulation offset on each of `slot`'s parameters, by dense
+    /// index, for the device `device` on the selected channel: what a plugin
+    /// face's rings draw, on the same terms as
+    /// [`Session::destination_offsets`] for a native face.
+    pub fn plugin_destination_offsets(
+        &self,
+        device: mooloop_core::DeviceId,
+        slot: PluginSlotId,
+    ) -> Vec<f32> {
+        let Some(saved) = self.plugins.get(&slot) else {
+            return Vec::new();
+        };
+        let mut offsets = vec![0.0; saved.params.len()];
+        let Some(channel) = self.channels.get(self.selected) else {
+            return offsets;
+        };
+        let scope = EffectTarget::Channel(self.selected as u8);
+        let outputs = self.modulation_outputs.get();
+        let sources = Self::control_sources(&outputs);
+        for (index, info) in saved.params.iter().enumerate() {
+            let policy =
+                ModDestinationDescriptor::for_plugin_param(info.id, info.stepped.is_some(), info.modulatable);
+            offsets[index] = channel.modulation.offset_for(
+                ParamAddr::plugin_param(scope, device, info.id),
+                sources,
+                &policy,
+            );
+        }
+        offsets
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,5 +397,82 @@ mod tests {
             ..gain
         };
         assert_eq!(plugin_plain(&stepped, 0.3), 1.0);
+    }
+
+    /// One modulator at 0.4 through a half-depth bipolar route reads 0.2 on
+    /// a native destination and on a plugin parameter alike: the plugin's
+    /// offsets are the native sum, by dense index. It also pins
+    /// `destination_offsets` across MOO-228's extraction of the source split
+    /// it shares with the plugin path.
+    #[test]
+    fn a_plugin_parameter_reads_the_same_offset_a_native_one_does() {
+        let (mut session, slot, device) = session_with(vec![nudge(), gain()]);
+        session
+            .add_modulation_source(mooloop_core::ModulatorKind::Lfo)
+            .expect("room for a modulator");
+        let scope = EffectTarget::Channel(0);
+        let volume = ParamAddr::strip(scope, mooloop_core::STRIP_PARAM_VOLUME);
+        let gain = ParamAddr::plugin_param(scope, device, 10);
+        for destination in [volume, gain] {
+            session.channels[0]
+                .modulation
+                .add_route(mooloop_core::ModRoute::to_slot(
+                    0,
+                    destination,
+                    0.5,
+                    mooloop_core::ModPolarity::Bipolar,
+                ))
+                .expect("room for a route");
+        }
+        let mut outputs = session.modulation_outputs.get();
+        outputs[0] = 0.4;
+        session.modulation_outputs.set(outputs);
+
+        let native = session.destination_offsets(&mooloop_core::STRIP_DESCRIPTORS, |param| {
+            ParamAddr::strip(scope, param)
+        });
+        assert!((native[mooloop_core::STRIP_PARAM_VOLUME as usize] - 0.2).abs() < 1e-6, "{native:?}");
+        // Nudge takes no modulation and reads zero; Gain, index 1, reads the sum.
+        let plugin = session.plugin_destination_offsets(device, slot);
+        assert_eq!(plugin.len(), 2);
+        assert_eq!(plugin[0], 0.0);
+        assert!((plugin[1] - 0.2).abs() < 1e-6, "{plugin:?}");
+    }
+
+    /// The lane menu's plugin rows: every listed, unhidden parameter under
+    /// the device's name and chain place, and -- once the list loses one a
+    /// lane names -- a missing row named by its id, which reads normally
+    /// again when the list has it back (MOO-74).
+    #[test]
+    fn a_lane_on_a_parameter_the_plugin_stopped_listing_is_listed_as_missing() {
+        let (mut session, slot, device) = session_with(vec![gain(), nudge()]);
+        let scope = EffectTarget::Channel(0);
+        let nudge_address = ParamAddr::plugin_param(scope, device, 4_000_000_000);
+        let names = |session: &Session| {
+            session
+                .plugin_destinations()
+                .into_iter()
+                .map(|row| (row.device, row.name, row.missing))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(&session),
+            [
+                ("Test 1".to_string(), "Gain".to_string(), false),
+                ("Test 1".to_string(), "Nudge".to_string(), false),
+            ]
+        );
+        session.open_automation_lane_at(nudge_address).expect("a lane");
+        let listed = session.plugins[&slot].params.clone();
+        session.plugins.get_mut(&slot).unwrap().params.retain(|info| info.id == 10);
+        assert_eq!(
+            names(&session),
+            [
+                ("Test 1".to_string(), "Gain".to_string(), false),
+                ("Test 1".to_string(), "Parameter 4000000000".to_string(), true),
+            ]
+        );
+        session.plugins.get_mut(&slot).unwrap().params = listed;
+        assert!(names(&session).iter().all(|(_, _, missing)| !missing));
     }
 }

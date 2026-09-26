@@ -139,6 +139,12 @@ struct AutomationTargetRow {
     open: bool,
     // True when this is the lane currently shown.
     current: bool,
+    // Something names this destination and it is no longer there to drive:
+    // a plugin parameter the plugin stopped listing (MOO-74). The row stays,
+    // its title thin and italic, and reads normally again when it returns.
+    // Nothing here is plugin-specific, so any address that is kept but
+    // drives nothing can set it.
+    missing: bool,
 }
 
 // One channel row in the rack.
@@ -510,6 +516,9 @@ struct SourceRow {
 component AutomationMenuRow inherits Rectangle {
     in property <string> text;
     in property <bool> current: false;
+    // Kept, and drives nothing: Adam's "itallicized/thin weight title in the
+    // lane selection menu" (MOO-74).
+    in property <bool> missing: false;
     callback selected();
     height: 20px;
     min-width: 150px;
@@ -517,8 +526,10 @@ component AutomationMenuRow inherits Rectangle {
     Text {
         x: 8px;
         text: root.text;
-        color: root.current ? Theme.accent : Theme.text;
+        color: root.current ? Theme.accent : root.missing ? Theme.text-muted : Theme.text;
         font-size: Theme.text-lg;
+        font-italic: root.missing;
+        font-weight: root.missing ? 300 : 400;
         vertical-alignment: center;
     }
     touch := TouchArea {
@@ -575,6 +586,7 @@ component AutomationLaneMenu inherits VerticalLayout {
                 AutomationMenuRow {
                     text: row.open ? "● " + row.param-name : row.param-name;
                     current: row.current;
+                    missing: row.missing;
                     selected => { root.picked(index); }
                 }
             }
@@ -1957,6 +1969,12 @@ export component MainWindow inherits Window {
     // index* in the plugin's list (never its id, which can pass `i32::MAX`),
     // normalized 0..1.
     callback plugin-param-changed(int, int, float);
+    // A plugin knob's modulation half (MOO-228), by slot and dense index
+    // like the value: the press that arms, learns or names it, and a route
+    // depth dragged while a source is armed. Its release is the native
+    // `effect-modulation-edit-finished`, which reads neither number.
+    callback plugin-modulation-edit-started(int, int);
+    callback plugin-modulation-depth-changed(int, int, float);
     // The insert menu's "Plugin…" row: open the browser's PLUGINS tab, aimed
     // at the row a plugin picked there should land before.
     callback add-plugin-requested(int);
@@ -2128,6 +2146,10 @@ export component MainWindow inherits Window {
     // Empty when no lane is open, which is what makes the lane draw its
     // "pick a destination" prompt instead of a curve.
     in property <string> automation-lane-name;
+    // The lane shown names a destination that is no longer there (see
+    // `AutomationTargetRow.missing`): drawn greyed and hatched. It can still
+    // be edited, cleared and removed, and it is saved; it plays nothing.
+    in property <bool> automation-lane-missing;
     // Natural-units readout of the point under the pointer, e.g. "1.2 kHz".
     in property <string> automation-value-text;
     // Index into `automation-targets`.
@@ -5883,6 +5905,16 @@ export component MainWindow inherits Window {
                                                     plugin-name: slot.plugin-name;
                                                     status: slot.plugin-status;
                                                     params: slot.plugin-params;
+                                                    // By dense index, like the rows: Rust
+                                                    // turns an index into the plugin's id.
+                                                    modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                    modulation-depths: slot.modulation-depths;
+                                                    modulation-allowed: slot.modulation-allowed;
+                                                    modulation-offsets: slot.modulation-offsets;
+                                                    modulation-route-counts: slot.modulation-route-counts;
+                                                    modulation-depth-changed(p, v) => { root.plugin-modulation-depth-changed(index, p, v); }
+                                                    modulation-edit-started(p) => { root.plugin-modulation-edit-started(index, p); }
+                                                    modulation-edit-finished(p) => { root.effect-modulation-edit-finished(index, p); }
                                                     param-changed(p, v) => { root.plugin-param-changed(index, p, v); }
                                                     reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     select-requested => { root.device-selected(index); }
@@ -6721,7 +6753,7 @@ export component MainWindow inherits Window {
                                                 viewbox-y: 0;
                                                 viewbox-width: parent.width / 1px;
                                                 viewbox-height: parent.height / 1px;
-                                                stroke: Theme.accent;
+                                                stroke: root.automation-lane-missing ? Theme.text-faint : Theme.accent;
                                                 stroke-width: 1.5px;
                                                 MoveTo {
                                                     x: automation-body.tick-x(root.automation-points[max(0, i - 1)].tick) / 1px;
@@ -6739,7 +6771,8 @@ export component MainWindow inherits Window {
                                                 width: 8px;
                                                 height: 8px;
                                                 border-radius: Theme.radius-lg;
-                                                background: point.selected ? Theme.focus : Theme.accent;
+                                                background: point.selected ? Theme.focus
+                                                    : root.automation-lane-missing ? Theme.text-faint : Theme.accent;
                                                 border-width: Theme.hairline;
                                                 border-color: Theme.surface;
                                             }

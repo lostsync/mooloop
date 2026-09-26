@@ -4779,11 +4779,12 @@ impl UiState {
     /// alternative -- silently deleting the automation -- loses work when a
     /// device is removed and re-added.
     fn refresh_automation(&self, window: &MainWindow) {
-        let destinations = self.session.automation_destinations();
+        // Plugin parameters included, and missing ones kept (MOO-228).
+        let destinations = plugin_ui::lane_destinations(&self.session);
         if self
             .session.automation_target
             .get()
-            .is_some_and(|target| !destinations.iter().any(|(addr, _, _)| *addr == target))
+            .is_some_and(|target| !destinations.iter().any(|row| row.address == target))
         {
             self.session.automation_target.set(None);
         }
@@ -4795,31 +4796,30 @@ impl UiState {
         let mut previous_device: Option<&str> = None;
         let rows: Vec<AutomationTargetRow> = destinations
             .iter()
-            .map(|(address, device, descriptor)| {
-                let starts_group = previous_device != Some(device.as_str());
-                previous_device = Some(device.as_str());
+            .map(|row| {
+                let starts_group = previous_device != Some(row.device.as_str());
+                previous_device = Some(row.device.as_str());
                 AutomationTargetRow {
-                    param_name: descriptor.name.into(),
-                    device: device.as_str().into(),
+                    param_name: row.name.as_str().into(),
+                    device: row.device.as_str().into(),
                     starts_group,
-                    open: open.contains(address),
-                    current: self.session.automation_target.get() == Some(*address),
+                    open: open.contains(&row.address),
+                    current: self.session.automation_target.get() == Some(row.address),
+                    missing: row.missing,
                 }
             })
             .collect();
         self.automation_target_model.set_vec(rows);
 
-        let label = self
+        let shown = self
             .session.automation_target
             .get()
-            .and_then(|target| {
-                destinations
-                    .iter()
-                    .find(|(address, _, _)| *address == target)
-                    .map(|(_, device, descriptor)| format!("{device} · {}", descriptor.name))
-            })
+            .and_then(|target| destinations.iter().find(|row| row.address == target));
+        let label = shown
+            .map(|row| format!("{} · {}", row.device, row.name))
             .unwrap_or_default();
         window.set_automation_lane_name(label.as_str().into());
+        window.set_automation_lane_missing(shown.is_some_and(|row| row.missing));
         self.refresh_automation_points(window);
     }
 
@@ -4849,8 +4849,11 @@ impl UiState {
             .and_then(|id| {
                 let lane = self.session.automation_lane()?;
                 let point = lane.points().iter().find(|point| point.id == id)?;
-                let descriptor = self.session.automation_descriptor()?;
-                Some(format_param_value(descriptor, point.value))
+                // A plugin parameter reads in its own plain units (MOO-228).
+                match self.session.automation_descriptor() {
+                    Some(descriptor) => Some(format_param_value(descriptor, point.value)),
+                    None => plugin_ui::plugin_value_text(&self.session, lane.target, point.value),
+                }
             })
             .unwrap_or_default();
         window.set_automation_value_text(readout.as_str().into());
@@ -5304,11 +5307,29 @@ impl UiState {
                             let offsets = self.session.destination_offsets(descriptors, address);
                             let counts =
                                 descriptor_route_count_slots(&state.modulation, descriptors, address);
-                            // The EQ's seven controls are a view over fifty
-                            // descriptors, so its overlays are gathered down
-                            // to what the face reads.
-                            match effect.params.eq() {
-                                Some(eq) => {
+                            // A plugin has no descriptor table: its overlays
+                            // are by dense index, the face's own numbering
+                            // (MOO-228). The EQ's seven controls are a view
+                            // over fifty descriptors, so its overlays are
+                            // gathered down to what the face reads.
+                            let plugin = match effect.params {
+                                mooloop_core::EffectParams::Plugin(plugin) => Some(plugin),
+                                _ => None,
+                            };
+                            match (plugin, effect.params.eq()) {
+                                (Some(plugin), _) => {
+                                    let overlays = plugin_ui::plugin_overlays(
+                                        &self.session,
+                                        armed,
+                                        effect.id,
+                                        plugin,
+                                    );
+                                    row.modulation_depths = overlays.depths.as_slice().into();
+                                    row.modulation_allowed = overlays.allowed.as_slice().into();
+                                    row.modulation_offsets = overlays.offsets.as_slice().into();
+                                    row.modulation_route_counts = overlays.counts.as_slice().into();
+                                }
+                                (None, Some(eq)) => {
                                     let ids = eq_face_ids(eq);
                                     row.modulation_depths =
                                         eq_overlay_view(&ids, &depths).as_slice().into();
@@ -5319,7 +5340,7 @@ impl UiState {
                                     row.modulation_route_counts =
                                         eq_overlay_view(&ids, &counts).as_slice().into();
                                 }
-                                None => {
+                                (None, None) => {
                                     row.modulation_depths = depths.as_slice().into();
                                     row.modulation_allowed = allowed.as_slice().into();
                                     row.modulation_offsets = offsets.as_slice().into();
@@ -5471,14 +5492,22 @@ impl UiState {
             let Some(mut row) = self.effect_slot_model.row_data(slot) else {
                 continue;
             };
-            let offsets = self
-                .session
-                .destination_offsets(effect.kind().descriptors(), |param| {
-                    ParamAddr::effect(scope, effect.id, param)
-                });
-            let offsets = match effect.params.eq() {
-                Some(eq) => eq_overlay_view(&eq_face_ids(eq), &offsets),
-                None => offsets,
+            let offsets = match effect.params {
+                // By dense index, the plugin face's own numbering (MOO-228).
+                mooloop_core::EffectParams::Plugin(plugin) => {
+                    self.session.plugin_destination_offsets(effect.id, plugin)
+                }
+                _ => {
+                    let offsets = self
+                        .session
+                        .destination_offsets(effect.kind().descriptors(), |param| {
+                            ParamAddr::effect(scope, effect.id, param)
+                        });
+                    match effect.params.eq() {
+                        Some(eq) => eq_overlay_view(&eq_face_ids(eq), &offsets),
+                        None => offsets,
+                    }
+                }
             };
             match write_offsets(&row.modulation_offsets, &offsets) {
                 OffsetsWrite::Unchanged => {}
@@ -5624,6 +5653,9 @@ impl UiState {
                 Some(row)
             })
             .collect();
+        // A plugin parameter has no descriptor, so the shelf names it from the
+        // plugin's own list, missing ones included (MOO-228).
+        let plugin_destinations = self.session.plugin_destinations();
         let routes: Vec<ModulationRouteRow> = channel
             .modulation
             .routes
@@ -5639,15 +5671,32 @@ impl UiState {
                     .session
                     .control_source_name(route.source_slot)
                     .unwrap_or_else(|| "SOURCE ?".to_string());
-                let (destination, allowed) = self
-                    .session.channel_modulation_destination(route.destination)
-                    .map(|(device, descriptor)| {
-                        (
-                            format!("{source_name} → {device} · {}", descriptor.name),
-                            ModDestinationDescriptor::for_param(descriptor).allowed,
-                        )
-                    })
-                    .unwrap_or_else(|| (format!("{source_name} → unavailable destination"), false));
+                let plugin = plugin_destinations
+                    .iter()
+                    .find(|row| row.address == route.destination);
+                let (destination, allowed) = match plugin {
+                    Some(row) => (
+                        format!("{source_name} → {} · {}", row.device, row.name),
+                        !row.missing
+                            && self
+                                .session
+                                .modulation_policy(route.destination)
+                                .is_some_and(|policy| policy.allowed),
+                    ),
+                    None => self
+                        .session
+                        .channel_modulation_destination(route.destination)
+                        .map(|(device, descriptor)| {
+                            (
+                                format!("{source_name} → {device} · {}", descriptor.name),
+                                ModDestinationDescriptor::for_param(descriptor).allowed,
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            (format!("{source_name} → unavailable destination"), false)
+                        }),
+                };
+                let missing = plugin.is_some_and(|row| row.missing);
                 let owner = match route.destination.owner {
                     // The source face's row only for a route made on the
                     // device the channel runs now. One left behind by a
@@ -5698,7 +5747,17 @@ impl UiState {
                     route_index: index as i32,
                     source_slot: route.source_slot as i32,
                     owner,
-                    param: route.destination.param as i32,
+                    // A plugin's id may be any `u32`, four billion included,
+                    // and must not wrap into an `int`: the row carries the
+                    // parameter's dense index, as its face does, or -1 for
+                    // one the plugin no longer lists.
+                    param: match route.destination.owner {
+                        ParamOwner::PluginParam { .. } => plugin_ui::route_param_index(
+                            &self.session,
+                            route.destination,
+                        ),
+                        _ => route.destination.param as i32,
+                    },
                     destination: destination.into(),
                     depth: route.depth,
                     polarity: match route.polarity {
@@ -5706,6 +5765,7 @@ impl UiState {
                         ModPolarity::Unipolar => 1,
                     },
                     allowed,
+                    missing,
                 })
             })
             .collect();
@@ -9837,7 +9897,15 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
-                let Some(command) = st.session.open_automation_lane(index) else {
+                // By the picker's own list, which holds plugin parameters the
+                // session's native one does not (MOO-228).
+                let target = usize::try_from(index).ok().and_then(|index| {
+                    plugin_ui::lane_destinations(&st.session)
+                        .get(index)
+                        .map(|row| row.address)
+                });
+                let Some(command) = target.and_then(|target| st.session.open_automation_lane_at(target))
+                else {
                     return;
                 };
                 let _ = tx.send(command);
@@ -11481,14 +11549,10 @@ impl AppUi {
                 // Only what the lane picker itself offers: the selected
                 // channel's source, strip and inserts.
                 let destination = address.and_then(|address| {
-                    st.borrow()
-                        .session
-                        .automation_destinations()
+                    plugin_ui::lane_destinations(&st.borrow().session)
                         .into_iter()
-                        .find(|(target, _, _)| *target == address)
-                        .map(|(target, device, descriptor)| {
-                            (target, format!("{device} · {}", descriptor.name))
-                        })
+                        .find(|row| row.address == address && !row.missing)
+                        .map(|row| (row.address, format!("{} · {}", row.device, row.name)))
                 });
                 let Some((target, label)) = destination else {
                     window.set_status_message("This control cannot be automated yet".into());
@@ -12269,6 +12333,10 @@ impl AppUi {
             &cmd_tx,
             &structural_tx,
             &sample_reset_tx,
+            {
+                let settings = ui_settings.clone();
+                Rc::new(move || settings.borrow().midi.learn_binds_port)
+            },
         );
         {
             let tx = cmd_tx.clone();

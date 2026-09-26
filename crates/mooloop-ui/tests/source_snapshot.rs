@@ -338,6 +338,7 @@ fn render_sampler_source_editor() {
             depth: 0.35,
             polarity: 1,
             allowed: true,
+            missing: false,
         },
     ]))));
     ui.set_modulation_max_sources(8);

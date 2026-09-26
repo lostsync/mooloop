@@ -67,6 +67,11 @@ export struct ModulationRouteRow {
     depth: float,
     polarity: int, // 0 = bipolar, 1 = unipolar
     allowed: bool,
+    // The destination is kept and drives nothing because it is no longer
+    // there: a plugin parameter the plugin stopped listing (MOO-74). Drawn
+    // greyed with an italic name, and still removable. Not plugin-specific:
+    // any kept-but-inert address can set it.
+    missing: bool,
 }
 
 // The rack reserves room for the shelf, so both files must agree on its
@@ -555,6 +560,7 @@ component RouteRow inherits Rectangle {
     in property <float> depth;
     in property <int> polarity;
     in property <bool> allowed;
+    in property <bool> missing;
     callback polarity-selected(int);
     callback removed();
 
@@ -567,8 +573,9 @@ component RouteRow inherits Rectangle {
         Text {
             horizontal-stretch: 1;
             text: root.destination;
-            color: root.allowed ? Theme.text : Theme.text-faint;
+            color: root.allowed && !root.missing ? Theme.text : Theme.text-faint;
             font-size: Theme.text-md;
+            font-italic: root.missing;
             vertical-alignment: center;
             overflow: elide;
         }
@@ -1710,6 +1717,7 @@ export component ModulationShelf inherits Rectangle {
                                 depth: route.depth;
                                 polarity: route.polarity;
                                 allowed: route.allowed;
+                                missing: route.missing;
                                 polarity-selected(value) => {
                                     root.route-polarity-changed(route.route-index, value);
                                 }

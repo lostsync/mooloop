@@ -2424,12 +2424,19 @@ land on its own when it starts to matter:
   ("Plugin Edit"), recorded once the plugin has gone quiet after the release,
   however long the drag paused. A **missing** plugin keeps its face, drawn
   from the parameter list the song remembers, greyed, with a badge saying it
-  is missing and plays dry; a plugin that failed says why. Not yet on the
-  face: the modulation ring and naming a parameter for a lane or a route
-  from its knob (a lane or route on a plugin parameter is still made from a
-  song or the session), a pinned subset with a sidebar list for a plugin
-  with hundreds of parameters, and a segmented selector for a stepped
-  parameter.
+  is missing and plays dry; a plugin that failed says why. **A plugin knob
+  is a destination like a native one** (MOO-228): with a modulator armed it
+  authors a route on the plugin's own parameter and draws the ring, the
+  offset and the route dots, and its context menu names it for a lane or a
+  MIDI mapping. The lane picker lists the channel's plugin parameters after
+  its inserts, under the plugin's name and chain place ("Test Gain 1"), and
+  the shelf names a route on one the same way. **A parameter the plugin
+  stops listing is kept** (Adam, MOO-74): its lane stays in the picker,
+  titled thin and italic by its id ("Parameter 4000000000"), the lane and
+  its shelf row draw greyed, and it plays nothing; when the plugin lists the
+  id again they read normally, with nothing to repair. Not yet on the face:
+  a pinned subset with a sidebar list for a plugin with hundreds of
+  parameters, and a segmented selector for a stepped parameter.
 - **A CLAP effect plays in a chain** (MOO-81, plugin-hosting 06). Besides
   the window (above), a plugin reaches a song from a song that already
   names it: a `plugin` effect device whose slot is in the song's `plugins`

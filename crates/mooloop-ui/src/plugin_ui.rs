@@ -24,13 +24,16 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
-use mooloop_core::{EffectParams, EffectSlotState, EngineCommand, MusicalEdge, PluginSlotId};
+use mooloop_core::{
+    DeviceId, EffectParams, EffectSlotState, EffectTarget, EngineCommand, MusicalEdge, ParamAddr,
+    ParamOwner, PluginSlotId,
+};
 use mooloop_engine::{CommandSink, StructuralCommand};
 use mooloop_plugin_host::scan::{PluginCache, ScannedPlugin};
 use mooloop_plugin_host::HostError;
 use mooloop_session::command::CommandState;
 use mooloop_session::engine::{EngineCommandSender, StructuralCommandSender};
-use mooloop_session::plugin_params::plugin_normalized;
+use mooloop_session::plugin_params::{plugin_normalized, plugin_plain};
 use mooloop_session::session::Session;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
@@ -404,6 +407,145 @@ impl UiState {
 }
 
 // ---------------------------------------------------------------------------
+// Lanes and routes on a plugin's parameters (MOO-228).
+
+/// A plugin face's modulation overlays, each indexed by a parameter's dense
+/// index -- the one number that crosses into Slint -- the way a native face's
+/// are indexed by descriptor id.
+#[derive(Default)]
+pub(crate) struct PluginOverlays {
+    pub depths: Vec<f32>,
+    pub allowed: Vec<bool>,
+    pub offsets: Vec<f32>,
+    pub counts: Vec<i32>,
+}
+
+/// The overlays for the plugin device `device`, whose slot is `slot`, on the
+/// selected channel's chain, with modulator `armed` (if any) assigning.
+pub(crate) fn plugin_overlays(
+    session: &Session,
+    armed: Option<u8>,
+    device: DeviceId,
+    slot: PluginSlotId,
+) -> PluginOverlays {
+    let Some(saved) = session.plugins.get(&slot) else {
+        return PluginOverlays::default();
+    };
+    let Some(channel) = session.channels.get(session.selected) else {
+        return PluginOverlays::default();
+    };
+    let scope = EffectTarget::Channel(session.selected as u8);
+    let mut overlays = PluginOverlays {
+        offsets: session.plugin_destination_offsets(device, slot),
+        ..PluginOverlays::default()
+    };
+    for info in &saved.params {
+        let address = ParamAddr::plugin_param(scope, device, info.id);
+        overlays
+            .depths
+            .push(armed.map_or(0.0, |armed| session.modulation_depth_for(armed, address)));
+        overlays
+            .allowed
+            .push(session.modulation_policy(address).is_some_and(|policy| policy.allowed));
+        // Every route, allowed or not, as a native knob counts them: an
+        // assignment is authored work the user can see and remove.
+        overlays.counts.push(
+            channel
+                .modulation
+                .destinations()
+                .filter(|destination| *destination == address)
+                .count() as i32,
+        );
+    }
+    overlays
+}
+
+/// The plugin parameter the face on chain row `row` names by `index`, as an
+/// address on the selected channel: the one place a face's index becomes the
+/// plugin's id for a route, a lane or a MIDI mapping. `None` when the rack is
+/// not showing the selected channel, the row is not a plugin, or the plugin
+/// lists no such index.
+pub(crate) fn face_param_address(session: &Session, row: usize, index: usize) -> Option<ParamAddr> {
+    let EffectTarget::Channel(channel) = session.effect_target else {
+        return None;
+    };
+    if channel as usize != session.selected {
+        return None;
+    }
+    let effect = session.channels.get(session.selected)?.effects.get(row)?;
+    let EffectParams::Plugin(slot) = effect.params else {
+        return None;
+    };
+    let id = session.plugin_param_id(slot, index)?;
+    Some(ParamAddr::plugin_param(session.effect_target, effect.id, id))
+}
+
+/// One row of the lane picker: a native destination with its descriptor, or
+/// a plugin parameter, which has none.
+#[derive(Clone, Debug)]
+pub(crate) struct LaneDestination {
+    pub address: ParamAddr,
+    pub device: String,
+    pub name: String,
+    /// A lane or route names it and the plugin no longer lists it (MOO-74):
+    /// kept, saved, and drawn as missing.
+    pub missing: bool,
+}
+
+/// Everything the lane picker offers, in its order: the session's native
+/// destinations, with the selected channel's plugin parameters placed after
+/// its inserts and before its strip -- where they sit in the signal path.
+/// The picker's index, the Automate request and the header label all read
+/// this one list, so they cannot disagree about what a position names.
+pub(crate) fn lane_destinations(session: &Session) -> Vec<LaneDestination> {
+    let native = session.automation_destinations();
+    let mut plugins = session
+        .plugin_destinations()
+        .into_iter()
+        .map(|row| LaneDestination {
+            address: row.address,
+            device: row.device,
+            name: row.name,
+            missing: row.missing,
+        });
+    let mut rows = Vec::with_capacity(native.len());
+    for (address, device, descriptor) in native {
+        if address.owner == ParamOwner::Strip {
+            rows.extend(plugins.by_ref());
+        }
+        rows.push(LaneDestination {
+            address,
+            device,
+            name: descriptor.name.to_string(),
+            missing: false,
+        });
+    }
+    rows.extend(plugins);
+    rows
+}
+
+/// A plugin lane point's value in the parameter's own plain units, for the
+/// lane header's readout. `None` for a native address, or a parameter the
+/// plugin no longer lists.
+pub(crate) fn plugin_value_text(session: &Session, address: ParamAddr, normalized: f32) -> Option<String> {
+    let info = session.plugin_param_info(address)?;
+    Some(plain_text(plugin_plain(info, normalized)).to_string())
+}
+
+/// The dense index a route row carries for a plugin parameter: its place in
+/// the plugin's list, or -1 when the plugin no longer lists it.
+pub(crate) fn route_param_index(session: &Session, address: ParamAddr) -> i32 {
+    let ParamOwner::PluginParam { device } = address.owner else {
+        return -1;
+    };
+    session
+        .plugin_slot_of(address.scope, device)
+        .and_then(|slot| session.plugin_param_index(slot, address.param))
+        .and_then(|index| i32::try_from(index).ok())
+        .unwrap_or(-1)
+}
+
+// ---------------------------------------------------------------------------
 // Adding a plugin, and editing one.
 
 /// The engine's two command queues as the [`CommandSink`] the session's
@@ -610,6 +752,9 @@ pub(crate) fn wire(
     tx: &EngineCommandSender,
     stx: &StructuralCommandSender,
     reset_tx: &std::sync::mpsc::Sender<usize>,
+    // Whether a MIDI learn made from a plugin knob binds the controller that
+    // taught it: the MIDI preference, read at the press.
+    learn_binds_port: Rc<dyn Fn() -> bool>,
 ) {
     let queues = Queues {
         tx: tx.clone(),
@@ -651,6 +796,57 @@ pub(crate) fn wire(
             };
             let _ = tx.send(command);
             st.refresh_plugin_faces();
+        });
+    }
+    {
+        // A plugin knob's press, when it is not a plain value edit: a MIDI
+        // learn, a naming press for the control menu, or the start of a
+        // route-depth drag -- the native `effect-modulation-edit-started`'s
+        // three answers, for an address built from the face's index here.
+        let st = state.clone();
+        let weak = window.as_weak();
+        let binds_port = learn_binds_port.clone();
+        window.on_plugin_modulation_edit_started(move |row, index| {
+            let (Some(window), Ok(row), Ok(index)) =
+                (weak.upgrade(), usize::try_from(row), usize::try_from(index))
+            else {
+                return;
+            };
+            let mut state = st.borrow_mut();
+            let Some(address) = face_param_address(&state.session, row, index) else {
+                return;
+            };
+            if state.name_if_asked(&window, address) {
+                return;
+            }
+            if state.learn_param_if_armed(&window, binds_port(), address) {
+                return;
+            }
+            state.begin_gesture(&window);
+        });
+    }
+    {
+        let st = state.clone();
+        let commands = commands.clone();
+        let tx = tx.clone();
+        let weak = window.as_weak();
+        window.on_plugin_modulation_depth_changed(move |row, index, depth| {
+            let (Some(window), Ok(row), Ok(index)) =
+                (weak.upgrade(), usize::try_from(row), usize::try_from(index))
+            else {
+                return;
+            };
+            crate::with_gesture_history(&st, &commands, &window, "Modulation depth", || {
+                let mut state = st.borrow_mut();
+                let Some(destination) = face_param_address(&state.session, row, index) else {
+                    return false;
+                };
+                if !state.set_armed_modulation_depth(&window, &tx, destination, depth) {
+                    state.refresh_modulation(&window);
+                    return false;
+                }
+                true
+            });
         });
     }
     {

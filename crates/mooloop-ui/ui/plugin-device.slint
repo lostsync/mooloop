@@ -41,6 +41,12 @@ export component PluginDeviceFace inherits EffectDeviceShell {
     // or empty when it is.
     in property <string> status;
     in property <[PluginParamRow]> params;
+    // The shell's modulation overlays (`modulation-depths` and the rest)
+    // are indexed here by a parameter's dense index (`PluginParamRow.index`),
+    // never its id, which may not fit an `int`. They stay apart from the
+    // rows because the offsets move every tick a modulator does, and a row
+    // carries text that would be re-measured with them (MOO-258); Rust
+    // writes them in place.
     callback param-changed(int /* index */, float /* normalized */);
 
     name: root.plugin-name;
@@ -116,8 +122,20 @@ export component PluginDeviceFace inherits EffectDeviceShell {
                     step: param.steps > 1 ? 1 / (param.steps - 1) : 0;
                     value-text: param.text;
                     enabled: param.enabled;
-                    modulation-allowed: false;
+                    // The plugin's own flags decide, through the same
+                    // policy the engine asks (`Session::modulation_policy`).
+                    modulation-armed: root.modulation-armed;
+                    modulation-allowed: root.modulation-allowed[param.index];
+                    modulation-depth: root.modulation-depths[param.index];
+                    modulation-offset: root.modulation-offsets[param.index];
+                    modulation-route-count: root.modulation-route-counts[param.index];
                     changed(v) => { root.param-changed(param.index, v); }
+                    modulation-depth-changed(v) => { root.modulation-depth-changed(param.index, v); }
+                    // Also how the knob names itself for a lane or a MIDI
+                    // mapping (`ControlRequest`), so it is forwarded even
+                    // for a parameter no route may reach.
+                    modulation-edit-started => { root.modulation-edit-started(param.index); }
+                    modulation-edit-finished => { root.modulation-edit-finished(param.index); }
                 }
             }
         }

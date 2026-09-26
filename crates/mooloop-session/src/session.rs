@@ -1809,18 +1809,8 @@ impl Session {
         let Some(channel) = self.channels.get(self.selected) else {
             return offsets;
         };
-        // The engine publishes one flat row a block; a route reads it as two
-        // halves, because they are captured at different rates. Split once
-        // here rather than per descriptor.
         let outputs = self.modulation_outputs.get();
-        let (modulators, rest) = outputs.split_at(MAX_MODULATORS_PER_CHANNEL);
-        let (outlets, performance) =
-            rest.split_at(mooloop_core::modulation::MAX_GENERATOR_OUTLETS);
-        let sources = mooloop_core::modulation::ControlSources {
-            modulators: modulators.try_into().expect("the rack's half"),
-            outlets: outlets.try_into().expect("the outlet band"),
-            performance: performance.try_into().expect("the performance band"),
-        };
+        let sources = Self::control_sources(&outputs);
         for descriptor in descriptors {
             let policy = ModDestinationDescriptor::for_param(descriptor);
             offsets[descriptor.id as usize] =
@@ -1829,6 +1819,25 @@ impl Session {
                     .offset_for(address(descriptor.id), sources, &policy);
         }
         offsets
+    }
+
+    /// The engine's last published source outputs, as the view a route reads.
+    ///
+    /// The engine publishes one flat row a block; a route reads it as its
+    /// bands, because they are captured at different rates. Split once per
+    /// read rather than per destination. Shared by the native and the plugin
+    /// offsets (MOO-228), so the two cannot read the row differently.
+    pub(crate) fn control_sources(
+        outputs: &[f32; CONTROL_SOURCE_SLOTS],
+    ) -> mooloop_core::modulation::ControlSources<'_> {
+        let (modulators, rest) = outputs.split_at(MAX_MODULATORS_PER_CHANNEL);
+        let (outlets, performance) =
+            rest.split_at(mooloop_core::modulation::MAX_GENERATOR_OUTLETS);
+        mooloop_core::modulation::ControlSources {
+            modulators: modulators.try_into().expect("the rack's half"),
+            outlets: outlets.try_into().expect("the outlet band"),
+            performance: performance.try_into().expect("the performance band"),
+        }
     }
 
     /// Which tracks `bus` may reach without closing a loop.

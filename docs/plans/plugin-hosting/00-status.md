@@ -1377,7 +1377,7 @@ from the list the song remembers, greyed, with the reason as a badge.
   name more (step 07 above).
 - **No modulation ring, and no naming a parameter from its knob** for a lane,
   a route or MIDI learn; nor the missing-parameter drawing in the lane menu
-  and on the shelf. MOO-228.
+  and on the shelf. MOO-228, landed 2026-09-26 (below).
 - **The drag's undo is the pump's step, held for the gesture.** Step 07 left
   "a drag's begin and end belong to the face". The shared knob already
   brackets every drag, wheel notch, reset and typed value with
@@ -1415,6 +1415,38 @@ with the same gain on the face, and exported at that gain against the dry
 loop. A missing plugin's face says so and its knob sends nothing.
 `ui/tests/plugin_formats_stay_out.rs` holds the window to the neutral types,
 now that `mooloop-ui` depends on the host crate.
+
+**Step 08's remainder, 2026-09-26 (MOO-228).** A plugin knob is a
+destination like a native one. The face forwards the shell's modulation
+overlays and edits by dense index. The overlays are depth, allowed (from
+`Session::modulation_policy`), offset, and route count. The edits are
+`plugin-modulation-edit-started` and `-depth-changed`. `plugin_ui` turns
+the index into the address (`face_param_address`, the one place that
+happens), then asks for the same three answers as a native knob: a naming
+press for the control menu, a MIDI learn, or a route-depth drag. The
+offsets ride the per-tick in-place path (`refresh_modulation_offsets`,
+`Session::plugin_destination_offsets`), never a row with text in it
+(MOO-258).
+- **The lane picker is one list, in `plugin_ui::lane_destinations`.** It is
+  the session's native `automation_destinations`, with Control's
+  `Session::plugin_destinations` placed after the inserts and before the
+  strip. The picker's index, the Automate request and the lane header all
+  read that list, and a lane opens by address. A native row keeps its order,
+  so a song with no plugin has exactly the list it had.
+- **A route row names a plugin parameter and carries its index.** The row
+  shows "LFO 1 → Test Gain 1 · Gain". `ModulationRouteRow.param` is the
+  dense index, or -1, and never the id: 4 000 000 000 does not fit in an
+  `int`.
+- **Missing is drawn, never dropped** (Adam, MOO-74). A lane or route on an
+  id the plugin no longer lists is kept.
+  - The picker titles it thin and italic, by its id ("Parameter
+    4000000000"). The song keeps no older name once a rescan has replaced
+    the list, so the id is the only name left.
+  - The lane draws greyed, and the route row greyed and italic.
+  - When the id is listed again, all three read normally.
+  - The flags (`AutomationTargetRow.missing`, `automation-lane-missing`,
+    `ModulationRouteRow.missing`) are not plugin-specific. MOO-270's inert
+    Source lanes can set them too.
 
 ## The test plugins
 

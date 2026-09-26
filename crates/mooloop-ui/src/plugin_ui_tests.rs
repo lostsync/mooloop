@@ -220,7 +220,7 @@ fn harness_with(project: &Project) -> Harness {
     let commands = Rc::new(RefCell::new(CommandState::default()));
     // Held for the harness's life: a dropped receiver fails the send.
     let (reset_tx, reset_rx) = mpsc::channel::<usize>();
-    plugin_ui::wire(&window, &state, &commands, &tx, &stx, &reset_tx);
+    plugin_ui::wire(&window, &state, &commands, &tx, &stx, &reset_tx, Rc::new(|| true));
     Harness {
         window,
         state,
@@ -529,4 +529,238 @@ fn an_instrument_from_the_add_channel_menu_becomes_a_new_plugin_channel() {
         ["Plugin channel added"],
         "the channel and its source are one undo step"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Lanes and routes on a plugin's parameters (MOO-228).
+
+/// The test gain in a live chain, ticked until its face is up.
+fn live_gain() -> Harness {
+    let mut h = harness_with(&drum_loop());
+    // The catalogue is read when the PLUGINS tab opens, as the app reads it.
+    h.state.borrow_mut().enter_browser_tab(BrowserTab::Plugins);
+    assert!(plugin_ui::add_plugin(
+        &h.state,
+        &h.commands,
+        &h.window,
+        test_plugin::GAIN_ID,
+        None,
+        &plugin_ui::Queues {
+            tx: h.tx.clone(),
+            stx: h.stx.clone(),
+            reset_tx: mpsc::channel().0,
+        },
+    ));
+    for _ in 0..3 {
+        h.tick();
+    }
+    h
+}
+
+fn plugin_device(h: &Harness) -> mooloop_core::DeviceId {
+    h.state.borrow().session.effect_chain().expect("a chain")[0].id
+}
+
+fn nudge_index(h: &Harness) -> usize {
+    let slot = h.plugin_slot();
+    h.state
+        .borrow()
+        .session
+        .plugin_param_index(slot, test_plugin::PARAM_NUDGE)
+        .expect("the gain lists Nudge")
+}
+
+/// A modulator in slot 0 and a route from it to `destination`, written into
+/// the rack directly, as a song that carries one would: the shelf's own
+/// gesture refuses a destination that takes no modulation.
+fn add_route(h: &Harness, destination: ParamAddr) {
+    let mut st = h.state.borrow_mut();
+    if st.session.channels[0].modulation.slots[0].is_none() {
+        st.session
+            .add_modulation_source(mooloop_core::ModulatorKind::Lfo)
+            .expect("room for a modulator");
+    }
+    st.session.channels[0]
+        .modulation
+        .add_route(mooloop_core::ModRoute::to_slot(
+            0,
+            destination,
+            0.5,
+            mooloop_core::ModPolarity::Bipolar,
+        ))
+        .expect("room for a route");
+    st.refresh_modulation(&h.window);
+}
+
+/// **A plugin knob arms a route like a native knob.** With a modulator
+/// armed, a wheel step on the face's Gain knob authors a route on the
+/// plugin's own id, and the knob and the shelf both show it.
+#[test]
+fn a_plugin_knob_arms_a_route_and_shows_its_ring() {
+    let mut h = live_gain();
+    let device = plugin_device(&h);
+    {
+        let mut st = h.state.borrow_mut();
+        st.session
+            .add_modulation_source(mooloop_core::ModulatorKind::Lfo)
+            .expect("room for a modulator");
+        st.session.modulation_armed_slot.set(Some(0));
+        st.refresh_modulation(&h.window);
+    }
+    h.window.set_modulation_armed_slot(0);
+    let gain = h.slider("Gain");
+    wheel(&h.window, &gain);
+    h.tick();
+
+    let gain_address = ParamAddr::plugin_param(EffectTarget::Channel(0), device, test_plugin::PARAM_GAIN);
+    let st = h.state.borrow();
+    let routes: Vec<_> = st.session.channels[0].modulation.destinations().collect();
+    assert_eq!(routes, [gain_address], "the wheel authored one route, on the plugin's id");
+    let row = st.modulation_route_model.row_data(0).expect("the shelf lists it");
+    assert!(row.destination.contains("Test Gain 1 · Gain"), "{}", row.destination);
+    assert!(row.allowed && !row.missing, "{row:?}");
+    assert_eq!(row.param, 0, "the route row carries the dense index");
+    let face = st.effect_slot_model.row_data(0).expect("the face's row");
+    assert_eq!(face.modulation_route_counts.row_data(0), Some(1), "the knob counts its route");
+    assert!(face.modulation_allowed.row_data(0) == Some(true));
+}
+
+/// **Index in, id out, for the parameter whose id is four billion.** The
+/// face names Nudge by its dense index, and what Rust makes of it is the
+/// plugin's `u32` id whole; a route on it lists under its name with the
+/// index, never a wrapped id, in the row.
+#[test]
+fn nudge_is_named_by_index_and_addressed_by_its_whole_id() {
+    let h = live_gain();
+    let device = plugin_device(&h);
+    let index = nudge_index(&h);
+    let nudge = ParamAddr::plugin_param(EffectTarget::Channel(0), device, test_plugin::PARAM_NUDGE);
+
+    // A naming press, as the knob's context menu makes one.
+    h.window.global::<ControlRequest>().set_naming(true);
+    h.window.invoke_plugin_modulation_edit_started(0, index as i32);
+    h.window.global::<ControlRequest>().set_naming(false);
+    assert_eq!(h.state.borrow().named_param, Some(nudge));
+
+    // The lane picker offers it under the plugin's device, and opens it.
+    let at = {
+        let st = h.state.borrow();
+        st.refresh_automation(&h.window);
+        plugin_ui::lane_destinations(&st.session)
+            .iter()
+            .position(|row| row.address == nudge)
+            .expect("the picker offers Nudge")
+    };
+    let rows = h.window.get_automation_targets();
+    let row = rows.row_data(at).expect("a menu row");
+    assert_eq!((row.device.as_str(), row.param_name.as_str()), ("Test Gain 1", "Nudge"));
+    assert!(!row.missing);
+
+    // A route on it -- not modulatable, so kept and inert -- lists by index.
+    add_route(&h, nudge);
+    let row = h.state.borrow().modulation_route_model.row_data(0).expect("a route row");
+    assert_eq!(row.param, index as i32, "the dense index, not {}", test_plugin::PARAM_NUDGE as i32);
+    assert!(row.destination.contains("Nudge") && !row.allowed && !row.missing, "{row:?}");
+}
+
+/// The picker's list is the session's native list with the plugin rows
+/// placed in it, so every native row keeps its order, and a song with no
+/// plugin gets exactly the list -- and so the lane at each index -- it
+/// always did.
+#[test]
+fn the_picker_keeps_every_native_row_in_order() {
+    let natives = |session: &Session| -> Vec<ParamAddr> {
+        session
+            .automation_destinations()
+            .into_iter()
+            .map(|(address, _, _)| address)
+            .collect()
+    };
+    let h = harness_with(&drum_loop());
+    {
+        let st = h.state.borrow();
+        let picker: Vec<ParamAddr> =
+            plugin_ui::lane_destinations(&st.session).iter().map(|row| row.address).collect();
+        assert_eq!(picker, natives(&st.session), "no plugin, no change");
+    }
+    let h = live_gain();
+    let st = h.state.borrow();
+    let picker = plugin_ui::lane_destinations(&st.session);
+    let native_rows: Vec<ParamAddr> = picker
+        .iter()
+        .map(|row| row.address)
+        .filter(|address| !matches!(address.owner, ParamOwner::PluginParam { .. }))
+        .collect();
+    assert_eq!(native_rows, natives(&st.session));
+    let first_plugin = picker
+        .iter()
+        .position(|row| matches!(row.address.owner, ParamOwner::PluginParam { .. }))
+        .expect("the gain's parameters are offered");
+    assert_eq!(
+        picker[first_plugin + 4].address.owner,
+        ParamOwner::Strip,
+        "the plugin's four parameters sit just before the strip"
+    );
+}
+
+/// **A parameter the plugin stops listing is kept and drawn as missing, and
+/// comes back when it returns** (Adam, MOO-74; plugin-hosting 08). A lane
+/// and a route on Nudge; the plugin's list loses it, as a `params.rescan`
+/// leaves it; both read as missing -- the menu row italic, the lane greyed,
+/// the route row greyed -- and nothing is dropped. The list regains it and
+/// they read normally, with no repair step.
+#[test]
+fn a_missing_plugin_parameter_is_drawn_missing_and_reunited() {
+    let h = live_gain();
+    let device = plugin_device(&h);
+    let slot = h.plugin_slot();
+    let nudge = ParamAddr::plugin_param(EffectTarget::Channel(0), device, test_plugin::PARAM_NUDGE);
+    h.state
+        .borrow_mut()
+        .session
+        .open_automation_lane_at(nudge)
+        .expect("a lane on Nudge");
+    add_route(&h, nudge);
+    let listed = h.state.borrow().session.plugins[&slot].params.clone();
+
+    let read = |h: &Harness| {
+        let st = h.state.borrow();
+        st.refresh_automation(&h.window);
+        st.refresh_modulation(&h.window);
+        let at = plugin_ui::lane_destinations(&st.session)
+            .iter()
+            .position(|row| row.address == nudge)
+            .expect("the lane's destination is still offered");
+        let menu = h.window.get_automation_targets().row_data(at).expect("its menu row");
+        let route = st.modulation_route_model.row_data(0).expect("its route row");
+        (menu, h.window.get_automation_lane_missing(), route)
+    };
+
+    // Gone from the list, as a rescan that drops it leaves it.
+    h.state
+        .borrow_mut()
+        .session
+        .plugins
+        .get_mut(&slot)
+        .expect("the slot")
+        .params
+        .retain(|info| info.id != test_plugin::PARAM_NUDGE);
+    let (menu, lane_missing, route) = read(&h);
+    assert!(menu.missing, "the menu row reads as missing: {menu:?}");
+    assert_eq!(menu.param_name.as_str(), "Parameter 4000000000", "named by its id");
+    assert!(menu.current && lane_missing, "the lane shown is drawn missing");
+    assert!(route.missing && !route.allowed, "the route row reads as missing: {route:?}");
+    assert_eq!(route.param, -1, "no index names a parameter the plugin does not list");
+    {
+        let st = h.state.borrow();
+        assert_eq!(st.session.automation_lanes().map(Vec::len), Some(1), "the lane is kept");
+        assert!(st.session.channels[0].modulation.routes[0].is_some(), "the route is kept");
+    }
+
+    // Back in the list: the same rows, normal again.
+    h.state.borrow_mut().session.plugins.get_mut(&slot).expect("the slot").params = listed;
+    let (menu, lane_missing, route) = read(&h);
+    assert!(!menu.missing && menu.param_name.as_str() == "Nudge", "{menu:?}");
+    assert!(!lane_missing);
+    assert!(!route.missing && route.destination.contains("Nudge"), "{route:?}");
 }

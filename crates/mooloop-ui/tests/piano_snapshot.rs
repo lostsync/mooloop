@@ -142,6 +142,7 @@ fn render_piano_lanes_snapshot() {
             starts_group: true,
             open: true,
             current: true,
+            missing: false,
         },
         AutomationTargetRow {
             param_name: "Resonance".into(),
@@ -149,6 +150,7 @@ fn render_piano_lanes_snapshot() {
             starts_group: false,
             open: false,
             current: false,
+            missing: false,
         },
     ]))));
     ui.on_automation_point_hit_test(move |tick, value, tolerance| {
