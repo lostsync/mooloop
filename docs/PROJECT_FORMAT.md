@@ -831,6 +831,55 @@ naming them loses only those orphaned slots in an older build.
 A song with no plugins writes neither key, so it is byte-identical to one
 written before the table existed.
 
+**A plugin device's preset** (MOO-222, 2026-09-26) is an ordinary `effect`
+document whose row is the plugin device, with the slot written unassigned
+(`state = 4294967295`), and a top-level `plugin` table beside `document`
+holding that slot's `PluginSlotState`: the `plugin` reference, `params`,
+`pinned` and `state`, exactly as a song's `plugins` table writes them. Its
+list is `contains = ["effect_params", "effect_plugin"]`:
+
+```toml
+format_version = 1
+document_type = "effect"
+asset_mode = "embedded"
+contains = ["effect_params", "effect_plugin"]
+
+[document.params]
+type = "plugin"
+state = 4294967295
+
+[plugin.plugin]
+format = "clap"
+id = "org.example.gain"
+name = "Gain"
+
+[[plugin.state]]
+tag = "clap"
+data = "..."
+```
+
+- The state is what the plugin held when the preset was saved, asked of the
+  live instance, not the song's last capture. Saving a preset writes nothing
+  into the song.
+- Loading one onto a plugin device of the same plugin (same `format` and
+  `id`; the version may differ) mints the preset's plugin a **new slot** in
+  the song it lands in and opens it with that state. The device keeps its
+  identity, so its lanes and routes stay. The old slot leaves the song, and
+  its instance is retired once its processor is back. An undo brings the old
+  slot back as it was.
+- **0.1.5 refuses it.** 0.1.5 checks an `effect` bundle's `contains` against
+  `["effect_params"]` before it parses the document, so it meets
+  `effect_plugin` and refuses the bundle
+  (`an_older_reader_refuses_a_plugin_preset`). A bundle that says
+  `effect_plugin` and has no `plugin` table, or whose row is not a plugin
+  device, is refused as well.
+- Presets are kept under `presets/effects/plugin/<vendor>/<id>/`, one folder
+  per plugin, and a plugin device's rail lists only its own plugin's folder.
+  An `effect_params` bundle holding a plugin row was never written by the
+  application. It still opens as it did, but no row loads it.
+- Every other document leaves the `plugin` key out, so each writes
+  byte-identical to before.
+
 ## Kit And Channel Documents
 
 A kit document contains `document.channels`, an array of channel setups. It

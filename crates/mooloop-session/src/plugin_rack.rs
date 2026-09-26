@@ -946,30 +946,7 @@ impl crate::session::Session {
             self.plugins.remove(&slot);
             return None;
         };
-        let config = Self::plugin_config(handle);
-        let opened = self
-            .plugin_rack
-            .open(&plugin, &PluginState::default(), config)
-            .and_then(|instance| {
-                let params = instance.params().to_vec();
-                let node = self.plugin_rack.insert(slot, instance)?;
-                Ok((node, params))
-            });
-        let node: Box<dyn AudioNode + Send> = match opened {
-            Ok((node, params)) if !self.misplaced(slot) => {
-                if let Some(state) = self.plugins.get_mut(&slot) {
-                    state.params = params;
-                }
-                node
-            }
-            // An instrument: refused, and retired by `misplaced`.
-            Ok(_) => Box::new(PluginPlaceholder::new(slot)),
-            Err(error) => {
-                log_warn!("plugin", "{}: {error}", plugin.name);
-                self.plugin_rack.record_problem(slot, error);
-                Box::new(PluginPlaceholder::new(slot))
-            }
-        };
+        let node = self.host_new_plugin(slot, &plugin, &PluginState::default(), &*handle);
         let align = IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
         let _ = handle.send_structural(StructuralCommand::InstallEffect {
             target,
@@ -997,6 +974,47 @@ impl crate::session::Session {
             kind: EffectKind::Plugin,
             params: EffectParams::Plugin(slot),
         })
+    }
+
+    /// Open `plugin` with `state` into the freshly minted `slot` and return
+    /// the processor for its device to install -- or the placeholder, when it
+    /// cannot be opened, with the reason kept for [`Self::plugin_problem`].
+    ///
+    /// The second half of [`Self::insert_plugin_effect`], and of an effect
+    /// preset's load onto a plugin device (MOO-222, Effects'
+    /// `load_plugin_effect_preset`), which opens its new slot with the
+    /// preset's state. `slot` must already be in `plugins` and not hosted.
+    pub(crate) fn host_new_plugin(
+        &mut self,
+        slot: PluginSlotId,
+        plugin: &PluginRef,
+        state: &PluginState,
+        handle: &impl CommandSink,
+    ) -> Box<dyn AudioNode + Send> {
+        let config = Self::plugin_config(handle);
+        let opened = self
+            .plugin_rack
+            .open(plugin, state, config)
+            .and_then(|instance| {
+                let params = instance.params().to_vec();
+                let node = self.plugin_rack.insert(slot, instance)?;
+                Ok((node, params))
+            });
+        match opened {
+            Ok((node, params)) if !self.misplaced(slot) => {
+                if let Some(state) = self.plugins.get_mut(&slot) {
+                    state.params = params;
+                }
+                node
+            }
+            // An instrument: refused, and retired by `misplaced`.
+            Ok(_) => Box::new(PluginPlaceholder::new(slot)),
+            Err(error) => {
+                log_warn!("plugin", "{}: {error}", plugin.name);
+                self.plugin_rack.record_problem(slot, error);
+                Box::new(PluginPlaceholder::new(slot))
+            }
+        }
     }
 
     /// Whether a plugin finished an edit of its own that the song does not

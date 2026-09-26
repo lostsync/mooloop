@@ -2844,6 +2844,80 @@ fn effect_presets_of_kind(
         .filter(move |preset| preset.kind == PresetKind::Effect(kind))
 }
 
+/// The effect presets `effect`'s rail offers, in the order its menu lists
+/// them and a menu index resolves back through: those saved for its kind --
+/// and for a hosted plugin device, only those saved for its plugin, which
+/// live in that plugin's own directory (MOO-222). A plugin whose slot the
+/// song does not have offers none.
+fn row_presets<'a>(
+    presets: &'a [PresetSummary],
+    effect: &EffectSlotState,
+    plugins: &mooloop_core::PluginSlots,
+) -> impl Iterator<Item = &'a PresetSummary> + 'a {
+    let kind = effect.kind();
+    let plugin_dir = match effect.params {
+        mooloop_core::EffectParams::Plugin(slot) => {
+            Some(plugins.get(&slot).map(|saved| plugin_presets_dir(&saved.plugin)))
+        }
+        _ => None,
+    };
+    effect_presets_of_kind(presets, kind).filter(move |preset| match &plugin_dir {
+        None => true,
+        Some(dir) => dir.as_deref().is_some_and(|dir| preset.path.parent() == Some(dir)),
+    })
+}
+
+/// Where a hosted plugin's device presets are kept:
+/// `presets/effects/plugin/<vendor>/<id>/` (MOO-222). By the plugin's
+/// identifier, not its name, so a preset follows the plugin across a rename
+/// and a version; the vendor is only there to keep one folder from holding
+/// every plugin on the machine.
+fn plugin_presets_dir(plugin: &mooloop_core::PluginRef) -> PathBuf {
+    // A folder name, never a path: sanitising keeps a separator out, and a
+    // name that is nothing but dots would climb out of the folder.
+    let folder = |text: &str| {
+        let name = mooloop_project::sanitize_preset_name(text);
+        if name.chars().all(|ch| ch == '.') {
+            format!("_{name}")
+        } else {
+            name
+        }
+    };
+    let vendor = if plugin.vendor.trim().is_empty() {
+        "unknown"
+    } else {
+        plugin.vendor.trim()
+    };
+    settings::effect_presets_dir(EffectKind::Plugin)
+        .join(folder(vendor))
+        .join(folder(&plugin.id))
+}
+
+/// Every hosted plugin's device presets, from every
+/// `presets/effects/plugin/<vendor>/<id>/` folder (MOO-222). Kept in the one
+/// flat list with the native kinds'; `row_presets` narrows it to a row's
+/// plugin by folder.
+fn plugin_effect_presets() -> Vec<PresetSummary> {
+    let folders = |dir: &Path| -> Vec<PathBuf> {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut folders: Vec<PathBuf> = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect();
+        folders.sort();
+        folders
+    };
+    folders(&settings::effect_presets_dir(EffectKind::Plugin))
+        .iter()
+        .flat_map(|vendor| folders(vendor))
+        .flat_map(|plugin| mooloop_project::list_presets(&plugin))
+        .filter(|preset| preset.kind == PresetKind::Effect(EffectKind::Plugin))
+        .collect()
+}
+
 /// The parameter id behind each of the EQ face's controls, for the target it
 /// is currently showing, indexed by the face's own control number.
 ///
@@ -2995,6 +3069,9 @@ fn layer_branch_rows(branches: &[layer_view::BranchView]) -> ModelRc<LayerBranch
 fn effect_slot_row(
     slot: &EffectSlotState,
     presets: &[PresetSummary],
+    // The song's plugins, for a plugin device's rail to offer only its own
+    // plugin's presets (MOO-222).
+    plugins: &mooloop_core::PluginSlots,
     preset_name: Option<&str>,
     placement: RackPlacement,
     // What the engine is running at, for the EQ's response curve: the plot
@@ -3010,7 +3087,7 @@ fn effect_slot_row(
     } = placement;
     let branches = layer_branch_rows(&view.branches);
     let kind = slot.kind();
-    let preset_options: Vec<slint::SharedString> = effect_presets_of_kind(presets, kind)
+    let preset_options: Vec<slint::SharedString> = row_presets(presets, slot, plugins)
         .map(preset_menu_label)
         .collect();
     let mut p = [0.0f32; EFFECT_ROW_PARAMS];
@@ -5019,6 +5096,7 @@ impl UiState {
             let mut row = effect_slot_row(
                 effect,
                 &self.session.effect_presets,
+                &self.session.plugins,
                 self.session
                     .effect_preset_name(self.session.effect_target, effect.id),
                 RackPlacement {
@@ -5285,6 +5363,7 @@ impl UiState {
                             let mut row = effect_slot_row(
                                 effect,
                                 &self.session.effect_presets,
+                                &self.session.plugins,
                                 self.session.effect_preset_name(
                                     EffectTarget::Channel(channel),
                                     effect.id,
@@ -5366,6 +5445,7 @@ impl UiState {
                                 let mut row = effect_slot_row(
                                     effect,
                                     &self.session.effect_presets,
+                                    &self.session.plugins,
                                     self.session.effect_preset_name(target, effect.id),
                                     RackPlacement {
                                         depth: mooloop_core::depth_at(effects, slot) as i32,
@@ -7706,6 +7786,23 @@ impl AppUi {
                             "mooloop-effect-run",
                             "Container preset saved",
                         ),
+                        // A plugin device's go in its plugin's own folder, so
+                        // they are offered only to that plugin (MOO-222).
+                        (None, Some(effect)) if effect.kind() == EffectKind::Plugin => {
+                            match &source.plugin {
+                                Some(plugin) => (
+                                    plugin_presets_dir(&plugin.plugin),
+                                    "mooloop-effect",
+                                    "Plugin preset saved",
+                                ),
+                                None => {
+                                    window.set_status_message(
+                                        "This plugin device has no plugin to save".into(),
+                                    );
+                                    return;
+                                }
+                            }
+                        }
                         (None, Some(effect)) => (
                             settings::effect_presets_dir(effect.kind()),
                             "mooloop-effect",
@@ -7758,12 +7855,24 @@ impl AppUi {
                                     info,
                                     AssetMode::Embedded,
                                 ),
-                                (None, Some(effect)) => mooloop_project::save_effect_preset(
-                                    &path,
-                                    &effect,
-                                    info,
-                                    AssetMode::Embedded,
-                                ),
+                                (None, Some(effect)) => match &source.plugin {
+                                    // With the state the plugin holds now.
+                                    Some(plugin) if effect.kind() == EffectKind::Plugin => {
+                                        mooloop_project::save_plugin_effect_preset(
+                                            &path,
+                                            &effect,
+                                            plugin,
+                                            info,
+                                            AssetMode::Embedded,
+                                        )
+                                    }
+                                    _ => mooloop_project::save_effect_preset(
+                                        &path,
+                                        &effect,
+                                        info,
+                                        AssetMode::Embedded,
+                                    ),
+                                },
                                 // Nothing to save. This returned without
                                 // sending, which left the File menu disabled
                                 // (MOO-103): every started operation reports.
@@ -12712,16 +12821,15 @@ impl AppUi {
                 let (Ok(slot), Ok(index)) = (usize::try_from(slot), usize::try_from(index)) else {
                     return;
                 };
-                // The index names an entry of this row's kind, in the order
-                // `effect_presets_of_kind` built the row's menu from.
+                // The index names an entry of this row's menu, in the order
+                // `row_presets` built it.
                 let Some(chosen) = ({
                     let st = st.borrow();
                     st.session
                         .effect_chain()
                         .and_then(|chain| chain.get(slot))
-                        .map(EffectSlotState::kind)
-                        .and_then(|kind| {
-                            effect_presets_of_kind(&st.session.effect_presets, kind)
+                        .and_then(|effect| {
+                            row_presets(&st.session.effect_presets, effect, &st.session.plugins)
                                 .nth(index)
                                 .map(|preset| (preset.path.clone(), preset.name.clone()))
                         })
@@ -12736,6 +12844,23 @@ impl AppUi {
                     Ok(report) => match report.document {
                         LoadedDocument::Effect(effect) => Ok(*effect),
                         LoadedDocument::EffectRun(run) => Err(*run),
+                        // A plugin device's preset brings its plugin, and
+                        // lands in a slot of its own (MOO-222).
+                        LoadedDocument::PluginEffect { effect, plugin } => {
+                            load_plugin_preset_onto(
+                                &st,
+                                &window,
+                                &commands,
+                                (&ctx, &stx),
+                                PluginPresetLoad {
+                                    slot,
+                                    effect: &effect,
+                                    plugin: &plugin,
+                                    name: &name,
+                                },
+                            );
+                            return;
+                        }
                         _ => {
                             log_warn!("project", "{} is not an effect preset", path.display());
                             window.set_status_message(
@@ -19068,9 +19193,11 @@ fn refresh_preset_menus(state: &Rc<RefCell<UiState>>, window: &MainWindow) {
     let channel_presets = mooloop_project::list_presets(&settings::channel_presets_dir());
     // Every kind's directory in one scan, kept flat: each rack row filters
     // the list down to its own kind when its row is built.
+    // A hosted plugin's are in folders of their own, one a plugin (MOO-222).
     let effect_presets: Vec<PresetSummary> = EffectKind::ALL
         .iter()
         .flat_map(|kind| mooloop_project::list_presets(&settings::effect_presets_dir(*kind)))
+        .chain(plugin_effect_presets())
         .collect();
     {
         let mut st = state.borrow_mut();
@@ -19680,16 +19807,82 @@ fn push_browser_rows(
     }
 }
 
+/// A hosted plugin device's preset, and the rack row it is loading onto.
+struct PluginPresetLoad<'a> {
+    slot: usize,
+    effect: &'a EffectSlotState,
+    plugin: &'a mooloop_core::PluginSlotState,
+    name: &'a str,
+}
+
+/// Load a plugin device's preset onto the plugin device in `load.slot`, as
+/// one undo step (MOO-222): the session mints the preset's plugin a slot,
+/// opens it with the preset's state and installs it in place, and retires
+/// the one it replaced once its processor is back.
+fn load_plugin_preset_onto(
+    st: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    commands: &Rc<RefCell<CommandState>>,
+    (tx, stx): (&EngineCommandSender, &StructuralCommandSender),
+    load: PluginPresetLoad<'_>,
+) {
+    let before = project_snapshot(&st.borrow(), window);
+    let loaded = {
+        let mut state = st.borrow_mut();
+        let mut sink = plugin_ui::QueuedSink {
+            tx,
+            stx,
+            sample_rate: state.audio_sample_rate,
+        };
+        let target = state.session.load_plugin_effect_preset(
+            load.slot,
+            load.effect,
+            load.plugin,
+            load.name,
+            &mut sink,
+        );
+        if target.is_some() {
+            state.sync_effects();
+            state.refresh_automation(window);
+            state.refresh_modulation(window);
+        }
+        target
+    };
+    let Some(_) = loaded else {
+        log_warn!("project", "{} does not fit slot {} on this chain", load.name, load.slot);
+        window.set_status_message("That preset is for a different plugin".into());
+        return;
+    };
+    st.borrow_mut().refresh_plugin_faces();
+    record_project_history(commands, before, st, window, "Effect preset loaded");
+    let problem = {
+        let st = st.borrow();
+        st.session
+            .effect_chain()
+            .and_then(|chain| chain.get(load.slot))
+            .and_then(|effect| match effect.params {
+                mooloop_core::EffectParams::Plugin(slot) => st.session.plugin_problem(slot),
+                _ => None,
+            })
+    };
+    if let Some(error) = problem {
+        window.set_status_message(
+            format!("Loaded {}, but the plugin is not playing: {error}", load.name).into(),
+        );
+    }
+}
+
 /// Where a double-clicked effect preset loads *into*, when it does: the
 /// selected device, when it is the preset's own kind, as the slot and the
 /// preset's index in that kind's rail menu (`effect_presets_of_kind`), which
 /// is what `effect-preset-selected` takes. `None` means add a new device.
 fn preset_load_target(session: &Session, kind: EffectKind, path: &Path) -> Option<(usize, usize)> {
     let slot = session.selected_device_slot()?;
-    if session.effect_chain()?.get(slot)?.kind() != kind {
+    let effect = session.effect_chain()?.get(slot)?;
+    if effect.kind() != kind {
         return None;
     }
-    let index = effect_presets_of_kind(&session.effect_presets, kind)
+    let index = row_presets(&session.effect_presets, effect, &session.plugins)
         .position(|preset| preset.path == path)?;
     Some((slot, index))
 }
@@ -20662,6 +20855,59 @@ mod preset_browser_tests {
         }
     }
 
+    /// **A plugin device's rail offers its own plugin's presets and no
+    /// other's** (MOO-222): the plugin rows share a kind, so the folder is
+    /// what tells them apart, and a native row of another kind sees none.
+    #[test]
+    fn a_plugin_rows_rail_lists_only_its_own_plugins_presets() {
+        let plugin = |id: &str| mooloop_core::PluginRef {
+            format: mooloop_core::PluginFormat::Clap,
+            id: id.into(),
+            name: id.into(),
+            vendor: "Example Audio".into(),
+            version: String::new(),
+        };
+        let preset = |of: &mooloop_core::PluginRef, name: &str| PresetSummary {
+            path: plugin_presets_dir(of).join(format!("{name}.mooloop-effect")),
+            name: name.into(),
+            category: String::new(),
+            tags: Vec::new(),
+            kind: PresetKind::Effect(EffectKind::Plugin),
+        };
+        let (gain, other) = (plugin("org.example.gain"), plugin("org.example.other"));
+        let presets = vec![
+            preset(&other, "Theirs"),
+            preset(&gain, "Warm"),
+            summary("Slap", "", &[]),
+            preset(&gain, "Hot"),
+        ];
+        let mut plugins = mooloop_core::PluginSlots::new();
+        plugins.insert(
+            mooloop_core::PluginSlotId(4),
+            mooloop_core::PluginSlotState::new(gain.clone()),
+        );
+        let mut row = EffectSlotState::of_kind(EffectKind::Plugin);
+        row.params = mooloop_core::EffectParams::Plugin(mooloop_core::PluginSlotId(4));
+        let names: Vec<&str> = row_presets(&presets, &row, &plugins)
+            .map(|preset| preset.name.as_str())
+            .collect();
+        assert_eq!(names, ["Warm", "Hot"]);
+        // A slot the song does not have offers nothing rather than everything.
+        row.params = mooloop_core::EffectParams::Plugin(mooloop_core::PluginSlotId(9));
+        assert_eq!(row_presets(&presets, &row, &plugins).count(), 0);
+        // A native row is unchanged: its kind's presets, all of them.
+        let delay = EffectSlotState::of_kind(EffectKind::Delay);
+        let names: Vec<&str> = row_presets(&presets, &delay, &plugins)
+            .map(|preset| preset.name.as_str())
+            .collect();
+        assert_eq!(names, ["Slap"]);
+        // A folder name never climbs out of the plugin folder.
+        let sneaky = plugin("..");
+        assert!(plugin_presets_dir(&sneaky)
+            .starts_with(settings::effect_presets_dir(EffectKind::Plugin)));
+        assert_ne!(plugin_presets_dir(&sneaky).file_name().unwrap(), "..");
+    }
+
     fn group(label: &str, slot: PresetSlot, presets: Vec<PresetSummary>) -> PresetGroup {
         PresetGroup {
             dir: PathBuf::from(format!("/presets/{label}")),
@@ -20796,6 +21042,7 @@ mod tests {
             let row = super::effect_slot_row(
                 &slot,
                 &[],
+                &Default::default(),
                 None,
                 super::RackPlacement {
                     depth: 0,

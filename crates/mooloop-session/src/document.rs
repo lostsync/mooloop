@@ -462,7 +462,9 @@ pub fn resolve_document(path: &Path) -> Result<ResolvedDocument, DocumentProblem
         }
         // Neither an effect nor a run of them references audio; there is
         // nothing to decode.
-        LoadedDocument::Effect(_) | LoadedDocument::EffectRun(_) => Vec::new(),
+        LoadedDocument::Effect(_)
+        | LoadedDocument::EffectRun(_)
+        | LoadedDocument::PluginEffect { .. } => Vec::new(),
     };
     let mut samples = Vec::with_capacity(sample_references.len());
     for (channel, reference) in sample_references.into_iter().enumerate() {
@@ -501,7 +503,9 @@ pub fn resolve_document(path: &Path) -> Result<ResolvedDocument, DocumentProblem
             .collect(),
         LoadedDocument::Channel(channel) => channel.source.sampler_state().map(|s| (0, s)).into_iter().collect(),
         LoadedDocument::Generator(source) => source.sampler_state().map(|s| (0, s)).into_iter().collect(),
-        LoadedDocument::Effect(_) | LoadedDocument::EffectRun(_) => Vec::new(),
+        LoadedDocument::Effect(_)
+        | LoadedDocument::EffectRun(_)
+        | LoadedDocument::PluginEffect { .. } => Vec::new(),
     };
     let mut zone_warnings = Vec::new();
     let zone_audio = crate::sample::decode_zone_files(samplers, &mut zone_warnings);
@@ -596,6 +600,10 @@ pub struct PresetSource {
     /// that does not know about containers writes the box on its own rather
     /// than something wrong.
     pub run: Option<mooloop_core::EffectRun>,
+    /// The plugin behind `effect`, when that row is a hosted plugin device
+    /// (MOO-222): which plugin, its list and pins, and the state it holds
+    /// now. A plugin row saves with this or not at all.
+    pub plugin: Option<mooloop_core::PluginSlotState>,
 }
 
 impl Session {
@@ -754,11 +762,13 @@ impl Session {
             }
             _ => None,
         };
+        let plugin = effect.and_then(|effect| self.plugin_preset_state(&effect));
         Some(PresetSource {
             target,
             setup,
             effect,
             run,
+            plugin,
         })
     }
 

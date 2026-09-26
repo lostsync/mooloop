@@ -1004,6 +1004,13 @@ impl Session {
         name: &str,
     ) -> Option<EffectTarget> {
         let target = self.effect_target;
+        // A plugin device's preset carries its plugin and loads through
+        // `load_plugin_effect_preset`. A bare plugin row -- a slot number from
+        // some other song -- would re-aim this device at whatever that number
+        // names here.
+        if preset.kind() == EffectKind::Plugin {
+            return None;
+        }
         let effect = self.effect_chain_mut()?.get_mut(slot)?;
         if effect.kind() != preset.kind() {
             return None;
@@ -1033,6 +1040,117 @@ impl Session {
         Some(target)
     }
 
+    /// Loads a hosted plugin device's preset (MOO-222) onto the plugin
+    /// device in `slot`, and installs it.
+    ///
+    /// **A new slot, not new state in the old one.** The preset's plugin is
+    /// minted a slot of its own in this song and opened with the preset's
+    /// state; the device is pointed at it; and the old slot leaves the song
+    /// and its instance is retired through the rack
+    /// (`PluginRack::remove`), which keeps it until its processor -- the one
+    /// the install displaces -- has come back. Loading state into the running
+    /// instance instead would have to be undone by reopening it anyway, and
+    /// an undo already knows how to swap slots: the snapshot before this one
+    /// names the old slot with its state, and the install retires this one.
+    ///
+    /// The device keeps its identity, so every lane and route on it stays;
+    /// one on a parameter the new plugin does not have reads as missing, as
+    /// for any plugin whose list changed.
+    ///
+    /// `None` when `slot` is not a plugin device, the preset is not one, or
+    /// the device runs a different plugin than the preset's: the rail only
+    /// offers a plugin's own presets, and a load is not how a device changes
+    /// plugin.
+    pub fn load_plugin_effect_preset(
+        &mut self,
+        slot: usize,
+        preset: &EffectSlotState,
+        plugin: &mooloop_core::PluginSlotState,
+        name: &str,
+        handle: &mut impl mooloop_engine::CommandSink,
+    ) -> Option<EffectTarget> {
+        let target = self.effect_target;
+        if preset.kind() != EffectKind::Plugin {
+            return None;
+        }
+        let Some(EffectParams::Plugin(old)) = self.effect_chain()?.get(slot).map(|row| row.params)
+        else {
+            return None;
+        };
+        if self
+            .plugins
+            .get(&old)
+            .is_some_and(|running| !same_plugin_id(&running.plugin, &plugin.plugin))
+        {
+            return None;
+        }
+        let row = u8::try_from(slot).ok()?;
+        let new = mooloop_core::mint_plugin_slot(
+            &mut self.plugins,
+            &mut self.next_plugin_slot,
+            plugin.clone(),
+        );
+        let effect = {
+            let effect = self.effect_chain_mut()?.get_mut(slot)?;
+            // The preset's host settings, this device's identity -- for
+            // `load_effect_preset`'s reason -- and the slot just minted.
+            *effect = preset.with_id(effect.id);
+            effect.params = EffectParams::Plugin(new);
+            *effect
+        };
+        self.plugins.remove(&old);
+        self.plugin_rack.remove(old);
+        let node = self.host_new_plugin(new, &plugin.plugin, &plugin.state.0, &*handle);
+        let align = mooloop_dsp::IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
+        // Keyed by the new slot, so a processor the rack builds for the old
+        // one later finds nothing to replace.
+        let _ = handle.send_structural(mooloop_engine::StructuralCommand::InstallEffect {
+            target,
+            slot: row,
+            kind: EffectKind::Plugin,
+            resource_key: Some(u64::from(new.0)),
+            node,
+            align,
+            analyzer: Box::new(mooloop_dsp::SpectrumAnalyzer::new()),
+            state: Box::new(mooloop_engine::EffectSlot::for_effect(&effect)),
+        });
+        // A container holding it sized its rings for the old plugin.
+        self.resize_plugin_containers(new, handle);
+        self.set_effect_preset_name(target, effect.id, name);
+        self.mark_dirty();
+        Some(target)
+    }
+
+    /// The plugin behind a plugin device, as a preset of it saves it
+    /// (MOO-222): what the song keeps about it, with the state the live
+    /// instance holds *now* -- a knob turned in its own window a moment ago
+    /// is in the preset whether or not the song has captured it yet.
+    ///
+    /// The song's copy when the plugin is not hosted, when it refused that
+    /// state on opening (its defaults are not what the song says it is), or
+    /// when it fails to save. Nothing is written into the song: a preset save
+    /// is not an edit. `None` for any other device.
+    pub(crate) fn plugin_preset_state(
+        &mut self,
+        effect: &EffectSlotState,
+    ) -> Option<mooloop_core::PluginSlotState> {
+        let EffectParams::Plugin(slot) = effect.params else {
+            return None;
+        };
+        let mut saved = self.plugins.get(&slot)?.clone();
+        if !self.plugin_rack.refused_state(slot) {
+            if let Some(instance) = self.plugin_rack.instance_mut(slot) {
+                match instance.save_state() {
+                    Ok(state) => saved.state = mooloop_core::PluginStateText(state),
+                    Err(error) => {
+                        mooloop_core::log_warn!("plugin", "slot {}: {error}", slot.0);
+                    }
+                }
+            }
+        }
+        Some(saved)
+    }
+
 
     /// The delay parameters in `slot`, when that slot holds a delay at all.
     fn delay_params_mut(&mut self, slot: i32) -> Option<&mut mooloop_core::DelayParams> {
@@ -1053,6 +1171,13 @@ impl Session {
             _ => None,
         }
     }
+}
+
+/// Whether two references name the same plugin, whatever version each was
+/// saved with: a preset made under 1.0 is still that plugin's preset under
+/// 1.1, and the plugin reads its own older state.
+fn same_plugin_id(a: &mooloop_core::PluginRef, b: &mooloop_core::PluginRef) -> bool {
+    a.format == b.format && a.id == b.id
 }
 
 /// The rate a synced modulation effect should now be running at, as a command,

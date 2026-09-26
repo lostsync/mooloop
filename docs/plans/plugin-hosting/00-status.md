@@ -1348,6 +1348,33 @@ signal at unity, hard left at -6.02 dB on both sides, each mixed layout,
 and a centred drum loop through the mono gain in a chain unchanged) and by
 `scan.rs`'s place-rule test.
 
+## Found after step 07: plugin device presets (MOO-222, 2026-09-26)
+
+Step 07 left presets to Effects and Document. Here is how they differ from
+the "Saving" paragraph above:
+
+- **`effect_plugin`, with an underscore**, like the other `contains`
+  entries. The bundle is an `effect` document whose row's slot is unassigned,
+  with a top-level `plugin` table (`Envelope::plugin`) holding the
+  `PluginSlotState`. It loads as `LoadedDocument::PluginEffect`.
+- **The state is the live instance's**, read at save time
+  (`Session::plugin_preset_state`). The song's copy is used when the plugin
+  is not hosted, refused its state, or fails to save. The song is not
+  touched.
+- **A load mints a new slot** (`Session::load_plugin_effect_preset`), opens
+  it with the preset's state through `host_new_plugin`, the half of
+  `insert_plugin_effect` it now shares, and installs it in place, keyed by
+  the new slot. The old slot leaves the song and its instance goes through
+  `PluginRack::remove`, so it is kept until the displaced processor comes
+  back. The device keeps its identity. The load is refused onto a device
+  running a different plugin (format and id; version is ignored).
+- Pinned by `crates/mooloop-session/tests/plugin_preset.rs`, the issue's
+  case with the test gain, and by the `mooloop-project` tests beside
+  `an_older_reader_refuses_a_plugin_preset`.
+- Not done: the browser's PRESETS tab does not list plugin presets (it walks
+  `EffectKind::ALL`), and CLAP's own `preset-discovery` factory presets are
+  out, as the step said.
+
 ## Step 08, recorded 2026-09-24 (MOO-83)
 
 **What landed.** A plugin goes in a chain from the window. The join's menu

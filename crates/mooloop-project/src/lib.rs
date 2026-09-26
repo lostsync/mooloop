@@ -8,8 +8,8 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use mooloop_core::{
-    ChannelSetup, ChannelSource, DeviceKind, EffectKind, EffectRun, EffectSlotState, Kit, Project,
-    SampleReference,
+    ChannelSetup, ChannelSource, DeviceKind, EffectKind, EffectRun, EffectSlotState, Kit,
+    PluginSlotState, Project, SampleReference,
 };
 use serde::{Deserialize, Serialize};
 
@@ -96,6 +96,20 @@ pub const EFFECT_PRESET_CONTAINS: &[&str] = &["effect_params"];
 /// go if a modulator ever gets to live in a container.
 pub const EFFECT_RUN_PRESET_CONTAINS: &[&str] = &["effect_params", "effect_run"];
 
+/// What a hosted plugin device's preset holds (MOO-222): its row, and the
+/// plugin behind it -- which plugin, its parameter list, its pinned ids and
+/// its saved state -- in the envelope's `plugin` table.
+///
+/// Added rather than folded into `effect_params`, for the reason
+/// [`EFFECT_RUN_PRESET_CONTAINS`] gives: 0.1.5 checks an effect bundle's list
+/// against `["effect_params"]` alone, so it meets `effect_plugin`, does not
+/// know it, and refuses the bundle rather than loading a row whose slot
+/// names nothing in the song it lands in.
+pub const EFFECT_PLUGIN_PRESET_CONTAINS: &[&str] = &["effect_params", "effect_plugin"];
+
+/// The `contains` entry that marks a plugin device's preset.
+const EFFECT_PLUGIN: &str = "effect_plugin";
+
 /// Indexable metadata for a saved preset, carried alongside the document so
 /// a future preset browser can list/group/filter without opening every
 /// bundle's full document.
@@ -156,6 +170,13 @@ pub enum LoadedDocument {
     Generator(Box<ChannelSource>),
     Effect(Box<EffectSlotState>),
     EffectRun(Box<EffectRun>),
+    /// A hosted plugin device's preset (MOO-222): its row, whose slot is
+    /// unassigned, and the plugin that row runs. Loading one mints a slot
+    /// for `plugin` in the song it lands in.
+    PluginEffect {
+        effect: Box<EffectSlotState>,
+        plugin: Box<PluginSlotState>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -258,6 +279,11 @@ struct Envelope<T> {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     contains: Vec<String>,
     document: T,
+    /// The plugin a plugin device's preset runs (MOO-222), and nothing for
+    /// every other document, which writes exactly as it did before the field.
+    /// See [`EFFECT_PLUGIN_PRESET_CONTAINS`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    plugin: Option<PluginSlotState>,
 }
 
 #[derive(Deserialize)]
@@ -377,6 +403,7 @@ pub fn save_kit(path: &Path, kit: &Kit, mode: AssetMode) -> Result<SaveReport, E
         mode,
         None,
         Vec::new(),
+        None,
         |kit| {
             kit.channels
                 .iter_mut()
@@ -426,6 +453,7 @@ fn save_channel_with_preset(
         mode,
         preset,
         Vec::new(),
+        None,
         |channel| vec![&mut channel.source],
     )?;
     report.repairs = diagnosis.issues;
@@ -452,6 +480,7 @@ pub fn save_generator_preset(
         mode,
         Some(info),
         Vec::new(),
+        None,
         |source| vec![source],
     )?;
     report.repairs = diagnosis.issues;
@@ -481,6 +510,15 @@ pub fn save_effect_preset(
     // `EffectSlotState::id`'s own documentation says a preset carries no
     // identity. `save_effect_run_preset` below strips it; this one relied on
     // every caller having done so first.
+    //
+    // A plugin device's row is only a slot number, which names nothing in
+    // the song the preset lands in: it saves with its plugin, through
+    // `save_plugin_effect_preset` (MOO-222).
+    if effect.kind() == EffectKind::Plugin {
+        return Err(Error::Invalid(
+            "a plugin device saves with its plugin, as a plugin preset".into(),
+        ));
+    }
     let mut effect = effect.with_id(mooloop_core::DeviceId::UNASSIGNED);
     let diagnosis = integrity::repair_effect(DocumentKind::Effect, &mut effect);
     if !diagnosis.is_usable() {
@@ -496,6 +534,54 @@ pub fn save_effect_preset(
             .iter()
             .map(|entry| (*entry).to_string())
             .collect(),
+        None,
+        |_| Vec::new(),
+    )?;
+    report.repairs = diagnosis.issues;
+    Ok(report)
+}
+
+/// Saves a hosted plugin device as a preset (MOO-222): its row, and the
+/// plugin it runs -- which plugin, its parameter list, its pinned ids and its
+/// state -- in the envelope's `plugin` table, under
+/// [`EFFECT_PLUGIN_PRESET_CONTAINS`].
+///
+/// Both identities are stripped: the device's, for `save_effect_preset`'s
+/// reason, and the plugin slot's, which is a key into the song the device
+/// was taken from. Loading it mints a slot in the song it lands in.
+///
+/// `plugin.state` should be what the plugin holds *now*, not what the song
+/// last captured; the caller asks the live instance.
+pub fn save_plugin_effect_preset(
+    path: &Path,
+    effect: &EffectSlotState,
+    plugin: &PluginSlotState,
+    info: PresetInfo,
+    mode: AssetMode,
+) -> Result<SaveReport, Error> {
+    if effect.kind() != EffectKind::Plugin {
+        return Err(Error::Invalid(format!(
+            "a plugin preset holds a plugin device, not a {}",
+            effect.kind().label()
+        )));
+    }
+    let mut effect = effect.with_id(mooloop_core::DeviceId::UNASSIGNED);
+    effect.params = mooloop_core::EffectParams::Plugin(mooloop_core::PluginSlotId::UNASSIGNED);
+    let diagnosis = integrity::repair_effect(DocumentKind::Effect, &mut effect);
+    if !diagnosis.is_usable() {
+        return Err(diagnosis.into());
+    }
+    let mut report = save_with_assets(
+        path,
+        DocumentKind::Effect,
+        effect,
+        mode,
+        Some(info),
+        EFFECT_PLUGIN_PRESET_CONTAINS
+            .iter()
+            .map(|entry| (*entry).to_string())
+            .collect(),
+        Some(plugin.clone()),
         |_| Vec::new(),
     )?;
     report.repairs = diagnosis.issues;
@@ -551,6 +637,7 @@ pub fn save_effect_run_preset(
             .iter()
             .map(|entry| (*entry).to_string())
             .collect(),
+        None,
         |_| Vec::new(),
     )?;
     report.repairs = diagnosis.unwrap_or_default();
@@ -650,6 +737,7 @@ fn save_song_file(path: &Path, project: &Project, mode: AssetMode) -> Result<Sav
             asset_mode: mode,
             preset: None,
             contains: Vec::new(),
+            plugin: None,
             document,
         };
         write_synced(&staging_file, toml::to_string_pretty(&envelope)?.as_bytes())?;
@@ -1083,6 +1171,9 @@ fn injected_fault(step: Step) -> Result<(), Error> {
     Ok(())
 }
 
+// One argument per envelope field it writes, and the asset closure; a
+// struct holding three of them would only move the list.
+#[allow(clippy::too_many_arguments)]
 fn save_with_assets<T, F>(
     path: &Path,
     kind: DocumentKind,
@@ -1090,6 +1181,7 @@ fn save_with_assets<T, F>(
     mode: AssetMode,
     preset: Option<PresetInfo>,
     contains: Vec<String>,
+    plugin: Option<PluginSlotState>,
     setups: F,
 ) -> Result<SaveReport, Error>
 where
@@ -1138,6 +1230,7 @@ where
             asset_mode: mode,
             preset,
             contains,
+            plugin,
             document,
         };
         let manifest = toml::to_string_pretty(&envelope)?;
@@ -1339,13 +1432,16 @@ fn parse_manifest(manifest: &str) -> Result<(LoadedDocument, AssetMode), Error> 
             // entry this reader does not know means the bundle holds more
             // than an `EffectSlotState`, and parsing that part alone would
             // be exactly the partial load the list exists to prevent.
-            validate_contains(&header.contains, EFFECT_PRESET_CONTAINS)?;
+            let known = effect_contains(&header.contains);
+            validate_contains(&header.contains, known)?;
             let envelope: Envelope<EffectSlotState> = table.try_into()?;
             validate_envelope(&envelope, "effect")?;
-            (
-                LoadedDocument::Effect(Box::new(envelope.document)),
-                envelope.asset_mode,
-            )
+            let document = if known == EFFECT_PLUGIN_PRESET_CONTAINS {
+                plugin_effect_document(envelope.document, envelope.plugin)?
+            } else {
+                LoadedDocument::Effect(Box::new(envelope.document))
+            };
+            (document, envelope.asset_mode)
         }
         "effect_run" => {
             validate_contains(&header.contains, EFFECT_RUN_PRESET_CONTAINS)?;
@@ -1427,6 +1523,11 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
         }
         // Nothing to resolve: an effect carries no sample reference.
         LoadedDocument::Effect(effect) => integrity::repair_effect(DocumentKind::Effect, effect),
+        // The plugin's own state is its own, and never judged here: only the
+        // row's host settings are (MOO-222).
+        LoadedDocument::PluginEffect { effect, .. } => {
+            integrity::repair_effect(DocumentKind::Effect, effect)
+        }
         LoadedDocument::EffectRun(run) => integrity::repair_effect_run(run),
     };
     if !diagnosis.is_usable() {
@@ -1481,9 +1582,15 @@ fn summarize_preset(path: &Path) -> Option<PresetSummary> {
         "effect" => {
             // A bundle this version could not load is left out of the list
             // rather than offered and then refused.
-            validate_contains(&header.contains, EFFECT_PRESET_CONTAINS).ok()?;
+            let known = effect_contains(&header.contains);
+            validate_contains(&header.contains, known).ok()?;
             let envelope: Envelope<EffectSlotState> = toml::from_str(&manifest).ok()?;
-            PresetKind::Effect(envelope.document.kind())
+            if known == EFFECT_PLUGIN_PRESET_CONTAINS {
+                plugin_effect_document(envelope.document, envelope.plugin).ok()?;
+                PresetKind::Effect(EffectKind::Plugin)
+            } else {
+                PresetKind::Effect(envelope.document.kind())
+            }
         }
         "effect_run" => {
             validate_contains(&header.contains, EFFECT_RUN_PRESET_CONTAINS).ok()?;
@@ -1505,6 +1612,46 @@ fn summarize_preset(path: &Path) -> Option<PresetSummary> {
         category: preset.category,
         tags: preset.tags,
         kind,
+    })
+}
+
+/// The `contains` list an `effect` bundle is checked against: a plugin
+/// device's when it says it holds a plugin, the one-row list otherwise.
+fn effect_contains(contains: &[String]) -> &'static [&'static str] {
+    if contains.iter().any(|entry| entry == EFFECT_PLUGIN) {
+        EFFECT_PLUGIN_PRESET_CONTAINS
+    } else {
+        EFFECT_PRESET_CONTAINS
+    }
+}
+
+/// A plugin device's preset, from its row and its `plugin` table, or why it
+/// is not one. Refused whole, never half loaded: a row with no plugin would
+/// land as a device that runs nothing, and a plugin whose row is some other
+/// kind has nowhere to run.
+fn plugin_effect_document(
+    effect: EffectSlotState,
+    plugin: Option<PluginSlotState>,
+) -> Result<LoadedDocument, Error> {
+    let Some(plugin) = plugin else {
+        return Err(Error::Invalid(
+            "this plugin preset does not say which plugin it is for".into(),
+        ));
+    };
+    if effect.kind() != EffectKind::Plugin {
+        return Err(Error::Invalid(format!(
+            "this plugin preset holds a {}, not a plugin device",
+            effect.kind().label()
+        )));
+    }
+    if plugin.plugin.id.is_empty() {
+        return Err(Error::Invalid(
+            "this plugin preset names a plugin with no identifier".into(),
+        ));
+    }
+    Ok(LoadedDocument::PluginEffect {
+        effect: Box::new(effect),
+        plugin: Box::new(plugin),
     })
 }
 
@@ -3020,6 +3167,7 @@ mod tests {
             asset_mode: AssetMode::Embedded,
             preset: None,
             contains: Vec::new(),
+            plugin: None,
             document: project,
         };
         fs::write(&bundle, toml::to_string_pretty(&envelope).unwrap()).unwrap();
@@ -3248,6 +3396,7 @@ mod tests {
             asset_mode: AssetMode::Embedded,
             preset: None,
             contains: Vec::new(),
+            plugin: None,
             document: project,
         };
         fs::write(
@@ -3289,6 +3438,7 @@ mod tests {
             asset_mode: AssetMode::Referenced,
             preset: None,
             contains: Vec::new(),
+            plugin: None,
             document: project.clone(),
         };
         fs::write(
@@ -4408,6 +4558,7 @@ id = "default_kick"
             asset_mode: AssetMode::Referenced,
             preset: None,
             contains: Vec::new(),
+            plugin: None,
             document: project.clone(),
         };
         let manifest = toml::to_string_pretty(&envelope).unwrap();
@@ -4609,6 +4760,155 @@ id = "default_kick"
         }
         // And it is not offered in the list only to be refused on the click.
         assert!(list_presets(&dir).is_empty());
+    }
+
+    /// A plugin as a device preset would carry it (MOO-222): moved off its
+    /// default, pinned, and holding state bytes of its own.
+    fn saved_plugin() -> PluginSlotState {
+        let mut plugin = PluginSlotState::new(mooloop_core::PluginRef {
+            format: mooloop_core::PluginFormat::Clap,
+            id: "org.example.gain".into(),
+            name: "Gain".into(),
+            vendor: "Example Audio".into(),
+            version: "1.2.0".into(),
+        });
+        plugin.params.push(mooloop_core::PluginParamInfo {
+            id: 4_000_000_000,
+            name: "Gain".into(),
+            module: String::new(),
+            min: 0.0,
+            max: 2.0,
+            default: 1.0,
+            stepped: None,
+            automatable: true,
+            modulatable: true,
+            hidden: false,
+        });
+        plugin.pinned.push(4_000_000_000);
+        plugin.state = mooloop_core::PluginStateText(mooloop_core::PluginState {
+            chunks: vec![mooloop_core::PluginStateChunk {
+                tag: "clap".into(),
+                data: (0..=255u8).collect(),
+            }],
+        });
+        plugin
+    }
+
+    fn plugin_row() -> EffectSlotState {
+        let mut effect = EffectSlotState::of_kind(EffectKind::Plugin);
+        effect.params = mooloop_core::EffectParams::Plugin(mooloop_core::PluginSlotId(3));
+        effect
+    }
+
+    /// **A plugin device saves as a preset with its plugin, and comes back
+    /// with none of the song it came from** (MOO-222): the plugin, its list,
+    /// its pins and its state bytes intact, the row's host settings with it,
+    /// and neither the device's identity nor the slot it had.
+    #[test]
+    fn a_plugin_preset_round_trips_its_plugin_and_no_identity() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("warm.mooloop-effect");
+        let mut effect = plugin_row();
+        effect.wet_dry = 0.25;
+        let effect = effect.with_id(mooloop_core::DeviceId(7));
+        let plugin = saved_plugin();
+        save_plugin_effect_preset(&path, &effect, &plugin, effect_info("Warm"), AssetMode::Embedded)
+            .unwrap();
+
+        let manifest = fs::read_to_string(path.join(MANIFEST_FILE)).unwrap();
+        let header: Header = toml::from_str(&manifest).unwrap();
+        assert_eq!(header.contains, EFFECT_PLUGIN_PRESET_CONTAINS);
+        let LoadedDocument::PluginEffect {
+            effect: back,
+            plugin: back_plugin,
+        } = load_bundle(&path).unwrap().document
+        else {
+            panic!("a plugin preset did not load as one");
+        };
+        assert_eq!(*back_plugin, plugin);
+        assert_eq!(back.wet_dry, 0.25);
+        assert_eq!(back.id, mooloop_core::DeviceId::UNASSIGNED);
+        assert_eq!(
+            back.params,
+            mooloop_core::EffectParams::Plugin(mooloop_core::PluginSlotId::UNASSIGNED)
+        );
+        // Listed as a plugin device's preset, so a plugin row can offer it.
+        let listed = list_presets(temp.path());
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].kind, PresetKind::Effect(EffectKind::Plugin));
+    }
+
+    /// **0.1.5 refuses a plugin preset rather than half loading it**
+    /// (MOO-222). Its reader checks an `effect` bundle's list against
+    /// `["effect_params"]` -- `EFFECT_PRESET_CONTAINS`, unchanged since, and
+    /// read from the `v0.1.5` tag's `parse_manifest` -- before it parses the
+    /// document. This is that check, run on the manifest a save writes now.
+    #[test]
+    fn an_older_reader_refuses_a_plugin_preset() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("warm.mooloop-effect");
+        save_plugin_effect_preset(
+            &path,
+            &plugin_row(),
+            &saved_plugin(),
+            effect_info("Warm"),
+            AssetMode::Embedded,
+        )
+        .unwrap();
+        let manifest = fs::read_to_string(path.join(MANIFEST_FILE)).unwrap();
+        let header: Header = toml::from_str(&manifest).unwrap();
+        const V0_1_5_EFFECT_CONTAINS: &[&str] = &["effect_params"];
+        assert_eq!(EFFECT_PRESET_CONTAINS, V0_1_5_EFFECT_CONTAINS);
+        match validate_contains(&header.contains, V0_1_5_EFFECT_CONTAINS) {
+            Err(Error::UnsupportedContents(entry)) => assert_eq!(entry, "effect_plugin"),
+            other => panic!("0.1.5 would have opened it: {other:?}"),
+        }
+    }
+
+    /// A plugin row cannot be saved as a plain effect preset: its slot is a
+    /// number that names nothing in the song it would land in. Nor can a
+    /// native row be saved as a plugin preset.
+    #[test]
+    fn a_plugin_row_saves_only_as_a_plugin_preset() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("bare.mooloop-effect");
+        assert!(matches!(
+            save_effect_preset(&path, &plugin_row(), effect_info("Bare"), AssetMode::Embedded),
+            Err(Error::Invalid(_))
+        ));
+        assert!(matches!(
+            save_plugin_effect_preset(
+                &path,
+                &EffectSlotState::of_kind(EffectKind::Delay),
+                &saved_plugin(),
+                effect_info("Bare"),
+                AssetMode::Embedded
+            ),
+            Err(Error::Invalid(_))
+        ));
+        assert!(!path.exists());
+    }
+
+    /// A bundle that says it holds a plugin and has none is refused whole,
+    /// and is not listed.
+    #[test]
+    fn a_plugin_preset_missing_its_plugin_is_refused() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("gone.mooloop-effect");
+        save_plugin_effect_preset(
+            &path,
+            &plugin_row(),
+            &saved_plugin(),
+            effect_info("Gone"),
+            AssetMode::Embedded,
+        )
+        .unwrap();
+        let manifest_path = path.join(MANIFEST_FILE);
+        let manifest = fs::read_to_string(&manifest_path).unwrap();
+        let cut = manifest.find("[plugin").expect("the plugin table was written");
+        fs::write(&manifest_path, &manifest[..cut]).unwrap();
+        assert!(matches!(load_bundle(&path), Err(Error::Invalid(_))));
+        assert!(list_presets(temp.path()).is_empty());
     }
 
     /// A non-finite host setting is corrected on the way out, as it is for

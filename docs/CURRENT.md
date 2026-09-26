@@ -2448,6 +2448,15 @@ land on its own when it starts to matter:
   id again they read normally, with nothing to repair. Not yet on the face:
   a pinned subset with a sidebar list for a plugin with hundreds of
   parameters, and a segmented selector for a stepped parameter.
+- **A plugin device saves and loads presets** (MOO-222) from its rail, like
+  any device. A preset keeps which plugin it is and the state the plugin
+  holds at that moment, including a knob just turned in its own window. It
+  is kept under `presets/effects/plugin/<vendor>/<id>/`, and a plugin
+  device's menu offers only that plugin's presets. Loading one, in this song
+  or another, opens the plugin with the preset's state in a new slot while
+  the device keeps its lanes and routes. It is one undo step ("Effect preset
+  loaded"). A 0.1.5 build refuses these presets. Not yet: plugin presets in
+  the browser's PRESETS tab, and the plugin's own CLAP factory presets.
 - **A CLAP effect plays in a chain** (MOO-81, plugin-hosting 06). Besides
   the window (above), a plugin reaches a song from a song that already
   names it: a `plugin` effect device whose slot is in the song's `plugins`
