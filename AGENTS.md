@@ -143,6 +143,22 @@ suspected, the sequence that would show it, and the test that would settle it.
   cancel it.
 - A bug you have already reproduced is filed without `Triage`.
 
+### Releases: the `Release` labels
+
+The single-select `Release` group has one label per version (`0.1.4` to
+`0.1.10`). Adam set it up on 2026-09-26 so that a push has a boundary. Linear's
+own Releases feature is paid. **Initiatives are not used**: an initiative holds
+projects, not issues, so it cannot scope a push. Don't attach projects to one.
+
+- **An open issue with the next version's label is in that push. Nothing else
+  is.** Adam chooses which issues get the label. An issue you file during a push
+  goes in unlabelled unless he adds it, even when it looks small.
+- A closed issue carries the version that shipped it. `0.1.5` was backfilled
+  on 2026-09-26: every issue completed between the `v0.1.4` and `v0.1.5` tags
+  got it. Issues closed before `v0.1.4` have no label.
+- When a version is cut, its labelled issues that are still open are Adam's
+  call. He can move them to the next version or take the label off.
+
 If Linear is unreachable, say so in your handoff and put the question or the
 finding there, so the next session can file it.
 

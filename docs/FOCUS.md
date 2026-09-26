@@ -10,6 +10,11 @@ wait on Adam: whether to patch or report Slint's FemtoVG clip and ellipsis
 costs (MOO-256, MOO-258), and MOO-227's effect-preset audition.
 Nothing from either push has been heard. `JOURNAL.md` has the record.
 
+**The next push is 0.1.6, scoped 2026-09-26.** It is the open issues with
+the `0.1.6` label in Linear, and nothing else. The label is the list, and this
+document does not copy it. `AGENTS.md` explains the labels under *Releases: the
+`Release` labels*. The order within 0.1.6 has not been set yet.
+
 `archive/ROADMAP.md` orders the whole product by dependency, and `SCOPE.md`
 says what 0.2.0 is. This document is narrower: it names the active sequence
 and the work that should not interrupt it. **Rewrite it when that sequence is
