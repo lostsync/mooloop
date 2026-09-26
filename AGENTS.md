@@ -472,10 +472,10 @@ a document to be corrected later is how it stops being trusted.
 
 ## Slint
 
-This project pins Slint `1.17.1`. Before editing `.slint`, `slint::` Rust API,
+This project pins Slint `1.18.1`. Before editing `.slint`, `slint::` Rust API,
 or `slint-build`, consult the version-matched documentation:
-`https://releases.slint.dev/1.17.1/docs/slint/`, and
-`https://docs.rs/i-slint-backend-testing/1.17.1/` for the `ElementHandle` API
+`https://releases.slint.dev/1.18.1/docs/slint/`, and
+`https://docs.rs/i-slint-backend-testing/1.18.1/` for the `ElementHandle` API
 the UI tests and the MCP server both drive. If the pinned version changes, use
 the matching release URL instead of relying on latest-version knowledge.
 

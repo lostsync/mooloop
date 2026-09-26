@@ -138,8 +138,10 @@ instance and a `for` reuses instances by seat, so a track dragged off a
 turned strip arrives on its fader face, and whichever track slides into the
 old seat shows that page. Fixing the second means moving the page into
 `MixerStripRow`. The held strip is also drawn under the strip to its right
-while it passes over it, because Slint 1.17 wants `z` as a literal; the
-channel and device racks have the same limit. That limit has a workaround
+while it passes over it, because Slint 1.17 wanted `z` as a literal; the
+channel and device racks have the same limit. Slint 1.18 (MOO-268) lifted it:
+`z` may now be a binding, and siblings re-sort at runtime, so the held row
+could simply take a higher `z`. That limit has a workaround
 nobody has used for a reorder yet: an overlay declared *after* the row, which
 Slint draws on top by declaration order, holding a copy of the held strip
 while the real one goes transparent -- the layer-promotion idiom, and the
