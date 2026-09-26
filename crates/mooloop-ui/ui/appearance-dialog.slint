@@ -3,6 +3,7 @@ import { Theme, Motion, StatusHint } from "theme.slint";
 import { MeterPrefs } from "meters.slint";
 import { AudioOrientation, IconButton, ParameterFader, SectionLabel, SegmentedControl, ToggleButton, ToolButton } from "controls.slint";
 import { AudioDriverCopy, DriverControlSurface, OutputTargetRow } from "audio-preferences.slint";
+import { StepperField } from "toolbar.slint";
 // The swatch rows beside the colour fields offer colours from the scheme in
 // force, so they use the same `ColorChoice` the channel picker does -- one
 // struct, because both halves of it come from Rust for the same reason: Slint
@@ -1214,6 +1215,156 @@ export component MidiPage inherits VerticalLayout {
     }
 }
 
+
+// A file the scanner could not read, and why (MOO-229).
+export struct PluginFailureRow {
+    name: string,
+    reason: string,
+}
+
+// Preferences > Plugins (plugin-hosting 08, MOO-229): where the scanner
+// looks, how long one file may take, whether it looks at startup, Rescan
+// All, and the files it could not read. Every edit is saved as it is made,
+// like the MIDI page's switch; a changed folder or timeout is used by the
+// next scan, which Rescan All starts.
+component PluginsPage inherits VerticalLayout {
+    // The folders CLAP names, always searched, for reading only; then the
+    // ones the user added, one per row.
+    in property <[string]> default-paths;
+    in property <[string]> extra-paths;
+    in property <int> scan-timeout-s;
+    in property <bool> scan-on-startup;
+    // What the scanner is doing, or what it last found. Empty before any
+    // scan from this page.
+    in property <string> scan-status;
+    in property <bool> scanning;
+    in property <[PluginFailureRow]> failures;
+    callback path-added();
+    callback path-removed(int);
+    callback scan-timeout-changed(int);
+    callback scan-on-startup-toggled(bool);
+    callback rescan-requested();
+
+    spacing: 8px;
+    alignment: start;
+
+    Text { text: "Plugins"; color: Theme.text; font-size: Theme.text-3xl; height: 20px; }
+
+    SectionLabel { text: "WHERE TO LOOK"; }
+    for path in root.default-paths : Text {
+        text: path;
+        color: Theme.text-faint;
+        font-size: Theme.text-lg;
+        height: 16px;
+        overflow: elide;
+    }
+    for path[i] in root.extra-paths : HorizontalLayout {
+        spacing: 6px;
+        height: 22px;
+        Text {
+            horizontal-stretch: 1;
+            text: path;
+            color: Theme.text;
+            font-size: Theme.text-lg;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        ToolButton {
+            text: "×";
+            tooltip: "Remove";
+            hint: "Stop looking in this folder";
+            min-width: 22px;
+            max-width: 22px;
+            clicked => { root.path-removed(i); }
+        }
+    }
+    HorizontalLayout {
+        alignment: start;
+        height: 24px;
+        ToolButton {
+            width: 110px;
+            text: "Add Folder…";
+            tooltip: "Add Folder";
+            hint: "Look for plugins in another folder as well";
+            clicked => { root.path-added(); }
+        }
+    }
+
+    SectionLabel { text: "SCANNING"; }
+    HorizontalLayout {
+        spacing: 8px;
+        height: 24px;
+        alignment: start;
+        Text {
+            text: "Give up on a file after";
+            color: Theme.text;
+            font-size: Theme.text-xl;
+            vertical-alignment: center;
+        }
+        StepperField {
+            value: root.scan-timeout-s;
+            minimum: 1;
+            maximum: 120;
+            display-text: self.value + " s";
+            value-width: 40px;
+            tooltip: root.scan-timeout-s + " s";
+            hint: "How long one plugin file may take to scan before it is recorded as timed out";
+            changed(v) => { root.scan-timeout-changed(v); }
+        }
+    }
+    HorizontalLayout {
+        alignment: start;
+        height: 24px;
+        spacing: 8px;
+        ToggleButton {
+            width: 160px;
+            text: "Scan at startup";
+            tooltip: "Scan at startup";
+            hint: "Look for new or changed plugin files each time mooloop starts";
+            checked: root.scan-on-startup;
+            toggled(value) => { root.scan-on-startup-toggled(value); }
+        }
+        ToolButton {
+            width: 100px;
+            text: root.scanning ? "Scanning…" : "Rescan All";
+            tooltip: "Rescan All";
+            hint: "Scan every plugin file again, the ones that failed included";
+            enabled: !root.scanning;
+            clicked => { root.rescan-requested(); }
+        }
+    }
+    if root.scan-status != "" : Text {
+        text: root.scan-status;
+        color: Theme.text-muted;
+        font-size: Theme.text-lg;
+        overflow: elide;
+    }
+
+    SectionLabel { text: "COULD NOT BE READ"; }
+    if root.failures.length == 0 : Text {
+        text: "Every file was read.";
+        color: Theme.text-faint;
+        font-size: Theme.text-xl;
+    }
+    for failure in root.failures : VerticalLayout {
+        spacing: 0px;
+        accessible-role: text;
+        accessible-label: failure.name + ": " + failure.reason;
+        Text {
+            text: failure.name;
+            color: Theme.text;
+            font-size: Theme.text-lg;
+            overflow: elide;
+        }
+        Text {
+            text: failure.reason;
+            color: Theme.warning;
+            font-size: Theme.text-md;
+            wrap: word-wrap;
+        }
+    }
+}
+
 export component PreferencesDialog inherits Rectangle {
     in-out property <bool> open;
     in-out property <string> appearance-theme;
@@ -1280,6 +1431,19 @@ export component PreferencesDialog inherits Rectangle {
     callback midi-binding-inverted-toggled(int);
     callback midi-binding-relearn(int);
     callback midi-transport-learn(int);
+    // Preferences > Plugins (MOO-229).
+    in property <[string]> plugin-default-paths;
+    in property <[string]> plugin-extra-paths;
+    in property <int> plugin-scan-timeout-s: 10;
+    in property <bool> plugin-scan-on-startup: true;
+    in property <string> plugin-scan-status;
+    in property <bool> plugin-scanning;
+    in property <[PluginFailureRow]> plugin-failures;
+    callback plugin-path-added();
+    callback plugin-path-removed(int);
+    callback plugin-scan-timeout-changed(int);
+    callback plugin-scan-on-startup-toggled(bool);
+    callback plugin-rescan-requested();
     // No arguments. Every value either callback needs is one of the two-way
     // bound properties above, and Rust reads them back through
     // `window_appearance`; passing fourteen of them positionally would be
@@ -1357,6 +1521,7 @@ export component PreferencesDialog inherits Rectangle {
                         PreferenceNavItem { text: "MIDI"; selected: root.page == 2; selected-page => { root.page = 2; } }
                         PreferenceNavItem { text: "Appearance"; selected: root.page == 3; selected-page => { root.page = 3; } }
                         PreferenceNavItem { text: "Shortcuts"; selected: root.page == 4; selected-page => { root.page = 4; } }
+                        PreferenceNavItem { text: "Plugins"; selected: root.page == 6; selected-page => { root.page = 6; } }
                         if root.developer-mode : PreferenceNavItem { text: "Developer"; selected: root.page == 5; selected-page => { root.page = 5; } }
                         Rectangle { vertical-stretch: 1; }
                     }
@@ -1592,6 +1757,27 @@ export component PreferencesDialog inherits Rectangle {
                                         }
                                     }
                                 }
+                            }
+                        }
+                        // Scrolls, like the Audio page: the failure list has no
+                        // bound on its length.
+                        if root.page == 6 : ScrollView {
+                            vertical-stretch: 1;
+                            PluginsPage {
+                                width: parent.width - 8px;
+                                padding-right: 8px;
+                                default-paths: root.plugin-default-paths;
+                                extra-paths: root.plugin-extra-paths;
+                                scan-timeout-s: root.plugin-scan-timeout-s;
+                                scan-on-startup: root.plugin-scan-on-startup;
+                                scan-status: root.plugin-scan-status;
+                                scanning: root.plugin-scanning;
+                                failures: root.plugin-failures;
+                                path-added => { root.plugin-path-added(); }
+                                path-removed(i) => { root.plugin-path-removed(i); }
+                                scan-timeout-changed(v) => { root.plugin-scan-timeout-changed(v); }
+                                scan-on-startup-toggled(v) => { root.plugin-scan-on-startup-toggled(v); }
+                                rescan-requested => { root.plugin-rescan-requested(); }
                             }
                         }
                         if root.page == 5 && root.developer-mode : VerticalBox {

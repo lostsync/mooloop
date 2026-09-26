@@ -364,7 +364,10 @@ them belong to the device teams, and the container drawing in
   in Engine's crate by agreement, and `app/tests/scan_child.rs`. The test
   plugin's two misbehaving names (`CRASHES_ON_SCAN`, `HANGS_ON_SCAN` in
   `mooloop-test-plugin`) are there for these tests. In `ui/src/settings.rs`,
-  `PluginSettings` and `plugin_cache_path`
+  `PluginSettings` and `plugin_cache_path`. `ui/src/plugin_scan.rs`: the
+  startup scan policy and the one-scan-at-a-time rule, moved out of
+  `app/src/main.rs` so the window can start the same scan (MOO-229);
+  Interface's Preferences > Plugins page (`plugin_ui.rs`) calls into it
 
 ## In Claude Code
 

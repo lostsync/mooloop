@@ -536,8 +536,8 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   channel and generator alike, and so is a kit load; none of them stops the
   song, because each edits the song that is playing rather than opening
   another (MOO-95).
-- A two-pane Preferences dialog with General, Audio, MIDI, Appearance, and
-  Shortcuts pages; General persists developer mode and reveals the presently
+- A two-pane Preferences dialog with General, Audio, MIDI, Appearance,
+  Shortcuts and Plugins pages; General persists developer mode and reveals the presently
   empty Developer page. The MIDI page lists the inputs the driver is offering,
   every controller mapping in the project, and all seven transport gestures
   with whatever is mapped to each. A mapping row can be relearned, removed,
@@ -2568,8 +2568,16 @@ land on its own when it starts to matter:
   kept in `<config>/plugins.toml`; an unchanged file is never scanned again,
   failed or not. `scan-on-startup = false` turns the startup scan off. The log
   says what the scan found. A song's plugins are found through it, and the
-  browser's PLUGINS tab lists it (above). There is no Preferences page for
-  plugins or rescan button yet (MOO-229).
+  browser's PLUGINS tab lists it (above). **Preferences > Plugins** (MOO-229)
+  shows the standard folders, the added ones (Add Folder…, and a × to
+  remove one), the timeout, the startup switch, and every file that could
+  not be read with the reason; each edit is saved as it is made. **Rescan
+  All** forgets the failures and scans every file again on the scan's own
+  thread, with its progress on the page and in the status bar; when it ends
+  the PLUGINS tab and the failure list are read again. Only one scan runs at
+  a time: a Rescan All while the startup scan is still going says so and
+  starts nothing. The same rescan is the bindable action `plugins.rescan`,
+  and `browser.plugins` opens the PLUGINS tab.
 
 ### Buffers And Rendering
 

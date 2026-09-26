@@ -19,7 +19,7 @@ import { MasterMeter, MeterPrefs } from "meters.slint";
 // fall rate out of this one once a tick.
 export { MeterPrefs }
 import { EnvelopeEditor } from "envelope.slint";
-import { PreferencesDialog, AppearanceSchemeRow, AudioDriverCopy, OutputTargetRow, ShortcutRow, GestureRow, MidiBindingRow, MidiTransportRow } from "appearance-dialog.slint";
+import { PreferencesDialog, PluginFailureRow, AppearanceSchemeRow, AudioDriverCopy, OutputTargetRow, ShortcutRow, GestureRow, MidiBindingRow, MidiTransportRow } from "appearance-dialog.slint";
 import { SavePresetDialog } from "save-preset-dialog.slint";
 import { SaveErrorDialog } from "save-error-dialog.slint";
 import { AboutDialog } from "about-dialog.slint";
@@ -34,7 +34,7 @@ import {
 } from "device-rack.slint";
 import { AddSourceButton, ChannelDrag, SourceKinds } from "channel-rack.slint";
 import { ChannelSidebar, PluginListRow } from "channel-sidebar.slint";
-export { PluginListRow }
+export { PluginListRow, PluginFailureRow }
 import { ColorChipButton, ColorChoice } from "color-picker.slint";
 import { DrumDeviceFace } from "drum-device.slint";
 import { FilterDeviceFace } from "filter-device.slint";
@@ -988,6 +988,23 @@ export component MainWindow inherits Window {
     in property <bool> preferences-audio-auto-reconnect;
     in property <string> preferences-audio-error;
     in property <AudioDriverCopy> preferences-audio-driver;
+    // Preferences > Plugins (MOO-229): the scanner's folders, its timeout,
+    // the startup switch, what a scan is doing, and the files that failed.
+    in property <[string]> preferences-plugin-default-paths;
+    in property <[string]> preferences-plugin-extra-paths;
+    in property <int> preferences-plugin-scan-timeout-s: 10;
+    in property <bool> preferences-plugin-scan-on-startup: true;
+    in property <string> preferences-plugin-scan-status;
+    in property <bool> preferences-plugin-scanning;
+    in property <[PluginFailureRow]> preferences-plugin-failures;
+    callback preferences-plugin-path-added();
+    callback preferences-plugin-path-removed(int);
+    callback preferences-plugin-scan-timeout-changed(int);
+    callback preferences-plugin-scan-on-startup-toggled(bool);
+    callback preferences-plugin-rescan-requested();
+    // The folder chooser answers on a thread of its own; its answer comes
+    // back to the window through this, never from the markup.
+    callback preferences-plugin-folder-chosen(string);
     in property <[ShortcutRow]> preferences-shortcut-rows;
     in property <[GestureRow]> preferences-gesture-rows;
     in property <[string]> preferences-gesture-choices;
@@ -8392,6 +8409,18 @@ export component MainWindow inherits Window {
         midi-binding-inverted-toggled(i) => { root.midi-binding-inverted-toggled(i); }
         midi-binding-relearn(i) => { root.midi-binding-relearn(i); }
         midi-transport-learn(i) => { root.midi-transport-learn(i); }
+        plugin-default-paths: root.preferences-plugin-default-paths;
+        plugin-extra-paths: root.preferences-plugin-extra-paths;
+        plugin-scan-timeout-s: root.preferences-plugin-scan-timeout-s;
+        plugin-scan-on-startup: root.preferences-plugin-scan-on-startup;
+        plugin-scan-status: root.preferences-plugin-scan-status;
+        plugin-scanning: root.preferences-plugin-scanning;
+        plugin-failures: root.preferences-plugin-failures;
+        plugin-path-added => { root.preferences-plugin-path-added(); }
+        plugin-path-removed(i) => { root.preferences-plugin-path-removed(i); }
+        plugin-scan-timeout-changed(v) => { root.preferences-plugin-scan-timeout-changed(v); }
+        plugin-scan-on-startup-toggled(v) => { root.preferences-plugin-scan-on-startup-toggled(v); }
+        plugin-rescan-requested => { root.preferences-plugin-rescan-requested(); }
         appearance-preview() => { root.preferences-appearance-preview(); }
         appearance-mode-changed(m) => { root.preferences-appearance-mode-changed(m); }
         appearance-select-theme(name) => { root.preferences-appearance-select-theme(name); }

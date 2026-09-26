@@ -28,6 +28,7 @@ mod modulation_offsets_tests;
 mod rack_displays;
 #[cfg(test)]
 mod rack_displays_tests;
+mod plugin_scan;
 mod plugin_ui;
 mod pump_profile;
 #[cfg(test)]
@@ -3566,6 +3567,9 @@ pub fn saved_audio_config() -> mooloop_engine::AudioConfig {
 }
 
 pub use settings::PluginSettings;
+/// The binary's startup plugin scan (MOO-80), moved here so the window can
+/// start the same scan again (MOO-229).
+pub use plugin_scan::start_startup_plugin_scan;
 
 /// What the user saved about finding plugins, for the binary's startup scan
 /// (MOO-80).
@@ -4379,6 +4383,8 @@ struct UiState {
     /// The plugin faces' parameter models and value texts, kept across
     /// republishes so a knob is updated rather than rebuilt.
     plugin_faces: plugin_ui::PluginFaces,
+    /// A plugin scan started from the window, as the pump follows it (MOO-229).
+    plugin_scan: plugin_ui::ScanWatch,
     /// Raised whenever the effect rack is re-synced, so the pump knows the
     /// engine's spectrum subscriptions may be pointing at the wrong slots.
     ///
@@ -4562,6 +4568,7 @@ impl UiState {
             plugin_cache_path: plugin_cache_path(),
             plugin_insert_before: None,
             plugin_faces: plugin_ui::PluginFaces::default(),
+            plugin_scan: plugin_ui::ScanWatch::default(),
             effect_spectra_stale: std::cell::Cell::new(false),
             effect_spectra_synced_for: std::cell::Cell::new(None),
             layer_selection: HashMap::new(),
@@ -8428,6 +8435,11 @@ impl AppUi {
                         window.invoke_device_selected(next);
                     }
                     "browser.focus" => browser_take_focus(&st, &window),
+                    // The PLUGINS tab, the catalogue read afresh (MOO-229).
+                    "browser.plugins" => plugin_ui::show_plugin_browser(&st, &window),
+                    // Preferences' Rescan All, from anywhere: the pump shows
+                    // its progress in the status bar.
+                    "plugins.rescan" => window.invoke_preferences_plugin_rescan_requested(),
                     "browser.activate" => {
                         if !browser_activate_focused(&st, &window) {
                             return false;
@@ -8752,6 +8764,7 @@ impl AppUi {
                 // Built on open rather than kept current: the ports move, the
                 // map moves, and nothing outside this page reads either.
                 st.borrow().refresh_midi_mappings(&window);
+                plugin_ui::show_plugin_preferences(&window, &settings.plugins, &st.borrow().plugin_cache_path);
                 tx.send(AudioAction::RefreshTargets);
             });
         }
@@ -12446,6 +12459,14 @@ impl AppUi {
                 let settings = ui_settings.clone();
                 Rc::new(move || settings.borrow().midi.learn_binds_port)
             },
+        );
+        // Preferences → Plugins and Rescan All (MOO-229), scanning with the
+        // same scan the binary starts at launch (`plugin_scan`).
+        plugin_ui::wire_plugin_preferences(
+            &window,
+            &state,
+            &ui_settings,
+            Rc::new(|settings, progress| plugin_scan::start_scan(settings, true, progress)),
         );
         {
             let tx = cmd_tx.clone();
@@ -17676,6 +17697,9 @@ impl AppUi {
                 // its pins or its list moved (MOO-229); a hash when none did.
                 if let Some(window) = weak.upgrade() {
                     st.borrow().refresh_plugin_param_list(&window);
+                    // A plugin scan the window started: its progress, and
+                    // the catalogue read again once it is done (MOO-229).
+                    st.borrow_mut().poll_plugin_scan(&window);
                 }
                 profile.borrow_mut().lap(pump_profile::Section::Plugins);
                 st.borrow_mut().session.sync_compensation(&mut handle);

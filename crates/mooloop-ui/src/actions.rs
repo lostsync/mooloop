@@ -458,6 +458,10 @@ pub(crate) static ACTIONS: &[ActionSpec] = &[
         Scope::Browser,
         ctrl + "return"
     ),
+    // The browser's PLUGINS tab, and Preferences' Rescan All (MOO-229). No
+    // default chords: both are occasional, and bindable.
+    action!("browser.plugins", "Show Plugins", "Browser"),
+    action!("plugins.rescan", "Rescan Plugins", "Browser"),
     action!("pattern.add", "Add Pattern", "Pattern", ctrl + shift + "p"),
     action!(
         "pattern.remove",

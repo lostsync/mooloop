@@ -598,6 +598,51 @@ fn a_named_stepped_parameter_is_a_selector_that_sets_its_position() {
     assert!(segment(&h, "Latency: 512 frames").checked, "the face shows the position it set");
 }
 
+/// **Preferences → Plugins lists the files that could not be read, and
+/// Rescan All scans again and reads the result back** (MOO-229). The scan
+/// itself is a stand-in here, which finishes at once having rewritten the
+/// cache without the failure: the real one would launch children over this
+/// machine's plugin folders (`plugin_scan`'s own test holds the one-scan
+/// rule).
+#[test]
+fn the_plugins_page_shows_failures_and_rescan_all_reads_them_again() {
+    use crate::plugin_scan::{ScanProgress, ScanState};
+    let h = harness_with(&drum_loop());
+    let settings = Rc::new(RefCell::new(crate::settings::UiSettings::default()));
+    let asked = Rc::new(RefCell::new(0));
+    let cache = h.state.borrow().plugin_cache_path.clone();
+    let starter: plugin_ui::ScanStarter = {
+        let (asked, cache) = (asked.clone(), cache.clone());
+        Rc::new(move |_settings: &PluginSettings, progress: ScanProgress| {
+            *asked.borrow_mut() += 1;
+            let text = std::fs::read_to_string(&cache).expect("the cache");
+            let kept = text.split("[[file]]\npath = \"/usr/lib/clap/broken.clap\"").next().unwrap();
+            std::fs::write(&cache, kept).expect("the cache is rewritten");
+            *progress.lock().unwrap() = ScanState::Done { plugins: 2, failed: 0 };
+            true
+        })
+    };
+    plugin_ui::wire_plugin_preferences(&h.window, &h.state, &settings, starter);
+    plugin_ui::show_plugin_preferences(&h.window, &settings.borrow().plugins, &cache);
+
+    let failures = h.window.get_preferences_plugin_failures();
+    assert_eq!(failures.row_count(), 1);
+    let broken = failures.row_data(0).expect("a row");
+    assert_eq!(broken.name, "broken.clap");
+    assert!(broken.reason.contains("signal 11"), "{}", broken.reason);
+    assert_eq!(h.window.get_preferences_plugin_scan_timeout_s(), 10);
+    assert!(h.window.get_preferences_plugin_default_paths().row_count() > 0);
+
+    // The shortcut's way in and the page's button are the same callback.
+    h.window.invoke_preferences_plugin_rescan_requested();
+    assert_eq!(*asked.borrow(), 1);
+    h.state.borrow_mut().poll_plugin_scan(&h.window);
+    assert_eq!(h.window.get_preferences_plugin_scan_status(), "Plugin scan done: 2 plugins");
+    assert!(!h.window.get_preferences_plugin_scanning());
+    assert_eq!(h.window.get_preferences_plugin_failures().row_count(), 0, "read again after the scan");
+    assert!(h.state.borrow().plugin_catalog.failures.is_empty());
+}
+
 /// **An instrument from the window: the add-channel menu's "Add Plugin…",
 /// then a double-click in the browser, makes a new channel whose source is
 /// that plugin**, as one undo step (MOO-83 on MOO-84). The row is pressed in

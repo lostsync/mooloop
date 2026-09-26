@@ -1499,7 +1499,28 @@ pinned parameters and the sidebar holds the rest.
   cannot be asked, so its stepped parameters are knobs until it runs.
   The test gain's Latency and Fail are selectors now.
 - Not built: a face for a plugin channel's *source* (none exists yet), so the
-  list covers inserts only. The Preferences page and rescan are part (c).
+  list covers inserts only.
+
+**Part (c), 2026-09-26 (MOO-229): Preferences > Plugins and Rescan All.**
+- The startup scan moved, unchanged, from `app/src/main.rs` into
+  `ui/src/plugin_scan.rs` (Platform's, acked): the binary cannot be called
+  from the window, and a rescan must be the same scan. `main.rs` calls
+  `mooloop_ui::start_startup_plugin_scan()`. Same policy, thread name, and
+  log lines; the startup path passes no progress.
+- **One scan at a time**: a process-wide claim (`ScanClaim`), held by the
+  scan's thread and dropped when it ends. A second request is refused, says
+  so, and launches nothing (`a_second_scan_while_one_runs_is_refused`).
+- **Rescan All** is `clear_failures` then `scan`, and the cache is saved even
+  when only the forgetting changed it. Progress goes through an
+  `Arc<Mutex<ScanState>>` the pump reads once a tick
+  (`UiState::poll_plugin_scan`); when the scan is done it reloads the
+  catalogue, the PLUGINS tab and the page's failure list. The scan never runs
+  on the UI thread.
+- The page edits `UiSettings.plugins` and saves on each edit, as the MIDI
+  page's switch does. The folder chooser runs on its own thread and answers
+  through `preferences-plugin-folder-chosen`, as the export card's does.
+- Actions: `browser.plugins` and `plugins.rescan` (Browser category, no
+  default chord).
 
 ## The test plugins
 

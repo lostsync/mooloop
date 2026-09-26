@@ -43,8 +43,8 @@ the command layer, and applies equally to any future console/MCP command.
 ## What's registered today
 
 `actions.rs`'s `ACTIONS` table is the source of truth; read it rather than
-this document for the current list. **It holds 71 actions in 12 categories**
-as of 2026-09-24, and a test in `actions.rs` reads that sentence and fails if
+this document for the current list. **It holds 73 actions in 12 categories**
+as of 2026-09-26, and a test in `actions.rs` reads that sentence and fails if
 either number stops being true.
 
 This sentence has been wrong twice. On 2026-09-08 it said 46 where the table
@@ -68,9 +68,11 @@ mute, solo), Track (solo on Ctrl+Shift+M and mute on Ctrl+Alt+M, plus moving
 the track one seat left or right, all aimed at the track the rack is editing),
 Device (the clipboard's four on Ctrl+Shift+C/X/V/D, plus bypass, remove,
 wrap in a container, save a preset, and stepping the selection along the
-chain), Browser (focus it on Ctrl+B, then Enter and Ctrl+Enter), Pattern
+chain), Browser (focus it on Ctrl+B, then Enter and Ctrl+Enter; plus
+`browser.plugins`, which opens the PLUGINS tab, and `plugins.rescan`, which
+is Preferences > Plugins' Rescan All), Pattern
 (including lengthening and shortening the pattern by a beat, on
-Ctrl+Shift+= and Ctrl+Shift+-), and MIDI (arming controller mapping). Eight
+Ctrl+Shift+= and Ctrl+Shift+-), and MIDI (arming controller mapping). Ten
 entries are registered with no default chord and are listed so they can be
 bound. `pattern.clear` has none because every nearby Pattern action already
 claims a Ctrl+modifier combination. `channel.solo` has none for the same

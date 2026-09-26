@@ -37,8 +37,13 @@ use mooloop_session::plugin_params::{plugin_normalized, plugin_plain};
 use mooloop_session::session::Session;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
+use mooloop_session::dialogs::{pick_folder_dialog, Picked};
+
+use crate::plugin_scan::{ScanProgress, ScanState};
+use crate::settings::{PluginSettings, UiSettings};
 use crate::{
-    BrowserRow, EffectSlotRow, MainWindow, PluginListRow, PluginParamRow, UiState, BROWSER_PLUGIN,
+    BrowserRow, EffectSlotRow, MainWindow, PluginFailureRow, PluginListRow, PluginParamRow, UiState,
+    BROWSER_PLUGIN,
 };
 
 // ---------------------------------------------------------------------------
@@ -1262,6 +1267,199 @@ pub(crate) fn wire(
             window.set_status_message(
                 "Pick an instrument: double-click it or press Enter to add it on a new channel".into(),
             );
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Preferences → Plugins, and Rescan All (MOO-229).
+
+/// What starts a scan for the Plugins page: `plugin_scan::start_scan` in the
+/// app, a stand-in in the tests, which must not launch children over this
+/// machine's real plugin folders.
+pub(crate) type ScanStarter = Rc<dyn Fn(&PluginSettings, ScanProgress) -> bool>;
+
+/// A scan started from the window, as the pump follows it: the progress its
+/// thread writes, and the state the window was last shown.
+#[derive(Default)]
+pub(crate) struct ScanWatch {
+    pub(crate) progress: ScanProgress,
+    shown: RefCell<ScanState>,
+}
+
+/// The words for a scan's state: the page's status line, and the status bar
+/// while one runs.
+pub(crate) fn scan_status_text(state: &ScanState) -> String {
+    match state {
+        ScanState::Idle => String::new(),
+        ScanState::Scanning { at, of, file } => format!("Scanning plugins: {at} of {of}, {file}"),
+        ScanState::Done { plugins, failed: 0 } => format!("Plugin scan done: {plugins} plugins"),
+        ScanState::Done { plugins, failed: 1 } => {
+            format!("Plugin scan done: {plugins} plugins; 1 file could not be read")
+        }
+        ScanState::Done { plugins, failed } => {
+            format!("Plugin scan done: {plugins} plugins; {failed} files could not be read")
+        }
+        ScanState::Refused(why) => format!("Plugins not scanned: {why}"),
+    }
+}
+
+/// Publish the Plugins page: the folders, the timeout, the startup switch,
+/// and the files the cache says could not be read. Called when Preferences
+/// opens and after every edit or scan.
+pub(crate) fn show_plugin_preferences(window: &MainWindow, settings: &PluginSettings, cache_path: &Path) {
+    let texts = |paths: &[std::path::PathBuf]| -> ModelRc<SharedString> {
+        let rows: Vec<SharedString> = paths.iter().map(|path| path.display().to_string().into()).collect();
+        ModelRc::from(rows.as_slice())
+    };
+    window.set_preferences_plugin_default_paths(texts(&mooloop_plugin_host::scan::default_search_paths()));
+    window.set_preferences_plugin_extra_paths(texts(&settings.extra_paths));
+    window.set_preferences_plugin_scan_timeout_s(settings.scan_timeout_s as i32);
+    window.set_preferences_plugin_scan_on_startup(settings.scan_on_startup);
+    let failures: Vec<PluginFailureRow> = PluginCatalog::load(cache_path)
+        .failures
+        .into_iter()
+        .map(|(name, reason)| PluginFailureRow {
+            name: name.into(),
+            reason: reason.into(),
+        })
+        .collect();
+    window.set_preferences_plugin_failures(ModelRc::from(failures.as_slice()));
+}
+
+impl UiState {
+    /// Follow a scan the window started: its progress on the Plugins page
+    /// and in the status bar, and, once it is done, the catalogue, the
+    /// browser's PLUGINS tab and the failure list read again. The pump calls
+    /// it every tick; a tick with nothing new takes a lock and compares.
+    pub(crate) fn poll_plugin_scan(&mut self, window: &MainWindow) {
+        let now = self
+            .plugin_scan
+            .progress
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        if *self.plugin_scan.shown.borrow() == now {
+            return;
+        }
+        *self.plugin_scan.shown.borrow_mut() = now.clone();
+        let text = scan_status_text(&now);
+        window.set_preferences_plugin_scan_status(text.as_str().into());
+        window.set_preferences_plugin_scanning(matches!(now, ScanState::Scanning { .. }));
+        window.set_status_message(text.into());
+        if matches!(now, ScanState::Done { .. }) {
+            self.plugin_catalog = PluginCatalog::load(&self.plugin_cache_path);
+            crate::refresh_browser(self);
+            let failures: Vec<PluginFailureRow> = self
+                .plugin_catalog
+                .failures
+                .iter()
+                .map(|(name, reason)| PluginFailureRow {
+                    name: name.as_str().into(),
+                    reason: reason.as_str().into(),
+                })
+                .collect();
+            window.set_preferences_plugin_failures(ModelRc::from(failures.as_slice()));
+        }
+    }
+}
+
+/// Wire Preferences → Plugins and Rescan All. Each edit is saved as it is
+/// made, as the MIDI page's switch is; an edit that fails to save puts the
+/// old value back and says why. `start` begins a scan (`plugin_scan`).
+pub(crate) fn wire_plugin_preferences(
+    window: &MainWindow,
+    state: &Rc<RefCell<UiState>>,
+    settings: &Rc<RefCell<UiSettings>>,
+    start: ScanStarter,
+) {
+    /// Apply `edit` to the saved plugin settings and save them; on failure
+    /// restore what was there and say so. Then republish the page.
+    fn edit_settings(
+        window: &MainWindow,
+        state: &Rc<RefCell<UiState>>,
+        settings: &Rc<RefCell<UiSettings>>,
+        edit: impl FnOnce(&mut PluginSettings),
+    ) {
+        let mut settings = settings.borrow_mut();
+        let previous = settings.plugins.clone();
+        edit(&mut settings.plugins);
+        if settings.plugins != previous {
+            if let Err(error) = settings.save() {
+                settings.plugins = previous;
+                window.set_preferences_error(format!("Could not save settings: {error}").into());
+            }
+        }
+        show_plugin_preferences(window, &settings.plugins, &state.borrow().plugin_cache_path);
+    }
+    {
+        // The chooser blocks its thread until it is answered, so it runs on
+        // its own, as the export card's does, and answers through
+        // `preferences-plugin-folder-chosen`.
+        let weak = window.as_weak();
+        window.on_preferences_plugin_path_added(move || {
+            let weak = weak.clone();
+            std::thread::spawn(move || {
+                let picked = pick_folder_dialog("Look for plugins in");
+                let _ = weak.upgrade_in_event_loop(move |window| match picked {
+                    Picked::Path(folder) => window
+                        .invoke_preferences_plugin_folder_chosen(folder.display().to_string().into()),
+                    Picked::Cancelled => {}
+                    Picked::Unavailable(none) => window.set_preferences_error(
+                        none.one_line().into(),
+                    ),
+                });
+            });
+        });
+    }
+    {
+        let (st, settings, weak) = (state.clone(), settings.clone(), window.as_weak());
+        window.on_preferences_plugin_folder_chosen(move |folder| {
+            let Some(window) = weak.upgrade() else { return };
+            let folder = std::path::PathBuf::from(folder.as_str());
+            edit_settings(&window, &st, &settings, |plugins| {
+                if !plugins.extra_paths.contains(&folder) {
+                    plugins.extra_paths.push(folder);
+                }
+            });
+        });
+    }
+    {
+        let (st, settings, weak) = (state.clone(), settings.clone(), window.as_weak());
+        window.on_preferences_plugin_path_removed(move |index| {
+            let (Some(window), Ok(index)) = (weak.upgrade(), usize::try_from(index)) else {
+                return;
+            };
+            edit_settings(&window, &st, &settings, |plugins| {
+                if index < plugins.extra_paths.len() {
+                    plugins.extra_paths.remove(index);
+                }
+            });
+        });
+    }
+    {
+        let (st, settings, weak) = (state.clone(), settings.clone(), window.as_weak());
+        window.on_preferences_plugin_scan_timeout_changed(move |seconds| {
+            let Some(window) = weak.upgrade() else { return };
+            edit_settings(&window, &st, &settings, |plugins| {
+                plugins.scan_timeout_s = seconds.clamp(1, 120) as u32;
+            });
+        });
+    }
+    {
+        let (st, settings, weak) = (state.clone(), settings.clone(), window.as_weak());
+        window.on_preferences_plugin_scan_on_startup_toggled(move |on| {
+            let Some(window) = weak.upgrade() else { return };
+            edit_settings(&window, &st, &settings, |plugins| plugins.scan_on_startup = on);
+        });
+    }
+    {
+        // Rescan All: the failures forgotten and every file scanned again,
+        // on the scan's own thread; the pump follows it (`poll_plugin_scan`).
+        let (st, settings) = (state.clone(), settings.clone());
+        window.on_preferences_plugin_rescan_requested(move || {
+            let progress = st.borrow().plugin_scan.progress.clone();
+            start(&settings.borrow().plugins, progress);
         });
     }
 }
