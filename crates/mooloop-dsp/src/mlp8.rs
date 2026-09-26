@@ -1201,6 +1201,8 @@ fn mode_params(mode: MlP8Chorus) -> ModulationParams {
             // chorus the patch chose, not a device a user is driving.
             tempo_sync: false,
             rate_division: ModTimeDivision::Whole,
+            // Full width: the chorus as it always was (MOO-245).
+            width: 1.0,
         },
         // II: faster, deeper, and with a little feedback, so it is a
         // different decision rather than more of the first one.
@@ -1217,6 +1219,8 @@ fn mode_params(mode: MlP8Chorus) -> ModulationParams {
             // chorus the patch chose, not a device a user is driving.
             tempo_sync: false,
             rate_division: ModTimeDivision::Whole,
+            // Full width: the chorus as it always was (MOO-245).
+            width: 1.0,
         },
         // Ensemble: the wider three-tap algorithm, which is the one that
         // stops sounding like a delay and starts sounding like more players.
@@ -1233,6 +1237,8 @@ fn mode_params(mode: MlP8Chorus) -> ModulationParams {
             // chorus the patch chose, not a device a user is driving.
             tempo_sync: false,
             rate_division: ModTimeDivision::Whole,
+            // Full width: the chorus as it always was (MOO-245).
+            width: 1.0,
         },
     }
 }

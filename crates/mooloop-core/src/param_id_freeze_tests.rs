@@ -129,6 +129,7 @@ const FROZEN: &[(Owner, &[(u32, &str)])] = &[
         (5, "Spread"),
         (6, "Tone"),
         (7, "Stages"),
+        (8, "Width"),
     ]),
     (Effect(EffectKind::Filter), &[
         (0, "Cutoff"),

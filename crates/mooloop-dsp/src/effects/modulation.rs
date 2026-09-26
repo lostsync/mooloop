@@ -9,7 +9,7 @@
 use mooloop_core::{
     LfoWave, ModulationMode, ModulationParams, MODULATION_PARAM_COLOR, MODULATION_PARAM_DEPTH,
     MODULATION_PARAM_FEEDBACK, MODULATION_PARAM_MODE, MODULATION_PARAM_RATE_HZ,
-    MODULATION_PARAM_SPREAD, MODULATION_PARAM_STAGES, MODULATION_PARAM_TONE,
+    MODULATION_PARAM_SPREAD, MODULATION_PARAM_STAGES, MODULATION_PARAM_TONE, MODULATION_PARAM_WIDTH,
 };
 
 use crate::bus::StereoBus;
@@ -25,7 +25,7 @@ const MAX_DELAY_MS: f32 = 64.0;
 const MAX_PHASER_STAGES: usize = 12;
 const TONE_MIN_HZ: f32 = 350.0;
 const TONE_MAX_HZ: f32 = 20_000.0;
-/// Time constant for depth, feedback, spread, tone, and color: all continuous
+/// Time constant for depth, feedback, spread, tone, color, and width: all continuous
 /// and audible, all currently stepped once per block on every knob move.
 /// Rate is deliberately excluded — it feeds a phase increment, so a step in
 /// rate is not a step in output. Stages and mode are discrete.
@@ -89,6 +89,7 @@ pub struct ModulationEffect {
     spread: Smoothed,
     tone: Smoothed,
     color: Smoothed,
+    width: Smoothed,
 }
 
 impl ModulationEffect {
@@ -115,6 +116,7 @@ impl ModulationEffect {
             spread: smoothed(params.spread.clamp(0.0, 1.0)),
             tone: smoothed(params.tone.clamp(0.0, 1.0)),
             color: smoothed(params.color.clamp(0.0, 1.0)),
+            width: smoothed(params.width.clamp(0.0, 1.0)),
         };
         effect.rebuild_tilt();
         effect
@@ -133,6 +135,7 @@ impl ModulationEffect {
         self.spread.reset_to(params.spread.clamp(0.0, 1.0));
         self.tone.reset_to(params.tone.clamp(0.0, 1.0));
         self.color.reset_to(params.color.clamp(0.0, 1.0));
+        self.width.reset_to(params.width.clamp(0.0, 1.0));
         self.rebuild_tilt();
     }
 
@@ -371,6 +374,23 @@ fn resonance_trim(feedback: f32) -> f32 {
     (RESONANCE_CEILING * (1.0 - feedback.abs())).min(1.0)
 }
 
+/// The wet pair at `width` (MOO-245): each side keeps `(1 + w) / 2` of
+/// itself and takes `(1 - w) / 2` of the other, so the mid is untouched and
+/// the side is scaled by `w`. At 0 both sides carry the same centred mix of
+/// the two voices. At exactly 1 the pair is returned untouched, so full
+/// width is the mode's own output to the bit, and ML-P8's finishing chorus,
+/// which runs at 1, is unchanged. The weights alone would not quite do it:
+/// `-0.0 * 1 + 0.0 * 0` is `+0.0`.
+#[inline]
+fn apply_width(left: f32, right: f32, width: f32) -> (f32, f32) {
+    if width == 1.0 {
+        return (left, right);
+    }
+    let keep = 0.5 + 0.5 * width;
+    let take = 0.5 - 0.5 * width;
+    (left * keep + right * take, right * keep + left * take)
+}
+
 fn ring_frames(sample_rate: u32) -> usize {
     (MAX_DELAY_MS * sample_rate as f32 / 1_000.0) as usize + 8
 }
@@ -410,6 +430,7 @@ impl RangeProcessor for ModulationEffect {
             let spread = self.spread.advance();
             let tone = self.tone.advance();
             let color = self.color.advance();
+            let width = self.width.advance();
             let (input_l, input_r) = (bus.l[i], bus.r[i]);
             let (wet_l, wet_r) = match self.params.mode {
                 ModulationMode::Phaser => {
@@ -434,6 +455,7 @@ impl RangeProcessor for ModulationEffect {
                     )
                 }
             };
+            let (wet_l, wet_r) = apply_width(wet_l, wet_r, width);
             bus.l[i] = wet_l;
             bus.r[i] = wet_r;
         }
@@ -478,6 +500,10 @@ impl RangeProcessor for ModulationEffect {
             MODULATION_PARAM_STAGES => {
                 self.params.stages = value.round().clamp(4.0, 12.0) as u8;
                 self.rebuild_tilt();
+            }
+            MODULATION_PARAM_WIDTH => {
+                self.params.width = value.clamp(0.0, 1.0);
+                self.width.set_target(self.params.width);
             }
             _ => {}
         }
@@ -538,6 +564,7 @@ impl AudioNode for ModulationEffect {
             || !self.spread.is_settled()
             || !self.tone.is_settled()
             || !self.color.is_settled()
+            || !self.width.is_settled()
         {
             return u32::MAX;
         }
@@ -581,6 +608,7 @@ impl AudioNode for ModulationEffect {
             self.spread.set_time(PARAM_SMOOTH_S, sample_rate);
             self.tone.set_time(PARAM_SMOOTH_S, sample_rate);
             self.color.set_time(PARAM_SMOOTH_S, sample_rate);
+            self.width.set_time(PARAM_SMOOTH_S, sample_rate);
             self.phaser_primed = false;
             self.tone_set_for = f32::NAN;
         }
@@ -1193,5 +1221,56 @@ mod tests {
             full > knee + 12.0,
             "past the knee the ring should keep lengthening: {full:.1} against {knee:.1} dB"
         );
+    }
+
+    /// **Full width is the mode's own output, to the bit** (MOO-245). The
+    /// weights are exactly 1 and 0 at width 1, so nothing a song or ML-P8's
+    /// finishing chorus played before Width existed changes.
+    #[test]
+    fn full_width_passes_the_wet_pair_through_to_the_bit() {
+        let pairs = [(0.3f32, -0.7f32), (-1.0e-30, 2.5), (0.0, -0.0), (1.0, 1.0), (-0.25, 0.125)];
+        for (l, r) in pairs {
+            let (wl, wr) = apply_width(l, r, 1.0);
+            assert_eq!((wl.to_bits(), wr.to_bits()), (l.to_bits(), r.to_bits()), "({l}, {r})");
+        }
+    }
+
+    /// **Zero width centres both voices** (MOO-245): a chorus at full
+    /// spread, which makes its sides differ, comes out identical on both at
+    /// width 0, and holds its level in the middle rather than losing it.
+    #[test]
+    fn zero_width_makes_the_wet_mono() {
+        let frames = SR as usize / 2;
+        let render = |width: f32| {
+            let mut bus = StereoBus::with_capacity(frames);
+            let mut noise = crate::osc::Noise::new(0x0245_5eed);
+            for i in 0..frames {
+                let x = 0.25 * noise.next_sample();
+                bus.l[i] = x;
+                bus.r[i] = x;
+            }
+            let mut effect = ModulationEffect::new(
+                ModulationParams { spread: 1.0, depth: 0.8, width, ..ModulationParams::default() },
+                SR,
+            );
+            effect.process(&context(frames), &mut bus, &EventList::empty(), None);
+            bus
+        };
+        let wide = render(1.0);
+        let side = |bus: &StereoBus| {
+            let diff: Vec<f32> =
+                bus.l[..frames].iter().zip(&bus.r[..frames]).map(|(l, r)| l - r).collect();
+            crate::testkit::rms(&diff)
+        };
+        assert!(side(&wide) > 0.01, "full spread should make the sides differ");
+        let mono = render(0.0);
+        assert_eq!(side(&mono), 0.0, "width 0 left a difference between the sides");
+        let mid = |bus: &StereoBus| {
+            let sum: Vec<f32> =
+                bus.l[..frames].iter().zip(&bus.r[..frames]).map(|(l, r)| 0.5 * (l + r)).collect();
+            crate::testkit::rms(&sum)
+        };
+        let moved = crate::testkit::db(mid(&mono) / mid(&wide)).abs();
+        assert!(moved < 0.01, "the mid moved by {moved} dB");
     }
 }

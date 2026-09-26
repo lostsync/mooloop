@@ -2007,8 +2007,11 @@ pub const MODULATION_PARAM_FEEDBACK: u32 = 4;
 pub const MODULATION_PARAM_SPREAD: u32 = 5;
 pub const MODULATION_PARAM_TONE: u32 = 6;
 pub const MODULATION_PARAM_STAGES: u32 = 7;
+/// The wet signal's stereo width, from both sides' voices centred (0) to
+/// as wide as the modes make them (1). Appended by MOO-245.
+pub const MODULATION_PARAM_WIDTH: u32 = 8;
 
-static MODULATION_DESCRIPTORS: [ParamDescriptor; 8] = [
+static MODULATION_DESCRIPTORS: [ParamDescriptor; 9] = [
     ParamDescriptor {
         id: MODULATION_PARAM_MODE,
         name: "Mode",
@@ -2081,6 +2084,15 @@ static MODULATION_DESCRIPTORS: [ParamDescriptor; 8] = [
         curve: ParamCurve::Stepped(5),
         default: 8.0,
     },
+    ParamDescriptor {
+        id: MODULATION_PARAM_WIDTH,
+        name: "Width",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 1.0,
+    },
 ];
 
 /// Algorithms exposed by the unified modulation processor. The first four
@@ -2141,6 +2153,15 @@ pub struct ModulationParams {
     pub spread: f32,
     pub tone: f32,
     pub stages: u8,
+    /// The wet signal's stereo width (MOO-245): 0 folds both sides'
+    /// voices to the centre, 1 leaves them as the mode makes them. Absent
+    /// from a song saved before it, which reads as 1, today's sound.
+    #[serde(default = "default_modulation_width")]
+    pub width: f32,
+}
+
+const fn default_modulation_width() -> f32 {
+    1.0
 }
 
 impl ModulationParams {
@@ -2168,6 +2189,7 @@ impl Default for ModulationParams {
             spread: 0.65,
             tone: 0.75,
             stages: 8,
+            width: default_modulation_width(),
         }
     }
 }
@@ -3544,6 +3566,7 @@ impl EffectParams {
                 MODULATION_PARAM_SPREAD => Some(p.spread),
                 MODULATION_PARAM_TONE => Some(p.tone),
                 MODULATION_PARAM_STAGES => Some(f32::from(p.stages)),
+                MODULATION_PARAM_WIDTH => Some(p.width),
                 _ => None,
             },
             Self::Filter(p) => match id {
@@ -3692,6 +3715,7 @@ impl EffectParams {
                 MODULATION_PARAM_SPREAD => p.spread = value,
                 MODULATION_PARAM_TONE => p.tone = value,
                 MODULATION_PARAM_STAGES => p.stages = value.round() as u8,
+                MODULATION_PARAM_WIDTH => p.width = value,
                 _ => return None,
             },
             Self::Filter(p) => match id {
@@ -4187,6 +4211,28 @@ mod tests {
             .filter(|kind| kind.container_flow() == Some(ContainerFlow::Parallel))
             .collect();
         assert_eq!(parallel, [EffectKind::Layer], "only a layer splits its input");
+    }
+
+    /// A Modulation device saved before Width existed (MOO-245) has no
+    /// `width` key, and reads at full width: the DSP's width stage is the
+    /// identity there to the bit
+    /// (`full_width_passes_the_wet_pair_through_to_the_bit`, mooloop-dsp),
+    /// so the song sounds as it did.
+    #[test]
+    fn a_modulation_saved_before_width_reads_at_full_width() {
+        let written = "type = \"modulation\"\n[state]\nmode = \"flange\"\nrate_hz = 0.5\n\
+                       depth = 0.6\ncolor = 0.4\nfeedback = 0.7\nspread = 0.3\ntone = 0.9\nstages = 8\n";
+        let EffectParams::Modulation(params) =
+            toml::from_str::<EffectParams>(written).expect("a 0.1.5 modulation decodes")
+        else {
+            panic!("a modulation came back as something else");
+        };
+        assert_eq!(params.width, 1.0);
+        assert_eq!(params.mode, ModulationMode::Flange);
+        assert_eq!(params.feedback, 0.7);
+        let dialled = EffectParams::Modulation(ModulationParams { width: 0.25, ..params });
+        let round_trip = toml::to_string(&dialled).expect("encodes");
+        assert_eq!(toml::from_str::<EffectParams>(&round_trip).expect("reads back"), dialled);
     }
 
     /// A layer is a new `type` tag and nothing else: a file naming it decodes

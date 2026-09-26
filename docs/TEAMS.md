@@ -251,13 +251,16 @@ Files marked *shared* are split in the table above.
   `bus_comp_tests.rs`, and the Bus Comp insert's acceptance render
   `engine/examples/bus_comp_insert.rs` (MOO-216), and the inserts' listening
   renders `engine/examples/phaser_sweep.rs` (MOO-235),
-  `engine/examples/drive_curves.rs` (MOO-250) and
+  `engine/examples/drive_curves.rs` (MOO-250),
+  `engine/examples/chorus_width.rs` (MOO-245) and
   `engine/examples/modulation_feedback.rs` (MOO-200)
 - `ui/ui/`: `bitcrush-device.slint`, `buffer-device.slint`, `bus-comp-device.slint`,
   `compressor-device.slint`, `container-device.slint`, `delay-device.slint`,
   `drive-device.slint`, `eq-device.slint`, `filter-device.slint`,
   `gate-device.slint`, `layer-device.slint`, `limiter-device.slint`,
-  `plate-device.slint`, `preamp-device.slint`, `reverb-device.slint`
+  `plate-device.slint`, `preamp-device.slint`, `reverb-device.slint`,
+  `modulation-device.slint` (the Modulation insert's face; filed under Control
+  until MOO-245)
 - `ui/src/layer_view.rs`: what the rack draws of a chain holding layers
   (which rows a layer hides, where each box closes, the branch list and the
   bracket), the container drawing's derivation (`containers/09`)
@@ -287,7 +290,7 @@ Files marked *shared* are split in the table above.
   plugin's parameters, offline and live) and `session/tests/plugin_params.rs`
 - `session/tests/source_param_kind.rs` (a binding made on one device is inert
   on another and comes back, MOO-135)
-- `ui/ui/`: `modulation-shelf.slint`, `modulation-device.slint`
+- `ui/ui/`: `modulation-shelf.slint`
 - `ui/tests/`: `shelf_agreement.rs`, `midi_learn_gesture.rs`,
   `slint_face_agreement.rs`, `knob_value_text.rs`
 

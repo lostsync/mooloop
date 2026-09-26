@@ -720,3 +720,22 @@ In the order worth playing:
 
     The measured version is
     `scripts/antibox --no-incremental cargo test -p mooloop-engine --lib -- plugin_mono`.
+28. **The Modulation device's Width and Mix** (MOO-245). Width is new: a
+    mid/side scale on the wet signal, from both voices folded to the
+    centre (0%) to the mode's own image (100%, the default and today's
+    sound, bit for bit). The face's Mix is the slot's own wet/dry, which
+    the face already carried as "Wet". The face's knobs are now five a row
+    and its trace is narrower. A sustained ML-P8 saw chord through a chorus
+    at full Spread and half Mix, two bars each at Width 100%, 50% and 0%,
+    then at full Mix, then dry:
+
+    ```sh
+    scripts/antibox --no-incremental --pull target/chorus-width \
+      cargo run -p mooloop-engine --example chorus_width -- target/chorus-width
+    ```
+
+    Play `chorus-width.wav`. Measured 2026-09-26, side against mid: -5.2 dB
+    at 100%, -11.2 dB at 50%, none at 0%, and the level barely moves
+    (-24.3, -25.2 and -25.5 dBFS RMS). Whether 0% sounds like a good mono
+    chorus rather than a comb, and whether the face reads well with five
+    knobs a row, are the listen and the look.

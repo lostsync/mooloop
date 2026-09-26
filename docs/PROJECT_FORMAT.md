@@ -620,6 +620,11 @@ before any of them existed still loads:
   grid it now shares says two — an eighth note under a label that read `1/2`
   — so a delay saved on that division reopens four times slower, playing the
   half note its own label always claimed.
+- A modulation effect carries `state.width` (0 to 1, the wet signal's
+  stereo width), added 2026-09-26 (MOO-245), parameter id 8. It defaults to
+  1.0, full width, where the DSP's width stage is the identity to the bit,
+  so a file written before it plays exactly as it did. 0.1.5 ignores the
+  key and plays such a song at full width.
 - A row of kind `chain` is a **container**: `state.children` says how many of
   the rows after it are inside it, and `state.mix` is the blend across that
   run. Both default. A container does not hold its children — they are

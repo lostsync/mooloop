@@ -1853,7 +1853,12 @@ land on its own when it starts to matter:
   Past Feedback 75% (either sign) every mode's wet output is trimmed by
   `min(1, 4 * (1 - |fb|))`, so a feedback resonance peaks at +12 dB instead
   of the +22 dB a loop at 92% reaches (MOO-200); the loop itself is not
-  touched, so a flanger at full feedback rings as long as it did. The
+  touched, so a flanger at full feedback rings as long as it did. Width
+  (MOO-245) scales the wet signal's side against its mid, from both
+  voices folded to the centre at 0% to the mode's own image at 100%, the
+  default, where it changes nothing; the face's Mix knob is the slot's own
+  wet/dry rather than a second blend. The face's knob panel is five a row
+  since. The
   generic host supplies their dry/wet blend, so the DSP returns the processed
   signal only. The reverb runs eight modulated delay lines through a Hadamard
   feedback matrix behind a diffused, pre-delayed input, each line's return

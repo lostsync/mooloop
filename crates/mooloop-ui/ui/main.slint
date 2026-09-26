@@ -5696,6 +5696,7 @@ export component MainWindow inherits Window {
                                                     spread: slot.p5;
                                                     tone: slot.p6;
                                                     stages: slot.p7;
+                                                    stereo-width: slot.p8;
                                                     tempo-sync: slot.p16 >= 0.5;
                                                     rate-division: round(slot.p17);
                                                     bpm: root.bpm;
@@ -5708,6 +5709,7 @@ export component MainWindow inherits Window {
                                                     spread-changed(v) => { root.effect-param-changed(index, 5, v); }
                                                     tone-changed(v) => { root.effect-param-changed(index, 6, v); }
                                                     stages-changed(v) => { root.effect-param-changed(index, 7, v); }
+                                                    stereo-width-changed(v) => { root.effect-param-changed(index, 8, v); }
                                                     tempo-sync-changed(on) => {
                                                         root.modulation-tempo-sync-changed(index, on);
                                                     }
