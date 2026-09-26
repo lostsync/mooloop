@@ -5,15 +5,18 @@ Status: **the overnight sequence and a first performance pass are done
 **Performance** holds what was fixed and what is left: MOO-264 (the rest of an
 ML-P8 voice), MOO-254 (Reverb), and the repaint cost while playing (MOO-258,
 upstream Slint), plus MOO-263. Adam ruled on MOO-263 on 2026-09-25: *"we can
-do v2, totally"*, so Linux release builds move to x86-64-v2. Two decisions still
-wait on Adam: whether to patch or report Slint's FemtoVG clip and ellipsis
-costs (MOO-256, MOO-258), and MOO-227's effect-preset audition.
+do v2, totally"*, so Linux release builds move to x86-64-v2. The Slint FemtoVG clip and ellipsis
+costs (MOO-256, MOO-258) are fixed upstream in Slint 1.18.1, so nothing was
+reported and nothing is patched. The upgrade is MOO-268 (Adam, 2026-09-26: no fork). MOO-227's effect half was ruled out on 2026-09-26:
+an effect preset's click only selects.
 Nothing from either push has been heard. `JOURNAL.md` has the record.
 
 **The next push is 0.1.6, scoped 2026-09-26.** It is the open issues with
 the `0.1.6` label in Linear, and nothing else. The label is the list, and this
 document does not copy it. `AGENTS.md` explains the labels under *Releases: the
-`Release` labels*. The order within 0.1.6 has not been set yet.
+`Release` labels*. **Order: bugs first** (Adam, 2026-09-26). Correctness comes first
+(MOO-242, 243, 135, 200, 239, 237), then the UX items, then the plugin face,
+then performance.
 
 `archive/ROADMAP.md` orders the whole product by dependency, and `SCOPE.md`
 says what 0.2.0 is. This document is narrower: it names the active sequence
@@ -50,8 +53,8 @@ Two siblings, kept because they outlived the plans they came from:
 
 ## The sequence, 2026-09-25 (overnight): done
 
-All of it is on `main` and closed, except MOO-227's effect-preset audition,
-which is a `Question` for Adam. The night also found and fixed MOO-241 (two
+All of it is on `main` and closed, and MOO-227's effect-preset half was ruled out
+(2026-09-26: an effect preset's click only selects). The night also found and fixed MOO-241 (two
 takes in one second overwrote each other) and filed MOO-237, MOO-238,
 MOO-239, MOO-240 and MOO-242. The lanes as they were queued:
 
@@ -542,8 +545,8 @@ In the order worth playing:
     an ML-P8, an ML-M1 and a DS-01 preset in turn. Each should play a short
     phrase (an arpeggio into a chord, or a bar of hits) without changing the
     song or its undo history, and a click on a second preset while the first
-    plays should cut to it. An effect preset's click plays nothing yet: that
-    is the question on MOO-227. The render path is pinned by
+    plays should cut to it. An effect preset's click plays nothing, by Adam's
+    ruling on MOO-227. The render path is pinned by
     `an_instrument_preset_auditions_as_a_rendered_phrase` (session).
 21. **Sampler key zones** (MOO-14). Two sine files, the sampler's own at C4
     and a zone's at C5 an octave up and half the level. One sampler plays its

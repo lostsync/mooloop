@@ -491,8 +491,8 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   thread, into a short phrase (a bar of hits for the drum devices, an
   arpeggio into a chord for the pitched ones, root and fifth for a sampler)
   and played through the preview voice when autoplay is on, like a clicked
-  sample. The song is not touched. An effect preset's click only selects: what
-  its audition should sound like is open (MOO-227). A **filter** field above both tabs narrows the
+  sample. The song is not touched. An effect preset's click only selects, and
+  that is Adam's ruling (MOO-227, 2026-09-26: no effect audition). A **filter** field above both tabs narrows the
   tree by words: presets by name, category, tags and group, opening every
   group that has a match; samples by file name, searched through every folder
   under every location rather than only the open ones (bounded, on the UI
