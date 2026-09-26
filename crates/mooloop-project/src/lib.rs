@@ -837,10 +837,8 @@ fn prepare_song_reference(
         };
         let directory = target_assets.join(folder);
         fs::create_dir_all(&directory)?;
-        let leaf = unclaimed_name(&directory, &wanted);
-        let destination = directory.join(&leaf);
-        copy_new_file(&source, &destination)?;
-        added.push(destination);
+        let leaf = copy_new_file(&source, &directory, &wanted)?;
+        added.push(directory.join(&leaf));
         let relative = asset_name.join(folder).join(&leaf);
         copied.insert(canonical, relative.clone());
         relative
@@ -878,23 +876,36 @@ fn unclaimed_name(directory: &Path, wanted: &str) -> String {
         .expect("an unbounded search finds a free name")
 }
 
-/// Copy `source` to `destination`, which does not exist, so that nothing ever
-/// sees a half-copied file under its final name: the bytes go to a hidden
-/// sibling first and are renamed into place.
-fn copy_new_file(source: &Path, destination: &Path) -> Result<(), Error> {
-    let directory = destination.parent().expect("an asset has a folder");
-    let leaf = destination
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("asset");
-    let partial = directory.join(format!(".{leaf}.part-{}", std::process::id()));
-    let result = fs::copy(source, &partial)
+/// Copy `source` into `directory` as `wanted`, or the first of its
+/// [`candidates`](mooloop_core::file_names::candidates) nothing has, and
+/// return the name it landed under.
+///
+/// Nothing ever sees a half-copied file under its final name: the bytes go
+/// to a hidden sibling first and are moved into place. And nothing already
+/// there is ever replaced (MOO-243): the move is
+/// [`rename_no_replace`](mooloop_core::file_names::rename_no_replace), which
+/// the OS refuses atomically when the name is taken, and a refusal moves on
+/// to the next candidate. So a file that appears under a name after anything
+/// checked it -- another process saving into the same sidecar -- keeps it.
+fn copy_new_file(source: &Path, directory: &Path, wanted: &str) -> Result<String, Error> {
+    use mooloop_core::file_names::{candidates, rename_no_replace};
+    let partial = directory.join(format!(".{wanted}.part-{}", std::process::id()));
+    let placed = fs::copy(source, &partial)
         .and_then(|_| fs::File::open(&partial)?.sync_all())
-        .and_then(|_| fs::rename(&partial, destination));
-    if result.is_err() {
+        .and_then(|_| {
+            for leaf in candidates(wanted) {
+                match rename_no_replace(&partial, &directory.join(&leaf)) {
+                    Ok(()) => return Ok(leaf),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => return Err(error),
+                }
+            }
+            unreachable!("the candidates never run out")
+        });
+    if placed.is_err() {
         let _ = fs::remove_file(&partial);
     }
-    result.map_err(Error::Io)
+    placed.map_err(Error::Io)
 }
 
 /// What a song's sidecar directory is called, after the song's own file name.
@@ -1663,6 +1674,40 @@ mod tests {
         ParamAddr, PatternMeta, PatternPlacement, ProjectColor, MAX_CHOKE_GROUP,
     };
     use tempfile::tempdir;
+
+    /// **An asset never replaces a file that took its name after the name
+    /// was chosen** (MOO-243). The name is picked the way a save used to
+    /// pick it, then another writer puts a file there, then the copy lands:
+    /// the other file is untouched, and the asset is under the next free
+    /// name, which the copy reports.
+    #[test]
+    fn an_asset_copy_moves_past_a_file_that_appeared_under_its_name() {
+        let temp = tempdir().unwrap();
+        let source = temp.path().join("kick.wav");
+        std::fs::write(&source, b"the new asset").unwrap();
+        let directory = temp.path().join("samples");
+        std::fs::create_dir_all(&directory).unwrap();
+        let wanted = "01-kick.wav";
+
+        let chosen = unclaimed_name(&directory, wanted);
+        assert_eq!(chosen, wanted);
+        std::fs::write(directory.join(&chosen), b"someone else's file").unwrap();
+
+        let landed = copy_new_file(&source, &directory, wanted).unwrap();
+        assert_eq!(landed, "01-kick-2.wav");
+        assert_eq!(
+            std::fs::read(directory.join(&chosen)).unwrap(),
+            b"someone else's file",
+            "the file that appeared was replaced"
+        );
+        assert_eq!(std::fs::read(directory.join(&landed)).unwrap(), b"the new asset");
+        // No part file is left behind.
+        let names: Vec<_> = std::fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names.len(), 2, "stray files: {names:?}");
+    }
 
     /// **Saving twice must not rename the sample twice.**
     ///
