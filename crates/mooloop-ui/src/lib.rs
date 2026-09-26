@@ -15,6 +15,8 @@ mod browser_panel_tests;
 #[cfg(test)]
 mod channel_sidebar_tests;
 #[cfg(test)]
+mod rack_rename_tests;
+#[cfg(test)]
 mod controlled_faces_tests;
 #[cfg(test)]
 mod rack_fold_tests;

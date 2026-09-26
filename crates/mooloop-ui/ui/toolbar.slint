@@ -388,7 +388,29 @@ export component NameField inherits Rectangle {
     /// a space rather than starting the transport. Exists for the same reason
     /// `current-text` does: so a test can ask, rather than read pixels.
     out property <bool> editing: input.has-focus;
+    /// Whether Tab and Shift+Tab leave this field asking to move on, rather
+    /// than walking the window's focus chain. The step rack's inline rename
+    /// sets it, so a run of channels can be named from the keyboard the way
+    /// a column of cells is (MOO-224). Off everywhere else.
+    in property <bool> tabs: false;
     callback edited(string);
+    /// Tab (`backwards` false) or Shift+Tab (true) in a field with `tabs`.
+    /// Fires before the caret leaves, so a listener can say where it goes
+    /// next and act on `left`.
+    callback tabbed(bool /* backwards */);
+    /// The caret has left and the editing session is closed: fired from the
+    /// same handler that ends the gesture, and after it. A field that takes
+    /// itself away on leaving does it here, never on `editing` -- a field
+    /// torn down before its own focus handler runs would leave its gesture
+    /// open, and the next edit anywhere would join this one's undo step.
+    callback left();
+
+    /// Puts the caret in the field with its text selected, so typing
+    /// replaces the name rather than appending to it.
+    public function edit-all() {
+        input.focus();
+        input.select-all();
+    }
 
     // Guarded, because re-assigning a `TextInput`'s text moves the cursor. An
     // accepted rename comes straight back as the value already in the box.
@@ -438,7 +460,7 @@ export component NameField inherits Rectangle {
         // discarding; this one has nothing to discard.
         changed has-focus => {
             if (self.has-focus) { Gesture.begin(); }
-            else { Gesture.end(); }
+            else { Gesture.end(); root.left(); }
         }
         // The initial value only; `changed text` above owns it from then on.
         text: root.text;
@@ -460,6 +482,13 @@ export component NameField inherits Rectangle {
         // every other key is untouched.
         key-pressed(event) => {
             if (event.text == Key.Escape) {
+                self.clear-focus();
+                return EventResult.accept;
+            }
+            // Shift+Tab arrives as Backtab from most platforms and as Tab
+            // with Shift from some; the window's own focus walk takes both.
+            if (root.tabs && (event.text == Key.Tab || event.text == Key.Backtab)) {
+                root.tabbed(event.text == Key.Backtab || event.modifiers.shift);
                 self.clear-focus();
                 return EventResult.accept;
             }

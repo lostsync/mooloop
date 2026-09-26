@@ -328,6 +328,16 @@ it is correct. `NameField` therefore drives its input from a `changed`
 handler and never writes back to `text`; `current-text` is what is actually
 in the box, and is what a test should read.
 
+**A field that removes itself does it on `left`, never on `editing`.** The
+step rack's inline rename (MOO-224) is an `if` that exists only while the
+caret is in it, and its editing session is the undo gesture. Tear the field
+down from a handler on `editing` and it can go before its own focus handler
+has run `Gesture.end()`, so the next edit anywhere joins this one's undo
+step. `left` fires from that handler, after the gesture has closed. With
+`tabs` set, Tab and Shift+Tab fire `tabbed` and then let the caret go, which
+is how the rack moves the field to the next channel with one undo step per
+channel.
+
 ### The back of a device
 
 **Every device has a second face, and it costs nothing.** A face is a fixed

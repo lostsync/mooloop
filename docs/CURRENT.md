@@ -168,7 +168,13 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   addressable pattern IDs and independent logical lengths from 1 to 256 steps.
   Hidden steps survive shortening and re-extending a pattern.
 - **Channels, tracks and patterns can each be named, and the names are
-  saved.** A channel is renamed on the `DEVICES` toolbar, a track on its own
+  saved.** A channel is renamed on the `DEVICES` toolbar, in the channel
+  sidebar's NAME row, or in the step rack: a double-click on a channel's
+  plate turns it into a name field, and Tab or Shift+Tab moves the field to
+  the next or previous channel, so a run of channels can be named from the
+  keyboard (MOO-224). Enter, Escape or a click elsewhere closes it, and Tab
+  past the last channel does too. Each channel's rename is its own undo step.
+  A track is renamed on its own
   device face, a pattern in the transport toolbar. A channel or a track
   refuses a blank name, because its rack plate or its mixer column is the only
   thing identifying it; a pattern accepts one and reads as `Pattern N`
