@@ -110,11 +110,11 @@ enum Request<'a> {
     Directory {
         title: &'a str,
     },
+    /// Unfiltered: the only save chooser is the song's, whose name is typed
+    /// whole. Export picks a folder (MOO-180, MOO-238).
     Save {
         title: &'a str,
         suggested: &'a str,
-        #[cfg_attr(target_os = "macos", allow(dead_code))]
-        filter: Option<&'a Filter>,
     },
 }
 
@@ -217,30 +217,7 @@ fn normalize_song_selection(path: PathBuf) -> PathBuf {
 }
 
 pub fn pick_save_dialog(title: &str, suggested: &str) -> Picked {
-    backend::pick(Request::Save {
-        title,
-        suggested,
-        filter: None,
-    })
-}
-
-pub fn pick_export_dialog(extension: &str) -> Picked {
-    let filter = Filter::new(&extension.to_uppercase(), [format!("*.{extension}")]);
-    backend::pick(Request::Save {
-        title: "Export audio",
-        suggested: &format!("mooloop-export.{extension}"),
-        filter: Some(&filter),
-    })
-    .map(|mut path| {
-        if path
-            .extension()
-            .and_then(|value| value.to_str())
-            .is_none_or(|value| !value.eq_ignore_ascii_case(extension))
-        {
-            path.set_extension(extension);
-        }
-        path
-    })
+    backend::pick(Request::Save { title, suggested })
 }
 
 /// Pick a folder: where an export writes its files (MOO-180). A chooser
@@ -353,17 +330,13 @@ mod backend {
                 command.arg(format!("--title={title}")).arg("--directory");
                 None
             }
-            Request::Save {
-                title,
-                suggested,
-                filter,
-            } => {
+            Request::Save { title, suggested } => {
                 command
                     .arg(format!("--title={title}"))
                     .arg("--save")
                     .arg("--confirm-overwrite")
                     .arg(format!("--filename={suggested}"));
-                filter
+                None
             }
         };
         if let Some(filter) = filter {
@@ -399,17 +372,12 @@ mod backend {
                     .arg("--getexistingdirectory")
                     .arg(&home);
             }
-            Request::Save {
-                title,
-                suggested,
-                filter,
-            } => {
+            Request::Save { title, suggested } => {
                 command
                     .arg("--title")
                     .arg(title)
                     .arg("--getsavefilename")
                     .arg(home.join(suggested));
-                command.args(spelled(filter));
             }
         }
         command
@@ -483,13 +451,8 @@ mod backend {
                     options.insert("directory", Value::from(true));
                     ("OpenFile", title)
                 }
-                Request::Save {
-                    title,
-                    suggested,
-                    filter,
-                } => {
+                Request::Save { title, suggested } => {
                     options.insert("current_name", Value::from(suggested));
-                    insert_filter(&mut options, filter);
                     ("SaveFile", title)
                 }
             };
@@ -650,9 +613,7 @@ mod backend {
             ),
             // The save panel asks before replacing a file itself, as zenity's
             // `--confirm-overwrite` does.
-            Request::Save {
-                title, suggested, ..
-            } => osascript(
+            Request::Save { title, suggested } => osascript(
                 "POSIX path of (choose file name with prompt (item 1 of argv) default name (item 2 of argv))",
                 &[title, suggested],
             ),
@@ -785,7 +746,6 @@ mod tests {
             args(&backend::zenity(Request::Save {
                 title: "Save mooloop song",
                 suggested: "Untitled.mooloop",
-                filter: None
             })),
             [
                 "--file-selection",
@@ -824,7 +784,6 @@ mod tests {
         let save = args(&backend::kdialog(Request::Save {
             title: "Save mooloop song",
             suggested: "Untitled.mooloop",
-            filter: None,
         }));
         assert_eq!(save[2], "--getsavefilename");
         assert!(save[3].ends_with("/Untitled.mooloop"), "{save:?}");
@@ -855,7 +814,6 @@ mod tests {
         let command = backend::chooser(Request::Save {
             title,
             suggested: "Untitled.mooloop",
-            filter: None,
         });
         let args = args(&command);
         assert_eq!(&args[args.len() - 2..], [title, "Untitled.mooloop"]);
