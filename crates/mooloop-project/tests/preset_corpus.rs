@@ -84,9 +84,13 @@ fn every_kind_has_a_preset_in_the_corpus() {
 /// A container's Level arrived with `containers/09` (2026-09-23). Its Mute
 /// and Solo arrived with it too, but land on "off" at 37% of a two-position
 /// range either way, so they need no row.
-const ADDED_AFTER: [(&str, EffectKind, u32); 2] = [
+///
+/// The Modulation device's Width arrived with MOO-245 (2026-09-26), and opens
+/// at its default of 100%.
+const ADDED_AFTER: [(&str, EffectKind, u32); 3] = [
     ("v0.1.4", EffectKind::Chain, mooloop_core::CONTAINER_PARAM_LEVEL),
     ("v0.1.4", EffectKind::Layer, mooloop_core::CONTAINER_PARAM_LEVEL),
+    ("v0.1.4", EffectKind::Modulation, mooloop_core::MODULATION_PARAM_WIDTH),
 ];
 
 /// What `version`'s files should open as: every parameter moved, except
