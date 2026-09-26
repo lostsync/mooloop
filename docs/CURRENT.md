@@ -670,11 +670,15 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   each covers under the choice, follows the transport (song or pattern)
   until a range is picked, and refuses a custom range that ends at or
   before its start or past the song, with Export disabled and the reason
-  on the card. A range renders from a locate, as playback plays from one:
-  automation and tempo-synced LFOs read what they read at its start, a
-  note that began before it is not chased, and effects start empty, so a
-  reverb from before the range is not in the file (pre-roll: open,
-  MOO-239).
+  on the card. As of 2026-09-26 (MOO-239) a range is **the same frames as
+  the whole song**: the render plays from the song's top with nothing
+  written until the range's first frame, so a reverb or delay from before
+  the range is in the file, automation and tempo-synced LFOs read what
+  playing through reads, and a note that began before the range sounds
+  from its first sample (MOO-181 had rendered from a locate, which started
+  effects empty and chased no note). There is no setting: the pre-roll is
+  always from the top, and costs an offline render of the bars before the
+  range.
   As of 2026-09-25 (MOO-190) the card **remembers how the last export was
   delivered**, across launches and in every song: the format, a WAV's depth
   and dither, an MP3's bitrate (both, whichever was exported), stereo or

@@ -692,3 +692,15 @@ In the order worth playing:
     mooloop-dsp. Songs with a Modulation device above 75% feedback play
     quieter than they were mixed; whether the jet still sounds right is the
     listen.
+28. **A range export that starts inside a reverb** (MOO-239). A range is
+    now the song's own frames, rendered from the top with nothing written
+    before the range. In the app, put a long reverb on a channel whose note
+    ends just before bar 2, and export Range: custom, from bar 2. The file
+    should open inside the reverb's tail, and a note held across the range's
+    start should sound from its first sample. The measured version holds
+    the range to the whole song's frames:
+
+    ```sh
+    scripts/antibox --no-incremental cargo test -p mooloop-engine --lib -- \
+      a_range_holds_the_reverb_from_before_it a_note_held_into_a_range
+    ```

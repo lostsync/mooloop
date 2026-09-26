@@ -15,7 +15,6 @@ use mooloop_dsp::{AudioNode, SampleData, MAX_BLOCK_SIZE};
 use mp3lame_encoder::{Bitrate, Builder, DualPcm, FlushGap, MonoPcm, Quality};
 
 use crate::render::RenderState;
-use mooloop_core::EngineCommand;
 
 /// The rate an MP3 file is written at, for a render at `rate`.
 ///
@@ -45,10 +44,13 @@ pub enum RenderScope {
     /// The whole arrangement, from the top to the song's last bar.
     Song,
     /// Part of the arrangement: song ticks from `start_tick` up to, not
-    /// including, `end_tick` (MOO-181). The render locates to the start the
-    /// way playback does, so automation and tempo-synced modulators read
-    /// what they read there, a note that began before the start is not
-    /// chased, and effects start empty. The range must lie inside the song.
+    /// including, `end_tick` (MOO-181). The render plays from the song's top
+    /// with nothing written until the range's first frame (MOO-239), so the
+    /// file is those frames of a whole-song render: effects hold the reverb
+    /// and delay from before the range, automation and tempo-synced
+    /// modulators read what playing through reads, and a note that began
+    /// before the start is still sounding. The range must lie inside the
+    /// song.
     Range { start_tick: u32, end_tick: u32 },
 }
 
@@ -583,19 +585,16 @@ impl OfflineRenderer {
         for (index, pass) in job.passes.iter().enumerate() {
             let hosted = if index == 0 { plugins(0) } else { BTreeMap::new() };
             match prepare_pass(project, samples, zones, sample_rate, pass, hosted) {
-                Ok((state, base, cap)) => {
+                Ok((state, length)) => {
                     if first.is_none() {
                         first = Some(state);
                     }
-                    lengths.push((base, cap));
+                    lengths.push(length);
                 }
                 Err(error) => return fail(Vec::new(), error),
             }
         }
-        let most: u64 = lengths
-            .iter()
-            .map(|(base, cap)| base.saturating_add(*cap))
-            .sum();
+        let most: u64 = lengths.iter().map(PassLength::work).sum();
         progress.done.store(0, Ordering::Relaxed);
         progress.most.store(most.max(1), Ordering::Relaxed);
 
@@ -603,41 +602,30 @@ impl OfflineRenderer {
         let mut rendered_frames = 0u64;
         // Each output's place in the whole job, which seeds its dither.
         let mut first_output = 0usize;
-        for (index, (pass, &(base_frames, tail_cap))) in
-            job.passes.iter().zip(&lengths).enumerate()
-        {
+        for (index, (pass, &length)) in job.passes.iter().zip(&lengths).enumerate() {
             let mut state = match first.take() {
                 Some(state) => state,
                 None => match prepare_pass(project, samples, zones, sample_rate, pass, plugins(index)) {
-                    Ok((state, _, _)) => state,
+                    Ok((state, _)) => state,
                     Err(error) => return fail(written, error),
                 },
             };
             let before = progress.done.load(Ordering::Relaxed);
-            let rendered = render_pass(
-                &mut state,
-                pass,
-                first_output,
-                sample_rate,
-                base_frames,
-                tail_cap,
-                progress,
-            );
+            let rendered = render_pass(&mut state, pass, first_output, sample_rate, length, progress);
             first_output += pass.outputs.len();
             match rendered {
                 Ok(files) => {
-                    rendered_frames = rendered_frames.saturating_add(
+                    rendered_frames = rendered_frames.saturating_add(length.preroll).saturating_add(
                         files
                             .first()
-                            .map_or(base_frames, |file| file.summary.total_frames),
+                            .map_or(length.base, |file| file.summary.total_frames),
                     );
                     written.extend(files);
                     // A tail that fell silent early skips the rest of its
                     // cap, so the bar jumps to where the next pass starts.
-                    progress.done.store(
-                        before.saturating_add(base_frames.saturating_add(tail_cap)),
-                        Ordering::Relaxed,
-                    );
+                    progress
+                        .done
+                        .store(before.saturating_add(length.work()), Ordering::Relaxed);
                 }
                 Err((files, error)) => {
                     written.extend(files);
@@ -669,8 +657,29 @@ fn unsupplied_zones(project: &Project, zones: &[Vec<Option<Arc<SampleData>>>]) -
     })
 }
 
-/// The render state for `pass`, and its length: the bars, and the tail cap,
-/// in frames at `sample_rate`.
+/// How long a pass is, in frames at the session's rate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PassLength {
+    /// Rendered before the first frame written, so the written frames are
+    /// the ones playing through would reach (MOO-239): a range's frames from
+    /// the song's top, zero for any other scope.
+    preroll: u64,
+    /// The bars written.
+    base: u64,
+    /// The most tail written after them.
+    tail_cap: u64,
+}
+
+impl PassLength {
+    /// The most frames the pass renders, for the progress bar.
+    fn work(&self) -> u64 {
+        self.preroll
+            .saturating_add(self.base)
+            .saturating_add(self.tail_cap)
+    }
+}
+
+/// The render state for `pass`, and its length.
 fn prepare_pass(
     project: &Project,
     samples: &[Option<Arc<SampleData>>],
@@ -678,7 +687,7 @@ fn prepare_pass(
     sample_rate: u32,
     pass: &RenderPass,
     plugins: BTreeMap<PluginSlotId, Box<dyn AudioNode + Send>>,
-) -> Result<(RenderState, u64, u64), ExportError> {
+) -> Result<(RenderState, PassLength), ExportError> {
     let mut render_project = project.clone();
     match pass.scope {
         RenderScope::Pattern { index } => {
@@ -695,11 +704,15 @@ fn prepare_pass(
     let mut state =
         RenderState::from_project_with_zones(sample_rate, &render_project, samples, zones);
     state.host_plugins(&render_project, plugins);
-    let base_ticks = match pass.scope {
-        RenderScope::Pattern { index } => state
-            .pattern_length_ticks(index)
-            .ok_or_else(|| ExportError::Invalid("pattern is out of range".into()))?,
-        RenderScope::Song => state.song_length_ticks(),
+    let frames_of = |ticks: u32| (f64::from(ticks) / state.ticks_per_sample()).ceil() as u64;
+    let mut preroll = 0;
+    let base = match pass.scope {
+        RenderScope::Pattern { index } => frames_of(
+            state
+                .pattern_length_ticks(index)
+                .ok_or_else(|| ExportError::Invalid("pattern is out of range".into()))?,
+        ),
+        RenderScope::Song => frames_of(state.song_length_ticks()),
         RenderScope::Range {
             start_tick,
             end_tick,
@@ -714,17 +727,29 @@ fn prepare_pass(
                     "the range ends after the song does".into(),
                 ));
             }
-            // A locate, as playback does it: the first block starts on the
-            // range's first tick and every lane resolves there.
-            state.apply_command(EngineCommand::Seek {
-                tick: f64::from(start_tick),
-            });
-            end_tick - start_tick
+            // Played from the top, not located (MOO-239): a locate starts
+            // every effect empty and chases no note, so the file's first bar
+            // was drier than the same bar of the song. The frames before the
+            // range are rendered on the song's own block grid and not
+            // written, so the written ones are the song's own frames. An
+            // offline render runs many times faster than realtime, so the
+            // cost of the song's top is small, and nothing short of the top
+            // gives the same state: a reverb or a held note can reach back
+            // any distance. Both ends are the song's frame on or after
+            // their tick, so the range is exactly the song's frames between.
+            preroll = frames_of(start_tick);
+            frames_of(end_tick) - preroll
         }
     };
-    let base_frames = (f64::from(base_ticks) / state.ticks_per_sample()).ceil() as u64;
     let tail_cap = (f64::from(pass.tail_seconds) * f64::from(sample_rate)).round() as u64;
-    Ok((state, base_frames, tail_cap))
+    Ok((
+        state,
+        PassLength {
+            preroll,
+            base,
+            tail_cap,
+        },
+    ))
 }
 
 /// Render one pass into every one of its outputs, then move each finished
@@ -736,10 +761,10 @@ fn render_pass(
     pass: &RenderPass,
     first_output: usize,
     sample_rate: u32,
-    base_frames: u64,
-    tail_cap: u64,
+    length: PassLength,
     progress: &ExportProgress,
 ) -> Result<Vec<RenderedFile>, (Vec<RenderedFile>, ExportError)> {
+    let base_frames = length.base;
     let temporaries: Vec<PathBuf> = pass
         .outputs
         .iter()
@@ -779,9 +804,9 @@ fn render_pass(
         }
     }
 
-    let rendered = render_blocks(state, base_frames, tail_cap, progress, |state, frames| {
+    let rendered = render_blocks(state, length, progress, |state, span| {
         for sink in &mut sinks {
-            sink.feed(state, frames)?;
+            sink.feed(state, span.clone())?;
         }
         Ok(())
     });
@@ -950,26 +975,42 @@ fn temporary_path(target: &Path) -> PathBuf {
 const OFFLINE_BLOCK_FRAMES: usize = 512;
 const _: () = assert!(OFFLINE_BLOCK_FRAMES <= MAX_BLOCK_SIZE);
 
-/// Render the bars, then the tail until the project falls silent or
-/// `tail_cap` runs out, handing the state to `sink` after each block with
-/// the block's length. Returns how much tail it rendered.
+/// Render the pre-roll and the bars, then the tail until the project falls
+/// silent or `tail_cap` runs out, handing the state to `sink` after each
+/// block with the part of the block to write. Returns how much tail it
+/// rendered.
+///
+/// The pre-roll is rendered on the same block grid as the bars, and the
+/// block the range starts inside is written from the range's first frame,
+/// so the frames written are the ones a render from the top computes, block
+/// for block (MOO-239).
 ///
 /// Nothing on the master delays its output -- the safety limiter has no
 /// lookahead (MOO-217) -- so a file starts on the bar line as rendered.
 fn render_blocks(
     state: &mut RenderState,
-    base_frames: u64,
-    tail_cap: u64,
+    length: PassLength,
     progress: &ExportProgress,
-    mut sink: impl FnMut(&RenderState, usize) -> Result<(), ExportError>,
+    mut sink: impl FnMut(&RenderState, std::ops::Range<usize>) -> Result<(), ExportError>,
 ) -> Result<u64, ExportError> {
+    let PassLength {
+        preroll,
+        base,
+        tail_cap,
+    } = length;
     state.play();
-    let mut remaining = base_frames;
-    while remaining > 0 {
-        let frames = remaining.min(OFFLINE_BLOCK_FRAMES as u64) as usize;
+    let end = preroll.saturating_add(base);
+    let mut position = 0u64;
+    while position < end {
+        let frames = (end - position).min(OFFLINE_BLOCK_FRAMES as u64) as usize;
         state.process_once_block(frames);
-        sink(state, frames)?;
-        remaining -= frames as u64;
+        // Zero for every block of the bars; inside the block the range
+        // starts in, how far in it starts; the whole block, before it.
+        let skip = preroll.saturating_sub(position).min(frames as u64) as usize;
+        if skip < frames {
+            sink(state, skip..frames)?;
+        }
+        position += frames as u64;
         progress.advance(frames)?;
     }
 
@@ -982,7 +1023,7 @@ fn render_blocks(
     while rendered < tail_cap {
         let frames = (tail_cap - rendered).min(OFFLINE_BLOCK_FRAMES as u64) as usize;
         state.process_once_block(frames);
-        sink(state, frames)?;
+        sink(state, 0..frames)?;
         rendered += frames as u64;
         progress.advance(frames)?;
         let (left, right) = (&state.master().l[..frames], &state.master().r[..frames]);
@@ -1192,12 +1233,14 @@ impl Sink {
         })
     }
 
-    /// Hand this block of the render to the file, from the sink's tap.
-    fn feed(&mut self, state: &RenderState, frames: usize) -> Result<(), ExportError> {
+    /// Hand `span` of this block of the render to the file, from the sink's
+    /// tap.
+    fn feed(&mut self, state: &RenderState, span: std::ops::Range<usize>) -> Result<(), ExportError> {
+        let frames = span.len();
         match self.tap {
             RenderTap::Master => {
                 let master = state.master();
-                let (left, right) = (&master.l[..frames], &master.r[..frames]);
+                let (left, right) = (&master.l[span.clone()], &master.r[span]);
                 self.audible |= is_audible(left, right);
                 self.write(left, right)
             }
@@ -1210,8 +1253,8 @@ impl Sink {
                 let [mut left, mut right] = std::mem::take(&mut self.stem);
                 match source {
                     Some(bus) => {
-                        left[..frames].copy_from_slice(&bus.l[..frames]);
-                        right[..frames].copy_from_slice(&bus.r[..frames]);
+                        left[..frames].copy_from_slice(&bus.l[span.clone()]);
+                        right[..frames].copy_from_slice(&bus.r[span]);
                     }
                     None => {
                         left[..frames].fill(0.0);
@@ -2081,6 +2124,77 @@ mod tests {
         let spread = levels.iter().cloned().fold(f64::MIN, f64::max)
             - levels.iter().cloned().fold(f64::MAX, f64::min);
         assert!(spread > 3.0, "the modulation moves the level by only {spread:.2} dB");
+    }
+
+    /// The worst difference between a range's frames and the same frames of
+    /// the whole song, and the peak of the range's first 2 400 frames.
+    fn against_the_song(project: &Project, sample: &Arc<SampleData>, start: u32, end: u32) -> (f32, f32) {
+        let temp = tempdir().unwrap();
+        let (_, whole) =
+            render_float(project, sample, RenderScope::Song, &temp.path().join("song.wav"));
+        let range = RenderScope::Range {
+            start_tick: start,
+            end_tick: end,
+        };
+        let (summary, part) = render_float(project, sample, range, &temp.path().join("range.wav"));
+        assert_eq!(summary.base_frames, u64::from(end - start) * FRAMES_PER_TICK);
+        assert_eq!(part.len() as u64, summary.total_frames);
+        let from = (u64::from(start) * FRAMES_PER_TICK) as usize;
+        let worst = part
+            .iter()
+            .zip(&whole[from..from + part.len()])
+            .map(|(ours, theirs)| (ours - theirs).abs())
+            .fold(0.0f32, f32::max);
+        let opening = part[..2_400].iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+        (worst, opening)
+    }
+
+    /// **A range holds the reverb from before it** (MOO-239).
+    ///
+    /// One short note on bar 1 into a long reverb, and a range of bar 2:
+    /// the range's first sample on is the same frames of the whole song.
+    /// Shaped against the tree that located to the range's start, where the
+    /// reverb started empty and the range opened on silence. Bar 2 starts
+    /// 96 000 frames in, half way through a 512-frame block, so the block
+    /// the range starts inside is written from its middle.
+    #[test]
+    fn a_range_holds_the_reverb_from_before_it() {
+        use mooloop_core::{EffectParams, ReverbParams};
+        let mut project = sampler_project(1.0);
+        project.channels[0].notes[0].clear();
+        project.channels[0].notes[0].push(NoteEvent::new(1, 0, BAR / 8, 60, 127));
+        project.channels[0].setup.push_effect(EffectSlotState::new(EffectParams::Reverb(
+            ReverbParams {
+                decay_s: 6.0,
+                ..ReverbParams::default()
+            },
+        )));
+        for bar in [0, 3] {
+            project.playlist.push(PatternPlacement::new(0, bar * BAR));
+        }
+        let sample = long_sample(96_000, tone);
+        assert_ne!((u64::from(BAR) * FRAMES_PER_TICK) % OFFLINE_BLOCK_FRAMES as u64, 0);
+
+        let (worst, opening) = against_the_song(&project, &sample, BAR, 2 * BAR);
+        assert!(opening > 1e-3, "the range opens at {opening}: the reverb is not in it");
+        assert!(worst < 1e-6, "the range is {worst} from the song's own frames");
+    }
+
+    /// **A note that began before a range sounds from its first sample**
+    /// (MOO-239): the range is the song's frames, so a held note is in it
+    /// the way it is in the song. MOO-181 left it out, as a locate does.
+    #[test]
+    fn a_note_held_into_a_range_sounds_from_its_first_sample() {
+        let mut project = sampler_project(1.0);
+        project.pattern_lengths[0] = 48; // three bars
+        project.channels[0].notes[0].clear();
+        project.channels[0].notes[0].push(NoteEvent::new(1, 0, 2 * BAR, 60, 127));
+        project.playlist.push(PatternPlacement::new(0, 0));
+        let sample = long_sample(4 * 96_000, |_| 0.5);
+
+        let (worst, opening) = against_the_song(&project, &sample, BAR + BAR / 3, 2 * BAR);
+        assert!(opening > 0.1, "the held note is missing from the range's start: {opening}");
+        assert!(worst < 1e-6, "the range is {worst} from the song's own frames");
     }
 
     /// A range that is empty or runs past the song is refused, not rendered.
