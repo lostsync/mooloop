@@ -31,10 +31,11 @@
 // A menu that spelled "Omni, 1, 2, ... 16" here would be the second copy of a
 // list, which is the fault `AGENTS.md` opens on.
 
-import { Theme } from "theme.slint";
+import { ScrollView } from "std-widgets.slint";
+import { Theme, StatusHint } from "theme.slint";
 import { MiniKnob, MuteButton, PeakMeter, SectionLabel, SoloButton, ToggleButton, TrimKnob } from "controls.slint";
 import { GainMath } from "gain.slint";
-import { MenuField, NameField } from "toolbar.slint";
+import { MenuField, NameField, SearchField } from "toolbar.slint";
 import { ColorChipButton, ColorChoice } from "color-picker.slint";
 // The same row the mixer strip draws, not a second one. A send has one model
 // and these are two views of it; a row of its own here would be the third
@@ -43,6 +44,120 @@ import { BusPicker, MixerSendRow, SendRow } from "mixer.slint";
 // Re-exported so `main.slint` has one import for the panel and the struct its
 // model is made of.
 export { ColorChoice }
+
+// One of a plugin's parameters as the sidebar's PARAMETERS list shows it
+// (MOO-229): every parameter the plugin does not hide, searchable, each with
+// a pin that puts it on the device's face.
+export struct PluginListRow {
+    // The parameter's dense index in the plugin's list, the only number that
+    // crosses into Slint (`session/src/plugin_params.rs`).
+    index: int,
+    name: string,
+    // The plugin's group path ("Filter/Envelope") on the row that starts a
+    // run of it, precomputed in Rust because a `for` cannot see the row
+    // before. Empty on every other row, and for a plugin that groups nothing.
+    group: string,
+    pinned: bool,
+}
+
+component PinRow inherits Rectangle {
+    in property <string> name;
+    in property <bool> pinned;
+    callback toggled();
+    property <string> hint: root.pinned
+        ? "On the device's face. Click to take it off."
+        : "Click to pin it to the device's face.";
+    height: 20px;
+    background: touch.has-hover ? Theme.surface-raised : transparent;
+    accessible-role: checkbox;
+    accessible-label: root.name;
+    accessible-checkable: true;
+    accessible-checked: root.pinned;
+    accessible-action-default => { root.toggled(); }
+    HorizontalLayout {
+        padding-left: 4px;
+        padding-right: 4px;
+        spacing: 6px;
+        Text {
+            width: 12px;
+            text: root.pinned ? "●" : "○";
+            color: root.pinned ? Theme.accent : Theme.text-faint;
+            font-size: Theme.text-md;
+            vertical-alignment: center;
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: root.name;
+            color: root.pinned ? Theme.text : Theme.text-muted;
+            font-size: Theme.text-md;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.toggled(); }
+        changed has-hover => {
+            if (self.has-hover) { StatusHint.show(root.hint); }
+            else { StatusHint.clear(root.hint); }
+        }
+    }
+}
+
+// The PARAMETERS list for the selected plugin device: a filter, and every
+// parameter under its group, each pinnable. The face draws the pinned ones
+// and this is where the rest are found -- the split the mixer strip's sends
+// settled on (`e034213`): the face is the compact part, the sidebar the rest.
+component PluginParamList inherits VerticalLayout {
+    in property <[PluginListRow]> rows;
+    in property <string> filter;
+    // How many the plugin lists in all, for the count beside the label.
+    in property <int> total;
+    callback filter-edited(string);
+    callback pin-toggled(int /* index */);
+    spacing: 4px;
+
+    HorizontalLayout {
+        spacing: 4px;
+        SectionLabel { text: "PARAMETERS"; }
+        Rectangle { horizontal-stretch: 1; }
+        Text {
+            text: root.rows.length == root.total ? root.total : root.rows.length + " / " + root.total;
+            color: Theme.text-faint;
+            font-size: Theme.text-sm;
+            vertical-alignment: center;
+        }
+    }
+    SearchField {
+        text: root.filter;
+        placeholder: "Find a parameter";
+        edited(value) => { root.filter-edited(value); }
+    }
+    ScrollView {
+        vertical-stretch: 1;
+        min-height: 120px;
+        content-height: list.preferred-height;
+        list := VerticalLayout {
+            spacing: 1px;
+            for row in root.rows : VerticalLayout {
+                spacing: 1px;
+                if row.group != "" : Text {
+                    height: 16px;
+                    text: row.group;
+                    color: Theme.text-faint;
+                    font-size: Theme.text-sm;
+                    vertical-alignment: bottom;
+                    overflow: elide;
+                }
+                PinRow {
+                    name: row.name;
+                    pinned: row.pinned;
+                    toggled => { root.pin-toggled(row.index); }
+                }
+            }
+        }
+    }
+}
 
 // A label above a control, which is how a 180px column has to stack what a
 // toolbar puts side by side.
@@ -126,6 +241,16 @@ export component ChannelSidebar inherits Rectangle {
     callback solo-toggled();
     callback volume-changed(float);   // dB
     callback pan-changed(float);
+
+    // The PARAMETERS list (MOO-229), while the selected device is a hosted
+    // plugin: its rows as the filter leaves them, the filter, and how many
+    // parameters the plugin shows in all. `plugin-param-total` is 0 when the
+    // selected device is not a plugin, which hides the list.
+    in property <[PluginListRow]> plugin-params;
+    in property <string> plugin-param-filter;
+    in property <int> plugin-param-total;
+    callback plugin-param-filter-edited(string);
+    callback plugin-param-pin-toggled(int);
 
     callback midi-input-picked(int);
     callback midi-channel-picked(int);
@@ -409,6 +534,22 @@ export component ChannelSidebar inherits Rectangle {
                         width: parent.value-width + 38px;
                     }
                 }
+            }
+
+            // The selected plugin's parameters, all of them, where the
+            // ones its face does not show are found and pinned to it.
+            if root.plugin-param-total > 0 : Rectangle {
+                height: 1px;
+                background: Theme.border;
+                opacity: 0.6;
+            }
+            if root.plugin-param-total > 0 : PluginParamList {
+                vertical-stretch: 1;
+                rows: root.plugin-params;
+                filter: root.plugin-param-filter;
+                total: root.plugin-param-total;
+                filter-edited(value) => { root.plugin-param-filter-edited(value); }
+                pin-toggled(index) => { root.plugin-param-pin-toggled(index); }
             }
 
             // The four controls every channel and track has, in the order the

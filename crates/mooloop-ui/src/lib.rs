@@ -17672,6 +17672,11 @@ impl AppUi {
                 // Every plugin face follows its plugin: the values it reports
                 // or was sent, their text, and whether it is running (MOO-83).
                 st.borrow_mut().refresh_plugin_faces();
+                // And the sidebar's PARAMETERS list, when the selected plugin,
+                // its pins or its list moved (MOO-229); a hash when none did.
+                if let Some(window) = weak.upgrade() {
+                    st.borrow().refresh_plugin_param_list(&window);
+                }
                 profile.borrow_mut().lap(pump_profile::Section::Plugins);
                 st.borrow_mut().session.sync_compensation(&mut handle);
                 profile.borrow_mut().lap(pump_profile::Section::SyncCompensation);

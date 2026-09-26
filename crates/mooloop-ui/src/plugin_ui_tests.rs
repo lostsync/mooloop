@@ -173,6 +173,7 @@ impl Harness {
         self.engine.drain();
         record_finished_plugin_edits(&self.state, &self.commands, &self.window);
         self.state.borrow_mut().refresh_plugin_faces();
+        self.state.borrow().refresh_plugin_param_list(&self.window);
     }
 
     fn slider(&self, label: &str) -> Control {
@@ -321,7 +322,10 @@ fn a_plugin_goes_in_a_chain_from_the_window_and_its_knob_is_saved_and_exported()
     // from nothing, and it is left alone here.
     let gain_knob = h.slider("Gain");
     assert_eq!(gain_knob.value, "0.0 dB", "the plugin writes its own readout");
-    assert!(sliders(&h.window).iter().any(|slider| slider.label == "Latency"));
+    // Latency names each of its positions, so it is a selector (MOO-229).
+    assert!(controls(&h.window, AccessibleRole::Button)
+        .iter()
+        .any(|button| button.label == "Latency: 64 frames"));
 
     // Turn it, inside a gesture as a drag is, and pause: nothing is recorded
     // while the gesture is open, however long the plugin is quiet.
@@ -464,6 +468,134 @@ fn the_plugin_filter_matches_names_vendors_and_reasons() {
     assert_eq!(names("instrument"), ["Test Sine"]);
     assert_eq!(names("signal"), ["broken.clap"]);
     assert!(names("nothing like it").is_empty());
+}
+
+/// A song naming a plugin this machine does not have, with the list of
+/// `count` parameters the song remembers of it: `P0`, `P1`, ... with
+/// "Frequency" at index 14 under the group "Filter", as LSP's is past the
+/// first page.
+fn big_missing_plugin(count: u32) -> Project {
+    let mut session = Session::default();
+    session.replace_project(&drum_loop(), &[]);
+    let (sender, _rx) = mpsc::channel();
+    let (tx, stx) = (EngineCommandSender(sender.clone()), StructuralCommandSender(sender));
+    let mut sink = plugin_ui::QueuedSink {
+        tx: &tx,
+        stx: &stx,
+        sample_rate: RATE,
+    };
+    let gone = PluginRef {
+        format: PluginFormat::Clap,
+        id: "com.example.big-filter".into(),
+        name: "Big Filter".into(),
+        vendor: "Nobody".into(),
+        version: String::new(),
+    };
+    let inserted = session.insert_plugin_effect(gone, 0, &mut sink).expect("the device is inserted");
+    let EffectParams::Plugin(slot) = inserted.params else {
+        unreachable!("a plugin device");
+    };
+    session.plugins.get_mut(&slot).expect("its slot").params = (0..count)
+        .map(|index| mooloop_core::PluginParamInfo {
+            id: 1_000 + index,
+            name: if index == 14 { "Frequency".into() } else { format!("P{index}") },
+            module: if (12..16).contains(&index) { "Filter".into() } else { String::new() },
+            min: 0.0,
+            max: 1.0,
+            default: 0.5,
+            stepped: None,
+            automatable: true,
+            modulatable: true,
+            hidden: false,
+        })
+        .collect();
+    session.project_snapshot(120, 0)
+}
+
+fn face_labels(h: &Harness) -> Vec<String> {
+    sliders(&h.window)
+        .into_iter()
+        .map(|slider| slider.label)
+        .filter(|label| label == "Frequency" || label.starts_with('P'))
+        .collect()
+}
+
+/// **A big plugin's face shows eight, and the sidebar finds and pins the
+/// rest** (MOO-229): Frequency, past the first page, is found by typing
+/// part of its name into the PARAMETERS list and pinned to the face, as one
+/// undo step, and the pin is saved with the song.
+#[test]
+fn a_big_plugin_shows_eight_and_the_sidebar_pins_the_rest() {
+    let mut h = harness_with(&big_missing_plugin(40));
+    h.window.set_channel_sidebar_visible(true);
+    h.tick();
+    h.state.borrow().refresh_plugin_param_list(&h.window);
+    assert_eq!(h.window.get_plugin_param_total(), 0, "no list until the plugin is selected");
+
+    h.state.borrow_mut().session.select_device(Some(0));
+    h.state.borrow().sync_effects();
+    h.tick();
+    h.state.borrow().refresh_plugin_param_list(&h.window);
+    assert_eq!(face_labels(&h), ["P0", "P1", "P2", "P3", "P4", "P5", "P6", "P7"]);
+    assert_eq!(h.window.get_plugin_param_total(), 40);
+    assert_eq!(h.window.get_plugin_param_rows().row_count(), 40);
+
+    // Typed into the list's field, as a user types it.
+    h.window.invoke_plugin_param_filter_edited("freq".into());
+    let rows = h.window.get_plugin_param_rows();
+    assert_eq!(rows.row_count(), 1, "the filter leaves Frequency alone");
+    let row = rows.row_data(0).expect("a row");
+    assert_eq!((row.name.as_str(), row.group.as_str(), row.pinned), ("Frequency", "Filter", false));
+
+    // Its pin, pressed in the real sidebar.
+    let pin = controls(&h.window, AccessibleRole::Checkbox)
+        .into_iter()
+        .find(|control| control.label == "Frequency")
+        .expect("the sidebar draws Frequency's pin");
+    assert!(!pin.checked);
+    click(&h.window, pin.centre);
+    h.tick();
+    assert_eq!(labels(&h.commands.borrow()), ["Pin Parameter"], "a pin is one undo step");
+    assert!(face_labels(&h).contains(&"Frequency".to_string()), "{:?}", face_labels(&h));
+    let slot = h.plugin_slot();
+    let pinned = h.state.borrow().session.plugins[&slot].pinned.clone();
+    assert_eq!(pinned, [1_000, 1_001, 1_002, 1_003, 1_004, 1_005, 1_006, 1_007, 1_014]);
+    assert!(h.window.get_plugin_param_rows().row_data(0).expect("a row").pinned);
+    // Nine controls on a six-across face: two rows, and one page.
+    assert_eq!(h.state.borrow().effect_slot_model.row_data(0).expect("a row").units, 2);
+
+    // A second press takes it off again.
+    h.window.invoke_plugin_param_pin_toggled(14);
+    h.tick();
+    assert!(!face_labels(&h).contains(&"Frequency".to_string()));
+}
+
+/// **A stepped parameter the plugin names at every position is a selector**
+/// (MOO-229): the test gain's Latency (three named positions) is drawn as
+/// three segments under the plugin's own words, and a press on one sets it.
+#[test]
+fn a_named_stepped_parameter_is_a_selector_that_sets_its_position() {
+    let mut h = live_gain();
+    let segment = |h: &Harness, label: &str| {
+        controls(&h.window, AccessibleRole::Button)
+            .into_iter()
+            .find(|button| button.label == label)
+            .unwrap_or_else(|| panic!("the face draws no {label:?} segment"))
+    };
+    assert!(!sliders(&h.window).iter().any(|slider| slider.label == "Latency"), "not a knob");
+    segment(&h, "Latency: 0 frames");
+    let at = segment(&h, "Latency: 512 frames").centre;
+    click(&h.window, at);
+    h.tick();
+    let slot = h.plugin_slot();
+    let index = h
+        .state
+        .borrow()
+        .session
+        .plugin_param_index(slot, test_plugin::PARAM_LATENCY)
+        .expect("the gain lists Latency");
+    assert_eq!(h.state.borrow().session.plugin_param_value(slot, index), Some(2.0));
+    assert!(segment(&h, "Latency: 512 frames").checked, "the face shows the position it set");
 }
 
 /// **An instrument from the window: the add-channel menu's "Add Plugin…",

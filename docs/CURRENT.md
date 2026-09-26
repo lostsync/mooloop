@@ -2427,10 +2427,24 @@ land on its own when it starts to matter:
   channel instead (below).
 - **A plugin with no GUI has a face** (MOO-83): its parameters, in the
   plugin's order and under its own names, as the knobs every native device
-  uses, with the plugin's own text for each value ("7.2 dB"). One unit wide
-  for up to six parameters, two units and pages of twelve beyond that, with
-  `<` `>` between pages. A stepped parameter's knob lands only on its
-  positions. The knobs follow the song: undo, a lane, a preset and the
+  uses, with the plugin's own text for each value ("7.2 dB"). **The face
+  shows the pinned parameters** (MOO-229): the first eight the plugin does
+  not hide until something is pinned, one unit wide while they fit three
+  across and two rows, two units beyond that, with `<` `>` between pages.
+  **The rest are in the sidebar**: with a plugin device selected, the
+  channel sidebar's PARAMETERS list shows every parameter the plugin does
+  not hide, under its group, with a field that filters by name or group and
+  a pin on each row that puts it on the face or takes it off. A pin is saved
+  with the song and is one undo step ("Pin Parameter"); the first one starts
+  from the eight the face already showed. A pinned parameter the plugin
+  stops listing is kept and not drawn. **A stepped parameter the plugin
+  names at every position** (2 to 8 positions at whole values, each with a
+  name of its own, and no other name between two neighbours) is a row of
+  segments labelled with the plugin's words; any other stepped parameter
+  is a knob that lands only on its positions, which is how LSP's filter
+  type, which names more choices than it reports positions, stays
+  reachable. Parameters the plugin groups (CLAP's `module` path) carry the
+  group's name as a small caption over their run on the face. The knobs follow the song: undo, a lane, a preset and the
   plugin's own edits all move them. A turn or a drag is one undo step
   ("Plugin Edit"), recorded once the plugin has gone quiet after the release,
   however long the drag paused. A **missing** plugin keeps its face, drawn
@@ -2445,9 +2459,8 @@ land on its own when it starts to matter:
   stops listing is kept** (Adam, MOO-74): its lane stays in the picker,
   titled thin and italic by its id ("Parameter 4000000000"), the lane and
   its shelf row draw greyed, and it plays nothing; when the plugin lists the
-  id again they read normally, with nothing to repair. Not yet on the face:
-  a pinned subset with a sidebar list for a plugin with hundreds of
-  parameters, and a segmented selector for a stepped parameter.
+  id again they read normally, with nothing to repair. The list covers an
+  insert plugin; a plugin channel's source has no face yet.
 - **A plugin device saves and loads presets** (MOO-222) from its rail, like
   any device. A preset keeps which plugin it is and the state the plugin
   holds at that moment, including a knob just turned in its own window. It

@@ -26,7 +26,7 @@ use std::rc::Rc;
 
 use mooloop_core::{
     DeviceId, EffectParams, EffectSlotState, EffectTarget, EngineCommand, MusicalEdge, ParamAddr,
-    ParamOwner, PluginSlotId,
+    ParamOwner, PluginParamInfo, PluginSlotId, PluginSlotState,
 };
 use mooloop_engine::{CommandSink, StructuralCommand};
 use mooloop_plugin_host::scan::{PluginCache, ScannedPlugin};
@@ -38,22 +38,220 @@ use mooloop_session::session::Session;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use crate::{
-    BrowserRow, EffectSlotRow, MainWindow, PluginParamRow, UiState, BROWSER_PLUGIN,
+    BrowserRow, EffectSlotRow, MainWindow, PluginListRow, PluginParamRow, UiState, BROWSER_PLUGIN,
 };
 
-/// Parameters a one-unit face holds: three across, two rows. Past this the
-/// face takes a second unit, six across, and pages beyond twelve. The same
-/// `columns` rule is in `plugin-device.slint`, which lays the knobs out.
-const ONE_UNIT_PARAMS: usize = 6;
+// ---------------------------------------------------------------------------
+// What the face shows, and where (MOO-229).
 
-/// The width of a plugin's face: one unit when its parameters fit in one,
+/// How many parameters a plugin's face shows before anything is pinned: the
+/// first this many the plugin does not hide (plugin-hosting 08). A plugin
+/// with this many or fewer shows them all, which is every Airwindows plugin.
+pub(crate) const DEFAULT_PINNED: usize = 8;
+
+/// The ids the face of `saved` shows, in the plugin's order: the pinned ones
+/// the plugin still lists, or -- while nothing has been pinned -- the first
+/// [`DEFAULT_PINNED`] it does not hide.
+///
+/// `pinned` empty means "the default" rather than "nothing", so a song saved
+/// before pins existed and a plugin nobody has touched both show their first
+/// eight, and unpinning the last one brings the default back rather than
+/// leaving a face with nothing on it. A pinned id the plugin no longer lists
+/// is kept (MOO-74's "never drop") and simply not drawn.
+pub(crate) fn face_ids(saved: &PluginSlotState) -> Vec<u32> {
+    let visible = saved.params.iter().filter(|info| !info.hidden);
+    if saved.pinned.is_empty() {
+        return visible.take(DEFAULT_PINNED).map(|info| info.id).collect();
+    }
+    visible
+        .filter(|info| saved.pinned.contains(&info.id))
+        .map(|info| info.id)
+        .collect()
+}
+
+/// `saved`'s pins with parameter `id` flipped. The default is made explicit
+/// first, so the first pin or unpin on an untouched plugin starts from what
+/// its face already shows. Pins the plugin no longer lists are kept.
+pub(crate) fn toggled_pins(saved: &PluginSlotState, id: u32) -> Vec<u32> {
+    let mut pins = if saved.pinned.is_empty() {
+        face_ids(saved)
+    } else {
+        saved.pinned.clone()
+    };
+    match pins.iter().position(|pinned| *pinned == id) {
+        Some(at) => {
+            pins.remove(at);
+        }
+        None => pins.push(id),
+    }
+    pins
+}
+
+/// Positions a stepped parameter may have and still be drawn as a selector
+/// (plugin-hosting 08): past this the labels do not fit a row.
+pub(crate) const SELECTOR_MAX_POSITIONS: u16 = 8;
+
+/// The plugin's names for a stepped parameter's positions, when the face can
+/// trust them as a selector's segments. `name(plain)` asks the plugin for its
+/// text at a plain value.
+///
+/// **The count is checked against the names.** LSP reports its filter type
+/// as 0..1 in two positions, yet names more choices than two (plugin-hosting
+/// `00-status.md`, step 07). A selector built from its two ends would offer
+/// two of them and hide the rest. So a parameter is a selector only when its
+/// positions are the whole values from min to max, every position has a name
+/// of its own, and the value halfway between two neighbours reads as one of
+/// them. A plugin with a choice in between fails the last check and keeps
+/// its knob, which reaches every value.
+pub(crate) fn selector_options(
+    info: &PluginParamInfo,
+    mut name: impl FnMut(f64) -> Option<String>,
+) -> Option<Vec<String>> {
+    let steps = info.stepped?;
+    if !(2..=SELECTOR_MAX_POSITIONS).contains(&steps) || info.hidden {
+        return None;
+    }
+    if (info.max - info.min - f64::from(steps - 1)).abs() > 1e-9 {
+        return None;
+    }
+    let options: Vec<String> = (0..steps)
+        .map(|position| name(info.min + f64::from(position)))
+        .collect::<Option<_>>()?;
+    let distinct = options
+        .iter()
+        .enumerate()
+        .all(|(at, option)| !option.is_empty() && !options[..at].contains(option));
+    if !distinct {
+        return None;
+    }
+    for position in 0..steps - 1 {
+        let between = name(info.min + f64::from(position) + 0.5)?;
+        let (low, high) = (&options[position as usize], &options[position as usize + 1]);
+        if between != *low && between != *high {
+            return None;
+        }
+    }
+    Some(options)
+}
+
+/// Rows of controls a face page holds: two, under the header, with the page
+/// buttons below (`plugin-device.slint`'s `row-pitch`).
+const ROWS_PER_PAGE: usize = 2;
+
+/// The controls across one row of a face `units` wide: three on one unit,
+/// six on two. `plugin-device.slint` reads each control's place from its row
+/// and counts no columns itself.
+pub(crate) fn face_columns(units: i32) -> usize {
+    if units <= 1 {
+        3
+    } else {
+        6
+    }
+}
+
+/// One control's place on the face: its page, its row on the page, its
+/// first column, and how many columns it takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Place {
+    pub page: usize,
+    pub row: usize,
+    pub column: usize,
+    pub span: usize,
+}
+
+/// Where each control lands, in the plugin's order, row by row and a page at
+/// a time: a knob takes one cell, a selector (`true`) a whole row, since its
+/// segments need the width. Returns the places and the page count.
+pub(crate) fn pack(selectors: &[bool], columns: usize) -> (Vec<Place>, usize) {
+    let mut places = Vec::with_capacity(selectors.len());
+    let (mut page, mut row, mut column) = (0usize, 0usize, 0usize);
+    let next_row = |page: &mut usize, row: &mut usize, column: &mut usize| {
+        *column = 0;
+        *row += 1;
+        if *row == ROWS_PER_PAGE {
+            *row = 0;
+            *page += 1;
+        }
+    };
+    for &selector in selectors {
+        if selector {
+            if column > 0 {
+                next_row(&mut page, &mut row, &mut column);
+            }
+            places.push(Place { page, row, column: 0, span: columns });
+            next_row(&mut page, &mut row, &mut column);
+        } else {
+            places.push(Place { page, row, column, span: 1 });
+            column += 1;
+            if column == columns {
+                next_row(&mut page, &mut row, &mut column);
+            }
+        }
+    }
+    let pages = if row == 0 && column == 0 { page } else { page + 1 };
+    (places, pages.max(1))
+}
+
+/// The width of a face: one unit when its controls fit one unit's page,
 /// two otherwise. A face with more than a page pages rather than growing.
-pub(crate) fn plugin_units(visible_params: usize) -> i32 {
-    if visible_params <= ONE_UNIT_PARAMS {
+pub(crate) fn face_units(selectors: &[bool]) -> i32 {
+    if pack(selectors, face_columns(1)).1 == 1 {
         1
     } else {
         2
     }
+}
+
+/// Each control's group caption: `(caption, span)` on the control that
+/// starts a run of one group on its row, `("", 0)` elsewhere. A run is
+/// broken by a new row, so a group that carries over is named again.
+pub(crate) fn captions<'a>(groups: &[&'a str], places: &[Place]) -> Vec<(&'a str, usize)> {
+    let mut out = vec![("", 0); groups.len()];
+    let mut at = 0;
+    while at < groups.len() {
+        let start = at;
+        let mut span = places[at].span;
+        at += 1;
+        while at < groups.len()
+            && groups[at] == groups[start]
+            && (places[at].page, places[at].row) == (places[start].page, places[start].row)
+        {
+            span += places[at].span;
+            at += 1;
+        }
+        if !groups[start].is_empty() {
+            out[start] = (groups[start], span);
+        }
+    }
+    out
+}
+
+/// The sidebar's PARAMETERS rows for `saved`: every parameter it does not
+/// hide, in its own order, those `filter` matches (by name or group, the
+/// presets' rule), each marked pinned when the face shows it. A row that
+/// starts a run of a group carries the group's name.
+pub(crate) fn param_list_rows(saved: &PluginSlotState, filter: &str) -> Vec<PluginListRow> {
+    let shown = face_ids(saved);
+    let mut previous: Option<&str> = None;
+    saved
+        .params
+        .iter()
+        .enumerate()
+        .filter(|(_, info)| !info.hidden)
+        .filter(|(_, info)| {
+            filter.trim().is_empty() || matches(filter, &format!("{} {}", info.name, info.module))
+        })
+        .map(|(index, info)| {
+            let starts = previous != Some(info.module.as_str());
+            previous = Some(info.module.as_str());
+            PluginListRow {
+                index: index as i32,
+                name: info.name.as_str().into(),
+                group: if starts { info.module.as_str().into() } else { SharedString::default() },
+                pinned: shown.contains(&info.id),
+            }
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -211,6 +409,10 @@ pub(crate) fn plugin_rows(catalog: &PluginCatalog, filter: &str) -> Vec<BrowserR
 // ---------------------------------------------------------------------------
 // The face.
 
+/// A stepped parameter's selector segments, under the id they were asked
+/// for, or `None` for a parameter that stays a knob.
+type SelectorCache = (u32, Option<ModelRc<SharedString>>);
+
 /// What the rack's plugin faces were last drawn from, kept so a face is
 /// updated in place and a knob under the pointer is never rebuilt.
 ///
@@ -224,6 +426,20 @@ pub(crate) struct PluginFaces {
     /// The plugin's own text for a parameter's value, and the value it was
     /// asked about. Refreshed when the value moves, never once a frame.
     texts: RefCell<HashMap<(PluginSlotId, usize), (f64, SharedString)>>,
+    /// Each stepped parameter's selector segments, asked of the running
+    /// plugin once ([`selector_options`]), under the id it was asked for;
+    /// `None` when it stays a knob. **One model per parameter for its life**:
+    /// a row compares equal only while its `options` is the same model, so a
+    /// fresh one each tick would republish every row and drop a drag.
+    options: RefCell<HashMap<(PluginSlotId, usize), SelectorCache>>,
+    /// The sidebar's PARAMETERS list: its model (set on the window once, by
+    /// [`wire`]), the filter typed into it, and what it was last built from.
+    list: Rc<VecModel<PluginListRow>>,
+    list_filter: RefCell<String>,
+    list_key: std::cell::Cell<Option<u64>>,
+    /// The plugin the list last described: the filter is cleared when the
+    /// selection moves to another, so a new plugin never opens filtered.
+    list_slot: std::cell::Cell<Option<PluginSlotId>>,
 }
 
 /// Why the plugin in `slot` is not playing, in words, or empty when it is.
@@ -254,23 +470,43 @@ impl PluginFaces {
             .clone()
     }
 
-    /// The face's rows for the plugin in `slot`: every parameter the plugin
-    /// does not hide, in its own order, each carrying its dense index.
-    fn param_rows(&self, session: &Session, slot: PluginSlotId) -> Vec<PluginParamRow> {
+    /// The face's rows for the plugin in `slot`, and its width in units: the
+    /// parameters its face shows ([`face_ids`]), in the plugin's order, each
+    /// carrying its dense index and its place ([`pack`]).
+    fn param_rows(&self, session: &Session, slot: PluginSlotId) -> (Vec<PluginParamRow>, i32) {
         let Some(saved) = session.plugins.get(&slot) else {
-            return Vec::new();
+            return (Vec::new(), 1);
         };
         let live = session
             .plugin_rack
             .instance(slot)
             .is_some_and(|instance| !instance.failed());
+        let shown = face_ids(saved);
         let texts = self.texts.borrow();
-        saved
+        let options = self.options.borrow();
+        let picked: Vec<(usize, &PluginParamInfo, Option<ModelRc<SharedString>>)> = saved
             .params
             .iter()
             .enumerate()
-            .filter(|(_, info)| !info.hidden)
+            .filter(|(_, info)| !info.hidden && shown.contains(&info.id))
             .map(|(index, info)| {
+                let names = options
+                    .get(&(slot, index))
+                    .filter(|(id, _)| *id == info.id)
+                    .and_then(|(_, names)| names.clone());
+                (index, info, names)
+            })
+            .collect();
+        let selectors: Vec<bool> = picked.iter().map(|(_, _, names)| names.is_some()).collect();
+        let units = face_units(&selectors);
+        let (places, _) = pack(&selectors, face_columns(units));
+        let groups: Vec<&str> = picked.iter().map(|(_, info, _)| info.module.as_str()).collect();
+        let captions = captions(&groups, &places);
+        let rows = picked
+            .into_iter()
+            .zip(places)
+            .zip(captions)
+            .map(|(((index, info, names), place), (caption, caption_span))| {
                 let plain = session
                     .plugin_param_value(slot, index)
                     .unwrap_or(info.default);
@@ -286,14 +522,61 @@ impl PluginFaces {
                     default_value: plugin_normalized(info, info.default),
                     steps: info.stepped.map_or(0, i32::from),
                     enabled: live,
+                    page: place.page as i32,
+                    row: place.row as i32,
+                    column: place.column as i32,
+                    span: place.span as i32,
+                    options: names.unwrap_or_default(),
+                    position: (plain - info.min).round() as i32,
+                    caption: caption.into(),
+                    caption_span: caption_span as i32,
                 }
             })
-            .collect()
+            .collect();
+        (rows, units)
     }
 
-    /// Ask the running plugin in `slot` for the text of every value that
-    /// moved since it was last asked.
+    /// Ask the running plugin in `slot` for the text of every value its face
+    /// shows that moved since it was last asked, and for the segments of
+    /// each stepped one it has not been asked about yet.
     fn refresh_texts(&self, session: &mut Session, slot: PluginSlotId) {
+        let Some(saved) = session.plugins.get(&slot) else {
+            return;
+        };
+        let shown = face_ids(saved);
+        let unasked: Vec<(usize, PluginParamInfo)> = saved
+            .params
+            .iter()
+            .enumerate()
+            .filter(|(_, info)| info.stepped.is_some() && shown.contains(&info.id))
+            .filter(|(index, info)| {
+                self.options
+                    .borrow()
+                    .get(&(slot, *index))
+                    .is_none_or(|(id, _)| *id != info.id)
+            })
+            .map(|(index, info)| (index, info.clone()))
+            .collect();
+        if !unasked.is_empty() {
+            let running = session
+                .plugin_rack
+                .instance(slot)
+                .is_some_and(|instance| !instance.failed());
+            // A plugin that is not running cannot be asked, and is asked
+            // again once it is: until then its stepped parameters are knobs.
+            if let (true, Some(instance)) = (running, session.plugin_rack.instance_mut(slot)) {
+                let mut options = self.options.borrow_mut();
+                for (index, info) in unasked {
+                    let names = selector_options(&info, |plain| instance.value_text(info.id, plain))
+                        .map(|names| {
+                            let names: Vec<SharedString> =
+                                names.iter().map(|name| name.as_str().into()).collect();
+                            ModelRc::from(names.as_slice())
+                        });
+                    options.insert((slot, index), (info.id, names));
+                }
+            }
+        }
         let Some(saved) = session.plugins.get(&slot) else {
             return;
         };
@@ -301,7 +584,7 @@ impl PluginFaces {
             .params
             .iter()
             .enumerate()
-            .filter(|(_, info)| !info.hidden)
+            .filter(|(_, info)| !info.hidden && shown.contains(&info.id))
             .filter_map(|(index, info)| {
                 let plain = session.plugin_rack.param_value(slot, index)?;
                 let known = self
@@ -339,9 +622,9 @@ impl PluginFaces {
             .plugins
             .get(&slot)
             .map_or("Plugin", |saved| saved.plugin.name.as_str());
-        let params = self.param_rows(session, slot);
+        let (params, units) = self.param_rows(session, slot);
         row.is_plugin = true;
-        row.units = plugin_units(params.len());
+        row.units = units;
         row.plugin_name = name.into();
         row.plugin_status = status_text(session, slot, name).into();
         let model = self.model(slot);
@@ -403,6 +686,101 @@ impl UiState {
                 self.effect_slot_model.set_row_data(row, data);
             }
         }
+    }
+
+    /// The hosted plugin the selected device is, if it is one: the device
+    /// the sidebar's PARAMETERS list describes.
+    pub(crate) fn selected_plugin_slot(&self) -> Option<PluginSlotId> {
+        let row = self.session.selected_device_slot()?;
+        match self.session.effect_chain()?.get(row)?.params {
+            EffectParams::Plugin(slot) => Some(slot),
+            _ => None,
+        }
+    }
+
+    /// Bring the sidebar's PARAMETERS list up to date with the selected
+    /// device, its pins and the filter. The pump calls it every tick; it
+    /// rebuilds only when one of those changed, read through a hash so an
+    /// unchanged tick allocates nothing, and a pin, an undo, a selection or
+    /// a plugin that reports its list late all reach it the same way.
+    pub(crate) fn refresh_plugin_param_list(&self, window: &MainWindow) {
+        use std::hash::{Hash, Hasher};
+        let slot = self.selected_plugin_slot();
+        if self.plugin_faces.list_slot.replace(slot) != slot {
+            self.plugin_faces.list_filter.borrow_mut().clear();
+        }
+        let saved = slot.and_then(|slot| self.session.plugins.get(&slot));
+        let filter = self.plugin_faces.list_filter.borrow();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        slot.hash(&mut hasher);
+        filter.hash(&mut hasher);
+        if let Some(saved) = saved {
+            saved.pinned.hash(&mut hasher);
+            for info in &saved.params {
+                (info.id, info.hidden, &info.name, &info.module).hash(&mut hasher);
+            }
+        }
+        let key = hasher.finish();
+        if self.plugin_faces.list_key.get() == Some(key) {
+            return;
+        }
+        self.plugin_faces.list_key.set(Some(key));
+        let (rows, total) = match saved {
+            Some(saved) => (
+                param_list_rows(saved, &filter),
+                saved.params.iter().filter(|info| !info.hidden).count(),
+            ),
+            None => (Vec::new(), 0),
+        };
+        self.plugin_faces.list.set_vec(rows);
+        window.set_plugin_param_total(total as i32);
+        window.set_plugin_param_filter(filter.as_str().into());
+    }
+}
+
+/// Wire the sidebar's PARAMETERS list: its filter, which is view state, and
+/// its pins, which are saved with the song and so are an edit and an undo
+/// step ("Pin Parameter").
+fn wire_param_list(window: &MainWindow, state: &Rc<RefCell<UiState>>, commands: &Rc<RefCell<CommandState>>) {
+    window.set_plugin_param_rows(ModelRc::from(state.borrow().plugin_faces.list.clone()));
+    {
+        let st = state.clone();
+        let weak = window.as_weak();
+        window.on_plugin_param_filter_edited(move |filter| {
+            let Some(window) = weak.upgrade() else { return };
+            let st = st.borrow();
+            *st.plugin_faces.list_filter.borrow_mut() = filter.to_string();
+            st.refresh_plugin_param_list(&window);
+        });
+    }
+    {
+        let st = state.clone();
+        let commands = commands.clone();
+        let weak = window.as_weak();
+        window.on_plugin_param_pin_toggled(move |index| {
+            let (Some(window), Ok(index)) = (weak.upgrade(), usize::try_from(index)) else {
+                return;
+            };
+            if commands.borrow().project_edit_pending {
+                return;
+            }
+            let Some(slot) = st.borrow().selected_plugin_slot() else { return };
+            let before = crate::project_snapshot(&st.borrow(), &window);
+            {
+                let mut st = st.borrow_mut();
+                let Some(saved) = st.session.plugins.get(&slot) else { return };
+                let Some(id) = saved.params.get(index).map(|info| info.id) else { return };
+                let pins = toggled_pins(saved, id);
+                if let Some(saved) = st.session.plugins.get_mut(&slot) {
+                    saved.pinned = pins;
+                }
+                st.session.mark_dirty();
+                st.refresh_plugin_faces();
+                st.refresh_plugin_param_list(&window);
+            }
+            crate::record_project_history(&commands, before, &st, &window, "Pin Parameter");
+            st.borrow().update_document_title(&window);
+        });
     }
 }
 
@@ -761,6 +1139,7 @@ pub(crate) fn wire(
         stx: stx.clone(),
         reset_tx: reset_tx.clone(),
     };
+    wire_param_list(window, state, commands);
     {
         // A knob on a plugin face: the value half of the edit. The plugin
         // holds the value, so the song has it once its state is captured;
@@ -884,5 +1263,137 @@ pub(crate) fn wire(
                 "Pick an instrument: double-click it or press Enter to add it on a new channel".into(),
             );
         });
+    }
+}
+
+#[cfg(test)]
+mod face_tests {
+    use super::*;
+    use mooloop_core::{PluginFormat, PluginRef};
+
+    fn param(id: u32, name: &str) -> PluginParamInfo {
+        PluginParamInfo {
+            id,
+            name: name.into(),
+            module: String::new(),
+            min: 0.0,
+            max: 1.0,
+            default: 0.0,
+            stepped: None,
+            automatable: true,
+            modulatable: true,
+            hidden: false,
+        }
+    }
+
+    fn slot(count: u32) -> PluginSlotState {
+        PluginSlotState {
+            params: (0..count).map(|id| param(id * 10, &format!("P{id}"))).collect(),
+            ..PluginSlotState::new(PluginRef {
+                format: PluginFormat::Clap,
+                id: "test".into(),
+                name: "Test".into(),
+                vendor: String::new(),
+                version: String::new(),
+            })
+        }
+    }
+
+    /// Nothing pinned shows the first eight the plugin does not hide; a pin
+    /// on an untouched plugin starts from those eight, and a pin the plugin
+    /// no longer lists is kept but not drawn.
+    #[test]
+    fn the_face_shows_the_first_eight_until_something_is_pinned() {
+        let mut saved = slot(20);
+        saved.params[1].hidden = true;
+        assert_eq!(face_ids(&saved), [0, 20, 30, 40, 50, 60, 70, 80]);
+        saved.pinned = toggled_pins(&saved, 150);
+        assert_eq!(face_ids(&saved), [0, 20, 30, 40, 50, 60, 70, 80, 150]);
+        saved.pinned = toggled_pins(&saved, 20);
+        assert_eq!(face_ids(&saved), [0, 30, 40, 50, 60, 70, 80, 150]);
+        saved.pinned.push(9_999);
+        assert_eq!(face_ids(&saved).len(), 8);
+        saved.pinned = toggled_pins(&saved, 0);
+        assert!(saved.pinned.contains(&9_999), "a pin the plugin stopped listing is kept");
+    }
+
+    /// Only whole-value positions that each have a name of their own, and no
+    /// choice named between them, make a selector (the LSP check).
+    #[test]
+    fn a_selector_trusts_the_names_not_the_count() {
+        let stepped = |steps: u16, max: f64| PluginParamInfo {
+            stepped: Some(steps),
+            max,
+            ..param(1, "Mode")
+        };
+        let words = ["Off", "Low", "Band", "High"];
+        let honest = |plain: f64| words.get(plain.round() as usize).map(|w| w.to_string());
+        assert_eq!(
+            selector_options(&stepped(4, 3.0), honest),
+            Some(words.iter().map(|w| w.to_string()).collect())
+        );
+        // LSP: 0..1 in two positions, and a third choice named in between.
+        let lsp = |plain: f64| {
+            Some(if plain < 0.25 { "Off" } else if plain < 0.75 { "Band" } else { "High" }.to_string())
+        };
+        assert_eq!(selector_options(&stepped(2, 1.0), lsp), None);
+        // Positions that are not whole values, or more than eight, stay knobs.
+        assert_eq!(selector_options(&stepped(4, 1.0), honest), None);
+        assert_eq!(selector_options(&stepped(9, 8.0), |p| Some(format!("{p}"))), None);
+        // Two positions with one name are not two choices.
+        assert_eq!(selector_options(&stepped(2, 1.0), |_| Some("Same".into())), None);
+        // A plugin that cannot name a position keeps its knob.
+        assert_eq!(selector_options(&stepped(2, 1.0), |_| None), None);
+    }
+
+    /// A selector takes a whole row, the knobs after it start the next, and
+    /// the rows after two start a page.
+    #[test]
+    fn a_selector_takes_a_row_and_pages_follow() {
+        let at = |page, row, column, span| Place { page, row, column, span };
+        let (places, pages) = pack(&[false, false, true, false], 3);
+        assert_eq!(places, [at(0, 0, 0, 1), at(0, 0, 1, 1), at(0, 1, 0, 3), at(1, 0, 0, 1)]);
+        assert_eq!(pages, 2);
+        let (places, pages) = pack(&[false; 6], 3);
+        assert_eq!(places.last(), Some(&at(0, 1, 2, 1)));
+        assert_eq!(pages, 1);
+        assert_eq!(pack(&[], 6).1, 1);
+        // Six knobs fit one unit; a seventh, or a selector and four, do not.
+        assert_eq!(face_units(&[false; 6]), 1);
+        assert_eq!(face_units(&[false; 7]), 2);
+        assert_eq!(face_units(&[true, false, false, false, false]), 2);
+        assert_eq!(face_units(&[true, false, false, false]), 1);
+    }
+
+    /// A group is named once per run on a row, over the run's width, and
+    /// again where it carries onto the next row.
+    #[test]
+    fn a_group_is_captioned_over_its_run() {
+        let groups = ["", "Filter", "Filter", "Filter", "Env"];
+        let (places, _) = pack(&[false; 5], 3);
+        assert_eq!(
+            captions(&groups, &places),
+            [("", 0), ("Filter", 2), ("", 0), ("Filter", 1), ("Env", 1)]
+        );
+    }
+
+    /// The list names a group on the row that starts its run, marks what the
+    /// face shows, and filters by name or group.
+    #[test]
+    fn the_list_groups_marks_pins_and_filters() {
+        let mut saved = slot(12);
+        for info in &mut saved.params[2..5] {
+            info.module = "Filter".into();
+        }
+        saved.params[3].name = "Frequency".into();
+        let rows = param_list_rows(&saved, "");
+        assert_eq!(rows.len(), 12);
+        assert_eq!(rows[2].group, "Filter");
+        assert_eq!(rows[3].group, "");
+        assert!(rows[7].pinned && !rows[8].pinned);
+        let found = param_list_rows(&saved, "freq");
+        assert_eq!(found.len(), 1);
+        assert_eq!((found[0].index, found[0].group.as_str()), (3, "Filter"));
+        assert_eq!(param_list_rows(&saved, "filter").len(), 3);
     }
 }

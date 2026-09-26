@@ -534,7 +534,7 @@ words. **Do not reopen this as a version-bump question.**
 | 05 | The scanner, out of process, with its cache | #27 | plugin-host, app, settings | **done 2026-09-23** (MOO-80) |
 | 06 | A headless CLAP effect in a chain | #27 | plugin-host, session | **done 2026-09-23** (MOO-81) |
 | 07 | Parameters, automation, modulation and state round-trip | #28 | session, project | **done 2026-09-24** (MOO-82) |
-| 08 | Plugin browser, the menu row, and the face for plugins without a GUI | #28 | **UI build**, drafted with `slint-sketch` | **done 2026-09-24** (MOO-83; remainder MOO-228, MOO-229) |
+| 08 | Plugin browser, the menu row, and the face for plugins without a GUI | #28 | **UI build**, drafted with `slint-sketch` | **done 2026-09-24** (MOO-83; remainder MOO-228, MOO-229: pins, list, selectors landed 2026-09-26) |
 | 09 | A channel source that is a boxed node | #29 | core, engine, session | **done 2026-09-24** (MOO-84) |
 | 10 | CLAP instruments | #29 | plugin-host, engine | **done 2026-09-25** (MOO-85) |
 | 11 | Plugin GUIs in their own windows | #30 | plugin-host, **UI build** | not started |
@@ -1474,6 +1474,32 @@ offsets ride the per-tick in-place path (`refresh_modulation_offsets`,
   - The flags (`AutomationTargetRow.missing`, `automation-lane-missing`,
     `ModulationRouteRow.missing`) are not plugin-specific. MOO-270's inert
     Source lanes can set them too.
+
+**Step 08's remainder, part two, 2026-09-26 (MOO-229).** The face shows the
+pinned parameters and the sidebar holds the rest.
+- **Pins.** `plugin_ui::face_ids`: `PluginSlotState.pinned` empty means the
+  first `DEFAULT_PINNED` (8) the plugin does not hide, so an old song and an
+  untouched plugin look the same; `toggled_pins` makes that default explicit
+  on the first pin. An id the plugin no longer lists stays pinned and is not
+  drawn. A pin is an edit ("Pin Parameter"); `pinned` is not part of
+  `same_plugin`, so undoing one never reopens the plugin.
+- **The PARAMETERS list** is in `channel-sidebar.slint` (Interface's), shown
+  while `Session::selected_device_slot` is a plugin insert. The pump rebuilds
+  it only when a hash of (slot, filter, pins, the plugin's list) moves, so an
+  idle tick allocates nothing; the filter clears when the selection moves to
+  another plugin. Rows carry the dense index, like the face.
+- **Rust places every control** (`pack`): page, row, column, span. A
+  selector takes a whole row; the page count is the last row's page + 1.
+  Rows are 96 px now, the top 12 a band for the group caption (`captions`:
+  one per run of a group on a row).
+- **Selectors trust the names** (`selector_options`). The plugin is asked
+  once per (slot, index) while it runs; the answer and its `ModelRc` are
+  cached for the slot's life, because `update_model` compares rows and a
+  fresh model each tick would republish the row mid-drag. A missing plugin
+  cannot be asked, so its stepped parameters are knobs until it runs.
+  The test gain's Latency and Fail are selectors now.
+- Not built: a face for a plugin channel's *source* (none exists yet), so the
+  list covers inserts only. The Preferences page and rescan are part (c).
 
 ## The test plugins
 

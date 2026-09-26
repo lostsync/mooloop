@@ -33,7 +33,8 @@ import {
     DevicePageButton, DeviceRackMetrics, RackDrag, BrowserDrag
 } from "device-rack.slint";
 import { AddSourceButton, ChannelDrag, SourceKinds } from "channel-rack.slint";
-import { ChannelSidebar } from "channel-sidebar.slint";
+import { ChannelSidebar, PluginListRow } from "channel-sidebar.slint";
+export { PluginListRow }
 import { ColorChipButton, ColorChoice } from "color-picker.slint";
 import { DrumDeviceFace } from "drum-device.slint";
 import { FilterDeviceFace } from "filter-device.slint";
@@ -1979,6 +1980,15 @@ export component MainWindow inherits Window {
     // `effect-modulation-edit-finished`, which reads neither number.
     callback plugin-modulation-edit-started(int, int);
     callback plugin-modulation-depth-changed(int, int, float);
+    // The sidebar's PARAMETERS list (MOO-229) for the selected device when
+    // it is a hosted plugin: its rows as `plugin-param-filter` leaves them,
+    // and how many the plugin shows in all (0 hides the list). Rust keeps
+    // the filter; a pin is by dense index, and saved with the song.
+    in property <[PluginListRow]> plugin-param-rows;
+    in property <string> plugin-param-filter;
+    in property <int> plugin-param-total;
+    callback plugin-param-filter-edited(string);
+    callback plugin-param-pin-toggled(int);
     // The insert menu's "Plugin…" row: open the browser's PLUGINS tab, aimed
     // at the row a plugin picked there should land before.
     callback add-plugin-requested(int);
@@ -3471,6 +3481,11 @@ export component MainWindow inherits Window {
                             audio-input-level-db: root.audio-input-level-db;
                             audio-input-held-db: root.audio-input-held-db;
                             audio-monitor-toggled(on) => { root.audio-monitor-toggled(on); }
+                            plugin-params: root.plugin-param-rows;
+                            plugin-param-filter: root.plugin-param-filter;
+                            plugin-param-total: root.plugin-param-total;
+                            plugin-param-filter-edited(value) => { root.plugin-param-filter-edited(value); }
+                            plugin-param-pin-toggled(index) => { root.plugin-param-pin-toggled(index); }
                             midi-input-picked(row) => { root.midi-input-picked(row); }
                             midi-channel-picked(row) => { root.midi-channel-picked(row); }
                             audio-input-picked(row) => { root.audio-input-picked(row); }
