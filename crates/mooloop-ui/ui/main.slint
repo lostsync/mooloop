@@ -4445,7 +4445,12 @@ export component MainWindow inherits Window {
                                 if !root.editing-bus : PickerChip {
                                     width: 96px;
                                     height: 22px;
+                                    // The chip is 96px, so it names the
+                                    // source by its model number; its menu
+                                    // has the room for the full name
+                                    // (MOO-276).
                                     options: SourceKinds.labels;
+                                    row-options: SourceKinds.titles;
                                     hidden: SourceKinds.retired;
                                     selected-index: root.source-kind;
                                     tooltip: "Source device";
@@ -5164,13 +5169,20 @@ export component MainWindow inherits Window {
 
                                             if !root.editing-bus : DeviceHeader {
                                                 x: DeviceRackMetrics.rail-width; y: 0px; width: parent.content-width;
-                                                // The one kind-label list, as the picker and the
-                                                // add-channel menu read it. This was eight strings
-                                                // in a ternary ladder whose last arm was a bare
-                                                // fallback, so a ninth kind would have been headed
-                                                // with the eighth's label, and nothing read the
-                                                // ladder to report it.
-                                                name: SourceKinds.labels[root.source-kind];
+                                                // The one kind-name list, as the add-channel menu
+                                                // reads it. This was eight strings in a ternary
+                                                // ladder whose last arm was a bare fallback, so a
+                                                // ninth kind would have been headed with the
+                                                // eighth's label, and nothing read the ladder to
+                                                // report it.
+                                                //
+                                                // The full name, Polyneight ML-P8: the header
+                                                // has the room (Adam, 2026-09-26, both where
+                                                // there's room, the model number where it's
+                                                // tight). The narrowest face a nicknamed source
+                                                // gets is 3U, which fits it beside the preset at
+                                                // twice the type scale (MOO-276).
+                                                name: SourceKinds.titles[root.source-kind];
                                                 kind: "SOURCE / " + source-device.source-units + "U";
                                                 preset: root.source-preset-name;
                                                 device-color: Theme.accent;

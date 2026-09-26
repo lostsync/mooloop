@@ -28,6 +28,8 @@ mod modulation_offsets_tests;
 mod rack_displays;
 #[cfg(test)]
 mod rack_displays_tests;
+#[cfg(test)]
+mod source_names_tests;
 mod plugin_scan;
 mod plugin_ui;
 mod pump_profile;
@@ -3339,22 +3341,6 @@ pub fn device_kind_to_int(kind: DeviceKind) -> i32 {
         DeviceKind::AuxIn => 7,
         DeviceKind::Plugin => 8,
     }
-}
-
-/// The name a device kind wears in the interface.
-///
-/// The table moved to [`DeviceKind::label`] on 2026-09-12, when a second copy
-/// of it -- the one both channel-creation paths build a default channel name
-/// out of -- was found to have drifted on three of the eight kinds. This stays
-/// as the name the preset browser calls to title a group.
-///
-/// `main.slint` holds the same eight strings once, in `SourceKinds.labels`,
-/// because a picker row is markup. That copy no Rust table can reach, but
-/// `tests/source_kind_menu.rs` reads it out of the production markup and
-/// holds it against this one -- which is what the add-channel menu, spelling
-/// its own four of them, never had.
-fn device_kind_label(kind: DeviceKind) -> &'static str {
-    kind.label()
 }
 
 /// Every source device, in the order the interface offers them -- which is
@@ -16176,9 +16162,11 @@ impl AppUi {
                         };
                         if channel_kind != Some(kind) {
                             window.set_status_message(
+                                // The full name, as the group this preset
+                                // was found under reads (MOO-276).
                                 format!(
                                     "Select a {} channel to load this preset",
-                                    device_kind_label(kind)
+                                    kind.title()
                                 )
                                 .into(),
                             );
@@ -20105,6 +20093,20 @@ struct PresetGroup {
     presets: Vec<PresetSummary>,
 }
 
+impl PresetGroup {
+    /// Every name this group goes by: the one its row shows, and for a
+    /// source's group the model number too. A source's group reads its full
+    /// name, "Dominic DS-01" (MOO-276), while the factory banks file their
+    /// presets under the model number, "DS-01"; both restate the group.
+    fn names(&self) -> Vec<&str> {
+        let mut names = vec![self.label.as_str()];
+        if let PresetSlot::Generator(kind) = self.slot {
+            names.push(kind.label());
+        }
+        names
+    }
+}
+
 /// Reads every well-known preset directory.
 ///
 /// `refresh_preset_menus` scans three of these for the rail menus and keeps
@@ -20130,9 +20132,12 @@ fn scan_preset_catalog() -> Vec<PresetGroup> {
         let dir = settings::generator_presets_dir(kind);
         let presets = mooloop_project::list_presets(&dir);
         if !presets.is_empty() {
+            // The full name, "Polyneight ML-P8": the browser has the room
+            // (Adam, 2026-09-26, both where there's room, the model number
+            // where it's tight). The filter matches either half of it.
             groups.push(PresetGroup {
                 dir,
-                label: device_kind_label(kind).to_string(),
+                label: kind.title().to_string(),
                 slot: PresetSlot::Generator(kind),
                 presets,
             });
@@ -20161,13 +20166,15 @@ fn scan_preset_catalog() -> Vec<PresetGroup> {
 /// machine ships, sixty-six are categorised `"Factory"` and seventeen
 /// `"DS-01"` -- restatements of the group they are already filed under. A
 /// category earns the space only when it says something the group does not,
-/// which is why this is a filter rather than a format.
-fn preset_detail(summary: &PresetSummary, group_label: &str) -> String {
+/// which is why this is a filter rather than a format. `group_names` is
+/// [`PresetGroup::names`]: a source's group reads "Dominic DS-01", and a
+/// category of "DS-01" restates it just the same.
+fn preset_detail(summary: &PresetSummary, group_names: &[&str]) -> String {
     let mut parts: Vec<&str> = Vec::new();
     let category = summary.category.trim();
     if !category.is_empty()
         && !category.eq_ignore_ascii_case("factory")
-        && !category.eq_ignore_ascii_case(group_label)
+        && !group_names.iter().any(|name| category.eq_ignore_ascii_case(name))
     {
         parts.push(category);
     }
@@ -20241,7 +20248,7 @@ fn build_preset_rows(
                 name: preset.name.as_str().into(),
                 path: preset.path.to_string_lossy().to_string().into(),
                 expanded: false,
-                detail: preset_detail(preset, &group.label).into(),
+                detail: preset_detail(preset, &group.names()).into(),
                 loadable,
                 effect,
             });
@@ -21038,21 +21045,46 @@ mod preset_browser_tests {
     /// only spare column in the panel on saying nothing.
     #[test]
     fn a_category_that_restates_its_group_is_not_shown() {
-        assert_eq!(preset_detail(&summary("A", "Factory", &[]), "Delay"), "");
-        assert_eq!(preset_detail(&summary("B", "DS-01", &[]), "DS-01"), "");
-        assert_eq!(preset_detail(&summary("C", "ds-01", &[]), "DS-01"), "");
-        assert_eq!(preset_detail(&summary("D", "", &[]), "Delay"), "");
+        assert_eq!(preset_detail(&summary("A", "Factory", &[]), &["Delay"]), "");
+        assert_eq!(preset_detail(&summary("B", "DS-01", &[]), &["DS-01"]), "");
+        assert_eq!(preset_detail(&summary("C", "ds-01", &[]), &["DS-01"]), "");
+        assert_eq!(preset_detail(&summary("D", "", &[]), &["Delay"]), "");
+    }
+
+    /// A source's group reads its full name (MOO-276), and the factory banks
+    /// file their presets under the model number. "DS-01" under "Dominic
+    /// DS-01" restates the group as surely as it did under "DS-01"; without
+    /// this every factory DS-01, ML-M1 and ML-P8 row would say its model
+    /// number again. A category that says something still shows.
+    #[test]
+    fn a_sources_model_number_restates_its_full_named_group() {
+        let groups = vec![group(
+            DeviceKind::Ds01.title(),
+            PresetSlot::Generator(DeviceKind::Ds01),
+            vec![summary("Deep Kick", "DS-01", &[]), summary("Snap", "Perc", &[])],
+        )];
+        let expanded = HashSet::from([PathBuf::from("/presets/Dominic DS-01")]);
+        let rows = build_preset_rows(&groups, &expanded, Some(DeviceKind::Ds01), "");
+        assert_eq!(rows[0].name, "Dominic DS-01");
+        assert_eq!(rows[1].detail, "", "the model number restates the group");
+        assert_eq!(rows[2].detail, "Perc");
+
+        // The filter finds the group by either half of its name.
+        for filter in ["dominic", "ds-01"] {
+            let found = build_preset_rows(&groups, &HashSet::new(), None, filter);
+            assert_eq!(found.len(), 3, "`{filter}` should find the DS-01's presets");
+        }
     }
 
     #[test]
     fn a_category_that_says_something_is_shown_with_the_tags() {
-        assert_eq!(preset_detail(&summary("A", "Pad", &[]), "ML-P8"), "Pad");
+        assert_eq!(preset_detail(&summary("A", "Pad", &[]), &["ML-P8"]), "Pad");
         assert_eq!(
-            preset_detail(&summary("B", "Pad", &["warm", "wide"]), "ML-P8"),
+            preset_detail(&summary("B", "Pad", &["warm", "wide"]), &["ML-P8"]),
             "Pad · warm · wide"
         );
         assert_eq!(
-            preset_detail(&summary("C", "Factory", &["bright"]), "Delay"),
+            preset_detail(&summary("C", "Factory", &["bright"]), &["Delay"]),
             "bright",
             "tags survive a category that does not"
         );

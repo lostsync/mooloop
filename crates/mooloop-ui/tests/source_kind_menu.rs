@@ -344,8 +344,9 @@ fn the_add_channel_menu_is_as_tall_as_its_rows() {
 fn the_source_device_header_reads_the_one_list() {
     let header = block(MAIN_SLINT, "if !root.editing-bus : DeviceHeader {");
     assert!(
-        header.contains("SourceKinds.labels[root.source-kind]"),
-        "the source device header should take its name from SourceKinds.labels"
+        header.contains("SourceKinds.titles[root.source-kind]"),
+        "the source device header should take its name from SourceKinds.titles, \
+         since a header has the room for the full name (MOO-276)"
     );
     for kind in SOURCE_KINDS_IN_PICKER_ORDER {
         for name in [kind.label(), kind.title()] {

@@ -479,6 +479,11 @@ export component PickerChip inherits Rectangle {
     // retired source device. Shorter than `options` is fine; a missing entry
     // reads as `false`.
     in property <[bool]> hidden;
+    // What each menu row reads, by position, where it should say more than
+    // the chip: the source picker's chip reads "ML-P8" and its row
+    // "Polyneight ML-P8" (MOO-276). Empty, or an empty entry, and the row
+    // reads its `options` entry, as the chip does.
+    in property <[string]> row-options;
     in property <string> tooltip;
     in property <color> text-color: Theme.text;
     callback picked(int);
@@ -548,7 +553,7 @@ export component PickerChip inherits Rectangle {
                                 x: 6px;
                                 width: parent.width - 12px;
                                 height: parent.height;
-                                text: option;
+                                text: root.row-options[index] != "" ? root.row-options[index] : option;
                                 color: index == root.selected-index ? Theme.accent : Theme.text;
                                 font-size: Theme.text-md;
                                 vertical-alignment: center;

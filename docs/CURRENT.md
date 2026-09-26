@@ -138,10 +138,17 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   Open Hat, from the factory patches Machine Kick, Machine Snare, Machine Hat
   and Machine Open Hat, whose names each channel's generator wears), grouped
   onto one `Drums` track (MOO-267). Channels can use any of
-  six sources — the sampler, the v1 drum synth, the DS-01, the ML-M1, the
-  ML-P8, or Aux In, which plays another channel's published audio outlet —
-  and every rack row exposes solo and mute, output volume, and constant-power
-  stereo pan. The rack's `+` offers those six when adding a channel, which is
+  six sources — the sampler, the Gitdum DS-SX (the v1 drum synth), the
+  Dominic DS-01, the Munotone ML-M1, the Polyneight ML-P8, or Aux In, which
+  plays another channel's published audio outlet — and every rack row exposes
+  solo and mute, output volume, and constant-power stereo pan. A source wears
+  its full name where there is room and its model number where it is tight
+  (Adam, 2026-09-26; MOO-140): the rack's `+`, the source picker's menu, the
+  device header and the preset browser's groups read "Polyneight ML-P8"; the
+  96px picker chip, a new channel's name ("ML-P8 2") and the automation and
+  MIDI lists read "ML-P8". These are display names only: a
+  song's stored channel names, such as an old "Drum Synth 1", are kept as
+  saved. The rack's `+` offers those six when adding a channel, which is
   the same list the source picker offers when changing one; its rows are
   ordinary menu rows, reading down a left edge like the rest of the
   interface's menus. The v1 mono and poly synths were retired from both on
