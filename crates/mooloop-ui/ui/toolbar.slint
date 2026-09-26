@@ -323,7 +323,7 @@ export component MenuField inherits Rectangle {
                 y: 4px;
                 width: parent.width - 8px;
                 height: parent.height - 8px;
-                viewport-height: root.options.length * 22px;
+                content-height: root.options.length * 22px;
                 VerticalLayout {
                     for option[i] in root.options : Rectangle {
                         height: 22px;

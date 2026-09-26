@@ -63,7 +63,7 @@ export component SamplerZonesPage inherits VerticalLayout {
         Flickable {
             width: parent.width;
             height: parent.height;
-            viewport-height: zone-list.preferred-height;
+            content-height: zone-list.preferred-height;
             zone-list := VerticalLayout {
                 spacing: 4px;
                 for zone[index] in root.zones : HorizontalLayout {

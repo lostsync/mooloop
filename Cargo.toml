@@ -29,8 +29,8 @@ mooloop-session = { path = "crates/mooloop-session" }
 mooloop-ui = { path = "crates/mooloop-ui" }
 mooloop-plugin-host = { path = "crates/mooloop-plugin-host" }
 
-slint = "1.17"
-slint-build = "1.17"
+slint = "1.18"
+slint-build = "1.18"
 jack = "0.13"
 cpal = "0.18"
 midir = "0.11"

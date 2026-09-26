@@ -54,11 +54,11 @@ slint-build = { workspace = true }
 [dev-dependencies]
 hound = "3"
 tempfile = "3"
-i-slint-backend-testing = { version = "1.17", features = ["renderer-software"] }
+i-slint-backend-testing = { version = "1.18", features = ["renderer-software"] }
 # The all-faces test walks the item tree for the `slider` role, which needs
 # `ItemRc`; the search API that would hide it needs element debug info CI
 # does not build. Already in the graph through `slint`, at the same version.
-i-slint-core = "=1.17.1"
+i-slint-core = "=1.18.1"
 # The plugin browser's window test puts the in-repo CLAP test double in a
 # chain; naming it here is what makes cargo build its cdylib first.
 mooloop-test-plugin = { path = "../mooloop-test-plugin" }

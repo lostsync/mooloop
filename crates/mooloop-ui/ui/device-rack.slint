@@ -635,7 +635,7 @@ export component DeviceFrame inherits Rectangle {
                 y: 4px;
                 width: parent.width - 8px;
                 height: parent.height - 8px;
-                viewport-height: root.preset-options.length * 22px;
+                content-height: root.preset-options.length * 22px;
                 VerticalLayout {
                     for option[i] in root.preset-options : Rectangle {
                         height: 22px;

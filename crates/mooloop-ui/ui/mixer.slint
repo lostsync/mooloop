@@ -796,9 +796,9 @@ component StripSendsPage inherits VerticalLayout {
         vertical-stretch: 1;
         // The scroll bar is drawn over the viewport's right edge, so the bars
         // give it room only while there is something to scroll.
-        viewport-width: self.visible-width
+        content-width: self.visible-width
             - (self.rows-height > self.visible-height ? MixerMetrics.scroll-bar : 0px);
-        viewport-height: max(self.visible-height, self.rows-height);
+        content-height: max(self.visible-height, self.rows-height);
         VerticalLayout {
             alignment: start;
             spacing: MixerMetrics.send-bar-gap;
@@ -1094,8 +1094,8 @@ component MixerStrip inherits Rectangle {
                         // fit would be a row of 8px knobs. The same answer the
                         // sends area gives.
                         if root.page == 2 : ScrollView {
-                            viewport-width: self.visible-width;
-                            viewport-height: max(self.visible-height,
+                            content-width: self.visible-width;
+                            content-height: max(self.visible-height,
                                 MixerMetrics.strip-page-height);
                             // Room for the vertical scroll bar, which Slint
                             // draws **over** the right edge of the viewport
@@ -1284,12 +1284,12 @@ export component MixerPane inherits Rectangle {
         height: 100%;
         // Derived from the row, not a constant: the bank is fixed today but a
         // hardcoded width is exactly what left the device rack unscrollable.
-        viewport-width: max(self.visible-width, strip-row.preferred-width);
+        content-width: max(self.visible-width, strip-row.preferred-width);
         // What the strip cannot be squeezed below, from `strip-floor` above.
         // A paged strip's own pages want far more than that and scroll
         // *inside* themselves instead, so only the face with a hard minimum
         // sets this one.
-        viewport-height: max(self.visible-height, root.strip-floor);
+        content-height: max(self.visible-height, root.strip-floor);
 
         Rectangle {
             width: max(mixer-scroll.visible-width, strip-row.preferred-width);

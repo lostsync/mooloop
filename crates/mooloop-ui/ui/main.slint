@@ -3810,8 +3810,8 @@ export component MainWindow inherits Window {
                             }
                             ScrollView {
                                 vertical-stretch: 1;
-                                viewport-width: max(self.visible-width, 340px + root.pattern-length * 27px);
-                                viewport-height: max(self.visible-height, root.channels.length * 32px + 48px);
+                                content-width: max(self.visible-width, 340px + root.pattern-length * 27px);
+                                content-height: max(self.visible-height, root.channels.length * 32px + 48px);
 
                                 VerticalBox {
                                     spacing: 2px;
@@ -4420,8 +4420,8 @@ export component MainWindow inherits Window {
                                 // a constant: the chain grows as devices are added,
                                 // and faces are width-quantized in rack units, so a
                                 // fixed figure leaves later devices unreachable.
-                                viewport-width: max(self.visible-width, rack-row.preferred-width);
-                                viewport-height: max(self.visible-height, DeviceRackMetrics.rack-height);
+                                content-width: max(self.visible-width, rack-row.preferred-width);
+                                content-height: max(self.visible-height, DeviceRackMetrics.rack-height);
 
                                 Rectangle {
                                     width: max(device-chain-scroll.visible-width, rack-row.preferred-width);
@@ -6246,7 +6246,7 @@ export component MainWindow inherits Window {
                                             vertical-stretch: 1;
                                             clip: true;
                                             Rectangle {
-                                                y: piano-scroll.viewport-y;
+                                                y: piano-scroll.content-y;
                                                 width: parent.width;
                                                 height: root.piano-note-count * root.piano-row-height;
                                                 for key in root.piano-note-count : Rectangle {
@@ -6320,15 +6320,15 @@ export component MainWindow inherits Window {
                                             vertical-scrollbar-policy: always-off;
                                             vertical-stretch: 1;
                                             horizontal-stretch: 1;
-                                        viewport-width: max(self.visible-width,
+                                        content-width: max(self.visible-width,
                                             root.pattern-length * root.piano-step-width);
-                                        viewport-height: max(self.visible-height,
+                                        content-height: max(self.visible-height,
                                             root.piano-note-count * root.piano-row-height);
                                         // Start around the working register (C6 at
                                         // the top) even though the canvas spans the
                                         // full MIDI range. Subsequent pan/zoom
                                         // interactions take ownership of this value.
-                                        viewport-y: -(root.piano-high-note - 84) * root.piano-row-height;
+                                        content-y: -(root.piano-high-note - 84) * root.piano-row-height;
                                         PianoGrid {
                                             pattern-length: root.pattern-length;
                                             notes: root.notes;
@@ -6348,8 +6348,8 @@ export component MainWindow inherits Window {
                                             row-height <=> root.piano-row-height;
                                             content-w: root.piano-content-w;
                                             content-h: root.piano-content-h;
-                                            scroll-x: piano-scroll.viewport-x;
-                                            scroll-y: piano-scroll.viewport-y;
+                                            scroll-x: piano-scroll.content-x;
+                                            scroll-y: piano-scroll.content-y;
                                             visible-w: piano-scroll.visible-width;
                                             visible-h: piano-scroll.visible-height;
                                             hover-hint <=> root.hover-hint;
@@ -6379,36 +6379,36 @@ export component MainWindow inherits Window {
                                             cell-painted(start, note, duration) => {
                                                 root.piano-cell-painted(start, note, duration);
                                             }
-                                            // Assigning over `viewport-y`'s initial binding is deliberate and
+                                            // Assigning over `content-y`'s initial binding is deliberate and
                                             // is what the inline handler did before: the first pan or zoom
                                             // takes ownership of the scroll position from the default
                                             // register the roll opens on.
                                             pan(x, y) => {
-                                                piano-scroll.viewport-x = x;
-                                                piano-scroll.viewport-y = y;
+                                                piano-scroll.content-x = x;
+                                                piano-scroll.content-y = y;
                                             }
                                         }
                                         }
 
                                         // Pitch axis: same idiom vertically. The
-                                        // keyboard column follows viewport-y, so
+                                        // keyboard column follows content-y, so
                                         // keys stay in sync while dragging.
                                         ZoomScrollBar {
                                             vertical: true;
                                             width: 12px;
-                                            offset: clamp(-piano-scroll.viewport-y
+                                            offset: clamp(-piano-scroll.content-y
                                                 / max(1px, root.piano-content-h - piano-scroll.visible-height), 0, 1);
                                             visible-fraction: clamp(
                                                 piano-scroll.visible-height / max(1px, root.piano-content-h), 0, 1);
                                             scrolled(v) => {
-                                                piano-scroll.viewport-y = -v * max(0px,
+                                                piano-scroll.content-y = -v * max(0px,
                                                     root.piano-content-h - piano-scroll.visible-height);
                                             }
                                             zoomed(o, f) => {
                                                 root.piano-row-height = clamp(
                                                     piano-scroll.visible-height / max(1, root.piano-note-count * f),
                                                     5px, 16px);
-                                                piano-scroll.viewport-y = -o * max(0px,
+                                                piano-scroll.content-y = -o * max(0px,
                                                     root.piano-content-h - piano-scroll.visible-height);
                                             }
                                             changed hovered => {
@@ -6428,19 +6428,19 @@ export component MainWindow inherits Window {
                                         ZoomScrollBar {
                                             height: 14px;
                                             horizontal-stretch: 1;
-                                            offset: clamp(-piano-scroll.viewport-x
+                                            offset: clamp(-piano-scroll.content-x
                                                 / max(1px, root.piano-content-w - piano-scroll.visible-width), 0, 1);
                                             visible-fraction: clamp(
                                                 piano-scroll.visible-width / max(1px, root.piano-content-w), 0, 1);
                                             scrolled(v) => {
-                                                piano-scroll.viewport-x = -v * max(0px,
+                                                piano-scroll.content-x = -v * max(0px,
                                                     root.piano-content-w - piano-scroll.visible-width);
                                             }
                                             zoomed(o, f) => {
                                                 root.piano-step-width = clamp(
                                                     piano-scroll.visible-width / max(1, root.pattern-length * f),
                                                     20px, 72px);
-                                                piano-scroll.viewport-x = -o * max(0px,
+                                                piano-scroll.content-x = -o * max(0px,
                                                     root.piano-content-w - piano-scroll.visible-width);
                                             }
                                             changed hovered => {
@@ -6470,7 +6470,7 @@ export component MainWindow inherits Window {
                                         background: Theme.surface;
                                         clip: true;
                                         Rectangle {
-                                            x: -piano-scroll.viewport-x;
+                                            x: -piano-scroll.content-x;
                                             width: root.pattern-length * root.piano-step-width;
                                             height: parent.height;
                                             background: transparent;
@@ -6597,7 +6597,7 @@ export component MainWindow inherits Window {
                                         background: Theme.surface;
                                         clip: true;
                                         automation-body := Rectangle {
-                                            x: -piano-scroll.viewport-x;
+                                            x: -piano-scroll.content-x;
                                             width: root.pattern-length * root.piano-step-width;
                                             height: parent.height;
                                             background: transparent;
@@ -6881,9 +6881,9 @@ export component MainWindow inherits Window {
 
                             ScrollView {
                                 vertical-stretch: 1;
-                                viewport-width: max(self.visible-width,
+                                content-width: max(self.visible-width,
                                     104px + root.playlist-bars * root.playlist-bar-width);
-                                viewport-height: max(self.visible-height,
+                                content-height: max(self.visible-height,
                                     30px + root.pattern-count * 28px);
 
                                 playlist-canvas := Rectangle {
@@ -7648,7 +7648,7 @@ export component MainWindow inherits Window {
 
                         browser-scroll := ScrollView {
                             vertical-stretch: 1;
-                            viewport-height: root.browser-rows.length * ROW;
+                            content-height: root.browser-rows.length * ROW;
 
                             property <length> ROW: 20px;
                             // Keep the keyboard's row on screen. A local
@@ -7659,11 +7659,11 @@ export component MainWindow inherits Window {
                             property <int> focused: root.browser-focus-index;
                             changed focused => {
                                 if (self.focused >= 0) {
-                                    if (self.focused * self.ROW < -self.viewport-y) {
-                                        self.viewport-y = -self.focused * self.ROW;
+                                    if (self.focused * self.ROW < -self.content-y) {
+                                        self.content-y = -self.focused * self.ROW;
                                     } else if ((self.focused + 1) * self.ROW
-                                            > -self.viewport-y + self.visible-height) {
-                                        self.viewport-y = self.visible-height
+                                            > -self.content-y + self.visible-height) {
+                                        self.content-y = self.visible-height
                                             - (self.focused + 1) * self.ROW;
                                     }
                                 }

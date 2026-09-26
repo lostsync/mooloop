@@ -1441,8 +1441,8 @@ export component PreferencesDialog inherits Rectangle {
                             // computed from the row counts rather than
                             // written down and left to drift.
                             vertical-stretch: 1;
-                            viewport-width: self.visible-width;
-                            viewport-height: max(
+                            content-width: self.visible-width;
+                            content-height: max(
                                 self.visible-height,
                                 470px + (root.midi-bindings.length + root.midi-ports.length) * 30px);
                             MidiPage {
@@ -1462,15 +1462,15 @@ export component PreferencesDialog inherits Rectangle {
                         }
                         if root.page == 3 : ScrollView {
                             // The page is taller than the dialog body, so it
-                            // scrolls. `viewport-height` must be a constant:
+                            // scrolls. `content-height` must be a constant:
                             // binding it to the page's own preferred height is
                             // circular (the child is sized by the viewport it
                             // would define) and Slint breaks that loop by
                             // collapsing everything below the fold. Keep the
                             // constant in step with the page's content height.
                             vertical-stretch: 1;
-                            viewport-width: self.visible-width;
-                            viewport-height: 684px;
+                            content-width: self.visible-width;
+                            content-height: 684px;
                             appearance-page := AppearancePage {
                                 width: parent.visible-width - 8px;
                                 theme <=> root.appearance-theme;
