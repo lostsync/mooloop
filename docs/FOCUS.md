@@ -32,7 +32,11 @@ and each closing comment names its commit. Adam's answers:
 Two items are still open in 0.1.6, and both wait on him:
 - **MOO-237**, Core Audio's latency, which he will check on a Mac.
 - **MOO-273**, an icon per device kind in place of the header's bar and dot,
-  which he added to 0.1.6. The sketches and the style question are on the issue.
+  which he added to 0.1.6. He chose filled shapes, and asked for an icon
+  registry and the long-deferred icon pass. That is now
+  `plans/icon-pass/` (Linear project Icon pass): its steps 01, the registry
+  (MOO-279), and 02, the device kinds (MOO-273), are in 0.1.6, and 03-05 are
+  0.1.7.
 
 **Cutting 0.1.6 is Adam's call.** Before tagging, dispatch `release.yml` on
 `main` (`docs/OPERATIONS.md`, "Releases And Tags"). None of the push has been
@@ -196,8 +200,10 @@ is short:
 - **The listening passes** below, which nobody has taken since 2026-09-18.
 - **MOO-237:** whether the Core Audio output latency mooloop logs matches
   what HALLab reports for the same device, on a real Mac.
-- **MOO-273:** which icon style (the sketches are on the issue), whether a
-  plugin gets one generic icon, and whether icons take the device colour.
+- **MOO-273:** Adam chose filled shapes. Two points stand as
+  recommendations he hasn't overruled: a plugin gets one generic icon, and
+  icons take the device colour. The full kind sheet goes to him before step
+  02 lands (`plans/icon-pass/02-device-kinds.md`).
 
 MOO-159 (the tracker) keeps its label, because "not now" defers the question
 rather than answering it.
@@ -258,9 +264,10 @@ way `coreaudio-driver/` was: asked for directly, and worked when asked.
   Sidechain needs a dependency edge that schedules a producer without summing
   it in. Read `archive/typed-audio-edges/` first. A layer's branches are not
   this: they have no strip and no place in the bus graph.
-- **The text-label-to-icon pass**, and **a curated factory bank.** Every
-  device ships presets to prove its architecture reaches its range, and that
-  is the only bar until a deliberate content push.
+- **A curated factory bank.** Every device ships presets to prove its
+  architecture reaches its range, and that is the only bar until a deliberate
+  content push. (The text-label-to-icon pass left this list on 2026-09-26: it
+  is `plans/icon-pass/`, with steps 01-02 in 0.1.6.)
 - **Playlist clip manipulation and richer missing-sample relinking.**
   Autosave and crash recovery landed 2026-09-23 (MOO-103).
 - **Metronome and the graph editor.** A take's count-in is still a silent

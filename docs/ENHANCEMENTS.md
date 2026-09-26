@@ -175,6 +175,9 @@ i think i want that panel to also be able to browse and load presets
 i want to do a text label -> icon pass at some point
   DELIBERATELY NOT YET. Wanted, but it is polish over a shell that is still
   moving, so doing it first means doing it twice.
+  PLANNED 2026-09-26 as `docs/plans/icon-pass/` (Linear project Icon pass).
+  The shell has since stopped moving, and a registry answers the "twice": a
+  moved button keeps its icon's name, and a restyle is one file.
 
 i think i want to expand our use of color. some of the app is ide-inspired so maybe we should build toward colorscheme support. imo it would be dope as hell to have a music app that had dracula, monokai, everforest, nord, etc built in. base16? mmm. this idea holds hands with pywal/wallust support
   LANDED 2026-09-15, as `docs/plans/theming/` steps 01, 03 and most of 04.

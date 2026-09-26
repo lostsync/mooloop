@@ -13,6 +13,15 @@ file is the narrative -- how each plan got where it is and what it is worth
 reading before reopening -- and where it states a plan's state, it is a
 summary as of its date.
 
+`icon-pass/` **was planned 2026-09-26 and is not started.** It's the "text
+label -> icon pass" `ENHANCEMENTS.md` deferred as polish over a moving shell.
+Adam brought it back when MOO-273 needed an icon for each device kind, and
+asked for *"some kind of library class"*. Its answer is one registry,
+`icons.slint`, and one `Icon` component. It also writes a `dupe-audit` check
+before anything is converted, because the survey found one meaning drawn as
+three different glyphs. Steps 01-02 are 0.1.6, and 03-05 are 0.1.7. Read its
+README for the survey, and `00-status.md` for Adam's four rulings.
+
 `incremental-structure/` **finished 2026-09-18 and is in `archive/`**, the
 same day `buffer-implementation/` was closed and archived. It was the
 continuation of `channel-identity/`: tracks got a `TrackId`, an install carries
