@@ -280,7 +280,9 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   range, or splits the top range when there are none. Slices, the stretch
   commit and the SAMPLE page's ROOT belong to the sampler's own sample: in
   Slice mode the zones are ignored. Start, end, loop and stretch apply to
-  every zone. Zones embed with the song like its sample. A zone whose file is
+  every zone. Zones embed with the song like its sample. A copied sampler
+  channel carries its zones' audio, so it pastes with every zone playing
+  into a song opened or created since the copy (MOO-242). A zone whose file is
   missing says so on the page and plays nothing. Zones store a velocity range
   that nothing plays yet (velocity layers). The full mapping workspace
   (MOO-40) and SFZ import (MOO-41) are not built.
