@@ -845,17 +845,30 @@ export component EffectDeviceShell inherits Rectangle {
     }
 }
 
-// A device folded to its header, turned on its side (MOO-219).
+// A folded strip's name, one entry per line (MOO-219). Rust splits it,
+// because the markup cannot index a string: each character is its own entry
+// and a run of spaces is one "", which the strip draws as a short gap.
+// Wired by `install_fold_label`; unwired, a strip shows no name.
+export global FoldLabel {
+    pure callback letters(string) -> [string];
+}
+
+// A device folded to its header, stood on end (MOO-219).
 //
 // Adam, 2026-09-24: *"let's turn that old `+` button into a `<` button that
 // collapses the device"* -- and a collapsed device is *"essentially its
 // header, rotated 90° clockwise"*. So this is the header's parts, stacked in
-// a strip one rail wide: `>` to open it again, the colour chip, the name and
-// kind reading top to bottom, and at the foot the controls that still act on
-// a folded device -- on/off, wet/dry, remove. Folding is looking, not
-// editing: the device keeps running exactly as it was.
+// a strip one rail wide: `>` to open it again, the colour chip, the name
+// reading top to bottom, and at the foot the controls that still act on a
+// folded device -- on/off, wet/dry, remove. Folding is looking, not editing:
+// the device keeps running exactly as it was.
 export component CollapsedDevice inherits Rectangle {
+    // The whole name, for the accessible label and the status bar.
     in property <string> name;
+    // What the strip draws: `name`, one entry per line.
+    in property <[string]> letters: FoldLabel.letters(root.name);
+    // The kind and size ("FX / 2U"): not drawn, but named on hover and to a
+    // screen reader.
     in property <string> kind;
     in property <color> device-color: Theme.warning;
     in property <bool> bypassed;
@@ -875,6 +888,8 @@ export component CollapsedDevice inherits Rectangle {
     callback wet-dry-changed(float);
     callback remove-requested();
 
+    private property <string> hover-text: root.kind == "" ? root.name : root.name + "  " + root.kind;
+
     width: DeviceRackMetrics.rail-width;
     height: DeviceRackMetrics.face-height;
     background: root.contained ? transparent : Theme.surface-raised;
@@ -882,7 +897,7 @@ export component CollapsedDevice inherits Rectangle {
     border-width: root.selected ? Theme.stroke-emphasis : Theme.hairline;
     border-color: root.selected ? Theme.accent : Theme.border;
     accessible-role: groupbox;
-    accessible-label: root.name + ", collapsed";
+    accessible-label: root.name + (root.kind == "" ? "" : ", " + root.kind) + ", collapsed";
 
     VerticalLayout {
         x: 1px;
@@ -903,28 +918,63 @@ export component CollapsedDevice inherits Rectangle {
                 background: root.bypassed ? Theme.text-faint : root.device-color;
             }
         }
-        // The header's words, a quarter turn clockwise, so they read top to
-        // bottom as they read left to right in the header. Laid out as one
-        // line as long as the box is tall, then turned about its centre.
+        // The name as upright letters, one per line, read top to bottom.
+        // Adam chose this (2026-09-26) over the header turned on its side:
+        // FemtoVG draws rotated text as unhinted outlines, soft beside the
+        // rest of the UI, where this is the normal text path. Capitals,
+        // because a stacked lower-case word's ascenders and descenders make
+        // its spacing uneven. A name longer than the box stops at a whole
+        // letter and ends in a vertical ellipsis; hovering shows it whole in
+        // the status bar.
         label-box := Rectangle {
             vertical-stretch: 1;
-            Text {
-                width: label-box.height;
-                height: 16px;
-                x: (label-box.width - self.width) / 2;
-                y: (label-box.height - self.height) / 2;
-                text: root.name + "   " + root.kind;
-                color: root.bypassed ? Theme.text-faint : Theme.text;
-                font-size: Theme.text-lg;
-                vertical-alignment: center;
-                overflow: elide;
-                transform-rotation: 90deg;
+            property <length> pitch: Theme.text-lg + 3px;
+            property <int> fits: floor(self.height / self.pitch);
+            property <bool> cut: root.letters.length > self.fits;
+            property <int> shown: self.cut ? max(0, self.fits - 1) : root.letters.length;
+            // Placed rather than stretched, so the letters never ask the
+            // strip for room: `fits` is measured from the box they are in.
+            VerticalLayout {
+                x: 0px;
+                y: 0px;
+                width: label-box.width;
+                height: label-box.height;
+                alignment: start;
+                for letter[i] in root.letters : Rectangle {
+                    // A space is half a line: enough to part BUS from COMP
+                    // without reading as a missing letter.
+                    height: i >= label-box.shown ? 0px
+                        : letter == "" ? label-box.pitch / 2 : label-box.pitch;
+                    if i < label-box.shown && letter != "" : Text {
+                        text: letter.to-uppercase();
+                        color: root.bypassed ? Theme.text-faint : Theme.text;
+                        font-size: Theme.text-lg;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                if label-box.cut : Rectangle {
+                    height: label-box.pitch;
+                    for dot[d] in 3 : Rectangle {
+                        x: (parent.width - 2px) / 2;
+                        y: (parent.height - 10px) / 2 + d * 4px;
+                        width: 2px;
+                        height: 2px;
+                        border-radius: 1px;
+                        background: Theme.text-faint;
+                    }
+                }
             }
             // The strip's header, for the same two gestures a face's header
             // carries: a press that stays is a selection, one that travels is
             // a reorder (`EffectDeviceShell`'s `drag`).
             TouchArea {
                 mouse-cursor: move;
+                changed has-hover => {
+                    if self.has-hover { StatusHint.show(root.hover-text); }
+                    else { StatusHint.clear(root.hover-text); }
+                }
                 pointer-event(event) => {
                     if event.kind == PointerEventKind.down {
                         RackDrag.source = root.slot-index;

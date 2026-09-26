@@ -6,6 +6,9 @@
 //! hides everything in it. The `<` and `>` are pressed in the real window.
 //! The one rule the markup cannot hold is that a fold survives an undo, so
 //! that one is held on the function the undo handler calls.
+//!
+//! The strip's name is upright stacked letters, not the header turned on its
+//! side (Adam, 2026-09-26): FemtoVG drew the rotated text soft.
 
 use super::*;
 use crate::window_probe::{click, controls, install_backend, Control};
@@ -24,6 +27,7 @@ fn rack_with(kinds: &[(EffectKind, u8)]) -> (MainWindow, Rc<RefCell<UiState>>) {
     window.window().set_size(LogicalSize::new(WIDTH, HEIGHT));
     install_strip_spec(&window);
     install_eq_spec(&window);
+    install_fold_label(&window);
     let state = Rc::new(RefCell::new(UiState::new(None, 48_000, &window)));
     window.invoke_move_view(view::DEVICES, 0);
     window.invoke_show_view(view::DEVICES);
@@ -67,12 +71,76 @@ fn buttons(window: &MainWindow, label: &str) -> Vec<Control> {
     found
 }
 
-fn strips(window: &MainWindow) -> Vec<String> {
+fn strip_controls(window: &MainWindow) -> Vec<Control> {
     controls(window, AccessibleRole::Groupbox)
         .into_iter()
         .filter(|group| group.label.ends_with(", collapsed"))
-        .map(|group| group.label)
         .collect()
+}
+
+/// Each folded strip's device name: its accessible label up to the kind.
+fn strips(window: &MainWindow) -> Vec<String> {
+    strip_controls(window)
+        .into_iter()
+        .map(|group| group.label.split(", ").next().unwrap_or_default().to_owned())
+        .collect()
+}
+
+/// The words drawn inside `strip`, top to bottom, one `Text` per line.
+fn letters_in(window: &MainWindow, strip: &Control) -> Vec<(String, f32, f32)> {
+    let mut found: Vec<(String, f32, f32)> = controls(window, AccessibleRole::Text)
+        .into_iter()
+        .filter(|text| (text.centre.0 - strip.centre.0).abs() < 4.0)
+        .filter(|text| (text.centre.1 - strip.centre.1).abs() < 134.0)
+        .filter(|text| text.label.chars().count() == 1 && text.label.chars().all(char::is_alphanumeric))
+        .map(|text| (text.label, text.centre.0, text.centre.1))
+        .collect();
+    found.sort_by(|a, b| a.2.total_cmp(&b.2));
+    found
+}
+
+/// A name is split into one line per character, a run of spaces into one
+/// gap, and nothing at either end.
+#[test]
+fn a_name_splits_into_one_line_per_letter() {
+    let lines = |name: &str| -> Vec<String> {
+        fold_letters(name).iter().map(|line| line.to_string()).collect()
+    };
+    assert_eq!(lines("EQ"), ["E", "Q"]);
+    assert_eq!(lines("Bus Comp"), ["B", "u", "s", "", "C", "o", "m", "p"]);
+    assert_eq!(lines("  ML-P8  "), ["M", "L", "-", "P", "8"]);
+    assert_eq!(lines("A   B"), ["A", "", "B"]);
+    assert!(lines("").is_empty());
+}
+
+/// **The folded strip shows its name as upright letters, top to bottom,**
+/// in one column down the strip's middle, and names its kind to a screen
+/// reader rather than drawing it.
+#[test]
+fn a_folded_strip_stacks_its_name_top_to_bottom() {
+    let (window, state) = rack_with(&[(EffectKind::BusComp, 0)]);
+    {
+        let mut st = state.borrow_mut();
+        st.session.effect_chain_mut().unwrap()[0].collapsed = true;
+        st.sync_effects();
+    }
+    let strip = strip_controls(&window).pop().expect("the Bus Comp is folded");
+    assert!(
+        strip.label.starts_with("Bus Comp, FX / ") && strip.label.ends_with("U, collapsed"),
+        "the kind moved to the accessible label: {}",
+        strip.label
+    );
+    let letters = letters_in(&window, &strip);
+    let word: String = letters.iter().map(|(letter, _, _)| letter.as_str()).collect();
+    assert_eq!(word, "BUSCOMP", "{letters:?}");
+    for pair in letters.windows(2) {
+        assert!(pair[1].2 > pair[0].2, "one letter per line, top to bottom: {letters:?}");
+    }
+    let gaps: Vec<f32> = letters.windows(2).map(|pair| pair[1].2 - pair[0].2).collect();
+    assert!(
+        gaps[2] > gaps[0] && gaps[2] < gaps[0] * 2.0,
+        "the space is a gap, shorter than a missing letter: {gaps:?}"
+    );
 }
 
 /// `<` folds a device to a strip, the strip's `>` opens it again, and while
@@ -93,7 +161,7 @@ fn a_device_folds_from_its_rail_and_opens_from_its_strip() {
         .clone();
     click(&window, drive_fold.centre);
     assert!(state.borrow().session.effect_chain().unwrap()[0].collapsed);
-    assert_eq!(strips(&window), ["Drive, collapsed"]);
+    assert_eq!(strips(&window), ["Drive"]);
     assert!(knobs(&window) < open, "the folded face's knobs are still drawn");
 
     click(&window, buttons(&window, "Expand")[0].centre);
@@ -118,7 +186,7 @@ fn a_folded_container_hides_what_it_holds_and_restores_it() {
         st.session.effect_chain_mut().unwrap()[0].collapsed = true;
         st.sync_effects();
     }
-    assert_eq!(strips(&window), ["Chain, collapsed"], "the Drive inside is hidden");
+    assert_eq!(strips(&window), ["Chain"], "the Drive inside is hidden");
     {
         let mut st = state.borrow_mut();
         st.session.effect_chain_mut().unwrap()[0].collapsed = false;
@@ -126,7 +194,7 @@ fn a_folded_container_hides_what_it_holds_and_restores_it() {
     }
     let mut shown = strips(&window);
     shown.sort();
-    assert_eq!(shown, ["Drive, collapsed"], "the Drive comes back folded");
+    assert_eq!(shown, ["Drive"], "the Drive comes back folded");
 }
 
 /// **A fold survives an undo.** Folding is not an undo step, and an undo

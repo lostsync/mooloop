@@ -497,6 +497,33 @@ where
     spec.set_slope_names(slope_names.as_slice().into());
 }
 
+/// A folded strip's name as the lines it is drawn in (MOO-219): one entry per
+/// character, and one `""` for each run of spaces, which the strip draws as a
+/// half-line gap. Leading and trailing spaces draw nothing. The markup cannot
+/// index a string, so this is the one place a name is split.
+pub fn fold_letters(name: &str) -> Vec<SharedString> {
+    let mut lines: Vec<SharedString> = Vec::new();
+    for ch in name.trim().chars() {
+        if ch.is_whitespace() {
+            if lines.last().is_some_and(|line| !line.is_empty()) {
+                lines.push(SharedString::new());
+            }
+        } else {
+            lines.push(ch.to_string().into());
+        }
+    }
+    lines
+}
+
+/// Wires `FoldLabel.letters` to [`fold_letters`]. Called once, before the
+/// window is shown, and by any harness that draws a folded strip; unwired,
+/// a strip draws no name.
+pub fn install_fold_label(window: &MainWindow) {
+    window.global::<FoldLabel>().on_letters(|name| {
+        ModelRc::from(Rc::new(VecModel::from(fold_letters(&name))))
+    });
+}
+
 /// Hand the markup the strip's parameter table and every id it addresses.
 ///
 /// Public for the reason `effect_kind_index` is: a UI test should reach the
@@ -8223,6 +8250,7 @@ impl AppUi {
         // and every parameter id out of this rather than spelling them.
         install_strip_spec(&window);
         install_eq_spec(&window);
+        install_fold_label(&window);
         {
             let settings = ui_settings.borrow();
             apply_appearance(&window, &settings.appearance);

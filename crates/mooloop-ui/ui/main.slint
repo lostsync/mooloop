@@ -30,8 +30,9 @@ import { MenuBar, MenuBarItem, MenuRow, MenuSeparator } from "menubar.slint";
 import { PianoGrid, NoteCell, NoteHit, GestureMod, PianoGestures, RollMetrics } from "piano-grid.slint";
 import {
     CollapsedDevice, ContainerEnclosure, DeviceFrame, DeviceHeader, DeviceJoin, DeviceOutputRail,
-    DevicePageButton, DeviceRackMetrics, RackDrag, BrowserDrag
+    DevicePageButton, DeviceRackMetrics, FoldLabel, RackDrag, BrowserDrag
 } from "device-rack.slint";
+export { FoldLabel }
 import { AddSourceButton, ChannelDrag, SourceKinds } from "channel-rack.slint";
 import { ChannelSidebar, PluginListRow } from "channel-sidebar.slint";
 export { PluginListRow, PluginFailureRow }
@@ -6047,11 +6048,13 @@ export component MainWindow inherits Window {
                                                     root.effect-output-trim-changed(container, v);
                                                 }
                                             }
-                                            // The device folded to its header, on its side (MOO-219).
+                                            // The device folded to a strip, its name
+                                            // stacked top to bottom (MOO-219): the
+                                            // kind's short label, or a plugin's own name.
                                             if slot.collapsed : CollapsedDevice {
                                                 x: cell.shift + (cell.dragging ? RackDrag.dx : 0px);
                                                 y: cell.dragging ? -8px : 0px;
-                                                name: slot.label;
+                                                name: slot.is-plugin && slot.plugin-name != "" ? slot.plugin-name : slot.label;
                                                 kind: "FX / " + slot.units + "U";
                                                 bypassed: slot.bypassed;
                                                 wet-dry-enabled: !slot.is-container;

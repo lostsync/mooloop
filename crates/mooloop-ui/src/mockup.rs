@@ -381,6 +381,9 @@ fn load_status(path: &Path, count: usize, dropped: usize) -> String {
 /// canvas is inert until this runs; both the standalone example and the
 /// in-app Developer entry call it and nothing else.
 pub fn wire_mockup(canvas: &MockupCanvas) {
+    canvas.global::<crate::mockup_ui::FoldLabel>().on_letters(|name| {
+        ModelRc::from(Rc::new(VecModel::from(crate::fold_letters(&name))))
+    });
     let catalog = Rc::new(catalog(canvas));
     let items: Rc<VecModel<MockupItem>> = Rc::new(VecModel::default());
     canvas.set_items(ModelRc::from(items.clone()));
