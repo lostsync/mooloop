@@ -2,11 +2,14 @@
 
 Status: **the overnight sequence and a first performance pass are done
 (2026-09-25); the next sequence is Adam's call.** The Linear project
-**Performance** holds what was fixed and what is left: MOO-254 (Reverb), and
-the repaint cost while playing (MOO-258,
+**Performance** holds what was fixed and what is left: the repaint cost
+while playing (MOO-258,
 upstream Slint), plus MOO-263. MOO-264 closed on 2026-09-26: Cold Metal at
 Unison X8 is 79 µs a block (`device_cost`), down from 112, with the output
-bit-identical. Adam ruled on MOO-263 on 2026-09-25: *"we can
+bit-identical. MOO-254 closed the same day: a Reverb is about 25% cheaper
+in a release build (x86-64-v2; `housey-dropout-factory`'s 26.3 -> 20.0 µs a
+128-frame block, `reverb_path_cost`) and about half at baseline x86-64,
+also bit-identical. No structure-of-arrays rewrite was needed for it. Adam ruled on MOO-263 on 2026-09-25: *"we can
 do v2, totally"*, so Linux release builds move to x86-64-v2. The Slint FemtoVG clip and ellipsis
 costs (MOO-256, MOO-258) are fixed upstream in Slint 1.18.1, so nothing was
 reported and nothing is patched. The upgrade is MOO-268 (Adam, 2026-09-26: no fork). MOO-227's effect half was ruled out on 2026-09-26:

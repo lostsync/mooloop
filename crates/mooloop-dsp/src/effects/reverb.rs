@@ -72,6 +72,11 @@ use super::{process_param_split, RangeProcessor};
 const LINES: usize = 8;
 const DIFFUSERS: usize = 4;
 
+/// Frames [`ReverbEffect::process_chunk`] runs its input stage across before
+/// the loop reads it. The scratch rows live on the stack, two of this many
+/// floats; a longer range is taken in pieces.
+const CHUNK: usize = 128;
+
 /// Reference sample rate the tuning lengths below are written at.
 const TUNING_SAMPLE_RATE: f32 = 48_000.0;
 
@@ -204,16 +209,36 @@ impl Ring {
 
     /// Read `delay` samples behind the write head. `delay` is clamped into
     /// the ring, so a parameter can never read uninitialized history.
+    ///
+    /// The whole part is a truncating conversion, not `floor`: the clamp
+    /// leaves `delay` at least one, where the two agree to the bit, and on
+    /// x86-64's baseline (no SSE4.1) `floor` is a call into libm. Twenty-one
+    /// reads a frame made that twenty-one calls (MOO-254). A NaN converts to
+    /// zero either way.
     fn read(&self, delay: f32) -> f32 {
+        let capacity = self.buffer.len();
+        let delay = delay.clamp(1.0, capacity as f32 - 2.0);
+        let back = delay as i32 as usize;
+        let frac = delay - back as f32;
+        // `back` is clamped inside the ring and the head is too, so the sum
+        // is under two laps and one subtraction reduces it. The eight lines
+        // and twelve diffusers read at least once a sample each, so this is
+        // twenty integer divisions a frame that do not happen.
+        let raw = self.write + capacity - back;
+        let index = if raw >= capacity { raw - capacity } else { raw };
+        let previous = if index == 0 { capacity - 1 } else { index - 1 };
+        self.buffer[index] * (1.0 - frac) + self.buffer[previous] * frac
+    }
+
+    /// [`Self::read`] as it was before MOO-254, with `floor`: the reference
+    /// the restructured loop is pinned against.
+    #[cfg(test)]
+    fn read_before_moo254(&self, delay: f32) -> f32 {
         let capacity = self.buffer.len();
         let delay = delay.clamp(1.0, capacity as f32 - 2.0);
         let base = delay.floor();
         let frac = delay - base;
         let back = base as usize;
-        // `back` is clamped inside the ring and the head is too, so the sum
-        // is under two laps and one subtraction reduces it. The eight lines
-        // and twelve diffusers read at least once a sample each, so this is
-        // twenty integer divisions a frame that do not happen.
         let raw = self.write + capacity - back;
         let index = if raw >= capacity { raw - capacity } else { raw };
         let previous = if index == 0 { capacity - 1 } else { index - 1 };
@@ -257,9 +282,32 @@ impl Diffuser {
         self.len += (self.target_len - self.len) * glide;
     }
 
+    /// Whether the glide has stopped moving `len`. It never reaches
+    /// `target_len` in float: it stalls within a rounding step of it, where
+    /// one more step returns `len` itself. From there every later step does
+    /// too, so a caller that sees this may skip the glide until the target
+    /// or the coefficient changes, and stay bit-identical (MOO-254).
+    fn at_rest(&self, glide: f32) -> bool {
+        self.len + (self.target_len - self.len) * glide == self.len
+    }
+
     fn process(&mut self, input: f32, gain: f32, glide: f32) -> f32 {
         self.len += (self.target_len - self.len) * glide;
+        self.process_at_rest(input, gain)
+    }
+
+    /// [`Self::process`] without the glide, for a diffuser [`Self::at_rest`].
+    fn process_at_rest(&mut self, input: f32, gain: f32) -> f32 {
         let delayed = self.ring.read(self.len);
+        let stored = input + delayed * gain;
+        self.ring.write(stored);
+        delayed - stored * gain
+    }
+
+    #[cfg(test)]
+    fn process_before_moo254(&mut self, input: f32, gain: f32, glide: f32) -> f32 {
+        self.len += (self.target_len - self.len) * glide;
+        let delayed = self.ring.read_before_moo254(self.len);
         let stored = input + delayed * gain;
         self.ring.write(stored);
         delayed - stored * gain
@@ -336,19 +384,27 @@ impl Line {
         self.loop_ap.step_silent(glide);
     }
 
-    /// Advance the modulation oscillator and read the line.
+    /// Whether both of this line's glides, its length's and its loop
+    /// allpass's, have stalled. See [`Diffuser::at_rest`].
+    fn at_rest(&self, glide: f32) -> bool {
+        self.len + (self.target_len - self.len) * glide == self.len && self.loop_ap.at_rest(glide)
+    }
+
+    /// Advance the modulation oscillator and read the line, as the sample
+    /// loop did before MOO-254 ran the eight lines side by side.
     ///
     /// The modulator is a triangle rather than a sine: it costs an absolute
     /// value instead of a `sin`, and at these depths and rates the difference
     /// is a slightly different distribution of the same small pitch drift.
-    fn read(&mut self, glide: f32) -> f32 {
+    #[cfg(test)]
+    fn read_before_moo254(&mut self, glide: f32) -> f32 {
         self.len += (self.target_len - self.len) * glide;
         self.phase += self.mod_step;
         if self.phase >= 1.0 {
             self.phase -= 1.0;
         }
         let triangle = 4.0 * (self.phase - 0.5).abs() - 1.0;
-        self.ring.read(self.len + triangle * self.mod_depth)
+        self.ring.read_before_moo254(self.len + triangle * self.mod_depth)
     }
 }
 
@@ -442,6 +498,9 @@ pub struct ReverbEffect {
     /// rebuild landing on the same numbers.
     #[cfg(test)]
     rebuild_counts: ReverbRebuildCounts,
+    /// Run the sample loop as it was before MOO-254, for comparison.
+    #[cfg(test)]
+    before_moo254: bool,
 }
 
 #[cfg(test)]
@@ -487,6 +546,8 @@ impl ReverbEffect {
             modulation_dirty: true,
             #[cfg(test)]
             rebuild_counts: ReverbRebuildCounts::default(),
+            #[cfg(test)]
+            before_moo254: false,
         };
         effect.resolve_dirty();
         effect
@@ -613,22 +674,178 @@ fn predelay_capacity(sample_rate: u32) -> usize {
     (0.2 * sample_rate.max(1) as f32).ceil() as usize + 4
 }
 
-impl RangeProcessor for ReverbEffect {
-    fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
-        self.resolve_dirty();
+impl ReverbEffect {
+    /// Up to [`CHUNK`] frames of the network, in two stages (MOO-254).
+    ///
+    /// **The input stage**, one stage at a time across the chunk: the
+    /// pre-delay and low cut into a scratch row, then each diffuser over the
+    /// whole row in turn. None of it reads the feedback loop, and each stage's
+    /// state is its own, so only the loop order differs from running every
+    /// stage for one sample before the next: each operation and its inputs are
+    /// the same, and so is every sample.
+    ///
+    /// **The loop**, one sample at a time as before, but with the eight lines
+    /// side by side: their lengths, phases, damping and allpass lengths are
+    /// copied into `[f32; 8]` rows for the chunk and written back after it, so
+    /// the glide, the modulator, the damping, the matrix and the allpass
+    /// arithmetic are eight-wide row operations. Only the ring reads and
+    /// writes stay one line at a time. Each line's arithmetic is the one
+    /// `Line::read` and `Diffuser::process` did, in the same order.
+    ///
+    /// A glide that has stalled ([`Diffuser::at_rest`]) is skipped for the
+    /// chunk, which is every glide but the few hundred milliseconds after a
+    /// `size` change. `size` only changes between ranges, never inside one.
+    // The loop indexes several rows by line on purpose: one index across all
+    // of them is what lets each row operation be read as one vector step.
+    #[allow(clippy::needless_range_loop)]
+    fn process_chunk(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
+        let frames = end - start;
+        let glide = self.size_glide;
+
+        // Pre-delay. The one-pole highpass sits after it and before the
+        // diffusers, so the network never sees subsonic content at all.
+        let mut diffused = [0.0f32; CHUNK];
+        let diffused = &mut diffused[..frames];
+        for (value, (left, right)) in diffused
+            .iter_mut()
+            .zip(bus.l[start..end].iter().zip(&bus.r[start..end]))
+        {
+            let dry = (*left + *right) * 0.5;
+            self.predelay.write(dry);
+            let delayed = self.predelay.read(self.predelay_samples.advance());
+            *value = delayed - self.low_cut.next_sample(delayed);
+        }
+        let mut gains = [0.0f32; CHUNK];
+        let gains = &mut gains[..frames];
+        for gain in gains.iter_mut() {
+            *gain = self.diffusion.advance();
+        }
+        for diffuser in self.diffusers.iter_mut() {
+            if diffuser.at_rest(glide) {
+                for (value, gain) in diffused.iter_mut().zip(gains.iter()) {
+                    *value = diffuser.process_at_rest(*value, *gain);
+                }
+            } else {
+                for (value, gain) in diffused.iter_mut().zip(gains.iter()) {
+                    *value = diffuser.process(*value, *gain, glide);
+                }
+            }
+        }
+
+        let gliding = !self.lines.iter().all(|line| line.at_rest(glide));
+        let lines = &mut self.lines;
+        let target_len: [f32; LINES] = std::array::from_fn(|j| lines[j].target_len);
+        let mod_step: [f32; LINES] = std::array::from_fn(|j| lines[j].mod_step);
+        let mod_depth: [f32; LINES] = std::array::from_fn(|j| lines[j].mod_depth);
+        let feedback_gain: [f32; LINES] = std::array::from_fn(|j| lines[j].feedback);
+        let ap_target_len: [f32; LINES] = std::array::from_fn(|j| lines[j].loop_ap.target_len);
+        let mut len: [f32; LINES] = std::array::from_fn(|j| lines[j].len);
+        let mut phase: [f32; LINES] = std::array::from_fn(|j| lines[j].phase);
+        let mut damp: [OnePoleLp; LINES] = std::array::from_fn(|j| lines[j].damp);
+        let mut ap_len: [f32; LINES] = std::array::from_fn(|j| lines[j].loop_ap.len);
+
+        for (k, input) in diffused.iter().enumerate() {
+            if gliding {
+                for j in 0..LINES {
+                    len[j] += (target_len[j] - len[j]) * glide;
+                }
+            }
+            // The modulator is a triangle rather than a sine: it costs an
+            // absolute value instead of a `sin`, and at these depths and rates
+            // the difference is a slightly different distribution of the same
+            // small pitch drift.
+            let mut delay = [0.0f32; LINES];
+            for j in 0..LINES {
+                phase[j] += mod_step[j];
+                if phase[j] >= 1.0 {
+                    phase[j] -= 1.0;
+                }
+                let triangle = 4.0 * (phase[j] - 0.5).abs() - 1.0;
+                delay[j] = len[j] + triangle * mod_depth[j];
+            }
+
+            // Read the network, tap the output, then close the loop. Tapping
+            // the delayed line contents means the output carries the tail as
+            // it currently stands rather than one bounce ahead.
+            let mut taps = [0.0f32; LINES];
+            for j in 0..LINES {
+                taps[j] = lines[j].ring.read(delay[j]);
+            }
+
+            let mut wet_l = 0.0f32;
+            let mut wet_r = 0.0f32;
+            for j in 0..LINES {
+                wet_l += taps[j] * TAP_L[j];
+                wet_r += taps[j] * TAP_R[j];
+            }
+
+            // Damp and attenuate each return, mix through the matrix, then
+            // pass the injected result through the line's in-loop allpass
+            // before writing it back. The allpass is what makes the tail
+            // dense instead of a bare eight-mode ring.
+            let mut feedback = taps;
+            for j in 0..LINES {
+                feedback[j] = damp[j].next_sample(feedback[j]) * feedback_gain[j];
+            }
+            hadamard(&mut feedback);
+            for j in 0..LINES {
+                feedback[j] += input * INJECT[j];
+            }
+            if gliding {
+                for j in 0..LINES {
+                    ap_len[j] += (ap_target_len[j] - ap_len[j]) * glide;
+                }
+            }
+            let mut delayed = [0.0f32; LINES];
+            for j in 0..LINES {
+                delayed[j] = lines[j].loop_ap.ring.read(ap_len[j]);
+            }
+            let mut stored = [0.0f32; LINES];
+            let mut returned = [0.0f32; LINES];
+            for j in 0..LINES {
+                stored[j] = feedback[j] + delayed[j] * LOOP_DIFFUSION_GAIN;
+                returned[j] = delayed[j] - stored[j] * LOOP_DIFFUSION_GAIN;
+            }
+            for j in 0..LINES {
+                lines[j].loop_ap.ring.write(stored[j]);
+                lines[j].ring.write(returned[j]);
+            }
+
+            // Mid/side width. The two taps are orthogonal, so at width 0 the
+            // side component cancels to a mono centre and at 1 they stay as
+            // decorrelated as the network makes them.
+            let width = self.width.advance();
+            let mid = (wet_l + wet_r) * 0.5;
+            let side = (wet_l - wet_r) * 0.5 * width;
+            bus.l[start + k] = (mid + side) * OUTPUT_REFERENCE;
+            bus.r[start + k] = (mid - side) * OUTPUT_REFERENCE;
+        }
+
+        for (j, line) in lines.iter_mut().enumerate() {
+            line.len = len[j];
+            line.phase = phase[j];
+            line.damp = damp[j];
+            line.loop_ap.len = ap_len[j];
+        }
+    }
+
+    /// The sample loop as it was before MOO-254: every stage for one sample,
+    /// then the next sample. [`Self::process_chunk`] is pinned against it.
+    #[cfg(test)]
+    fn process_range_before_moo254(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         for i in start..end {
             let dry = (bus.l[i] + bus.r[i]) * 0.5;
 
             // Pre-delay. The one-pole highpass sits after it and before the
             // diffusers, so the network never sees subsonic content at all.
             self.predelay.write(dry);
-            let delayed = self.predelay.read(self.predelay_samples.advance());
+            let delayed = self.predelay.read_before_moo254(self.predelay_samples.advance());
             let input = delayed - self.low_cut.next_sample(delayed);
 
             let diffusion = self.diffusion.advance();
             let mut diffused = input;
             for diffuser in self.diffusers.iter_mut() {
-                diffused = diffuser.process(diffused, diffusion, self.size_glide);
+                diffused = diffuser.process_before_moo254(diffused, diffusion, self.size_glide);
             }
 
             // Read the network, tap the output, then close the loop. Tapping
@@ -636,7 +853,7 @@ impl RangeProcessor for ReverbEffect {
             // it currently stands rather than one bounce ahead.
             let mut taps = [0.0f32; LINES];
             for (tap, line) in taps.iter_mut().zip(self.lines.iter_mut()) {
-                *tap = line.read(self.size_glide);
+                *tap = line.read_before_moo254(self.size_glide);
             }
 
             let mut wet_l = 0.0f32;
@@ -658,7 +875,7 @@ impl RangeProcessor for ReverbEffect {
             let glide = self.size_glide;
             for (index, line) in self.lines.iter_mut().enumerate() {
                 let injected = feedback[index] + diffused * INJECT[index];
-                let diffused_return = line.loop_ap.process(injected, LOOP_DIFFUSION_GAIN, glide);
+                let diffused_return = line.loop_ap.process_before_moo254(injected, LOOP_DIFFUSION_GAIN, glide);
                 line.ring.write(diffused_return);
             }
 
@@ -670,6 +887,23 @@ impl RangeProcessor for ReverbEffect {
             let side = (wet_l - wet_r) * 0.5 * width;
             bus.l[i] = (mid + side) * OUTPUT_REFERENCE;
             bus.r[i] = (mid - side) * OUTPUT_REFERENCE;
+        }
+    }
+}
+
+impl RangeProcessor for ReverbEffect {
+    fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
+        self.resolve_dirty();
+        #[cfg(test)]
+        if self.before_moo254 {
+            self.process_range_before_moo254(bus, start, end);
+            return;
+        }
+        let mut at = start;
+        while at < end {
+            let next = end.min(at + CHUNK);
+            self.process_chunk(bus, at, next);
+            at = next;
         }
     }
 
@@ -1308,5 +1542,309 @@ mod tests {
             100.0 * worst_step / peak,
             100.0 * core::f32::consts::TAU * TONE_HZ / 48_000.0,
         );
+    }
+
+    // --- MOO-254: the input stage a stage at a time, the lines side by side -
+
+    /// The reverb settings of Adam's songs the issue names, and two more,
+    /// rounded: `housey-dropout-factory`'s bus, `ok-then`'s two, `deep`'s and
+    /// `sad_house`'s (the smallest size in any of them).
+    fn song_reverbs() -> Vec<(&'static str, ReverbParams)> {
+        let params = |size, decay_s, damping, predelay_ms, diffusion, modulation, low_cut_hz| {
+            ReverbParams {
+                size,
+                decay_s,
+                damping,
+                predelay_ms,
+                diffusion,
+                width: 1.0,
+                modulation,
+                low_cut_hz,
+            }
+        };
+        vec![
+            ("housey", params(0.7996, 2.3905, 0.38, 12.0, 0.72, 0.3, 116.22)),
+            ("ok-then a", params(0.7958, 0.3163, 0.0, 1.0, 1.0, 0.4482, 230.94)),
+            ("ok-then b", params(0.5645, 3.5524, 0.38, 12.0, 0.72, 0.0504, 42.0)),
+            ("deep", params(0.8455, 1.0337, 0.5974, 4.0859, 0.72, 0.3646, 42.0)),
+            ("sad_house", params(0.059, 2.7889, 1.0, 1.104, 1.0, 0.2727, 42.0)),
+        ]
+    }
+
+    fn context_at(sample_rate: u32, frames: usize) -> ProcessContext {
+        ProcessContext {
+            sample_rate,
+            ..context(frames)
+        }
+    }
+
+    /// A deterministic noise sample in -1..1.
+    fn noise(seed: &mut u32) -> f32 {
+        *seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        ((*seed >> 8) as f32 / 8_388_608.0) - 1.0
+    }
+
+    /// Knobs turned under the render, as (frame, id, value): a size jump and
+    /// a size sweep (the glides), and every other control once, some
+    /// mid-block.
+    fn reverb_moves() -> Vec<(usize, u32, f32)> {
+        let mut moves = vec![
+            (9_001, REVERB_PARAM_SIZE, 1.0),
+            (20_000, REVERB_PARAM_PREDELAY_MS, 80.0),
+            (21_111, REVERB_PARAM_DIFFUSION, 0.1),
+            (23_000, REVERB_PARAM_WIDTH, 0.4),
+            (25_555, REVERB_PARAM_DAMPING, 0.9),
+            (27_000, REVERB_PARAM_DECAY_S, 6.0),
+            (29_000, REVERB_PARAM_MODULATION, 1.0),
+            (31_000, REVERB_PARAM_LOW_CUT_HZ, 300.0),
+        ];
+        for step in 0..40 {
+            moves.push((40_000 + step * 97, REVERB_PARAM_SIZE, step as f32 / 39.0));
+        }
+        moves
+    }
+
+    /// Render `frames` of an impulse followed by bursts of noise, in blocks
+    /// of `block`, stereo interleaved into one vector. `moves` are applied
+    /// as they come. A stretch is skipped the way the host sleeps a device,
+    /// and a seek lands later, so the two paths meet those too.
+    fn render_reverb(
+        params: ReverbParams,
+        sample_rate: u32,
+        block: usize,
+        frames: usize,
+        moves: &[(usize, u32, f32)],
+        before: bool,
+    ) -> Vec<f32> {
+        let mut effect = ReverbEffect::new(params, sample_rate);
+        effect.before_moo254 = before;
+        let mut bus = StereoBus::with_capacity(block);
+        let mut out = Vec::with_capacity(frames * 2);
+        let mut seed = 0x0bad_5eedu32;
+        let mut rendered = 0;
+        let skip = 60_000..64_000;
+        let seek_at = 70_000;
+        while rendered < frames {
+            let len = block.min(frames - rendered);
+            if skip.contains(&rendered) {
+                effect.skip_block(&context_at(sample_rate, len));
+                out.extend(std::iter::repeat_n(0.0, len * 2));
+                rendered += len;
+                continue;
+            }
+            if (rendered..rendered + len).contains(&seek_at) {
+                effect.on_discontinuity(Discontinuity::Seek);
+            }
+            let mut events = EventList::empty();
+            for &(at, id, value) in moves {
+                if rendered <= at && at < rendered + len {
+                    events.push(crate::event::TimedEvent {
+                        offset: (at - rendered) as u32,
+                        event: Event::ParamValue { id, value },
+                    });
+                }
+            }
+            for i in 0..len {
+                let frame = rendered + i;
+                let loud = frame == 0 || (frame / 3_000) % 4 == 1;
+                let value = if frame == 0 {
+                    1.0
+                } else if loud {
+                    noise(&mut seed)
+                } else {
+                    0.0
+                };
+                bus.l[i] = value;
+                bus.r[i] = -0.5 * value;
+            }
+            effect.process(&context_at(sample_rate, len), &mut bus, &events, None);
+            for i in 0..len {
+                out.push(bus.l[i]);
+                out.push(bus.r[i]);
+            }
+            rendered += len;
+        }
+        out
+    }
+
+    fn assert_same_bits(name: &str, before: &[f32], now: &[f32]) {
+        assert!(
+            before.iter().any(|sample| *sample != 0.0),
+            "{name}: rendered silence, which proves nothing"
+        );
+        assert_eq!(before.len(), now.len(), "{name}: the renders differ in length");
+        if let Some(at) = before.iter().zip(now).position(|(a, b)| a.to_bits() != b.to_bits()) {
+            let worst = before
+                .iter()
+                .zip(now)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max);
+            panic!(
+                "{name}: MOO-254 changed a sample, first at frame {} ({} against {}), \
+                 by at most {worst:e}",
+                at / 2,
+                before[at],
+                now[at]
+            );
+        }
+    }
+
+    /// The restructured network is the old one to the bit: each song's
+    /// reverb and the extremes, with and without knobs turned under it
+    /// (sizes gliding and at rest), at four sample rates, in blocks shorter
+    /// and longer than a chunk, across a skipped stretch and a seek.
+    #[test]
+    fn the_restructured_network_is_the_old_one_bit_for_bit() {
+        let frames = 96_000;
+        let mut cases = song_reverbs();
+        cases.push(("default", ReverbParams::default()));
+        cases.push((
+            "smallest",
+            ReverbParams {
+                size: 0.0,
+                modulation: 1.0,
+                diffusion: 0.0,
+                ..ReverbParams::default()
+            },
+        ));
+        cases.push((
+            "largest",
+            ReverbParams {
+                size: 1.0,
+                modulation: 1.0,
+                decay_s: 20.0,
+                ..ReverbParams::default()
+            },
+        ));
+        for (name, params) in &cases {
+            for moves in [Vec::new(), reverb_moves()] {
+                let moved = if moves.is_empty() { "" } else { ", knobs turned" };
+                let name = format!("{name}{moved}");
+                let before = render_reverb(*params, 48_000, 128, frames, &moves, true);
+                let now = render_reverb(*params, 48_000, 128, frames, &moves, false);
+                assert_same_bits(&name, &before, &now);
+            }
+        }
+        let moves = reverb_moves();
+        for (sample_rate, block) in [(44_100, 64), (22_050, 1_000), (96_000, 333), (48_000, 4_096)] {
+            let name = format!("default at {sample_rate} Hz in {block}-frame blocks, knobs turned");
+            let params = ReverbParams::default();
+            let before = render_reverb(params, sample_rate, block, frames, &moves, true);
+            let now = render_reverb(params, sample_rate, block, frames, &moves, false);
+            assert_same_bits(&name, &before, &now);
+        }
+    }
+
+    /// The skip the restructure leans on is real: a second after a size
+    /// change every glide has stalled, so the steady state skips them all,
+    /// and a size change sets them moving again.
+    #[test]
+    fn every_glide_stalls_after_a_size_change_and_a_new_one_restarts_them() {
+        let at_rest = |effect: &ReverbEffect| {
+            let glide = effect.size_glide;
+            effect.lines.iter().all(|line| line.at_rest(glide))
+                && effect.diffusers.iter().all(|diffuser| diffuser.at_rest(glide))
+        };
+        let mut effect = ReverbEffect::new(ReverbParams::default(), 48_000);
+        let mut bus = StereoBus::with_capacity(48_000);
+        effect.process(&context(48_000), &mut bus, &EventList::empty(), None);
+        assert!(at_rest(&effect), "a second in, the glides should have stalled");
+        let mut events = EventList::empty();
+        events.push(crate::event::TimedEvent {
+            offset: 0,
+            event: Event::ParamValue {
+                id: REVERB_PARAM_SIZE,
+                value: 0.9,
+            },
+        });
+        effect.process(&context(128), &mut bus, &events, None);
+        assert!(!at_rest(&effect), "a size change should set the glides moving");
+        effect.process(&context(48_000), &mut bus, &EventList::empty(), None);
+        assert!(at_rest(&effect), "and a second later they should stall again");
+    }
+
+    /// **What MOO-254 saves**, in microseconds a 128-frame block at 48 kHz,
+    /// before and after interleaved in one run so a shared machine's noise
+    /// lands on both: every pass renders every (setting, path) pair once,
+    /// and each block's cost is its fastest over the passes. Noise in
+    /// bursts, as a send carries it. "size swept" moves `size` every block,
+    /// so its glides never stall: the case the skip does not help.
+    ///
+    /// ```sh
+    /// REPS=15 cargo test -p mooloop-dsp --release --lib reverb_path_cost -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "measures wall time; run deliberately in release"]
+    fn reverb_path_cost() {
+        use std::time::Instant;
+        let reps = std::env::var("REPS")
+            .ok()
+            .and_then(|reps| reps.parse().ok())
+            .unwrap_or(7usize)
+            .max(1);
+        let block = 128;
+        let blocks = 2 * 48_000 / block;
+        let mut cases: Vec<(&str, ReverbParams, bool)> = song_reverbs()
+            .into_iter()
+            .map(|(name, params)| (name, params, false))
+            .collect();
+        cases.push(("default", ReverbParams::default(), false));
+        cases.push(("default, size swept", ReverbParams::default(), true));
+        let paths = [true, false];
+        let mut fastest = vec![vec![vec![f64::MAX; blocks]; paths.len()]; cases.len()];
+        let mut bus = StereoBus::with_capacity(block);
+        for _ in 0..reps {
+            for (c, (_, params, swept)) in cases.iter().enumerate() {
+                for (p, before) in paths.iter().enumerate() {
+                    let mut effect = ReverbEffect::new(*params, 48_000);
+                    effect.before_moo254 = *before;
+                    let mut seed = 0x0bad_5eedu32;
+                    for (index, slot) in fastest[c][p].iter_mut().enumerate() {
+                        let mut events = EventList::empty();
+                        if *swept {
+                            let size = 0.3 + 0.4 * ((index % 64) as f32 / 63.0);
+                            events.push(crate::event::TimedEvent {
+                                offset: 0,
+                                event: Event::ParamValue {
+                                    id: REVERB_PARAM_SIZE,
+                                    value: size,
+                                },
+                            });
+                        }
+                        let loud = (index / 24) % 4 == 1;
+                        for i in 0..block {
+                            let value = if loud { noise(&mut seed) } else { 0.0 };
+                            bus.l[i] = value;
+                            bus.r[i] = value;
+                        }
+                        let start = Instant::now();
+                        effect.process(&context(block), &mut bus, &events, None);
+                        let spent = start.elapsed().as_secs_f64() * 1.0e6;
+                        std::hint::black_box(&bus);
+                        *slot = slot.min(spent);
+                    }
+                }
+            }
+        }
+        println!("us per 128-frame block at 48 kHz, fastest of {reps} passes, over {blocks} blocks");
+        println!(
+            "{:<22} {:>9} {:>9} {:>7} {:>9} {:>9}",
+            "reverb", "before", "now", "saved", "p99 bef", "p99 now"
+        );
+        for (c, (name, _, _)) in cases.iter().enumerate() {
+            let mean = |p: usize| fastest[c][p].iter().sum::<f64>() / blocks as f64;
+            let p99 = |p: usize| {
+                let mut sorted = fastest[c][p].clone();
+                sorted.sort_by(f64::total_cmp);
+                sorted[blocks * 99 / 100]
+            };
+            let (before, now) = (mean(0), mean(1));
+            println!(
+                "{name:<22} {before:>9.2} {now:>9.2} {:>6.0}% {:>9.2} {:>9.2}",
+                100.0 * (before - now) / before,
+                p99(0),
+                p99(1),
+            );
+        }
     }
 }

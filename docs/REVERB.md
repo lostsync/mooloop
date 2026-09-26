@@ -40,6 +40,18 @@ the tail dense regardless, so a low `Diffuse` setting is no longer metallic.
   allpass tap per line (eight more interpolated reads a sample) on top of the
   eight delay reads and four input diffusers, and the total is still a small
   single-digit percentage of a 64-frame block budget at 48 kHz.
+  MOO-254 (2026-09-26) cut it by about a quarter without changing a sample:
+  18.5-21 us a 128-frame block on the build box, down from 24.7-27.4, in a
+  release build for x86-64-v2 as Linux ships (at baseline x86-64 it halved,
+  37-40 to 18-20). Measured by `reverb_path_cost` on the reverbs of
+  `housey-dropout-factory`, `ok-then`, `deep` and `sad_house`. The input diffusers run a stage at a time across
+  128-frame chunks, the eight lines run side by side as `[f32; 8]` rows, a
+  size glide that has stalled is skipped, and a ring read truncates rather
+  than calling `floor` (a libm call on baseline x86-64). The old loop is kept
+  under `#[cfg(test)]` and the new one is pinned against it bit for bit
+  (`the_restructured_network_is_the_old_one_bit_for_bit`). A change to the
+  loop's arithmetic breaks that pin; change the old path with it, or say
+  why the sound may move.
 - Nothing allocates, locks, or reallocates in `process`. The rings are sized
   at construction for the longest `size` plus the modulation excursion, so a
   size change moves read heads inside buffers that already exist.
