@@ -33,6 +33,15 @@ quieter than it did. Settings at or below 75% are unchanged.
 
 ### Instruments
 
+- **The instruments have names:** the **Munotone ML-M1**, the **Polyneight
+  ML-P8** and the **Dominic DS-01**. The first drum synth, the easy sub-kick
+  machine, is now the **Gitdum DS-SX**.
+  - The full name shows where there's room: the Add menu, the device's
+    header, the source picker's menu and the preset browser.
+  - The model number shows where it's tight: new channel names ("ML-M1 2")
+    and the automation and MIDI lists.
+  - Songs load unchanged, and a channel already called "Drum Synth 1" keeps
+    its name.
 - ML-P8 costs about 30% less at Unison X8, and ML-M1 and DS-01 are cheaper
   too, with every sample unchanged.
 - A copied sampler channel pasted into a song opened after the copy keeps
@@ -71,6 +80,10 @@ quieter than it did. Settings at or below 75% are unchanged.
 
 - Double-click a channel's name in the step rack to rename it, and Tab to
   the next one (Shift+Tab for the previous).
+- A folded device shows its name as upright letters down the strip, as
+  crisp as the rest of the window, instead of its header turned on its
+  side. Hover it to see the whole name.
+- The rack's `+` menu is wide enough for every row at every text size.
 - When the audio callback runs late, the status bar names the bar and the
   channels or tracks that took the time. Click it to clear it.
 

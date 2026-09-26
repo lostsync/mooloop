@@ -3,8 +3,8 @@
 Status: **the overnight sequence and a first performance pass are done
 (2026-09-25); the next sequence is Adam's call.** The Linear project
 **Performance** holds what was fixed and what is left: the repaint cost
-while playing (MOO-258,
-upstream Slint), plus MOO-263. MOO-264 closed on 2026-09-26: Cold Metal at
+while playing (MOO-258, closed at 13.7% text cost on 2026-09-26),
+plus MOO-263. MOO-264 closed on 2026-09-26: Cold Metal at
 Unison X8 is 79 µs a block (`device_cost`), down from 112, with the output
 bit-identical. MOO-254 closed the same day: a Reverb is about 25% cheaper
 in a release build (x86-64-v2; `housey-dropout-factory`'s 26.3 -> 20.0 µs a
@@ -16,20 +16,27 @@ reported and nothing is patched. The upgrade is MOO-268 (Adam, 2026-09-26: no fo
 an effect preset's click only selects.
 Nothing from either push has been heard. `JOURNAL.md` has the record.
 
-**The 0.1.6 push is done, apart from four questions for Adam (2026-09-26).**
-The scope was the open issues carrying the `0.1.6` label in Linear, and
-nothing else (`AGENTS.md`, *Releases: the `Release` labels*). Team
-orchestration worked it bugs first, as Adam ordered, then the UX items, the
-plugin face and performance. Every issue a team could finish is Done, and
-each closing comment names its commit. Four wait on Adam, and each carries
-the `Question` label with the question on the issue:
-MOO-219 (a look at a folded device, and whether folds save), MOO-237 (Core
-Audio's latency, which needs a real Mac to check), MOO-140 (whether the v1
-Drum Synth also leaves the Add menu, against his 2026-09-22 ruling that it
-stays), and MOO-258 (close at 13.7% text cost, or keep going). **Cutting
-0.1.6 is Adam's call.** Before tagging, dispatch `release.yml` on `main`
-(`docs/OPERATIONS.md`, "Releases And Tags"). None of the push has been
-heard: listening items 27 to 30 below are its own. `JOURNAL.md` has the
+**The 0.1.6 push is done, and its four questions were answered on
+2026-09-26.** The scope was the open issues carrying the `0.1.6` label in
+Linear, and nothing else (`AGENTS.md`, *Releases: the `Release` labels*).
+Team orchestration worked it bugs first, as Adam ordered, then the UX items,
+the plugin face and performance. Every issue a team could finish is Done,
+and each closing comment names its commit. Adam's answers:
+- **MOO-258** closed at 13.7% text cost.
+- **MOO-219:** a folded device shows its name as upright stacked letters (`2ba1e028`).
+- **MOO-140:** the sources have names, *"Munotone ML-M1, Polyneight ML-P8,
+  Dominic DS-01"*, and the v1 Drum Synth stays offered as the **Gitdum
+  DS-SX**. The full name shows where there's room, the model number where
+  it's tight (`05a7dad2`..`83f3f78e`, four teams in a relay).
+
+Two items are still open in 0.1.6, and both wait on him:
+- **MOO-237**, Core Audio's latency, which he will check on a Mac.
+- **MOO-273**, an icon per device kind in place of the header's bar and dot,
+  which he added to 0.1.6. The sketches and the style question are on the issue.
+
+**Cutting 0.1.6 is Adam's call.** Before tagging, dispatch `release.yml` on
+`main` (`docs/OPERATIONS.md`, "Releases And Tags"). None of the push has been
+heard: listening items 27 to 31 below are its own. `JOURNAL.md` has the
 record.
 
 `archive/ROADMAP.md` orders the whole product by dependency, and `SCOPE.md`
@@ -187,9 +194,10 @@ is short:
   bevel, Platinum and Impulse, and stopped where the step says to look before
   converting the rest of the controls. It needs a look, not a paragraph.
 - **The listening passes** below, which nobody has taken since 2026-09-18.
-- **MOO-219:** whether a collapsed device stays collapsed when the song
-  reopens, and one look at the folded strip's rotated label in the running
-  app (the test renderer ignores rotation).
+- **MOO-237:** whether the Core Audio output latency mooloop logs matches
+  what HALLab reports for the same device, on a real Mac.
+- **MOO-273:** which icon style (the sketches are on the issue), whether a
+  plugin gets one generic icon, and whether icons take the device colour.
 
 MOO-159 (the tracker) keeps its label, because "not now" defers the question
 rather than answering it.
@@ -488,14 +496,14 @@ In the order worth playing:
     `insert-tube.wav` against `dry.wav`. Each `master-*.wav` should be the
     same sound. Then, in the app, put a Bus Comp on a real drum bus from the
     insert menu and try each voicing.
-16. **A folded device's label, turned on its side** (MOO-219). A look, not a
-    listen: fold a device with the `<` at the top of its rail. Its name and
-    kind should read top to bottom down the strip, rotated a quarter turn
-    clockwise, as the header reads left to right. It is the interface's
-    first rotated element. The software renderer (`slint-sketch`, the tests)
-    ignores rotation, so it has only been seen unrotated. The desktop app
-    renders with femtovg, which rotates. Also fold a Chain holding a folded
-    device, open it again, and check the inner fold is still folded.
+16. **A folded device's label** (MOO-219). A look, not a listen: fold a
+    device with the `<` at the top of its rail. Its name should read top to
+    bottom as upright capitals, one per line (Adam's choice on 2026-09-26,
+    after the header turned on its side rendered soft under femtovg), with
+    "BUS COMP" parted by half a line. A name too long for the strip ends in
+    stacked dots, and hovering the strip shows it whole in the status bar.
+    Also fold a Chain holding a folded device, open it again, and check the
+    inner fold is still folded.
 17. **A CLAP filter put in a chain from the window** (MOO-83,
     plugin-hosting 08: lane 2's acceptance case). In the app, open a drum
     loop, hover the arrow after its last device, pick **Plugin…**, type
@@ -753,3 +761,11 @@ In the order worth playing:
     (-24.3, -25.2 and -25.5 dBFS RMS). Whether 0% sounds like a good mono
     chorus rather than a comb, and whether the face reads well with five
     knobs a row, are the listen and the look.
+31. **The sources' names** (MOO-140). A look, not a listen.
+    - The rack's `+` should offer "Add Gitdum DS-SX", "Add Munotone ML-M1",
+      "Add Polyneight ML-P8" and "Add Dominic DS-01".
+    - A source's header should read the full name.
+    - The source picker's chip should read the model number, and its menu the full name.
+    - The preset browser should head each source's group with the full name.
+    - A new channel should be named by the model number ("ML-M1 2").
+    - An old song with a "Drum Synth 1" channel should keep that name.
