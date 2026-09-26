@@ -74,7 +74,7 @@ fn song(pumped: bool) -> Project {
             source_slot: 0,
             destination: ParamAddr {
                 scope: EffectTarget::Channel(0),
-                owner: ParamOwner::Source,
+                owner: ParamOwner::source(mooloop_core::DeviceKind::MlP8),
                 param: mooloop_core::mlp8::PARAM_MASTER_VOLUME,
             },
             depth: -0.4,

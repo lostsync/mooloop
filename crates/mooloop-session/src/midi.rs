@@ -16,7 +16,7 @@ use mooloop_core::{
     audio_input_taps, audio_source_rows, AudioInputSource, AudioSourceRow, AudioTap,
     ChannelMidiInput, ClaimedNotes, ControlBinding, ControlLearn, ControlMode, ControlOutcome,
     ControlTarget, EffectSlotState, EffectTarget, EngineCommand, MidiInputRoute, MidiKind,
-    MidiMessage, MidiPortInfo, NoteEvent, ParamAddr, ParamDescriptor, ParamOwner, Project,
+    DeviceKind, MidiMessage, MidiPortInfo, NoteEvent, ParamAddr, ParamDescriptor, ParamOwner, Project,
     Takeover, TransportControl, STRIP_PARAM_PAN, STRIP_PARAM_VOLUME,
 };
 
@@ -438,14 +438,9 @@ impl Session {
         // is worth more than a panic would be.
         let scope = scope.unwrap_or_else(|| "?".to_owned());
         let owner = match address.owner {
-            ParamOwner::Source => match address.scope {
-                EffectTarget::Channel(channel) => self
-                    .channels
-                    .get(usize::from(channel))
-                    .map(|state| state.kind().label().to_owned())
-                    .unwrap_or_else(|| "?".to_owned()),
-                EffectTarget::Bus(_) => "?".to_owned(),
-            },
+            // `param_descriptor` answered, so this is the kind the channel
+            // runs; the address's own kind says the same thing.
+            ParamOwner::Source { kind } => kind.map_or_else(|| "?".to_owned(), |kind| kind.label().to_owned()),
             ParamOwner::Effect { device } => self
                 .chain_for(address.scope)
                 .and_then(|chain| {
@@ -663,6 +658,24 @@ fn external_transport(message: &MidiMessage) -> &'static [TransportControl] {
 /// all, and why a knob on a desk and a knob on the screen cannot come to
 /// disagree.
 impl Session {
+    /// The kind of generator a `Source` address names, when it is the kind
+    /// its channel runs now; `None` for anything else.
+    ///
+    /// **A binding made on one device does not move another** (MOO-135): id
+    /// 12 is the sampler's Cutoff and the drum synth's snare tone, so an
+    /// address made against a kind the channel no longer runs is inert --
+    /// kept, shown as unavailable, and live again when the channel is
+    /// switched back -- rather than read against the new device's table.
+    fn source_kind_named(&self, address: ParamAddr) -> Option<DeviceKind> {
+        let ParamOwner::Source { kind: Some(kind) } = address.owner else {
+            return None;
+        };
+        let EffectTarget::Channel(channel) = address.scope else {
+            return None;
+        };
+        (self.channels.get(usize::from(channel))?.kind() == kind).then_some(kind)
+    }
+
     /// The descriptor a parameter is held to, or `None` for an address that
     /// names nothing here.
     ///
@@ -672,15 +685,9 @@ impl Session {
     /// surface, and binding a knob to one is a question nobody has asked yet.
     pub fn param_descriptor(&self, address: ParamAddr) -> Option<&'static ParamDescriptor> {
         match address.owner {
-            ParamOwner::Source => {
-                let EffectTarget::Channel(channel) = address.scope else {
-                    return None;
-                };
-                self.channels
-                    .get(usize::from(channel))?
-                    .generator_params()
-                    .kind()
-                    .descriptor(address.param)
+            ParamOwner::Source { .. } => {
+                let kind = self.source_kind_named(address)?;
+                kind.descriptor(address.param)
             }
             ParamOwner::Effect { device } => {
                 let chain = self.chain_for(address.scope)?;
@@ -700,7 +707,8 @@ impl Session {
     /// A parameter's present value in its natural units.
     pub fn param_natural(&self, address: ParamAddr) -> Option<f32> {
         match address.owner {
-            ParamOwner::Source => {
+            ParamOwner::Source { .. } => {
+                self.source_kind_named(address)?;
                 let EffectTarget::Channel(channel) = address.scope else {
                     return None;
                 };
@@ -760,7 +768,8 @@ impl Session {
         let descriptor = self.param_descriptor(address)?;
         let value = descriptor.from_normalized(normalized.clamp(0.0, 1.0));
         match address.owner {
-            ParamOwner::Source => {
+            // `param_descriptor` has refused an address made on another kind.
+            ParamOwner::Source { .. } => {
                 let EffectTarget::Channel(channel) = address.scope else {
                     return None;
                 };
@@ -1509,12 +1518,9 @@ mod tests {
         assert_eq!(session.param_normalized(address), Some(1.0));
 
         // And the generator, which is the third owner kind this pass reaches.
-        let generator = session.channels[0].generator_params().kind().descriptors()[0];
-        let address = ParamAddr {
-            scope: EffectTarget::Channel(0),
-            owner: ParamOwner::Source,
-            param: generator.id,
-        };
+        let kind = session.channels[0].generator_params().kind();
+        let generator = kind.descriptors()[0];
+        let address = ParamAddr::source(EffectTarget::Channel(0), kind, generator.id);
         let command = session
             .set_param_normalized(address, 0.0)
             .expect("a generator parameter is written");
@@ -1602,17 +1608,12 @@ mod tests {
         let mut session = Session::default();
         // A parameter with a handful of positions, so that every write
         // quantizes and the value read back is not the value asked for.
-        let stepped = session.channels[0]
-            .generator_params()
-            .kind()
+        let kind = session.channels[0].generator_params().kind();
+        let stepped = kind
             .descriptors()
             .iter()
             .find(|descriptor| matches!(descriptor.curve, ParamCurve::Stepped(n) if n > 4))
-            .map(|descriptor| ParamAddr {
-                scope: EffectTarget::Channel(0),
-                owner: ParamOwner::Source,
-                param: descriptor.id,
-            })
+            .map(|descriptor| ParamAddr::source(EffectTarget::Channel(0), kind, descriptor.id))
             .expect("the default generator has a stepped parameter");
         // The premise the rest of this test rests on: asking for a position
         // between two detents does not land on it.

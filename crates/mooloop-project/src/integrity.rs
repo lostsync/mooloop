@@ -1489,13 +1489,25 @@ impl ChainShape {
             // descriptor-addressed yet, not one whose controls are all
             // wrong. Judging an address against an empty table would delete
             // authored work the day that device gets its table.
-            ParamOwner::Source if self.source.descriptors().is_empty() => None,
-            ParamOwner::Source => self.source.descriptor(id).is_none().then(|| {
-                format!(
-                    "it drives control {id} of the {:?}, which has no such control",
-                    self.source
-                )
-            }),
+            //
+            // Judged against the kind the address was *made on*, not the one
+            // the channel runs: a lane or route left behind by a device change
+            // is inert but kept, never dropped and never counted as a repair,
+            // and it works again when the channel is switched back (MOO-135;
+            // "never drop", Adam, 2026-09-23, MOO-74). Only a control that
+            // kind does not have is an orphan. An address with no kind has
+            // not been through `Project::identify_source_kinds`, which every
+            // load runs first; it is judged as that pass would have filled it.
+            ParamOwner::Source { kind } => {
+                let kind = kind.unwrap_or(self.source);
+                if kind.descriptors().is_empty() {
+                    None
+                } else {
+                    kind.descriptor(id).is_none().then(|| {
+                        format!("it drives control {id} of the {kind:?}, which has no such control")
+                    })
+                }
+            }
             // A route is addressed by its durable id, so an address that
             // names one the patch no longer has is exactly the orphan the id
             // exists to make visible rather than silently re-aimable.
@@ -1621,7 +1633,7 @@ fn address_problem(
                     }),
                 },
                 ParamOwner::PluginParam { device } => plugin_param_problem(chain, device, Some(bus)),
-                ParamOwner::Source
+                ParamOwner::Source { .. }
                 | ParamOwner::SourceRoute { .. }
                 | ParamOwner::Modulator { .. } => {
                     Some(format!("it drives a generator or modulator on bus {bus}; a bus has neither"))
@@ -2941,6 +2953,56 @@ mod tests {
         assert!(inspect_project(&project).is_clean());
     }
 
+    /// **A lane or route made on another kind of device is kept, and is not
+    /// a repair** (MOO-135). The channel was a sampler with a lane and an LFO
+    /// on Cutoff (id 12), then became a drum synth, where id 12 is something
+    /// else. The address names the sampler, so it is judged against the
+    /// sampler's table, found good, and left for the day the channel is a
+    /// sampler again. A lane on the drum synth's own id 12 is a different
+    /// destination, not a duplicate of it.
+    #[test]
+    fn another_kinds_lanes_and_routes_are_kept_without_a_repair() {
+        use mooloop_core::{ChannelSetup, ModPolarity, ModRoute, ModulatorKind};
+        let cutoff = mooloop_core::SAMPLER_PARAM_FILTER_CUTOFF;
+        assert!(
+            DeviceKind::DrumSynth.descriptor(cutoff).is_some(),
+            "the premise: the drum synth has an id 12 of its own"
+        );
+        let here = EffectTarget::Channel(0);
+        let mut project = Project::default();
+        let mut setup = ChannelSetup::drum_synth("Drum");
+        setup
+            .modulation
+            .install(0, ModulatorKind::Lfo.default_params())
+            .unwrap();
+        let on_sampler = ParamAddr::source(here, DeviceKind::Sampler, cutoff);
+        let on_drum = ParamAddr::source(here, DeviceKind::DrumSynth, cutoff);
+        setup
+            .modulation
+            .add_route(ModRoute::to_slot(0, on_sampler, 0.5, ModPolarity::Bipolar))
+            .unwrap();
+        project.channels[0].setup = setup;
+        let lane = |target| {
+            let mut lane = AutomationLane::new(target);
+            assert!(lane.upsert(AutomationPoint::new(1, 0, 0.5)));
+            lane
+        };
+        project.channels[0].automation[0] = vec![lane(on_sampler), lane(on_drum)];
+        let before = project.clone();
+
+        let diagnosis = repair_project(&mut project);
+        assert!(diagnosis.issues.is_empty(), "{diagnosis}");
+        assert_eq!(project, before);
+
+        // A control the sampler never had is still an orphan, whichever
+        // device the channel runs.
+        project.channels[0].automation[0]
+            .push(lane(ParamAddr::source(here, DeviceKind::Sampler, 9_999)));
+        let diagnosis = repair_project(&mut project);
+        assert_eq!(diagnosis.issues.len(), 1, "{diagnosis}");
+        assert_eq!(project, before);
+    }
+
     #[test]
     fn two_lanes_on_one_control_keep_the_one_with_more_points() {
         let mut project = Project::default();
@@ -2984,7 +3046,7 @@ mod tests {
                 // count is the only finding.
                 let mut lane = AutomationLane::new(ParamAddr {
                     scope: EffectTarget::Channel(0),
-                    owner: ParamOwner::Source,
+                    owner: ParamOwner::source(DeviceKind::Sampler),
                     param: index as u32,
                 });
                 assert!(lane.upsert(AutomationPoint::new(1, 0, 0.5)));
@@ -3021,7 +3083,7 @@ mod tests {
             .map(|index| {
                 let mut lane = AutomationLane::new(ParamAddr {
                     scope: EffectTarget::Channel(0),
-                    owner: ParamOwner::Source,
+                    owner: ParamOwner::source(DeviceKind::Sampler),
                     param: index as u32,
                 });
                 assert!(lane.upsert(AutomationPoint::new(1, 0, 0.5)));
@@ -3047,7 +3109,7 @@ mod tests {
             project.channels[0].automation[0].clone();
         untouched.channels[0].automation[0].push(AutomationLane::new(ParamAddr {
             scope: EffectTarget::Channel(0),
-            owner: ParamOwner::Source,
+            owner: ParamOwner::source(DeviceKind::Sampler),
             param: mooloop_core::SAMPLER_PARAM_FILTER_CUTOFF,
         }));
         let looked = inspect_project(&untouched);

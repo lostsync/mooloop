@@ -325,6 +325,14 @@ impl Header {
 /// whose fix would delete notes or clips stops the write, and that comes back
 /// as [`Error::InvalidDocument`] naming exactly where it is.
 pub fn save_song(path: &Path, project: &Project, mode: AssetMode) -> Result<SaveReport, Error> {
+    // A generator address with no kind would be written as one that means
+    // "whatever device is there" (MOO-135). Only a decode makes one, and
+    // every load fills it before handing the song over, so a song reaching
+    // here with one came in by a path that skipped `assign_channel_ids`.
+    debug_assert!(
+        !project.has_unidentified_source_kinds(),
+        "a song is being saved with a generator address that names no kind"
+    );
     let mut document = project.clone();
     let diagnosis = integrity::repair_project(&mut document);
     if !diagnosis.is_usable() {

@@ -13,14 +13,39 @@
 use crate::effect::{ParamCurve, ParamDescriptor};
 use crate::effect::DeviceId;
 use crate::mod_metadata::{ModDestinationDescriptor, ModSourceId, ModSourceRef};
-use crate::{ChainKey, EffectTarget};
+use crate::{ChainKey, DeviceKind, EffectTarget};
 
 /// Which device inside a channel or bus owns the parameter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
+///
+/// **Not serde on its own.** It reaches a file only inside a [`ParamAddr`] or
+/// a [`ParamKey`], because a `Source` owner's kind is written beside the
+/// owner rather than inside it (see [`ParamOwner::Source`]); an owner written
+/// by itself would lose it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ParamOwner {
-    /// The channel's generator. Buses have none.
-    Source,
+    /// The channel's generator, as the kind of device the address was made
+    /// against. Buses have none.
+    ///
+    /// **One descriptor id means a different control on each kind** (id 12 is
+    /// the sampler's Cutoff and the drum synth's snare tone), so an address
+    /// names the kind as well as the id (MOO-135; "the address says what it
+    /// belongs to", Adam, 2026-09-23, MOO-74). An address whose kind is not
+    /// the one the channel holds now is **inert but kept**: nothing resolves
+    /// it, it is saved back unchanged, and it works again when the channel
+    /// is switched back. Compared by equality everywhere, so building the
+    /// address from the channel's current kind is all a resolver does.
+    ///
+    /// `None` only ever comes from a file saved before kinds were recorded,
+    /// and only until the load pass gives it the channel's kind
+    /// (`ChannelSetup::assign_device_ids` for routes,
+    /// `Project::assign_channel_ids` for lanes and bindings) -- which is what
+    /// such an address meant when it was saved. Code never builds one: use
+    /// [`Self::source`] or [`ParamAddr::source`]. One that escaped the pass
+    /// equals no address a resolver builds, so it is inert rather than aimed
+    /// at whichever device is there.
+    Source {
+        kind: Option<DeviceKind>,
+    },
     /// One internal modulation route inside the channel's generator, by the
     /// route's durable id.
     ///
@@ -36,15 +61,15 @@ pub enum ParamOwner {
     /// One device on the channel's or bus's effect chain, by the device's
     /// durable id.
     ///
-    /// `#[serde(alias = "slot")]` is what makes this readable in every
-    /// project written before devices had identities, and it is exact rather
-    /// than approximate: in such a project a device's *position was* its
-    /// identity, so the number under the old key and the number under the new
-    /// one name the same device. `ChannelSetup::assign_device_ids` is the
-    /// other half of that -- it hands a chain decoded without ids the ids its
-    /// routes are already using.
+    /// `#[serde(alias = "slot")]` on [`SavedOwner::Effect`] is what makes
+    /// this readable in every project written before devices had identities,
+    /// and it is exact rather than approximate: in such a project a device's
+    /// *position was* its identity, so the number under the old key and the
+    /// number under the new one name the same device.
+    /// `ChannelSetup::assign_device_ids` is the other half of that -- it
+    /// hands a chain decoded without ids the ids its routes are already
+    /// using.
     Effect {
-        #[serde(alias = "slot")]
         device: DeviceId,
     },
     Modulator {
@@ -74,10 +99,162 @@ pub enum ParamOwner {
     /// `DeviceId` its channel's source slot is given, not `Source` with the
     /// plugin's id reinterpreted. The source has no device id today; step 10
     /// gives it one without widening this payload.
+    PluginParam {
+        device: DeviceId,
+    },
+}
+
+impl ParamOwner {
+    /// The generator of a channel running `kind`.
+    pub const fn source(kind: DeviceKind) -> Self {
+        Self::Source { kind: Some(kind) }
+    }
+
+    /// A `Source` owner read from a file saved before kinds were recorded,
+    /// which names no kind yet. The one thing the load pass looks for.
+    pub const fn is_unidentified_source(self) -> bool {
+        matches!(self, Self::Source { kind: None })
+    }
+
+    /// Give an unidentified `Source` owner the kind its channel runs, which
+    /// is what it meant when it was saved. Anything else is left alone, so
+    /// this is idempotent. Returns whether it changed anything.
+    pub fn identify_source(&mut self, kind: DeviceKind) -> bool {
+        if self.is_unidentified_source() {
+            *self = Self::source(kind);
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// [`ParamOwner`] as it is spelled on disk, which is how it was spelled
+/// before a `Source` owner carried its kind: `owner = "source"`. The kind is
+/// [`SavedAddress::source_kind`], a sibling key, so a reader that predates it
+/// (0.1.5) ignores it and still opens the song.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SavedOwner {
+    Source,
+    SourceRoute {
+        route: u16,
+    },
+    Effect {
+        #[serde(alias = "slot")]
+        device: DeviceId,
+    },
+    Modulator {
+        slot: u8,
+    },
+    Strip,
     #[serde(rename = "plugin_param")]
     PluginParam {
         device: DeviceId,
     },
+}
+
+/// A [`ParamAddr`] or [`ParamKey`] as it is written: the three fields it
+/// always had, and a `Source` owner's kind beside them, skipped when there
+/// is none so every other address is byte-identical to what it was.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SavedAddress<S> {
+    scope: S,
+    owner: SavedOwner,
+    param: u32,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_source_kind"
+    )]
+    source_kind: Option<DeviceKind>,
+}
+
+/// A `source_kind` this version cannot read -- a kind added later, or a hand
+/// edit -- is read as absent rather than failing the song. The load pass then
+/// gives it the channel's kind, which is what every reader before 0.1.6 did
+/// with any `Source` address; the song opens, and the key is not lost on a
+/// kind this version *does* know.
+fn lenient_source_kind<'de, D>(deserializer: D) -> Result<Option<DeviceKind>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Lenient {
+        Known(DeviceKind),
+        Unknown(serde::de::IgnoredAny),
+    }
+    Ok(match <Lenient as serde::Deserialize>::deserialize(deserializer)? {
+        Lenient::Known(kind) => Some(kind),
+        Lenient::Unknown(_) => None,
+    })
+}
+
+impl<S> SavedAddress<S> {
+    fn new(scope: S, owner: ParamOwner, param: u32) -> Self {
+        let (owner, source_kind) = match owner {
+            ParamOwner::Source { kind } => (SavedOwner::Source, kind),
+            ParamOwner::SourceRoute { route } => (SavedOwner::SourceRoute { route }, None),
+            ParamOwner::Effect { device } => (SavedOwner::Effect { device }, None),
+            ParamOwner::Modulator { slot } => (SavedOwner::Modulator { slot }, None),
+            ParamOwner::Strip => (SavedOwner::Strip, None),
+            ParamOwner::PluginParam { device } => (SavedOwner::PluginParam { device }, None),
+        };
+        Self {
+            scope,
+            owner,
+            param,
+            source_kind,
+        }
+    }
+
+    /// A `source_kind` on any other owner is a hand-edited file and means
+    /// nothing, so it is ignored rather than refused.
+    fn owner(&self) -> ParamOwner {
+        match self.owner {
+            SavedOwner::Source => ParamOwner::Source {
+                kind: self.source_kind,
+            },
+            SavedOwner::SourceRoute { route } => ParamOwner::SourceRoute { route },
+            SavedOwner::Effect { device } => ParamOwner::Effect { device },
+            SavedOwner::Modulator { slot } => ParamOwner::Modulator { slot },
+            SavedOwner::Strip => ParamOwner::Strip,
+            SavedOwner::PluginParam { device } => ParamOwner::PluginParam { device },
+        }
+    }
+}
+
+impl From<ParamAddr> for SavedAddress<EffectTarget> {
+    fn from(address: ParamAddr) -> Self {
+        Self::new(address.scope, address.owner, address.param)
+    }
+}
+
+impl From<SavedAddress<EffectTarget>> for ParamAddr {
+    fn from(saved: SavedAddress<EffectTarget>) -> Self {
+        Self {
+            owner: saved.owner(),
+            scope: saved.scope,
+            param: saved.param,
+        }
+    }
+}
+
+impl From<ParamKey> for SavedAddress<ChainKey> {
+    fn from(key: ParamKey) -> Self {
+        Self::new(key.scope, key.owner, key.param)
+    }
+}
+
+impl From<SavedAddress<ChainKey>> for ParamKey {
+    fn from(saved: SavedAddress<ChainKey>) -> Self {
+        Self {
+            owner: saved.owner(),
+            scope: saved.scope,
+            param: saved.param,
+        }
+    }
 }
 
 /// A parameter, anywhere in the project.
@@ -86,6 +263,7 @@ pub enum ParamOwner {
 /// enabling cross-channel modulation later is a routing change rather than a
 /// retyping of every engine command (`MODULATION.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(from = "SavedAddress<EffectTarget>", into = "SavedAddress<EffectTarget>")]
 pub struct ParamAddr {
     pub scope: EffectTarget,
     pub owner: ParamOwner,
@@ -113,6 +291,17 @@ impl ParamAddr {
         }
     }
 
+    /// Address parameter `param` of the generator on `scope`, as a device of
+    /// `kind` -- the kind the channel runs now, for anything a user is
+    /// pointing at.
+    pub const fn source(scope: EffectTarget, kind: DeviceKind, param: u32) -> Self {
+        Self {
+            scope,
+            owner: ParamOwner::source(kind),
+            param,
+        }
+    }
+
     /// Address one internal route's field inside a channel's generator.
     pub const fn source_route(scope: EffectTarget, route: u16, param: u32) -> Self {
         Self {
@@ -132,7 +321,7 @@ impl ParamAddr {
     pub const fn device(self) -> Option<DeviceId> {
         match self.owner {
             ParamOwner::Effect { device } | ParamOwner::PluginParam { device } => Some(device),
-            ParamOwner::Source
+            ParamOwner::Source { .. }
             | ParamOwner::SourceRoute { .. }
             | ParamOwner::Modulator { .. }
             | ParamOwner::Strip => None,
@@ -164,6 +353,7 @@ impl ParamAddr {
 /// the shape `AGENTS.md`'s "Parameter identity across the session boundary"
 /// warns about; two types that do not convert silently is the answer to it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(from = "SavedAddress<ChainKey>", into = "SavedAddress<ChainKey>")]
 pub struct ParamKey {
     pub scope: ChainKey,
     pub owner: ParamOwner,
@@ -2232,6 +2422,24 @@ impl ModRack {
     /// silently. `gates.get` is bounded by `MAX_CHANNELS`, so a wrong index
     /// always names *some* channel: there is no inert failure mode to fall
     /// into.
+    /// Give every route onto a generator that was saved without its kind the
+    /// kind of the generator this rack sits beside (MOO-135). Idempotent; see
+    /// [`ParamOwner::Source`].
+    pub fn identify_source_kinds(&mut self, kind: DeviceKind) {
+        for route in self.routes.iter_mut().flatten() {
+            route.destination.owner.identify_source(kind);
+        }
+    }
+
+    /// Whether any route onto a generator still names no kind: a rack that
+    /// has not been through the load pass.
+    pub fn has_unidentified_source_kinds(&self) -> bool {
+        self.routes
+            .iter()
+            .flatten()
+            .any(|route| route.destination.owner.is_unidentified_source())
+    }
+
     /// Adopt an identity for every envelope gate that is still only a seat.
     /// [`crate::AuxInParams::identify`]'s twin, and run from the same pass.
     pub fn identify_gates(&mut self, id_at: impl Fn(u8) -> Option<crate::ChannelId>) {
@@ -3549,5 +3757,158 @@ rate_hz = 2.0
         let decoded = toml::from_str::<ModRack>(legacy).unwrap();
         assert_eq!(decoded.params(0).unwrap().kind(), ModulatorKind::Lfo);
         assert_eq!(decoded.params(0).unwrap().get(LFO_PARAM_RATE_HZ), Some(2.0));
+    }
+}
+
+/// A generator address names the kind it was made against (MOO-135), and
+/// the file spells it so that 0.1.5 still opens a song saved by this version.
+#[cfg(test)]
+mod source_kind_tests {
+    use super::*;
+    use crate::ChannelId;
+
+    #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    struct Wrap {
+        target: ParamAddr,
+        key: ParamKey,
+    }
+
+    const HERE: EffectTarget = EffectTarget::Channel(2);
+
+    /// Id 12 is the sampler's Cutoff and the drum synth's snare tone: two
+    /// kinds, one id, two addresses. That inequality is the whole fix -- a
+    /// resolver builds the address from the kind the channel runs, so a lane
+    /// made on the other kind never matches it.
+    #[test]
+    fn one_id_on_two_kinds_is_two_addresses_and_costs_nothing() {
+        let sampler = ParamAddr::source(HERE, DeviceKind::Sampler, 12);
+        let drum = ParamAddr::source(HERE, DeviceKind::DrumSynth, 12);
+        assert_ne!(sampler, drum);
+        assert_eq!(sampler.device(), None);
+        // The kind is a byte in the owner's padding: the address the engine
+        // carries did not grow. (`ParamKey` is 20 and was before; its
+        // `ChainKey` scope is the four bytes.)
+        assert_eq!(std::mem::size_of::<ParamAddr>(), 16);
+        assert_eq!(std::mem::size_of::<ParamKey>(), 20);
+    }
+
+    #[test]
+    fn the_kind_is_a_sibling_key_and_round_trips() {
+        let wrap = Wrap {
+            target: ParamAddr::source(HERE, DeviceKind::Ds01, 12),
+            key: ParamKey::new(
+                ChainKey::Channel(ChannelId(7)),
+                ParamOwner::source(DeviceKind::MlM1),
+                5,
+            ),
+        };
+        let text = toml::to_string(&wrap).unwrap();
+        assert!(text.contains("owner = \"source\""), "{text}");
+        assert!(text.contains("source_kind = \"ds01\""), "{text}");
+        assert!(text.contains("source_kind = \"ml1\""), "{text}");
+        assert_eq!(toml::from_str::<Wrap>(&text).unwrap(), wrap);
+    }
+
+    /// Every other owner is written exactly as before: no key, no change.
+    #[test]
+    fn no_other_owner_writes_a_kind() {
+        let wrap = Wrap {
+            target: ParamAddr::effect(HERE, DeviceId(3), 1),
+            key: ParamKey::strip(ChainKey::Channel(ChannelId(1)), 0),
+        };
+        let text = toml::to_string(&wrap).unwrap();
+        assert!(!text.contains("source_kind"), "{text}");
+        assert_eq!(toml::from_str::<Wrap>(&text).unwrap(), wrap);
+    }
+
+    /// A song saved before the kind existed reads as unidentified, for the
+    /// load pass to fill; so does a kind this version cannot read, rather
+    /// than failing the song.
+    #[test]
+    fn an_old_or_unreadable_kind_reads_as_unidentified() {
+        for extra in ["", "source_kind = \"NoSuchKind\"\n", "source_kind = 3\n"] {
+            let text = format!(
+                "[target]\nowner = \"source\"\nparam = 12\n{extra}[target.scope]\nchannel = 2\n\
+                 [key]\nowner = \"source\"\nparam = 5\n{extra}[key.scope]\nchannel = 7\n"
+            );
+            let read: Wrap =
+                toml::from_str(&text).unwrap_or_else(|error| panic!("{extra}: {error}"));
+            assert!(read.target.owner.is_unidentified_source(), "{extra}");
+            assert!(read.key.owner.is_unidentified_source(), "{extra}");
+            assert_eq!(read.target.param, 12);
+            assert_eq!(read.key.scope, ChainKey::Channel(ChannelId(7)));
+        }
+    }
+
+    /// 0.1.5's own shape, spelled out: its `ParamAddr` and `ParamKey` were
+    /// plain derives over this owner enum, with no `deny_unknown_fields`. A
+    /// song saved now must still decode there -- the kind ignored, which is
+    /// the old behaviour -- or 0.1.5 would refuse it.
+    #[test]
+    fn a_reader_that_predates_the_kind_still_reads_the_address() {
+        #[derive(Debug, PartialEq, serde::Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum OldOwner {
+            Source,
+            Effect {
+                #[serde(alias = "slot")]
+                device: DeviceId,
+            },
+        }
+        #[derive(serde::Deserialize)]
+        struct OldAddr {
+            scope: EffectTarget,
+            owner: OldOwner,
+            param: u32,
+        }
+        #[derive(serde::Deserialize)]
+        struct OldKey {
+            scope: ChainKey,
+            owner: OldOwner,
+            param: u32,
+        }
+        #[derive(serde::Deserialize)]
+        struct OldWrap {
+            target: OldAddr,
+            key: OldKey,
+        }
+        let text = toml::to_string(&Wrap {
+            target: ParamAddr::source(HERE, DeviceKind::Sampler, 12),
+            key: ParamKey::new(
+                ChainKey::Channel(ChannelId(7)),
+                ParamOwner::source(DeviceKind::Sampler),
+                5,
+            ),
+        })
+        .unwrap();
+        let old: OldWrap = toml::from_str(&text).expect("0.1.5 reads it");
+        assert_eq!(old.target.owner, OldOwner::Source);
+        assert_eq!((old.target.scope, old.target.param), (HERE, 12));
+        assert_eq!(old.key.owner, OldOwner::Source);
+        assert_eq!(
+            (old.key.scope, old.key.param),
+            (ChainKey::Channel(ChannelId(7)), 5)
+        );
+        let effect = toml::to_string(&Wrap {
+            target: ParamAddr::effect(HERE, DeviceId(4), 1),
+            key: ParamKey::effect(ChainKey::Channel(ChannelId(7)), DeviceId(4), 1),
+        })
+        .unwrap();
+        let old: OldWrap = toml::from_str(&effect).unwrap();
+        assert_eq!(old.target.owner, OldOwner::Effect { device: DeviceId(4) });
+    }
+
+    /// The fill gives an unidentified address its channel's kind, and leaves
+    /// one that names a kind -- any kind -- alone.
+    #[test]
+    fn the_fill_only_touches_what_names_no_kind() {
+        let mut owner = ParamOwner::Source { kind: None };
+        assert!(owner.identify_source(DeviceKind::MlP8));
+        assert_eq!(owner, ParamOwner::source(DeviceKind::MlP8));
+        assert!(!owner.identify_source(DeviceKind::Sampler));
+        assert_eq!(owner, ParamOwner::source(DeviceKind::MlP8));
+        let mut strip = ParamOwner::Strip;
+        assert!(!strip.identify_source(DeviceKind::Sampler));
+        assert_eq!(strip, ParamOwner::Strip);
     }
 }

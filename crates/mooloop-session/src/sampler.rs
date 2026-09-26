@@ -1548,7 +1548,7 @@ mod stretch_pool_tests {
         assert_eq!(tick(&mut session), vec![(0, Some(2))]);
         let voices = ParamAddr {
             scope: EffectTarget::Channel(0),
-            owner: ParamOwner::Source,
+            owner: ParamOwner::source(mooloop_core::DeviceKind::Sampler),
             param: mooloop_core::SAMPLER_PARAM_POLYPHONY,
         };
         session.control_map.bind(ControlBinding::new(
@@ -1593,7 +1593,7 @@ mod stretch_pool_tests {
         stretching(&mut session, 1);
         session.channels[0].automation[0].push(mooloop_core::AutomationLane::new(ParamAddr {
             scope: EffectTarget::Channel(0),
-            owner: ParamOwner::Source,
+            owner: ParamOwner::source(mooloop_core::DeviceKind::Sampler),
             param: mooloop_core::SAMPLER_PARAM_POLYPHONY,
         }));
         assert_eq!(tick(&mut session), vec![(0, Some(16))]);

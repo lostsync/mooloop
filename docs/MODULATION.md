@@ -117,6 +117,18 @@ would judge a plugin id against a native table without a compiler error.
 Adam's words: *"we don't want to not know what something belongs to"*.
 `docs/plans/plugin-hosting/00-status.md`, "Parameters", has the ruling.
 
+**The generator owner names its kind** (MOO-135, 2026-09-26, the same
+ruling applied to a channel's source). A descriptor id is stable *per kind*,
+and a channel's kind can change: id 12 is the sampler's Cutoff and the v1
+drum synth's snare tone. So the owner is `ParamOwner::Source { kind }`, the
+kind the address was made on, and the address still costs 16 bytes. A
+resolver builds its addresses from the kind the channel runs now, so one
+made on another kind matches nothing. It is **inert, never dropped**: kept,
+saved back unchanged, and live again when the channel is switched back. This
+is the "never drop" rule from MOO-74. On disk the owner is still spelled
+`"source"`, and the kind is a sibling key (`PROJECT_FORMAT.md`), so the saved
+bytes of every other address did not change.
+
 This is deliberately a destination address, not a claim that every parameter
 is already a legal modulation target. Descriptors declare range and curve;
 destination metadata declares whether modulation is meaningful and how its

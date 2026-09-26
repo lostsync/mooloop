@@ -263,7 +263,7 @@ fn sequence_bleep() -> FactoryPatch {
         0,
         ParamAddr {
             scope: AUTHORED_SCOPE,
-            owner: ParamOwner::Source,
+            owner: ParamOwner::source(crate::DeviceKind::MlM1),
             param: SYNTH_PARAM_FILTER_CUTOFF,
         },
         0.3,
@@ -273,7 +273,7 @@ fn sequence_bleep() -> FactoryPatch {
         1,
         ParamAddr {
             scope: AUTHORED_SCOPE,
-            owner: ParamOwner::Source,
+            owner: ParamOwner::source(crate::DeviceKind::MlM1),
             param: synth_osc_param(0, OSC_OFFSET_PULSE_WIDTH),
         },
         0.35,

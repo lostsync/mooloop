@@ -413,7 +413,7 @@ fn an_unused_edge_costs_no_buffers_at_all() {
 fn aux_in_level_takes_a_lane_and_a_route() {
     let level = ParamAddr {
         scope: EffectTarget::Channel(1),
-        owner: ParamOwner::Source,
+        owner: ParamOwner::source(mooloop_core::DeviceKind::AuxIn),
         param: aux_in::PARAM_LEVEL,
     };
     let base = Project {

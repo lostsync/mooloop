@@ -472,8 +472,15 @@ impl ChannelSetup {
     /// Give this chain's devices their identities and put the mint past them.
     /// See [`crate::assign_device_ids`] for why this is a no-op on a project
     /// that has never seen it rather than a migration.
+    ///
+    /// It also gives every route onto the generator that was saved without
+    /// a kind this setup's kind ([`crate::ParamOwner::Source`], MOO-135).
+    /// Here because every document that carries a setup -- a song, a kit, a
+    /// channel preset -- runs this on the way in, so no loaded rack can skip
+    /// it; and a setup carries its own source, so the kind is its own.
     pub fn assign_device_ids(&mut self) {
         crate::assign_device_ids(&mut self.effects, &mut self.next_device_id);
+        self.modulation.identify_source_kinds(self.source.kind());
     }
 
     pub fn rescope_modulation(&mut self, channel: u8) {
@@ -1226,6 +1233,59 @@ impl Project {
         // ids and forgot to identify the references would leave the
         // references positional and silently so.
         self.identify_channel_references();
+        // Bindings name their channel by id, so this waits for the ids too.
+        self.identify_source_kinds();
+    }
+
+    /// Give every lane, route and control binding onto a generator that was
+    /// saved without its kind the kind its channel runs -- what it meant when
+    /// it was saved (MOO-135, [`crate::ParamOwner::Source`]).
+    ///
+    /// Run by [`Self::assign_channel_ids`], after the channels have ids,
+    /// because a binding names its channel by one. Idempotent: an address
+    /// that already has a kind, whichever kind, is left alone. A binding on a
+    /// channel this song does not have stays unidentified, and it resolves to
+    /// nothing anyway.
+    pub fn identify_source_kinds(&mut self) {
+        for channel in &mut self.channels {
+            let kind = channel.setup.source.kind();
+            channel.setup.modulation.identify_source_kinds(kind);
+            for lane in channel.automation.iter_mut().flatten() {
+                lane.target.owner.identify_source(kind);
+            }
+        }
+        let kinds: Vec<(ChannelId, DeviceKind)> = self
+            .channels
+            .iter()
+            .map(|channel| (channel.id, channel.setup.source.kind()))
+            .collect();
+        for binding in &mut self.control_map.bindings {
+            let crate::control::ControlTarget::Param(key) = &mut binding.target else {
+                continue;
+            };
+            let crate::ChainKey::Channel(id) = key.scope else {
+                continue;
+            };
+            if let Some(&(_, kind)) = kinds.iter().find(|(channel, _)| *channel == id) {
+                key.owner.identify_source(kind);
+            }
+        }
+    }
+
+    /// Whether any lane or route onto a generator still names no kind: a
+    /// song that has not been through [`Self::identify_source_kinds`]. Saving
+    /// one would write an address that means "whatever device is there".
+    /// Bindings on a channel the song does not have are not counted; they
+    /// name nothing either way.
+    pub fn has_unidentified_source_kinds(&self) -> bool {
+        self.channels.iter().any(|channel| {
+            channel.setup.modulation.has_unidentified_source_kinds()
+                || channel
+                    .automation
+                    .iter()
+                    .flatten()
+                    .any(|lane| lane.target.owner.is_unidentified_source())
+        })
     }
 
     /// Give every track an identity, and put the mint past them all.

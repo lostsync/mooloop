@@ -39,6 +39,13 @@ fn every_release_song_opens_as_the_song_it_was() {
         let report = load_bundle(&path).unwrap_or_else(|error| {
             panic!("{} no longer opens: {error}", path.display())
         });
+        // Opened as it was, not mended into something else.
+        assert!(
+            report.repairs.is_empty(),
+            "{} needed repairs: {:?}",
+            path.display(),
+            report.repairs
+        );
         let LoadedDocument::Song(project) = report.document else {
             panic!("{} opened as something other than a song", path.display());
         };

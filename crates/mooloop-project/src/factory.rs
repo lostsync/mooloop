@@ -551,7 +551,7 @@ mod tests {
             0,
             ParamAddr {
                 scope: EffectTarget::Channel(3),
-                owner: ParamOwner::Source,
+                owner: ParamOwner::source(mooloop_core::DeviceKind::MlM1),
                 param: 5,
             },
             0.5,

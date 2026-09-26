@@ -84,7 +84,7 @@ fn write_wav(path: &Path, frames: &[[f32; 2]]) {
 fn lane() -> AutomationLane {
     let mut lane = AutomationLane::new(ParamAddr {
         scope: EffectTarget::Channel(0),
-        owner: ParamOwner::Source,
+        owner: ParamOwner::source(mooloop_core::DeviceKind::Sampler),
         param: SAMPLER_PARAM_LOOP_START,
     });
     lane.upsert(AutomationPoint::new(1, 0, 0.0));

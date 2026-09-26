@@ -22,6 +22,21 @@ use mooloop_core::{
 };
 
 impl Session {
+    /// The address of the selected channel's generator parameter `param`, as
+    /// the device the channel runs now -- which is what a press on the
+    /// source face means. `None` when nothing is selected.
+    ///
+    /// The one place the window builds a generator address from a face
+    /// callback, so the kind cannot be left out of one (MOO-135).
+    pub fn selected_source_address(&self, param: u32) -> Option<mooloop_core::ParamAddr> {
+        let state = self.channels.get(self.selected)?;
+        Some(mooloop_core::ParamAddr::source(
+            mooloop_core::EffectTarget::Channel(self.selected as u8),
+            state.kind(),
+            param,
+        ))
+    }
+
     /// The selected channel's modulation rack, when there is one.
     fn rack_mut(&mut self) -> Option<&mut mooloop_core::ModRack> {
         let selected = self.selected;

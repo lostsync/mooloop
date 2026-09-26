@@ -162,7 +162,7 @@ fn maximal_project() -> Project {
     let source_param = DeviceKind::Sampler.descriptors()[0].id;
     let mut lane = AutomationLane::new(ParamAddr {
         scope: target,
-        owner: ParamOwner::Source,
+        owner: ParamOwner::source(DeviceKind::Sampler),
         param: source_param,
     });
     let point = lane.allocate_id();
@@ -177,7 +177,7 @@ fn maximal_project() -> Project {
             .expect("the rack has a slot for one of each kind");
         let destination = ParamAddr {
             scope: target,
-            owner: ParamOwner::Source,
+            owner: ParamOwner::source(DeviceKind::Sampler),
             param: DeviceKind::Sampler.descriptors()[slot + 1].id,
         };
         let polarity = if slot % 2 == 0 {

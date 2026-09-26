@@ -5448,14 +5448,10 @@ impl UiState {
         // re-evaluated every binding on every face and kept the window
         // repainting with nothing else changing.
         let mut refresh = ModulationOffsetsRefresh::default();
-        let source = self.session.destination_offsets(
-            channel.generator_params().kind().descriptors(),
-            |param| ParamAddr {
-                scope,
-                owner: ParamOwner::Source,
-                param,
-            },
-        );
+        let source_kind = channel.generator_params().kind();
+        let source = self.session.destination_offsets(source_kind.descriptors(), |param| {
+            ParamAddr::source(scope, source_kind, param)
+        });
         match write_offsets(&window.get_source_modulation_offsets(), &source) {
             OffsetsWrite::Unchanged => {}
             OffsetsWrite::InPlace => refresh.values_moved += 1,
@@ -5651,7 +5647,23 @@ impl UiState {
                     })
                     .unwrap_or_else(|| (format!("{source_name} → unavailable destination"), false));
                 let owner = match route.destination.owner {
-                    ParamOwner::Source => -1,
+                    // The source face's row only for a route made on the
+                    // device the channel runs now. One left behind by a
+                    // device change is kept but drives nothing (MOO-135), so
+                    // it takes the no-row token rather than lighting up
+                    // whatever this device calls the same id.
+                    ParamOwner::Source { kind }
+                        if kind.is_some()
+                            && kind
+                                == self
+                                    .session
+                                    .channels
+                                    .get(self.session.selected)
+                                    .map(|state| state.kind()) =>
+                    {
+                        -1
+                    }
+                    ParamOwner::Source { .. } => i32::MIN,
                     ParamOwner::Strip => -2,
                     // The row this route points at, as a *position*: this
                     // token is a Slint model index, not an address, so the
@@ -5871,30 +5883,18 @@ impl UiState {
         window.set_source_modulation_depths(self.destination_depths(
             armed,
             generator.descriptors(),
-            |param| ParamAddr {
-                scope,
-                owner: ParamOwner::Source,
-                param,
-            },
+            |param| ParamAddr::source(scope, generator, param),
         ));
         window.set_source_modulation_allowed(descriptor_policies(generator.descriptors()));
         window.set_source_param_defaults(descriptor_defaults(generator.descriptors()));
         window.set_source_modulation_offsets(self.destination_offsets(
             generator.descriptors(),
-            |param| ParamAddr {
-                scope,
-                owner: ParamOwner::Source,
-                param,
-            },
+            |param| ParamAddr::source(scope, generator, param),
         ));
         window.set_source_modulation_route_counts(descriptor_route_counts(
             &channel.modulation,
             generator.descriptors(),
-            |param| ParamAddr {
-                scope,
-                owner: ParamOwner::Source,
-                param,
-            },
+            |param| ParamAddr::source(scope, generator, param),
         ));
         window.set_strip_modulation_depths(self.destination_depths(
             armed,
@@ -12028,10 +12028,8 @@ impl AppUi {
                 // The press that starts a modulation edit is the same press
                 // that names a control for MIDI learn, so which of the two it
                 // is comes from this side's arm rather than from the face.
-                let address = ParamAddr {
-                    scope: EffectTarget::Channel(state.session.selected as u8),
-                    owner: ParamOwner::Source,
-                    param,
+                let Some(address) = state.session.selected_source_address(param) else {
+                    return;
                 };
                 if state.name_if_asked(&window, address) {
                     return;
@@ -12054,10 +12052,8 @@ impl AppUi {
                 };
                 with_gesture_history(&st, &commands, &window, "Modulation depth", || {
                     let mut state = st.borrow_mut();
-                    let destination = ParamAddr {
-                        scope: EffectTarget::Channel(state.session.selected as u8),
-                        owner: ParamOwner::Source,
-                        param,
+                    let Some(destination) = state.session.selected_source_address(param) else {
+                        return false;
                     };
                     if !state.set_armed_modulation_depth(&window, &tx, destination, depth) {
                         // A full matrix or invalid target must snap the

@@ -119,7 +119,7 @@ fn a_channel_lfo_sweeps_ds01s_filter() {
             source_slot: 0,
             destination: ParamAddr {
                 scope: EffectTarget::Channel(0),
-                owner: ParamOwner::Source,
+                owner: ParamOwner::source(mooloop_core::DeviceKind::Ds01),
                 param: ds01::PARAM_FILTER_CUTOFF,
             },
             depth: -0.7,
@@ -158,7 +158,7 @@ fn an_automation_lane_on_ds01_renders_the_same_at_any_block_size() {
     let channel = &mut project.channels[0];
     let mut lane = AutomationLane::new(ParamAddr {
         scope: EffectTarget::Channel(0),
-        owner: ParamOwner::Source,
+        owner: ParamOwner::source(mooloop_core::DeviceKind::Ds01),
         param: ds01::PARAM_TONE_PITCH,
     });
     lane.upsert(AutomationPoint::new(1, 0, 0.2));

@@ -6776,7 +6776,7 @@ impl RenderState {
             }
             // A generator has no queue between blocks; its base is applied
             // directly, which is safe because `set_params` allocates nothing.
-            ParamOwner::Source => {
+            ParamOwner::Source { .. } => {
                 let EffectTarget::Channel(channel) = destination.scope else {
                     return;
                 };
@@ -9173,11 +9173,16 @@ impl RenderState {
                 // Only what a route or a lane names, not the whole table
                 // (MOO-195): see `driven_positions`.
                 let table = base.kind().descriptors();
+                // The kind the channel runs now. A lane or route made on
+                // another kind names another address, so it matches nothing
+                // here and drives nothing -- inert, not re-aimed at whatever
+                // this kind calls the same id (MOO-135).
+                let owner = ParamOwner::source(base.kind());
                 let mut positions = [0usize; MAX_SOURCE_CURVE_DESTINATIONS];
                 let driven = driven_positions(
                     table,
                     scope,
-                    ParamOwner::Source,
+                    owner,
                     Some(modulation.rack),
                     automation.as_ref(),
                     &mut positions,
@@ -9185,7 +9190,7 @@ impl RenderState {
                 for descriptor in positions[..driven].iter().map(|&position| &table[position]) {
                     let destination = ParamAddr {
                         scope,
-                        owner: ParamOwner::Source,
+                        owner,
                         param: descriptor.id,
                     };
                     let policy = ModDestinationDescriptor::for_param(descriptor);
@@ -10319,7 +10324,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                         source,
                         ParamAddr {
                             scope: EffectTarget::Channel(0),
-                            owner: ParamOwner::Source,
+                            owner: ParamOwner::source(kind),
                             param: descriptor.id,
                         },
                         depth,
@@ -10350,6 +10355,113 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 assert!((rested - at_rest).abs() < 1e-6, "{kind:?}: a panic left the band up");
             }
         }
+    }
+
+    /// MOO-135's "done when". An LFO routed to the sampler's Cutoff, and a
+    /// lane on it, with the channel then switched to the v1 drum synth --
+    /// whose id 12 is its own control -- drive nothing at all; switched back
+    /// to a sampler, both work again. A switch keeps the rack and the lanes
+    /// and swaps the source (`Session::reset_channel_source`), and the engine
+    /// takes it as an install, which is what this does.
+    #[test]
+    fn a_route_and_a_lane_made_on_one_device_are_inert_on_another_until_it_returns() {
+        use mooloop_core::{
+            AutomationLane, AutomationPoint, DeviceKind, ModLfoParams, ModPolarity, ModRoute,
+            ModulatorParams,
+        };
+        let cutoff = mooloop_core::SAMPLER_PARAM_FILTER_CUTOFF;
+        let drive = mooloop_core::SAMPLER_PARAM_DRIVE;
+        assert!(
+            DeviceKind::DrumSynth.descriptor(cutoff).is_some(),
+            "the premise: the drum synth has an id 12 of its own"
+        );
+        let here = EffectTarget::Channel(0);
+        // Every source parameter handed to the device this block, by id.
+        let driven = |render: &RenderState| -> Vec<(u32, Vec<f32>)> {
+            let mut buf: [ControlCurve<'_>; MAX_SOURCE_CURVE_DESTINATIONS] =
+                std::array::from_fn(|_| ControlCurve::default());
+            let count = render.source_curves[0].fill(&mut buf);
+            buf[..count]
+                .iter()
+                .map(|curve| (curve.id, curve.values.to_vec()))
+                .collect()
+        };
+        let run = |project: &Project| -> Vec<(u32, Vec<f32>)> {
+            let mut render = RenderState::from_project(48_000, project, &[]);
+            render.play();
+            let mut seen = Vec::new();
+            for _ in 0..4 {
+                render.process_block(128);
+                seen.extend(driven(&render));
+            }
+            seen
+        };
+
+        let mut project = one_source_project(DeviceKind::Sampler);
+        let channel = &mut project.channels[0];
+        channel
+            .setup
+            .modulation
+            .install(
+                0,
+                ModulatorParams::Lfo(ModLfoParams {
+                    // Many cycles in four blocks, so both halves occur and
+                    // one of them moves Cutoff off whichever end its knob
+                    // sits at.
+                    rate_hz: 375.0,
+                    ..ModLfoParams::default()
+                }),
+            )
+            .expect("slot 0 accepts a module");
+        channel
+            .setup
+            .modulation
+            .add_route(ModRoute::to_slot(
+                0,
+                ParamAddr::source(here, DeviceKind::Sampler, cutoff),
+                0.5,
+                ModPolarity::Bipolar,
+            ))
+            .expect("the route fits");
+        let mut lane = AutomationLane::new(ParamAddr::source(here, DeviceKind::Sampler, drive));
+        assert!(lane.upsert(AutomationPoint::new(1, 0, 1.0)));
+        channel.automation[0].push(lane);
+        let sampler_source = channel.setup.source.clone();
+
+        // On the sampler: the route moves Cutoff, and the lane holds Drive.
+        let on_sampler = run(&project);
+        let cutoff_values: Vec<f32> = on_sampler
+            .iter()
+            .filter(|(id, _)| *id == cutoff)
+            .flat_map(|(_, values)| values.iter().copied())
+            .collect();
+        assert!(!cutoff_values.is_empty(), "the route did not drive Cutoff");
+        let spread = cutoff_values.iter().copied().fold(f32::MIN, f32::max)
+            - cutoff_values.iter().copied().fold(f32::MAX, f32::min);
+        assert!(spread > 0.0, "the LFO never moved Cutoff: {cutoff_values:?}");
+        assert!(
+            on_sampler.iter().any(|(id, _)| *id == drive),
+            "the lane did not drive Drive"
+        );
+
+        // Switched to the drum synth: nothing is driven at all.
+        project.channels[0].setup.source =
+            one_source_project(DeviceKind::DrumSynth).channels[0].setup.source.clone();
+        let on_drum = run(&project);
+        assert!(
+            on_drum.is_empty(),
+            "a sampler route or lane drove the drum synth: {:?}",
+            on_drum.iter().map(|(id, _)| id).collect::<Vec<_>>()
+        );
+        // Kept, not dropped: the rack and the lane are exactly as they were.
+        assert!(project.channels[0].setup.modulation.has_routes());
+        assert_eq!(project.channels[0].automation[0].len(), 1);
+
+        // And back: both work again.
+        project.channels[0].setup.source = sampler_source;
+        let back = run(&project);
+        assert!(back.iter().any(|(id, _)| *id == cutoff), "the route did not come back");
+        assert!(back.iter().any(|(id, _)| *id == drive), "the lane did not come back");
     }
 
     /// Every pitched source bends (MOO-128). A note played with the wheel
@@ -12164,7 +12276,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         project.channels[0].automation[0].push(mooloop_core::AutomationLane::new(
             mooloop_core::ParamAddr {
                 scope: mooloop_core::EffectTarget::Channel(0),
-                owner: mooloop_core::ParamOwner::Source,
+                owner: mooloop_core::ParamOwner::source(mooloop_core::DeviceKind::Sampler),
                 param: mooloop_core::SAMPLER_PARAM_POLYPHONY,
             },
         ));
@@ -12816,7 +12928,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             0,
             ParamAddr {
                 scope: EffectTarget::Channel(0),
-                owner: ParamOwner::Source,
+                owner: ParamOwner::source(mooloop_core::DeviceKind::Sampler),
                 param: cutoff,
             },
             0.5,
@@ -12827,7 +12939,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             0,
             ParamAddr {
                 scope: EffectTarget::Channel(0),
-                owner: ParamOwner::Source,
+                owner: ParamOwner::source(mooloop_core::DeviceKind::Sampler),
                 param: output_gain,
             },
             0.5,
@@ -12904,7 +13016,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 0,
                 ParamAddr {
                     scope: EffectTarget::Channel(0),
-                    owner: ParamOwner::Source,
+                    owner: ParamOwner::source(mooloop_core::DeviceKind::Sampler),
                     param,
                 },
                 0.3,
@@ -14435,7 +14547,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         let project = synth_project(ProjectChannel::sampler(0, 1));
         let target = ParamAddr {
             scope: EffectTarget::Channel(0),
-            owner: ParamOwner::Source,
+            owner: ParamOwner::source(mooloop_core::DeviceKind::Sampler),
             param: mooloop_core::SAMPLER_PARAM_FILTER_CUTOFF,
         };
         let mut render = RenderState::from_project(48_000, &project, &[]);
@@ -14758,7 +14870,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             .expect("slot 0 accepts a module");
         let punch = ParamAddr {
             scope: EffectTarget::Channel(0),
-            owner: ParamOwner::Source,
+            owner: ParamOwner::source(mooloop_core::DeviceKind::DrumSynth),
             param: mooloop_core::DRUM_PARAM_PUNCH,
         };
         assert!(channel
@@ -14779,7 +14891,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         // The lane drives a different control, so the two are visible apart.
         let start = ParamAddr {
             scope: EffectTarget::Channel(0),
-            owner: ParamOwner::Source,
+            owner: ParamOwner::source(mooloop_core::DeviceKind::DrumSynth),
             param: mooloop_core::DRUM_PARAM_KICK_START_HZ,
         };
         render.apply_command(EngineCommand::UpsertAutomationPoint {
@@ -14845,7 +14957,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         let mut render = RenderState::from_project(48_000, &project, &[]);
         let target = ParamAddr {
             scope: EffectTarget::Channel(0),
-            owner: ParamOwner::Source,
+            owner: ParamOwner::source(mooloop_core::DeviceKind::Sampler),
             param: mooloop_core::SAMPLER_PARAM_DRIVE,
         };
         render.apply_command(EngineCommand::UpsertAutomationPoint {

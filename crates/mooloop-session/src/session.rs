@@ -759,15 +759,11 @@ impl Session {
         if let Some(state) = self.channels.get(self.selected) {
             // The generator first: it is the top of the signal path, and it is
             // what most channels have instead of an effect chain.
-            let generator = state.generator_params();
+            let kind = state.generator_params().kind();
             let device = state.name.clone();
-            for descriptor in generator.kind().descriptors() {
+            for descriptor in kind.descriptors() {
                 rows.push((
-                    ParamAddr {
-                        scope: channel,
-                        owner: ParamOwner::Source,
-                        param: descriptor.id,
-                    },
+                    ParamAddr::source(channel, kind, descriptor.id),
                     device.clone(),
                     descriptor,
                 ));
@@ -847,15 +843,14 @@ impl Session {
     pub fn automation_descriptor(&self) -> Option<&'static ParamDescriptor> {
         let target = self.automation_target.get()?;
         match target.owner {
-            ParamOwner::Source => {
-                let EffectTarget::Channel(channel) = target.scope else {
+            // The kind the lane was drawn on, not the one the channel runs
+            // now: a lane left behind by a device change is inert but still
+            // shown, and it reads in its own device's units (MOO-135).
+            ParamOwner::Source { kind } => {
+                let EffectTarget::Channel(_) = target.scope else {
                     return None;
                 };
-                self.channels
-                    .get(channel as usize)?
-                    .generator_params()
-                    .kind()
-                    .descriptor(target.param)
+                kind?.descriptor(target.param)
             }
             // A route amount is not in the device's table; its descriptor
             // belongs to the route.
@@ -1236,11 +1231,13 @@ impl Session {
         }
         let state = self.channels.get(self.selected)?;
         match address.owner {
-            ParamOwner::Source => state
-                .generator_params()
+            // A route made on another kind of device is kept but drives
+            // nothing here, so it names no destination (MOO-135).
+            ParamOwner::Source { kind } if kind == Some(state.kind()) => state
                 .kind()
                 .descriptor(address.param)
                 .map(|descriptor| (state.name.clone(), descriptor)),
+            ParamOwner::Source { .. } => None,
             ParamOwner::Effect { device } => mooloop_core::device_slot(&state.effects, device)
                 .and_then(|slot| {
                     let effect = &state.effects[slot];

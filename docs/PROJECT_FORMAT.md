@@ -662,10 +662,44 @@ through a serde alias onto the same field — see the paragraph above for why
 the two numbers agree. A channel is still named by *index*, so a route or lane
 scoped to a channel is still renumbered when the channel list changes.
 
+**A `ParamAddr` or `ParamKey` naming the channel's generator carries the
+kind of device it was made on** (since 2026-09-26, MOO-135). The owner is
+still written `owner = "source"`, exactly as before, and the kind is a
+sibling key on the same table, `source_kind`, spelled with the `source.type`
+tags above (`"sampler"`, `"ds01"`, `"ml1"` ...). It is written for every
+generator address and for no other owner, so every other address is
+byte-identical to what it was. It exists because a descriptor id is stable
+*per kind*: id 12 is the sampler's Cutoff and the v1 drum synth's snare tone,
+and a channel whose device was changed used to hand its old lanes, routes
+and bindings to whatever the new device calls the same id. An address whose
+`source_kind` is not the kind its channel runs is **inert and kept**. It
+drives nothing, the loader keeps it and does not report it as a repair, and
+it is saved back unchanged. It works again if the channel is switched back
+(Adam's "never drop" ruling on MOO-74, 2026-09-23).
+
+**`FORMAT_VERSION` stays 1, because the key is optional in both
+directions.** A song written before it has no `source_kind`. Each such
+address takes its own channel's kind on load (`ChannelSetup::assign_device_ids`
+for a rack's routes, in songs, kits and channel presets alike;
+`Project::assign_channel_ids` for lanes and bindings). That is what the
+address meant when it was saved, so an older song loads with every generator
+address intact, reports no repair, and gains the key on its next save. A
+`source_kind` this version cannot read (a device added later, or a hand
+edit) is treated the same way rather than failing the song. **0.1.5 and
+earlier ignore the key**: their address type has no `deny_unknown_fields`,
+so they open a song written now. But they read every generator address as
+the old unkinded one, so there a lane recorded for another kind drives the
+current device's control with the same id. That is their old behaviour, and
+only a song whose device was changed after the lane was made can show it.
+
 Because a channel index is a position, loading runs an integrity pass: a route
 or lane stranded on another channel's index is pointed back at its own
 channel, and one naming a device or control that is not present is dropped.
-Addresses on a generator that has no descriptor table yet are left untouched.
+A generator address is judged against the table of the kind it *names*, not
+the kind the channel runs, so only a control that kind never had is dropped.
+Addresses on a generator kind that has no descriptor table yet are left
+untouched. Two lanes on one id of two different kinds are two destinations,
+not a duplicate.
 
 A container also saves as a preset of its own: an `effect_run` document
 holding the container and everything inside it, in rack order, with

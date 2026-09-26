@@ -964,7 +964,7 @@ pub fn stretch_pool_voices(params: &SamplerParams, lanes: &[Vec<AutomationLane>]
     }
     let all = usize::from(MAX_SAMPLER_VOICES);
     let lane_on_voices = lanes.iter().flatten().any(|lane| {
-        lane.target.owner == ParamOwner::Source
+        lane.target.owner == ParamOwner::source(crate::DeviceKind::Sampler)
             && lane.target.param == crate::generator::SAMPLER_PARAM_POLYPHONY
     });
     if lane_on_voices {
@@ -1180,7 +1180,7 @@ mod stretch_pool_tests {
         let lane = |param| {
             AutomationLane::new(ParamAddr {
                 scope: EffectTarget::Channel(0),
-                owner: ParamOwner::Source,
+                owner: ParamOwner::source(crate::DeviceKind::Sampler),
                 param,
             })
         };

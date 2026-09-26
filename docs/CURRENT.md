@@ -111,6 +111,15 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   toggle and a menu, the playlist a menu. A third snap control used to sit in
   the toolbar and ask `editor-page` which of the two indices it was editing.
 - The source device is a picker rather than a chip per instrument.
+- **Changing a channel's device leaves what was aimed at the old one inert,
+  and keeps it** (MOO-135, 2026-09-26). A lane, a modulation route or a MIDI
+  binding on the sampler's Cutoff no longer starts moving whatever the new
+  device calls the same id (the drum synth's snare tone). It stays in the
+  song and is saved with it: the shelf lists the route as an unavailable
+  destination, and the mapping list shows the binding as an unavailable
+  parameter. Switching the channel back makes all three work again. The new
+  device still arrives at its defaults (MOO-192). An inert lane still counts
+  toward the channel's eight lanes per pattern.
 - Patterns are chosen with a fixed-width stepper plus a jump menu and can be
   named; the selector costs the same width at any pattern count.
 - Pattern length moves a beat at a time with Shift -- on the STEPS field's

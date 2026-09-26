@@ -285,6 +285,8 @@ Files marked *shared* are split in the table above.
   and by dense index, and the one conversion between them, MOO-82)
 - `engine/src/plugin_automation_tests.rs` (lanes and routes on a hosted
   plugin's parameters, offline and live) and `session/tests/plugin_params.rs`
+- `session/tests/source_param_kind.rs` (a binding made on one device is inert
+  on another and comes back, MOO-135)
 - `ui/ui/`: `modulation-shelf.slint`, `modulation-device.slint`
 - `ui/tests/`: `shelf_agreement.rs`, `midi_learn_gesture.rs`,
   `slint_face_agreement.rs`, `knob_value_text.rs`
@@ -301,6 +303,8 @@ Files marked *shared* are split in the table above.
   takes, assets and exports, MOO-241, MOO-188), `lib.rs`
 - `session/tests/`: `gesture_undo.rs`, `structure.rs`, `source_switch.rs`,
   `document_fixtures.rs`
+- `project/tests/source_param_kind.rs` (a song saved before generator
+  addresses carried a kind loads with each one intact, MOO-135)
 - `ui/ui/save-preset-dialog.slint`
 
 ### 9. Interface
