@@ -1821,6 +1821,48 @@ in one team's worktree can silently revert another team's landing (hence
 `git diff --stat` before every push); and the box updates `Cargo.lock` without
 telling anyone, so rung 4 runs `--locked`.
 
+## Sep 26 (the 0.1.6 push) — sixteen issues, thirteen agents, and main red twice from one change
+
+The first push scoped by a `Release` label rather than a `FOCUS.md` sequence:
+the open issues carrying `0.1.6`, bugs first. Thirteen team agents worked it,
+at most three at a time. Engine, Effects and Interface each needed a second
+agent (Effects a third) when the first reached its token budget, and each
+handed off through a comment on the issue. Every issue a team could finish
+landed and is closed. Four wait on Adam, each labelled `Question`: MOO-219,
+MOO-237 (it needs a real Mac), MOO-140 (the v1 Drum Synth, against his own
+09-22 ruling) and MOO-258.
+
+**One change turned main red twice, and both times for the same reason.**
+MOO-245 added a Width to the Modulation device. It grew ML-P8's finishing
+chorus by 16 bytes, which Engine's footprint test pins, and it left a row out
+of the preset corpus's list of parameters an old file predates. The team had
+fixed a failure of its own and re-run only `mooloop-dsp`. Its full run before
+that had "passed everything but one of mine", because `cargo test --workspace`
+without `--no-fail-fast` stops at the first failing test binary and never ran
+the other two. Two other teams found the two failures while verifying their
+own work, and each landed a one-line fix ahead of its own. The brief now
+requires `--no-fail-fast`, and rung 4 again after any fix and after the final
+rebase.
+
+**Timing needed a scheduler.** Three performance issues (MOO-264, MOO-254,
+and MOO-236's under-1% claim) wanted the build box under load 4, and three
+teams building kept it above that for hours. What worked was the
+orchestrator holding the other teams' builds for a window, and running the
+timings back to back. A timing command that waits on the box until the load
+drops, then runs, needs no one to watch it. MOO-254 also caught its own
+flattering number: the 50% it measured at baseline x86-64 is 25% in the
+x86-64-v2 build that ships, and the closing comment leads with the 25%.
+
+**Three results worth keeping.** ML-P8's Cold Metal at Unison X8 went from
+112 to 79 µs a block, and the Reverb is a quarter cheaper. Both are
+bit-identical, pinned in-process against the old path kept behind
+`#[cfg(test)]`. MOO-135 recorded a device's kind on generator addresses, so a
+lane made on one instrument goes quiet on another rather than moving a
+different parameter. It still loads every old song, and 0.1.5 still opens
+new ones.
+
+None of it has been heard. `FOCUS.md` lists items 27 to 30 for it.
+
 ## Open threads
 
 Refreshed 2026-09-02, with the September documentation audit's threads merged in on 2026-09-04 and Adam's 2026-09-05 list merged in after that. Four of the six threads listed here in August are closed: modulation drives things now, the buffer device exists, undo and clipboard are real, and the convolution reverb that needed an IR loader was replaced outright by an FDN hall — so `StereoIr` is no longer the boundary anything is waiting on.

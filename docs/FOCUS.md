@@ -16,12 +16,21 @@ reported and nothing is patched. The upgrade is MOO-268 (Adam, 2026-09-26: no fo
 an effect preset's click only selects.
 Nothing from either push has been heard. `JOURNAL.md` has the record.
 
-**The next push is 0.1.6, scoped 2026-09-26.** It is the open issues with
-the `0.1.6` label in Linear, and nothing else. The label is the list, and this
-document does not copy it. `AGENTS.md` explains the labels under *Releases: the
-`Release` labels*. **Order: bugs first** (Adam, 2026-09-26). Correctness comes first
-(MOO-242, 243, 135, 200, 239, 237), then the UX items, then the plugin face,
-then performance.
+**The 0.1.6 push is done, apart from four questions for Adam (2026-09-26).**
+The scope was the open issues carrying the `0.1.6` label in Linear, and
+nothing else (`AGENTS.md`, *Releases: the `Release` labels*). Team
+orchestration worked it bugs first, as Adam ordered, then the UX items, the
+plugin face and performance. Every issue a team could finish is Done, and
+each closing comment names its commit. Four wait on Adam, and each carries
+the `Question` label with the question on the issue:
+MOO-219 (a look at a folded device, and whether folds save), MOO-237 (Core
+Audio's latency, which needs a real Mac to check), MOO-140 (whether the v1
+Drum Synth also leaves the Add menu, against his 2026-09-22 ruling that it
+stays), and MOO-258 (close at 13.7% text cost, or keep going). **Cutting
+0.1.6 is Adam's call.** Before tagging, dispatch `release.yml` on `main`
+(`docs/OPERATIONS.md`, "Releases And Tags"). None of the push has been
+heard: listening items 27 to 30 below are its own. `JOURNAL.md` has the
+record.
 
 `archive/ROADMAP.md` orders the whole product by dependency, and `SCOPE.md`
 says what 0.2.0 is. This document is narrower: it names the active sequence
@@ -725,7 +734,7 @@ In the order worth playing:
 
     The measured version is
     `scripts/antibox --no-incremental cargo test -p mooloop-engine --lib -- plugin_mono`.
-28. **The Modulation device's Width and Mix** (MOO-245). Width is new: a
+30. **The Modulation device's Width and Mix** (MOO-245). Width is new: a
     mid/side scale on the wet signal, from both voices folded to the
     centre (0%) to the mode's own image (100%, the default and today's
     sound, bit for bit). The face's Mix is the slot's own wet/dry, which

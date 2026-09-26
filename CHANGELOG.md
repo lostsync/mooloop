@@ -4,6 +4,83 @@ What changed for someone making music with mooloop, grouped by area. Internal
 refactors, tests, CI and tooling are left out unless they change what ships.
 `scripts/release-notes` prints the full commit list for any release.
 
+## 0.1.6 — unreleased (changes since 0.1.5, 2026-09-26)
+
+Correctness first. A paste no longer loses a sampler's zones, a sample copy
+no longer overwrites a file, automation no longer jumps to the wrong
+parameter when a channel changes instrument, the Modulation device's
+feedback is bounded, and a range export keeps its reverb. After that, plugins
+get presets and a face that copes with hundreds of parameters, and the window
+and two of the heaviest sounds cost much less.
+
+**Heads up:** a Modulation device (flanger, phaser, chorus, ensemble, ADT)
+with Feedback above 75% is now quieter. Its resonance peaks at +12 dB instead
+of about +22, so a patch set near the end of the knob sounds 2 to 10 dB
+quieter than it did. Settings at or below 75% are unchanged.
+
+### Highlights
+
+- **Presets for plugins.** A hosted plugin device saves and loads as an
+  effect preset, with the plugin's own state inside it. Loading one onto
+  another channel, in another song, opens the plugin as it was saved.
+- **Large plugins are usable.** A plugin's face shows the parameters you pin
+  (the first eight by default). The channel sidebar lists the rest, with a
+  search box and a pin on each row. A stepped parameter the plugin names
+  shows as a row of buttons.
+- **The window draws about twice as fast** after the move to Slint 1.18.1. A
+  frame of a busy song went from 36 ms to 18 ms, and the rack and the mixer
+  now reach 60 frames a second.
+
+### Instruments
+
+- ML-P8 costs about 30% less at Unison X8, and ML-M1 and DS-01 are cheaper
+  too, with every sample unchanged.
+- A copied sampler channel pasted into a song opened after the copy keeps
+  its key zones' audio.
+
+### Effects and plugins
+
+- The Modulation device has a **Width** control, from mono to its full
+  stereo image. The face's Wet knob is now called **Mix**, and it is the
+  same control as before.
+- The Modulation device's feedback is bounded (see *Heads up*).
+- The Reverb costs about a quarter less, with every sample unchanged.
+- A mono CLAP effect can go in a chain: it hears the chain summed to mono,
+  and its output is copied to both sides. The browser no longer greys it
+  out. A plugin that is still refused says which ports it has.
+- A plugin knob takes modulation routes, shows the modulation ring, and can
+  be named for an automation lane or a MIDI mapping, like a native knob. A
+  parameter the plugin stops reporting is kept and drawn greyed, and comes
+  back when the plugin reports it again.
+- **Preferences → Plugins:** extra plugin folders, the scan timeout, rescan
+  at startup, **Rescan All** with progress, and the files that could not be
+  read and why.
+
+### Automation and modulation
+
+- Changing a channel's instrument no longer sends its lanes, LFO routes and
+  MIDI mappings to whatever parameter shares the old one's number. They go
+  quiet, stay in the song, and work again if you switch back.
+
+### Export
+
+- A range export now contains the reverb, delay and notes that carried into
+  the range. The range's frames are the whole song's own frames.
+
+### Interface
+
+- Double-click a channel's name in the step rack to rename it, and Tab to
+  the next one (Shift+Tab for the previous).
+- When the audio callback runs late, the status bar names the bar and the
+  channels or tracks that took the time. Click it to clear it.
+
+### Files and reliability
+
+- Copying a sample into a song's folder never overwrites a file that took
+  its name in the meantime.
+- On macOS, recorded MIDI is placed using the device's real output latency,
+  not one buffer's worth.
+
 ## 0.1.5 — 2026-09-25
 
 The biggest release so far. It adds plugin hosting, audio recording, a
