@@ -17977,7 +17977,14 @@ mod footprint {
         //
         // Grew by 16 with MOO-245: the finishing chorus's Modulation block
         // gained a Width parameter and its smoother.
-        assert_eq!(size_of::<MlP8>(), 7_504);
+        //
+        // Grew by 64 with MOO-264, 8 bytes a voice: the voice filter keeps
+        // the corner and resonance its coefficients were made from, so a
+        // filter that is not moving reuses them rather than paying `tan` and
+        // `exp2` every span, and `1 / span` so its ramp multiplies rather
+        // than divides (its step and span narrowed to `u16` to pay for part
+        // of it). Bit for bit.
+        assert_eq!(size_of::<MlP8>(), 7_568);
         // DS-01 is 6,832, and almost all of it is the eight-voice pool: a
         // voice carries six tone oscillators for its partial bank, an FM
         // modulator, four noise generators' worth of state, a state-variable
@@ -18203,7 +18210,10 @@ mod footprint {
         // widest source now 7,488.
         //
         // And by 16 for MOO-245: the chorus's Width, 7,504.
-        assert_eq!(per_live, 143_352);
+        //
+        // And by 64 for MOO-264: ML-P8's voice filters keep their last aim,
+        // the widest source now 7,568.
+        assert_eq!(per_live, 143_416);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
@@ -18300,7 +18310,10 @@ mod footprint {
         //
         // MOO-255's per-voice network controls: 448 bytes a live channel,
         // exactly 7 KiB across sixteen.
-        assert_eq!((fixed + per_live * 16) / 1024, 2_726);
+        //
+        // MOO-264's filter aims: 64 bytes a live channel, exactly 1 KiB
+        // across sixteen.
+        assert_eq!((fixed + per_live * 16) / 1024, 2_727);
     }
 
 }

@@ -335,22 +335,35 @@ struct VoiceFilter {
     /// The ramp's two ends, and how far into it the voice is.
     from: SvfCoeffs,
     to: SvfCoeffs,
-    step: u32,
-    span: u32,
+    step: u16,
+    span: u16,
+    /// `1 / span`, so a sample's place along the ramp is a multiply rather
+    /// than a divide (MOO-264). Exactly the quotient for a power-of-two span,
+    /// which every span this runs at is.
+    inv_span: f32,
     /// The mode `to` was made for, or `None` when the next engaged sample
     /// must take its coefficients whole rather than ramp from stale ones.
     mode: Option<MlP8FilterMode>,
     /// The cutoff the last span started at, which with this one's says
     /// where the next is heading.
     last_hz: f32,
+    /// The corner and resonance `to` was made from. A span aimed at the same
+    /// pair as the last one reuses `to` rather than paying `tan` and `exp2`
+    /// again for the same answer (MOO-264): a patch whose filter does not
+    /// move, which is most of them, made identical coefficients every span.
+    aim_hz: f32,
+    aim_resonance: f32,
     /// Run the filter as it was before MOO-246, for comparison.
     #[cfg(test)]
     per_sample: bool,
+    /// Run the filter as it was before MOO-264, for comparison.
+    #[cfg(test)]
+    before_moo264: bool,
 }
 
 /// Samples between coefficient updates of a voice filter. A power of two so
 /// the ramp's step is exact.
-const FILTER_CONTROL_SPAN: u32 = 16;
+const FILTER_CONTROL_SPAN: u16 = 16;
 
 impl VoiceFilter {
     fn new() -> Self {
@@ -361,10 +374,15 @@ impl VoiceFilter {
             to: rest,
             step: 0,
             span: FILTER_CONTROL_SPAN,
+            inv_span: 1.0 / FILTER_CONTROL_SPAN as f32,
             mode: None,
             last_hz: 0.0,
+            aim_hz: f32::NAN,
+            aim_resonance: f32::NAN,
             #[cfg(test)]
             per_sample: false,
+            #[cfg(test)]
+            before_moo264: false,
         }
     }
 
@@ -411,11 +429,26 @@ impl VoiceFilter {
             cutoff_hz
         };
         self.last_hz = cutoff_hz;
-        let next = SvfCascade::coeffs(output, slope, aim, resonance, sample_rate);
+        // `coeffs` is a pure function of these and the sample rate, which
+        // is the device's for its life; `to` was made for the same mode
+        // whenever `continuing` holds, so reusing it is the same
+        // coefficients to the bit. A NaN aim never matches, and is recomputed.
+        let same_aim =
+            continuing && aim == self.aim_hz && resonance == self.aim_resonance;
+        #[cfg(test)]
+        let same_aim = same_aim && !self.before_moo264;
+        let next = if same_aim {
+            self.to
+        } else {
+            self.aim_hz = aim;
+            self.aim_resonance = resonance;
+            SvfCascade::coeffs(output, slope, aim, resonance, sample_rate)
+        };
         self.from = if continuing { self.to } else { next };
         self.to = next;
         self.mode = Some(mode);
         self.step = 0;
+        self.inv_span = 1.0 / self.span as f32;
         self.ramp()
     }
 
@@ -425,7 +458,11 @@ impl VoiceFilter {
     #[inline]
     fn ramp(&mut self) -> SvfCoeffs {
         self.step += 1;
-        self.from.lerp(&self.to, self.step as f32 / self.span as f32)
+        #[cfg(test)]
+        if self.before_moo264 {
+            return self.from.lerp(&self.to, self.step as f32 / self.span as f32);
+        }
+        self.from.lerp(&self.to, self.step as f32 * self.inv_span)
     }
 
     #[inline]
@@ -1328,6 +1365,17 @@ struct Voice {
     cutoff: Smoothed,
     drive_amount: Smoothed,
     feedback: Smoothed,
+    /// Whether all nine of the smoothers above had reached their targets
+    /// when this render range began (MOO-264). Their targets are set only at
+    /// a range's start and at a note, which starts a new range, so a settled
+    /// smoother stays settled to the range's end: `advance()` would return
+    /// its target every sample and change nothing, and the sample loop reads
+    /// the target instead. That is nine calls a voice-sample for most of a
+    /// note's life.
+    smoothers_settled: bool,
+    /// Run the voice as it was before MOO-264, for comparison.
+    #[cfg(test)]
+    before_moo264: bool,
     /// This voice's summed internal-route offsets, in each destination's own
     /// units, indexed by [`MlP8ModDest::slot`]. Written once per sample and
     /// read wherever the destination is used; only the slots a route actually
@@ -1413,6 +1461,9 @@ impl Voice {
             cutoff: smoothed(1.0),
             drive_amount: smoothed(0.0),
             feedback: smoothed(0.0),
+            smoothers_settled: false,
+            #[cfg(test)]
+            before_moo264: false,
             mod_offsets: [0.0; MLP8_MOD_DESTS],
             network: NetworkControls::new(),
             pitch_scale: [1.0; 3],
@@ -1490,6 +1541,23 @@ impl Voice {
     /// Flat, branchless per route, and proportional to the routes a patch has
     /// rather than to the destination list: no descriptor is consulted, no
     /// enum is matched, and an unrouted patch returns immediately.
+    /// Whether every per-voice smoother is at its target, which is what
+    /// [`Self::smoothers_settled`] records once a range.
+    fn smoothers_are_settled(&self) -> bool {
+        #[cfg(test)]
+        if self.before_moo264 {
+            return false;
+        }
+        self.velocity_amp.is_settled()
+            && self.osc_level.iter().all(Smoothed::is_settled)
+            && self.sub_level.is_settled()
+            && self.noise_level.is_settled()
+            && self.cutoff.is_settled()
+            && self.drive_amount.is_settled()
+            && self.feedback.is_settled()
+    }
+
+    #[inline]
     fn resolve_routes(&mut self, routes: &CompiledRoutes, sources: &ModSources) {
         if !routes.any {
             return;
@@ -1577,6 +1645,17 @@ impl Voice {
         }
         let _ = prep;
         self.network.now[depth_index(to, from)]
+    }
+
+    /// Whether oscillator `to`'s phase can be moved this range; see
+    /// [`Prepared::phase_modulated`].
+    #[inline]
+    fn phase_modulated(&self, prep: &Prepared, to: usize) -> bool {
+        #[cfg(test)]
+        if self.before_moo264 {
+            return true;
+        }
+        prep.phase_modulated[to]
     }
 
     /// Oscillator `n`'s tuning as a ratio, before Drift, Detune and bend.
@@ -1773,6 +1852,17 @@ struct Prepared<'a> {
     /// The routed ones, as indices, so a voice's sample visits only those.
     routed_controls: [u8; NETWORK_CONTROLS],
     routed_count: usize,
+    /// Whether anything can move each oscillator's read phase this range:
+    /// one of its four depths is routed or not zero (MOO-264). With none,
+    /// its phase modulation is four products of zero summed, which is a
+    /// zero, and `bound_phase` of a zero is that zero; the sample loop
+    /// takes `0.0` without the products or `bound_phase`'s divide. That
+    /// zero's sign (the products can make `-0.0`) changes no sample: the
+    /// offset is added to a phase, or read as a phase of its own by a sync
+    /// reset, where every wave reads the same at `-0.0` as at `0.0`.
+    /// `skipping_settled_smoothers_and_unmoved_filter_aims_is_the_old_voice
+    /// _bit_for_bit` holds it to the old path.
+    phase_modulated: [bool; 3],
 }
 
 impl<'a> Prepared<'a> {
@@ -1880,7 +1970,15 @@ impl<'a> Prepared<'a> {
             }
         }
 
+        let phase_modulated: [bool; 3] = std::array::from_fn(|to| {
+            (0..4).any(|from| {
+                let index = depth_index(to, from);
+                control_routed[index] || control_value[index] != 0.0
+            })
+        });
+
         Self {
+            phase_modulated,
             control_value,
             control_input,
             control_routed,
@@ -2435,6 +2533,7 @@ impl MlP8 {
             voice
                 .feedback
                 .set_target(params.voice_feedback.clamp(-1.0, 1.0));
+            voice.smoothers_settled = voice.smoothers_are_settled();
             voice.network.settle(&prepared);
             voice.refresh_character(
                 params.drift.clamp(0.0, 1.0),
@@ -2465,7 +2564,7 @@ impl MlP8 {
                     continue;
                 }
                 voice.current_freq = voice.glide.follow(voice.target_freq, params.glide, sr);
-                let velocity = voice.velocity_amp.advance();
+                let velocity = follow(&mut voice.velocity_amp, voice.smoothers_settled);
                 // In `MlP8ModSource::ALL` order, which is the order a
                 // compiled route's source index means.
                 let sources: ModSources = [
@@ -2542,6 +2641,20 @@ impl MlP8 {
     }
 }
 
+/// A voice smoother's value this sample. When the range began with it at its
+/// target, that target is exactly what `advance()` would return, and the
+/// call would change nothing (MOO-264). `target()` rather than `value()`, so
+/// a smoother resting at `-0.0` under a `0.0` target reads as `advance()`
+/// would have, sign and all.
+#[inline(always)]
+fn follow(smoothed: &mut Smoothed, settled: bool) -> f32 {
+    if settled {
+        smoothed.target()
+    } else {
+        smoothed.advance()
+    }
+}
+
 /// A note as a bipolar offset from middle C, which is what the `Key`
 /// modulation source reads.
 ///
@@ -2571,9 +2684,11 @@ impl Voice {
         if prep.any_network_routed {
             self.advance_network(prep);
         }
-        let smoothed_level: [f32; 3] = std::array::from_fn(|n| self.osc_level[n].advance());
-        let smoothed_sub = self.sub_level.advance();
-        let smoothed_noise = self.noise_level.advance();
+        let settled = self.smoothers_settled;
+        let smoothed_level: [f32; 3] =
+            std::array::from_fn(|n| follow(&mut self.osc_level[n], settled));
+        let smoothed_sub = follow(&mut self.sub_level, settled);
+        let smoothed_noise = follow(&mut self.noise_level, settled);
         let level: [f32; 3] =
             std::array::from_fn(|n| self.dest(routes, slot::OSC_LEVEL[n], smoothed_level[n]));
         let sub_level = self.dest(routes, slot::SUB_LEVEL, smoothed_sub);
@@ -2621,14 +2736,18 @@ impl Voice {
             // would mean something different at every point on the knob. The
             // sum is in the order it always was, so an unrouted patch is the
             // same to the bit.
-            let mut phase_mod = self.phase_depth(prep, index, index) * self.taps[index]
-                + self.phase_depth(prep, index, 3) * self.noise_tap;
-            for source in 0..3 {
-                if source != index {
-                    phase_mod += self.phase_depth(prep, index, source) * self.taps[source];
+            offset[index] = if self.phase_modulated(prep, index) {
+                let mut phase_mod = self.phase_depth(prep, index, index) * self.taps[index]
+                    + self.phase_depth(prep, index, 3) * self.noise_tap;
+                for source in 0..3 {
+                    if source != index {
+                        phase_mod += self.phase_depth(prep, index, source) * self.taps[source];
+                    }
                 }
-            }
-            offset[index] = bound_phase(phase_mod);
+                bound_phase(phase_mod)
+            } else {
+                0.0
+            };
             freq[index] = self.current_freq * ratio[index];
             let width = self.dest(routes, slot::OSC_WIDTH[index], prep.pulse_width[index]);
             let step = self.oscs[index].next_step(
@@ -2718,9 +2837,10 @@ impl Voice {
     /// have made the control a volume knob with a ceiling.
     fn shape(&mut self, prep: &Prepared, mix: f32, velocity: f32, sample_rate: u32) -> f32 {
         let routes = prep.routes;
-        let smoothed_cutoff = self.cutoff.advance();
-        let smoothed_drive = self.drive_amount.advance();
-        let smoothed_feedback = self.feedback.advance();
+        let settled = self.smoothers_settled;
+        let smoothed_cutoff = follow(&mut self.cutoff, settled);
+        let smoothed_drive = follow(&mut self.drive_amount, settled);
+        let smoothed_feedback = follow(&mut self.feedback, settled);
         let cutoff = self.dest(routes, slot::CUTOFF, smoothed_cutoff);
         let drive = self.dest(routes, slot::DRIVE, smoothed_drive);
         let feedback = self.dest(routes, slot::VOICE_FEEDBACK, smoothed_feedback);
@@ -3099,8 +3219,10 @@ mod tests {
     }
     use crate::event::TimedEvent;
     use mooloop_core::mlp8::{
-        osc_param, xmod_index, OSC_OFFSET_SEMITONES, PARAM_FILTER_CUTOFF,
-        PARAM_OSC_FEEDBACK_BASE, PARAM_VOICE_FEEDBACK, PARAM_XMOD_BASE,
+        osc_param, xmod_index, OSC_OFFSET_LEVEL, OSC_OFFSET_SEMITONES, PARAM_DRIVE,
+        PARAM_FILTER_CUTOFF, PARAM_FILTER_ENV_AMOUNT, PARAM_FILTER_RESONANCE,
+        PARAM_NOISE_LEVEL, PARAM_OSC_FEEDBACK_BASE, PARAM_SUB_LEVEL, PARAM_VOICE_FEEDBACK,
+        PARAM_XMOD_BASE,
     };
     use mooloop_core::{MlP8FilterMode, MlP8Unison, SubOctave, SubSource, SyncSource};
 
@@ -4729,7 +4851,7 @@ mod tests {
     #[derive(Clone, Copy)]
     enum FilterRate {
         PerSample,
-        Span(u32),
+        Span(u16),
     }
 
     /// Render `notes` held from the start, both channels, with every voice
@@ -4956,6 +5078,206 @@ mod tests {
                 reference.iter().zip(&routed).all(|(a, b)| a.to_bits() == b.to_bits()),
                 "{name}: the routed list changed a sample"
             );
+        }
+    }
+
+    // --- MOO-264: settled smoothers and an unmoving filter, skipped -------
+
+    /// How a render's voices run: as before MOO-264, with only the voice's
+    /// half of it (its smoothers and phase modulation), or as they do now.
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    enum VoicePath {
+        Before,
+        /// The voice's half, the filter as before: the split.
+        VoiceOnly,
+        Now,
+    }
+
+    fn set_voice_path(synth: &mut MlP8, path: VoicePath) {
+        for voice in synth.voices.iter_mut() {
+            voice.before_moo264 = path == VoicePath::Before;
+            voice.filter.before_moo264 =
+                matches!(path, VoicePath::Before | VoicePath::VoiceOnly);
+        }
+    }
+
+    /// Render `notes` held for `held` frames of `frames` in 128-frame
+    /// blocks, both channels, with `moves` (frame, parameter id, value)
+    /// applied as they come: a knob turned mid-note is what un-settles a
+    /// smoother and moves the filter's aim.
+    fn render_path(
+        params: MlP8Params,
+        notes: &[u8],
+        frames: usize,
+        held: usize,
+        moves: &[(usize, u32, f32)],
+        path: VoicePath,
+    ) -> Vec<f32> {
+        let mut synth = MlP8::new(params, SR);
+        set_voice_path(&mut synth, path);
+        let mut left = Vec::with_capacity(frames);
+        let mut right = Vec::with_capacity(frames);
+        let block = 128;
+        let mut bus = StereoBus::with_capacity(block);
+        let mut rendered = 0;
+        while rendered < frames {
+            let len = block.min(frames - rendered);
+            let mut events = EventList::empty();
+            if rendered == 0 {
+                for (index, note) in notes.iter().enumerate() {
+                    events.push(note_on(0, index as u64 + 1, *note));
+                }
+            }
+            for &(at, id, value) in moves {
+                if rendered <= at && at < rendered + len {
+                    events.push(TimedEvent {
+                        offset: (at - rendered) as u32,
+                        event: Event::ParamValue { id, value },
+                    });
+                }
+            }
+            if rendered <= held && held < rendered + len {
+                for (index, note) in notes.iter().enumerate() {
+                    events.push(TimedEvent {
+                        offset: (held - rendered) as u32,
+                        event: Event::NoteOff {
+                            id: index as u64 + 1,
+                            note: *note,
+                        },
+                    });
+                }
+            }
+            bus.l[..len].fill(0.0);
+            bus.r[..len].fill(0.0);
+            synth.process(&ctx(len), &mut bus, &events, None);
+            left.extend_from_slice(&bus.l[..len]);
+            right.extend_from_slice(&bus.r[..len]);
+            rendered += len;
+        }
+        left.extend_from_slice(&right);
+        left
+    }
+
+    /// Knobs turned while the notes sound, each a step the smoothers ramp
+    /// out of: cutoff, resonance, drive, feedback, levels and the filter
+    /// envelope's depth, some mid-block, one back where it started.
+    fn knob_moves() -> Vec<(usize, u32, f32)> {
+        vec![
+            (3_000, PARAM_FILTER_CUTOFF, 0.35),
+            (3_000, osc_param(0, OSC_OFFSET_LEVEL), 0.2),
+            (5_555, PARAM_DRIVE, 0.3),
+            (7_000, PARAM_SUB_LEVEL, 0.4),
+            (7_001, PARAM_NOISE_LEVEL, 0.1),
+            (9_000, PARAM_FILTER_RESONANCE, 0.5),
+            (11_000, PARAM_VOICE_FEEDBACK, 0.2),
+            (12_345, PARAM_FILTER_ENV_AMOUNT, 0.4),
+            (14_000, PARAM_FILTER_CUTOFF, 0.35),
+            (16_000, osc_param(0, OSC_OFFSET_LEVEL), 0.9),
+        ]
+    }
+
+    /// The voice with its settled smoothers read rather than advanced, and
+    /// its filter reusing coefficients it already made, is the voice it
+    /// replaced to the bit: every factory patch and route case, the fast
+    /// filter sweep, each at Unison X8 too, held and released, with and
+    /// without knobs turned under it.
+    #[test]
+    fn skipping_settled_smoothers_and_unmoved_filter_aims_is_the_old_voice_bit_for_bit() {
+        let mut cases = route_cases();
+        cases.push(("fast sweep", fast_filter_sweep(), &[45, 57]));
+        let wide: Vec<_> = cases
+            .iter()
+            .map(|&(name, params, _)| {
+                (name, MlP8Params { unison: MlP8Unison::X8, ..params }, &[57u8][..])
+            })
+            .collect();
+        cases.extend(wide);
+        for (name, params, notes) in cases {
+            for moves in [Vec::new(), knob_moves()] {
+                let before = render_path(params, notes, 24_000, 18_000, &moves, VoicePath::Before);
+                let now = render_path(params, notes, 24_000, 18_000, &moves, VoicePath::Now);
+                let moved = if moves.is_empty() { "" } else { ", knobs turned" };
+                assert!(
+                    before.iter().any(|sample| *sample != 0.0),
+                    "{name}{moved}: rendered silence, which proves nothing"
+                );
+                assert!(
+                    before.iter().zip(&now).all(|(a, b)| a.to_bits() == b.to_bits()),
+                    "{name} ({:?}){moved}: MOO-264 changed a sample",
+                    params.unison
+                );
+            }
+        }
+    }
+
+    /// **What MOO-264 saves**, in microseconds a 128-frame block, the three
+    /// paths interleaved in one run so a shared machine's noise lands on all
+    /// of them: every pass renders every (patch, path) pair once, and each
+    /// block's cost is its fastest over the passes. One note at Unison X8,
+    /// held three quarters of two seconds, as `device_cost` plays it.
+    ///
+    /// ```sh
+    /// REPS=15 cargo test -p mooloop-dsp --release voice_path_cost -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "measures wall time; run deliberately in release"]
+    fn voice_path_cost() {
+        use std::time::Instant;
+        let reps = std::env::var("REPS")
+            .ok()
+            .and_then(|reps| reps.parse().ok())
+            .unwrap_or(7usize)
+            .max(1);
+        let block = 128;
+        let blocks = 2 * SR as usize / block;
+        let held_blocks = blocks * 3 / 4;
+        let patches: Vec<(&str, MlP8Params)> = mooloop_core::mlp8_factory::patches()
+            .into_iter()
+            .map(|patch| (patch.name, patch.params))
+            .map(|(name, params)| (name, MlP8Params { unison: MlP8Unison::X8, ..params }))
+            .collect();
+        let paths = [
+            VoicePath::Before,
+            VoicePath::VoiceOnly,
+            VoicePath::Now,
+        ];
+        let mut fastest = vec![vec![vec![f64::MAX; blocks]; paths.len()]; patches.len()];
+        let mut bus = StereoBus::with_capacity(block);
+        for _ in 0..reps {
+            for (p, (_, params)) in patches.iter().enumerate() {
+                for (v, path) in paths.iter().enumerate() {
+                    let mut synth = MlP8::new(*params, SR);
+                    set_voice_path(&mut synth, *path);
+                    for (index, slot) in fastest[p][v].iter_mut().enumerate() {
+                        let mut events = EventList::empty();
+                        if index == 0 {
+                            events.push(note_on(0, 1, 60));
+                        }
+                        if index == held_blocks {
+                            events.push(TimedEvent {
+                                offset: 0,
+                                event: Event::NoteOff { id: 1, note: 60 },
+                            });
+                        }
+                        bus.l[..block].fill(0.0);
+                        bus.r[..block].fill(0.0);
+                        let start = Instant::now();
+                        synth.process(&ctx(block), &mut bus, &events, None);
+                        let spent = start.elapsed().as_secs_f64() * 1.0e6;
+                        std::hint::black_box(&bus);
+                        *slot = slot.min(spent);
+                    }
+                }
+            }
+        }
+        println!("us per 128-frame block, fastest of {reps} passes, mean over {blocks} blocks");
+        println!(
+            "{:<22} {:>9} {:>9} {:>9}",
+            "patch (Unison X8)", "before", "voice", "now"
+        );
+        for (p, (name, _)) in patches.iter().enumerate() {
+            let mean = |v: usize| fastest[p][v].iter().sum::<f64>() / blocks as f64;
+            println!("{name:<22} {:>9.1} {:>9.1} {:>9.1}", mean(0), mean(1), mean(2));
         }
     }
 
