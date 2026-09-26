@@ -116,7 +116,7 @@ use mooloop_session::browser::{
     browser_display_name, has_playable_descendant, is_playable_sample, scan_browser_dir,
 };
 use mooloop_session::channel::{
-    apply_sample_references, copied_channel_name, ChannelClipboard, ChannelState,
+    apply_sample_references, ChannelClipboard, ChannelState,
 };
 use mooloop_session::command::{cycle_pane, CommandState, Pane};
 use mooloop_session::effects::EffectParamWrite;
@@ -2242,47 +2242,16 @@ fn queue_channel_insert(
         let state = state.borrow();
         project_snapshot(&state, window)
     };
-    let mut project = before.project.clone();
-    let mut samples = before.samples.clone();
-    if project.channels.len() >= MAX_CHANNELS || after >= project.channels.len() {
-        return false;
-    }
-    let mut channel = clipboard.channel;
-    // **A paste carries no foreign input picks.** Both fields name something
-    // in the document the channel was copied *from*: paste into another song
-    // and the same numbers name whatever that song happens to have there, so
-    // a pasted channel arrived listening to a stranger
-    // (`reports/fable-2026-09-21.md`, finding 7). Cleared on every paste
-    // rather than only across documents, because the same-song case is not
-    // sound either -- `rescope_after` renumbers routes and lanes and does not
-    // touch these (`docs/LOOSE_ENDS.md`, "A pasted channel's inputs"). The
-    // status message says so, so the pick is re-made deliberately.
-    channel.setup.channel.audio_input = mooloop_core::AudioInputSource::Off;
-    channel.setup.channel.midi_input = mooloop_core::midi::ChannelMidiInput::default();
-    channel
-        .notes
-        .resize_with(project.pattern_lengths.len(), Vec::new);
-    channel
-        .automation
-        .resize_with(project.pattern_lengths.len(), Vec::new);
-    channel.setup.channel.name = copied_channel_name(&project, &channel.setup.channel.name);
-    // The song renumbers every route and lane that named a later channel,
-    // and points the newcomer's own at its new seat.
-    let Some(index) = project.insert_channel(after + 1, channel) else {
+    // The session builds the pasted song (clearing the copy's input picks)
+    // and takes in the key-zone audio the clipboard carries (MOO-242).
+    let Some((pasted, index)) = state.borrow_mut().session.paste_channel(&before, after, clipboard)
+    else {
         return false;
     };
-    // The paste selects what it just made, and names it: `insert_channel`
-    // minted its identity on the way in -- and the same id is what its audio
-    // is filed under, so the sample table needs no insert.
-    let pasted = project.channels[index].id;
-    project.selected_channel = pasted;
-    if let Some(sample) = clipboard.sample {
-        samples.insert(pasted, sample);
-    }
     queue_structural_edit(
         tx,
         before,
-        ProjectSnapshot { project, samples },
+        pasted,
         status,
         Some(ListEdit::Channel(ChannelEdit::Inserted(index as u8))),
     )

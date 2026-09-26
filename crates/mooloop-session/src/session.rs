@@ -1891,8 +1891,9 @@ impl Session {
 
     /// A channel and its decoded audio, for the clipboard.
     ///
-    /// The sample travels with it so a paste never has to decode on the UI
-    /// thread.
+    /// The sample and the key zones' buffers travel with it, so a paste
+    /// never has to decode on the UI thread, and a paste into a song opened
+    /// since still has them (MOO-242).
     pub fn channel_clipboard(
         &self,
         index: usize,
@@ -1901,9 +1902,17 @@ impl Session {
     ) -> Option<crate::channel::ChannelClipboard> {
         let mut project = self.project_snapshot(bpm, swing_percent);
         crate::project::normalize_project_pattern_banks(&mut project);
+        let zones = self
+            .channels
+            .get(index)?
+            .zones
+            .iter()
+            .filter_map(|zone| Some((zone.path()?.to_path_buf(), zone.sample.clone()?)))
+            .collect();
         Some(crate::channel::ChannelClipboard {
             channel: project.channels.get(index)?.clone(),
             sample: self.sample_snapshots().get(index)?.clone(),
+            zones,
         })
     }
 }

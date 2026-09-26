@@ -283,10 +283,76 @@ impl ChannelState {
 /// In-memory channel clipboard. It intentionally keeps decoded sample data
 /// alongside the serializable channel so pasting never needs to re-read audio
 /// on the UI thread.
+///
+/// **Every buffer the channel plays travels with it** (MOO-242): the base
+/// sample, and each key zone's by the path the channel names it by. The
+/// clipboard outlives New and Open (MOO-161), but the session's zone table
+/// is replaced by them, so a zone's audio left behind in the table would be
+/// missing when the copy is pasted into the next song.
 #[derive(Clone)]
 pub struct ChannelClipboard {
     pub channel: ProjectChannel,
     pub sample: Option<Arc<SampleData>>,
+    /// The key zones' decoded audio, by path, for
+    /// [`crate::session::Session::admit_zone_audio`] on paste. A zone whose
+    /// audio the copied channel did not have is absent, and stays missing.
+    pub zones: Vec<(PathBuf, Arc<SampleData>)>,
+}
+
+impl crate::session::Session {
+    /// The snapshot a paste of `clipboard` after seat `after` makes of
+    /// `before`, and the seat the pasted channel lands in. `None` when the
+    /// song is full or `after` names no channel.
+    ///
+    /// The clipboard's zone buffers join the session's zone table here, so
+    /// the install that follows finds them by path as it finds any zone's
+    /// (MOO-242). They stay after an undo of the paste, as every zone buffer
+    /// the history can reach does.
+    pub fn paste_channel(
+        &mut self,
+        before: &crate::project::ProjectSnapshot,
+        after: usize,
+        clipboard: ChannelClipboard,
+    ) -> Option<(crate::project::ProjectSnapshot, usize)> {
+        let mut project = before.project.clone();
+        let mut samples = before.samples.clone();
+        if project.channels.len() >= MAX_CHANNELS || after >= project.channels.len() {
+            return None;
+        }
+        let mut channel = clipboard.channel;
+        // **A paste carries no foreign input picks.** Both fields name
+        // something in the document the channel was copied *from*: paste
+        // into another song and the same numbers name whatever that song
+        // happens to have there, so a pasted channel arrived listening to a
+        // stranger (`reports/fable-2026-09-21.md`, finding 7). Cleared on
+        // every paste rather than only across documents, because the
+        // same-song case is not sound either -- `rescope_after` renumbers
+        // routes and lanes and does not touch these (`docs/LOOSE_ENDS.md`,
+        // "A pasted channel's inputs"). The status message says so, so the
+        // pick is re-made deliberately.
+        channel.setup.channel.audio_input = mooloop_core::AudioInputSource::Off;
+        channel.setup.channel.midi_input = mooloop_core::midi::ChannelMidiInput::default();
+        channel
+            .notes
+            .resize_with(project.pattern_lengths.len(), Vec::new);
+        channel
+            .automation
+            .resize_with(project.pattern_lengths.len(), Vec::new);
+        channel.setup.channel.name = copied_channel_name(&project, &channel.setup.channel.name);
+        // The song renumbers every route and lane that named a later channel,
+        // and points the newcomer's own at its new seat.
+        let index = project.insert_channel(after + 1, channel)?;
+        // The paste selects what it just made, and names it: `insert_channel`
+        // minted its identity on the way in -- and the same id is what its
+        // audio is filed under, so the sample table needs no insert.
+        let pasted = project.channels[index].id;
+        project.selected_channel = pasted;
+        if let Some(sample) = clipboard.sample {
+            samples.insert(pasted, sample);
+        }
+        self.admit_zone_audio(clipboard.zones, false);
+        Some((crate::project::ProjectSnapshot { project, samples }, index))
+    }
 }
 
 pub fn copied_channel_name(project: &Project, source_name: &str) -> String {
@@ -475,5 +541,147 @@ mod tests {
             "clearing the reference is still not a browse"
         );
         assert_eq!(channel.sample_path, None);
+    }
+}
+
+#[cfg(test)]
+mod paste_tests {
+    use super::*;
+    use crate::project::{normalize_project_pattern_banks, ProjectSnapshot};
+    use crate::session::Session;
+    use mooloop_core::{ChannelSource, KeyRange, SampleZone, TICKS_PER_STEP};
+    use mooloop_dsp::ChannelAudioSnapshot;
+
+    const RATE: u32 = 48_000;
+
+    fn tone(hz: f64, level: f32) -> Arc<SampleData> {
+        Arc::new(SampleData {
+            frames: (0..RATE as usize)
+                .map(|n| {
+                    let value = level
+                        * (2.0 * std::f64::consts::PI * hz * n as f64 / f64::from(RATE)).sin()
+                            as f32;
+                    [value, value]
+                })
+                .collect(),
+            sample_rate: RATE,
+            root_note: 60,
+        })
+    }
+
+    fn file(name: &str) -> SampleReference {
+        SampleReference::File {
+            path: PathBuf::from(format!("/nonexistent/moo-242/{name}.wav")),
+            embedded: false,
+        }
+    }
+
+    fn zone(low: u8, high: u8, name: &str) -> SampleZone {
+        SampleZone {
+            keys: KeyRange::new(low, high),
+            root_note: low,
+            sample: file(name),
+            ..SampleZone::default()
+        }
+    }
+
+    /// One sampler whose base plays up to B3 and two zones above it, with a
+    /// note on each zone's own root, the second a half-bar after the first.
+    fn two_zone_song() -> Project {
+        let mut channel = ProjectChannel::sampler(0, 1);
+        let ChannelSource::Sampler(state) = &mut channel.setup.source else {
+            unreachable!()
+        };
+        state.sample = file("base");
+        state.params.attack = 0.0;
+        state.params.decay = 8.0;
+        state.params.sustain = 1.0;
+        state.keys = KeyRange::new(0, 59);
+        state.zones = vec![zone(60, 83, "low"), zone(84, 127, "high")];
+        channel.notes[0] = vec![
+            NoteEvent::new(1, 0, 4 * TICKS_PER_STEP, 60, 110),
+            NoteEvent::new(2, 8 * TICKS_PER_STEP, 4 * TICKS_PER_STEP, 84, 110),
+        ];
+        Project {
+            bpm: 120,
+            channels: vec![channel],
+            pattern_lengths: vec![16],
+            ..Project::default()
+        }
+    }
+
+    fn snapshot(session: &Session) -> ProjectSnapshot {
+        let mut project = session.project_snapshot(120, 0);
+        normalize_project_pattern_banks(&mut project);
+        ProjectSnapshot {
+            project,
+            samples: session.keyed_sample_snapshots(),
+        }
+    }
+
+    /// **A sampler channel copied in one song and pasted into a song opened
+    /// since plays both of its key zones** (MOO-242). The copy is taken, the
+    /// session opens a fresh song -- which empties the zone table, as New and
+    /// Open do -- and the paste installs through the same session calls the
+    /// window's does. Before the clipboard carried the zones' buffers, both
+    /// were reported missing and sounded nothing, though the files existed.
+    #[test]
+    fn a_two_zone_sampler_pasted_into_a_new_song_plays_both_zones() {
+        let (low, high) = (tone(440.0, 0.25), tone(660.0, 0.25));
+        let mut session = Session::default();
+        session.admit_zone_audio(
+            vec![
+                (PathBuf::from("/nonexistent/moo-242/low.wav"), low.clone()),
+                (PathBuf::from("/nonexistent/moo-242/high.wav"), high.clone()),
+            ],
+            true,
+        );
+        session.replace_project(&two_zone_song(), &[Some(tone(220.0, 0.25))]);
+        assert!(session.missing_zones().is_empty());
+        let copy = session.channel_clipboard(0, 120, 0).expect("a channel to copy");
+
+        // New: the table goes with the outgoing song.
+        session.admit_zone_audio(Vec::new(), true);
+        session.replace_project(&Project::default(), &[]);
+        assert!(session.zone_audio.is_empty());
+
+        let (pasted, index) = session
+            .paste_channel(&snapshot(&session), 0, copy)
+            .expect("room to paste");
+        session.replace_project(&pasted.project, &pasted.seated());
+        assert_eq!(session.missing_zones(), Vec::new(), "a pasted zone is missing");
+        let zones = &session.channels[index].zones;
+        assert!(Arc::ptr_eq(zones[0].sample.as_ref().unwrap(), &low));
+        assert!(Arc::ptr_eq(zones[1].sample.as_ref().unwrap(), &high));
+
+        // And both sound, through the real executor, from the install's own
+        // snapshots: the pasted channel only, since the fresh song's own
+        // channel is not the question.
+        let seated = pasted.seated();
+        let audio: Vec<ChannelAudioSnapshot> = pasted
+            .project
+            .channels
+            .iter()
+            .enumerate()
+            .map(|(seat, channel)| match channel.setup.sampler_state() {
+                Some(sampler) => session.sampler_install_audio(seated[seat].clone(), sampler),
+                None => ChannelAudioSnapshot::default(),
+            })
+            .collect();
+        let mut solo = pasted.project.clone();
+        for (seat, channel) in solo.channels.iter_mut().enumerate() {
+            if seat != index {
+                channel.notes.iter_mut().for_each(Vec::clear);
+            }
+        }
+        let bar = 2 * RATE as usize;
+        let played =
+            mooloop_engine::live_check::play_audio_through_executor(&solo, audio, RATE, bar, 256);
+        let loudest = |from: usize, to: usize| {
+            played[from * 2..to * 2].iter().fold(0.0f32, |m, v| m.max(v.abs()))
+        };
+        let eighth = bar / 8;
+        assert!(loudest(0, eighth) > 0.05, "the first zone is silent");
+        assert!(loudest(bar / 2, bar / 2 + eighth) > 0.05, "the second zone is silent");
     }
 }
