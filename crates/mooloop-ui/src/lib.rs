@@ -9,6 +9,7 @@
 mod actions;
 mod channel_colors;
 mod gestures;
+mod keys_focus;
 mod layer_view;
 #[cfg(test)]
 mod browser_panel_tests;
@@ -16667,6 +16668,11 @@ impl AppUi {
                     }
                     slint::quit_event_loop().ok();
                     return;
+                }
+                // The root shortcut scope gets the keys back whenever the
+                // focus has been left nowhere (MOO-289, `keys_focus.rs`).
+                if let Some(window) = weak.upgrade() {
+                    keys_focus::keep(&window);
                 }
                 if reconnect_requested.take() {
                     if let Some(window) = weak.upgrade() {

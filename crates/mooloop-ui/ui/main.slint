@@ -2808,6 +2808,16 @@ export component MainWindow inherits Window {
         }
     }
 
+    // Hands the keyboard back to `keys`, the one shortcut handler (MOO-289).
+    // Rust calls it, from one place: `keys_focus::keep`, on every pump tick
+    // that finds the window's focus nowhere at all. That is where a
+    // dialog's own scope leaves it on closing, where `clear-focus()` leaves
+    // it when a text field is done, and where a focused knob leaves it when
+    // its face is rebuilt or its pane is hidden -- and from there no key
+    // reaches anything until a click happens to focus something inside.
+    public function focus-root() {
+        keys.focus();
+    }
     forward-focus: keys;
     keys := FocusScope {
         // Deliberately does NOT take focus on click, even though it now
