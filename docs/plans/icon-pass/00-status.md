@@ -38,7 +38,27 @@ generic icon**, and a device's icon takes the **device colour**.
 | 04 — one meaning, one icon | Backlog (MOO-281) |
 | 05 — words to icons | Backlog (MOO-282) |
 
+## `scripts/dupe-audit icon-literal`
+
+**First run, 2026-09-27, against `main` at `a7ea4425`, before anything
+moved: 88.** By kind:
+
+| Kind | Count | What |
+| --- | --- | --- |
+| path | 29 | Every line of the four sets (`ToolIcons` 14, `StripIcons` 4, `SamplerDeviceIcons` 4, the EQ face's 6) and the Preferences close X. |
+| element path | 3 | The colour picker's "none" (twice: the swatch and the chip) and `ConsoleButton`'s sine. |
+| glyph | 55 | The survey's glyph sites, one per line; it counted "about 45". The extra are the transport's `▶ ⏸ ■ ●`, the settings `⚙`, the menu's `✓`, the browser row kinds `◇ ◈`, the math module's operator labels, and the device rack's `⇱ ▱ ❏ ⧉`. |
+| glyph (lead) | 1 | The `→` inside the math module's clamp readout; step 04 decides it. |
+
+Validated by reading every hit, and by what it does not report: the knob
+arcs (`controls.slint`), the envelope (`envelope.slint`), the response
+curves (`device-displays.slint`), the master compressor's needle
+(`master-comp.slint`) and the automation lane's computed `MoveTo`s are all
+built from values, and none is reported. The two LFO panels' fixed waveform
+pictures (`poly-device.slint`, `mono-device.slint`) are allowlisted in the
+check as displays, with step 05 to decide them. `"±0.0"` is a signed number
+and is not reported.
+
 ## To record when it happens
 
-- `scripts/dupe-audit icon-literal`'s first count, against the unfixed tree (01).
 - The FemtoVG cost measurement and the gate's decision (01).

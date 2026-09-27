@@ -1220,6 +1220,153 @@ def balanced_tail(text, start):
     return text[start:]
 
 
+# --- 11 ----------------------------------------------------------------
+ICON_HOME = "crates/mooloop-ui/ui/icons.slint"
+
+# Literals the path rule has to let through, each with its reason. A display
+# is not an icon (`docs/plans/icon-pass/README.md`, "What this does not do"),
+# and a display that happens to be a fixed picture is still a display.
+ICON_PATH_ALLOWED = {
+    (
+        "crates/mooloop-ui/ui/poly-device.slint",
+        "M 0 35 C 25 0 50 0 75 35",
+    ): "the LFO panel's waveform picture, a display on a 200x70 box; step 05 decides it",
+    (
+        "crates/mooloop-ui/ui/mono-device.slint",
+        "M 0 35 C 25 0 50 0 75 35",
+    ): "the LFO panel's waveform picture, a display on a 200x70 box; step 05 decides it",
+}
+
+# The blocks the icon-pass survey found glyphs in: arrows, mathematical
+# operators, misc technical, geometric shapes, misc symbols, dingbats, the
+# supplemental arrows, and emoji -- plus the Latin-1 and punctuation strays
+# `×`, `±`, `‹` and `›`.
+_ICON_CHAR_POINTS = {0x00B1, 0x00D7, 0x2039, 0x203A}
+
+
+def _icon_char(char: str) -> bool:
+    point = ord(char)
+    return point in _ICON_CHAR_POINTS or 0x2190 <= point <= 0x2BFF or point >= 0x1F000
+
+
+def icon_literal():
+    """Icons drawn anywhere but the registry, `ui/icons.slint`.
+
+    Written first for `docs/plans/icon-pass/` step 01 (MOO-279), against the
+    tree before anything moved, and it is the pass's progress bar: step 04
+    ends it at zero. The survey found one meaning drawn three ways -- remove
+    as `×`, `✕` and `−`; previous and next as `<`, `‹` and a Path chevron --
+    because an icon was written where it was drawn. It reports four kinds of
+    hit, one per line:
+
+    - **path**: a string literal that is nothing but SVG path commands, in
+      any `.slint` file but the registry. A display (a knob arc, an
+      envelope, a response curve) builds its commands from values, so it
+      has an interpolation or a bare `"M "` and is not reported. A fixed
+      picture that is still a display goes in `ICON_PATH_ALLOWED` with its
+      reason.
+    - **element path**: a `Path` drawn from `MoveTo` children whose
+      coordinates are literal numbers -- the colour picker's "none" and
+      `ConsoleButton`'s sine. The automation lane's `MoveTo`s are computed
+      and are not reported.
+    - **glyph**: a string literal holding a character from the symbol blocks
+      the survey found, written literally or as `\\u{...}`, or a literal
+      that is exactly `<` or `>`. Letters, digits and ordinary punctuation
+      are not icons, a sign on a number (`"±0.0"`) is a quantity, and prose
+      bound to `tooltip:`, `hint:` or an `accessible-` property is prose.
+      A `→` inside a longer label is reported as a lead, not a failure;
+      step 04 decides it.
+    - **duplicate**: two registry entries with the same path string, the
+      duplicate Adam asked the registry to prevent (2026-09-26).
+
+    It reads `.slint` only; the `mockup*` and `device-concepts.slint` files
+    are sketches and are skipped, as the plan says.
+    """
+    literal = re.compile(r'"((?:[^"\\]|\\.)*)"')
+    unicode_escape = re.compile(r"\\u\{([0-9a-fA-F]+)\}")
+    path_only = re.compile(r"^\s*[Mm]\s*-?[0-9][0-9\s.,eE+-]*(?:[MLCQAZHVSTmlcqazhvst][0-9\s.,eE+-]*)*$")
+    prose = re.compile(r"^\s*(?:tooltip|hint|accessible-[a-z-]+|status)\s*:")
+    move_literal = re.compile(r"MoveTo\s*\{\s*x:\s*-?[0-9.]+\s*;\s*y:\s*-?[0-9.]+\s*;\s*\}")
+
+    def code_of(line: str) -> str:
+        # The line up to a `//` that is not inside a string.
+        inside = False
+        for at, char in enumerate(line):
+            if char == '"' and (at == 0 or line[at - 1] != "\\"):
+                inside = not inside
+            elif not inside and line.startswith("//", at):
+                return line[:at]
+        return line
+
+    hits = []
+    registry = []
+    for path in slint_sources():
+        where = rel(path)
+        if path.name.startswith("mockup") or path.name == "device-concepts.slint":
+            continue
+        home = where == ICON_HOME
+        for number, raw in enumerate(path.read_text().splitlines(), 1):
+            code = code_of(raw)
+            if home:
+                for match in literal.finditer(code):
+                    registry.append((number, match.group(1)))
+                continue
+            if move_literal.search(code):
+                hits.append((f"{where}:{number}", "element path: a Path drawn from literal MoveTo coordinates"))
+                continue
+            glyphs, lead, path_hit = [], False, False
+            for match in literal.finditer(code):
+                text = match.group(1)
+                if "\\{" not in text and path_only.match(text):
+                    allowed = any(
+                        where == file and text.startswith(start)
+                        for (file, start) in ICON_PATH_ALLOWED
+                    )
+                    if not allowed:
+                        path_hit = True
+                    continue
+                if prose.match(code):
+                    continue
+                shown = unicode_escape.sub(lambda m: chr(int(m.group(1), 16)), text)
+                if shown.strip() in ("<", ">"):
+                    glyphs.append(shown.strip())
+                    continue
+                found = [c for c in shown if _icon_char(c)]
+                # A sign on a number is a quantity, not an icon.
+                found = [
+                    c for c in found
+                    if not re.search(re.escape(c) + r"\s*[0-9]", shown)
+                ]
+                if not found:
+                    continue
+                if found == ["→"] * len(found) and shown != "→":
+                    lead = True
+                    continue
+                glyphs.extend(found)
+            if path_hit:
+                hits.append((f"{where}:{number}", "path: an icon's path string outside icons.slint"))
+            if glyphs:
+                shown = " ".join(dict.fromkeys(glyphs))
+                hits.append((f"{where}:{number}", f"glyph: {shown} drawn as text; name it in icons.slint"))
+            elif lead:
+                hits.append((f"{where}:{number}", "glyph (lead): a signal-flow → inside a label; step 04 decides it"))
+
+    seen = {}
+    for number, text in registry:
+        if not path_only.match(text):
+            continue
+        if text in seen:
+            hits.append(
+                (
+                    f"{ICON_HOME}:{number}",
+                    f"duplicate: the same path string as line {seen[text]}",
+                )
+            )
+        else:
+            seen[text] = number
+    return hits
+
+
 CHECKS = {
     "shared-constant": shared_constant,
     "repeated-line": repeated_line,
@@ -1231,6 +1378,7 @@ CHECKS = {
     "popup-close-order": popup_close_order,
     "navigation-sends": navigation_sends,
     "unrecorded-edit": unrecorded_edit,
+    "icon-literal": icon_literal,
 }
 
 
