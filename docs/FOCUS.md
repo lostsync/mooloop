@@ -29,14 +29,24 @@ and each closing comment names its commit. Adam's answers:
   DS-SX**. The full name shows where there's room, the model number where
   it's tight (`05a7dad2`..`83f3f78e`, four teams in a relay).
 
-Two items are still open in 0.1.6, and both wait on him:
-- **MOO-237**, Core Audio's latency, which he will check on a Mac.
-- **MOO-273**, an icon per device kind in place of the header's bar and dot,
-  which he added to 0.1.6. He chose filled shapes, and asked for an icon
-  registry and the long-deferred icon pass. That is now
-  `plans/icon-pass/` (Linear project Icon pass): its steps 01, the registry
-  (MOO-279), and 02, the device kinds (MOO-273), are in 0.1.6, and 03-05 are
-  0.1.7.
+**2026-09-27:** Adam's UI feedback batch landed on main:
+- MOO-283: the swatches follow the scheme;
+- MOO-284: no window border;
+- MOO-285: the Appearance page scrolls to its end;
+- MOO-286: 115% text is the new 100%, and there's no Density fader;
+- MOO-287: the pane shortcuts act on is outlined;
+- MOO-289: shortcuts survive focus loss;
+- MOO-279: the icon registry, `plans/icon-pass/` step 01.
+
+Three items are still open in 0.1.6, and all wait on Adam:
+- **MOO-273**, device-kind icons (icon-pass step 02). It's built and
+  verified on `feat/moo-273-device-kind-icons`, and waits on his look at the
+  kind sheet.
+- **MOO-289**'s launch case, which wasn't reproduced headless. He has two
+  checks to make on the laptop (Hyprland, `follow_mouse = 1`).
+- **MOO-237**, Core Audio's latency, which he'll check on a Mac.
+
+Steps 03-05 of the icon pass are 0.1.7.
 
 **Cutting 0.1.6 is Adam's call.** Before tagging, dispatch `release.yml` on
 `main` (`docs/OPERATIONS.md`, "Releases And Tags"). None of the push has been
