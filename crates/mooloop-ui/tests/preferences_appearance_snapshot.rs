@@ -25,6 +25,7 @@ slint::slint! {
         in property <[color]> slots;
         in property <[ColorChoice]> bases;
         in property <[ColorChoice]> hues;
+        in property <[ColorChoice]> accents;
         AppearancePage {
             schemes: root.rows;
             ramp: root.slots;
@@ -45,6 +46,7 @@ slint::slint! {
             accent-ratio: 5.03;
             base-choices: root.bases;
             hue-choices: root.hues;
+            accent-choices: root.accents;
             smooth-curves: true;
         }
     }
@@ -168,10 +170,11 @@ fn render_preferences_appearance_snapshot() {
     ui.set_preferences_appearance_roundness(1.0);
     ui.set_preferences_appearance_text_ratio(7.45);
     ui.set_preferences_appearance_accent_ratio(5.03);
-    ui.set_preferences_appearance_base_choices(choices(&[
-        0x2e3440, 0x18181b, 0x282a36, 0x282828, 0x2d353b, 0x002b36,
-    ]));
-    ui.set_preferences_appearance_hue_choices(choices(&NORD[8..14]));
+    // What `seed_choices` hands Nord (MOO-283): its three background-like
+    // neutrals, and its eight hues for Accent and Alert.
+    ui.set_preferences_appearance_base_choices(choices(&NORD[0..3]));
+    ui.set_preferences_appearance_accent_choices(choices(&NORD[8..16]));
+    ui.set_preferences_appearance_hue_choices(choices(&NORD[8..16]));
 
     // The Appearance page only becomes visible after clicking its nav item;
     // `page` is private to `PreferencesDialog` and not exposed to Rust.
@@ -185,10 +188,9 @@ fn render_preferences_appearance_snapshot() {
     // the color fields, the interface scalars, and the preview strip -- are
     // checkable too.
     let harness = AppearancePageHarness::new().unwrap();
-    harness.set_bases(page_choices(&[
-        0x2e3440, 0x18181b, 0x282a36, 0x282828, 0x2d353b, 0x002b36,
-    ]));
-    harness.set_hues(page_choices(&NORD[8..14]));
+    harness.set_bases(page_choices(&NORD[0..3]));
+    harness.set_accents(page_choices(&NORD[8..16]));
+    harness.set_hues(page_choices(&NORD[8..16]));
     harness.set_slots(ModelRc::from(Rc::new(VecModel::from(
         NORD.iter().map(|&slot| color(slot)).collect::<Vec<_>>(),
     ))));

@@ -571,6 +571,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   the desktop's own `org.freedesktop.appearance color-scheme` (the system
   appearance on macOS), **live**: switching the desktop between light and dark
   switches mooloop within a frame, with Preferences open or closed (MOO-156).
+  **The three colour pickers' quick swatches come from the scheme the page
+  names**, even after a swatch has made the colours Custom (MOO-283): Base
+  offers its three background-like neutrals (slots 00-02), Accent its eight
+  hues plus its own accent when that is none of them, and Alert its eight
+  hues. So a built-in's own three seeds are each a selectable swatch.
   **The channel, track and pattern swatch palette follows the theme**: eleven
   colours taken from the ramp's eight hues plus a midpoint in each of its
   three widest gaps. A song stores the colour it was given rather than a

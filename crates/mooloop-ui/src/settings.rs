@@ -90,6 +90,15 @@ impl ThemeScheme {
     }
 }
 
+/// The quick swatches the three colour pickers offer, one list per picker.
+/// See `AppearanceSettings::seed_choices`.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SeedChoices {
+    pub base: Vec<Rgb>,
+    pub accent: Vec<Rgb>,
+    pub alert: Vec<Rgb>,
+}
+
 /// Everything the Appearance page owns. The palette is not stored: it is
 /// derived from these seeds on every apply, so old configs pick up palette
 /// changes instead of freezing a stale ramp.
@@ -647,6 +656,52 @@ impl AppearanceSettings {
     /// what "the swatch palette follows the colourscheme" means in code.
     pub(crate) fn swatches(&self) -> Vec<Rgb> {
         self.ramp().swatches()
+    }
+
+    /// The quick swatches beside the three colour pickers, all from one
+    /// scheme (MOO-283).
+    ///
+    /// **The scheme is the one the page names, edited or not.** Clicking a
+    /// swatch makes the colours Custom, and a row drawn from the ramp in
+    /// force would then turn into the seed ramp's stock hues under the
+    /// pointer. Only with no theme named at all do the seeds' own ramp's
+    /// colours stand in.
+    ///
+    /// - **Base** is the ramp's three background-like neutrals, slots 00-02:
+    ///   base16's background, its lighter background and its selection. 03
+    ///   is already the comment colour, a text shade rather than a ground.
+    /// - **Accent** is the eight hues, slots 08-0F, then the ramp's accent
+    ///   override when it is none of them -- which is where the seed themes,
+    ///   Mooloop among them, keep theirs.
+    /// - **Alert** is the eight hues.
+    ///
+    /// The hues keep base16's slot order, so neither row reshuffles itself as
+    /// the theme changes. A selected theme's three seeds are each in their
+    /// row, which `every_builtin_theme_offers_its_own_seeds` holds.
+    pub(crate) fn seed_choices(&self) -> SeedChoices {
+        let ramp = self
+            .definition()
+            .map(|theme| theme.variant(self.wants_dark()).ramp())
+            .unwrap_or_else(|| self.ramp());
+        let distinct = |colors: &mut dyn Iterator<Item = Rgb>| {
+            let mut out: Vec<Rgb> = Vec::new();
+            for color in colors {
+                if !out.contains(&color) {
+                    out.push(color);
+                }
+            }
+            out
+        };
+        let hues = distinct(&mut (0x08..=0x0F).map(|slot| ramp.slot(slot)));
+        let mut accent = hues.clone();
+        if !accent.contains(&ramp.accent()) {
+            accent.push(ramp.accent());
+        }
+        SeedChoices {
+            base: distinct(&mut (0x00..=0x02).map(|slot| ramp.slot(slot))),
+            accent,
+            alert: hues,
+        }
     }
 
     /// The relief in force, read from its spelling.
@@ -1650,6 +1705,66 @@ mod tests {
                 assert_eq!(validated.unwrap().theme, theme.name);
             }
         }
+    }
+
+    /// MOO-283: with any built-in selected, on either side of the light/dark
+    /// line, each of the three pickers has a swatch that is its value -- a
+    /// swatch shows as selected on exactly that -- and Base's choices are the
+    /// scheme's own. Before, Base was the first six built-ins' backgrounds for
+    /// every theme, and the seed themes' accents were in no row at all.
+    #[test]
+    fn every_builtin_theme_offers_its_own_seeds() {
+        let hex = |colors: &[Rgb]| colors.iter().map(|c| c.to_hex()).collect::<Vec<_>>();
+        for theme in builtins::all() {
+            for mode in [Mode::Dark, Mode::Light] {
+                let mut settings = AppearanceSettings {
+                    mode: mode.name().to_owned(),
+                    ..AppearanceSettings::default()
+                };
+                settings.apply_theme(&theme);
+                let choices = settings.seed_choices();
+                let at = format!("{} in {} mode", theme.name, mode.name());
+                assert!(
+                    hex(&choices.base).contains(&settings.base),
+                    "{at}: base {} is not among {:?}",
+                    settings.base,
+                    hex(&choices.base)
+                );
+                assert!(
+                    hex(&choices.accent).contains(&settings.accent),
+                    "{at}: accent {} is not among {:?}",
+                    settings.accent,
+                    hex(&choices.accent)
+                );
+                assert!(
+                    hex(&choices.alert).contains(&settings.alert),
+                    "{at}: alert {} is not among {:?}",
+                    settings.alert,
+                    hex(&choices.alert)
+                );
+                let ramp = settings.ramp();
+                assert!(
+                    choices.base.iter().all(|c| (0..=2).any(|slot| ramp.slot(slot) == *c)),
+                    "{at}: every base choice is one of the scheme's own neutrals"
+                );
+            }
+        }
+    }
+
+    /// Picking a swatch makes the colours Custom, and the rows must not turn
+    /// into the stock seed hues under the pointer: they stay the named
+    /// scheme's.
+    #[test]
+    fn the_swatches_stay_the_schemes_once_a_swatch_is_picked() {
+        let mut settings = AppearanceSettings {
+            mode: Mode::Dark.name().to_owned(),
+            ..AppearanceSettings::default()
+        };
+        settings.apply_theme(&builtins::find("Nord").unwrap());
+        let before = settings.seed_choices();
+        settings.accent = before.accent[0].to_hex();
+        settings.customized = true;
+        assert_eq!(settings.seed_choices(), before);
     }
 
     /// Selecting a theme and flipping the mode is the whole feature, and what

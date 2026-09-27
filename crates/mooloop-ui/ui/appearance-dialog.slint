@@ -419,11 +419,12 @@ export component AppearancePage inherits VerticalLayout {
     in-out property <bool> variant-derived;
     in-out property <float> text-ratio: 1.0;
     in-out property <float> accent-ratio: 1.0;
-    // Quick swatches for the three fields. Base offers the built-in themes'
-    // backgrounds for the variant in force; accent and alert offer the hues of
-    // the scheme in force, so the row stops suggesting a lime while Nord is on
-    // screen.
+    // Quick swatches for the three fields, all from the scheme the page names
+    // (MOO-283): Base its background-like neutrals, Accent its eight hues and
+    // its own accent, Alert (`hue-choices`) its eight hues. Rust's
+    // `AppearanceSettings::seed_choices` says why each.
     in property <[ColorChoice]> base-choices;
+    in property <[ColorChoice]> accent-choices;
     in property <[ColorChoice]> hue-choices;
     in-out property <string> base;
     in-out property <string> accent;
@@ -606,7 +607,7 @@ export component AppearancePage inherits VerticalLayout {
         description: "State: selection, focus, and meters in their safe range.";
         value <=> root.accent;
         resolved: Theme.accent;
-        choices: root.hue-choices;
+        choices: root.accent-choices;
         changed => { root.preview-changed(); }
     }
     ColorField {
@@ -1370,6 +1371,7 @@ export component PreferencesDialog inherits Rectangle {
     in-out property <float> appearance-accent-ratio: 1.0;
     in-out property <[ColorChoice]> appearance-base-choices;
     in-out property <[ColorChoice]> appearance-hue-choices;
+    in-out property <[ColorChoice]> appearance-accent-choices;
     in-out property <string> appearance-base;
     in-out property <string> appearance-accent;
     in-out property <string> appearance-alert;
@@ -1644,6 +1646,7 @@ export component PreferencesDialog inherits Rectangle {
                                 accent-ratio <=> root.appearance-accent-ratio;
                                 base-choices: root.appearance-base-choices;
                                 hue-choices: root.appearance-hue-choices;
+                                accent-choices: root.appearance-accent-choices;
                                 base <=> root.appearance-base;
                                 accent <=> root.appearance-accent;
                                 alert <=> root.appearance-alert;

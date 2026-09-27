@@ -888,43 +888,29 @@ fn push_appearance_colors(window: &MainWindow, appearance: &AppearanceSettings) 
     push_appearance_swatches(window, appearance);
 }
 
-/// The quick swatches beside the three colour fields.
+/// The quick swatches beside the three colour fields, **all three from the
+/// scheme the page names** (MOO-283).
 ///
-/// **Base offers the built-in themes' backgrounds; accent and alert offer the
-/// hues of the scheme in force.** Both rows used to be six hex literals in the
-/// markup, which was defensible when the page's own colours were the only
-/// palette there was and stopped being so the moment a theme could be Nord:
-/// the accent row was suggesting a lime while Nord was on screen.
-///
-/// Six of each, because that is what the row draws. The hues are slots 08-0D
-/// -- red, orange, yellow, green, cyan, blue -- which every ramp has and which
-/// are in a predictable order, so the row does not reshuffle itself as the
-/// theme changes.
+/// Base used to be the first six built-in themes' backgrounds whatever the
+/// theme, so from Catppuccin on a scheme's own background was never offered,
+/// and the seed themes' accents were in no row at which a swatch could show
+/// as selected. What each row holds, and why, is
+/// `AppearanceSettings::seed_choices`; this only turns it into models.
 fn push_appearance_swatches(window: &MainWindow, appearance: &AppearanceSettings) {
-    let dark = appearance.wants_dark();
-    let mut bases: Vec<ColorChoice> = Vec::new();
-    for theme in appearance.themes() {
-        let background = theme.variant(dark).ramp().slot(0);
-        let value: SharedString = background.to_hex().into();
-        if bases.iter().all(|choice| choice.value != value) {
-            bases.push(ColorChoice {
-                value,
-                tint: background.color(),
-            });
-        }
-        if bases.len() == 6 {
-            break;
-        }
-    }
-    let ramp = appearance.ramp();
-    let hues: Vec<ColorChoice> = (0x08..=0x0D)
-        .map(|slot| ColorChoice {
-            value: ramp.slot(slot).to_hex().into(),
-            tint: ramp.slot(slot).color(),
-        })
-        .collect();
-    window.set_preferences_appearance_base_choices(ModelRc::from(Rc::new(VecModel::from(bases))));
-    window.set_preferences_appearance_hue_choices(ModelRc::from(Rc::new(VecModel::from(hues))));
+    let choices = appearance.seed_choices();
+    let model = |colors: Vec<settings::Rgb>| {
+        let rows: Vec<ColorChoice> = colors
+            .into_iter()
+            .map(|color| ColorChoice {
+                value: color.to_hex().into(),
+                tint: color.color(),
+            })
+            .collect();
+        ModelRc::from(Rc::new(VecModel::from(rows)))
+    };
+    window.set_preferences_appearance_base_choices(model(choices.base));
+    window.set_preferences_appearance_accent_choices(model(choices.accent));
+    window.set_preferences_appearance_hue_choices(model(choices.alert));
 }
 
 /// The two WCAG ratios the Appearance page reports.
