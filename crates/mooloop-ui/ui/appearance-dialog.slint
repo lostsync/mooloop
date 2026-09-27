@@ -462,11 +462,11 @@ export component AppearancePage inherits VerticalLayout {
     // which inherit VerticalBox and would otherwise absorb it as layouts do.
     alignment: start;
 
-    Text { text: "Appearance"; color: Theme.text; font-size: Theme.text-3xl; height: 20px; }
+    Text { text: "Appearance"; color: Theme.text; font-size: Theme.text-3xl; min-height: 20px; }
 
     SectionLabel { text: "THEME"; }
     HorizontalBox {
-        height: 30px;
+        min-height: 30px;
         padding: 0px;
         spacing: Theme.pad-lg;
         Text {
@@ -497,7 +497,7 @@ export component AppearancePage inherits VerticalLayout {
                 padding: Theme.pad-sm;
                 spacing: Theme.pad-xs;
                 for scheme in root.schemes : Rectangle {
-                    height: 26px;
+                    min-height: 26px;
                     border-radius: Theme.radius-sm;
                     // Highlighted only while the theme is what is actually
                     // being drawn. An edited palette is Custom, and a row
@@ -573,7 +573,7 @@ export component AppearancePage inherits VerticalLayout {
                     : root.theme;
         color: Theme.text-muted;
         font-size: Theme.text-lg;
-        height: 14px;
+        min-height: 14px;
     }
     HorizontalBox {
         padding: 0px;
@@ -732,7 +732,7 @@ export component AppearancePage inherits VerticalLayout {
     // square, so it reads best with Roundness at 0 -- said here, not
     // enforced, as the step asks until the drawing has been looked at.
     HorizontalBox {
-        height: 36px;
+        min-height: 36px;
         padding: 0px;
         spacing: 8px;
         VerticalBox {
@@ -776,7 +776,7 @@ export component AppearancePage inherits VerticalLayout {
     // which is why the hint says so rather than the interface pretending.
     SectionLabel { text: "TYPE"; }
     HorizontalBox {
-        height: 26px;
+        min-height: 26px;
         padding: 0px;
         spacing: Theme.pad-md;
         Text {
@@ -794,7 +794,7 @@ export component AppearancePage inherits VerticalLayout {
         }
     }
     HorizontalBox {
-        height: 26px;
+        min-height: 26px;
         padding: 0px;
         spacing: Theme.pad-md;
         Text {
@@ -815,7 +815,7 @@ export component AppearancePage inherits VerticalLayout {
         text: "A font that is not installed falls back to the platform default.";
         color: Theme.text-muted;
         font-size: Theme.text-lg;
-        height: 14px;
+        min-height: 14px;
     }
     ParameterFader {
         label: "Weight";
@@ -833,7 +833,7 @@ export component AppearancePage inherits VerticalLayout {
 
     SectionLabel { text: "GRAPHICS"; }
     HorizontalBox {
-        height: 36px;
+        min-height: 36px;
         padding: 0px;
         spacing: 8px;
         VerticalBox {
@@ -856,7 +856,7 @@ export component AppearancePage inherits VerticalLayout {
     // animated panel answers live; Apply persists the indices by name.
     SectionLabel { text: "MOTION"; }
     HorizontalBox {
-        height: 36px;
+        min-height: 36px;
         padding: 0px;
         spacing: 8px;
         VerticalBox {
@@ -877,7 +877,7 @@ export component AppearancePage inherits VerticalLayout {
         }
     }
     HorizontalBox {
-        height: 36px;
+        min-height: 36px;
         padding: 0px;
         spacing: 8px;
         VerticalBox {
@@ -900,7 +900,7 @@ export component AppearancePage inherits VerticalLayout {
     // persisted by name on Apply.
     SectionLabel { text: "METERING"; }
     HorizontalBox {
-        height: 36px;
+        min-height: 36px;
         padding: 0px;
         spacing: 8px;
         VerticalBox {
@@ -1627,15 +1627,18 @@ export component PreferencesDialog inherits Rectangle {
                         }
                         if root.page == 3 : ScrollView {
                             // The page is taller than the dialog body, so it
-                            // scrolls. `content-height` must be a constant:
-                            // binding it to the page's own preferred height is
-                            // circular (the child is sized by the viewport it
-                            // would define) and Slint breaks that loop by
-                            // collapsing everything below the fold. Keep the
-                            // constant in step with the page's content height.
+                            // scrolls, over the page's own preferred height.
+                            // This was a constant (684px) until MOO-285, on
+                            // the belief that the binding was circular; it is
+                            // not in Slint 1.18.1 (the page's width comes from
+                            // `visible-width`, and nothing in the page wraps),
+                            // and the constant had fallen ~600px behind the
+                            // page, stranding Borders and everything below it.
+                            // Left unset, `content-height` falls back to the
+                            // visible height rather than the content's.
                             vertical-stretch: 1;
                             content-width: self.visible-width;
-                            content-height: 684px;
+                            content-height: max(self.visible-height, appearance-page.preferred-height);
                             appearance-page := AppearancePage {
                                 width: parent.visible-width - 8px;
                                 theme <=> root.appearance-theme;

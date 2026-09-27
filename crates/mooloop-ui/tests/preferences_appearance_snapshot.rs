@@ -251,3 +251,62 @@ fn the_window_reports_a_desktop_scheme_change() {
         "each switch reaches Rust once, in order: {heard:?}"
     );
 }
+
+/// Pixels in the frame painted exactly `tint`.
+fn count_tint(snapshot: &slint::SharedPixelBuffer<slint::Rgba8Pixel>, tint: Color) -> usize {
+    snapshot
+        .as_slice()
+        .iter()
+        .filter(|p| p.r == tint.red() && p.g == tint.green() && p.b == tint.blue())
+        .count()
+}
+
+/// MOO-285: the page scrolls to its last section. Its `ScrollView` once had a
+/// fixed `content-height` of 684px while the page grew to twice that, so
+/// Borders, Emphasis and everything from TYPE down could not be reached. This
+/// sets the largest text size and density the page offers -- the tallest the
+/// page gets -- wheels the page down as far as it goes, and looks for the
+/// PREVIEW strip's destructive-red bar, which nothing else on the page paints.
+#[test]
+fn the_appearance_page_scrolls_to_its_last_section_at_200_percent_text() {
+    use mooloop_ui::Theme;
+
+    common::install_testing_backend();
+    let ui = MainWindow::new().unwrap();
+    ui.window().set_size(LogicalSize::new(800.0, 600.0));
+    let theme = ui.global::<Theme>();
+    theme.set_type_scale(2.0);
+    theme.set_density(1.75);
+    let red = theme.get_destructive();
+    ui.set_preferences_open(true);
+    click_at(ui.window(), APPEARANCE_NAV_ITEM);
+
+    let top = ui.window().take_snapshot().expect("headless snapshot");
+    assert_eq!(
+        count_tint(&top, red),
+        0,
+        "the PREVIEW strip is below the fold before scrolling"
+    );
+
+    // Over the page's right-hand gutter, beside its scroll bar: the faders
+    // take the wheel for themselves, and the gutter is where no fader is.
+    let over_gutter = LogicalPosition::new(754.0, 300.0);
+    ui.window()
+        .dispatch_event(WindowEvent::PointerMoved { position: over_gutter });
+    for _ in 0..60 {
+        ui.window().dispatch_event(WindowEvent::PointerScrolled {
+            position: over_gutter,
+            delta_x: 0.0,
+            delta_y: -120.0,
+        });
+    }
+    slint::platform::update_timers_and_animations();
+
+    let bottom = ui.window().take_snapshot().expect("headless snapshot");
+    write_snapshot(&bottom, "MOOLOOP_APPEARANCE_SCROLLED_SNAPSHOT");
+    let seen = count_tint(&bottom, red);
+    assert!(
+        seen >= 60,
+        "scrolled to the end, the PREVIEW strip's red bar is on screen ({seen} px)"
+    );
+}
