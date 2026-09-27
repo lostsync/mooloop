@@ -5,6 +5,7 @@ import { DevicePageButton } from "device-rack.slint";
 import { BitcrusherTrace, FilterResponseDisplay } from "device-displays.slint";
 import { EnvelopeEditor } from "envelope.slint";
 import { StepperField } from "toolbar.slint";
+import { Icons } from "icons.slint";
 
 /// One extra key zone as the ZONES page lists it (MOO-14).
 export struct SamplerZoneRow {
@@ -109,13 +110,6 @@ export component SamplerZonesPage inherits VerticalLayout {
         }
         Rectangle { horizontal-stretch: 1; }
     }
-}
-
-global SamplerDeviceIcons {
-    out property <string> previous: "M 10 3 L 5 8 L 10 13";
-    out property <string> next: "M 6 3 L 11 8 L 6 13";
-    out property <string> search: "M 10 6 A 4 4 0 1 1 2 6 A 4 4 0 1 1 10 6 Z M 9.2 9.2 L 13.5 13.5";
-    out property <string> reverse: "M 12 3 L 12 13 M 12 8 L 4.5 8 M 7.3 5 L 4.3 8 L 7.3 11";
 }
 
 component SampleMarker inherits Rectangle {
@@ -584,17 +578,17 @@ export component SamplerDeviceFace inherits Rectangle {
             HorizontalLayout {
                 spacing: 3px;
                 ToolButton {
-                    icon: SamplerDeviceIcons.previous; tooltip: "Previous sample";
+                    icon: Icons.previous; tooltip: "Previous sample";
                     enabled: root.can-previous-sample; min-width: 28px; max-width: 28px;
                     clicked => { root.previous-sample-clicked(); }
                 }
                 ToolButton {
-                    icon: SamplerDeviceIcons.search; tooltip: "Load sample";
+                    icon: Icons.search; tooltip: "Load sample";
                     min-width: 28px; max-width: 28px;
                     clicked => { root.load-sample-clicked(); }
                 }
                 ToolButton {
-                    icon: SamplerDeviceIcons.next; tooltip: "Next sample";
+                    icon: Icons.next; tooltip: "Next sample";
                     enabled: root.can-next-sample; min-width: 28px; max-width: 28px;
                     clicked => { root.next-sample-clicked(); }
                 }
@@ -614,7 +608,7 @@ export component SamplerDeviceFace inherits Rectangle {
                     changed(v) => { root.root-note-changed(v); }
                 }
                 ToolButton {
-                    icon: SamplerDeviceIcons.reverse; tooltip: "Reverse";
+                    icon: Icons.reverse; tooltip: "Reverse";
                     active: root.reverse-playback; min-width: 28px; max-width: 28px;
                     clicked => { root.reverse-playback = !root.reverse-playback; root.reverse-playback-changed(root.reverse-playback); }
                 }
