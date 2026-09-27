@@ -3,7 +3,8 @@ import { ScrollView } from "std-widgets.slint";
 import { ConsoleButton, MixerFader, MiniKnob, MuteButton, ParameterFader, PickerChip, SectionLabel, SoloButton, ToolButton } from "controls.slint";
 import { GainMath } from "gain.slint";
 import { ChannelMeter } from "meters.slint";
-import { StripIcons, StripMeters, StripRow, StripSections } from "strip.slint";
+import { StripMeters, StripRow, StripSections } from "strip.slint";
+import { Icons } from "icons.slint";
 import { ReorderMath } from "reorder.slint";
 
 // The mixer's own numbers, under a name, the way `DeviceRackMetrics` holds
@@ -820,7 +821,7 @@ component StripPageArrow inherits ToolButton {
     in property <string> glyph;
 
     text: root.here ? "" : root.glyph;
-    icon: root.here ? StripIcons.dot : "";
+    icon: root.here ? Icons.on : "";
     active: root.here;
     text-color: root.here ? Theme.text : Theme.text-muted;
     min-width: 20px;

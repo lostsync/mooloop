@@ -30,6 +30,7 @@ import { Motion, StatusHint, Theme } from "theme.slint";
 import { GainMath } from "gain.slint";
 import { MiniKnob, NoteFormat, PickerChip, SectionLabel, SelectorBank, ToolButton, ValueScale } from "controls.slint";
 import { DynamicsCurveDisplay, EqResponseDisplay } from "device-displays.slint";
+import { Icon, Icons } from "icons.slint";
 
 // One parameter's identity and range, as `mooloop_core::ParamDescriptor`
 // states it. Handed over once at startup, never per frame.
@@ -220,13 +221,10 @@ export global StripMetrics {
 //
 // Letters stay where the thing is a quantity rather than a shape: a
 // threshold is not a picture. `docs/UI_DESIGN.md` carries that split.
-export global StripIcons {
-    out property <string> bell: "M 1 13 C 5 13 5 4 8 4 C 11 4 11 13 15 13";
-    out property <string> high-shelf: "M 1 12 L 6 12 C 9 12 8 4 15 4";
-    out property <string> low-shelf: "M 1 4 C 8 4 7 12 10 12 L 15 12";
-    /// The dot the in-and-out switch wears instead of the word `IN`.
-    out property <string> dot: "M 6 8 A 2 2 0 1 1 10 8 A 2 2 0 1 1 6 8";
-}
+//
+// The drawings live in `icons.slint` as `Icons.eq-bell`, `Icons.eq-high-shelf`
+// and `Icons.eq-low-shelf` (MOO-279); the in-and-out switch's dot is
+// `Icons.on`.
 
 // One track's meter, through the ballistics the pump runs per bus: the
 // level, its held peak and the clip latch.
@@ -283,7 +281,7 @@ export global StripMeters {
 component StripInSwitch inherits ToolButton {
     in property <bool> on;
 
-    icon: StripIcons.dot;
+    icon: Icons.on;
     active: root.on;
     text-color: root.on ? Theme.text : Theme.text-faint;
     tooltip: root.on ? "In" : "Out";
@@ -599,19 +597,16 @@ export component StripEqPage inherits Rectangle {
                 // always, so their icon is a label rather than a control.
                 property <bool> switchable: index == 0
                     || index == root.strip.band-gain-db.length - 1;
-                Path {
+                Icon {
                     x: 0px;
                     y: (parent.height - self.height) / 2;
-                    width: StripMetrics.row-label;
-                    height: StripMetrics.row-label;
-                    viewbox-width: 16;
-                    viewbox-height: 16;
-                    commands: !root.strip.band-shelf[index]
-                        ? StripIcons.bell
-                        : index == 0 ? StripIcons.high-shelf : StripIcons.low-shelf;
-                    stroke: root.strip.eq-in ? Theme.accent : Theme.text-faint;
-                    stroke-width: 1.2px;
-                    fill: transparent;
+                    size: StripMetrics.row-label;
+                    icon: !root.strip.band-shelf[index]
+                        ? Icons.eq-bell
+                        : index == 0 ? Icons.eq-high-shelf : Icons.eq-low-shelf;
+                    tint: root.strip.eq-in ? Theme.accent : Theme.text-faint;
+                    outline: true;
+                    outline-width: 1.2px;
                 }
                 if shape.switchable : TouchArea {
                     mouse-cursor: pointer;
