@@ -19,6 +19,7 @@ import { Theme } from "theme.slint";
 import { GainMath } from "gain.slint";
 import { NoteFormat, ParameterKnob, SelectorBank, ToolButton } from "controls.slint";
 import { EqResponseDisplay } from "device-displays.slint";
+import { Icons } from "icons.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 
 // One face control's range, as `mooloop_core::ParamDescriptor` states it.
@@ -151,17 +152,11 @@ export component EqDeviceFace inherits EffectDeviceShell {
     private property <bool> pass-target: EqSpec.is-pass(root.target-index);
     private property <bool> proportional-q: root.q-profile >= 0.5;
 
-    // The selector's glyphs, on `ToolButton`'s 16x16 grid: what each target
-    // does to the curve, drawn as the curve. A band that is a plain bell
-    // draws its number instead -- the number its own parameters are called
-    // by -- so the row reads as the bank does, shelf, five bells, shelf,
-    // with the two pass filters at the ends.
-    private property <string> low-shelf-icon: "M 2 5 L 5 5 C 7 5 7 11 9 11 L 14 11";
-    private property <string> high-shelf-icon: "M 2 11 L 7 11 C 9 11 9 5 11 5 L 14 5";
-    private property <string> high-pass-icon: "M 2 13 C 5 13 6 5 9 5 L 14 5";
-    private property <string> low-pass-icon: "M 2 5 L 7 5 C 10 5 11 13 14 13";
-    private property <string> analyzer-icon:
-        "M 3 13 L 3 9 M 6.5 13 L 6.5 5 M 10 13 L 10 8 M 13.5 13 L 13.5 3";
+    // The selector's glyphs are `Icons.eq-face-*` in `icons.slint`: what each
+    // target does to the curve, drawn as the curve. A band that is a plain
+    // bell draws its number instead -- the number its own parameters are
+    // called by -- so the row reads as the bank does, shelf, five bells,
+    // shelf, with the two pass filters at the ends.
 
     // Which target the button at `position` aims at: the high-pass first,
     // then the seven bands, then the low-pass, so the row runs left to right
@@ -182,10 +177,10 @@ export component EqDeviceFace inherits EffectDeviceShell {
     // `the_selectors_glyphs_follow_the_bands_own_kind` pins.
     pure function target-icon(target: int) -> string {
         if (EqSpec.is-pass(target)) {
-            return target == EqSpec.band-count ? root.high-pass-icon : root.low-pass-icon;
+            return target == EqSpec.band-count ? Icons.eq-face-high-pass : Icons.eq-face-low-pass;
         }
         let kind = target < root.band-kinds.length ? root.band-kinds[target] : 0;
-        return kind == 1 ? root.low-shelf-icon : kind == 2 ? root.high-shelf-icon : "";
+        return kind == 1 ? Icons.eq-face-low-shelf : kind == 2 ? Icons.eq-face-high-shelf : "";
     }
 
     VerticalLayout {
@@ -219,7 +214,7 @@ export component EqDeviceFace inherits EffectDeviceShell {
                 x: parent.width - self.width - 6px;
                 y: 6px;
                 width: 28px; height: 22px;
-                icon: root.analyzer-icon;
+                icon: Icons.eq-face-analyzer;
                 tooltip: "Analyzer";
                 hint: "Show spectrum analyzer";
                 active: root.analyzer-enabled;
@@ -293,7 +288,7 @@ export component EqDeviceFace inherits EffectDeviceShell {
             if !root.pass-target : ToolButton {
                 min-width: 26px; max-width: 26px; min-height: 26px; max-height: 26px;
                 text: "";
-                icon: "M 2 12 L 5 12 L 8 4 L 11 12 L 14 12";
+                icon: Icons.eq-face-proportional-q;
                 tooltip: "Proportional Q";
                 active: root.proportional-q;
                 clicked => { root.q-profile-changed(root.proportional-q ? 0 : 1); }

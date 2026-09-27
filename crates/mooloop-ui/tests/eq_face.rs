@@ -343,10 +343,10 @@ fn the_eq_face_declares_no_bounds_of_its_own() {
 #[test]
 fn the_selectors_glyphs_follow_the_bands_own_kind() {
     for (kind, icon) in [
-        (EqBandKind::LowShelf, "low-shelf-icon"),
-        (EqBandKind::HighShelf, "high-shelf-icon"),
+        (EqBandKind::LowShelf, "eq-face-low-shelf"),
+        (EqBandKind::HighShelf, "eq-face-high-shelf"),
     ] {
-        let clause = format!("kind == {} ? root.{icon}", kind.to_index());
+        let clause = format!("kind == {} ? Icons.{icon}", kind.to_index());
         assert!(
             EQ_SLINT.contains(&clause),
             "eq-device.slint does not say `{clause}`, so the glyph a band draws \
