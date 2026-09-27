@@ -68,15 +68,23 @@ fn pane_rows(window: &MainWindow, view: i32) -> ((f32, f32), (f32, f32)) {
 
 /// Presses `view` somewhere nothing inside it claims -- its background --
 /// and returns where. Tried along the pane's bottom edge and its toolbar row,
-/// right to left, because what covers a pane depends on the view: with no
-/// channels the steps are empty, while the rack's face takes presses almost
-/// everywhere. A press that something claimed leaves the outline where it
-/// was, and the next point is tried from there.
+/// because what covers a pane depends on the view: with no channels the steps
+/// are empty, while the rack's face takes presses almost everywhere. A press
+/// that something claimed leaves the outline where it was, and the next point
+/// is tried from there.
+///
+/// **Middle outwards, not right to left.** A toolbar's controls sit at its
+/// two ends and its stretch is in the middle. Right to left worked only while
+/// the window's 8px padding happened to leave 0.97 of the width in a gap past
+/// the dock toolbar's last control. When MOO-284 took the padding away, the
+/// toolbar's right-hand controls moved 8px right and that press landed on
+/// one. Every point after it then stopped hovering the pane, most likely
+/// under the menu it had opened.
 fn press_background(window: &MainWindow, view: i32) -> (f32, f32) {
     let (bottom, top) = pane_rows(window, view);
     let before = window.get_active_pane();
     for y in [bottom.1, top.1] {
-        for fraction in [0.97, 0.85, 0.7, 0.5, 0.3, 0.1] {
+        for fraction in [0.5, 0.7, 0.3, 0.85, 0.1, 0.97] {
             let point = (WIDTH * fraction, y);
             hover(window, point);
             if window.get_hovered_pane() != view {

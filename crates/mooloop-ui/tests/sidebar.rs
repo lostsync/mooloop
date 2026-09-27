@@ -6,8 +6,9 @@
 //! snapshots, so a round trip must be byte-identical and a clamped drag
 //! must restore exactly. The sidebar's x geometry hangs off one measured
 //! constant, CONTENT_RIGHT (the right edge of the window's layout area,
-//! where the sidebar meets the window edge; the window keeps small side
-//! insets, so this is inside the 960px surface).
+//! where the sidebar meets the window edge). That was 952 while the window
+//! kept an 8px inset on every side; MOO-284 took the inset away, so the
+//! sidebar now meets the 960px surface's own edge.
 
 use mooloop_ui::{view, MainWindow};
 use slint::platform::{PointerEventButton, WindowEvent};
@@ -15,7 +16,7 @@ use slint::{ComponentHandle, LogicalPosition, LogicalSize};
 
 mod common;
 
-const CONTENT_RIGHT: f32 = 952.0;
+const CONTENT_RIGHT: f32 = 960.0;
 const DEFAULT_WIDTH: f32 = 260.0;
 // The browser's chip is the *rightmost* of the status bar's layout chips,
 // which read in the screen order of the regions they toggle: channel
@@ -26,7 +27,7 @@ const DEFAULT_WIDTH: f32 = 260.0;
 // centre is width - 16 whatever n is -- which is why this constant did not
 // move when the channel sidebar's chip was added in front of it.
 const BUTTON_X: f32 = 944.0;
-const BUTTON_Y: f32 = 740.0;
+const BUTTON_Y: f32 = 748.0;
 const NEUTRAL: (f32, f32) = (300.0, 400.0);
 
 fn harness() -> MainWindow {
@@ -212,7 +213,7 @@ fn sidebar_grip_clamps_at_ceiling_and_restores_exactly() {
     ui.window().set_size(LogicalSize::new(1100.0, 760.0));
     ui.set_sidebar_visible(true);
     let window = ui.window();
-    const WIDE_RIGHT: f32 = 1092.0;
+    const WIDE_RIGHT: f32 = 1100.0;
     let wide_grip_x = |width: f32| WIDE_RIGHT - width - 2.0;
 
     // 390 -> 30px of leftward drag clamps at 400 with a 20px overshoot.

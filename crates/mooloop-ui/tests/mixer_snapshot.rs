@@ -555,7 +555,9 @@ const FULL_FADER_Y: f32 = 620.0;
 /// clear of the corner, so the sweep cannot turn the strip over half way
 /// through and start testing the other face.
 fn sweep_strip(ui: &MainWindow, moved: &Rc<Cell<(i32, i32)>>) -> Vec<i32> {
-    sweep_column(ui, moved, 190.0, 285.0)
+    // From under the fader down to 12px above the turn-over button's centre,
+    // which clears the button (it is 16px tall).
+    sweep_column(ui, moved, 182.0, TURN_OVER_Y - 12.0)
 }
 
 /// The same sweep between two heights, for the faces that put the strip's
@@ -572,8 +574,8 @@ fn sweep_column(
         // Clear of the page's own scroll bar at the strip's right edge,
         // which is a control and would otherwise be most of what this
         // sweep clicks.
-        let mut x = 118.0;
-        while x < 186.0 {
+        let mut x = 110.0;
+        while x < 178.0 {
             moved.set((-1, -1));
             click(ui, x, y);
             let (bus, param) = moved.get();
@@ -590,8 +592,14 @@ fn sweep_column(
 /// The arrow in strip 1's bottom-right corner, probed off
 /// `MOOLOOP_MIXER_SNAPSHOT`. It is the face's last row rather than an
 /// overlay, so it sits just inside the strip's own bottom padding.
-const TURN_OVER_X: f32 = 194.0;
-const TURN_OVER_Y: f32 = 291.0;
+///
+/// Re-probed 2026-09-27 for MOO-284, which took away the window's 8px padding:
+/// the button spans x 172..192, y 299..315. The pane now starts 8px higher and
+/// ends 8px lower, and the strips fill it, so the corner came down 16px. The
+/// old (194, 291) was left of the button's new right edge and above its top,
+/// so the click turned nothing over.
+const TURN_OVER_X: f32 = 182.0;
+const TURN_OVER_Y: f32 = 307.0;
 
 /// Clicking a strip's name plate is the gesture that points the device rack at
 /// that bus. If it stops reporting, the mixer becomes a display.
@@ -693,11 +701,14 @@ fn strip_pitch(ui: &MainWindow) -> f32 {
 }
 
 /// Centre of the first channel row's bus picker in the normal work surface.
-const CHANNEL_BUS_PICKER_X: f32 = 202.0;
-const CHANNEL_ROW_Y: f32 = 116.0;
+/// Re-read off `MOOLOOP_RACK_ROW_SNAPSHOT` for MOO-284, which took away the
+/// window's 8px padding: the picker spans x 184..214, y 99..121, and every
+/// number here moved 8px up and left with it.
+const CHANNEL_BUS_PICKER_X: f32 = 194.0;
+const CHANNEL_ROW_Y: f32 = 108.0;
 /// Centre of Bus 3 in the picker popup. The menu opens directly below its
 /// 22px owner and each option is 21px tall after 4px top padding.
-const CHANNEL_MENU_BUS_3_Y: f32 = 216.0;
+const CHANNEL_MENU_BUS_3_Y: f32 = 208.0;
 
 /// The channel sidebar with a channel selected, which is where a channel's
 /// mixer destination can be set without the rack row in front of you.

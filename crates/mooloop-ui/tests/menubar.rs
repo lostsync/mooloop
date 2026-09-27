@@ -18,14 +18,16 @@ use slint::{ComponentHandle, LogicalPosition, LogicalSize};
 use std::cell::Cell;
 use std::rc::Rc;
 
-/// The menu bar sits under the window layout's 8px padding: its items span
-/// y 8..33. Title x ranges come from the layout: 4px bar padding + 8px item
-/// padding + text width. "File" starts around x=20, "Edit" around x=56.
-const TITLE_Y: f32 = 20.0;
-const FILE_X: f32 = 30.0;
-const EDIT_X: f32 = 64.0;
-const TRACK_X: f32 = 225.0;
-const VIEW_X: f32 = 270.0;
+/// The menu bar runs to the window's top edge: its items span y 0..25. It
+/// sat under an 8px window padding until MOO-284 took that away, and every
+/// number here moved up and left by those 8px. Title x ranges come from the
+/// layout: 4px bar padding + 8px item padding + text width. "File" starts
+/// around x=12, "Edit" around x=48.
+const TITLE_Y: f32 = 12.0;
+const FILE_X: f32 = 22.0;
+const EDIT_X: f32 = 56.0;
+const TRACK_X: f32 = 217.0;
+const VIEW_X: f32 = 262.0;
 
 fn harness() -> MainWindow {
     i_slint_backend_testing::init_no_event_loop();
@@ -59,7 +61,7 @@ fn file_menu_items_fire_their_callbacks() {
     click(ui.window(), FILE_X, TITLE_Y);
     // "Save Song" is the third row; rows are 24px tall under the popup's
     // 4px padding, starting below the bar.
-    click(ui.window(), 60.0, 100.0);
+    click(ui.window(), 52.0, 92.0);
 
     assert!(save.get(), "Save Song must route to the window callback");
 }
@@ -73,10 +75,10 @@ fn view_menu_reveals_a_view() {
     // Track. Measured off a render of the bar.
     click(ui.window(), VIEW_X, TITLE_Y);
     // Popup rows are 24px under the popup's 4px padding below the bar, so
-    // row N spans y 42 + 24N .. 66 + 24N. The menu is one row per view now --
+    // row N spans y 34 + 24N .. 58 + 24N. The menu is one row per view now --
     // Steps, Mixer, Devices, Notes, Playlist -- rather than the three pages
     // of the lower dock, so Playlist is row 4 and not row 2.
-    click(ui.window(), VIEW_X, 150.0);
+    click(ui.window(), VIEW_X, 142.0);
 
     assert!(
         ui.get_showing_playlist(),
@@ -97,8 +99,8 @@ fn track_move_rows_fire_only_when_the_edited_track_can_move() {
     });
     // Rows under the popup's padding: Add Track, a separator, then the two
     // moves.
-    const LEFT_Y: f32 = 87.0;
-    const RIGHT_Y: f32 = 111.0;
+    const LEFT_Y: f32 = 79.0;
+    const RIGHT_Y: f32 = 103.0;
     let pick = |y: f32| {
         click(ui.window(), TRACK_X, TITLE_Y);
         click(ui.window(), TRACK_X, y);
@@ -153,7 +155,7 @@ fn busy_documents_disable_the_file_menu() {
     });
 
     click(ui.window(), FILE_X, TITLE_Y);
-    click(ui.window(), 60.0, 100.0);
+    click(ui.window(), 52.0, 92.0);
 
     assert!(!save.get(), "a disabled title must not open its menu");
 }
@@ -165,7 +167,7 @@ fn disabled_rows_swallow_clicks() {
     click(ui.window(), EDIT_X, TITLE_Y);
     // "Undo" is the first row of the Edit menu and starts unavailable; the
     // click must neither fire anything nor destabilize the menu.
-    click(ui.window(), 60.0, 52.0);
+    click(ui.window(), 52.0, 44.0);
     // Verify the window survived and rows keep rendering by toggling the
     // menu again.
     click(ui.window(), EDIT_X, TITLE_Y);
@@ -189,7 +191,7 @@ fn pending_project_edits_disable_paste_until_installation_finishes() {
 
     click(ui.window(), EDIT_X, TITLE_Y);
     // Paste is the third channel row, after Undo, Redo, and the separator.
-    click(ui.window(), 60.0, 150.0);
+    click(ui.window(), 52.0, 142.0);
     assert!(
         !pasted.get(),
         "paste must stay inert while a project swap is pending"
@@ -197,7 +199,7 @@ fn pending_project_edits_disable_paste_until_installation_finishes() {
 
     ui.set_project_edit_pending(false);
     click(ui.window(), EDIT_X, TITLE_Y);
-    click(ui.window(), 60.0, 150.0);
+    click(ui.window(), 52.0, 142.0);
     assert!(
         pasted.get(),
         "paste should become available once installation finishes"

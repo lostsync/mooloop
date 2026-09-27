@@ -62,16 +62,21 @@ pub fn install_testing_backend() {
 /// each held their own copy, so fixing the first reported the second as
 /// nineteen fresh failures. That is how the copy was found.
 ///
+/// All four moved 8px on 2026-09-27 (MOO-284), when the window's own 8px
+/// padding went: the roll is in the dock, which hangs from the window's
+/// bottom edge, so its rows and its horizontal scrollbar came down 8px, its
+/// left gutter moved 8px left and its vertical scrollbar 8px right.
+///
 /// `rack_tools.rs` has a third `GRID_ORIGIN_X`; that one is the step grid and
 /// is genuinely a different grid, so it does not belong here.
 pub mod piano_grid {
-    pub const GRID_ORIGIN_X: f32 = 54.0;
-    pub const GRID_TOP_Y: f32 = 349.0;
+    pub const GRID_ORIGIN_X: f32 = 46.0;
+    pub const GRID_TOP_Y: f32 = 357.0;
     pub const ROW_HEIGHT: f32 = 8.0;
     pub const STEP_WIDTH: f32 = 32.0;
     pub const HIGH_NOTE: i32 = 84;
-    pub const H_SCROLLBAR_Y: f32 = 649.0;
-    pub const V_SCROLLBAR_X: f32 = 946.0;
+    pub const H_SCROLLBAR_Y: f32 = 657.0;
+    pub const V_SCROLLBAR_X: f32 = 954.0;
 
     /// The engine's own value rather than a copy of it.
     ///

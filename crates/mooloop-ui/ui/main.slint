@@ -3068,8 +3068,12 @@ export component MainWindow inherits Window {
             }
         }
 
+        // MOO-284: the window's content runs to its edges. `VerticalBox`
+        // brings the style's 8px layout padding, which put a border round
+        // the whole window, menubar included.
         VerticalBox {
             spacing: 0px;
+            padding: 0px;
 
             // ===== Menu bar =====
             //

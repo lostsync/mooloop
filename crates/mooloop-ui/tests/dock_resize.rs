@@ -25,9 +25,11 @@ use slint::{ComponentHandle, LogicalPosition, LogicalSize};
 mod common;
 
 // Dock geometry in the 960x760 window, measured with the grip probe: the
-// splitter's 1px line sits at y=317 with the dock's top edge directly below,
-// and the grip spans the 6px just above that line.
-const DOCK_TOP_Y: f32 = 318.0;
+// splitter's 1px line sits at y=325 with the dock's top edge directly below,
+// and the grip spans the 6px just above that line. The dock hangs from the
+// window's bottom edge, so it moved down 8px when MOO-284 took away the
+// window's 8px padding.
+const DOCK_TOP_Y: f32 = 326.0;
 const GRIP_X: f32 = 480.0;
 const GRIP_Y: f32 = DOCK_TOP_Y - 3.0;
 const NEUTRAL_Y: f32 = 400.0;
@@ -157,9 +159,11 @@ fn splitter_drag_clamps_at_minimum_and_restores_exactly() {
 // It is the *leftmost* of three 20px chips now, not the rightmost of two:
 // they read in the screen order of the regions they toggle, by each region's
 // left edge, so the dock (which starts at x 0) leads. Chip k spans
-// [width - (3 - k) * 26, +20] in a 960px window, so this one's centre is 892
-// where it used to be 944 -- which is the browser's now.
-const PANE_BUTTON: (f32, f32) = (892.0, 746.0);
+// [width - (3 - k) * 26, +20] in a 960px window, so this one's centre is 900
+// where it used to be 944 -- which is the browser's now. (892, 746) until
+// MOO-284 took the window's 8px padding away and the status bar reached the
+// bottom-right corner.
+const PANE_BUTTON: (f32, f32) = (900.0, 754.0);
 
 fn click(window: &slint::Window, at: (f32, f32)) {
     let pos = LogicalPosition::new(at.0, at.1);

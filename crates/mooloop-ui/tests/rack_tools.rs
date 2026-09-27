@@ -29,9 +29,12 @@ use std::rc::Rc;
 /// It moved out and back on 2026-09-09: an analog-sum switch was added to the
 /// rack row and then removed again once Adam settled that the switch belongs
 /// to a track and not to a channel.
-const GRID_ORIGIN_X: f32 = 228.0;
+///
+/// And 8px up and left with MOO-284, which took away the window's own 8px
+/// padding: the first cell now spans y=100..122.
+const GRID_ORIGIN_X: f32 = 220.0;
 const CELL_PITCH: f32 = 27.0;
-const ROW_CENTRE_Y: f32 = 119.0;
+const ROW_CENTRE_Y: f32 = 111.0;
 const STEPS: usize = 8;
 
 /// Centre of the given step cell.

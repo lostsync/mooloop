@@ -86,24 +86,27 @@ fn render_playlist_snapshot() {
     };
     // The playlist canvas lives inside the fixed-height editor dock, which
     // the docked status bar lifts 24px: 450 in window coordinates before the
-    // bar is 426 after.
-    let clip_color = pixel(120, 426).to_vec();
-    assert_eq!(pixel(159, 426), clip_color);
-    assert_ne!(pixel(160, 426), clip_color);
+    // bar is 426 after. The dock hangs from the window's bottom edge and the
+    // canvas starts at its left, so MOO-284, which took away the window's 8px
+    // padding, moved both 8px: down to 434, and left to end at 151.
+    let clip_color = pixel(112, 434).to_vec();
+    assert_eq!(pixel(151, 434), clip_color);
+    assert_ne!(pixel(152, 434), clip_color);
 
     // The step grid starts after the rack row's name, mute, the volume/pan
     // knobs and the mixer-track picker, so these x coordinates move whenever
     // that prefix is resized -- the picker's 30px plus its 6px of spacing is
     // why they sit 36px further right than they used to. The first cell spans
-    // 228..=251 and the second 255..=278 at 24px per cell.
+    // 220..=243 and the second 247..=270 at 24px per cell (8px left of where
+    // they were before MOO-284 took the window's padding away).
     //
     // They moved out and back on 2026-09-09: an analog-sum switch was added to
     // the rack row and then removed again once Adam settled that the switch
     // belongs to a track and not to a channel.
-    const FIRST_CELL_X: usize = 229;
-    const FIRST_CELL_LAST_X: usize = 251;
-    const CELL_GAP_X: usize = 252;
-    const SECOND_CELL_X: usize = 256;
+    const FIRST_CELL_X: usize = 221;
+    const FIRST_CELL_LAST_X: usize = 243;
+    const CELL_GAP_X: usize = 244;
+    const SECOND_CELL_X: usize = 248;
     // Likewise these y values track the combined height of the menu bar and
     // the toolbar, since the rack sits directly beneath them. FILL_Y crosses
     // both cells' fills; VELOCITY_Y is high enough that only the louder step
@@ -114,12 +117,14 @@ fn render_playlist_snapshot() {
     // holding only the Steps/Mixer switcher, which now leads the toolbar row
     // above. The failure was `onset == held == background`, which is what a
     // y that has fallen off the top of the row looks like.
-    const FILL_Y: usize = 127;
-    const VELOCITY_Y: usize = 113;
+    //
+    // And 8px higher again with MOO-284: the window's own 8px padding.
+    const FILL_Y: usize = 119;
+    const VELOCITY_Y: usize = 105;
     // Cell one covers all four 64ths but is struck only on the first, so its
     // slots render at two different intensities.
     const ONSET_X: usize = FIRST_CELL_X;
-    const HELD_X: usize = 241;
+    const HELD_X: usize = 233;
 
     // A struck 64th is solid, one that is only being held is dim, and the gap
     // between cells is background. That ordering is the whole reason a
@@ -151,11 +156,11 @@ fn render_playlist_snapshot() {
     // Measured because the alternative is a constant that silently means the
     // wrong thing the next time anything above the canvas changes height, and
     // every gesture below is aimed by it. The horizontal offset needs no such
-    // care: the assertions above already pin the canvas's left edge 8px in.
+    // care: the assertions above already pin the canvas's left edge.
     let canvas_top = {
         // Scanned from below the work surface, because the accent this is
         // looking for is also the colour of an active tab and a lit meter.
-        let column = 120;
+        let column = 112;
         let first = (300..snapshot.height() as usize)
             .find(|y| pixel(column, *y) == clip_color.as_slice())
             .expect("the clip at tick 0 should be somewhere in the column");
@@ -170,10 +175,10 @@ fn render_playlist_snapshot() {
     let loop_strip_y = canvas_top + 5.0;
     let bar_ruler_y = canvas_top + 20.0;
     // Snap is 1/2 bar (192 ticks) in this fixture, and the timeline starts
-    // 104px into the canvas at 24px per bar, so window x 160 is tick 768 and
-    // window x 244 is tick 2112.
-    const TICK_768_X: f32 = 160.0;
-    const TICK_2112_X: f32 = 244.0;
+    // 104px into the canvas at 24px per bar, so window x 152 is tick 768 and
+    // window x 236 is tick 2112.
+    const TICK_768_X: f32 = 152.0;
+    const TICK_2112_X: f32 = 236.0;
 
     let drag = |from: LogicalPosition, to: LogicalPosition, button| {
         ui.window()
@@ -287,7 +292,7 @@ fn render_playlist_snapshot() {
         let removed = removed.clone();
         move |pattern, tick| removed.set(Some((pattern, tick)))
     });
-    let position = LogicalPosition::new(124.0, 426.0);
+    let position = LogicalPosition::new(116.0, 434.0);
     for button in [PointerEventButton::Left, PointerEventButton::Right] {
         ui.window()
             .dispatch_event(WindowEvent::PointerMoved { position });
@@ -300,8 +305,9 @@ fn render_playlist_snapshot() {
     assert_eq!(removed.get(), Some((0, 192)));
 
     // The File title in the menu bar. Its x tracks the bar's leading padding
-    // and the width of the title text; its y is the bar's 26px height.
-    let file_position = LogicalPosition::new(22.0, 13.0);
+    // and the width of the title text; its y is the middle of the bar's 26px
+    // height, which since MOO-284 starts at the window's top edge.
+    let file_position = LogicalPosition::new(22.0, 12.0);
     ui.window().dispatch_event(WindowEvent::PointerMoved {
         position: file_position,
     });
@@ -381,20 +387,20 @@ fn a_coloured_pattern_paints_its_own_clips() {
         snapshot.as_bytes()[offset..offset + 3].to_vec()
     };
 
-    // The canvas sits 8px in from the window's left edge, so the gutter
-    // plate's own `x: 8px` puts its colour bar at window x 16..=18 and its
-    // body from 19. Measured off this snapshot rather than derived: the
+    // The canvas starts at the window's left edge (8px in until MOO-284 took
+    // the window's padding away), so the gutter plate's own `x: 8px` puts its
+    // colour bar at window x 8..=10 and its body from 11. Measured off this snapshot rather than derived: the
     // inset is the work area's, and a number derived from the markup would
     // agree with the markup by construction and check nothing.
-    const BAR_X: usize = 17;
-    const PLATE_BODY_X: usize = 30;
+    const BAR_X: usize = 9;
+    const PLATE_BODY_X: usize = 22;
     // The vertical middle of the first pattern row. Its top edge is where a
     // radius eats the corner, which is not where to ask what colour a plate
     // is.
-    const ROW_Y: usize = 432;
+    const ROW_Y: usize = 440;
 
     assert_eq!(
-        pixel(120, 426),
+        pixel(112, 434),
         AMBER.to_vec(),
         "the clip was not painted with its pattern's colour"
     );
