@@ -5,8 +5,10 @@ Steps: 01 is MOO-279, 02 is MOO-273, 03 is MOO-280, 04 is MOO-281, 05 is
 MOO-282. Milestones: **A device shows what it is** (01-02, 0.1.6) and **One
 family, one meaning** (03-05, 0.1.7).
 
-Planned 2026-09-26. Step 01's Interface leg landed on its branch 2026-09-27;
-the Mixer, Instruments and Effects legs are still to run (MOO-279).
+Planned 2026-09-26. Step 01 (MOO-279) was done 2026-09-27 as a relay of four
+legs on one branch. Interface built the registry and moved its own icons in.
+Mixer (`StripIcons`), Instruments (`SamplerDeviceIcons`) and Effects (the EQ
+face's shapes) each switched their own set.
 
 ## Adam's rulings
 
@@ -33,7 +35,7 @@ generic icon**, and a device's icon takes the **device colour**.
 
 | Step | State |
 | --- | --- |
-| 01 — the registry | In progress (MOO-279): Interface's leg done |
+| 01 — the registry | Done (MOO-279): all four legs |
 | 02 — device kinds | Todo, blocked by 01 (MOO-273) |
 | 03 — one family | Backlog (MOO-280) |
 | 04 — one meaning, one icon | Backlog (MOO-281) |
@@ -65,6 +67,21 @@ and is not reported.
 X and the colour picker's two "none" Paths moved into the registry. What is
 left of the path kind is the other teams' sets (Mixer 4, Instruments 4,
 Effects 6), which their relay legs move.
+
+**After all four legs: 57.** No path string is spelled outside `icons.slint`
+any more. What is left:
+- the text glyphs, which step 04 converts;
+- the one `→` lead;
+- `ConsoleButton`'s sine, built from `MoveTo` elements, which step 03 decides.
+
+Every leg was held to byte-identical pixels:
+- Interface's leg: all 86 snapshots, against `a7ea4425`.
+- Instruments: the seven sampler snapshots.
+- Effects: two new EQ-face snapshots, `render_eq_face_glyphs`, added first,
+  because nothing drew the face before.
+- Mixer: its own tests only. The box ran out of disk before its comparison
+  render. The strip's snapshots were compared when the combined branch
+  landed; see MOO-279.
 
 ## The FemtoVG cost gate (01), measured 2026-09-27
 
