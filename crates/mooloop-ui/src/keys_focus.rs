@@ -17,7 +17,10 @@
 //!   with the focus still pointing at it;
 //! - a key that finds the focus on an item that is no longer visible is
 //!   dropped, and the focus with it (`i-slint-core` `window.rs`,
-//!   `process_key_input`).
+//!   `process_key_input`). Hiding by `visible: false` -- a dialog, a pane --
+//!   clears the focus as it happens, through Slint's own visibility tracker;
+//!   an item clipped away some other way loses that one key, and the next
+//!   tick gives the focus back.
 //!
 //! From there nothing reached `keys` until a click focused something inside
 //! it, and only the piano roll's `focus-requested` gave it back directly --
@@ -37,15 +40,20 @@ use slint::ComponentHandle;
 // held at 1.18.1 by the lockfile, and a change here is a compile error.
 use slint::private_unstable_api::re_exports::WindowInner;
 
-/// Whether no visible item holds the window's focus, so no key would reach
-/// the root scope. False while a popup is open: the popup has it.
+/// Whether nothing holds the window's focus, so no key would reach the root
+/// scope. False while a popup is open: the popup has it.
+///
+/// Runs every pump tick, so it is two `RefCell` borrows and a weak-pointer
+/// upgrade, and allocates nothing. It deliberately does not ask whether the
+/// focused item is *visible*: `ItemRc::is_visible` builds a `Vec` of the
+/// item's ancestors each call, and the one case it would add is covered by
+/// the next tick anyway (see the module comment).
 pub(crate) fn lost(window: &MainWindow) -> bool {
     let inner = WindowInner::from_pub(window.window());
     if !inner.active_popups().is_empty() {
         return false;
     }
-    let focused = inner.focus_item.borrow().upgrade();
-    focused.is_none_or(|item| !item.is_visible())
+    inner.focus_item.borrow().upgrade().is_none()
 }
 
 /// Gives the focus back to the root scope when nothing holds it. Returns
@@ -99,6 +107,15 @@ mod tests {
             self.window
                 .window()
                 .dispatch_event(WindowEvent::KeyReleased { text });
+        }
+
+        /// What the event loop does between events, which a test has to ask
+        /// for: bring the tree up to date -- the old face is dropped here --
+        /// and run Slint's change trackers, one of which is the one that
+        /// takes the focus off an item that has just been hidden.
+        fn event_loop_turn(&self) {
+            WindowInner::from_pub(self.window.window()).ensure_tree_instantiated();
+            slint::platform::update_timers_and_animations();
         }
 
         /// Whether Space, the play key, reaches the dispatcher now.
@@ -190,20 +207,50 @@ mod tests {
                 .expect("the window shows a rename field");
             click(&ui.window, field.centre);
             assert!(!lost(&ui.window), "clicking the field puts the caret in it");
+            assert!(!keep(&ui.window), "the tick took the caret out of a field in use");
             type_text(&ui.window, "x");
+            assert_eq!(
+                ui.heard.borrow().len(),
+                0,
+                "a key typed into the field reached the shortcuts instead"
+            );
             ui.key(exit);
             ui.assert_lost_then_kept(&format!("after a rename field was left with {how}"));
         }
     }
 
     /// The knob that had the focus is destroyed when the face is rebuilt for
-    /// another source.
+    /// another source. Which knob matters: the rack draws controls of its own
+    /// beside the face, and those survive the change, so the knob pressed is
+    /// one the other source's face does not have.
     #[test]
     fn rebuilding_the_face_under_a_focused_knob_gives_the_keys_back() {
         let ui = harness();
-        ui.press_a_knob();
-        let other = (ui.window.get_source_kind() + 1) % 8;
+        let bottom = HEIGHT / 2.0;
+        let knobs = |ui: &Harness| -> Vec<(String, (f32, f32))> {
+            sliders(&ui.window)
+                .into_iter()
+                .filter(|knob| knob.centre.1 > bottom)
+                .map(|knob| (knob.label, knob.centre))
+                .collect()
+        };
+        let first = ui.window.get_source_kind();
+        let other = (first + 1) % 8;
+        let before = knobs(&ui);
         ui.window.set_source_kind(other);
+        ui.event_loop_turn();
+        let after = knobs(&ui);
+        let (_, centre) = before
+            .into_iter()
+            .find(|knob| !after.contains(knob))
+            .expect("the two sources' faces have a knob that is not in both");
+        ui.window.set_source_kind(first);
+        ui.event_loop_turn();
+
+        click(&ui.window, centre);
+        assert!(!lost(&ui.window), "pressing the knob focuses it");
+        ui.window.set_source_kind(other);
+        ui.event_loop_turn();
         ui.assert_lost_then_kept("after the focused knob's face was rebuilt");
     }
 
@@ -213,6 +260,7 @@ mod tests {
         let ui = harness();
         ui.press_a_knob();
         ui.window.invoke_show_view(crate::view::NOTES);
+        ui.event_loop_turn();
         ui.assert_lost_then_kept("after the focused knob's pane was hidden");
     }
 }
