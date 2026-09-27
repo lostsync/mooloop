@@ -168,7 +168,12 @@ shaped for.
 - **Not done:** screen-reader coverage is untouched. The plan already says the
   second is its own work and no amount of theming touches it.
 
-### 02 — relief — **the drawing landed; the look waits on Adam** (MOO-153)
+### 02 — relief — **the drawing landed, and Adam approved the look** (MOO-153)
+
+Adam, 2026-09-26: *"the themes look pretty good to me incl the bevels."*
+The 1px derived bevel stays. The remaining adopters (knob caps, device
+header, rack row, panel and pane edges, the dock) are unblocked, and MOO-153
+is Todo for them.
 
 `Theme.relief` (0 flat, 1 bevel, 2 inset) and `Theme.relief-depth`, a
 `Bevel` component in `controls.slint`, and `ToolButton` as the first adopter,

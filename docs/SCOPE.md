@@ -336,10 +336,13 @@ earlier, not by leaving scope.
   `Mooloop.app`, zipped, so the Mac can run a release build without building
   one. It is a convenience build, not a supported target, and there is no
   Intel build.
-- **The modulation-rack move and the tracker question** (open: MOO-159). Genuinely undecided —
+- **The modulation-rack move and the tracker question** (MOO-159). Genuinely undecided —
   `IDEAS.md` shows it is a three-way fork (automation events, modulators, song
   automation) and answering it separately is how a project ends up with two
-  editors that nearly agree. Out until it is answered.
+  editors that nearly agree. Adam, 2026-09-26: it is one idea (automation
+  written in something tracker-inspired), and *"something i am interested in
+  doing. i havent decided on it"*. Out, and not a question waiting on him:
+  it comes back only when he raises it.
 - **A curated factory bank.** Every device ships presets to prove its
   architecture reaches its range; authoring content by taste across every
   device is a deliberate later push.

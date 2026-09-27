@@ -194,9 +194,6 @@ The `Question` label in Linear is the complete list (an `Answer` label marks
 one he has answered that nobody has acknowledged yet), and after 2026-09-23 it
 is short:
 
-- **Relief beyond the first controls** (MOO-153). `d3c90211` shipped the
-  bevel, Platinum and Impulse, and stopped where the step says to look before
-  converting the rest of the controls. It needs a look, not a paragraph.
 - **The listening passes** below, which nobody has taken since 2026-09-18.
 - **MOO-237:** whether the Core Audio output latency mooloop logs matches
   what HALLab reports for the same device, on a real Mac.
@@ -205,8 +202,11 @@ is short:
   icons take the device colour. The full kind sheet goes to him before step
   02 lands (`plans/icon-pass/02-device-kinds.md`).
 
-MOO-159 (the tracker) keeps its label, because "not now" defers the question
-rather than answering it.
+Answered 2026-09-26:
+- **MOO-153:** *"the themes look pretty good to me incl the bevels"*. The
+  1px bevel stays, and the rest of the adopters are unblocked (Todo).
+- **MOO-159:** the tracker is an interest, not a decision. It's recorded in
+  `IDEAS.md` and is no longer a question.
 
 ## Fixes that may interrupt the sequence
 

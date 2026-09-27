@@ -122,6 +122,16 @@ side, now that audio recording goes into the sampler
 (`plans/archive/audio-recording/`). So when this question is answered, that is a
 second use case for it. The question is open as MOO-159, 2026-09-22.
 
+**Adam, 2026-09-26, on MOO-159:** *"basically different versions of the
+same idea. the entire tracker thing is just something i am interested in
+doing. i havent decided on it. problem with trying to brainstorm with a
+coding agent is they want to build everything you mention. basic idea is
+just that i thought it'd be cool to have a way to do automation using
+something tracker-inspired or tracker-adjacent, since that is one of the
+things they do very well."* So the three-way fork above is one idea, and it is
+an interest rather than a decision. Nobody designs or builds it until he
+raises it himself.
+
 Recorded while writing `docs/plans/archive/console/`, which is the mixer half of the
 same morning list and which deliberately does not touch the playlist.
 
