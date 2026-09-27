@@ -188,8 +188,12 @@ export component StepperField inherits Rectangle {
             enabled: root.enabled && root.value > root.minimum;
             clicked(coarse) => { root.apply(root.value - root.move(coarse)); }
         }
+        // `value-width` is pinned so the field does not jitter as the number
+        // changes, and every caller measured its pin at 13px text. So the pin
+        // grows with the text rather than clipping it -- at the 115% base
+        // (MOO-286) and above -- and never shrinks under what was asked for.
         Rectangle {
-            width: root.value-width;
+            width: max(root.value-width, root.value-width * ToolbarMetrics.value-size / 13px);
             Text {
                 text: root.display-text;
                 color: root.enabled ? Theme.text : Theme.text-faint;

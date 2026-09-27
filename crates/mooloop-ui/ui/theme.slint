@@ -47,23 +47,29 @@ export global Theme {
     // digits must not reflow as the value changes.
     //
     // `type-scale` is the accessibility control. The working range of this
-    // interface is 7-11px, which is small, and before these tokens existed
-    // turning it up meant editing three hundred literals.
+    // interface is 7-11px before `type-base`, which is small, and before these
+    // tokens existed turning it up meant editing three hundred literals.
     in-out property <string> font-family: "";
     in-out property <string> font-family-mono: "monospace";
     in-out property <float> type-scale: 1.0;
     in-out property <int> font-weight: 400;
 
-    out property <length> text-xs: 7px * root.type-scale;
-    out property <length> text-sm: 8px * root.type-scale;
-    out property <length> text-md: 9px * root.type-scale;
-    out property <length> text-lg: 10px * root.type-scale;
-    out property <length> text-xl: 11px * root.type-scale;
+    // MOO-286 (Adam, 2026-09-26): what was 115% became 100%. The grid below
+    // keeps its old numbers and this carries the step, so "Text size 100%"
+    // means the size Adam lived with at 115%. Stored `type-scale` values are
+    // read against it as they are, by his ruling: no migration.
+    out property <float> type-base: 1.15;
+
+    out property <length> text-xs: 7px * root.type-base * root.type-scale;
+    out property <length> text-sm: 8px * root.type-base * root.type-scale;
+    out property <length> text-md: 9px * root.type-base * root.type-scale;
+    out property <length> text-lg: 10px * root.type-base * root.type-scale;
+    out property <length> text-xl: 11px * root.type-base * root.type-scale;
     // Above the working range: dialog headings, the transport readout, and
     // the handful of glyphs drawn large on purpose.
-    out property <length> text-2xl: 13px * root.type-scale;
-    out property <length> text-3xl: 16px * root.type-scale;
-    out property <length> text-4xl: 22px * root.type-scale;
+    out property <length> text-2xl: 13px * root.type-base * root.type-scale;
+    out property <length> text-3xl: 16px * root.type-base * root.type-scale;
+    out property <length> text-4xl: 22px * root.type-base * root.type-scale;
 
     // Stroke. A theme that wants a borderless interface sets `hairline` to 0
     // and gets one without any face knowing that is what it asked for; the

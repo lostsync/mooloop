@@ -25,10 +25,12 @@ pub(crate) const MIN_ROUNDNESS: f32 = 0.0;
 pub(crate) const MAX_ROUNDNESS: f32 = 3.0;
 
 /// The accessibility control. The working type size of this interface is
-/// 7-11px, which is small; 2.0 takes it to 14-22px, which is a different
-/// program to sit in front of for an evening. Below 0.75 the 7px step rounds
-/// into illegibility, so that is the floor.
-pub(crate) const MIN_TYPE_SCALE: f32 = 0.75;
+/// 8-12.65px at 1.0 (`Theme.type-base`, 1.15, since MOO-286 made the old 115%
+/// the new 100%); 2.0 takes it to 16-25px, which is a different program to sit
+/// in front of for an evening. The floor is where the smallest step lands
+/// near 5.25px, which is where it was before the base moved (0.75 of 7px);
+/// below that it rounds into illegibility.
+pub(crate) const MIN_TYPE_SCALE: f32 = 0.65;
 pub(crate) const MAX_TYPE_SCALE: f32 = 2.0;
 
 /// Control heights and the padding ramp. The ceiling is where a 24px control

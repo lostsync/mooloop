@@ -685,25 +685,18 @@ export component AppearancePage inherits VerticalLayout {
         label: "Text size";
         tooltip: "Scales every label, readout and heading together";
         label-width: 54px;
-        minimum: 0.75;
+        // `MIN_TYPE_SCALE` and `MAX_TYPE_SCALE` in `settings.rs`.
+        minimum: 0.65;
         maximum: 2.0;
         step: 0.05;
         value <=> root.type-scale;
         value-text: round(root.type-scale * 100) + "%";
         changed(v) => { root.preview-changed(); }
     }
-    ParameterFader {
-        controlled: false;
-        label: "Density";
-        tooltip: "Control heights, padding and spacing";
-        label-width: 54px;
-        minimum: 0.75;
-        maximum: 1.75;
-        step: 0.05;
-        value <=> root.density;
-        value-text: round(root.density * 100) + "%";
-        changed(v) => { root.preview-changed(); }
-    }
+    // No Density fader (MOO-286, Adam 2026-09-26: "having lived with the
+    // sliders...density could get commented out"). The token and the setting
+    // stay, and `density` still round-trips through this page, because theme
+    // files set it -- Impulse does.
     ParameterFader {
         controlled: false;
         label: "Borders";

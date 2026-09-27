@@ -575,8 +575,9 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   colours taken from the ramp's eight hues plus a midpoint in each of its
   three widest gaps. A song stores the colour it was given rather than a
   palette index, so changing themes never repaints anybody's channels.
-  Beside the colours: roundness, contrast, **text size**, **density**,
-  **border and emphasis widths**, **relief** (flat, bevel or inset, with a
+  Beside the colours: roundness, contrast, **text size** (65-200%; 100% is
+  what read as 115% before 0.1.6, and a stored size is read against the new
+  base rather than migrated, MOO-286), **border and emphasis widths**, **relief** (flat, bevel or inset, with a
   depth; so far drawn by the buttons, the toggles, the segmented selectors and
   the tabs, and taken away again by a theme that doesn't state one), and
   **two font families** -- one for the
@@ -584,7 +585,9 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   the platform default, because Slint has no runtime font registration and a
   theme can only name a family. Themes save to
   `<config>/mooloop/themes/<name>.toml`, one file per theme, and a malformed
-  one is skipped with a message rather than stopping startup. All of it
+  one is skipped with a message rather than stopping startup. **Density** has
+  no control on the page since 0.1.6, but a theme that states one (Impulse)
+  still applies it and the setting still persists. All of it
   previews live and persists on Apply or OK. Motion speed's **Instant** is labelled as
   reduced motion and is the default, so nothing animates unless asked to. Shared audio controls, tooltips, and master
   peak-meter ballistics. A fresh install leaves the buffer size where the

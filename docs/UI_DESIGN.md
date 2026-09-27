@@ -210,9 +210,10 @@ what makes the ramp a widening rather than a change.
   left alone: an accent is a colour somebody chose.
 - **roundness** scales `Theme.radius-xs/sm/md/lg`.
 - **type-scale** scales `Theme.text-xs` … `text-4xl`, eight steps over a
-  7-22px range. This is the accessibility control and nothing else in the
-  program makes 7px text bigger.
-- **density** scales `Theme.control-height`, `control-min-width` and the
+  7-22px grid times `Theme.type-base` (1.15 since MOO-286, which made the
+  old 115% the new 100%), so 8-25px at 100%. This is the accessibility
+  control and nothing else in the program makes small text bigger.
+- **density** (no control on the Appearance page since MOO-286; themes set it) scales `Theme.control-height`, `control-min-width` and the
   `pad-xs/sm/md/lg` ramp, which is padding and spacing both.
 - **hairline** and **stroke-emphasis** are the two stroke weights. A zero
   hairline is a real setting: a theme asks for a borderless interface there.

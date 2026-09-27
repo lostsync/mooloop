@@ -124,7 +124,7 @@ a name nobody has falls back to the platform default without a word. If your
 theme depends on a face, say so in `description`.
 
 `scale` multiplies the whole type scale. The interface's working range is
-7–11px, so 1.5 is 10–17px and is a different program to sit in front of for an
+8–12.65px at 1.0 (the old 115%, since 0.1.6), so 1.5 is 12–19px and is a different program to sit in front of for an
 evening. `weight` is a CSS weight; anything above 500 at 9px is a smudge.
 
 ## Shape and metrics

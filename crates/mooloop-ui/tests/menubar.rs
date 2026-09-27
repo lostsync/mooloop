@@ -21,13 +21,15 @@ use std::rc::Rc;
 /// The menu bar runs to the window's top edge: its items span y 0..25. It
 /// sat under an 8px window padding until MOO-284 took that away, and every
 /// number here moved up and left by those 8px. Title x ranges come from the
-/// layout: 4px bar padding + 8px item padding + text width. "File" starts
-/// around x=12, "Edit" around x=48.
+/// layout: 4px bar padding + 8px item padding + text width, so they move
+/// with the text size. Measured off a render at MOO-286's 100% (the old
+/// 115%): "File" spans x 12..32, "Edit" 52..76, "Track" 229..261 and "View"
+/// 281..310.
 const TITLE_Y: f32 = 12.0;
 const FILE_X: f32 = 22.0;
-const EDIT_X: f32 = 56.0;
-const TRACK_X: f32 = 217.0;
-const VIEW_X: f32 = 262.0;
+const EDIT_X: f32 = 64.0;
+const TRACK_X: f32 = 245.0;
+const VIEW_X: f32 = 296.0;
 
 fn harness() -> MainWindow {
     i_slint_backend_testing::init_no_event_loop();
