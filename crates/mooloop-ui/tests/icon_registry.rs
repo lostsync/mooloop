@@ -125,8 +125,16 @@ fn split_terms(expression: &str) -> Vec<&str> {
     terms
 }
 
-/// The strings of `out property <[string]> {name}: [ ... ];`.
-fn string_array(global: &str, name: &str) -> Vec<String> {
+/// One slot of a kind table: a path drawn there, or a reference to a named
+/// entry (`root.plugin`), which is that entry and not a second copy of it.
+#[derive(Debug, PartialEq)]
+enum Slot {
+    Path(String),
+    Entry(String),
+}
+
+/// The slots of `out property <[string]> {name}: [ ... ];`.
+fn string_array(global: &str, name: &str) -> Vec<Slot> {
     let declaration = format!("out property <[string]> {name}:");
     let start = global
         .find(&declaration)
@@ -138,16 +146,25 @@ fn string_array(global: &str, name: &str) -> Vec<String> {
         .map(str::trim)
         .filter(|item| !item.is_empty())
         .map(|item| {
-            item.strip_prefix('"')
-                .and_then(|i| i.strip_suffix('"'))
-                .unwrap_or_else(|| panic!("Icons.{name} holds `{item}`, not a string literal"))
-                .to_string()
+            if let Some(entry) = item.strip_prefix("root.") {
+                return Slot::Entry(entry.to_string());
+            }
+            Slot::Path(
+                item.strip_prefix('"')
+                    .and_then(|i| i.strip_suffix('"'))
+                    .unwrap_or_else(|| {
+                        panic!("Icons.{name} holds `{item}`, not a string literal or `root.<entry>`")
+                    })
+                    .to_string(),
+            )
         })
         .collect()
 }
 
-/// Every entry drawn from the registry: each `out` string, and each
-/// non-empty kind-table slot, as (where, path).
+/// Every entry drawn from the registry: each `out` string, and each kind
+/// table slot that draws its own path, as (where, path). A slot naming an
+/// entry is that entry, already listed, so it is checked to exist and not
+/// listed twice.
 fn entries() -> Vec<(String, String)> {
     let code = code();
     let global = icons_global(&code);
@@ -158,11 +175,13 @@ fn entries() -> Vec<(String, String)> {
         .map(|(name, _)| (format!("Icons.{name}"), resolve(name, &properties, 0)))
         .collect();
     for table in ["source-kinds", "effect-kinds"] {
-        for (index, path) in string_array(&global, table).into_iter().enumerate() {
-            // Empty is "not drawn yet" (step 02 fills the tables), and every
-            // empty slot is equal to every other; it is not a duplicate.
-            if !path.is_empty() {
-                entries.push((format!("Icons.{table}[{index}]"), path));
+        for (index, slot) in string_array(&global, table).into_iter().enumerate() {
+            match slot {
+                Slot::Path(path) => entries.push((format!("Icons.{table}[{index}]"), path)),
+                Slot::Entry(entry) => assert!(
+                    properties.get(&entry).is_some_and(|(public, _)| *public),
+                    "Icons.{table}[{index}] names Icons.{entry}, which is not an entry"
+                ),
             }
         }
     }
@@ -294,4 +313,43 @@ fn unused_icons_are_reported() {
     if !unused.is_empty() {
         eprintln!("icon registry: entries nothing draws yet (a lead, not a failure): {unused:?}");
     }
+}
+
+/// Every kind has its drawing (MOO-273): an empty slot would draw nothing in
+/// that kind's header, and nothing on the screen would say why. The
+/// duplicate check refuses an empty path too; this one names the kind.
+#[test]
+fn every_kind_has_an_icon() {
+    let code = code();
+    let global = icons_global(&code);
+    for table in ["source-kinds", "effect-kinds"] {
+        for (index, slot) in string_array(&global, table).into_iter().enumerate() {
+            assert!(
+                slot != Slot::Path(String::new()),
+                "Icons.{table}[{index}] is empty; every kind has an icon"
+            );
+        }
+    }
+}
+
+/// A plugin is one generic icon whether it is a source or an effect
+/// (MOO-273). The source header reaches it past the end of the source
+/// table; an effect row reaches it at the plugin's own number, which must
+/// therefore name the entry rather than draw a second plug.
+#[test]
+fn a_plugin_is_the_one_plugin_icon() {
+    let code = code();
+    let slots = string_array(&icons_global(&code), "effect-kinds");
+    let index = effect_kind_index(EffectKind::Plugin) as usize;
+    assert_eq!(
+        slots[index],
+        Slot::Entry("plugin".to_string()),
+        "Icons.effect-kinds[{index}], a plugin insert's, should be `root.plugin`"
+    );
+    assert_eq!(
+        device_kind_to_int(mooloop_core::DeviceKind::Plugin) as usize,
+        SOURCE_KINDS_IN_PICKER_ORDER.len(),
+        "a plugin instrument's number is the first past Icons.source-kinds, \
+         which is what the source header's `Icons.plugin` fallback reads"
+    );
 }

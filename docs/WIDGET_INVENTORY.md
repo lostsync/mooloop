@@ -71,6 +71,15 @@ one; it does not spell a path string or a glyph of its own, and
 `outline` is transitional: the icons that moved in are outlines, and step 03
 of the plan redraws them filled and deletes it.
 
+Every device kind has a filled icon (MOO-273): `Icons.source-kinds[n]` and
+`Icons.effect-kinds[n]` by `device_kind_to_int` and `effect_kind_index`, and
+`Icons.plugin` for a plugin of either role. `DeviceHeader.icon` and
+`CollapsedDevice.icon` take one, tinted with the device colour, faint while
+bypassed; `EffectDeviceShell.icon` forwards to its header, and `main.slint`
+binds it from the row's kind number. An empty `icon` draws nothing, which is
+what the mixer's strip, bus and output headers show until they have a kind.
+`DeviceKindSheet` in `mockup-catalog.slint` shows every kind's header.
+
 A third caller arrived 2026-09-05 and needed nothing new: `aux-in-device.slint`
 picks a source channel and a published outlet from two `PickerChip`s, and the
 whole face is that pair, a `ParameterKnob` and two `SectionLabel`s. A device

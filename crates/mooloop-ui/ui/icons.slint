@@ -106,20 +106,89 @@ export global Icons {
         "M 3 13 L 3 9 M 6.5 13 L 6.5 5 M 10 13 L 10 8 M 13.5 13 L 13.5 3";
     out property <string> eq-face-proportional-q: "M 2 12 L 5 12 L 8 4 L 11 12 L 14 12";
 
-    // --- Device kinds ---------------------------------------------------
+    // --- Device kinds (MOO-273, step 02) ------------------------------
+    //
+    // Style B, filled, Adam's ruling of 2026-09-26. Each is drawn inside
+    // (1, 1)-(15, 15) and placed at 16px, so the shape is 14px, one grid
+    // unit is one pixel at 1x, and a straight edge on a whole unit is a
+    // pixel edge. A hole is a subpath inside another, **wound the other
+    // way** (anticlockwise on screen, where the outline runs clockwise). It
+    // then cuts under `fill-rule: evenodd`, which `Icon` sets, and under
+    // nonzero too: `slint-viewer`'s software renderer was seen filling a
+    // same-wound hole solid (2026-09-27). Two subpaths must never overlap.
+    //
+    // **Related kinds share a motif, never a path.** The drums are drums,
+    // the v1 synths saw teeth in twos and the ML synths in threes (one row
+    // mono, two rows poly), Drive and Bitcrush a wave across its axis,
+    // Comp, Bus Comp and Limiter a transfer curve, Reverb and Plate a
+    // decay tail, Chain and Layer blocks in series and in parallel.
     //
     // By kind number: `source-kinds[i]` is the kind `device_kind_to_int`
     // sends as `i`, at `SourceKinds.labels`'s positions, and
-    // `effect-kinds[i]` the kind `effect_kind_index` sends as `i` (15 is a
-    // plugin's). Empty until step 02 draws them (MOO-273);
-    // `tests/icon_registry.rs` holds their lengths to the Rust tables.
+    // `effect-kinds[i]` the kind `effect_kind_index` sends as `i`.
+    // `tests/icon_registry.rs` holds their lengths to the Rust tables and
+    // refuses an empty slot.
+
+    // A plugin, source or effect: one generic icon, a mains plug (MOO-273's
+    // recommendation, not overruled). The header already names the plugin.
+    out property <string> plugin:
+        "M 5 1 L 7 1 L 7 5 L 5 5 Z M 9 1 L 11 1 L 11 5 L 9 5 Z "
+        + "M 3 5 L 13 5 L 13 8 C 13 10 11 11 9 11 L 9 15 L 7 15 L 7 11 "
+        + "C 5 11 3 10 3 8 Z";
+
     out property <[string]> source-kinds: [
-        "", "", "", "",
-        "", "", "", ""
+        // 0 Sampler: a clip's waveform.
+        "M 1 6 L 3 6 L 3 10 L 1 10 Z M 4 3 L 6 3 L 6 13 L 4 13 Z M 7 1 L 9 1 L 9 15 L 7 15 Z M 10 4 L 12 4 L 12 12 L 10 12 Z M 13 6 L 15 6 L 15 10 L 13 10 Z",
+        // 1 Gitdum DS-SX: a drum and its sticks.
+        "M 3 9 A 5 2 0 0 1 13 9 L 13 13 A 5 2 0 0 1 3 13 Z M 3 9 L 3 10 A 5 2 0 0 0 13 10 L 13 9 A 5 2 0 0 1 3 9 Z M 3 2 L 4.2 1.4 L 7.3 6.4 L 6.1 7 Z M 13 2 L 11.8 1.4 L 8.7 6.4 L 9.9 7 Z",
+        // 2 Mono Synth (retired): one row of two saw teeth.
+        "M 2 12 L 8 4 L 8 12 Z M 8 12 L 14 4 L 14 12 Z",
+        // 3 Poly Synth (retired): two rows of two.
+        "M 2 7 L 8 2 L 8 7 Z M 8 7 L 14 2 L 14 7 Z M 2 14 L 8 9 L 8 14 Z M 8 14 L 14 9 L 14 14 Z",
+        // 4 Munotone ML-M1: one row of three.
+        "M 2 12 L 6 4 L 6 12 Z M 6 12 L 10 4 L 10 12 Z M 10 12 L 14 4 L 14 12 Z",
+        // 5 Polyneight ML-P8: two rows of three (the sketch Adam approved).
+        "M 2 7 L 6 2 L 6 7 Z M 6 7 L 10 2 L 10 7 Z M 10 7 L 14 2 L 14 7 Z M 2 14 L 6 9 L 6 14 Z M 6 14 L 10 9 L 10 14 Z M 10 14 L 14 9 L 14 14 Z",
+        // 6 Dominic DS-01: a drum, its rim cut out (the sketch Adam approved).
+        "M 2 5 A 6 2.5 0 0 1 14 5 L 14 11 A 6 2.5 0 0 1 2 11 Z M 2 5 L 2 6 A 6 2.5 0 0 0 14 6 L 14 5 A 6 2.5 0 0 1 2 5 Z",
+        // 7 Aux In: a jack plug.
+        "M 1 7 L 4 7 L 4 5 L 9 5 L 9 7 L 12 7 L 12 9 L 9 9 L 9 11 L 4 11 L 4 9 L 1 9 Z M 13 7 L 14 7 L 15 8 L 14 9 L 13 9 Z"
     ];
     out property <[string]> effect-kinds: [
-        "", "", "", "", "", "", "", "", "",
-        "", "", "", "", "", "", "", ""
+        // 0 Filter: a low-pass response with its resonant peak.
+        "M 1 14 L 1 7 L 7 7 C 9 7 9.5 3 10.5 3 C 11.5 3 12 8 15 13 L 15 14 Z",
+        // 1 Drive: a wave clipped soft, above and below its axis.
+        "M 1 8 C 1.5 3 2.5 3 4 3 L 5 3 C 6.5 3 7.5 3 8 8 C 8.5 13 9.5 13 11 13 L 12 13 C 13.5 13 14.5 13 15 8 Z",
+        // 2 Bitcrush: the same wave in steps.
+        "M 1 8 L 1 5 L 3 5 L 3 3 L 6 3 L 6 5 L 8 5 L 8 11 L 10 11 L 10 13 L 13 13 L 13 11 L 15 11 L 15 8 Z",
+        // 3 Delay: echoes, each smaller than the last.
+        "M 1 8 A 2.75 2.75 0 0 1 6.5 8 A 2.75 2.75 0 0 1 1 8 Z M 7.5 8 A 1.75 1.75 0 0 1 11 8 A 1.75 1.75 0 0 1 7.5 8 Z M 12 8 A 1.25 1.25 0 0 1 14.5 8 A 1.25 1.25 0 0 1 12 8 Z",
+        // 4 Gate: open, then shut.
+        "M 1 14 L 1 12 L 4 12 L 4 3 L 12 3 L 12 12 L 15 12 L 15 14 Z",
+        // 5 Comp: its transfer curve, bending at the threshold.
+        "M 1 15 L 8 8 L 15 5 L 15 15 Z",
+        // 6 Limiter: the curve flat at the ceiling, and the ceiling.
+        "M 1 15 L 9 7 L 15 7 L 15 15 Z M 1 3 L 15 3 L 15 5 L 1 5 Z",
+        // 7 EQ: a bell (the sketch Adam approved).
+        "M 1 14 L 1 11 L 4 11 C 6.3 11 6.3 2 8 2 C 9.7 2 9.7 11 12 11 L 15 11 L 15 14 Z",
+        // 8 Reverb: a spike and its long tail (the sketch Adam approved).
+        "M 1 14 L 3 2 C 5 10 10 12 15 12.5 L 15 14 Z",
+        // 9 Mod: a wave's ribbon, the LFO that moves it.
+        "M 1 7 C 3.5 1 5.5 1 8 7 C 10.5 13 12.5 13 15 7 L 15 10 C 12.5 16 10.5 16 8 10 C 5.5 4 3.5 4 1 10 Z",
+        // 10 Plate: a hanging plate, and a short tail under it.
+        "M 3 1 L 13 1 L 13 6 L 3 6 Z M 1 15 L 2 8 C 4 13 9 14 15 14 L 15 15 Z",
+        // 11 Buffer: two tape reels on their tape.
+        "M 1.5 6.5 A 3 3 0 0 1 7.5 6.5 A 3 3 0 0 1 1.5 6.5 Z M 3.5 6.5 A 1 1 0 0 0 5.5 6.5 A 1 1 0 0 0 3.5 6.5 Z M 8.5 6.5 A 3 3 0 0 1 14.5 6.5 A 3 3 0 0 1 8.5 6.5 Z M 10.5 6.5 A 1 1 0 0 0 12.5 6.5 A 1 1 0 0 0 10.5 6.5 Z M 3 12 L 13 12 L 13 14 L 3 14 Z",
+        // 12 Preamp: a valve, its element cut out, on two pins.
+        "M 4 13 L 4 7 C 4 2 12 2 12 7 L 12 13 Z M 7 6 L 7 11 L 9 11 L 9 6 Z M 5 14 L 7 14 L 7 15 L 5 15 Z M 9 14 L 11 14 L 11 15 L 9 15 Z",
+        // 13 Chain: blocks in series, joined end to end.
+        "M 1 5 L 5 5 L 5 7 L 6 7 L 6 5 L 10 5 L 10 7 L 11 7 L 11 5 L 15 5 L 15 11 L 11 11 L 11 9 L 10 9 L 10 11 L 6 11 L 6 9 L 5 9 L 5 11 L 1 11 Z",
+        // 14 Layer: lanes in parallel, joined at both ends.
+        "M 1 2 L 15 2 L 15 15 L 1 15 Z M 2 5 L 2 7 L 14 7 L 14 5 Z M 2 10 L 2 12 L 14 12 L 14 10 Z",
+        // 15 a plugin insert: the one plugin icon.
+        root.plugin,
+        // 16 Bus Comp: Comp's curve, riding a bus.
+        "M 1 12 L 8 6 L 15 3 L 15 12 Z M 1 13 L 15 13 L 15 15 L 1 15 Z"
     ];
 }
 
@@ -145,6 +214,9 @@ export component Icon inherits Path {
     viewbox-height: 16;
     commands: root.icon;
     fill: root.outline ? transparent : root.tint;
+    // A filled icon's holes are subpaths inside it (MOO-273). Changes
+    // nothing for an outline, which has no fill.
+    fill-rule: evenodd;
     stroke: root.outline ? root.tint : transparent;
     stroke-width: root.outline ? root.outline-width : 0px;
 }

@@ -5300,6 +5300,11 @@ export component MainWindow inherits Window {
                                                 kind: "SOURCE / " + source-device.source-units + "U";
                                                 preset: root.source-preset-name;
                                                 device-color: Theme.accent;
+                                                // The kind's icon (MOO-273), by the same number
+                                                // as its name. A plugin instrument (8) is past
+                                                // the table and takes the one plugin icon.
+                                                icon: root.source-kind < Icons.source-kinds.length
+                                                    ? Icons.source-kinds[root.source-kind] : Icons.plugin;
                                             }
                                         }
 
@@ -5564,6 +5569,7 @@ export component MainWindow inherits Window {
                                                     slot-count: root.effect-slots.length;
                                                     bypassed: slot.bypassed;
                                                     preset-name: slot.preset-name;
+                                                    icon: Icons.effect-kinds[slot.kind];
                                                     cutoff: slot.p0;
                                                     resonance: slot.p1;
                                                     mode: round(slot.p2 * 2);
@@ -5594,6 +5600,7 @@ export component MainWindow inherits Window {
                                                     slot-count: root.effect-slots.length;
                                                     bypassed: slot.bypassed;
                                                     preset-name: slot.preset-name;
+                                                    icon: Icons.effect-kinds[slot.kind];
                                                     drive: slot.p0;
                                                     curve: round(slot.p1 * 3);
                                                     tone: slot.p2;
@@ -5624,6 +5631,7 @@ export component MainWindow inherits Window {
                                                     slot-count: root.effect-slots.length;
                                                     bypassed: slot.bypassed;
                                                     preset-name: slot.preset-name;
+                                                    icon: Icons.effect-kinds[slot.kind];
                                                     drive: slot.p0;
                                                     voicing: round(slot.p1 * 3);
                                                     mix: slot.p2;
@@ -5655,6 +5663,7 @@ export component MainWindow inherits Window {
                                                     slot-count: root.effect-slots.length;
                                                     bypassed: slot.bypassed;
                                                     preset-name: slot.preset-name;
+                                                    icon: Icons.effect-kinds[slot.kind];
                                                     style: round(slot.p3 * 3);
                                                     bits: slot.p0;
                                                     downsample: slot.p1;
@@ -5683,6 +5692,7 @@ export component MainWindow inherits Window {
                                                     slot-count: root.effect-slots.length;
                                                     bypassed: slot.bypassed;
                                                     preset-name: slot.preset-name;
+                                                    icon: Icons.effect-kinds[slot.kind];
                                                     time: slot.p0;
                                                     feedback: slot.p1;
                                                     mode: round(slot.p2 * 2);
@@ -5724,6 +5734,7 @@ export component MainWindow inherits Window {
                                                     slot-count: root.effect-slots.length;
                                                     bypassed: slot.bypassed;
                                                     preset-name: slot.preset-name;
+                                                    icon: Icons.effect-kinds[slot.kind];
                                                     threshold: slot.p0;
                                                     attack: slot.p1;
                                                     hold: slot.p2;
@@ -5756,6 +5767,7 @@ export component MainWindow inherits Window {
                                                     slot-count: root.effect-slots.length;
                                                     bypassed: slot.bypassed;
                                                     preset-name: slot.preset-name;
+                                                    icon: Icons.effect-kinds[slot.kind];
                                                     threshold: slot.p0;
                                                     ratio: slot.p1;
                                                     attack: slot.p2;
@@ -5792,6 +5804,7 @@ export component MainWindow inherits Window {
                                                     slot-count: root.effect-slots.length;
                                                     bypassed: slot.bypassed;
                                                     preset-name: slot.preset-name;
+                                                    icon: Icons.effect-kinds[slot.kind];
                                                     ceiling: slot.p0;
                                                     release: slot.p1;
                                                     gain: slot.p2;
@@ -5824,6 +5837,7 @@ export component MainWindow inherits Window {
                                                     slot-count: root.effect-slots.length;
                                                     bypassed: slot.bypassed;
                                                     preset-name: slot.preset-name;
+                                                    icon: Icons.effect-kinds[slot.kind];
                                                     section: slot.bus-comp;
                                                     reduction-db: -root.slot-meters(index).gain-reduction-db;
                                                     held-reduction-db: root.slot-meters(index).held-reduction-db;
@@ -5848,6 +5862,7 @@ export component MainWindow inherits Window {
                                                     slot-count: root.effect-slots.length;
                                                     bypassed: slot.bypassed;
                                                     preset-name: slot.preset-name;
+                                                    icon: Icons.effect-kinds[slot.kind];
                                                     target: slot.p0;
                                                     enabled: slot.p1;
                                                     frequency: slot.p2;
@@ -5889,6 +5904,7 @@ export component MainWindow inherits Window {
                                                     slot-count: root.effect-slots.length;
                                                     bypassed: slot.bypassed;
                                                     preset-name: slot.preset-name;
+                                                    icon: Icons.effect-kinds[slot.kind];
                                                     // Row fields are descriptor ids, and the
                                                     // Reverb's are 8..15: 0..7 are retired
                                                     // convolution-era ids. Edits below are
@@ -5929,6 +5945,7 @@ export component MainWindow inherits Window {
                                                     slot-count: root.effect-slots.length;
                                                     bypassed: slot.bypassed;
                                                     preset-name: slot.preset-name;
+                                                    icon: Icons.effect-kinds[slot.kind];
                                                     mode: round(slot.p0 * 4);
                                                     rate: slot.p1;
                                                     depth: slot.p2;
@@ -5978,6 +5995,7 @@ export component MainWindow inherits Window {
                                                     slot-count: root.effect-slots.length;
                                                     bypassed: slot.bypassed;
                                                     preset-name: slot.preset-name;
+                                                    icon: Icons.effect-kinds[slot.kind];
                                                     size: slot.p0;
                                                     decay: slot.p1;
                                                     damping: slot.p2;
@@ -6008,6 +6026,7 @@ export component MainWindow inherits Window {
                                                     slot-count: root.effect-slots.length;
                                                     bypassed: slot.bypassed;
                                                     preset-name: slot.preset-name;
+                                                    icon: Icons.effect-kinds[slot.kind];
                                                     seams: root.slot-meters(index).buffer-collisions;
                                                     peaks: root.effect-slot-traces[index];
                                                     head-fraction: root.slot-meters(index).buffer-head;
@@ -6064,6 +6083,7 @@ export component MainWindow inherits Window {
                                                     slot-count: root.effect-slots.length;
                                                     bypassed: slot.bypassed;
                                                     preset-name: slot.preset-name;
+                                                    icon: Icons.effect-kinds[slot.kind];
                                                     units: slot.units;
                                                     plugin-name: slot.plugin-name;
                                                     status: slot.plugin-status;
@@ -6092,6 +6112,7 @@ export component MainWindow inherits Window {
                                                     slot-count: root.effect-slots.length;
                                                     bypassed: slot.bypassed;
                                                     preset-name: slot.preset-name;
+                                                    icon: Icons.effect-kinds[slot.kind];
                                                     branch-count: slot.branches.length;
                                                     mix: slot.p0;
                                                     gain: slot.p1;
@@ -6140,6 +6161,7 @@ export component MainWindow inherits Window {
                                                     slot-count: root.effect-slots.length;
                                                     bypassed: slot.bypassed;
                                                     preset-name: slot.preset-name;
+                                                    icon: Icons.effect-kinds[slot.kind];
                                                     children: slot.children;
                                                     mix: slot.p0;
                                                     level: slot.p1;
@@ -6182,6 +6204,7 @@ export component MainWindow inherits Window {
                                                 y: cell.dragging ? -8px : 0px;
                                                 name: slot.is-plugin && slot.plugin-name != "" ? slot.plugin-name : slot.label;
                                                 kind: "FX / " + slot.units + "U";
+                                                icon: Icons.effect-kinds[slot.kind];
                                                 bypassed: slot.bypassed;
                                                 wet-dry-enabled: !slot.is-container;
                                                 wet-dry: slot.wet-dry;

@@ -28,15 +28,16 @@ He then took the recommended answer to all four of the plan's questions:
 | Who draws them? | **Our own, on one 16 px grid.** No outside set. |
 | How much is in 0.1.6? | **The registry and the device icons** (01, 02). Steps 03-05 are 0.1.7. |
 
-Still standing as recommendations, not yet overruled: a plugin gets **one
-generic icon**, and a device's icon takes the **device colour**.
+**2026-09-27, on MOO-273's kind sheet:** *"i love the sheet. iconts are
+10/10"*. No redraws. The sheet showed one generic plug for a plugin and every
+icon in its device colour, so those two recommendations stand as built.
 
 ## Steps
 
 | Step | State |
 | --- | --- |
 | 01 — the registry | Done (MOO-279): all four legs |
-| 02 — device kinds | Todo, blocked by 01 (MOO-273) |
+| 02 — device kinds | Done (MOO-273): Adam approved the kind sheet as drawn, 2026-09-27. The mixer's headers are MOO-294 |
 | 03 — one family | Backlog (MOO-280) |
 | 04 — one meaning, one icon | Backlog (MOO-281) |
 | 05 — words to icons | Backlog (MOO-282) |

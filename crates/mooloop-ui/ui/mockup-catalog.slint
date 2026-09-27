@@ -20,6 +20,8 @@ import {
     FilterResponseDisplay, OscillatorTrace, SampleTrace
 } from "device-displays.slint";
 import { OscillatorDeviceStrip } from "device-oscillator.slint";
+import { Icons } from "icons.slint";
+import { SourceKinds } from "channel-rack.slint";
 import { MenuBar, MenuBarItem, MenuRow, MenuSeparator } from "menubar.slint";
 import {
     BeatLamps, MenuField, NameField, PositionReadout, StepperField, TempoField, ToolbarLabel,
@@ -368,6 +370,73 @@ export component StickyNote inherits Rectangle {
         wrap: word-wrap;
         single-line: false;
         edited => { root.edited(self.text); }
+    }
+}
+
+// Every device kind's header, for looking at the kind icons together
+// (MOO-273, `docs/plans/icon-pass/02-device-kinds.md`). Not a palette row:
+// render it on its own, at 1x and again at 2x, to see each drawing at the
+// size the rack draws it.
+//
+//   scripts/slint-sketch --shot --component DeviceKindSheet \
+//       crates/mooloop-ui/ui/mockup-catalog.slint
+//   SLINT_SCALE_FACTOR=2 scripts/slint-sketch --shot ...   # the 2x sheet
+//
+// The effects are in `effect_kind_index` order, the sources in
+// `SOURCE_KINDS_IN_PICKER_ORDER` order, as the tables are. Reverb is
+// bypassed, and a few kinds are folded, one of them bypassed.
+export component DeviceKindSheet inherits Window {
+    // The names, by the effect-kinds table's positions. Only this sheet
+    // wants them, so they are spelled here rather than made a global.
+    private property <[string]> effect-names: [
+        "Filter", "Drive", "Bitcrush", "Delay", "Gate", "Comp", "Limiter", "EQ",
+        "Reverb", "Mod", "Plate", "Buffer", "Preamp", "Chain", "Layer", "Plugin", "Bus Comp"
+    ];
+    width: 660px;
+    height: 640px;
+    background: Theme.background;
+    HorizontalLayout {
+        padding: 12px;
+        spacing: 16px;
+        alignment: start;
+        VerticalLayout {
+            spacing: 4px;
+            alignment: start;
+            width: 300px;
+            Text { text: "Sources"; color: Theme.text-muted; font-size: Theme.text-lg; }
+            for title[i] in SourceKinds.titles : DeviceHeader {
+                name: title;
+                kind: SourceKinds.labels[i];
+                icon: Icons.source-kinds[i];
+            }
+            DeviceHeader { name: "A plugin instrument"; kind: "PLUGIN"; icon: Icons.plugin; }
+            Rectangle { height: 8px; }
+            Text { text: "Folded"; color: Theme.text-muted; font-size: Theme.text-lg; }
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+                height: DeviceRackMetrics.face-height;
+                CollapsedDevice { name: "DS-01"; letters: ["D", "S", "-", "0", "1"]; icon: Icons.source-kinds[6]; device-color: Theme.accent; }
+                CollapsedDevice { name: "Reverb"; letters: ["R", "e", "v", "e", "r", "b"]; icon: Icons.effect-kinds[8]; }
+                CollapsedDevice { name: "Reverb"; letters: ["R", "e", "v", "e", "r", "b"]; icon: Icons.effect-kinds[8]; bypassed: true; }
+                CollapsedDevice { name: "Chain"; letters: ["C", "h", "a", "i", "n"]; icon: Icons.effect-kinds[13]; }
+                CollapsedDevice { name: "Layer"; letters: ["L", "a", "y", "e", "r"]; icon: Icons.effect-kinds[14]; }
+            }
+        }
+        VerticalLayout {
+            spacing: 4px;
+            alignment: start;
+            width: 300px;
+            Text { text: "Effects"; color: Theme.text-muted; font-size: Theme.text-lg; }
+            for icon[i] in Icons.effect-kinds : DeviceHeader {
+                name: root.effect-names[i];
+                kind: i == 8 ? "FX, bypassed" : "FX";
+                role: "FX";
+                icon: icon;
+                device-color: Theme.warning;
+                enabled: i != 8;
+            }
+        }
     }
 }
 
@@ -769,6 +838,7 @@ export component MockupSpecimen inherits Rectangle {
     if root.kind == 64: CollapsedDevice {
         name: root.label == "" ? "Delay" : root.label;
         kind: "FX / 3U";
+        icon: Icons.effect-kinds[3];
         bypassed: root.value > 0.5;
         wet-dry: 1.0;
         wet-dry-text: "100% wet";

@@ -3,6 +3,7 @@ import { StatusHint, Theme } from "theme.slint";
 import { GainMath } from "gain.slint";
 import { IconButton, MiniKnob, ToolButton, TrimKnob } from "controls.slint";
 import { ChannelMeter } from "meters.slint";
+import { Icon } from "icons.slint";
 
 export global DeviceRackMetrics {
     out property <length> unit-width: 220px;
@@ -683,6 +684,13 @@ export component DeviceHeader inherits Rectangle {
     in property <bool> enabled: true;
     // Right-edge role tag: "SOURCE" for generators, "FX" for effects.
     in property <string> role: "SOURCE";
+    // The device's kind, as a registry entry: `Icons.source-kinds[n]`,
+    // `Icons.effect-kinds[n]` or `Icons.plugin` (MOO-273). It replaced a
+    // 4x16 bar and an 8x8 dot that both said only the device's colour, and
+    // that Adam could not read (2026-09-26). Tinted as they were, so it
+    // still tells source from effect and on from off. Empty draws nothing:
+    // the mixer's strip, bus and output headers have no kind yet.
+    in property <string> icon;
 
     height: DeviceRackMetrics.header-height;
     background: Theme.surface-raised;
@@ -696,17 +704,12 @@ export component DeviceHeader inherits Rectangle {
         padding-left: 6px;
         padding-right: 6px;
         spacing: 6px;
-        Rectangle {
-            width: 4px;
-            height: 16px;
-            border-radius: Theme.radius-sm;
-            background: root.enabled ? root.device-color : Theme.text-faint;
-        }
-        Rectangle {
-            width: 8px;
-            height: 8px;
-            border-radius: Theme.radius-lg;
-            background: root.enabled ? root.device-color : Theme.text-faint;
+        if root.icon != "" : VerticalLayout {
+            alignment: center;
+            Icon {
+                icon: root.icon;
+                tint: root.enabled ? root.device-color : Theme.text-faint;
+            }
         }
         Text {
             text: root.name;
@@ -755,6 +758,9 @@ export component EffectDeviceShell inherits Rectangle {
     // Forwarded to the header. Every face inherits this shell, so a face
     // gets the preset label without knowing anything about presets.
     in property <string> preset-name;
+    // The header's kind icon, bound where the face is placed from the row's
+    // kind number (`Icons.effect-kinds[slot.kind]`), so no face names its own.
+    in property <string> icon;
     callback reorder-requested(int);  // target slot index
     // A press on the header that did not move far enough to be a reorder.
     // Selection rides on the drag handle rather than getting a TouchArea of
@@ -786,6 +792,7 @@ export component EffectDeviceShell inherits Rectangle {
         kind: root.kind;
         preset: root.preset-name;
         role: "FX";
+        icon: root.icon;
         device-color: Theme.warning;
         enabled: !root.bypassed;
 
@@ -858,7 +865,7 @@ export global FoldLabel {
 // Adam, 2026-09-24: *"let's turn that old `+` button into a `<` button that
 // collapses the device"* -- and a collapsed device is *"essentially its
 // header, rotated 90° clockwise"*. So this is the header's parts, stacked in
-// a strip one rail wide: `>` to open it again, the colour chip, the name
+// a strip one rail wide: `>` to open it again, the kind icon, the name
 // reading top to bottom, and at the foot the controls that still act on a
 // folded device -- on/off, wet/dry, remove. Folding is looking, not editing:
 // the device keeps running exactly as it was.
@@ -870,6 +877,8 @@ export component CollapsedDevice inherits Rectangle {
     // The kind and size ("FX / 2U"): not drawn, but named on hover and to a
     // screen reader.
     in property <string> kind;
+    // The same kind icon the header draws, where the colour chip was.
+    in property <string> icon;
     in property <color> device-color: Theme.warning;
     in property <bool> bypassed;
     in property <bool> bypass-enabled: true;
@@ -911,11 +920,9 @@ export component CollapsedDevice inherits Rectangle {
         }
         HorizontalLayout {
             alignment: center;
-            Rectangle {
-                width: 8px;
-                height: 8px;
-                border-radius: Theme.radius-lg;
-                background: root.bypassed ? Theme.text-faint : root.device-color;
+            Icon {
+                icon: root.icon;
+                tint: root.bypassed ? Theme.text-faint : root.device-color;
             }
         }
         // The name as upright letters, one per line, read top to bottom.
