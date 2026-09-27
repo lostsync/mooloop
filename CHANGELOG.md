@@ -18,6 +18,11 @@ with Feedback above 75% is now quieter. Its resonance peaks at +12 dB instead
 of about +22, so a patch set near the end of the knob sounds 2 to 10 dB
 quieter than it did. Settings at or below 75% are unchanged.
 
+**Heads up:** text is 15% larger at every setting, so what was 115% is
+now 100%. A text size you had changed is read against the new base: 115%
+becomes about 132%. Set it again in Preferences → Appearance if it's now
+too big.
+
 ### Highlights
 
 - **Presets for plugins.** A hosted plugin device saves and loads as an
@@ -84,6 +89,22 @@ quieter than it did. Settings at or below 75% are unchanged.
   crisp as the rest of the window, instead of its header turned on its
   side. Hover it to see the whole name.
 - The rack's `+` menu is wide enough for every row at every text size.
+- The window's content runs to its edges, with no border round it.
+- **The pane your keyboard shortcuts act on is outlined.** Click in a pane,
+  pick a channel or device, or switch views with Ctrl+1..5 to move it.
+  Copy, cut, paste and the arrow keys act on the outlined pane. Selected
+  notes are copied and pasted only when the piano roll is the outlined
+  pane.
+- Keyboard shortcuts no longer go dead after you leave a rename field with
+  Escape or Enter, close a dialog, or when the panel of the control you
+  clicked is rebuilt or hidden.
+- Preferences → Appearance:
+  - The page scrolls to its end, so Borders, Emphasis, Relief, Depth and
+    every section below can be reached.
+  - The Density slider is gone. A theme that sets density still applies it.
+  - The colour swatches come from the chosen scheme. Base offers its
+    backgrounds; Accent and Alert offer its hues, and Accent includes the
+    scheme's own accent.
 - When the audio callback runs late, the status bar names the bar and the
   channels or tracks that took the time. Click it to clear it.
 
