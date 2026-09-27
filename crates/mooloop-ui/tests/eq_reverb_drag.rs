@@ -17,6 +17,7 @@
 //! self-positioning control, only shared `ParameterKnob`s, so that case is
 //! gone rather than untested.
 
+use mooloop_core::EqBandKind;
 use mooloop_ui::{
     eq_plot_pass, install_eq_spec, CompressorDeviceDragHarness, EqDeviceDragHarness,
     FilterDeviceDragHarness, EQ_PLOT_BAND_STRIDE, EQ_PLOT_PASS_STRIDE,
@@ -439,4 +440,44 @@ fn compressor_threshold_drag_updates_the_parameter_and_curve() {
         after.as_bytes(),
         "the threshold handle and transfer curve should redraw after a drag"
     );
+}
+
+/// The EQ face with every glyph it draws on screen: both shelves in the
+/// target row (bands 0 and 6 made shelves), the two pass filters at its ends,
+/// the analyzer switch, and the proportional-Q switch beside the knobs (a
+/// band, not a pass, is selected). Rendered twice, the second time with the
+/// analyzer and proportional Q on, so each switch is seen in both states.
+///
+/// Written for MOO-279, whose EQ leg moves those glyphs' path strings into
+/// `icons.slint` without changing a pixel: render with
+/// `MOOLOOP_EQ_FACE_SNAPSHOT` and `MOOLOOP_EQ_FACE_ACTIVE_SNAPSHOT` before and
+/// after such a move, and `cmp` the pairs.
+#[test]
+fn render_eq_face_glyphs() {
+    init_software_backend();
+    let ui = EqDeviceDragHarness::new().unwrap();
+    ui.window()
+        .set_size(LogicalSize::new(EQ_FACE_WIDTH, FACE_HEIGHT));
+    install_eq_spec(&ui);
+
+    let mut kinds = vec![EqBandKind::Bell.to_index(); 7];
+    kinds[0] = EqBandKind::LowShelf.to_index();
+    kinds[6] = EqBandKind::HighShelf.to_index();
+    ui.set_band_kinds(ModelRc::from(Rc::new(VecModel::from(kinds))));
+    ui.set_target(0.0);
+    ui.set_enabled(1.0);
+
+    let resting = ui.window().take_snapshot().unwrap();
+    assert!(resting.as_bytes().iter().any(|byte| *byte != 0));
+    write_snapshot(&resting, "MOOLOOP_EQ_FACE_SNAPSHOT");
+
+    ui.set_analyzer_enabled(true);
+    ui.set_q_profile(1.0);
+    let active = ui.window().take_snapshot().unwrap();
+    assert_ne!(
+        resting.as_bytes(),
+        active.as_bytes(),
+        "switching the analyzer and proportional Q on changed nothing on the face"
+    );
+    write_snapshot(&active, "MOOLOOP_EQ_FACE_ACTIVE_SNAPSHOT");
 }
