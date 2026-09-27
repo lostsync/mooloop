@@ -124,22 +124,74 @@ string property `focused-surface` rather than an index, so neither side
 spells a number; `focused_surface_names_match_the_markup` holds the two
 spellings together.
 
-Two rules decide it, and the order matters:
+### The focused pane
 
-1. **The roll wins whenever it is on screen with something selected.** That
-   is the rule the clipboard chords have shipped with since 2026-09-07, and
-   a user who has just dragged a marquee is not thinking about the browser
-   row they opened before it.
-2. **Otherwise it is where the last click was**, written from Rust in the
-   handlers a click already round-trips through — `channel-selected`,
-   `device-selected`, `source-select-toggled` — and from the markup for the
-   browser's own rows and tabs.
+**The focused pane is the one focus model, and the surface is derived from
+it** (MOO-287, decided 2026-09-27 with Adam asleep; a follow-up if he
+disagrees). `active-pane` in `main.slint` is a view id (`PaneViews`: steps,
+mixer, devices, notes, playlist) or the browser sidebar (5), or -1 for none,
+and it is drawn: an outline in `Theme.stroke-emphasis` and `Theme.focus`
+around that pane, the border a focused control has. `focus-pane` is the only
+writer of `focused-surface`, so the outline cannot sit on one pane while a
+chord acts on another:
+
+| Focused pane | Surface |
+| --- | --- |
+| Devices | `Rack` |
+| Notes | `Notes` |
+| Browser | `Browser` |
+| Steps, Mixer, Playlist, or none | `Channels` |
+
+The other shape was considered and not taken: making `active-slot` the thing
+the chords consult and deriving the surface from it. A slot is not a pane the
+keyboard can mean -- the browser has none -- and `active-slot` now simply
+follows the focused pane when that pane is a view, so Zoom Pane and the View
+menu's Move rows mean the outlined pane.
+
+What moves it:
+
+1. **A press in a pane.** A press nothing inside claims -- the pane's
+   background -- focuses it (`ViewSlot.pressed`). So does every press that
+   already reports where it was: a channel picked (`channel-selected`), a
+   device or the instrument selected (`device-selected`,
+   `source-select-toggled`), the roll's grid (`focus-requested`), a browser
+   row or tab, a pane's tab.
+2. **Revealing a view.** `show-view`, which Ctrl+1..5, the View menu and the
+   tabs all go through, and `move-view`.
+3. **A selection from the keyboard**, through Rust's `set_focused_surface`:
+   Ctrl+Shift+Left/Right into the rack, Ctrl+B into the browser. Each names a
+   surface, and `focus-surface` finds its pane. The channel is in several, so
+   it is the pane under the pointer if that shows channels
+   (`PaneFocus.hovered`), else the focused pane if it already does, else the
+   steps if they are on screen, else none.
+
+A press that a control keeps for itself and reports nowhere -- a knob, a
+fader, a mute button -- does not move it. That is deliberate rather than a
+gap to close with a pointer hook: the control acts on what it is, not on the
+focused pane, and the chords' target has not changed.
+
+**The roll no longer wins on its own.** Until 2026-09-27 a roll on screen with
+notes selected took the chords ahead of whatever was clicked last. An outline
+cannot say that -- it would sit on the browser row just clicked while Ctrl+C
+copied notes -- so it went. Pressing in the roll focuses its pane, so a
+marquee still aims the chords at the notes it drew. **Paste changed with
+it**: notes on the clipboard used to be pasted whatever was focused, as long
+as the roll was on screen; now they are pasted only with the roll outlined.
+
+The routing itself is one function, `actions::focused_target`, which the
+dispatcher calls with the surface it reads, and
+`every_focused_chord_lands_on_the_outlined_pane` presses each pane and holds
+every `Focused` chord to it.
 
 `Channels` is the fallback, not a fifth state meaning "nothing". Before this
-existed the clipboard chords meant the channel unconditionally, so a surface
-nobody has clicked behaves the way it did then, and **nothing a user relied
-on changed shape**. There is deliberately no Escape-to-nowhere: the way back
-to the fallback is selecting a channel, which is the ordinary thing.
+existed the clipboard chords meant the channel unconditionally, so a pane
+with no clipboard of its own -- the steps, the mixer, the playlist -- means
+the selected channel, and so does no pane at all.
+
+Only the `Focused` chords consult it. The other scopes are unchanged and
+still say where they apply on the Shortcuts page: Delete and Ctrl+A act on
+the roll whenever it is the visible editor (`Scope::Notes`), the device verbs
+on the selected device (`Scope::Rack`).
 
 Seven actions are `Focused`: `edit.cut-channel`, `edit.copy-channel`,
 `edit.paste-channel` (ids unchanged, per the rule above — what they *mean* is

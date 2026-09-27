@@ -672,10 +672,22 @@ global PaneViews {
     out property <int> devices: 2;
     out property <int> notes: 3;
     out property <int> playlist: 4;
+    // The browser sidebar, as a pane the keyboard can be aimed at (MOO-287).
+    // It is not a view: no slot holds it and no tab names it, so it sits
+    // past the end of `names` and nothing that walks the views meets it.
+    out property <int> browser: 5;
     // DEVICES is the only view with an intrinsic height -- a face is a fixed
     // 268px and does not stretch -- which is the whole of "the bottom pane
     // resizes except on the devices page".
     out property <[bool]> fixed-height: [false, false, true, false, false];
+}
+
+// The view under the pointer, or -1 (MOO-287). Each `ViewSlot` publishes
+// itself here as the pointer enters and leaves it, which is how a press that
+// a control kept for itself -- a channel row, a device header -- can still
+// say which pane it was made in when it reaches Rust as a selection.
+global PaneFocus {
+    in-out property <int> hovered: -1;
 }
 
 // Live state of a pane-tab drag.
@@ -718,12 +730,35 @@ struct PaneRect {
 component ViewSlot inherits Rectangle {
     in property <PaneRect> rect;
     in property <bool> shown;
+    // Which view this frames, for `PaneFocus.hovered`.
+    in property <int> view: -1;
+    // A press inside the pane that nothing in it claimed: its background.
+    callback pressed();
     x: self.rect.x;
     y: self.rect.y;
     width: self.rect.width;
     height: self.rect.height;
     visible: self.shown;
     clip: true;
+
+    // The view is drawn *inside* this rather than beside it. A parent
+    // `TouchArea` has `has-hover` set before its children are asked about
+    // the pointer, so it knows the pointer is in the pane even over a
+    // control that takes the press -- a sibling underneath would not.
+    out property <bool> hovered: area.has-hover && self.shown;
+    changed hovered => {
+        if (self.hovered) {
+            PaneFocus.hovered = self.view;
+        } else if (PaneFocus.hovered == self.view) {
+            PaneFocus.hovered = -1;
+        }
+    }
+    area := TouchArea {
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) { root.pressed(); }
+        }
+        @children
+    }
 }
 
 // Every view's one toolbar row.
@@ -1599,7 +1634,7 @@ export component MainWindow inherits Window {
     // Reveal a view where it lives. Rust calls this; so does every tab.
     public function show-view(v: int) {
         root.set-slot-active(root.slot-of(v), v);
-        root.active-slot = root.slot-of(v);
+        root.focus-pane(v);
         root.layout-changed();
     }
 
@@ -1660,12 +1695,69 @@ export component MainWindow inherits Window {
     public function toggle-zoom(s: int) {
         root.zoomed = root.zoomed == s ? -1 : s;
     }
-    // The last slot a view was revealed in -- by a tab, a chord or a menu
-    // row. It is not a focus model and does not pretend to be one; it is the
-    // only honest answer available to "which pane did you mean" for the
-    // gestures that are not aimed with a pointer. Starts at the dock, which
-    // is where the editors are and what is showing at launch.
+    // The slot of the focused pane, while that pane is a view: what the
+    // gestures that are not aimed with a pointer -- Zoom Pane, the View
+    // menu's Move rows -- take "this pane" to mean. `focus-pane` keeps it,
+    // so it is the outlined pane's slot and not a second idea of focus.
+    // Starts at the dock, which is where the editors are and what is showing
+    // at launch.
     in-out property <int> active-slot: 2;
+
+    // ===== The focused pane (MOO-287) =====
+    //
+    // Which pane the keyboard is aimed at: a view id (`PaneViews`), one of
+    // the two sidebars, or -1 for none. **It is the one focus model**, and
+    // `focused-surface` -- what the contextual chords (`Scope::Focused` in
+    // `actions.rs`) act on -- is derived from it here and nowhere else, so
+    // the outline drawn around this pane cannot point somewhere the chords
+    // do not. `docs/ACTIONS.md`, *The focused pane*.
+    //
+    // A press on a pane's background sets it, and so does every press that
+    // already reports where it was: a channel, a device, the roll, a browser
+    // row or tab, a pane's tab. So does revealing a view by chord or menu.
+    in-out property <int> active-pane: -1;
+    // The view under the pointer (`PaneFocus`), for the tests to find a pane by.
+    out property <int> hovered-pane: PaneFocus.hovered;
+    public function focus-pane(p: int) {
+        root.active-pane = p;
+        if (p >= 0 && p < PaneViews.names.length) {
+            root.active-slot = root.slot-of(p);
+        }
+        // One literal per surface, which `actions.rs`'s
+        // `focused_surface_names_match_the_markup` reads. The steps, the
+        // mixer, the playlist and the channel list all mean the channel.
+        if (p == PaneViews.devices) {
+            root.focused-surface = "rack";
+        } else if (p == PaneViews.notes) {
+            root.focused-surface = "notes";
+        } else if (p == PaneViews.browser) {
+            root.focused-surface = "browser";
+        } else {
+            root.focused-surface = "channels";
+        }
+    }
+    // A selection that says only *what* was picked -- Rust's
+    // `set_focused_surface` -- aimed at a pane. Three surfaces have one pane
+    // each. The channel is in several, so it is the one under the pointer if
+    // that shows channels, else the one already focused if that does, else
+    // the steps, which are the channel list: a keyboard pick has no pointer
+    // to go by.
+    public function focus-surface(name: string) {
+        if (name == "rack") {
+            root.focus-pane(PaneViews.devices);
+        } else if (name == "notes") {
+            root.focus-pane(PaneViews.notes);
+        } else if (name == "browser") {
+            root.focus-pane(PaneViews.browser);
+        } else if (PaneFocus.hovered == PaneViews.steps || PaneFocus.hovered == PaneViews.mixer
+                || PaneFocus.hovered == PaneViews.playlist) {
+            root.focus-pane(PaneFocus.hovered);
+        } else if (root.active-pane >= 0 && root.focused-surface == "channels") {
+            return;
+        } else {
+            root.focus-pane(root.showing-steps ? PaneViews.steps : -1);
+        }
+    }
     // How many views the main slot holds. Main is never allowed to empty --
     // there would be no pane left to drop anything back onto -- so the last
     // view in it refuses to be dragged out rather than snapping back.
@@ -1702,7 +1794,7 @@ export component MainWindow inherits Window {
         let from = root.slot-of(v);
         root.set-view-slot(v, s);
         root.set-slot-active(s, v);
-        root.active-slot = s;
+        root.focus-pane(v);
         root.reseat-slot(from);
         root.layout-changed();
     }
@@ -3725,6 +3817,8 @@ export component MainWindow inherits Window {
                     ViewSlot {
                         rect: work.slot-rect(root.steps-slot);
                         shown: root.view-showing(PaneViews.steps, root.steps-slot);
+                        view: PaneViews.steps;
+                        pressed => { root.focus-pane(PaneViews.steps); }
                         VerticalLayout {
                             spacing: 0px;
                             PaneToolbar {
@@ -4364,6 +4458,8 @@ export component MainWindow inherits Window {
                     ViewSlot {
                         rect: work.slot-rect(root.mixer-slot);
                         shown: root.view-showing(PaneViews.mixer, root.mixer-slot);
+                        view: PaneViews.mixer;
+                        pressed => { root.focus-pane(PaneViews.mixer); }
                         VerticalLayout {
                             spacing: 0px;
                             PaneToolbar {
@@ -4418,6 +4514,8 @@ export component MainWindow inherits Window {
                     ViewSlot {
                         rect: work.slot-rect(root.devices-slot);
                         shown: root.view-showing(PaneViews.devices, root.devices-slot);
+                        view: PaneViews.devices;
+                        pressed => { root.focus-pane(PaneViews.devices); }
                         VerticalLayout {
                             spacing: 0px;
                             PaneToolbar {
@@ -6241,6 +6339,8 @@ export component MainWindow inherits Window {
                     ViewSlot {
                         rect: work.slot-rect(root.notes-slot);
                         shown: root.view-showing(PaneViews.notes, root.notes-slot);
+                        view: PaneViews.notes;
+                        pressed => { root.focus-pane(PaneViews.notes); }
                         VerticalLayout {
                             spacing: 0px;
                             PaneToolbar {
@@ -6505,7 +6605,10 @@ export component MainWindow inherits Window {
                                             visible-h: piano-scroll.visible-height;
                                             hover-hint <=> root.hover-hint;
                                             note-hit-test(tick, note) => { return root.piano-note-hit-test(tick, note); }
-                                            focus-requested => { keys.focus(); }
+                                            focus-requested => {
+                                                keys.focus();
+                                                root.focus-pane(PaneViews.notes);
+                                            }
                                             gesture-begin() => { root.piano-gesture-begin(); }
                                             gesture-end() => { root.piano-gesture-end(); }
                                             note-created(start, note, duration) => {
@@ -6923,6 +7026,8 @@ export component MainWindow inherits Window {
                     ViewSlot {
                         rect: work.slot-rect(root.playlist-slot);
                         shown: root.view-showing(PaneViews.playlist, root.playlist-slot);
+                        view: PaneViews.playlist;
+                        pressed => { root.focus-pane(PaneViews.playlist); }
                         VerticalLayout {
                             spacing: 0px;
                             PaneToolbar {
@@ -7488,6 +7593,22 @@ export component MainWindow inherits Window {
                     }
 
 
+                    // The focused pane (MOO-287), outlined the way a focused
+                    // control is: `stroke-emphasis` in `focus`. Over the
+                    // slots, under the drop target and the dividers, and
+                    // only while the pane is on screen.
+                    if root.active-pane >= 0 && root.active-pane < PaneViews.names.length
+                            && root.view-showing(root.active-pane, root.slot-of(root.active-pane))
+                            : Rectangle {
+                        property <PaneRect> r: work.slot-rect(root.slot-of(root.active-pane));
+                        x: self.r.x;
+                        y: self.r.y;
+                        width: self.r.width;
+                        height: self.r.height;
+                        border-width: Theme.stroke-emphasis;
+                        border-color: Theme.focus;
+                    }
+
                     // Where the drag would land. Drawn over the slots and
                     // under the dividers, and only while a drag is live.
                     //
@@ -7697,7 +7818,7 @@ export component MainWindow inherits Window {
                                     browser-tab-touch := TouchArea {
                                         mouse-cursor: pointer;
                                         clicked => {
-                                            root.focused-surface = "browser";
+                                            root.focus-pane(PaneViews.browser);
                                             root.browser-tab = i;
                                             root.browser-tab-changed(i);
                                         }
@@ -7895,7 +8016,7 @@ export component MainWindow inherits Window {
                                             // keyboard now is, so the arrows
                                             // carry on from the row that was
                                             // just pressed.
-                                            root.focused-surface = "browser";
+                                            root.focus-pane(PaneViews.browser);
                                             root.browser-focus-index = index;
                                             // A preset is selected and auditioned by
                                             // a click (Adam, MOO-9; MOO-227): loading
@@ -8073,6 +8194,18 @@ export component MainWindow inherits Window {
                         background: sidebar-grip.has-hover || sidebar-grip.pressed
                             ? Theme.focus : Theme.border;
                     }
+                    }
+
+                    // The focused pane's outline, when it is the browser
+                    // (MOO-287). Drawn over the content, the way the work
+                    // area draws it over a view.
+                    if root.active-pane == PaneViews.browser && root.sidebar-visible : Rectangle {
+                        x: 0;
+                        y: 0;
+                        width: parent.width;
+                        height: parent.height;
+                        border-width: Theme.stroke-emphasis;
+                        border-color: Theme.focus;
                     }
 
                     sidebar-grip := TouchArea {

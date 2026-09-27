@@ -16,6 +16,8 @@ mod browser_panel_tests;
 #[cfg(test)]
 mod channel_sidebar_tests;
 #[cfg(test)]
+mod focused_pane_tests;
+#[cfg(test)]
 mod rack_rename_tests;
 #[cfg(test)]
 mod controlled_faces_tests;
@@ -1426,29 +1428,24 @@ fn length_text(ticks: u32) -> String {
     }
 }
 
-/// Which panel a `Scope::Focused` action resolves against.
+/// Which panel a `Scope::Focused` action resolves against: the focused
+/// pane's (MOO-287). The markup derives `focused-surface` from the pane it
+/// outlines, in `focus-pane`, so what this answers is what the outline shows.
 ///
-/// The roll wins whenever it is on screen with something selected, ahead of
-/// whatever was clicked last. That is the rule the clipboard chords have
-/// shipped with since 2026-09-07, and it is still the right one: a user who
-/// has just dragged a marquee is not thinking about the browser row they
-/// opened before it. Everything else is the stored surface, which falls
-/// back to the channel list -- what these chords meant before there was a
-/// second clipboard to mean.
+/// It used to put the roll first whenever the roll was on screen with notes
+/// selected, ahead of whatever was clicked last. An outline cannot say that:
+/// it would sit on the browser row just clicked while Ctrl+C copied notes.
+/// Pressing in the roll focuses its pane, so a marquee still aims the chords
+/// at the notes it drew.
 fn focused_surface(window: &MainWindow) -> actions::Surface {
-    if notes_have_focus(window) {
-        return actions::Surface::Notes;
-    }
     actions::Surface::from_name(window.get_focused_surface().as_str())
 }
 
-/// Records where the user just clicked, so the next contextual chord knows.
+/// Aims the contextual chords at `surface` by focusing the pane that shows
+/// it: the one under the pointer when the surface is the channel, which is
+/// in several (`focus-surface` in `main.slint`).
 fn set_focused_surface(window: &MainWindow, surface: actions::Surface) {
-    window.set_focused_surface(surface.name().into());
-}
-
-fn notes_have_focus(window: &MainWindow) -> bool {
-    window.get_showing_notes() && window.get_has_note_selection()
+    window.invoke_focus_surface(surface.name().into());
 }
 
 /// A browser row's kind, as `BrowserRow.kind` spells it. One model serves
@@ -8314,52 +8311,46 @@ impl AppUi {
                     "file.quit" => window.invoke_quit_requested(),
                     "edit.undo" => window.invoke_edit_command_requested(0, channel),
                     "edit.redo" => window.invoke_edit_command_requested(1, channel),
-                    // The three clipboards, resolved against the focused
-                    // surface (`docs/ACTIONS.md`): notes on the roll, the
-                    // selected device in the rack, the channel everywhere
-                    // else -- which is the fallback these chords have always
-                    // been, so nothing a user relied on changed shape.
-                    // A rack surface with nothing selected falls through to
-                    // the channel rather than doing nothing, because "the
-                    // rack is where I clicked last" and "I have a device
-                    // picked out" are different claims.
-                    "edit.cut-channel" => match surface {
-                        actions::Surface::Notes => window.invoke_piano_notes_copied(true),
-                        actions::Surface::Rack if selected_device_slot(&st).is_some() => {
-                            window.invoke_device_clipboard_action(1)
-                        }
-                        _ => window.invoke_edit_command_requested(2, channel),
-                    },
-                    "edit.copy-channel" => match surface {
-                        actions::Surface::Notes => window.invoke_piano_notes_copied(false),
-                        actions::Surface::Rack if selected_device_slot(&st).is_some() => {
-                            window.invoke_device_clipboard_action(0)
-                        }
-                        _ => window.invoke_edit_command_requested(3, channel),
-                    },
-                    "edit.paste-channel" => {
-                        // Paste does not need a selection -- it needs
-                        // something on the clipboard it is about to use, so
-                        // each arm asks about its own.
-                        let has_notes = window.get_showing_notes()
-                            && !commands.borrow().note_clipboard.is_empty();
-                        let has_device = commands.borrow().device_clipboard.is_some();
-                        match surface {
-                            actions::Surface::Rack if has_device => {
+                    // The three clipboards and the four arrows, resolved
+                    // against the focused pane's surface by
+                    // `actions::focused_target` (`docs/ACTIONS.md`, *The
+                    // focused pane*): notes on the roll, the selected device
+                    // in the rack, the browser's row, and the channel
+                    // everywhere else.
+                    "edit.cut-channel" | "edit.copy-channel" | "edit.paste-channel"
+                    | "notes.nudge-earlier" | "notes.nudge-later" | "notes.nudge-up"
+                    | "notes.nudge-down" => {
+                        let aim = actions::Aim {
+                            device_selected: selected_device_slot(&st).is_some(),
+                            device_clipboard: commands.borrow().device_clipboard.is_some(),
+                            note_clipboard: window.get_showing_notes()
+                                && !commands.borrow().note_clipboard.is_empty(),
+                        };
+                        let target = actions::focused_target(action_id, surface, aim)
+                            .unwrap_or(actions::Target::Nothing);
+                        let cut = action_id == "edit.cut-channel";
+                        let forward = action_id == "notes.nudge-later";
+                        let delta = if action_id == "notes.nudge-up" { -1 } else { 1 };
+                        match (action_id, target) {
+                            ("edit.cut-channel" | "edit.copy-channel", actions::Target::Notes) => {
+                                window.invoke_piano_notes_copied(cut)
+                            }
+                            ("edit.cut-channel" | "edit.copy-channel", actions::Target::Device) => {
+                                window.invoke_device_clipboard_action(if cut { 1 } else { 0 })
+                            }
+                            ("edit.cut-channel" | "edit.copy-channel", _) => {
+                                window.invoke_edit_command_requested(if cut { 2 } else { 3 }, channel)
+                            }
+                            ("edit.paste-channel", actions::Target::Device) => {
                                 window.invoke_device_clipboard_action(2)
                             }
-                            _ if has_notes => window.invoke_piano_notes_pasted(),
-                            _ => window.invoke_edit_command_requested(4, channel),
-                        }
-                    }
-                    // The four arrows. Left/Right nudge on the roll and
-                    // walk the tree in the browser; Up/Down transpose,
-                    // change the browser's row, or -- the fallback, and what
-                    // `main.slint` used to do in markup -- pick a channel.
-                    "notes.nudge-earlier" | "notes.nudge-later" => {
-                        let forward = action_id == "notes.nudge-later";
-                        match surface {
-                            actions::Surface::Notes => {
+                            ("edit.paste-channel", actions::Target::Notes) => {
+                                window.invoke_piano_notes_pasted()
+                            }
+                            ("edit.paste-channel", _) => {
+                                window.invoke_edit_command_requested(4, channel)
+                            }
+                            ("notes.nudge-earlier" | "notes.nudge-later", actions::Target::Notes) => {
                                 let step = if window.get_piano_snap_enabled() {
                                     window.get_piano_snap_ticks().max(1)
                                 } else {
@@ -8368,31 +8359,26 @@ impl AppUi {
                                 let sign = if forward { 1 } else { -1 };
                                 window.invoke_piano_notes_nudged(sign * step, 0);
                             }
-                            actions::Surface::Browser => {
+                            ("notes.nudge-earlier" | "notes.nudge-later", actions::Target::Browser) => {
                                 if !browser_step_horizontally(&st, &window, forward) {
                                     return false;
                                 }
                             }
-                            _ => return false,
-                        }
-                    }
-                    "notes.nudge-up" | "notes.nudge-down" => {
-                        let delta = if action_id == "notes.nudge-up" { -1 } else { 1 };
-                        match surface {
-                            actions::Surface::Notes => {
+                            (_, actions::Target::Notes) => {
                                 window.invoke_piano_notes_nudged(0, -delta);
                             }
-                            actions::Surface::Browser => {
+                            (_, actions::Target::Browser) => {
                                 if !browser_move_focus(&st, &window, delta) {
                                     return false;
                                 }
                             }
-                            _ => {
+                            (_, actions::Target::Channel) => {
                                 let last = window.get_channels().row_count() as i32 - 1;
                                 let next =
                                     (window.get_selected_channel() + delta).clamp(0, last.max(0));
                                 window.invoke_channel_selected(next);
                             }
+                            _ => return false,
                         }
                     }
                     // The device clipboard's own unambiguous chords. Bare

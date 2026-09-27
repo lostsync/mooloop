@@ -112,6 +112,68 @@ impl Surface {
     }
 }
 
+/// What a `Scope::Focused` chord acts on, once the surface is known.
+///
+/// The dispatcher in `lib.rs` used to spell this out inline in each arm,
+/// where no test could reach it. It is here so the whole routing -- a press
+/// focuses a pane, the pane names a surface, the surface picks a target --
+/// can be held by one test (`focused_pane_tests.rs`) rather than trusted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Target {
+    /// The roll's selected notes, or its clipboard.
+    Notes,
+    /// The rack's selected device, or the device clipboard.
+    Device,
+    /// The selected channel: the fallback these chords have always had.
+    Channel,
+    /// The browser tree's keyboard row.
+    Browser,
+    /// Nothing: the key is left for whatever else wants it.
+    Nothing,
+}
+
+/// The state a `Focused` chord's target depends on beside the surface.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Aim {
+    pub device_selected: bool,
+    pub device_clipboard: bool,
+    /// Notes on the clipboard *and* the roll on screen to paste them into.
+    pub note_clipboard: bool,
+}
+
+/// Where `action` lands on `surface`, or `None` for an action that is not
+/// `Scope::Focused`.
+///
+/// A rack surface with nothing selected cuts and copies the channel rather
+/// than doing nothing, because "the rack is where I clicked last" and "I
+/// have a device picked out" are different claims. Paste needs no
+/// selection, only something of its own kind on the clipboard.
+pub(crate) fn focused_target(action: &str, surface: Surface, aim: Aim) -> Option<Target> {
+    Some(match action {
+        "edit.cut-channel" | "edit.copy-channel" => match surface {
+            Surface::Notes => Target::Notes,
+            Surface::Rack if aim.device_selected => Target::Device,
+            _ => Target::Channel,
+        },
+        "edit.paste-channel" => match surface {
+            Surface::Rack if aim.device_clipboard => Target::Device,
+            Surface::Notes if aim.note_clipboard => Target::Notes,
+            _ => Target::Channel,
+        },
+        "notes.nudge-earlier" | "notes.nudge-later" => match surface {
+            Surface::Notes => Target::Notes,
+            Surface::Browser => Target::Browser,
+            _ => Target::Nothing,
+        },
+        "notes.nudge-up" | "notes.nudge-down" => match surface {
+            Surface::Notes => Target::Notes,
+            Surface::Browser => Target::Browser,
+            _ => Target::Channel,
+        },
+        _ => return None,
+    })
+}
+
 pub(crate) struct ActionSpec {
     pub id: &'static str,
     pub label: &'static str,
