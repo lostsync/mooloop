@@ -4,6 +4,7 @@ import { MeterPrefs } from "meters.slint";
 import { AudioOrientation, IconButton, ParameterFader, SectionLabel, SegmentedControl, ToggleButton, ToolButton } from "controls.slint";
 import { AudioDriverCopy, DriverControlSurface, OutputTargetRow } from "audio-preferences.slint";
 import { StepperField } from "toolbar.slint";
+import { Icons } from "icons.slint";
 // The swatch rows beside the colour fields offer colours from the scheme in
 // force, so they use the same `ColorChoice` the channel picker does -- one
 // struct, because both halves of it come from Rust for the same reason: Slint
@@ -1495,7 +1496,7 @@ export component PreferencesDialog inherits Rectangle {
                     Text { text: "Preferences"; color: Theme.text; font-size: Theme.text-3xl; vertical-alignment: center; }
                     Rectangle { horizontal-stretch: 1; }
                     IconButton {
-                        icon: "M 4 4 L 12 12 M 12 4 L 4 12";
+                        icon: Icons.close;
                         tooltip: "Close";
                         size: 24px;
                         clicked => { root.cancelled(); root.open = false; }

@@ -97,6 +97,7 @@ ids (C2, P4, …) are the report's.
 | A control naming its parameter to Rust: `ControlRequest` (`controls.slint`) and `name_if_asked` in the three `*_modulation_edit_started` handlers | Interface, with Control owning what learn and automate do with the address | nobody | MOO-143. A control sets `ControlRequest.naming`, fires its own `modulation-edit-started`, and clears the flag **in the same Slint function**; Rust notes the address in `UiState.named_param` and returns before learn or a gesture; the menu request that follows takes it. Rust never sets or clears `naming`. A face handler that does more than forward the callback must ignore it while `naming` is set |
 | A device face's and a mixer strip's per-tick state: meters, dynamics readouts, the Buffer's marks, the EQ analyzer's, Preamp's and Buffer's traces, the strips' levels and lamps | Interface (the models and `ui/src/rack_displays.rs`), with Effects and Mixer owning the bindings in their faces | the rows (`EffectSlotRow`, `MixerStripRow`) | MOO-261. Nothing that moves every pump tick lives on a row that carries text: a whole-row write re-measures every text on the face. `effect-slot-meters` and `effect-slot-traces` are indexed like `effect-slots` and realigned (to rest) in `sync_effects`, the one place the rows are rebuilt; a face reads `root.slot-meters(index)` and `root.effect-slot-traces[index]`. A strip reads `StripMeters.level(track)`. The pump writes an entry only where it would be drawn differently, and a trace in place |
 | Where a slow callback went: per-site lap timing in the block loop (`engine/src/site_times.rs`), the `HotSpot` record and its seqlock slot in `LoadMeters` (`engine/src/load.rs`), and the status bar's `audio-hot-spot` | Engine (the timing, the record, the threshold), with Mixer owning the bus walk its one lap per bus sits in, and Interface the pump line that names the sites and the Text that shows them | nobody | MOO-236. A lap is one `Instant::now()` as a site's turn begins and changes nothing the walk does; a new early exit in the bus walk needs no second read. The record is published only by a callback past `HOT_SPOT_SHARE_PERCENT` of its budget, after its work is measured, and never allocates or waits (`soak_tests.rs` publishes on every block). The pump names a `Site` by its index into `Session::channels` or `Session::buses` and sets the property at most once a second; the Text is a fixed-width box beside the readout, so a new string never re-measures the bar |
+| Every icon's drawing: the registry `Icons` and the component `Icon` (`ui/ui/icons.slint`), and `scripts/dupe-audit icon-literal`, which counts icons drawn anywhere else | Interface (the registry, the drawings and `Icon`), with each face's team owning where its face places an icon and which entry it names | each file that drew one: `ToolIcons` (Interface), `StripIcons` (Mixer), `SamplerDeviceIcons` (Instruments), the EQ face's own (Effects), and ~55 text glyphs | MOO-279, `docs/plans/icon-pass/`. One meaning had three drawings because an icon was written where it was drawn. A face names an entry (`icon: Icons.previous`) and never spells a path string or a glyph; a face that needs an icon the registry lacks asks Interface for one, the way it asks the shell for a rail. The kind tables `Icons.source-kinds` and `Icons.effect-kinds` are indexed by `device_kind_to_int` and `effect_kind_index`, and `ui/tests/icon_registry.rs` holds them to those and holds the registry free of duplicates |
 
 ## Work that crosses teams
 
@@ -328,6 +329,7 @@ Files marked *shared* are split in the table above.
   `mockup.slint`, `mockup-catalog.slint`,
   `mockup-tool.slint`, `plugin-device.slint` (the face of a hosted plugin
   with no GUI, MOO-83)
+- `ui/ui/icons.slint`: the icon registry, `Icons` and `Icon` (MOO-279)
 - `ui/src/plugin_ui.rs` and its tests (the plugin browser, menu row and face)
 - `ui/src/export_ui.rs` and its tests (the export card's wiring, MOO-180)
 - `ui/tests/`: `menubar.rs`, `question_dialog.rs`, `panes.rs`, `pane_drag.rs`, `first_click.rs`,
@@ -336,7 +338,7 @@ Files marked *shared* are split in the table above.
   `save_error_snapshot.rs`, `status_notice.rs`, `knob_typed_entry.rs`,
   `preferences_appearance_snapshot.rs`,
   `preferences_shortcuts_snapshot.rs`, `preferences_developer_snapshot.rs`,
-  `plugin_formats_stay_out.rs`
+  `plugin_formats_stay_out.rs`, `icon_registry.rs`
 
 `device-rack.slint` and `device-displays.slint` are the shell and the display
 canvas every device face is drawn in. They are Interface's; the faces inside

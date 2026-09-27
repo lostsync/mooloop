@@ -1,5 +1,6 @@
 import { ScrollView } from "std-widgets.slint";
 import { StatusHint, Theme } from "theme.slint";
+import { Icon } from "icons.slint";
 import { GainMath } from "gain.slint";
 import { MenuRow, MenuSeparator } from "menubar.slint";
 
@@ -245,10 +246,10 @@ export component Bevel inherits Rectangle {
 
 export component ToolButton inherits Rectangle {
     in property <string> text;
-    // Line-art icon on a 16x16 grid, drawn instead of a glyph when set (see
-    // ToolIcons in toolbar.slint for the precedent: text glyphs resolve
-    // through font fallback and arrive at inconsistent weights, Path icons
-    // stay one family). Empty string keeps the plain-text behavior.
+    // An icon from the registry, `icon: Icons.close`, drawn instead of the
+    // text when set (`icons.slint`: text glyphs resolve through font
+    // fallback and arrive at inconsistent weights, Path icons stay one
+    // family). Empty string keeps the plain-text behavior.
     in property <string> icon: "";
     in property <string> tooltip: root.text;
     /// The sentence explaining what this does, for the status bar. The
@@ -308,17 +309,12 @@ export component ToolButton inherits Rectangle {
         vertical-alignment: center;
         font-size: Theme.text-xl;
     }
-    if root.icon != "" : Path {
-        width: 16px;
-        height: 16px;
+    if root.icon != "" : Icon {
         x: (parent.width - 16px) / 2;
         y: (parent.height - 16px) / 2;
-        viewbox-width: 16;
-        viewbox-height: 16;
-        commands: root.icon;
-        stroke: root.enabled ? root.text-color : Theme.text-faint;
-        stroke-width: 1.3px;
-        fill: transparent;
+        icon: root.icon;
+        tint: root.enabled ? root.text-color : Theme.text-faint;
+        outline: true;
     }
 
     tap := TouchArea {

@@ -11,8 +11,9 @@ import {
 } from "controls.slint";
 import {
     BeatLamps, MenuField, NameField, PositionReadout, SearchField, StepperField, TempoField,
-    ToolbarLabel, ToolbarRule, ToolIcons, ToolModeButton
+    ToolbarLabel, ToolbarRule, ToolModeButton
 } from "toolbar.slint";
+import { Icon, Icons } from "icons.slint";
 import { MasterMeter, MeterPrefs } from "meters.slint";
 // Re-exported for the reason `StripSpec` is: a global is visible to the
 // generated Rust only from the entry file, and the metering pump reads the
@@ -1892,14 +1893,14 @@ export component MainWindow inherits Window {
     // it draws `panel-left`, which is the glyph the browser chip wrongly wore
     // until that pass.
     property <[{ on: bool, fill: string, line: string, label: string }]> layout-chips: [
-        { on: root.channel-sidebar-visible, fill: ToolIcons.panel-left-fill,
-          line: ToolIcons.panel-left, label: "Toggle channel sidebar" },
-        { on: root.bottom-pane-visible, fill: ToolIcons.panel-bottom-fill,
-          line: ToolIcons.panel-bottom, label: "Toggle bottom pane" },
+        { on: root.channel-sidebar-visible, fill: Icons.panel-left-fill,
+          line: Icons.panel-left, label: "Toggle channel sidebar" },
+        { on: root.bottom-pane-visible, fill: Icons.panel-bottom-fill,
+          line: Icons.panel-bottom, label: "Toggle bottom pane" },
         { on: root.split-active >= 0, fill: "",
-          line: ToolIcons.panel-split, label: "Split top pane" },
-        { on: root.sidebar-visible, fill: ToolIcons.panel-right-fill,
-          line: ToolIcons.panel-right, label: "Toggle browser" },
+          line: Icons.panel-split, label: "Split top pane" },
+        { on: root.sidebar-visible, fill: Icons.panel-right-fill,
+          line: Icons.panel-right, label: "Toggle browser" },
     ];
     // The selected channel's colour, in the three shapes the face needs
     // because Slint has no `Option`: whether it has one, the colour to draw,
@@ -3911,25 +3912,25 @@ export component MainWindow inherits Window {
                                 // Tool modes. The glyph row is the answer to "what
                                 // will my next drag across the grid do".
                                 ToolModeButton {
-                                    icon: ToolIcons.select; name: "Select";
+                                    icon: Icons.tool-select; name: "Select";
                                     hint: "Click toggles a step. Ctrl-drag sets velocity.";
                                     active: root.tool-mode == 0;
                                     clicked => { root.tool-mode = 0; }
                                 }
                                 ToolModeButton {
-                                    icon: ToolIcons.paint; name: "Paint";
+                                    icon: Icons.tool-paint; name: "Paint";
                                     hint: "Drag to fill steps. Right-drag to clear.";
                                     active: root.tool-mode == 1;
                                     clicked => { root.tool-mode = 1; }
                                 }
                                 ToolModeButton {
-                                    icon: ToolIcons.slice; name: "Slice";
+                                    icon: Icons.tool-slice; name: "Slice";
                                     hint: "Click a step to ratchet it into even hits.";
                                     active: root.tool-mode == 2;
                                     clicked => { root.tool-mode = 2; }
                                 }
                                 ToolModeButton {
-                                    icon: ToolIcons.stretch; name: "Stretch";
+                                    icon: Icons.tool-stretch; name: "Stretch";
                                     hint: "Drag a step sideways to set its length.";
                                     active: root.tool-mode == 3;
                                     clicked => { root.tool-mode = 3; }
@@ -7114,7 +7115,7 @@ export component MainWindow inherits Window {
                                     FlatButton {
                                         width: 100%;
                                         height: 100%;
-                                        icon: ToolIcons.loop;
+                                        icon: Icons.loop;
                                         tooltip: "Loop (L)";
                                         hint: loop-toggle.hint;
                                         active: root.playlist-loop-enabled;
@@ -8443,28 +8444,19 @@ export component MainWindow inherits Window {
                     border-color: chip-touch.has-hover ? Theme.border : transparent;
                     background: chip.on ? Theme.accent-active
                         : chip-touch.pressed ? Theme.surface-active : Theme.surface;
-                    Path {
-                        width: 16px;
-                        height: 16px;
+                    Icon {
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
-                        viewbox-width: 16;
-                        viewbox-height: 16;
-                        commands: chip.fill;
-                        fill: chip.on ? Theme.text : Theme.text-muted;
+                        icon: chip.fill;
+                        tint: chip.on ? Theme.text : Theme.text-muted;
                         opacity: 0.55;
                     }
-                    Path {
-                        width: 16px;
-                        height: 16px;
+                    Icon {
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
-                        viewbox-width: 16;
-                        viewbox-height: 16;
-                        commands: chip.line;
-                        stroke: chip.on ? Theme.text : Theme.text-muted;
-                        stroke-width: 1.3px;
-                        fill: transparent;
+                        icon: chip.line;
+                        tint: chip.on ? Theme.text : Theme.text-muted;
+                        outline: true;
                     }
                     chip-touch := TouchArea {
                         mouse-cursor: pointer;

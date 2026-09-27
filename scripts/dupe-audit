@@ -1230,11 +1230,11 @@ ICON_PATH_ALLOWED = {
     (
         "crates/mooloop-ui/ui/poly-device.slint",
         "M 0 35 C 25 0 50 0 75 35",
-    ): "the LFO panel's waveform picture, a display on a 200x70 box; step 05 decides it",
+    ): "the LFO panel's waveform display, hardcoded (WIDGET_INVENTORY.md 12, a bug); not an icon",
     (
         "crates/mooloop-ui/ui/mono-device.slint",
         "M 0 35 C 25 0 50 0 75 35",
-    ): "the LFO panel's waveform picture, a display on a 200x70 box; step 05 decides it",
+    ): "the LFO panel's waveform display, hardcoded (WIDGET_INVENTORY.md 12, a bug); not an icon",
 }
 
 # The blocks the icon-pass survey found glyphs in: arrows, mathematical

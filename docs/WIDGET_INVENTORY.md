@@ -57,6 +57,20 @@ and `toolbar.slint`'s `StepperField`, `MenuField` and `TempoField` -- because a
 `<=>` does not protect a binding at the far end of the chain, and the EQ's
 knobs were the proof. A caller over a plain property says `controlled: false`.
 
+**Closed 2026-09-27: the icon.** `Icons` and `Icon` in `icons.slint`
+(MOO-279, `docs/plans/icon-pass/`). Reach for them before drawing any shape
+that stands for an action or a kind. `Icons` holds every icon as a path
+string on a 16x16 grid, named for what it means (`Icons.close`,
+`Icons.previous`), and `Icon` is the one thing that draws one: a `Path` at a
+`size` in a `tint`. `ToolButton.icon` and `ToolModeButton.icon` take a
+registry entry (`icon: Icons.tool-select`) and draw it through `Icon`. Before
+this there were four sets of path strings in four files and one meaning drawn
+three ways. A face that needs an icon the registry lacks asks Interface for
+one; it does not spell a path string or a glyph of its own, and
+`scripts/dupe-audit icon-literal` counts the ones that still do. `Icon`'s
+`outline` is transitional: the icons that moved in are outlines, and step 03
+of the plan redraws them filled and deletes it.
+
 A third caller arrived 2026-09-05 and needed nothing new: `aux-in-device.slint`
 picks a source channel and a published outlet from two `PickerChip`s, and the
 whole face is that pair, a `ParameterKnob` and two `SectionLabel`s. A device

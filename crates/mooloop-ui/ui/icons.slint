@@ -1,0 +1,150 @@
+// Every icon in the program, named for what it means, on one 16x16 grid.
+//
+// `docs/plans/icon-pass/` (MOO-279). Adam, 2026-09-26: *"I thought it might
+// make sense to build an icon registry to help with consistency and avoid
+// dupes."* Before this file there were four sets of path strings in four
+// files, and one meaning drawn three ways; an icon was written where it was
+// drawn, so moving a button meant redrawing it. Now a button carries an
+// icon's *name*, and a restyle is this file.
+//
+// **Nothing outside this file spells a path string or an icon glyph.**
+// `scripts/dupe-audit icon-literal` counts the ones that still do, and
+// `tests/icon_registry.rs` holds this file to itself and to the Rust kind
+// tables. A face that wants an icon asks Interface for one, the way it asks
+// the shell for a rail.
+//
+// **Filled everywhere** is Adam's ruling (2026-09-26). The icons here today
+// are the outlines that moved in unchanged, drawn with `Icon`'s transitional
+// `outline`; step 03 redraws them filled and deletes it.
+
+import { Theme } from "theme.slint";
+
+export global Icons {
+    // --- Interface: the toolbar's tool modes (were `ToolIcons`) ---------
+    //
+    // Drawn rather than set as text. The pencil and scissors glyphs resolve
+    // through font fallback, so each one arrived at a different weight and
+    // baseline; as line art on a shared 16x16 grid they stay one family.
+    out property <string> tool-select:
+        "M 3.5 2.5 L 3.5 13 L 6.4 10.2 L 8.2 13.6 L 9.9 12.7 L 8.1 9.4 L 12 9.4 Z";
+    out property <string> tool-paint:
+        "M 3 13 L 3.9 10.1 L 10.5 3.5 L 12.5 5.5 L 5.9 12.1 Z M 9.4 4.6 L 11.4 6.6";
+    out property <string> tool-slice:
+        "M 2.5 5 L 13.5 5 L 13.5 11 L 2.5 11 Z M 6.2 5 L 6.2 11 M 9.8 5 L 9.8 11";
+    out property <string> tool-stretch:
+        "M 2.5 8 L 13.5 8 M 5 5.5 L 2.5 8 L 5 10.5 M 11 5.5 L 13.5 8 L 11 10.5";
+    // The transport's repeat sign: a stadium the eye runs round, with an
+    // arrowhead where each straight meets its arc so it reads as motion
+    // rather than as an oval. Drawn wider and flatter than a circle would be,
+    // because at 16px a round one with two chevrons on it closes up into a
+    // blob -- checked at 1x rather than assumed from the 4x drawing.
+    out property <string> loop:
+        "M 5 4.5 L 10.5 4.5 A 3.5 3.5 0 0 1 10.5 11.5 L 5.5 11.5 "
+        + "A 3.5 3.5 0 0 1 5.5 4.5 M 8.8 2.6 L 11 4.5 L 8.8 6.4 "
+        + "M 7.2 9.6 L 5 11.5 L 7.2 13.4";
+
+    // --- Interface: the status bar's layout chips (were `ToolIcons`) ----
+    //
+    // The outline is the window and the inner rule marks the region;
+    // `*-fill` is the region drawn solid, on a second `Icon` beneath the
+    // outline because one Path has one fill and filling the outline would
+    // fill the whole window shape.
+    //
+    // **A docked panel is filled; a split is not.** Position alone did not
+    // separate them -- a rule at x 8 and a rule at x 10 are the same square
+    // at 16px -- and fill is the true distinction anyway: a panel appears and
+    // disappears, a split is two editors side by side.
+    private property <string> panel-frame:
+        "M 2.5 3 L 13.5 3 L 13.5 13 L 2.5 13 Z ";
+    out property <string> panel-left:
+        root.panel-frame + "M 6.5 3 L 6.5 13";
+    out property <string> panel-left-fill:
+        "M 2.5 3 L 6.5 3 L 6.5 13 L 2.5 13 Z";
+    out property <string> panel-right:
+        root.panel-frame + "M 11 3 L 11 13";
+    out property <string> panel-right-fill:
+        "M 11 3 L 13.5 3 L 13.5 13 L 11 13 Z";
+    out property <string> panel-bottom:
+        root.panel-frame + "M 2.5 9.5 L 13.5 9.5";
+    out property <string> panel-bottom-fill:
+        "M 2.5 9.5 L 13.5 9.5 L 13.5 13 L 2.5 13 Z";
+    // Centred, and unfilled: two editors, not a panel.
+    out property <string> panel-split:
+        root.panel-frame + "M 8 3 L 8 13";
+
+    // --- Interface: dialogs and the colour picker -----------------------
+    out property <string> close: "M 4 4 L 12 12 M 12 4 L 4 12";
+    // The colour picker's "no colour" choice: a square crossed out, the
+    // stroke being the icon and the swatch the square. Drawn on a 20-unit
+    // box until the registry; these are its (4, 16)-(16, 4) scaled to 16.
+    out property <string> color-none: "M 3.2 12.8 L 12.8 3.2";
+
+    // --- Mixer: the strip (`StripIcons` in `strip.slint` until its leg) --
+    //
+    // The strip's EQ bands, drawn as the curve each one is. Not merged with
+    // the EQ face's drawings below: they are two drawings of the same
+    // meanings, and choosing one is step 03's visual change.
+    out property <string> eq-bell: "M 1 13 C 5 13 5 4 8 4 C 11 4 11 13 15 13";
+    out property <string> eq-high-shelf: "M 1 12 L 6 12 C 9 12 8 4 15 4";
+    out property <string> eq-low-shelf: "M 1 4 C 8 4 7 12 10 12 L 15 12";
+    // The dot a section's in-and-out switch wears instead of the word `IN`,
+    // and the page arrow wears on the page you are on.
+    out property <string> on: "M 6 8 A 2 2 0 1 1 10 8 A 2 2 0 1 1 6 8";
+
+    // --- Instruments: the sampler (`SamplerDeviceIcons` until its leg) --
+    out property <string> previous: "M 10 3 L 5 8 L 10 13";
+    out property <string> next: "M 6 3 L 11 8 L 6 13";
+    out property <string> search: "M 10 6 A 4 4 0 1 1 2 6 A 4 4 0 1 1 10 6 Z M 9.2 9.2 L 13.5 13.5";
+    out property <string> reverse: "M 12 3 L 12 13 M 12 8 L 4.5 8 M 7.3 5 L 4.3 8 L 7.3 11";
+
+    // --- Effects: the EQ face (`eq-device.slint`'s own until its leg) ----
+    out property <string> eq-face-low-shelf: "M 2 5 L 5 5 C 7 5 7 11 9 11 L 14 11";
+    out property <string> eq-face-high-shelf: "M 2 11 L 7 11 C 9 11 9 5 11 5 L 14 5";
+    out property <string> eq-face-high-pass: "M 2 13 C 5 13 6 5 9 5 L 14 5";
+    out property <string> eq-face-low-pass: "M 2 5 L 7 5 C 10 5 11 13 14 13";
+    out property <string> eq-face-analyzer:
+        "M 3 13 L 3 9 M 6.5 13 L 6.5 5 M 10 13 L 10 8 M 13.5 13 L 13.5 3";
+    out property <string> eq-face-proportional-q: "M 2 12 L 5 12 L 8 4 L 11 12 L 14 12";
+
+    // --- Device kinds ---------------------------------------------------
+    //
+    // By kind number: `source-kinds[i]` is the kind `device_kind_to_int`
+    // sends as `i`, at `SourceKinds.labels`'s positions, and
+    // `effect-kinds[i]` the kind `effect_kind_index` sends as `i` (15 is a
+    // plugin's). Empty until step 02 draws them (MOO-273);
+    // `tests/icon_registry.rs` holds their lengths to the Rust tables.
+    out property <[string]> source-kinds: [
+        "", "", "", "",
+        "", "", "", ""
+    ];
+    out property <[string]> effect-kinds: [
+        "", "", "", "", "", "", "", "", "",
+        "", "", "", "", "", "", "", ""
+    ];
+}
+
+// The one thing that draws an icon: a `Path` of the registry's string, at a
+// size, in a tint. It *is* the `Path` rather than a box holding one, so an
+// icon costs the renderer one element, and moving a hand-written `Path` onto
+// it changed no pixel (checked 2026-09-27 by rendering both side by side).
+export component Icon inherits Path {
+    // A registry entry: `icon: Icons.close`. Never a literal.
+    in property <string> icon;
+    in property <brush> tint: Theme.text;
+    in property <length> size: 16px;
+    // **Transitional; step 03 deletes both.** The icons that moved in are
+    // outlines -- a stroke and no fill -- and drawing them filled would
+    // change every one of them. `outline` draws the stroke instead, at
+    // `outline-width`, until step 03 redraws them filled.
+    in property <bool> outline;
+    in property <length> outline-width: 1.3px;
+
+    width: root.size;
+    height: root.size;
+    viewbox-width: 16;
+    viewbox-height: 16;
+    commands: root.icon;
+    fill: root.outline ? transparent : root.tint;
+    stroke: root.outline ? root.tint : transparent;
+    stroke-width: root.outline ? root.outline-width : 0px;
+}

@@ -9,6 +9,7 @@
 
 import { Theme, StatusHint } from "theme.slint";
 import { NameField, ToolbarMetrics } from "toolbar.slint";
+import { Icon, Icons } from "icons.slint";
 
 // One colour a channel or pattern can be given: the hex the project stores,
 // and the colour to draw it in.
@@ -42,15 +43,12 @@ export component ColorSwatch inherits Rectangle {
     accessible-role: button;
     accessible-label: root.tooltip;
 
-    if root.is-none : Path {
-        width: 100%;
-        height: 100%;
-        stroke: Theme.text-faint;
-        stroke-width: 1px;
-        viewbox-width: 20;
-        viewbox-height: 20;
-        MoveTo { x: 4; y: 16; }
-        LineTo { x: 16; y: 4; }
+    if root.is-none : Icon {
+        size: 20px;
+        icon: Icons.color-none;
+        tint: Theme.text-faint;
+        outline: true;
+        outline-width: 1px;
     }
 
     TouchArea {
@@ -178,15 +176,12 @@ export component ColorChipButton inherits Rectangle {
         border-width: Theme.hairline;
         border-color: touch.has-hover ? Theme.focus : Theme.border;
 
-        if !root.has-color : Path {
-            width: 100%;
-            height: 100%;
-            stroke: Theme.text-faint;
-            stroke-width: 1px;
-            viewbox-width: 20;
-            viewbox-height: 20;
-            MoveTo { x: 4; y: 16; }
-            LineTo { x: 16; y: 4; }
+        if !root.has-color : Icon {
+            size: 20px;
+            icon: Icons.color-none;
+            tint: Theme.text-faint;
+            outline: true;
+            outline-width: 1px;
         }
     }
 

@@ -1,5 +1,6 @@
 import { StatusHint, Theme } from "theme.slint";
 import { BbtText, Gesture } from "controls.slint";
+import { Icon } from "icons.slint";
 
 // Toolbar vocabulary.
 //
@@ -7,57 +8,6 @@ import { BbtText, Gesture } from "controls.slint";
 // so tempo did not read as a control and unrelated clusters carried equal
 // visual weight. These are the pieces it should have been built from: every
 // field is the same height, numerics are tabular, and grouping is explicit.
-
-// Tool icons are drawn rather than set as text. The pencil and scissors glyphs
-// resolve through font fallback, so each one arrived at a different weight and
-// baseline; as line art on a shared 16x16 grid they stay one family.
-export global ToolIcons {
-    out property <string> select:
-        "M 3.5 2.5 L 3.5 13 L 6.4 10.2 L 8.2 13.6 L 9.9 12.7 L 8.1 9.4 L 12 9.4 Z";
-    out property <string> paint:
-        "M 3 13 L 3.9 10.1 L 10.5 3.5 L 12.5 5.5 L 5.9 12.1 Z M 9.4 4.6 L 11.4 6.6";
-    out property <string> slice:
-        "M 2.5 5 L 13.5 5 L 13.5 11 L 2.5 11 Z M 6.2 5 L 6.2 11 M 9.8 5 L 9.8 11";
-    out property <string> stretch:
-        "M 2.5 8 L 13.5 8 M 5 5.5 L 2.5 8 L 5 10.5 M 11 5.5 L 13.5 8 L 11 10.5";
-    // The transport's repeat sign: a stadium the eye runs round, with an
-    // arrowhead where each straight meets its arc so it reads as motion
-    // rather than as an oval. Drawn wider and flatter than a circle would be,
-    // because at 16px a round one with two chevrons on it closes up into a
-    // blob -- checked at 1x rather than assumed from the 4x drawing.
-    out property <string> loop:
-        "M 5 4.5 L 10.5 4.5 A 3.5 3.5 0 0 1 10.5 11.5 L 5.5 11.5 "
-        + "A 3.5 3.5 0 0 1 5.5 4.5 M 8.8 2.6 L 11 4.5 L 8.8 6.4 "
-        + "M 7.2 9.6 L 5 11.5 L 7.2 13.4";
-    // Layout toggles. The outline is the window and the inner rule marks the
-    // region; `*-fill` is the region drawn solid, on a second Path beneath
-    // the outline because one Path has one fill and filling the outline would
-    // fill the whole window shape.
-    //
-    // **A docked panel is filled; a split is not.** Position alone did not
-    // separate them -- a rule at x 8 and a rule at x 10 are the same square
-    // at 16px -- and fill is the true distinction anyway: a panel appears and
-    // disappears, a split is two editors side by side.
-    out property <string> panel-frame:
-        "M 2.5 3 L 13.5 3 L 13.5 13 L 2.5 13 Z ";
-    // Kept for a left-docked panel, which `FOCUS.md` step 3 draws and this
-    // program does not have yet. The browser is docked on the *right*.
-    out property <string> panel-left:
-        root.panel-frame + "M 6.5 3 L 6.5 13";
-    out property <string> panel-left-fill:
-        "M 2.5 3 L 6.5 3 L 6.5 13 L 2.5 13 Z";
-    out property <string> panel-right:
-        root.panel-frame + "M 11 3 L 11 13";
-    out property <string> panel-right-fill:
-        "M 11 3 L 13.5 3 L 13.5 13 L 11 13 Z";
-    out property <string> panel-bottom:
-        root.panel-frame + "M 2.5 9.5 L 13.5 9.5";
-    out property <string> panel-bottom-fill:
-        "M 2.5 9.5 L 13.5 9.5 L 13.5 13 L 2.5 13 Z";
-    // Centred, and unfilled: two editors, not a panel.
-    out property <string> panel-split:
-        root.panel-frame + "M 8 3 L 8 13";
-}
 
 // The toolbar's own names for three of `Theme`'s tokens. Kept as an alias
 // rather than swept away so the bar's call sites stay readable -- `value-size`
@@ -580,17 +530,12 @@ export component ToolModeButton inherits Rectangle {
     accessible-label: root.name;
     accessible-checked: root.active;
 
-    if root.icon != "" : Path {
-        width: 16px;
-        height: 16px;
+    if root.icon != "" : Icon {
         x: (parent.width - 16px) / 2;
         y: (parent.height - 16px) / 2;
-        viewbox-width: 16;
-        viewbox-height: 16;
-        commands: root.icon;
-        stroke: root.active ? Theme.text : Theme.text-muted;
-        stroke-width: 1.3px;
-        fill: transparent;
+        icon: root.icon;
+        tint: root.active ? Theme.text : Theme.text-muted;
+        outline: true;
     }
     if root.icon == "" : Text {
         text: root.glyph;
