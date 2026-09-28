@@ -1864,8 +1864,10 @@ export component PreferencesDialog inherits Rectangle {
                         // that scrolls must not share the body height with
                         // it: two siblings at vertical-stretch 1 split the
                         // space evenly, which halves the scroll viewport and
-                        // hides everything past the fold.
-                        if root.page != 1 && root.page != 2 && root.page != 3 : Rectangle { vertical-stretch: 1; }
+                        // hides everything past the fold. The Plugins page (6)
+                        // scrolls too, and was missing here until MOO-302's
+                        // toggle landed below the fold and could not be seen.
+                        if root.page != 1 && root.page != 2 && root.page != 3 && root.page != 6 : Rectangle { vertical-stretch: 1; }
                     }
                 }
             }
