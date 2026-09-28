@@ -92,7 +92,13 @@ too big.
   unlabelled bar and dot: a drum for the drum synths, saw teeth for the
   synths, a bell for the EQ and so on. It's in the device's colour, and
   faint while the device is bypassed. A folded device shows the same icon
-  on its strip.
+  on its strip. The mixer's strip, bus and output headers have icons too.
+- **The Bus Comp and the channel strip pick their voicing with one chip**,
+  `◂ GRIP ▸`: click an arrow or turn the wheel over it to step through the
+  voicings. It replaces the Bus Comp's three buttons and the strip's DRIVE
+  row, which ran its four names together. The master's IN/OUT button is now
+  the same on/off square the strip's sections use.
+- At large text sizes a device header grows so its name is no longer cut off.
 - The rack's `+` menu is wide enough for every row at every text size.
 - The window's content runs to its edges, with no border round it.
 - **The pane your keyboard shortcuts act on is outlined.** Click in a pane,

@@ -32,12 +32,21 @@ He then took the recommended answer to all four of the plan's questions:
 10/10"*. No redraws. The sheet showed one generic plug for a plugin and every
 icon in its device colour, so those two recommendations stand as built.
 
+**2026-09-28, MOO-295:** Adam sketched a `◂ GRIP ▸` voicing chip and chose
+the arrows inside the box. `StepperChip` draws them from the registry as
+`Icons.step-previous` and `Icons.step-next`, which are filled. They are kept
+apart from the sampler's outline `previous` and `next`, which page rather
+than step; step 04 decides whether those are one meaning. The master Bus
+Comp's IN/OUT became the strip sections' `Icons.on` square. Adam asked for "a
+power or toggle icon", and one on/off meaning gets one drawing. If he wants a
+⏻ instead, it changes for every section switch at once.
+
 ## Steps
 
 | Step | State |
 | --- | --- |
 | 01 — the registry | Done (MOO-279): all four legs |
-| 02 — device kinds | Done (MOO-273): Adam approved the kind sheet as drawn, 2026-09-27. The mixer's headers are MOO-294 |
+| 02 — device kinds | Done (MOO-273): Adam approved the kind sheet as drawn, 2026-09-27. The mixer's headers are done too (MOO-294, 2026-09-28): `Icons.strip`, `Icons.bus`, `Icons.output` |
 | 03 — one family | Backlog (MOO-280) |
 | 04 — one meaning, one icon | Backlog (MOO-281) |
 | 05 — words to icons | Backlog (MOO-282) |

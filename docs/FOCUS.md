@@ -40,6 +40,12 @@ and each closing comment names its commit. Adam's answers:
 - MOO-273: every device kind has an icon, step 02, landed as drawn after
   Adam's look at the kind sheet (`697e5116`).
 
+**2026-09-28:** after Adam's sketch, the Bus Comp and the strip pick their
+voicing with one `◂ GRIP ▸` chip (MOO-295). The mixer's headers got icons
+(MOO-294), the DRIVE row stopped crowding (MOO-292), and he redrew the Bus
+Comp's layout himself. That landed as `fd0dcfce..07434472`. MOO-296 (a device
+header cut off its name's descenders since MOO-286) is `5f9d6de6`.
+
 Two items are still open in 0.1.6, and both wait on Adam:
 - **MOO-289**'s launch case, which wasn't reproduced headless. He has two
   checks to make on the laptop (Hyprland, `follow_mouse = 1`).
