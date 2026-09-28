@@ -375,7 +375,7 @@ fn learn_and_sweep(session: &mut Session, address: ParamAddr, controller: u8) ->
         let effects = session.apply_control_input(&cc(controller, value), &ports(), false);
         if let Some(command) = effects.commands.last() {
             assert_eq!(effects.moved, [address]);
-            last = Some(command.clone());
+            last = Some(*command);
         }
     }
     (session.control_target_label(&target), last.expect("the sweep moved the parameter"))
