@@ -953,14 +953,18 @@ fn a_missing_plugin_parameter_is_drawn_missing_and_reunited() {
 // it was asked, and the plugin is the test double's GUI variant, which draws
 // nothing.
 
-/// The scanner's cache with the test gain's GUI variant beside the rest.
+/// The scanner's cache with the test gain's and the test sine's GUI variants
+/// beside the rest.
 fn gui_cache_text(library: &Path) -> String {
     let path = library.display().to_string().replace('\\', "/");
     let broken = "[[file]]\npath = \"/usr/lib/clap/broken.clap\"";
     let gui = format!(
         "[[file.plugin]]\npath = \"{path}\"\nformat = \"clap\"\nid = \"{id}\"\nname = \"Test Gain (GUI)\"\n\
-         vendor = \"{vendor}\"\nfeatures = [\"audio-effect\"]\naudio-inputs = [2]\naudio-outputs = [2]\n\n{broken}",
+         vendor = \"{vendor}\"\nfeatures = [\"audio-effect\"]\naudio-inputs = [2]\naudio-outputs = [2]\n\n\
+         [[file.plugin]]\npath = \"{path}\"\nformat = \"clap\"\nid = \"{sine}\"\nname = \"Test Sine (GUI)\"\n\
+         vendor = \"{vendor}\"\nfeatures = [\"instrument\"]\naudio-outputs = [2]\nnote-inputs = 1\n\n{broken}",
         id = test_plugin::GAIN_GUI_ID,
+        sine = test_plugin::SINE_GUI_ID,
         vendor = test_plugin::VENDOR,
     );
     cache_text(library).replacen(broken, &gui, 1)
@@ -1172,4 +1176,308 @@ fn the_xwayland_toggle_round_trips_to_the_setting() {
     assert!(!settings.borrow().plugins.run_under_xwayland);
     assert!(!h.window.get_preferences_plugin_run_under_xwayland());
     assert!(h.window.get_preferences_error().contains("read-only"));
+}
+
+// ---------------------------------------------------------------------------
+// A plugin instrument's face (MOO-304, MOO-316): the face a plugin on a
+// chain has, in the source's place at the head of the chain.
+
+/// A new channel whose source is the instrument `id`, from the same cache as
+/// [`gui_harness`], the window side faked; ticked until its face is up.
+fn instrument_harness(id: &str) -> (Harness, FakeLog) {
+    let mut h = harness_with(&drum_loop());
+    let cache = h.state.borrow().plugin_cache_path.clone();
+    std::fs::write(&cache, gui_cache_text(&test_plugin_path())).expect("the cache is written");
+    let (guis, log) = crate::plugin_gui::fake::fake();
+    {
+        let mut st = h.state.borrow_mut();
+        st.session
+            .set_plugin_opener(mooloop_session::plugin_rack::clap_opener(cache));
+        st.plugin_guis = guis;
+        st.enter_browser_tab(BrowserTab::Plugins);
+    }
+    let queues = plugin_ui::Queues {
+        tx: h.tx.clone(),
+        stx: h.stx.clone(),
+        reset_tx: mpsc::channel().0,
+    };
+    assert!(plugin_ui::add_plugin(&h.state, &h.commands, &h.window, id, None, &queues), "{id} added");
+    for _ in 0..3 {
+        h.tick();
+    }
+    (h, log)
+}
+
+/// The selected channel's instrument: its source slot's device id and the
+/// plugin's slot.
+fn instrument(h: &Harness) -> (mooloop_core::DeviceId, PluginSlotId) {
+    h.state.borrow().session.plugin_source().expect("the selected channel's source is a plugin")
+}
+
+/// **A plugin instrument's channel shows the open-window control when its
+/// plugin has a GUI, and it opens and raises the same window a plugin
+/// effect's does** (MOO-304), through `PluginGuis::open_or_raise` with the
+/// source's slot.
+#[test]
+fn a_plugin_instrument_with_a_gui_opens_it_from_its_face() {
+    let (mut h, log) = instrument_harness(test_plugin::SINE_GUI_ID);
+    let (_, slot) = instrument(&h);
+    assert_eq!(h.window.get_source_kind(), 8, "the rack shows the plugin channel's source");
+    let face = h.window.get_source_plugin_face().row_data(0).expect("the instrument has a face");
+    assert_eq!(face.name, "Test Sine (GUI)");
+    assert!(face.has_gui && !face.gui_open, "{face:?}");
+    let buttons = window_buttons(&h);
+    assert_eq!(buttons.len(), 1, "one control, on the instrument's face: {buttons:?}");
+    assert!(calls(&log).is_empty(), "nothing is opened until asked");
+
+    click(&h.window, buttons[0].centre);
+    assert!(h.state.borrow_mut().session.plugin_gui_is_open(slot), "the instrument's GUI is open");
+    let made = calls(&log);
+    assert!(made[0].starts_with("create ") && made[0].contains("Test Sine (GUI)"), "{made:?}");
+    assert_eq!(made.last().map(String::as_str), Some("show 0x101"), "shown once placed: {made:?}");
+    h.tick();
+    assert!(h.window.get_source_plugin_face().row_data(0).expect("the face").gui_open);
+    assert!(window_buttons(&h)[0].label.ends_with("window to the front"));
+
+    // Again: the same window, brought to the front.
+    let before = calls(&log).len();
+    click(&h.window, window_buttons(&h)[0].centre);
+    assert_eq!(calls(&log)[before..], ["hide 0x101".to_string(), "show 0x101".to_string()]);
+    assert_eq!(calls(&log).iter().filter(|call| call.starts_with("create ")).count(), 1, "no second window");
+}
+
+/// **The test sine's face: its parameter as a knob, the searchable list, and
+/// its knob's presses naming `PluginParam { device: source_device }`**
+/// (MOO-316). No GUI, so no open-window control. Turning the knob is
+/// `Session::set_plugin_source_param`; MIDI learn, the naming press the
+/// control menu makes, and the lane picker all address the instrument's own
+/// parameter, by the plugin's id.
+#[test]
+fn the_sine_source_shows_its_parameters_and_its_knob_names_the_instrument() {
+    let (mut h, _log) = instrument_harness(test_plugin::SINE_ID);
+    let (device, slot) = instrument(&h);
+    let channel = h.state.borrow().session.selected;
+    let level = ParamAddr::plugin_param(EffectTarget::Channel(channel as u8), device, test_plugin::PARAM_LEVEL);
+    let index = h
+        .state
+        .borrow()
+        .session
+        .plugin_param_index(slot, test_plugin::PARAM_LEVEL)
+        .expect("the sine lists Level");
+    assert!(window_buttons(&h).is_empty(), "a plugin without a GUI has its face and nothing else");
+    let knob = h.slider("Level");
+    assert!(!knob.value.is_empty(), "the plugin writes its own readout");
+
+    // The knob: the instrument's own verb, its id and plain value.
+    wheel(&h.window, &knob);
+    h.tick();
+    assert!(
+        h.engine.sent.iter().any(|command| matches!(
+            command,
+            EngineCommand::SetChannelGeneratorParam { id, .. } if *id == test_plugin::PARAM_LEVEL
+        )),
+        "the knob sent {:?}",
+        h.engine.sent
+    );
+
+    // The PARAMETERS list, for the selected source.
+    h.window.set_channel_sidebar_visible(true);
+    h.state.borrow_mut().session.select_source(true);
+    h.tick();
+    assert_eq!(h.window.get_plugin_param_total(), 1);
+    let row = h.window.get_plugin_param_rows().row_data(0).expect("a row");
+    assert_eq!((row.index, row.name.as_str(), row.pinned), (index as i32, "Level", true));
+    h.window.invoke_plugin_param_filter_edited("lev".into());
+    assert_eq!(h.window.get_plugin_param_rows().row_count(), 1);
+    h.window.invoke_plugin_param_filter_edited("cutoff".into());
+    assert_eq!(h.window.get_plugin_param_rows().row_count(), 0, "the filter finds nothing else");
+
+    // A naming press, as the knob's context menu makes one: the address a
+    // route or a lane takes.
+    h.window.global::<ControlRequest>().set_naming(true);
+    h.window.invoke_source_plugin_modulation_edit_started(index as i32);
+    h.window.global::<ControlRequest>().set_naming(false);
+    assert_eq!(h.state.borrow().named_param, Some(level));
+
+    // MIDI learn, armed, then a press on the knob.
+    h.state.borrow_mut().midi_learn_armed = true;
+    h.window.invoke_source_plugin_modulation_edit_started(index as i32);
+    let key = h.state.borrow().session.param_key(level).expect("a durable key");
+    let learning = h.state.borrow().session.control_learn.clone().expect("the press started a learn");
+    assert_eq!(learning.target, mooloop_core::ControlTarget::Param(key));
+
+    // The lane picker offers it under the instrument's name, before the
+    // strip, as the source comes before everything after it.
+    let st = h.state.borrow();
+    let picker = plugin_ui::lane_destinations(&st.session);
+    let at = picker.iter().position(|row| row.address == level).expect("the picker offers Level");
+    assert_eq!((picker[at].device.as_str(), picker[at].name.as_str()), ("Test Sine", "Level"));
+    let strip = picker
+        .iter()
+        .position(|row| row.address.owner == ParamOwner::Strip)
+        .expect("the strip's rows");
+    assert!(at < strip, "the instrument's parameters come before the strip");
+}
+
+/// A song whose first channel's source is an instrument this machine does
+/// not have, with the list of `count` parameters the song remembers of it:
+/// [`big_missing_plugin`]'s list, on a channel's source.
+fn big_missing_instrument(count: u32) -> Project {
+    let mut session = Session::default();
+    session.replace_project(&drum_loop(), &[]);
+    let (sender, _rx) = mpsc::channel();
+    let (tx, stx) = (EngineCommandSender(sender.clone()), StructuralCommandSender(sender));
+    let mut sink = plugin_ui::QueuedSink {
+        tx: &tx,
+        stx: &stx,
+        sample_rate: RATE,
+    };
+    let gone = PluginRef {
+        format: PluginFormat::Clap,
+        id: "com.example.big-synth".into(),
+        name: "Big Synth".into(),
+        vendor: "Nobody".into(),
+        version: String::new(),
+    };
+    let slot = session.set_plugin_source(0, gone, &mut sink).expect("the source is set");
+    session.plugins.get_mut(&slot).expect("its slot").params = (0..count)
+        .map(|index| mooloop_core::PluginParamInfo {
+            id: 1_000 + index,
+            name: if index == 14 { "Frequency".into() } else { format!("P{index}") },
+            module: if (12..16).contains(&index) { "Filter".into() } else { String::new() },
+            min: 0.0,
+            max: 1.0,
+            default: 0.5,
+            stepped: None,
+            automatable: true,
+            modulatable: true,
+            hidden: false,
+        })
+        .collect();
+    session.project_snapshot(120, 0)
+}
+
+/// **An instrument's face shows eight, and the sidebar finds and pins the
+/// rest, as one "Pin Parameter" step that survives a reload** (MOO-316):
+/// MOO-229's case on a channel's source.
+#[test]
+fn an_instruments_pin_is_one_step_and_survives_a_reload() {
+    let mut h = harness_with(&big_missing_instrument(40));
+    h.window.set_channel_sidebar_visible(true);
+    h.tick();
+    assert_eq!(face_labels(&h), ["P0", "P1", "P2", "P3", "P4", "P5", "P6", "P7"]);
+    let badge = controls(&h.window, AccessibleRole::Text)
+        .into_iter()
+        .find(|text| text.label.starts_with("Missing"))
+        .expect("the instrument's face says it is missing");
+    assert!(badge.label.contains("Big Synth"), "{}", badge.label);
+    h.state.borrow().refresh_plugin_param_list(&h.window);
+    assert_eq!(h.window.get_plugin_param_total(), 0, "no list until the source is selected");
+
+    h.state.borrow_mut().session.select_source(true);
+    h.tick();
+    assert_eq!(h.window.get_plugin_param_total(), 40);
+    h.window.invoke_plugin_param_filter_edited("freq".into());
+    let pin = controls(&h.window, AccessibleRole::Checkbox)
+        .into_iter()
+        .find(|control| control.label == "Frequency")
+        .expect("the sidebar draws Frequency's pin");
+    assert!(!pin.checked);
+    click(&h.window, pin.centre);
+    h.tick();
+    assert_eq!(labels(&h.commands.borrow()), ["Pin Parameter"], "a pin is one undo step");
+    assert!(face_labels(&h).contains(&"Frequency".to_string()), "{:?}", face_labels(&h));
+    let (_, slot) = instrument(&h);
+    let pinned = h.state.borrow().session.plugins[&slot].pinned.clone();
+    assert_eq!(pinned, [1_000, 1_001, 1_002, 1_003, 1_004, 1_005, 1_006, 1_007, 1_014]);
+    assert_eq!(h.window.get_source_plugin_face().row_data(0).expect("the face").units, 2);
+
+    // Saved as the window saves, and reopened: the pin is the song's.
+    let song = project_snapshot(&h.state.borrow(), &h.window).project;
+    let path = h.dir.path().join("instrument-pins.mooloop");
+    mooloop_project::save_song(&path, &song, mooloop_project::AssetMode::Referenced).expect("it saves");
+    let report = mooloop_project::load_bundle(&path).expect("it reopens");
+    let mooloop_project::LoadedDocument::Song(reopened) = report.document else {
+        panic!("a song came back as something else");
+    };
+    let mut again = harness_with(&reopened);
+    again.tick();
+    let (_, slot) = instrument(&again);
+    assert_eq!(again.state.borrow().session.plugins[&slot].pinned, pinned);
+    assert!(face_labels(&again).contains(&"Frequency".to_string()), "{:?}", face_labels(&again));
+}
+
+// ---------------------------------------------------------------------------
+// A MIDI control on a plugin parameter (MOO-318).
+
+fn desk_cc(controller: u8, value: u8) -> mooloop_core::MidiMessage {
+    mooloop_core::MidiMessage {
+        offset: 0,
+        port: mooloop_core::MidiPortId(0),
+        channel: 0,
+        kind: mooloop_core::MidiKind::ControlChange { controller, value },
+    }
+}
+
+/// **A CC moving a plugin parameter is one undo step** (MOO-318). The CC is
+/// learned onto the test gain's Gain and swept; the plugin hears it through
+/// the engine, and the pump runs until the plugin has gone quiet and the
+/// controller idle. Undo takes the sweep back in one press: the step under
+/// it is the learn, not an empty "Controller move".
+#[test]
+fn a_controller_on_a_plugin_parameter_is_one_undo_step() {
+    let mut h = live_gain();
+    let device = plugin_device(&h);
+    let gain = ParamAddr::plugin_param(EffectTarget::Channel(0), device, test_plugin::PARAM_GAIN);
+    h.state.borrow_mut().midi_ports = vec![mooloop_core::MidiPortInfo {
+        id: mooloop_core::MidiPortId(0),
+        name: "Desk".to_owned(),
+    }];
+    let key = h.state.borrow().session.param_key(gain).expect("a durable key");
+    h.state
+        .borrow_mut()
+        .session
+        .begin_control_learn(mooloop_core::ControlTarget::Param(key), false);
+    let drain = |h: &mut Harness, value: u8| {
+        let drained = drain_control_surface(
+            &h.state,
+            &h.commands,
+            &h.window,
+            &mut vec![desk_cc(21, value)],
+            &mut Vec::new(),
+            false,
+        );
+        for command in drained.commands {
+            let _ = h.tx.send(command);
+        }
+        h.tick();
+        settle_edit_streams(&h.state, &h.commands, &h.window, false, false);
+    };
+    drain(&mut h, 64);
+    assert_eq!(labels(&h.commands.borrow()), ["MIDI learn"]);
+
+    // The sweep, which a pickup catches on its way.
+    let slot = h.plugin_slot();
+    let index = h.state.borrow().session.plugin_param_index(slot, test_plugin::PARAM_GAIN).expect("listed");
+    let start = h.state.borrow().session.plugin_param_value(slot, index).expect("live");
+    for value in [0, 127, 0, 100] {
+        drain(&mut h, value);
+    }
+    let end = h.state.borrow().session.plugin_param_value(slot, index).expect("live");
+    assert_ne!(start, end, "the controller moved the gain");
+
+    // The pump, until the plugin is quiet and the controller idle.
+    let quiet = mooloop_session::plugin_rack::EDIT_QUIET_TICKS as usize + 2;
+    for _ in 0..quiet {
+        h.tick();
+        settle_edit_streams(&h.state, &h.commands, &h.window, false, false);
+    }
+    settle_edit_streams(&h.state, &h.commands, &h.window, false, true);
+    assert_eq!(labels(&h.commands.borrow()), ["Plugin Edit"], "the plugin's state is the step");
+    h.commands.borrow_mut().history.commit_undo();
+    assert_eq!(
+        labels(&h.commands.borrow()),
+        ["MIDI learn"],
+        "one undo takes the whole sweep back; the step under it is the learn"
+    );
 }
