@@ -32,4 +32,8 @@ clack-extensions = { version = "0.2", features = [
     "state",
     "tail",
     "thread-check",
+    # The GUI variants' event loop (step 11, MOO-300): a timer and a pipe's
+    # fd registered with the host, as JUCE and DPF GUIs register theirs.
+    "timer",
+    "posix-fd",
 ] }

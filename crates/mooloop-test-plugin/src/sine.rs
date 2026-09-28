@@ -8,12 +8,11 @@
 //! `Sleep` once no voice is left, so a host can measure the tail three ways.
 
 use crate::HostServices;
-use crate::gui::{TestGui, impl_test_gui};
+use crate::gui::{TestGui, impl_test_gui, register_test_gui};
 use clack_extensions::audio_ports::{
     AudioPortFlags, AudioPortInfo, AudioPortInfoWriter, AudioPortType, PluginAudioPorts,
     PluginAudioPortsImpl,
 };
-use clack_extensions::gui::PluginGui;
 use clack_extensions::note_ports::{
     NoteDialect, NoteDialects, NotePortInfo, NotePortInfoWriter, PluginNotePorts,
     PluginNotePortsImpl,
@@ -46,7 +45,7 @@ impl<const GUI: bool> Plugin for SinePlugin<GUI> {
             .register::<PluginNotePorts>()
             .register::<PluginTail>();
         if GUI {
-            builder.register::<PluginGui>();
+            register_test_gui!(builder);
         }
     }
 }
@@ -68,16 +67,18 @@ impl<'a> PluginShared<'a> for SineShared<'a> {}
 
 /// The main-thread half.
 pub struct SineMain<'a> {
+    host: HostMainThreadHandle<'a>,
     _shared: &'a SineShared<'a>,
     gui: TestGui,
 }
 
 impl<'a> SineMain<'a> {
     pub(crate) fn new(
-        _host: HostMainThreadHandle<'a>,
+        host: HostMainThreadHandle<'a>,
         shared: &'a SineShared<'a>,
     ) -> Result<Self, PluginError> {
         Ok(Self {
+            host,
             _shared: shared,
             gui: TestGui::new(),
         })

@@ -22,13 +22,12 @@
 //! an offset in dB over the gain's value, clamped with it into the range,
 //! and it holds until the next one. `get_value` reports the value without it.
 
-use crate::gui::{TestGui, impl_test_gui};
+use crate::gui::{TestGui, impl_test_gui, register_test_gui};
 use crate::{AtomicF64, HostServices};
 use clack_extensions::audio_ports::{
     AudioPortFlags, AudioPortInfo, AudioPortInfoWriter, AudioPortType, PluginAudioPorts,
     PluginAudioPortsImpl,
 };
-use clack_extensions::gui::PluginGui;
 use clack_extensions::latency::{HostLatency, PluginLatency, PluginLatencyImpl};
 use clack_extensions::params::{
     ParamDisplayWriter, ParamInfo, ParamInfoFlags, ParamInfoWriter, PluginAudioProcessorParams,
@@ -84,7 +83,7 @@ impl<const GUI: bool> Plugin for GainPlugin<GUI> {
             .register::<PluginState>()
             .register::<PluginLatency>();
         if GUI {
-            builder.register::<PluginGui>();
+            register_test_gui!(builder);
         }
     }
 }
@@ -426,8 +425,10 @@ impl PluginMainThreadParams for GainMain<'_> {
         });
     }
 
+    /// A parameter's value, or a GUI probe's (`crate::gui::PROBE_IDS`),
+    /// which no list names: what a host test reads the GUI's counters by.
     fn get_value(&self, id: ClapId) -> Option<f64> {
-        self.shared.param(id.get())
+        self.shared.param(id.get()).or_else(|| self.gui.probe(id.get()))
     }
 
     fn value_to_text(

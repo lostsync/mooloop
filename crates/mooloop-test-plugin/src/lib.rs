@@ -7,12 +7,12 @@
 //! | id | what |
 //! | --- | --- |
 //! | [`GAIN_ID`] | stereo gain effect; `gain` (dB, modulatable), `latency` (stepped), `fail`, `nudge` (moves its own gain) |
-//! | [`GAIN_GUI_ID`] | the same, declaring the `gui` extension |
+//! | [`GAIN_GUI_ID`] | the same, declaring the `gui` extension, with a timer and an fd behind it and probes a test reads ([`PROBE_IDS`]) |
 //! | [`GAIN_MONO_ID`] | the gain with one mono input and one mono output (MOO-266) |
 //! | [`GAIN_MONO_IN_ID`] | the gain with a mono input and a stereo output: both outputs are the input |
 //! | [`GAIN_MONO_OUT_ID`] | the gain with a stereo input and a mono output: the output is the left input |
 //! | [`SINE_ID`] | one sine voice per note id, with a release tail |
-//! | [`SINE_GUI_ID`] | the same, declaring the `gui` extension |
+//! | [`SINE_GUI_ID`] | the same, declaring the `gui` extension, with a timer and an fd behind it |
 //!
 //! The plugins without a GUI are the ones that matter most: a plugin that has
 //! no GUI at all (Airwindows is the named case) is a path the host has to
@@ -46,7 +46,10 @@ pub use gain::{
     GAIN_DB_DEFAULT, GAIN_DB_MAX, GAIN_DB_MIN, LATENCY_STEPS, NUDGE_DB, PARAM_FAIL, PARAM_GAIN,
     PARAM_LATENCY, PARAM_NUDGE, STATE_MAGIC,
 };
-pub use gui::{GUI_DEFAULT_SIZE, GUI_MIN_SIZE};
+pub use gui::{
+    GUI_DEFAULT_SIZE, GUI_MIN_SIZE, GUI_TIMER_MS, PROBE_FDS_LIVE, PROBE_FD_READS, PROBE_GUIS_LEAKED,
+    PROBE_GUIS_LIVE, PROBE_IDS, PROBE_TIMERS_LIVE, PROBE_TIMER_TICKS,
+};
 pub use sine::{RELEASE_SECONDS, SINE_AMPLITUDE};
 
 /// The stereo gain effect, without a GUI.
