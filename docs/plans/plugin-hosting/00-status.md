@@ -928,6 +928,8 @@ into an activate-deactivate every 8 ms.
   belongs on the audio thread, but a processor leaving a chain gets no more
   calls there. So `deactivate` stops it on the main thread, which is what
   `clack-host` does for a processor that was dropped while started.
+  *Undone by MOO-311 (2026-09-28): Odin2 terminates the process on it. See
+  "Found after step 11: stop_processing on the audio thread" below.*
 - **An export uses second instances.** The live processors are the engine's,
   and one instance cannot have two. `Session::export_plugin_processors`
   captures each live plugin's state, opens a second instance with it on the
@@ -1412,6 +1414,49 @@ wait for 0.2.0 (`FOCUS.md`). They need a dependency edge that schedules a
 producer without summing it (`SCOPE.md` item 4; start from
 `docs/plans/archive/typed-audio-edges/`), and that is Mixer & Routing's
 and the Engine's.
+
+## Found after step 11: stop_processing on the audio thread (MOO-311, 2026-09-28)
+
+Removing or replacing Odin2 aborted mooloop. Odin2 is built on
+`clap-helpers` with its misbehaviour handler set to terminate, and step 06's
+one deviation -- a started processor stopped by `deactivate` on the main
+thread -- is misbehaviour. Surge XT logs the same call and carries on.
+
+- **`AudioNode::retire`**, a default no-op, is called on the audio thread
+  when a node leaves it for good, and `ClapProcessor` answers with
+  `stop_processing`. A processor that never ran was never started and gets
+  no stop. The engine calls it wherever a node leaves:
+  - `Executor::reclaim`, for everything pushed down the reclaim ring. That
+    is a removal or a swap once faded (a remove, the rack's pull-back for a
+    restart, a sample-rate rebuild or a quit, an instrument's processor
+    pulled out, a hosted source swapped for a native one) and the renderer
+    a song close retires.
+  - The export, on its render thread, once a pass is done.
+  - `EngineHandle`, as it drops or reconnects. It asks the running executor
+    through `executor::Teardown` to retire every node and render silence
+    from then on, then waits up to 500 ms for the answer.
+- **The backstop is `ClapProcessor`'s `Drop`.** A processor that leaves
+  still started, because the callback was dead, is stopped where it is
+  dropped when that is not the main thread. On the main thread it is
+  stopped on a short-lived thread, which is its only audio thread for that
+  call. `deactivate` never stops one.
+- **Why a hook and not a self-stop on the last faded block.** A song close,
+  an export and a closing engine have no fade to announce a last block.
+- **`check_ports` counts note ports before asking for the first.** Surge XT
+  Effects declares the extension with no ports and logged an out-of-bounds
+  `get` on every load.
+
+The test plugin's **strict mode** holds a host to this. It is on unless
+`MOOLOOP_TEST_PLUGIN_LENIENT` is set, and it aborts the process when:
+
+- `start_processing` or `stop_processing` comes off the audio thread;
+- `stop_processing` comes on a thread the processor never ran on;
+- `note_ports.get` is out of range.
+
+The gain now declares an empty note-ports extension, as Surge XT Effects
+does. `plugin_retire_tests.rs` in `mooloop-engine` takes a started processor
+out by every path above and drops its instance on the test thread. All eight
+aborted against the code before the fix.
 
 ## Found after step 07: plugin device presets (MOO-222, 2026-09-26)
 

@@ -282,6 +282,14 @@ time stopped being continuous, and names which kind -- `Seek`, `Stop` or
 `ProgramChange`. A general "reset to construction state" verb is still not
 part of the contract, and nothing has asked for one.
 
+**A node is told when it leaves the audio thread for good** (MOO-311):
+`AudioNode::retire`, on that thread, after its last block and before it
+goes anywhere else to be dropped. The executor calls it on everything it
+pushes down the reclaim ring. An export calls it on its renderer once a pass
+is done, and a closing engine calls it on every node it holds. The default
+does nothing. It exists for a hosted plugin's processor, which CLAP says
+must be stopped on its audio thread. A container of nodes passes it on.
+
 Before it there was one channel for this, and it was the wrong one: the host
 synthesised `Event::Choke` into a node's event list, so *let go of these
 notes* and *time moved* arrived as the same sentence. The voices heard it and
