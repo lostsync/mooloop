@@ -51,7 +51,8 @@ use mooloop_dsp::effects::PluginPlaceholder;
 use mooloop_dsp::{AudioNode, HostedSource, IntegerDelay, SpectrumAnalyzer};
 use mooloop_engine::{CommandSink, EffectSlot, StructuralCommand};
 use mooloop_plugin_host::{
-    AudioConfig, HostError, HostedInstance, Lifeline, PluginOpener, PluginParamEvent, Requests,
+    AudioConfig, GuiConfig, GuiError, GuiRequest, GuiSize, HostError, HostedGui, HostedInstance,
+    IoActivity, Lifeline, NativeWindow, PluginOpener, PluginParamEvent, Requests,
 };
 
 use crate::effects::EffectInserted;
@@ -315,6 +316,88 @@ pub struct PluginRack {
     /// byte for byte until the plugin is edited: capturing it here would
     /// write the defaults over the only copy of what was saved.
     refused_state: BTreeSet<PluginSlotId>,
+    /// What the window side has to act on about plugin GUIs: the plugin's
+    /// own requests, and GUIs the rack closed by itself (step 11, MOO-300).
+    gui_events: Vec<(PluginSlotId, PluginGuiEvent)>,
+}
+
+/// Where a plugin's GUI opens (step 11, policies 2 to 4). The ids are X11
+/// window ids, the only windowing API hosted so far; each window must
+/// outlive the GUI, which [`PluginGuiEvent::Closed`] or
+/// [`crate::session::Session::close_plugin_gui`] returning says is over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuiPlacement {
+    /// Embedded in the host's bare window `parent`.
+    Embedded { parent: u64 },
+    /// In the plugin's own window, kept above `transient_for` where the
+    /// session allows it (not under a native Wayland session).
+    Floating { transient_for: Option<u64> },
+}
+
+impl GuiPlacement {
+    pub fn config(self) -> GuiConfig {
+        match self {
+            Self::Embedded { .. } => GuiConfig::X11_EMBEDDED,
+            Self::Floating { .. } => GuiConfig::X11_FLOATING,
+        }
+    }
+}
+
+/// How to open a plugin's GUI.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginGuiOpen {
+    pub placement: GuiPlacement,
+    /// The window's title, which a floating GUI is offered as well.
+    pub title: String,
+    /// The window's scale factor. A plugin that reads it from the system
+    /// may refuse it, which does not stop the GUI opening.
+    pub scale: Option<f64>,
+}
+
+/// A GUI that opened: what the window should now be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PluginGuiOpened {
+    pub config: GuiConfig,
+    /// The size the plugin wants, when it says.
+    pub size: Option<GuiSize>,
+    /// Whether the user may resize the window. An embedded GUI that cannot
+    /// gets fixed min and max size hints, so a tiling compositor floats it.
+    pub can_resize: bool,
+}
+
+/// Something the window side of a plugin's GUI has to do, drained once a
+/// pump tick ([`crate::session::Session::drain_plugin_gui_events`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginGuiEvent {
+    /// The plugin asks for its window at this size.
+    Resize(GuiSize),
+    /// The plugin showed its GUI: map the window.
+    Show,
+    /// The plugin hid its GUI: unmap the window.
+    Hide,
+    /// Ask [`crate::session::Session::resize_plugin_gui`]'s rules again:
+    /// the plugin's resize hints changed.
+    ResizeHintsChanged,
+    /// The GUI is destroyed: the plugin closed it, or the rack did because
+    /// its device went, its song closed or the app is quitting. Destroy the
+    /// window now, never before this.
+    Closed,
+}
+
+/// Hide and destroy `instance`'s GUI if it is open. Returns whether it was.
+/// Never touches the processor: a GUI's lifetime is its own.
+fn destroy_gui(instance: &mut dyn HostedInstance) -> bool {
+    let Some(gui) = instance.gui() else {
+        return false;
+    };
+    if gui.open_config().is_none() {
+        return false;
+    }
+    if gui.is_visible() {
+        let _ = gui.hide();
+    }
+    gui.destroy();
+    true
 }
 
 impl std::fmt::Debug for PluginRack {
@@ -478,12 +561,19 @@ impl PluginRack {
     /// Retire `slot`. The caller sends the device's removal; the instance
     /// stays until [`Self::collect`] sees its processors gone. Returns
     /// whether a live entry was there.
+    ///
+    /// Step 04's order: its GUI is destroyed here, before the instance goes
+    /// to wait for its processor, and a [`PluginGuiEvent::Closed`] tells the
+    /// window side its window may go.
     pub fn remove(&mut self, slot: PluginSlotId) -> bool {
         self.problems.remove(&slot);
         self.edited.remove(&slot);
         self.refused_state.remove(&slot);
         match self.entries.remove(&slot) {
-            Some(entry) => {
+            Some(mut entry) => {
+                if destroy_gui(entry.instance.as_mut()) {
+                    self.gui_events.push((slot, PluginGuiEvent::Closed));
+                }
                 self.graveyard.push((entry.instance, entry.lifeline));
                 true
             }
@@ -492,19 +582,190 @@ impl PluginRack {
     }
 
     /// Retire every entry: the song is closing. Returns the slots whose
-    /// processors are still out, for the caller to pull back.
+    /// processors are still out, for the caller to pull back. Every GUI is
+    /// destroyed first.
     pub fn close(&mut self) -> Vec<PluginSlotId> {
         self.problems.clear();
         self.edited.clear();
         self.refused_state.clear();
         let mut out = Vec::new();
-        for (slot, entry) in std::mem::take(&mut self.entries) {
+        for (slot, mut entry) in std::mem::take(&mut self.entries) {
+            if destroy_gui(entry.instance.as_mut()) {
+                self.gui_events.push((slot, PluginGuiEvent::Closed));
+            }
             if !entry.lifeline.is_alone() {
                 out.push(slot);
             }
             self.graveyard.push((entry.instance, entry.lifeline));
         }
         out
+    }
+
+    /// Which way `slot`'s GUI opens: embedded in an X11 window where the
+    /// plugin can (policy 2), floating where it only offers that (policy 4).
+    pub fn gui_placement_kind(&mut self, slot: PluginSlotId) -> Result<GuiConfig, GuiError> {
+        let gui = self.gui_of(slot)?;
+        [GuiConfig::X11_EMBEDDED, GuiConfig::X11_FLOATING]
+            .into_iter()
+            .find(|&config| gui.is_api_supported(config))
+            .ok_or(GuiError::Unsupported(GuiConfig::X11_EMBEDDED))
+    }
+
+    fn gui_of(&mut self, slot: PluginSlotId) -> Result<&mut dyn HostedGui, GuiError> {
+        self.entries
+            .get_mut(&slot)
+            .ok_or(GuiError::Missing)?
+            .instance
+            .gui()
+            .ok_or(GuiError::NoGui)
+    }
+
+    /// Open `slot`'s GUI as `open` says and show it. On any failure after it
+    /// was created it is destroyed again, so nothing is left half open.
+    pub fn open_gui(&mut self, slot: PluginSlotId, open: &PluginGuiOpen) -> Result<PluginGuiOpened, GuiError> {
+        let gui = self.gui_of(slot)?;
+        if gui.open_config().is_some() {
+            return Err(GuiError::AlreadyOpen);
+        }
+        let config = open.placement.config();
+        gui.create(config)?;
+        let shown = (|| {
+            if let Some(scale) = open.scale {
+                // Refused by a plugin that reads the scale itself: not a
+                // reason not to open.
+                let _ = gui.set_scale(scale);
+            }
+            match open.placement {
+                GuiPlacement::Embedded { parent } => gui.set_parent(NativeWindow::x11(parent))?,
+                GuiPlacement::Floating { transient_for } => {
+                    gui.suggest_title(&open.title);
+                    if let Some(window) = transient_for {
+                        if let Err(error) = gui.set_transient(NativeWindow::x11(window)) {
+                            log_warn!("plugin", "slot {}: {error}; its window may fall behind", slot.0);
+                        }
+                    }
+                }
+            }
+            let opened = PluginGuiOpened {
+                config,
+                size: gui.size(),
+                can_resize: gui.can_resize(),
+            };
+            gui.show()?;
+            Ok(opened)
+        })();
+        if shown.is_err() {
+            gui.destroy();
+        }
+        shown
+    }
+
+    /// Hide and destroy `slot`'s GUI: its window's close button, or the
+    /// device's own toggle. The processor keeps running. Returns whether a
+    /// GUI was open; the caller's window may go once this returns.
+    pub fn close_gui(&mut self, slot: PluginSlotId) -> bool {
+        self.entries
+            .get_mut(&slot)
+            .is_some_and(|entry| destroy_gui(entry.instance.as_mut()))
+    }
+
+    /// Whether a GUI the rack closed by itself is waiting to be reported.
+    pub fn has_gui_events(&self) -> bool {
+        !self.gui_events.is_empty()
+    }
+
+    /// Whether `slot`'s GUI is open.
+    pub fn gui_is_open(&mut self, slot: PluginSlotId) -> bool {
+        self.gui_of(slot)
+            .is_ok_and(|gui| gui.open_config().is_some())
+    }
+
+    /// Show `slot`'s GUI again (its window was mapped).
+    pub fn show_gui(&mut self, slot: PluginSlotId) -> Result<(), GuiError> {
+        self.gui_of(slot)?.show()
+    }
+
+    /// Hide `slot`'s GUI without destroying it (its window was unmapped).
+    pub fn hide_gui(&mut self, slot: PluginSlotId) -> Result<(), GuiError> {
+        self.gui_of(slot)?.hide()
+    }
+
+    /// The user resized `slot`'s window to `size`: the nearest size the
+    /// plugin takes, which it now has and the window should snap to.
+    pub fn resize_gui(&mut self, slot: PluginSlotId, size: GuiSize) -> Result<GuiSize, GuiError> {
+        let gui = self.gui_of(slot)?;
+        if gui.open_config().is_none() {
+            return Err(GuiError::NotOpen);
+        }
+        if !gui.can_resize() {
+            return gui.size().ok_or(GuiError::Refused("be resized"));
+        }
+        let adjusted = gui.adjust_size(size).unwrap_or(size);
+        gui.set_size(adjusted)?;
+        Ok(adjusted)
+    }
+
+    /// The window's scale factor changed.
+    pub fn set_gui_scale(&mut self, slot: PluginSlotId, scale: f64) -> Result<(), GuiError> {
+        self.gui_of(slot)?.set_scale(scale)
+    }
+
+    /// Fire every live plugin's due timers and ready fds (policy 1). Never
+    /// waits. Retired instances are not serviced: their GUIs are gone.
+    pub fn service_io(&mut self, now: std::time::Instant) -> IoActivity {
+        let mut activity = IoActivity::default();
+        for entry in self.entries.values_mut() {
+            activity += entry.instance.service_io(now);
+        }
+        activity
+    }
+
+    /// The plugins' requests of their windows, carried out on the plugin's
+    /// side where there is one to carry out, and every GUI the rack closed
+    /// by itself since the last call.
+    ///
+    /// A plugin that says its window was closed has its GUI hidden and
+    /// destroyed here, as the close button would (the step's "Lifetime"),
+    /// and is reported as [`PluginGuiEvent::Closed`].
+    pub fn drain_gui_events(&mut self) -> Vec<(PluginSlotId, PluginGuiEvent)> {
+        let mut events = std::mem::take(&mut self.gui_events);
+        for (&slot, entry) in &mut self.entries {
+            let Some(gui) = entry.instance.gui() else {
+                continue;
+            };
+            let mut requests = Vec::new();
+            gui.take_requests(&mut |request| requests.push(request));
+            for request in requests {
+                let event = match request {
+                    GuiRequest::Resize(size) => PluginGuiEvent::Resize(size),
+                    GuiRequest::ResizeHintsChanged => PluginGuiEvent::ResizeHintsChanged,
+                    GuiRequest::Show => {
+                        if gui.show().is_err() {
+                            continue;
+                        }
+                        PluginGuiEvent::Show
+                    }
+                    GuiRequest::Hide => {
+                        if gui.hide().is_err() {
+                            continue;
+                        }
+                        PluginGuiEvent::Hide
+                    }
+                    GuiRequest::Closed { .. } => {
+                        if gui.is_visible() {
+                            let _ = gui.hide();
+                        }
+                        gui.destroy();
+                        PluginGuiEvent::Closed
+                    }
+                };
+                events.push((slot, event));
+                if event == PluginGuiEvent::Closed {
+                    break;
+                }
+            }
+        }
+        events
     }
 
     /// What an install does to the rack: keep every instance whose slot the
@@ -563,7 +824,9 @@ impl PluginRack {
     /// thing worse than a leak at exit.
     pub fn leak_remaining(&mut self) -> usize {
         let count = self.len();
-        for (_, entry) in std::mem::take(&mut self.entries) {
+        for (_, mut entry) in std::mem::take(&mut self.entries) {
+            // A GUI does not wait on the processor: it goes even here.
+            destroy_gui(entry.instance.as_mut());
             std::mem::forget(entry);
         }
         for held in std::mem::take(&mut self.graveyard) {
@@ -666,6 +929,12 @@ impl PluginRack {
         }
 
         for (&slot, entry) in &mut self.entries {
+            // A device removed from its chain leaves its instance live for an
+            // undo, but not its window: the GUI of a device nobody can see
+            // goes now, and the processor stays as it is.
+            if !named.contains(&slot) && destroy_gui(entry.instance.as_mut()) {
+                self.gui_events.push((slot, PluginGuiEvent::Closed));
+            }
             let requests: Requests = entry.instance.take_requests();
             if requests.has(Requests::CALLBACK) {
                 entry.instance.on_main_thread();
@@ -1132,14 +1401,117 @@ impl crate::session::Session {
         processors
     }
 
-    /// Begin retiring every hosted plugin, for a quit: every processor out
-    /// is pulled back by swapping the placeholder in. The caller then polls
-    /// the engine and calls [`Self::collect_plugins`] until
-    /// [`Self::plugins_retired`], or its bounded wait runs out.
+    /// Begin retiring every hosted plugin, for a quit: every GUI is
+    /// destroyed first (reported by [`Self::drain_plugin_gui_events`] as
+    /// [`PluginGuiEvent::Closed`]), then every processor out is pulled back
+    /// by swapping the placeholder in. The caller then polls the engine and
+    /// calls [`Self::collect_plugins`] until [`Self::plugins_retired`], or
+    /// its bounded wait runs out.
     pub fn close_plugins(&mut self, handle: &mut impl CommandSink) {
         for slot in self.plugin_rack.close() {
             self.pull_back(slot, handle);
         }
+    }
+
+    /// Which way plugin `slot`'s GUI would open (step 11): embedded where
+    /// the plugin can, floating where it only offers that. The error is the
+    /// badge's text when it has no window at all.
+    pub fn plugin_gui_kind(&mut self, slot: PluginSlotId) -> Result<GuiConfig, GuiError> {
+        self.plugin_rack.gui_placement_kind(slot)
+    }
+
+    /// The title a plugin's window gets: the plugin's name and the track
+    /// its device is on (policy 2).
+    pub fn plugin_gui_title(&self, slot: PluginSlotId) -> Option<String> {
+        let plugin = &self.plugins.get(&slot)?.plugin.name;
+        let wanted = EffectParams::Plugin(slot);
+        let channels = self.channels.iter().map(|channel| (&channel.name, &channel.effects));
+        let buses = self.buses.iter().map(|bus| (&bus.bus.name, &bus.effects));
+        let track = channels
+            .chain(buses)
+            .find(|(_, effects)| effects.iter().any(|effect| effect.params == wanted))
+            .map(|(name, _)| name)
+            .or_else(|| {
+                self.plugin_source_channel(slot)
+                    .and_then(|channel| self.channels.get(usize::from(channel)))
+                    .map(|channel| &channel.name)
+            });
+        Some(match track {
+            Some(track) if !track.is_empty() => format!("{plugin} - {track}"),
+            _ => plugin.clone(),
+        })
+    }
+
+    /// Open plugin `slot`'s GUI in the window `open` names, and show it.
+    /// The processor is not touched. The caller sizes its window from what
+    /// comes back.
+    pub fn open_plugin_gui(
+        &mut self,
+        slot: PluginSlotId,
+        open: &PluginGuiOpen,
+    ) -> Result<PluginGuiOpened, GuiError> {
+        self.plugin_rack.open_gui(slot, open)
+    }
+
+    /// Hide and destroy plugin `slot`'s GUI. The processor keeps running
+    /// and is never reclaimed for this. Returns whether it was open; once it
+    /// returns, the caller's window may be destroyed.
+    pub fn close_plugin_gui(&mut self, slot: PluginSlotId) -> bool {
+        self.plugin_rack.close_gui(slot)
+    }
+
+    pub fn plugin_gui_is_open(&mut self, slot: PluginSlotId) -> bool {
+        self.plugin_rack.gui_is_open(slot)
+    }
+
+    /// Show plugin `slot`'s GUI (its window was mapped again).
+    pub fn show_plugin_gui(&mut self, slot: PluginSlotId) -> Result<(), GuiError> {
+        self.plugin_rack.show_gui(slot)
+    }
+
+    /// Hide plugin `slot`'s GUI without closing it.
+    pub fn hide_plugin_gui(&mut self, slot: PluginSlotId) -> Result<(), GuiError> {
+        self.plugin_rack.hide_gui(slot)
+    }
+
+    /// The user resized plugin `slot`'s window to `size`. Returns the size
+    /// the plugin took (`can_resize`, then `adjust_size`, then `set_size`),
+    /// which the window should snap to.
+    pub fn resize_plugin_gui(&mut self, slot: PluginSlotId, size: GuiSize) -> Result<GuiSize, GuiError> {
+        self.plugin_rack.resize_gui(slot, size)
+    }
+
+    /// The window's scale factor changed (from the Slint window's).
+    pub fn set_plugin_gui_scale(&mut self, slot: PluginSlotId, scale: f64) -> Result<(), GuiError> {
+        self.plugin_rack.set_gui_scale(slot, scale)
+    }
+
+    /// The pump's once-a-tick call for plugin event loops: fire every due
+    /// timer and every ready fd of every hosted plugin (policy 1). Never
+    /// waits: timers are compared with the clock and fds are polled with a
+    /// zero timeout. A song with no plugin pays one branch.
+    pub fn service_plugin_io(&mut self) -> IoActivity {
+        self.service_plugin_io_at(std::time::Instant::now())
+    }
+
+    /// [`Self::service_plugin_io`] as of `now`.
+    pub fn service_plugin_io_at(&mut self, now: std::time::Instant) -> IoActivity {
+        if self.plugin_rack.is_empty() {
+            return IoActivity::default();
+        }
+        self.plugin_rack.service_io(now)
+    }
+
+    /// Everything the window side has to do about plugin GUIs since the last
+    /// call, once a pump tick: the plugins' own requests (a resize, a show,
+    /// a hide, a close, which is carried out here before it is reported),
+    /// and every GUI the session closed by itself because its device was
+    /// removed, its song closed, or the app is quitting.
+    pub fn drain_plugin_gui_events(&mut self) -> Vec<(PluginSlotId, PluginGuiEvent)> {
+        if self.plugin_rack.is_empty() && !self.plugin_rack.has_gui_events() {
+            return Vec::new();
+        }
+        self.plugin_rack.drain_gui_events()
     }
 
     /// Whether the plugin hosted in `slot` is in a place it cannot play: an
