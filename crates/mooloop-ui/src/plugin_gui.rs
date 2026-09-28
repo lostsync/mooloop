@@ -703,6 +703,53 @@ mod tests {
         assert!(!guis.any_open());
     }
 
+    /// **On native Wayland, plugin windows hide once mooloop has had focus
+    /// nowhere for the grace period, and come back with it**; a plugin
+    /// window's own focus counts as mooloop's, and a window its plugin hid
+    /// stays hidden. On X11 nothing hides.
+    #[test]
+    fn plugin_windows_hide_while_mooloop_is_not_focused_on_wayland() {
+        let (mut guis, log) = super::fake::fake();
+        guis.windows = Some((guis.connector)().expect("the fake connects"));
+        let (shown, hidden) = (PluginWindowId(0x201), PluginWindowId(0x202));
+        let gui = |window, shown| OpenGui {
+            window: Some(window),
+            title: String::new(),
+            shown,
+        };
+        guis.open.insert(PluginSlotId(1), gui(shown, true));
+        guis.open.insert(PluginSlotId(2), gui(hidden, false));
+        let calls = |log: &std::rc::Rc<std::cell::RefCell<super::fake::Log>>| log.borrow_mut().calls.split_off(0);
+        let start = Instant::now();
+        let wayland = |focused, after: Duration| main_on(Some(DisplayBackend::Wayland), focused, start + after);
+
+        guis.follow_focus(&wayland(true, Duration::ZERO));
+        assert!(calls(&log).is_empty(), "focused: nothing moves");
+        guis.follow_focus(&wayland(false, Duration::ZERO));
+        guis.follow_focus(&wayland(false, FOCUS_GRACE / 2));
+        assert!(calls(&log).is_empty(), "a moment without focus is focus moving between windows");
+        guis.follow_focus(&wayland(false, FOCUS_GRACE));
+        assert_eq!(calls(&log), ["hide 0x201"], "only the window its plugin still shows");
+        guis.follow_focus(&wayland(false, FOCUS_GRACE * 2));
+        assert!(calls(&log).is_empty(), "hidden once");
+        guis.follow_focus(&wayland(true, FOCUS_GRACE * 3));
+        assert_eq!(calls(&log), ["show 0x201"], "back with focus");
+
+        // A plugin window with focus is mooloop with focus.
+        guis.focused.insert(shown);
+        guis.follow_focus(&wayland(false, FOCUS_GRACE * 4));
+        guis.follow_focus(&wayland(false, FOCUS_GRACE * 10));
+        assert!(calls(&log).is_empty(), "the plugin window has focus");
+        guis.focused.clear();
+
+        // X11, or "Run under XWayland": the window manager keeps it above
+        // its parent, and nothing hides however long focus is away.
+        let x11 = |after| main_on(Some(DisplayBackend::X11), false, start + after);
+        guis.follow_focus(&x11(FOCUS_GRACE * 20));
+        guis.follow_focus(&x11(FOCUS_GRACE * 30));
+        assert!(calls(&log).is_empty());
+    }
+
     /// The transient parent is offered only where the backend allows it.
     #[test]
     fn only_x11_is_transient() {

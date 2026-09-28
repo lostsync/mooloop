@@ -537,7 +537,7 @@ words. **Do not reopen this as a version-bump question.**
 | 08 | Plugin browser, the menu row, and the face for plugins without a GUI | #28 | **UI build**, drafted with `slint-sketch` | **done 2026-09-24** (MOO-83; remainder MOO-228, MOO-229: pins, list, selectors landed 2026-09-26) |
 | 09 | A channel source that is a boxed node | #29 | core, engine, session | **done 2026-09-24** (MOO-84) |
 | 10 | CLAP instruments | #29 | plugin-host, engine | **done 2026-09-25** (MOO-85) |
-| 11 | Plugin GUIs in their own windows | #30 | plugin-host, **UI build** | in progress: host side (MOO-300) recorded below; the window (MOO-301) and the pump (MOO-302) to come |
+| 11 | Plugin GUIs in their own windows | #30 | plugin-host, **UI build** | built: host side (MOO-300), the window (MOO-301) and the pump and face (MOO-302) recorded below; the real-desktop record is Adam's (MOO-86) |
 | 12 | VST3 | — | plugin-host | outline only |
 | 13 | AU (macOS, optional) | — | plugin-host | outline only |
 
@@ -1718,6 +1718,71 @@ clients` should say `xwayland: 1`), and how it scales there: XWayland
 windows under a fractional scale are drawn at 1x and stretched unless
 Hyprland's `xwayland { force_zero_scaling = true }` is set, and Slint then
 reads its scale from `Xft.dpi`.
+
+## Step 11's pump and face, recorded 2026-09-28 (MOO-302)
+
+The third leg: the two halves joined, in `ui/src/plugin_gui.rs`
+(Interface's).
+
+**What landed.**
+
+- **The face's control.** `plugin-device.slint`'s foot gains an
+  open-window button (`Icons.open-window`, new in the registry), drawn only
+  when the running instance has a GUI (`HostedInstance::gui().is_some()`,
+  read each tick in `refresh_plugin_faces`, so a missing plugin has none),
+  lit while the window is open. Pressed, it opens the GUI; pressed again, it
+  raises the window.
+- **Opening.** `plugin_gui_kind` decides embedded or floating. Embedded: a
+  window is made at 640x480, unmapped; its id goes to `open_plugin_gui` as
+  the parent, with the title (`plugin_gui_title`) and the Slint window's
+  scale; then the window is resized to the plugin's size, given fixed hints
+  if the plugin cannot resize, made transient for the main window where
+  `can_set_transient()`, and mapped. Floating: `open_plugin_gui` with
+  `transient_for` where allowed, and no window of ours. Any failure after
+  the window was made closes the GUI and then destroys the window.
+- **Raising** is an unmap and a map. `PluginWindows` has no raise, and a
+  newly mapped window is placed on top by every window manager; a proper
+  raise (`_NET_ACTIVE_WINDOW`, or a configure with `stack_mode = Above`) is
+  Platform's to add if the flicker shows.
+- **The pump** (`UiState::pump_plugin_guis`, after `service_plugins`):
+  `service_plugin_io`, then the session's GUI events (`Resize` resizes the
+  window, `Show`/`Hide` map and unmap it, `ResizeHintsChanged` re-reads
+  `can_resize` into the hints, `Closed` destroys the window), then the
+  windows' events (`CloseRequested` closes the GUI through the session and
+  then destroys the window; `Resized` goes through `resize_plugin_gui` and
+  the window snaps to what the plugin took; focus is tracked), then a scale
+  change to every open GUI, retitling after a rename, and focus hiding. The
+  main window is not asked about itself while no GUI is open.
+- **Focus hiding, native Wayland only**, and embedded windows only: a
+  floating GUI's window is the plugin's, whose focus mooloop cannot see.
+  The main window's focus is winit's `has_focus` (through Slint's
+  `WinitWindowAccessor`); the plugin windows' is X11's. Windows hide only
+  after focus has been nowhere for 300 ms (`FOCUS_GRACE`): moving focus from
+  the main window to a plugin window leaves both unfocused for a moment,
+  and hiding then would take the window from under the click.
+- **Teardown.** Removal, New and Open already close the GUI in the session
+  and report `Closed`; the pump destroys the window on that tick. Quit:
+  Engine's quit branch now calls `UiState::close_plugin_windows` right after
+  `close_plugins`. A lost X connection closes every embedded GUI and puts
+  the reason on its face.
+- **Failure** is the face's badge (`plugin_ui::status_text`), under a
+  plugin problem when there is one, and the status bar says it once.
+- **The toggle.** Preferences > Plugins, "PLUGIN WINDOWS": "Run under
+  XWayland (full plugin window behaviour)", with "Takes effect when mooloop
+  restarts" beside it, saved as it is flipped
+  (`plugin_ui::wire_xwayland_toggle`).
+
+**Tests** (`plugin_ui_tests.rs`, the window side faked by
+`plugin_gui::fake`, so nothing opens on the desktop): the control only on
+the GUI variant's face, open and raise; close button, resize, removal and
+quit, each window destroyed only after its GUI; a window that cannot open
+is the badge; the toggle round-trips through a scratch settings file. Focus
+hiding is a unit test in `plugin_gui.rs`.
+
+**For Adam, on MOO-86.** Everything with a real window: whether Surge XT,
+LSP and the test plugin open, float, resize and hide on focus loss under
+Hyprland, and with the setting on. And whether the unmap-and-map raise is
+acceptable, or flickers.
 
 ## The test plugins
 

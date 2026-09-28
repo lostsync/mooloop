@@ -2517,7 +2517,25 @@ land on its own when it starts to matter:
   channel moves later by that much when it arrives, as it does for any
   latency change. On quit, mooloop waits up to two seconds for
   every plugin's processor to come back from the audio thread before it
-  destroys the plugin. Its GUI does not open (step 11).
+  destroys the plugin, and any GUI it has open is destroyed first.
+- **A plugin with a GUI of its own opens it from its face** (MOO-302,
+  plugin-hosting 11). The face's foot has an open-window button, drawn only
+  for a running plugin that has a GUI; pressed, the plugin's GUI opens in a
+  bare X11 window of mooloop's (XWayland under Wayland), titled with the
+  plugin's and the track's names, sized as the plugin asks and scaled as the
+  main window is; pressed again, it brings that window to the front. A
+  plugin that only floats opens its own window. The window's close button
+  closes the GUI and leaves the plugin playing. Removing the device, New,
+  Open and quit close the GUI, then its window. **On a native Wayland
+  session** the plugin windows hide while neither mooloop's window nor any
+  plugin window has focus (after 0.3 s, so a click from one to the other is
+  not taken for leaving), and come back when mooloop is focused; on X11, or
+  with "Run under XWayland" on (below), each is kept above the main window
+  and nothing hides. A window that cannot open (no X server, a plugin that
+  refuses) is said in the face's badge, and the face stays. Every pump tick
+  services each plugin's timers and fds, which is what a Linux plugin GUI
+  runs on. Not yet: a GUI for a plugin channel's source (it has no face), and
+  the per-desktop record of how the windows behave, which is Adam's (MOO-86).
 - **A hosted plugin's parameters take lanes and routes** (MOO-82,
   plugin-hosting 07). The face's knobs set them (above), but a lane or route
   reaches a plugin parameter only from a song that names one, or through the
@@ -2582,10 +2600,11 @@ land on its own when it starts to matter:
   that failed and why (`load`, `incompatible`, `crashed`, `timed-out`, ...), is
   kept in `<config>/plugins.toml`; an unchanged file is never scanned again,
   failed or not. `scan-on-startup = false` turns the startup scan off.
-  `run-under-xwayland = true` (off by default; no Preferences toggle yet,
-  MOO-302) runs the whole application on X11 through XWayland under a Wayland
-  session, from the next start, so plugin windows can later be kept above the
-  main window; with no X server it stays on Wayland and logs why (MOO-301).
+  `run-under-xwayland = true` (off by default; Preferences > Plugins' "Run
+  under XWayland (full plugin window behaviour)", MOO-302) runs the whole
+  application on X11 through XWayland under a Wayland session, from the next
+  start, so plugin windows are kept above the main window; with no X server
+  it stays on Wayland and logs why (MOO-301).
   The log
   says what the scan found. A song's plugins are found through it, and the
   browser's PLUGINS tab lists it (above). **Preferences > Plugins** (MOO-229)
