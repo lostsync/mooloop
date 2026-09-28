@@ -196,15 +196,17 @@ pub trait HostedInstance {
         false
     }
 
-    /// Whether it may be a device on a chain: [`crate::scan::effect_refusal`]
-    /// on what it declared when it opened (MOO-85). The session refuses a
+    /// Whether it may be a device on a chain:
+    /// [`crate::scan::main_port_effect_refusal`] on what it declared when it
+    /// opened (MOO-85, MOO-307). The session refuses a
     /// plugin in a place it does not fit.
     fn fits_effect(&self) -> bool {
         true
     }
 
-    /// Whether it may be a channel's source: [`crate::scan::source_refusal`]
-    /// on what it declared when it opened (MOO-85).
+    /// Whether it may be a channel's source:
+    /// [`crate::scan::main_port_source_refusal`] on what it declared when it
+    /// opened (MOO-85, MOO-307).
     fn fits_source(&self) -> bool {
         false
     }

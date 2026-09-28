@@ -2,7 +2,7 @@
 //!
 //! CI cannot install third-party plugins, so every plugin-hosting step's
 //! automated tests run against this one library. It exports one CLAP entry
-//! whose factory holds seven plugins, [`PLUGIN_IDS`]:
+//! whose factory holds eight plugins, [`PLUGIN_IDS`]:
 //!
 //! | id | what |
 //! | --- | --- |
@@ -13,6 +13,7 @@
 //! | [`GAIN_MONO_OUT_ID`] | the gain with a stereo input and a mono output: the output is the left input |
 //! | [`SINE_ID`] | one sine voice per note id, with a release tail |
 //! | [`SINE_GUI_ID`] | the same, declaring the `gui` extension, with a timer and an fd behind it |
+//! | [`SIDECHAIN_ID`] | a unity effect with a sidechain input and two extra outputs, its main ports at 1 and 2, and probes on the sidechain (MOO-308) |
 //!
 //! The plugins without a GUI are the ones that matter most: a plugin that has
 //! no GUI at all (Airwindows is the named case) is a path the host has to
@@ -40,6 +41,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 mod gain;
 mod gui;
+mod sidechain;
 mod sine;
 
 pub use gain::{
@@ -50,6 +52,7 @@ pub use gui::{
     GUI_DEFAULT_SIZE, GUI_MIN_SIZE, GUI_TIMER_MS, PROBE_FDS_LIVE, PROBE_FD_READS, PROBE_GUIS_LEAKED,
     PROBE_GUIS_LIVE, PROBE_IDS, PROBE_TIMERS_LIVE, PROBE_TIMER_TICKS,
 };
+pub use sidechain::{AUX_LEVEL, PROBE_SIDECHAIN_BLOCKS, PROBE_SIDECHAIN_LOUD};
 pub use sine::{RELEASE_SECONDS, SINE_AMPLITUDE};
 
 /// The stereo gain effect, without a GUI.
@@ -66,10 +69,12 @@ pub const GAIN_MONO_ID: &str = "mooloop.test.gain.mono";
 pub const GAIN_MONO_IN_ID: &str = "mooloop.test.gain.mono-in";
 /// The gain, stereo in and mono out (MOO-266).
 pub const GAIN_MONO_OUT_ID: &str = "mooloop.test.gain.mono-out";
+/// A unity effect with a sidechain and extra outputs (MOO-308).
+pub const SIDECHAIN_ID: &str = "mooloop.test.sidechain";
 
 /// Every plugin the factory lists, in its order: a test that checks what a
 /// scan found reads this rather than its own copy.
-pub const PLUGIN_IDS: [&str; 7] = [
+pub const PLUGIN_IDS: [&str; 8] = [
     GAIN_ID,
     GAIN_GUI_ID,
     SINE_ID,
@@ -77,6 +82,7 @@ pub const PLUGIN_IDS: [&str; 7] = [
     GAIN_MONO_ID,
     GAIN_MONO_IN_ID,
     GAIN_MONO_OUT_ID,
+    SIDECHAIN_ID,
 ];
 
 /// A copy of this library whose file name ends in this aborts the process
@@ -146,6 +152,7 @@ impl TestFactory {
                 describe(GAIN_MONO_ID, "Test Gain (mono)").with_features([AUDIO_EFFECT, UTILITY, MONO]),
                 describe(GAIN_MONO_IN_ID, "Test Gain (mono in)").with_features([AUDIO_EFFECT, UTILITY]),
                 describe(GAIN_MONO_OUT_ID, "Test Gain (mono out)").with_features([AUDIO_EFFECT, UTILITY]),
+                describe(SIDECHAIN_ID, "Test Sidechain").with_features([AUDIO_EFFECT, UTILITY, STEREO]),
             ],
         }
     }
@@ -194,6 +201,12 @@ impl PluginFactoryImpl for TestFactory {
                 descriptor,
                 sine::SineShared::new,
                 sine::SineMain::new,
+            ),
+            7 => PluginInstance::new::<sidechain::SidechainPlugin>(
+                host_info,
+                descriptor,
+                sidechain::SidechainShared::new,
+                sidechain::SidechainMain::new,
             ),
             _ => {
                 let (inputs, outputs) = match index {

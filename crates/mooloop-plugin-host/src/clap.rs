@@ -15,10 +15,18 @@
 //! rate change and a carry that did not carry all go that way.
 //!
 //! **What the processor promises the callback.** Nothing in
-//! [`ClapProcessor::process`] allocates, locks or blocks: the input and
-//! output buffers, the event buffer and the ring for the plugin's own
-//! parameter output are all sized at activation, and events arrive in
-//! order, so the event buffer is never sorted. What the plugin itself does
+//! [`ClapProcessor::process`] allocates, locks or blocks: the buffers for
+//! every audio port the plugin declares, the event buffer and the ring for
+//! the plugin's own parameter output are all sized at activation, and events
+//! arrive in order, so the event buffer is never sorted.
+//!
+//! **Every audio port runs, and only the main ones are wired** (MOO-306,
+//! MOO-308). CLAP wants a buffer for every port a plugin declares, so a
+//! sidechain or a second bus gets one: each extra input is fed silence and
+//! each extra output is scratch that nothing reads. The main ports are the
+//! ones the plugin flags `CLAP_AUDIO_PORT_IS_MAIN` (port 0 when it flags
+//! none), found the way the scan finds them ([`crate::scan::read_audio_ports`]),
+//! and they need not be port 0. What the plugin itself does
 //! inside its `process` is its own affair; mooloop cannot vouch for it.
 //!
 //! **One deviation from CLAP's threading rules, and why.** CLAP says
@@ -39,7 +47,7 @@ use std::sync::Arc;
 use std::thread::ThreadId;
 use std::time::{Duration, Instant, SystemTime};
 
-use clack_extensions::audio_ports::{AudioPortInfoBuffer, PluginAudioPorts};
+use clack_extensions::audio_ports::PluginAudioPorts;
 use clack_extensions::gui::{
     GuiApiType, GuiConfiguration, GuiSize as ClapGuiSize, HostGui, HostGuiImpl, PluginGui, Window,
 };
@@ -346,20 +354,52 @@ enum Notes {
 }
 
 /// The ports a plugin was accepted with, and where it may go (MOO-85): the
-/// places are [`crate::scan::effect_refusal`] and `source_refusal` on its
-/// own features and ports, the same rule the browser reads from the scan.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// places are [`crate::scan::main_port_effect_refusal`] and
+/// `main_port_source_refusal` on its own features and main ports, the same
+/// rule the browser reads from the scan (MOO-307).
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Layout {
-    /// Channels of the one audio input, or 0 for none. A source's input is
-    /// fed the source's bus, which the source clears: silence. A mono input
-    /// is fed `(L + R) / 2` (MOO-266).
-    in_channels: u32,
-    /// Channels of the one audio output. A mono output is copied to both
-    /// sides.
-    out_channels: u32,
+    /// Channels of each audio input port, in the plugin's order (0 for a
+    /// port it would not describe, so indices stay the plugin's). Every one
+    /// gets a buffer.
+    inputs: Box<[u32]>,
+    /// Channels of each audio output port, as `inputs`.
+    outputs: Box<[u32]>,
+    /// Which input is main; past the end when there are none. As an effect
+    /// it is fed the chain's signal, a mono one `(L + R) / 2` (MOO-266); as
+    /// a source, and every other input always, silence.
+    main_input: u32,
+    /// Which output is main: one or two channels, by the refusal rules. A
+    /// mono one goes to both sides. Every other output is thrown away.
+    main_output: u32,
     notes: Notes,
     effect: bool,
     source: bool,
+}
+
+impl Layout {
+    fn main_input_channels(&self) -> Option<u32> {
+        crate::scan::main_channels(&self.inputs, self.main_input)
+    }
+
+    fn main_output_channels(&self) -> Option<u32> {
+        crate::scan::main_channels(&self.outputs, self.main_output)
+    }
+}
+
+/// One buffer of `frames` for each channel of each port, port after port.
+fn port_buffers(ports: &[u32], frames: usize) -> Box<[Box<[f32]>]> {
+    let channels: usize = ports.iter().map(|&channels| channels as usize).sum();
+    (0..channels).map(|_| vec![0.0; frames].into_boxed_slice()).collect()
+}
+
+/// Where port `port`'s first channel sits in [`port_buffers`]' list.
+fn first_channel(ports: &[u32], port: u32) -> usize {
+    ports
+        .iter()
+        .take(port as usize)
+        .map(|&channels| channels as usize)
+        .sum()
 }
 
 /// A hosted CLAP plugin's control-thread half.
@@ -402,11 +442,12 @@ impl ClapInstance {
     /// Load `plugin` from the library at `path`, create it, and load `state`
     /// into it. It is not activated until [`HostedInstance::build_processor`].
     ///
-    /// Refused as [`HostError::Incompatible`] unless its ports are an
-    /// effect's (one stereo input, one stereo output) or an instrument's (no
-    /// audio input, one output of one or two channels, and a note input).
-    /// Sidechains, several outputs and other layouts are in the plan's
-    /// "Deliberately not" list. Where each may go is the session's call.
+    /// Refused as [`HostError::Incompatible`] unless its main ports are an
+    /// effect's (a main input and a main output of one or two channels each)
+    /// or an instrument's (a main output of one or two channels and a note
+    /// input). Any other port is run and not wired: a sidechain hears
+    /// silence, a second output is thrown away (MOO-308). Where each may go
+    /// is the session's call.
     pub fn open(
         path: &Path,
         plugin: &PluginRef,
@@ -524,9 +565,11 @@ impl ClapInstance {
     }
 }
 
-/// Accept an effect's ports or an instrument's (see [`Layout`]), and refuse
-/// everything else. [`crate::scan::ScannedPlugin::effect_refusal`] and
-/// `source_refusal` say the same from the scan, without loading anything.
+/// Accept an effect's main ports or an instrument's (see [`Layout`]), and
+/// refuse everything else. [`crate::scan::ScannedPlugin::effect_refusal`]
+/// and `source_refusal` say the same from the scan, without loading
+/// anything, and both find the main ports through
+/// [`crate::scan::read_audio_ports`].
 fn check_ports(instance: &mut PluginInstance<ClapHost>, features: &[String]) -> Result<Layout, HostError> {
     let Some(ports) = instance
         .plugin_shared_handle()
@@ -554,27 +597,29 @@ fn check_ports(instance: &mut PluginInstance<ClapHost>, features: &[String]) -> 
                 Notes::None
             }
         });
-    let channels = |is_input: bool, index: u32| {
-        let mut buffer = AudioPortInfoBuffer::new();
-        ports
-            .get(&handle, index, is_input, &mut buffer)
-            .map_or(0, |info| info.channel_count)
+    let (inputs, main_input) = crate::scan::read_audio_ports(&ports, &handle, true);
+    let (outputs, main_output) = crate::scan::read_audio_ports(&ports, &handle, false);
+    let layout = Layout {
+        inputs: inputs.into_boxed_slice(),
+        outputs: outputs.into_boxed_slice(),
+        main_input,
+        main_output,
+        notes,
+        effect: false,
+        source: false,
     };
-    let ins: Vec<u32> = (0..ports.count(&handle, true)).map(|index| channels(true, index)).collect();
-    let outs: Vec<u32> = (0..ports.count(&handle, false)).map(|index| channels(false, index)).collect();
     // The note input the host wires is one it can speak to.
     let note_inputs = u32::from(notes != Notes::None);
-    let as_effect = crate::scan::effect_refusal(features, &ins, &outs);
-    let as_source = crate::scan::source_refusal(features, &ins, &outs, note_inputs);
+    let (main_in, main_out) = (layout.main_input_channels(), layout.main_output_channels());
+    let as_effect = crate::scan::main_port_effect_refusal(features, main_in, main_out);
+    let as_source = crate::scan::main_port_source_refusal(features, main_out, note_inputs);
     if let (Some(effect), Some(source)) = (&as_effect, &as_source) {
         return Err(HostError::Incompatible(format!("as an effect, {effect}; as a source, {source}")));
     }
     Ok(Layout {
-        in_channels: ins.first().copied().unwrap_or(0),
-        out_channels: outs.first().copied().unwrap_or(2),
-        notes,
         effect: as_effect.is_none(),
         source: as_source.is_none(),
+        ..layout
     })
 }
 
@@ -1054,6 +1099,16 @@ impl HostedInstance for ClapInstance {
             .collect();
         params.sort_by_key(|&(id, _)| id);
         params.dedup_by_key(|&mut (id, _)| id);
+        let layout = self.layout.clone();
+        let main_out = match layout.main_output_channels() {
+            Some(channels @ (1 | 2)) => channels as usize,
+            // `check_ports` accepted it with a main output of one or two
+            // channels, in either place.
+            _ => return Err(HostError::Incompatible("it has no main output of 1 or 2 channels".into())),
+        };
+        let main_in = layout.main_input_channels().unwrap_or(0) as usize;
+        let in_count: usize = layout.inputs.iter().map(|&channels| channels as usize).sum();
+        let out_count: usize = layout.outputs.iter().map(|&channels| channels as usize).sum();
         Ok(Box::new(ClapProcessor {
             params: params.into_boxed_slice(),
             modulated: [0; MODULATED],
@@ -1063,14 +1118,15 @@ impl HostedInstance for ClapInstance {
             tail,
             tail_frames: 0,
             latency: self.latency,
-            layout: self.layout,
             notes: NoteTable::new(),
-            in_l: vec![0.0; frames],
-            in_r: vec![0.0; frames],
-            out_l: vec![0.0; frames],
-            out_r: vec![0.0; frames],
-            inputs: AudioPorts::with_capacity(2, 1),
-            outputs: AudioPorts::with_capacity(2, 1),
+            max_frames: frames,
+            ins: port_buffers(&layout.inputs, frames),
+            outs: port_buffers(&layout.outputs, frames),
+            main_in: (first_channel(&layout.inputs, layout.main_input), main_in),
+            main_out: (first_channel(&layout.outputs, layout.main_output), main_out),
+            inputs: AudioPorts::with_capacity(in_count, layout.inputs.len()),
+            outputs: AudioPorts::with_capacity(out_count, layout.outputs.len()),
+            layout,
             events: EventBuffer::with_capacity(EVENTS_IN + NOTE_ROWS),
             events_out: producer,
             flags,
@@ -1103,15 +1159,24 @@ pub struct ClapProcessor {
     tail: Option<PluginTail>,
     tail_frames: u32,
     latency: u32,
-    /// The ports it was accepted with: whether it has an input to copy the
-    /// bus into, how many output channels to hand it, how it takes notes.
+    /// The ports it was accepted with: every port to hand a buffer, which
+    /// are main, how it takes notes.
     layout: Layout,
     /// The notes it is holding, by mooloop's id and its own (MOO-85).
     notes: NoteTable,
-    in_l: Vec<f32>,
-    in_r: Vec<f32>,
-    out_l: Vec<f32>,
-    out_r: Vec<f32>,
+    /// The longest block the buffers hold.
+    max_frames: usize,
+    /// One buffer per channel of every input port, port after port in the
+    /// plugin's order ([`port_buffers`]), and the same for outputs. All are
+    /// sized at activation; `process` only writes into them.
+    ins: Box<[Box<[f32]>]>,
+    outs: Box<[Box<[f32]>]>,
+    /// The main input's first channel in `ins` and its width (0 for none),
+    /// and the main output's in `outs` (one or two channels).
+    main_in: (usize, usize),
+    main_out: (usize, usize),
+    /// clack's per-call port lists, sized for every port at activation, so
+    /// that filling them never grows them.
     inputs: AudioPorts,
     outputs: AudioPorts,
     events: EventBuffer,
@@ -1345,7 +1410,7 @@ impl AudioNode for ClapProcessor {
         if self.flags.failed.load(Ordering::Relaxed) {
             return;
         }
-        let frames = ctx.frames.min(self.in_l.len()).min(bus.l.len()).min(bus.r.len());
+        let frames = ctx.frames.min(self.max_frames).min(bus.l.len()).min(bus.r.len());
         if frames == 0 {
             return;
         }
@@ -1364,17 +1429,28 @@ impl AudioNode for ClapProcessor {
         // source, the silence `HostedSource` cleared it to -- a source has
         // nothing upstream of it.
         let input_peak = peak(&bus.l[..frames]).max(peak(&bus.r[..frames]));
-        if self.layout.in_channels == 1 {
+        // Only an effect's main input hears the bus; a source's, and every
+        // extra input (a sidechain, a second bus), is silence (MOO-308).
+        // They are cleared every block, not once, in case a plugin wrote
+        // into a buffer it was only meant to read.
+        let (main_at, main_width) = self.main_in;
+        let fed = if self.layout.effect { main_width.min(2) } else { 0 };
+        for (index, channel) in self.ins.iter_mut().enumerate() {
+            if !(main_at..main_at + fed).contains(&index) {
+                channel[..frames].fill(0.0);
+            }
+        }
+        if fed == 1 {
             // A mono input hears the sum at -6 dB (MOO-266): a centred
             // signal (L = R) passes at unity and a hard-panned one 6 dB
             // down. The -3 dB sum would raise a centred signal by 3 dB.
             let (left, right) = (&bus.l[..frames], &bus.r[..frames]);
-            for ((mono, &l), &r) in self.in_l[..frames].iter_mut().zip(left).zip(right) {
+            for ((mono, &l), &r) in self.ins[main_at][..frames].iter_mut().zip(left).zip(right) {
                 *mono = (l + r) * 0.5;
             }
-        } else {
-            self.in_l[..frames].copy_from_slice(&bus.l[..frames]);
-            self.in_r[..frames].copy_from_slice(&bus.r[..frames]);
+        } else if fed == 2 {
+            self.ins[main_at][..frames].copy_from_slice(&bus.l[..frames]);
+            self.ins[main_at + 1][..frames].copy_from_slice(&bus.r[..frames]);
         }
 
         // A route that was offsetting a parameter last block and names it no
@@ -1510,30 +1586,34 @@ impl AudioNode for ClapProcessor {
                 ..*ctx
             };
             let transport = Self::transport(&piece_ctx);
-            let (in_l, in_r) = (&mut self.in_l[start..end], &mut self.in_r[start..end]);
-            let (out_l, out_r) = (&mut self.out_l[start..end], &mut self.out_r[start..end]);
-            // A plugin with no input port gets no input buffers.
-            let in_channels = self.layout.in_channels as usize;
-            let inputs = if in_channels > 0 {
-                self.inputs.with_input_buffers([AudioPortBuffer {
+            // Every port the plugin declared, in its order, each channel this
+            // piece's frames of its buffer. `rest` walks the flat list one
+            // port's width at a time; nothing here allocates, because
+            // `inputs` and `outputs` were sized for every port. A plugin with
+            // no input port gets no input buffers.
+            let mut rest: &mut [Box<[f32]>] = &mut self.ins;
+            let inputs = self.inputs.with_input_buffers(self.layout.inputs.iter().map(|&width| {
+                let (port, tail) = std::mem::take(&mut rest).split_at_mut(width as usize);
+                rest = tail;
+                AudioPortBuffer {
                     latency: 0,
                     channels: AudioPortBufferType::f32_input_only(
-                        [InputChannel::variable(in_l), InputChannel::variable(in_r)]
-                            .into_iter()
-                            .take(in_channels),
+                        port.iter_mut()
+                            .map(move |channel| InputChannel::variable(&mut channel[start..end])),
                     ),
-                }])
-            } else {
-                InputAudioBuffers::empty()
-            };
-            // A mono instrument gets one channel, copied to both below.
-            let out_channels = self.layout.out_channels as usize;
-            let mut outputs = self.outputs.with_output_buffers([AudioPortBuffer {
-                latency: 0,
-                channels: AudioPortBufferType::f32_output_only(
-                    [out_l, out_r].into_iter().take(out_channels),
-                ),
-            }]);
+                }
+            }));
+            let mut rest: &mut [Box<[f32]>] = &mut self.outs;
+            let mut outputs = self.outputs.with_output_buffers(self.layout.outputs.iter().map(|&width| {
+                let (port, tail) = std::mem::take(&mut rest).split_at_mut(width as usize);
+                rest = tail;
+                AudioPortBuffer {
+                    latency: 0,
+                    channels: AudioPortBufferType::f32_output_only(
+                        port.iter_mut().map(move |channel| &mut channel[start..end]),
+                    ),
+                }
+            }));
             let mut out = ParamOut {
                 ring: &mut self.events_out,
                 dropped: &self.flags.dropped_events,
@@ -1563,11 +1643,13 @@ impl AudioNode for ClapProcessor {
                 }
             };
         }
-        if self.layout.out_channels == 1 {
-            let (mono, right) = (&self.out_l[..frames], &mut self.out_r[..frames]);
-            right.copy_from_slice(mono);
-        }
-        let (out_l, out_r) = (&self.out_l[..frames], &self.out_r[..frames]);
+        // The main output is the bus; a mono one goes to both sides, and
+        // every other output is left where the plugin wrote it.
+        let (main_at, main_width) = self.main_out;
+        let (out_l, out_r) = (
+            &self.outs[main_at][..frames],
+            &self.outs[main_at + main_width - 1][..frames],
+        );
         if out_l.iter().chain(out_r).any(|sample| !sample.is_finite()) {
             self.fail();
             return;

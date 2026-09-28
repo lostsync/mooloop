@@ -136,8 +136,8 @@ pub fn main_channels(channels: &[u32], main: u32) -> Option<u32> {
 /// the channel count of each port in the plugin's order (0 for a port it
 /// would not describe, so the indices stay the plugin's) and the index of
 /// the main one ([`main_port`]). The scan's `describe_ports` reads its
-/// ports through this; the CLAP adapter can too, so both find the same main
-/// port (MOO-307, MOO-308).
+/// ports through this, and so does the CLAP adapter's `check_ports`, so
+/// both find the same main port (MOO-307, MOO-308).
 pub(crate) fn read_audio_ports(
     ports: &PluginAudioPorts,
     handle: &clack_host::prelude::PluginMainThreadHandle<'_>,
@@ -218,76 +218,6 @@ fn main_output_refusal(main_output: Option<u32>) -> Option<String> {
         Some(1 | 2) => None,
         Some(n) => Some(format!("its main output has {n} channels; 1 or 2 are hosted")),
     }
-}
-
-/// **The one-port rule, kept only for the CLAP adapter until MOO-308.**
-/// `ClapInstance` (`clap.rs`, `check_ports`) still wires exactly one port
-/// each way and checks this at open; MOO-308 makes it run every port and
-/// call [`main_port_effect_refusal`] instead, and then this goes. The scan
-/// and the browser already use the main-port rule
-/// ([`ScannedPlugin::effect_refusal`]).
-///
-/// Why a plugin with these CLAP `features` and audio ports (channels per
-/// port) cannot be a device on a chain, or `None` when it can (MOO-85).
-///
-/// **The role is the plugin's own word, and the ports only what the host
-/// can wire.** A plugin says what it is with its features (`audio-effect`,
-/// `instrument`), and ports cannot say it for it: vocoders, MIDI-triggered
-/// gates and tempo-synced effects take notes, and many instruments have a
-/// sidechain or audio input. So an effect is one that declares
-/// `audio-effect` -- or declares neither role and has an audio input --
-/// with one input and one output of one or two channels each, the layouts a
-/// chain wires. A mono input is fed the chain's `(L + R) / 2` and a mono
-/// output goes to both sides, like a TRS cable into a TS jack, with no
-/// setting (MOO-266). A note input is allowed and gets no notes: a chain
-/// carries none. A plugin that declares both roles may go in either place.
-pub fn effect_refusal(features: &[String], audio_inputs: &[u32], audio_outputs: &[u32]) -> Option<String> {
-    let has = |feature: &str| features.iter().any(|f| f == feature);
-    let effect = has("audio-effect") || (!has("instrument") && matches!(audio_inputs, [1] | [2]));
-    if !effect {
-        return Some("an instrument: it plays as a channel's source".into());
-    }
-    if !matches!(audio_inputs, [1] | [2]) {
-        return Some(format!("its inputs are {audio_inputs:?}; one input of 1 or 2 channels is hosted"));
-    }
-    if !matches!(audio_outputs, [1] | [2]) {
-        return Some(format!("its outputs are {audio_outputs:?}; one output of 1 or 2 channels is hosted"));
-    }
-    None
-}
-
-/// **The one-port rule, kept only for the CLAP adapter until MOO-308**, as
-/// [`effect_refusal`]; its replacement is [`main_port_source_refusal`].
-///
-/// Why a plugin with these `features`, audio ports and note inputs cannot
-/// be a channel's source, or `None` when it can (MOO-85). The role as
-/// [`effect_refusal`] reads it: `instrument`, or a note input when it
-/// declares neither role. What the host wires for a source: a note input,
-/// one output of one or two channels (mono is copied to both sides), and at
-/// most one audio input of one or two, which is fed silence: a channel's
-/// source has nothing upstream of it.
-pub fn source_refusal(
-    features: &[String],
-    audio_inputs: &[u32],
-    audio_outputs: &[u32],
-    note_inputs: u32,
-) -> Option<String> {
-    let has = |feature: &str| features.iter().any(|f| f == feature);
-    let neither = !has("instrument") && !has("audio-effect");
-    let instrument = has("instrument") || (neither && note_inputs > 0);
-    if !instrument {
-        return Some("an effect: it goes in a chain, not as a channel's source".into());
-    }
-    if note_inputs == 0 {
-        return Some("it takes no notes".into());
-    }
-    if !matches!(audio_outputs, [1] | [2]) {
-        return Some(format!("its outputs are {audio_outputs:?}; one of 1 or 2 channels is hosted"));
-    }
-    if !matches!(audio_inputs, [] | [1] | [2]) {
-        return Some(format!("its inputs are {audio_inputs:?}; at most one of 1 or 2 channels is hosted"));
-    }
-    None
 }
 
 impl ScannedPlugin {

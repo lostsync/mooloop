@@ -217,6 +217,20 @@ fn the_child_describes_every_plugin_in_the_file() {
     assert_eq!((gain.main_audio_input, gain.main_audio_output), (0, 0));
     assert_eq!((gain.main_input_channels(), gain.main_output_channels()), (Some(2), Some(2)));
     assert_eq!((sine.main_input_channels(), sine.main_output_channels()), (None, Some(2)));
+
+    // A plugin whose main ports are not port 0, and not at the same index
+    // each way (MOO-308's test plugin): the scan records where they are,
+    // and the rules judge those, not the sidechain or the extra outputs.
+    let sidechain = find(test_plugin::SIDECHAIN_ID);
+    assert_eq!(sidechain.audio_inputs, vec![1, 2]);
+    assert_eq!(sidechain.audio_outputs, vec![2, 1, 2]);
+    assert_eq!((sidechain.main_audio_input, sidechain.main_audio_output), (1, 2));
+    assert_eq!(
+        (sidechain.main_input_channels(), sidechain.main_output_channels()),
+        (Some(2), Some(2))
+    );
+    assert_eq!(sidechain.effect_refusal(), None);
+    assert!(sidechain.source_refusal().is_some());
 }
 
 /// A cache file holding one plugin, `fields` being its keys after the saved

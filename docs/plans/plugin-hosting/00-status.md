@@ -1348,6 +1348,71 @@ signal at unity, hard left at -6.02 dB on both sides, each mixed layout,
 and a centred drum loop through the mono gain in a chain unchanged) and by
 `scan.rs`'s place-rule test.
 
+## Found after step 11: extra ports run through the main ones (MOO-306, 2026-09-28)
+
+Adam could not add Surge XT: its scenes are two extra outputs, and the
+one-port rule refused it. The rule refused 78 of the 196 plugins in his
+scan cache, **every one of them with a main port of one or two channels**.
+Anything with a sidechain was in that 78. MOO-306 is the first stage. It
+has two halves:
+
+- **The scan records which port is main, and the rules read only that**
+  (Platform, MOO-307). `ScannedPlugin::main_audio_input` and
+  `main_audio_output` are the first port flagged `CLAP_AUDIO_PORT_IS_MAIN`,
+  or port 0 when none is. A cache written before this reads port 0 until a
+  rescan. `scan::main_port_effect_refusal` and `main_port_source_refusal`
+  judge the main ports only. An effect needs a main input and a main
+  output of one or two channels. An instrument needs a note input and a
+  main output of one or two, and its inputs are not judged at all. The
+  one-port `effect_refusal`/`source_refusal` are gone.
+- **The adapter runs every port** (Engine, MOO-308). `check_ports` reads
+  the live ports through the scan's own `read_audio_ports` and judges them
+  with the same two rules, so the browser and `ClapInstance::open` find
+  the same main port. At activation, `ClapProcessor` gets one buffer of
+  `max_frames` for every channel of every port the plugin declares. It
+  also gets clack's port lists sized for all of them, so filling them in
+  `process` never grows them. Each block, and each piece of a block cut at
+  an event:
+  - An effect's main input hears the chain as before, and a mono one hears
+    MOO-266's `(L + R) / 2`. It can sit at any index.
+  - A source's inputs, and every extra input of either, are cleared to
+    silence. They are cleared every block in case a plugin writes into a
+    buffer it was only meant to read.
+  - Only the main output reaches the bus, and a mono one goes to both
+    sides. Every other output is scratch that nothing reads.
+
+  Nothing in `process` allocates.
+
+The test plugin gained `mooloop.test.sidechain` (`SIDECHAIN_ID`). It is a
+unity effect with inputs `[sidechain 1, main 2]` and outputs `[aux 2, aux
+mono 1, main 2]`, so its main ports are at 1 and 2, never 0 and never the
+same index both ways. It fills its extra outputs with `AUX_LEVEL`, fails
+any block that does not hand it every port at its width, and counts what
+reached its sidechain behind two probes that no parameter list names
+(`PROBE_SIDECHAIN_BLOCKS`, `PROBE_SIDECHAIN_LOUD`). The following pin it:
+
+- `mooloop-plugin-host/tests/extra_ports.rs`. The processor alone, over
+  uneven blocks up to `MAX_FRAMES`, each cut in two by a mid-block event.
+  The main output is the main input bit for bit, the sidechain was
+  delivered every call and heard no sample, and after the first block the
+  audio thread made no allocator call. The binary installs its own
+  counting allocator.
+- `plugin_ports_tests` in `mooloop-engine`. A drum loop through the effect
+  in a channel's chain is the loop unchanged, and the render thread
+  neither allocates nor frees with it in place.
+- `scan.rs`. The scan records the effect's main ports as 1 and 2.
+
+The Surge XT and LSP checks are Adam's, on his desktop (MOO-306's done-when).
+
+**Still not done: real sidechain routing.** Nothing can feed a sidechain.
+A sidechain compressor here hears no external key, so most follow their
+own input, as they do in other hosts with nothing plugged in. The extra
+outputs of an instrument are not routed to mixer channels either. Both
+wait for 0.2.0 (`FOCUS.md`). They need a dependency edge that schedules a
+producer without summing it (`SCOPE.md` item 4; start from
+`docs/plans/archive/typed-audio-edges/`), and that is Mixer & Routing's
+and the Engine's.
+
 ## Found after step 07: plugin device presets (MOO-222, 2026-09-26)
 
 Step 07 left presets to Effects and Document. Here is how they differ from
@@ -1801,8 +1866,12 @@ build today.
 
 These are kept from #10, plus one addition.
 
-- Multi-output instruments, sidechain inputs, and port layouts other than
-  mono and stereo (mono effects arrived with MOO-266). (Sidechain waits for the typed-edge work `FOCUS.md` names.)
+- Routing a sidechain input or an instrument's extra outputs, and main
+  ports other than mono and stereo. Mono effects arrived with MOO-266.
+  Since MOO-306 a plugin with extra ports loads and runs through its main
+  ones: every extra input hears silence, and every extra output is thrown
+  away. Feeding a sidechain from another channel waits for the typed-edge
+  work `FOCUS.md` names for 0.2.0.
 - Note expression and MPE, and routing notes that a plugin generates.
 - Graph-wide plugin delay compensation beyond what the chain already does.
 - Crash isolation while processing.

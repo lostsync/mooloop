@@ -2500,8 +2500,13 @@ land on its own when it starts to matter:
   runs**, like a TRS cable into a TS jack, with no setting: a mono input
   hears the chain as `(L + R) / 2`, so a centred signal passes at unity and
   a hard-panned one comes through 6 dB down, and a mono output is copied to
-  both sides. The dry path and wet/dry stay stereo. Anything else is
-  refused as incompatible, and so is a sidechain. The plugin is heard live, and **it is in an export**: the export
+  both sides. The dry path and wet/dry stay stereo. As of 2026-09-28
+  (MOO-306) a plugin with **extra ports** is hosted as well, as long as its
+  main input and main output are mono or stereo. Those are the ports it
+  flags as main, wherever they sit. A sidechain or any other extra input
+  hears silence, and an extra output (Surge XT's scenes, say) is thrown
+  away. Nothing can feed a sidechain yet: that is 0.2.0. A plugin whose
+  main ports are wider is refused as unsupported. The plugin is heard live, and **it is in an export**: the export
   renders with second instances opened from the live ones' state. A plugin
   that reports an error or a non-finite sample, or panics, is passed through
   from that block on. A song whose plugin is **missing** opens, plays that
