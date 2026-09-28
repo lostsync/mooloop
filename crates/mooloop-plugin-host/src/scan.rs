@@ -29,7 +29,7 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-use clack_extensions::audio_ports::{AudioPortInfoBuffer, PluginAudioPorts};
+use clack_extensions::audio_ports::{AudioPortFlags, AudioPortInfoBuffer, PluginAudioPorts};
 use clack_extensions::gui::PluginGui;
 use clack_extensions::note_ports::PluginNotePorts;
 use clack_host::entry::PluginEntryError;
@@ -92,6 +92,15 @@ pub struct ScannedPlugin {
     /// Channel count of each audio output port, in the plugin's order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub audio_outputs: Vec<u32>,
+    /// Which of `audio_inputs` is the main input: the port the plugin flags
+    /// `CLAP_AUDIO_PORT_IS_MAIN`, or 0 when it flags none ([`main_port`],
+    /// MOO-307). It indexes past the end when there are no inputs. A cache
+    /// written before MOO-307 has no such key and reads 0 until a rescan.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub main_audio_input: u32,
+    /// Which of `audio_outputs` is the main output, as `main_audio_input`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub main_audio_output: u32,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub note_inputs: u32,
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -105,6 +114,119 @@ pub struct ScannedPlugin {
     pub error: Option<String>,
 }
 
+/// The index of a plugin's main audio port in one direction, from each
+/// port's `CLAP_AUDIO_PORT_IS_MAIN` flag in the plugin's order: the first
+/// flagged port, or 0 when none is flagged (MOO-307). The scan records it as
+/// [`ScannedPlugin::main_audio_input`] and `main_audio_output`;
+/// [`read_audio_ports`] is the same rule on a live plugin.
+pub fn main_port(is_main: impl IntoIterator<Item = bool>) -> u32 {
+    is_main
+        .into_iter()
+        .position(|main| main)
+        .map_or(0, |index| u32::try_from(index).unwrap_or(0))
+}
+
+/// The channel count of port `main` among `channels` (one count per port),
+/// or `None` when the plugin has no port there: no main port at all.
+pub fn main_channels(channels: &[u32], main: u32) -> Option<u32> {
+    usize::try_from(main).ok().and_then(|index| channels.get(index)).copied()
+}
+
+/// One direction of a live plugin's audio ports, as the scan records them:
+/// the channel count of each port in the plugin's order (0 for a port it
+/// would not describe, so the indices stay the plugin's) and the index of
+/// the main one ([`main_port`]). The scan's `describe_ports` reads its
+/// ports through this; the CLAP adapter can too, so both find the same main
+/// port (MOO-307, MOO-308).
+pub(crate) fn read_audio_ports(
+    ports: &PluginAudioPorts,
+    handle: &clack_host::prelude::PluginMainThreadHandle<'_>,
+    is_input: bool,
+) -> (Vec<u32>, u32) {
+    let mut main = Vec::new();
+    let channels = (0..ports.count(handle, is_input))
+        .map(|index| {
+            let mut buffer = AudioPortInfoBuffer::new();
+            let info = ports.get(handle, index, is_input, &mut buffer);
+            main.push(info.as_ref().is_some_and(|info| info.flags.contains(AudioPortFlags::IS_MAIN)));
+            info.map_or(0, |info| info.channel_count)
+        })
+        .collect();
+    (channels, main_port(main))
+}
+
+/// Why a plugin with these CLAP `features` and main audio ports (the
+/// channels of its main input and main output, `None` for no such port)
+/// cannot be a device on a chain, or `None` when it can (MOO-85, MOO-307).
+///
+/// **The role is the plugin's own word, and the main ports only what the
+/// host can wire.** A plugin says what it is with its features
+/// (`audio-effect`, `instrument`); an effect is one that declares
+/// `audio-effect`, or declares neither role and has a main input. It needs
+/// a main input and a main output of one or two channels each. A mono input
+/// is fed the chain's `(L + R) / 2` and a mono output goes to both sides
+/// (MOO-266). Any other port -- a sidechain, a second bus -- is no reason to
+/// refuse it: the host feeds an extra input silence and throws an extra
+/// output away (MOO-306). A note input is allowed and gets no notes: a chain
+/// carries none. A plugin that declares both roles may go in either place.
+///
+/// A refusal here is *unsupported* (the plugin loads, mooloop cannot wire
+/// it), never *failed*: MOO-298 hides the one and reports the other.
+pub fn main_port_effect_refusal(
+    features: &[String],
+    main_input: Option<u32>,
+    main_output: Option<u32>,
+) -> Option<String> {
+    let has = |feature: &str| features.iter().any(|f| f == feature);
+    let effect = has("audio-effect") || (!has("instrument") && main_input.is_some());
+    if !effect {
+        return Some("an instrument: it plays as a channel's source".into());
+    }
+    match main_input {
+        None => return Some("it has no audio input".into()),
+        Some(1 | 2) => {}
+        Some(n) => return Some(format!("its main input has {n} channels; 1 or 2 are hosted")),
+    }
+    main_output_refusal(main_output)
+}
+
+/// Why a plugin with these `features`, main audio output (its channels,
+/// `None` for none) and note inputs cannot be a channel's source, or `None`
+/// when it can (MOO-85, MOO-307). The role as [`main_port_effect_refusal`]
+/// reads it: `instrument`, or a note input when it declares neither role. A
+/// source needs a note input and a main output of one or two channels (mono
+/// is copied to both sides). Every audio input it has, the main one
+/// included, is fed silence -- a channel's source has nothing upstream of
+/// it -- and every output but the main one is thrown away, so neither is a
+/// reason to refuse it.
+pub fn main_port_source_refusal(features: &[String], main_output: Option<u32>, note_inputs: u32) -> Option<String> {
+    let has = |feature: &str| features.iter().any(|f| f == feature);
+    let neither = !has("instrument") && !has("audio-effect");
+    let instrument = has("instrument") || (neither && note_inputs > 0);
+    if !instrument {
+        return Some("an effect: it goes in a chain, not as a channel's source".into());
+    }
+    if note_inputs == 0 {
+        return Some("it takes no notes".into());
+    }
+    main_output_refusal(main_output)
+}
+
+fn main_output_refusal(main_output: Option<u32>) -> Option<String> {
+    match main_output {
+        None => Some("it has no audio output".into()),
+        Some(1 | 2) => None,
+        Some(n) => Some(format!("its main output has {n} channels; 1 or 2 are hosted")),
+    }
+}
+
+/// **The one-port rule, kept only for the CLAP adapter until MOO-308.**
+/// `ClapInstance` (`clap.rs`, `check_ports`) still wires exactly one port
+/// each way and checks this at open; MOO-308 makes it run every port and
+/// call [`main_port_effect_refusal`] instead, and then this goes. The scan
+/// and the browser already use the main-port rule
+/// ([`ScannedPlugin::effect_refusal`]).
+///
 /// Why a plugin with these CLAP `features` and audio ports (channels per
 /// port) cannot be a device on a chain, or `None` when it can (MOO-85).
 ///
@@ -134,6 +256,9 @@ pub fn effect_refusal(features: &[String], audio_inputs: &[u32], audio_outputs: 
     None
 }
 
+/// **The one-port rule, kept only for the CLAP adapter until MOO-308**, as
+/// [`effect_refusal`]; its replacement is [`main_port_source_refusal`].
+///
 /// Why a plugin with these `features`, audio ports and note inputs cannot
 /// be a channel's source, or `None` when it can (MOO-85). The role as
 /// [`effect_refusal`] reads it: `instrument`, or a note input when it
@@ -181,24 +306,37 @@ impl ScannedPlugin {
         self.has_feature("audio-effect")
     }
 
+    /// The main input's channel count, or `None` when it has no audio input
+    /// (MOO-307).
+    pub fn main_input_channels(&self) -> Option<u32> {
+        main_channels(&self.audio_inputs, self.main_audio_input)
+    }
+
+    /// The main output's channel count, or `None` when it has no audio
+    /// output (MOO-307).
+    pub fn main_output_channels(&self) -> Option<u32> {
+        main_channels(&self.audio_outputs, self.main_audio_output)
+    }
+
     /// Why it cannot be a device on a chain, or `None` when it can
-    /// (MOO-85): [`effect_refusal`] on what the scan recorded, or the reason
-    /// it failed to scan.
+    /// (MOO-85): [`main_port_effect_refusal`] on the main ports the scan
+    /// recorded (MOO-307), or the reason it failed to scan.
     pub fn effect_refusal(&self) -> Option<String> {
         if let Some(error) = &self.error {
             return Some(format!("could not be created: {error}"));
         }
-        effect_refusal(&self.features, &self.audio_inputs, &self.audio_outputs)
+        main_port_effect_refusal(&self.features, self.main_input_channels(), self.main_output_channels())
     }
 
     /// Why it cannot be a channel's source, or `None` when it can (MOO-85):
-    /// [`source_refusal`] on what the scan recorded, or the reason it failed
-    /// to scan. `None` is what a browser offers as an instrument.
+    /// [`main_port_source_refusal`] on the main output and note inputs the
+    /// scan recorded (MOO-307), or the reason it failed to scan. `None` is
+    /// what a browser offers as an instrument.
     pub fn source_refusal(&self) -> Option<String> {
         if let Some(error) = &self.error {
             return Some(format!("could not be created: {error}"));
         }
-        source_refusal(&self.features, &self.audio_inputs, &self.audio_outputs, self.note_inputs)
+        main_port_source_refusal(&self.features, self.main_output_channels(), self.note_inputs)
     }
 
     /// Whether it could be created when it was scanned.
@@ -888,6 +1026,8 @@ fn describe_file(path: &Path) -> ChildReport {
                             .collect(),
                         audio_inputs: Vec::new(),
                         audio_outputs: Vec::new(),
+                        main_audio_input: 0,
+                        main_audio_output: 0,
                         note_inputs: 0,
                         note_outputs: 0,
                         has_gui: false,
@@ -931,14 +1071,8 @@ fn describe_ports(entry: &clack_host::prelude::PluginEntry, mut plugin: ScannedP
     plugin.has_gui = gui.is_some();
     let handle = instance.plugin_handle();
     if let Some(audio) = audio {
-        for (is_input, into) in [(true, &mut plugin.audio_inputs), (false, &mut plugin.audio_outputs)] {
-            for index in 0..audio.count(&handle, is_input) {
-                let mut buffer = AudioPortInfoBuffer::new();
-                if let Some(info) = audio.get(&handle, index, is_input, &mut buffer) {
-                    into.push(info.channel_count);
-                }
-            }
-        }
+        (plugin.audio_inputs, plugin.main_audio_input) = read_audio_ports(&audio, &handle, true);
+        (plugin.audio_outputs, plugin.main_audio_output) = read_audio_ports(&audio, &handle, false);
     }
     if let Some(notes) = notes {
         plugin.note_inputs = notes.count(&handle, true);
@@ -965,6 +1099,8 @@ mod tests {
             features: vec!["audio-effect".into(), "stereo".into()],
             audio_inputs: vec![2],
             audio_outputs: vec![2],
+            main_audio_input: 0,
+            main_audio_output: 0,
             note_inputs: 0,
             note_outputs: 0,
             has_gui: true,
@@ -1007,20 +1143,15 @@ mod tests {
         // What the host cannot wire, with the reason.
         let no_notes = plugin(&["instrument"], &[], &[2], 0);
         assert_eq!(no_notes.source_refusal().as_deref(), Some("it takes no notes"));
-        let multi_out = plugin(&["instrument"], &[], &[2, 2, 2], 1);
-        assert!(multi_out.source_refusal().is_some_and(|why| why.contains("outputs")));
-        let sidechained = plugin(&["audio-effect"], &[2, 2], &[2], 0);
-        assert_eq!(
-            sidechained.effect_refusal().as_deref(),
-            Some("its inputs are [2, 2]; one input of 1 or 2 channels is hosted")
-        );
         let surround = plugin(&["audio-effect"], &[2], &[6], 0);
         assert_eq!(
             surround.effect_refusal().as_deref(),
-            Some("its outputs are [6]; one output of 1 or 2 channels is hosted")
+            Some("its main output has 6 channels; 1 or 2 are hosted")
         );
         let generator = plugin(&["audio-effect"], &[], &[2], 0);
-        assert!(generator.effect_refusal().is_some_and(|why| why.contains("inputs are []")));
+        assert_eq!(generator.effect_refusal().as_deref(), Some("it has no audio input"));
+        let silent = plugin(&["instrument"], &[], &[], 1);
+        assert_eq!(silent.source_refusal().as_deref(), Some("it has no audio output"));
         let synth = plugin(&["instrument"], &[], &[2], 1);
         assert_eq!(synth.effect_refusal().as_deref(), Some("an instrument: it plays as a channel's source"));
         let failed = ScannedPlugin {

@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use mooloop_core::plugin::PluginFormat;
 use mooloop_plugin_host::scan::{
-    self, ChildCommand, FailureKind, PluginCache, ScanConfig, SCAN_FLAG,
+    self, ChildCommand, FailureKind, PluginCache, ScanConfig, ScannedPlugin, SCAN_FLAG,
 };
 use mooloop_test_plugin as test_plugin;
 
@@ -212,4 +212,143 @@ fn the_child_describes_every_plugin_in_the_file() {
     scan::scan(&config(scan_dir.path()), &mut cache, |_, _, _| {});
     let found = cache.resolve(&gain.plugin).expect("the gain resolves");
     assert_eq!(found.path, canonical(&scan_dir.path().join("test.clap")));
+
+    // Each flags its one port main (MOO-307); the scan records which.
+    assert_eq!((gain.main_audio_input, gain.main_audio_output), (0, 0));
+    assert_eq!((gain.main_input_channels(), gain.main_output_channels()), (Some(2), Some(2)));
+    assert_eq!((sine.main_input_channels(), sine.main_output_channels()), (None, Some(2)));
+}
+
+/// A cache file holding one plugin, `fields` being its keys after the saved
+/// reference, in the file's own spelling.
+fn cache_with(fields: &str) -> String {
+    format!(
+        "version = 1\n\n\
+         [[file]]\npath = \"/usr/lib/clap/example.clap\"\nmodified-ns = 0\nsize = 0\n\n\
+         [[file.plugin]]\npath = \"/usr/lib/clap/example.clap\"\nformat = \"clap\"\n\
+         id = \"org.example.plugin\"\nname = \"Example\"\n{fields}\n"
+    )
+}
+
+/// The one plugin in [`cache_with`]'s file, as a load reads it.
+fn cached_plugin(fields: &str) -> ScannedPlugin {
+    let text = cache_with(fields);
+    let cache = PluginCache::from_toml(&text).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    let mut plugins: Vec<ScannedPlugin> = cache.plugins().cloned().collect();
+    assert_eq!(plugins.len(), 1, "{text}");
+    plugins.remove(0)
+}
+
+/// MOO-307: a cache written before the scan recorded main ports has no
+/// `main-audio-input` or `main-audio-output`. Such an entry still loads,
+/// reads port 0 as main until a rescan, and is judged by it: the Surge XT
+/// layouts in Adam's cache (MOO-306), which the one-port rule refused, are
+/// offered. Port 0 is never written, so an old entry writes back as it was;
+/// any other main port is written and read back.
+#[test]
+fn an_old_cache_entry_without_main_ports_loads_with_port_zero_as_main() {
+    let surge = "features = [\"instrument\"]\naudio-outputs = [2, 2, 2]\nnote-inputs = 1";
+    let plugin = cached_plugin(surge);
+    assert_eq!((plugin.main_audio_input, plugin.main_audio_output), (0, 0));
+    assert_eq!((plugin.main_input_channels(), plugin.main_output_channels()), (None, Some(2)));
+    assert_eq!(plugin.source_refusal(), None);
+
+    let surge_effects = "features = [\"audio-effect\"]\naudio-inputs = [2, 2]\naudio-outputs = [2]";
+    let plugin = cached_plugin(surge_effects);
+    assert_eq!((plugin.main_audio_input, plugin.main_audio_output), (0, 0));
+    assert_eq!(plugin.effect_refusal(), None);
+    let old = PluginCache::from_toml(&cache_with(surge_effects)).expect("parses");
+    let written = old.to_toml().expect("serializes");
+    assert!(!written.contains("main-audio"), "{written}");
+    assert_eq!(PluginCache::from_toml(&written).expect("parses"), old);
+
+    let flagged = "audio-inputs = [6, 2]\naudio-outputs = [2, 2]\nmain-audio-input = 1\nmain-audio-output = 1";
+    let cache = PluginCache::from_toml(&cache_with(flagged)).expect("parses");
+    let plugin = cache.plugins().next().expect("one plugin");
+    assert_eq!((plugin.main_audio_input, plugin.main_audio_output), (1, 1));
+    let written = cache.to_toml().expect("serializes");
+    assert!(written.contains("main-audio-input = 1"), "{written}");
+    assert!(written.contains("main-audio-output = 1"), "{written}");
+    assert_eq!(PluginCache::from_toml(&written).expect("parses"), cache);
+}
+
+/// MOO-307: the refusal rules look at the main ports only. Every layout
+/// Adam's cache refused (MOO-306) has a main port of one or two channels,
+/// and is now offered in its role: an effect with a sidechain or several
+/// buses, an instrument with extra outputs. What is still refused is a
+/// plugin with no usable main port, and it is refused as *unsupported*
+/// (a reason from the rule), not as *failed* (MOO-298's split).
+#[test]
+fn the_refusal_rules_read_the_main_ports_only() {
+    let effect = |ins: &str, outs: &str, more: &str| {
+        cached_plugin(&format!("features = [\"audio-effect\"]\naudio-inputs = {ins}\naudio-outputs = {outs}\n{more}"))
+            .effect_refusal()
+    };
+    let instrument = |ins: &str, outs: &str, more: &str| {
+        cached_plugin(&format!(
+            "features = [\"instrument\"]\naudio-inputs = {ins}\naudio-outputs = {outs}\nnote-inputs = 1\n{more}"
+        ))
+        .source_refusal()
+    };
+
+    // Effects with a sidechain (Surge XT Effects; LSP's sidechain dynamics)
+    // and multi-bus tools (LSP's x2 and x4 variants).
+    for (ins, outs) in [
+        ("[2, 2]", "[2]"),
+        ("[1, 1]", "[1]"),
+        ("[2, 1, 1]", "[2]"),
+        ("[2, 2, 2, 2]", "[2, 2, 2, 2]"),
+    ] {
+        assert_eq!(effect(ins, outs, ""), None, "{ins} -> {outs}");
+    }
+    // Instruments with extra outputs (Surge XT's scenes, a drum machine),
+    // and with inputs of any width: a source's inputs are all fed silence.
+    let drum_machine = format!("[{}]", ["2"; 13].join(", "));
+    for (ins, outs) in [("[]", "[2, 2, 2]"), ("[]", drum_machine.as_str()), ("[2, 2]", "[1, 2]"), ("[6]", "[2]")] {
+        assert_eq!(instrument(ins, outs, ""), None, "{ins} -> {outs}");
+    }
+
+    // The flagged main port is the one judged, wherever it sits.
+    assert_eq!(effect("[6, 2]", "[2]", "main-audio-input = 1"), None);
+    assert_eq!(
+        effect("[2, 6]", "[2]", "main-audio-input = 1").as_deref(),
+        Some("its main input has 6 channels; 1 or 2 are hosted")
+    );
+    assert_eq!(instrument("[]", "[8, 2]", "main-audio-output = 1"), None);
+    assert_eq!(
+        instrument("[]", "[2, 8]", "main-audio-output = 1").as_deref(),
+        Some("its main output has 8 channels; 1 or 2 are hosted")
+    );
+
+    // No usable main port: still refused, each with its reason.
+    assert_eq!(effect("[6, 2]", "[2]", "").as_deref(), Some("its main input has 6 channels; 1 or 2 are hosted"));
+    assert_eq!(effect("[2]", "[6, 2]", "").as_deref(), Some("its main output has 6 channels; 1 or 2 are hosted"));
+    assert_eq!(effect("[]", "[2]", "").as_deref(), Some("it has no audio input"));
+    assert_eq!(effect("[2]", "[]", "").as_deref(), Some("it has no audio output"));
+    assert_eq!(instrument("[]", "[]", "").as_deref(), Some("it has no audio output"));
+    assert_eq!(instrument("[]", "[6]", "").as_deref(), Some("its main output has 6 channels; 1 or 2 are hosted"));
+    // A main index past the ports (a hand-edited or stale cache) is no port.
+    assert_eq!(effect("[2]", "[2]", "main-audio-input = 3").as_deref(), Some("it has no audio input"));
+
+    // Unsupported, not failed: the plugin was created, and says why it fits
+    // nowhere from its ports, never "could not be created".
+    let unwired = cached_plugin("features = [\"audio-effect\"]\naudio-inputs = [6]\naudio-outputs = [2]");
+    assert!(unwired.is_usable());
+    assert!(unwired.effect_refusal().is_some_and(|why| !why.contains("could not be created")));
+
+    // A plugin that declares no role: an input makes it an effect, and it
+    // is judged by its main input whatever else it has.
+    let unmarked = cached_plugin("audio-inputs = [2, 2]\naudio-outputs = [2]");
+    assert_eq!((unmarked.effect_refusal(), unmarked.source_refusal().is_some()), (None, true));
+
+    // The same rule on bare flags and channel counts, for a live plugin.
+    assert_eq!(scan::main_port([false, true, true]), 1);
+    assert_eq!(scan::main_port([false, false]), 0);
+    assert_eq!(scan::main_port([false; 0]), 0);
+    assert_eq!(scan::main_channels(&[6, 2], 1), Some(2));
+    assert_eq!(scan::main_channels(&[], 0), None);
+    let features = ["audio-effect".to_owned()];
+    assert_eq!(scan::main_port_effect_refusal(&features, Some(1), Some(2)), None);
+    let features = ["instrument".to_owned()];
+    assert_eq!(scan::main_port_source_refusal(&features, Some(2), 1), None);
 }
