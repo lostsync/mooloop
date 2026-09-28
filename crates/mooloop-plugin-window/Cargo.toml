@@ -1,0 +1,24 @@
+[package]
+name = "mooloop-plugin-window"
+description = "The OS windows a hosted plugin's GUI goes into, and which display server mooloop runs on."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+# Platform & Release's (`docs/TEAMS.md`), plugin-hosting step 11, MOO-301.
+# Kept out of `mooloop-ui` so it builds and tests in seconds rather than
+# behind a Slint build, and so it needs no window to test: nothing here opens
+# a display unless a test that is `#[ignore]`d asks it to.
+[dependencies]
+# The neutral types the window is handed to the plugin in (`NativeWindow`,
+# `GuiSize`). No plugin format's types: this crate never names `clack-*`.
+mooloop-plugin-host = { workspace = true }
+mooloop-core = { workspace = true }
+# Already in the lock through winit. The core protocol is all a bare window
+# needs, and the pure-Rust connection needs no libxcb, so no features.
+x11rb = { version = "0.13", default-features = false }
+# What Slint's `raw-window-handle-06` feature hands out, read here to tell
+# X11 from Wayland and to find the main window's X11 id. Re-exported, so the
+# UI names the same version Slint implements.
+raw-window-handle = "0.6"

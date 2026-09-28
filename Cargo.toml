@@ -9,6 +9,7 @@ members = [
     "crates/mooloop-ui",
     "crates/mooloop-app",
     "crates/mooloop-plugin-host",
+    "crates/mooloop-plugin-window",
     "crates/mooloop-test-plugin",
     "spikes/time-stretch",
 ]
@@ -28,8 +29,16 @@ mooloop-project = { path = "crates/mooloop-project" }
 mooloop-session = { path = "crates/mooloop-session" }
 mooloop-ui = { path = "crates/mooloop-ui" }
 mooloop-plugin-host = { path = "crates/mooloop-plugin-host" }
+mooloop-plugin-window = { path = "crates/mooloop-plugin-window" }
 
-slint = "1.18"
+# `raw-window-handle-06`: the main window's display handle and X11 id, so a
+# plugin window can be made transient for it and the pump can tell X11 from
+# Wayland (plugin-hosting step 11, MOO-301). `unstable-winit-030`: the one way
+# to hand Slint a winit event loop builder, which is how the "Run under
+# XWayland" setting puts the process on X11 (`ui/src/display_backend.rs`).
+# The second is tied to Slint's minor version by its own terms; check it on
+# every Slint upgrade.
+slint = { version = "1.18", features = ["raw-window-handle-06", "unstable-winit-030"] }
 slint-build = "1.18"
 jack = "0.13"
 cpal = "0.18"
