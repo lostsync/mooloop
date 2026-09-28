@@ -73,3 +73,70 @@ fn an_install_keeps_only_the_running_kind() {
     session.replace_project(&project, &samples);
     assert_eq!(session.channels[session.selected].generator_params(), edited);
 }
+
+/// MOO-313: a plugin instrument is a device with an identity of its own,
+/// minted from the channel's `next_device_id` each time one is set, so two in
+/// a row never share one; a native source has none. The identity survives a
+/// snapshot and an install, which is the path undo and every project edit
+/// take.
+#[test]
+fn each_plugin_source_gets_its_own_device_id_and_a_native_one_gets_none() {
+    use mooloop_core::DeviceId;
+    let mut session = Session::default();
+    session.reset_channel_source(0, DeviceKind::Plugin);
+    let first = session.channels[0].source_device;
+    session.reset_channel_source(0, DeviceKind::Plugin);
+    let second = session.channels[0].source_device;
+    assert!(first.is_assigned() && second.is_assigned(), "{first:?} {second:?}");
+    assert_ne!(first, second, "a second plugin source reused the first's id");
+
+    let project = session.project_snapshot(120, 50);
+    assert_eq!(project.channels[0].setup.source_device, second);
+    let samples = vec![None; project.channels.len()];
+    session.replace_project(&project, &samples);
+    assert_eq!(session.channels[0].source_device, second, "an install lost the id");
+
+    for kind in KINDS {
+        session.reset_channel_source(0, DeviceKind::Plugin);
+        session.reset_channel_source(0, kind);
+        assert_eq!(session.channels[0].source_device, DeviceId::UNASSIGNED, "{kind:?}");
+    }
+}
+
+/// Replacing a plugin instrument lets go of its lanes and routes, as
+/// deleting an effect does -- Adam's recommended answer to the open Question
+/// on MOO-312, `Session::forget_replaced_source_device`. A lane on the native
+/// generator is not the instrument's and stays (MOO-135).
+#[test]
+fn replacing_a_plugin_instrument_forgets_its_lanes_and_routes() {
+    use mooloop_core::{
+        AutomationLane, EffectTarget, ModLfoParams, ModPolarity, ModRoute, ModulatorParams,
+        ParamAddr,
+    };
+    let here = EffectTarget::Channel(0);
+    for next in [DeviceKind::Plugin, DeviceKind::MonoSynth] {
+        let mut session = Session::default();
+        session.reset_channel_source(0, DeviceKind::Plugin);
+        let instrument = session.channels[0].source_device;
+        let on_instrument = ParamAddr::plugin_param(here, instrument, 7);
+        let on_generator =
+            ParamAddr::source(here, DeviceKind::Sampler, mooloop_core::SAMPLER_PARAM_DRIVE);
+        let channel = &mut session.channels[0];
+        channel.modulation.install(0, ModulatorParams::Lfo(ModLfoParams::default()));
+        for destination in [on_instrument, on_generator] {
+            channel
+                .modulation
+                .add_route(ModRoute::to_slot(0, destination, 0.5, ModPolarity::Bipolar))
+                .unwrap();
+            channel.automation[0].push(AutomationLane::new(destination));
+        }
+
+        session.reset_channel_source(0, next);
+        let channel = &session.channels[0];
+        let routes: Vec<ParamAddr> =
+            channel.modulation.routes.iter().flatten().map(|route| route.destination).collect();
+        let lanes: Vec<ParamAddr> = channel.automation[0].iter().map(|lane| lane.target).collect();
+        assert_eq!(routes, [on_generator], "{next:?}: routes");
+        assert_eq!(lanes, [on_generator], "{next:?}: lanes");
+    }
+}

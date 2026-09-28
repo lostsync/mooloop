@@ -3490,6 +3490,63 @@ mod tests {
         assert_eq!(project.channels[0].automation[0].len(), 1, "the lane was dropped");
     }
 
+    /// MOO-313: a plugin instrument's parameters are addressed on the
+    /// channel's `source_device`, and the integrity pass keeps a lane and a
+    /// route there for the plugin effect's reasons -- the plugin here is
+    /// missing (its slot is not in `Project::plugins`), and neither id is
+    /// judged. One naming a device that is neither the source nor on the
+    /// chain names nothing, and goes as a counted repair.
+    #[test]
+    fn a_plugin_instruments_lanes_and_routes_are_kept_on_its_source_device() {
+        let mut project = Project::default();
+        let setup = &mut project.channels[0].setup;
+        *setup = lfo_channel("Synth");
+        setup.push_effect(EffectSlotState::of_kind(EffectKind::Filter));
+        setup.source = mooloop_core::ChannelSource::Plugin(mooloop_core::PluginSlotId(5));
+        setup.channel.kind = DeviceKind::Plugin;
+        setup.assign_device_ids();
+        let source = setup.source_device;
+        assert!(source.is_assigned(), "test setup: the instrument has no id");
+        assert!(project.plugins.is_empty(), "test setup: the plugin was never scanned");
+        let here = EffectTarget::Channel(0);
+        let nowhere = DeviceId(source.0 + 10);
+
+        let kept = [
+            ParamAddr::plugin_param(here, source, 7),
+            ParamAddr::plugin_param(here, source, 123_456),
+        ];
+        let rack = &mut project.channels[0].setup.modulation;
+        for destination in kept.into_iter().chain([ParamAddr::plugin_param(here, nowhere, 7)]) {
+            rack.add_route(mooloop_core::ModRoute::to_slot(
+                0,
+                destination,
+                0.5,
+                mooloop_core::ModPolarity::Bipolar,
+            ))
+            .unwrap();
+        }
+        let lanes = &mut project.channels[0].automation[0];
+        lanes.push(mooloop_core::AutomationLane::new(ParamAddr::plugin_param(here, source, 123_456)));
+        lanes.push(mooloop_core::AutomationLane::new(ParamAddr::plugin_param(here, nowhere, 7)));
+
+        let diagnosis = repair_project(&mut project);
+        let mut found = codes(&diagnosis);
+        found.sort_unstable();
+        assert_eq!(found, ["channel.automation.destination", "modulation.route.destination"]);
+        let surviving: Vec<ParamAddr> = project.channels[0]
+            .setup
+            .modulation
+            .routes
+            .iter()
+            .flatten()
+            .map(|route| route.destination)
+            .collect();
+        assert_eq!(surviving, kept);
+        let lanes: Vec<ParamAddr> =
+            project.channels[0].automation[0].iter().map(|lane| lane.target).collect();
+        assert_eq!(lanes, [ParamAddr::plugin_param(here, source, 123_456)]);
+    }
+
     #[test]
     fn a_route_to_a_device_that_is_not_there_is_dropped() {
         let mut project = Project::default();

@@ -4457,10 +4457,17 @@ id = "default_kick"
         let channel = &mut project.channels[0].setup;
         channel.source = mooloop_core::ChannelSource::Plugin(slot);
         channel.channel.kind = mooloop_core::DeviceKind::Plugin;
+        // What `Session::reset_channel_source` does for a plugin (MOO-313).
+        channel.source_device = mooloop_core::mint_device_id(&mut channel.next_device_id);
+        let source_device = channel.source_device;
         save_song(&bundle, &project, AssetMode::Embedded).unwrap();
         let first = fs::read(&bundle).unwrap();
         let manifest = String::from_utf8(first.clone()).unwrap();
         assert!(manifest.contains("type = \"plugin\""), "the source is not tagged plugin");
+        assert!(
+            manifest.contains(&format!("source_device = {}", source_device.0)),
+            "the instrument's device id was not saved"
+        );
 
         let loaded = load_bundle(&bundle).unwrap();
         assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
@@ -4472,6 +4479,69 @@ id = "default_kick"
         assert_eq!(loaded.channels[0].setup.source.kind(), mooloop_core::DeviceKind::Plugin);
         save_song(&bundle, &loaded, AssetMode::Embedded).unwrap();
         assert!(fs::read(&bundle).unwrap() == first, "the second save changed the file");
+    }
+
+    /// MOO-313: a song whose sources are all native writes no
+    /// `source_device`, so it is byte-identical to one written before the
+    /// field existed, and a second save of it changes nothing.
+    #[test]
+    fn a_native_source_song_writes_no_source_device_and_round_trips() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("native.mooloop");
+        let project = song_with_a_plugin();
+        assert!(
+            project.channels.iter().all(|channel| !channel.setup.source_device.is_assigned()),
+            "test setup: a native source has an id"
+        );
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+        let first = fs::read(&bundle).unwrap();
+        assert!(
+            !String::from_utf8(first.clone()).unwrap().contains("source_device"),
+            "a native source wrote an id"
+        );
+        let loaded = load_bundle(&bundle).unwrap();
+        assert!(loaded.repairs.is_empty(), "{:?}", loaded.repairs);
+        let LoadedDocument::Song(loaded) = loaded.document else {
+            panic!("expected a song");
+        };
+        assert_eq!(loaded, project);
+        save_song(&bundle, &loaded, AssetMode::Embedded).unwrap();
+        assert!(fs::read(&bundle).unwrap() == first, "the second save changed the file");
+    }
+
+    /// MOO-313: a plugin source saved before sources had an identity loads
+    /// with one, above every effect on its chain and with the mint past it,
+    /// and with nothing counted as a repair: no such song can hold an address
+    /// on the instrument, so any fresh id is right.
+    #[test]
+    fn a_plugin_source_saved_without_an_id_is_given_one_above_its_effects() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("old-plugin-source.mooloop");
+        let mut project = song_with_a_plugin();
+        let state = project.plugins.values().next().unwrap().clone();
+        let slot = project.add_plugin_slot(state);
+        let channel = &mut project.channels[0].setup;
+        channel.push_effect(mooloop_core::EffectSlotState::of_kind(mooloop_core::EffectKind::Filter));
+        channel.source = mooloop_core::ChannelSource::Plugin(slot);
+        channel.channel.kind = mooloop_core::DeviceKind::Plugin;
+        assert!(!channel.source_device.is_assigned(), "test setup: the source already has an id");
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+        assert!(
+            !fs::read_to_string(&bundle).unwrap().contains("source_device"),
+            "test setup: the fixture carries an id"
+        );
+
+        let loaded = load_bundle(&bundle).unwrap();
+        assert!(loaded.repairs.is_empty(), "{:?}", loaded.repairs);
+        let LoadedDocument::Song(loaded) = loaded.document else {
+            panic!("expected a song");
+        };
+        let setup = &loaded.channels[0].setup;
+        assert!(setup.source_device.is_assigned(), "the plugin source was given no id");
+        assert_eq!(setup.effects.len(), 2);
+        let highest_effect = setup.effects.iter().map(|effect| effect.id.0).max().unwrap();
+        assert!(setup.source_device.0 > highest_effect, "{:?}", setup.source_device);
+        assert!(setup.next_device_id > setup.source_device.0, "the mint was not moved past it");
     }
 
     /// A plugin parameter's lanes and routes survive a save and a load byte
