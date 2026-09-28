@@ -36,12 +36,11 @@ and each closing comment names its commit. Adam's answers:
 - MOO-286: 115% text is the new 100%, and there's no Density fader;
 - MOO-287: the pane shortcuts act on is outlined;
 - MOO-289: shortcuts survive focus loss;
-- MOO-279: the icon registry, `plans/icon-pass/` step 01.
+- MOO-279: the icon registry, `plans/icon-pass/` step 01;
+- MOO-273: every device kind has an icon, step 02, landed as drawn after
+  Adam's look at the kind sheet (`697e5116`).
 
-Three items are still open in 0.1.6, and all wait on Adam:
-- **MOO-273**, device-kind icons (icon-pass step 02). It's built and
-  verified on `feat/moo-273-device-kind-icons`, and waits on his look at the
-  kind sheet.
+Two items are still open in 0.1.6, and both wait on Adam:
 - **MOO-289**'s launch case, which wasn't reproduced headless. He has two
   checks to make on the laptop (Hyprland, `follow_mouse = 1`).
 - **MOO-237**, Core Audio's latency, which he'll check on a Mac.
@@ -207,10 +206,11 @@ is short:
 - **The listening passes** below, which nobody has taken since 2026-09-18.
 - **MOO-237:** whether the Core Audio output latency mooloop logs matches
   what HALLab reports for the same device, on a real Mac.
-- **MOO-273:** Adam chose filled shapes. Two points stand as
-  recommendations he hasn't overruled: a plugin gets one generic icon, and
-  icons take the device colour. The full kind sheet goes to him before step
-  02 lands (`plans/icon-pass/02-device-kinds.md`).
+
+Answered 2026-09-27:
+- **MOO-273:** *"i love the sheet. iconts are 10/10"*. Every kind's icon
+  landed as drawn, with one plug for any plugin and each icon in its device
+  colour.
 
 Answered 2026-09-26:
 - **MOO-153:** *"the themes look pretty good to me incl the bevels"*. The

@@ -88,6 +88,11 @@ too big.
 - A folded device shows its name as upright letters down the strip, as
   crisp as the rest of the window, instead of its header turned on its
   side. Hover it to see the whole name.
+- **Every device shows an icon for its kind** where its header had an
+  unlabelled bar and dot: a drum for the drum synths, saw teeth for the
+  synths, a bell for the EQ and so on. It's in the device's colour, and
+  faint while the device is bypassed. A folded device shows the same icon
+  on its strip.
 - The rack's `+` menu is wide enough for every row at every text size.
 - The window's content runs to its edges, with no border round it.
 - **The pane your keyboard shortcuts act on is outlined.** Click in a pane,
