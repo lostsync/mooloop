@@ -445,12 +445,30 @@ pub(crate) struct PluginFaces {
     /// The plugin the list last described: the filter is cleared when the
     /// selection moves to another, so a new plugin never opens filtered.
     list_slot: std::cell::Cell<Option<PluginSlotId>>,
+    /// Each plugin's own window as its face shows it (step 11, MOO-302):
+    /// whether it has one, whether it is open, and why it would not open.
+    /// Written by [`UiState::refresh_plugin_faces`], which has the running
+    /// plugin and the open windows; read by [`PluginFaces::fill_row`].
+    gui: RefCell<HashMap<PluginSlotId, GuiFace>>,
 }
 
-/// Why the plugin in `slot` is not playing, in words, or empty when it is.
-fn status_text(session: &Session, slot: PluginSlotId, name: &str) -> String {
+/// A plugin face's open-window control, and its badge when the window
+/// would not open.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct GuiFace {
+    pub has_gui: bool,
+    pub open: bool,
+    pub problem: Option<String>,
+}
+
+/// Why the plugin in `slot` is not playing, in words, or empty when it is;
+/// or, when it is playing, why its window would not open (`window`).
+fn status_text(session: &Session, slot: PluginSlotId, name: &str, window: Option<&str>) -> String {
     match session.plugin_problem(slot) {
-        None => String::new(),
+        None => match window {
+            Some(why) => format!("{name}'s window did not open: {why}. Its face still works."),
+            None => String::new(),
+        },
         Some(HostError::Missing) => format!(
             "Missing: {name} is not installed, or could not be opened. It plays dry, \
              and the song keeps it and its settings."
@@ -631,7 +649,10 @@ impl PluginFaces {
         row.is_plugin = true;
         row.units = units;
         row.plugin_name = name.into();
-        row.plugin_status = status_text(session, slot, name).into();
+        let gui = self.gui.borrow().get(&slot).cloned().unwrap_or_default();
+        row.plugin_status = status_text(session, slot, name, gui.problem.as_deref()).into();
+        row.plugin_has_gui = gui.has_gui;
+        row.plugin_gui_open = gui.open;
         let model = self.model(slot);
         update_model(&model, params);
         row.plugin_params = ModelRc::from(model);
@@ -672,6 +693,20 @@ impl UiState {
             .collect();
         for (row, slot) in plugins {
             self.plugin_faces.refresh_texts(&mut self.session, slot);
+            // Whether the running plugin has a GUI of its own: a missing
+            // plugin has none to open, and the control is not drawn.
+            let gui = GuiFace {
+                has_gui: self
+                    .session
+                    .plugin_rack
+                    .instance_mut(slot)
+                    .is_some_and(|instance| instance.gui().is_some()),
+                open: self.plugin_guis.is_open(slot),
+                problem: self.plugin_guis.problem(slot).map(str::to_string),
+            };
+            if self.plugin_faces.gui.borrow().get(&slot) != Some(&gui) {
+                self.plugin_faces.gui.borrow_mut().insert(slot, gui);
+            }
             let Some(effect) = self
                 .session
                 .effect_chain()
@@ -683,10 +718,24 @@ impl UiState {
             let Some(mut data) = self.effect_slot_model.row_data(row) else {
                 continue;
             };
-            let was = (data.is_plugin, data.units, data.plugin_name.clone(), data.plugin_status.clone());
+            let was = (
+                data.is_plugin,
+                data.units,
+                data.plugin_name.clone(),
+                data.plugin_status.clone(),
+                data.plugin_has_gui,
+                data.plugin_gui_open,
+            );
             // The same model as before, updated in place.
             self.plugin_faces.fill_row(&self.session, &effect, &mut data);
-            let now = (data.is_plugin, data.units, data.plugin_name.clone(), data.plugin_status.clone());
+            let now = (
+                data.is_plugin,
+                data.units,
+                data.plugin_name.clone(),
+                data.plugin_status.clone(),
+                data.plugin_has_gui,
+                data.plugin_gui_open,
+            );
             if was != now {
                 self.effect_slot_model.set_row_data(row, data);
             }
@@ -1234,6 +1283,22 @@ pub(crate) fn wire(
         });
     }
     {
+        // The face's open-window control (step 11, MOO-302): the plugin's
+        // own GUI in a window of its own, or that window brought to the
+        // front. A failure is the face's badge, and the face stays.
+        let st = state.clone();
+        let weak = window.as_weak();
+        window.on_plugin_gui_requested(move |row| {
+            let (Some(window), Ok(row)) = (weak.upgrade(), usize::try_from(row)) else {
+                return;
+            };
+            let main = crate::plugin_gui::MainWindowState::of(window.window());
+            if let Err(why) = st.borrow_mut().open_plugin_gui_at(row, &main) {
+                window.set_status_message(format!("The plugin's window did not open: {why}").into());
+            }
+        });
+    }
+    {
         let st = state.clone();
         let weak = window.as_weak();
         window.on_add_plugin_requested(move |before| {
@@ -1316,6 +1381,7 @@ pub(crate) fn show_plugin_preferences(window: &MainWindow, settings: &PluginSett
     window.set_preferences_plugin_extra_paths(texts(&settings.extra_paths));
     window.set_preferences_plugin_scan_timeout_s(settings.scan_timeout_s as i32);
     window.set_preferences_plugin_scan_on_startup(settings.scan_on_startup);
+    window.set_preferences_plugin_run_under_xwayland(settings.run_under_xwayland);
     let failures: Vec<PluginFailureRow> = PluginCatalog::load(cache_path)
         .failures
         .into_iter()
@@ -1453,6 +1519,7 @@ pub(crate) fn wire_plugin_preferences(
             edit_settings(&window, &st, &settings, |plugins| plugins.scan_on_startup = on);
         });
     }
+    wire_xwayland_toggle(window, settings, Rc::new(|settings: &UiSettings| settings.save()));
     {
         // Rescan All: the failures forgotten and every file scanned again,
         // on the scan's own thread; the pump follows it (`poll_plugin_scan`).
@@ -1462,6 +1529,33 @@ pub(crate) fn wire_plugin_preferences(
             start(&settings.borrow().plugins, progress);
         });
     }
+}
+
+/// How the XWayland toggle saves: `UiSettings::save` in the app, a scratch
+/// file in the tests, which must not write the settings of whoever runs them.
+pub(crate) type SettingsSaver = Rc<dyn Fn(&UiSettings) -> Result<(), crate::settings::SettingsError>>;
+
+/// Wire Preferences > Plugins' "Run under XWayland (full plugin window
+/// behaviour)" (step 11, MOO-302) to `PluginSettings::run_under_xwayland`.
+/// Saved as it is flipped, like every switch on the page; it is read once,
+/// before the first window (`select_display_backend`), so it takes effect
+/// at the next start, which the note beside it says. A save that fails puts
+/// the old value back and says why.
+pub(crate) fn wire_xwayland_toggle(window: &MainWindow, settings: &Rc<RefCell<UiSettings>>, save: SettingsSaver) {
+    let (settings, weak) = (settings.clone(), window.as_weak());
+    window.on_preferences_plugin_run_under_xwayland_toggled(move |on| {
+        let Some(window) = weak.upgrade() else { return };
+        let mut settings = settings.borrow_mut();
+        let previous = settings.plugins.run_under_xwayland;
+        if previous != on {
+            settings.plugins.run_under_xwayland = on;
+            if let Err(error) = save(&settings) {
+                settings.plugins.run_under_xwayland = previous;
+                window.set_preferences_error(format!("Could not save settings: {error}").into());
+            }
+        }
+        window.set_preferences_plugin_run_under_xwayland(settings.plugins.run_under_xwayland);
+    });
 }
 
 #[cfg(test)]

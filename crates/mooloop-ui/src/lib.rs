@@ -34,6 +34,7 @@ mod rack_displays_tests;
 #[cfg(test)]
 mod source_names_tests;
 mod display_backend;
+mod plugin_gui;
 mod plugin_scan;
 mod plugin_ui;
 mod pump_profile;
@@ -3248,6 +3249,8 @@ fn effect_slot_row(
         plugin_name: Default::default(),
         plugin_status: Default::default(),
         plugin_params: Default::default(),
+        plugin_has_gui: false,
+        plugin_gui_open: false,
         branches,
         selected_branch: view.selected_branch,
         bracket: view.bracket,
@@ -4387,6 +4390,9 @@ struct UiState {
     /// The plugin faces' parameter models and value texts, kept across
     /// republishes so a knob is updated rather than rebuilt.
     plugin_faces: plugin_ui::PluginFaces,
+    /// Every hosted plugin's own GUI that is open, and the windows they are
+    /// in (step 11, MOO-302). The pump drives it (`pump_plugin_guis`).
+    plugin_guis: plugin_gui::PluginGuis,
     /// A plugin scan started from the window, as the pump follows it (MOO-229).
     plugin_scan: plugin_ui::ScanWatch,
     /// Raised whenever the effect rack is re-synced, so the pump knows the
@@ -4572,6 +4578,7 @@ impl UiState {
             plugin_cache_path: plugin_cache_path(),
             plugin_insert_before: None,
             plugin_faces: plugin_ui::PluginFaces::default(),
+            plugin_guis: plugin_gui::PluginGuis::default(),
             plugin_scan: plugin_ui::ScanWatch::default(),
             effect_spectra_stale: std::cell::Cell::new(false),
             effect_spectra_synced_for: std::cell::Cell::new(None),
@@ -16614,6 +16621,9 @@ impl AppUi {
                     let mut st = st.borrow_mut();
                     if !plugins_close_sent {
                         st.session.close_plugins(&mut handle);
+                        // Every GUI is destroyed now; its window after it
+                        // (Interface, MOO-302).
+                        st.close_plugin_windows();
                         plugins_close_sent = true;
                     }
                     while handle.poll().is_some() {}
@@ -17688,6 +17698,21 @@ impl AppUi {
                 // compensation sync, so a latency change is in this tick's
                 // plan.
                 st.borrow_mut().session.service_plugins(&mut handle);
+                // Plugin GUIs (step 11, MOO-302): every plugin's timers and
+                // fds, the GUIs' own requests, the windows' events, and the
+                // windows hidden while mooloop is not focused on Wayland.
+                // Before the faces, so a window that opened or closed is on
+                // its face this tick.
+                if let Some(window) = weak.upgrade() {
+                    // The main window is only asked about itself while a
+                    // plugin window is open: a song with none pays nothing.
+                    let main = if st.borrow().plugin_guis.any_open() {
+                        plugin_gui::MainWindowState::of(window.window())
+                    } else {
+                        plugin_gui::MainWindowState::idle()
+                    };
+                    st.borrow_mut().pump_plugin_guis(&main);
+                }
                 if let Some(window) = weak.upgrade() {
                     record_finished_plugin_edits(&st, &commands, &window);
                 }

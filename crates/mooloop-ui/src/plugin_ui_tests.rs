@@ -169,6 +169,8 @@ impl Harness {
                 sample_rate: RATE,
             };
             st.session.service_plugins(&mut sink);
+            let main = crate::plugin_gui::MainWindowState::of(self.window.window());
+            st.pump_plugin_guis(&main);
         }
         self.engine.drain();
         record_finished_plugin_edits(&self.state, &self.commands, &self.window);
@@ -940,4 +942,231 @@ fn a_missing_plugin_parameter_is_drawn_missing_and_reunited() {
     assert!(!menu.missing && menu.param_name.as_str() == "Nudge", "{menu:?}");
     assert!(!lane_missing);
     assert!(!route.missing && route.destination.contains("Nudge"), "{route:?}");
+}
+
+// ---------------------------------------------------------------------------
+// A plugin's own GUI in a window of its own (step 11, MOO-302). No test here
+// opens a window: the window side is `plugin_gui::fake`, which records what
+// it was asked, and the plugin is the test double's GUI variant, which draws
+// nothing.
+
+/// The scanner's cache with the test gain's GUI variant beside the rest.
+fn gui_cache_text(library: &Path) -> String {
+    let path = library.display().to_string().replace('\\', "/");
+    let broken = "[[file]]\npath = \"/usr/lib/clap/broken.clap\"";
+    let gui = format!(
+        "[[file.plugin]]\npath = \"{path}\"\nformat = \"clap\"\nid = \"{id}\"\nname = \"Test Gain (GUI)\"\n\
+         vendor = \"{vendor}\"\nfeatures = [\"audio-effect\"]\naudio-inputs = [2]\naudio-outputs = [2]\n\n{broken}",
+        id = test_plugin::GAIN_GUI_ID,
+        vendor = test_plugin::VENDOR,
+    );
+    cache_text(library).replacen(broken, &gui, 1)
+}
+
+type FakeLog = Rc<RefCell<crate::plugin_gui::fake::Log>>;
+
+/// The test gain and its GUI variant in a live chain, in that order, the
+/// window side faked; ticked until both faces are up.
+fn gui_harness() -> (Harness, FakeLog) {
+    let mut h = harness_with(&drum_loop());
+    let cache = h.state.borrow().plugin_cache_path.clone();
+    std::fs::write(&cache, gui_cache_text(&test_plugin_path())).expect("the cache is written");
+    let (guis, log) = crate::plugin_gui::fake::fake();
+    {
+        let mut st = h.state.borrow_mut();
+        st.session
+            .set_plugin_opener(mooloop_session::plugin_rack::clap_opener(cache));
+        st.plugin_guis = guis;
+        st.enter_browser_tab(BrowserTab::Plugins);
+    }
+    let queues = plugin_ui::Queues {
+        tx: h.tx.clone(),
+        stx: h.stx.clone(),
+        reset_tx: mpsc::channel().0,
+    };
+    for (id, at) in [(test_plugin::GAIN_ID, 0), (test_plugin::GAIN_GUI_ID, 1)] {
+        assert!(plugin_ui::add_plugin(&h.state, &h.commands, &h.window, id, Some(at), &queues), "{id} added");
+    }
+    for _ in 0..3 {
+        h.tick();
+    }
+    (h, log)
+}
+
+/// The open-window controls the rack draws.
+fn window_buttons(h: &Harness) -> Vec<Control> {
+    controls(&h.window, AccessibleRole::Button)
+        .into_iter()
+        .filter(|button| button.label.ends_with("plugin's window") || button.label.ends_with("window to the front"))
+        .collect()
+}
+
+fn gui_slot(h: &Harness) -> PluginSlotId {
+    match h.state.borrow().session.effect_chain().expect("a chain")[1].params {
+        EffectParams::Plugin(slot) => slot,
+        _ => panic!("the second device is not a plugin"),
+    }
+}
+
+fn calls(log: &FakeLog) -> Vec<String> {
+    log.borrow().calls.clone()
+}
+
+fn open_gui(h: &Harness) {
+    let main = crate::plugin_gui::MainWindowState::of(h.window.window());
+    h.state.borrow_mut().open_plugin_gui_at(1, &main).expect("it opens");
+}
+
+/// **The face draws the open-window control only for a plugin with a GUI
+/// of its own**, and pressing it opens the GUI in a window of mooloop's,
+/// sized to the plugin and shown; pressed again, it brings that window to
+/// the front rather than opening a second.
+#[test]
+fn only_a_plugin_with_a_gui_has_the_control_and_it_opens_or_raises() {
+    let (mut h, log) = gui_harness();
+    let rows: Vec<EffectSlotRow> = h.state.borrow().effect_slot_model.iter().collect();
+    assert!(rows[0].is_plugin && !rows[0].plugin_has_gui, "the plain gain has no GUI");
+    assert!(rows[1].is_plugin && rows[1].plugin_has_gui, "its GUI variant has one");
+    let buttons = window_buttons(&h);
+    assert_eq!(buttons.len(), 1, "one control, on the face with a GUI: {buttons:?}");
+    assert!(calls(&log).is_empty(), "nothing is opened until asked");
+
+    click(&h.window, buttons[0].centre);
+    let slot = gui_slot(&h);
+    assert!(h.state.borrow_mut().session.plugin_gui_is_open(slot), "the plugin's GUI is open");
+    let made = calls(&log);
+    assert!(made[0].starts_with("create ") && made[0].contains("Test Gain (GUI)"), "{made:?}");
+    assert_eq!(made.last().map(String::as_str), Some("show 0x101"), "shown once placed: {made:?}");
+    assert!(!made.iter().any(|call| call.starts_with("transient")), "no X11 main window to belong to");
+    h.tick();
+    assert!(h.state.borrow().effect_slot_model.row_data(1).expect("the row").plugin_gui_open);
+    assert!(window_buttons(&h)[0].label.ends_with("window to the front"));
+
+    // Again: the same window, unmapped and mapped, which puts it on top.
+    let before = calls(&log).len();
+    click(&h.window, window_buttons(&h)[0].centre);
+    assert_eq!(calls(&log)[before..], ["hide 0x101".to_string(), "show 0x101".to_string()]);
+    assert_eq!(
+        calls(&log).iter().filter(|call| call.starts_with("create ")).count(),
+        1,
+        "no second window"
+    );
+}
+
+/// **Teardown, in the order that matters: the plugin's GUI, then its
+/// window.** The window's close button closes the GUI through the session
+/// and only then destroys the window; the processor keeps playing. A device
+/// removed with its GUI open has the GUI closed by the session, and its
+/// window destroyed on the tick that reports it. Quit does the same for all.
+#[test]
+fn a_window_goes_only_after_its_plugin_gui() {
+    use mooloop_plugin_window::{GuiSize, PluginWindowEvent, PluginWindowId};
+    let destroyed = |log: &FakeLog| calls(log).iter().filter(|call| call.starts_with("destroy ")).count();
+    let (mut h, log) = gui_harness();
+    let slot = gui_slot(&h);
+
+    // The close button.
+    open_gui(&h);
+    log.borrow_mut()
+        .events
+        .push((PluginWindowId(0x101), PluginWindowEvent::CloseRequested));
+    h.tick();
+    assert!(!h.state.borrow_mut().session.plugin_gui_is_open(slot), "the GUI is closed");
+    assert_eq!(calls(&log).last().map(String::as_str), Some("destroy 0x101"));
+    assert!(h.state.borrow().session.plugin_rack.instance(slot).is_some(), "the plugin still plays");
+    assert!(!h.state.borrow().effect_slot_model.row_data(1).expect("the row").plugin_gui_open);
+
+    // Reopened; a resize from outside reaches the plugin and leaves it open.
+    open_gui(&h);
+    let resized = GuiSize { width: 333, height: 222 };
+    log.borrow_mut()
+        .events
+        .push((PluginWindowId(0x102), PluginWindowEvent::Resized(resized)));
+    h.tick();
+    assert!(h.state.borrow().plugin_guis.is_open(slot));
+
+    // The device removed while its GUI is open: nothing is destroyed until
+    // the session has closed the GUI, which it does on the next tick.
+    assert_eq!(destroyed(&log), 1);
+    h.state.borrow_mut().session.remove_effect_at(1).expect("removed");
+    assert_eq!(destroyed(&log), 1, "the window outlives the GUI, never the reverse");
+    h.tick();
+    assert_eq!(destroyed(&log), 2, "gone on the tick the session closed the GUI");
+    assert!(!h.state.borrow().plugin_guis.any_open());
+
+    // Quit with a GUI open.
+    let (h, log) = gui_harness();
+    let slot = gui_slot(&h);
+    open_gui(&h);
+    {
+        let mut st = h.state.borrow_mut();
+        let mut sink = plugin_ui::QueuedSink {
+            tx: &h.tx,
+            stx: &h.stx,
+            sample_rate: RATE,
+        };
+        st.session.close_plugins(&mut sink);
+        assert_eq!(destroyed(&log), 0, "the GUIs go first");
+        st.close_plugin_windows();
+        assert!(!st.session.plugin_gui_is_open(slot));
+        assert!(!st.plugin_guis.any_open());
+    }
+    assert_eq!(calls(&log).last().map(String::as_str), Some("destroy 0x101"));
+}
+
+/// **A window that cannot open is the face's badge, and the face stays.**
+/// No X server here: the reason is the window side's own.
+#[test]
+fn a_window_that_cannot_open_is_the_badge() {
+    let (mut h, _log) = gui_harness();
+    h.state.borrow_mut().plugin_guis =
+        crate::plugin_gui::PluginGuis::new(Box::new(|| Err(mooloop_plugin_window::WindowError::NoDisplay)));
+    click(&h.window, window_buttons(&h)[0].centre);
+    h.tick();
+    let row = h.state.borrow().effect_slot_model.row_data(1).expect("the row");
+    assert!(row.is_plugin && row.plugin_has_gui, "the face stays, control and all");
+    assert!(!row.plugin_gui_open);
+    assert!(row.plugin_status.contains("window did not open"), "{}", row.plugin_status);
+    assert!(row.plugin_status.contains("DISPLAY"), "the reason is said: {}", row.plugin_status);
+    assert_eq!(window_buttons(&h).len(), 1, "and it can be pressed again");
+}
+
+/// **Preferences → Plugins' "Run under XWayland" round-trips to the saved
+/// setting**, off by default, and a save that fails puts it back. Saved to a
+/// scratch file: a test must not write the settings of whoever runs it.
+#[test]
+fn the_xwayland_toggle_round_trips_to_the_setting() {
+    use crate::settings::{SettingsError, UiSettings};
+    let h = harness_with(&drum_loop());
+    let settings = Rc::new(RefCell::new(UiSettings::default()));
+    let file = h.dir.path().join("settings.toml");
+    let saver: plugin_ui::SettingsSaver = {
+        let file = file.clone();
+        Rc::new(move |settings: &UiSettings| settings.save_to(&file))
+    };
+    plugin_ui::wire_xwayland_toggle(&h.window, &settings, saver);
+    let cache = h.state.borrow().plugin_cache_path.clone();
+    plugin_ui::show_plugin_preferences(&h.window, &settings.borrow().plugins, &cache);
+    assert!(!h.window.get_preferences_plugin_run_under_xwayland(), "off by default");
+
+    h.window.invoke_preferences_plugin_run_under_xwayland_toggled(true);
+    assert!(settings.borrow().plugins.run_under_xwayland);
+    assert!(h.window.get_preferences_plugin_run_under_xwayland());
+    assert!(
+        UiSettings::load_or_default_from(&file).plugins.run_under_xwayland,
+        "saved, for the next start to read"
+    );
+
+    h.window.invoke_preferences_plugin_run_under_xwayland_toggled(false);
+    assert!(!UiSettings::load_or_default_from(&file).plugins.run_under_xwayland);
+    assert!(!h.window.get_preferences_plugin_run_under_xwayland());
+
+    // A save that fails keeps what was there, and says so.
+    let failing: plugin_ui::SettingsSaver =
+        Rc::new(|_: &UiSettings| Err(SettingsError::Io(std::io::Error::other("read-only"))));
+    plugin_ui::wire_xwayland_toggle(&h.window, &settings, failing);
+    h.window.invoke_preferences_plugin_run_under_xwayland_toggled(true);
+    assert!(!settings.borrow().plugins.run_under_xwayland);
+    assert!(!h.window.get_preferences_plugin_run_under_xwayland());
+    assert!(h.window.get_preferences_error().contains("read-only"));
 }
