@@ -1379,6 +1379,8 @@ pub(crate) fn wire(
             };
             face_value_changed(&mut st.borrow_mut(), &tx, FaceSite::Chain(row), index, normalized);
         });
+    }
+    {
         let st = state.clone();
         let tx = tx.clone();
         window.on_source_plugin_param_changed(move |index, normalized| {
@@ -1425,6 +1427,8 @@ pub(crate) fn wire(
             };
             face_depth_changed(&st, &commands, &tx, &window, FaceSite::Chain(row), index, depth);
         });
+    }
+    {
         let st = state.clone();
         let commands = commands.clone();
         let tx = tx.clone();
