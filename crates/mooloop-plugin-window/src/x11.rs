@@ -571,7 +571,7 @@ impl PluginWindows {
             }
             None => {
                 self.connection
-                    .delete_property(id.0, AtomEnum::WM_TRANSIENT_FOR)?;
+                    .delete_property(id.0, AtomEnum::WM_TRANSIENT_FOR.into())?;
             }
         }
         self.connection.flush()?;

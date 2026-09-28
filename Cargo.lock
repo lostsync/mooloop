@@ -3136,6 +3136,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mooloop-plugin-window"
+version = "0.1.5"
+dependencies = [
+ "mooloop-core",
+ "mooloop-plugin-host",
+ "raw-window-handle",
+ "x11rb",
+]
+
+[[package]]
 name = "mooloop-project"
 version = "0.1.5"
 dependencies = [
@@ -4830,6 +4840,7 @@ dependencies = [
  "const-field-offset",
  "i-slint-backend-linuxkms",
  "i-slint-backend-selector",
+ "i-slint-backend-winit",
  "i-slint-common",
  "i-slint-core",
  "i-slint-core-macros",
@@ -4838,6 +4849,7 @@ dependencies = [
  "num-traits",
  "once_cell",
  "pin-weak",
+ "raw-window-handle",
  "slint-macros",
  "unicode-segmentation",
  "vtable",
