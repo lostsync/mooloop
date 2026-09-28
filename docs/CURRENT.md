@@ -2581,7 +2581,12 @@ land on its own when it starts to matter:
   scanned costs that child and nothing else. What was found, and every file
   that failed and why (`load`, `incompatible`, `crashed`, `timed-out`, ...), is
   kept in `<config>/plugins.toml`; an unchanged file is never scanned again,
-  failed or not. `scan-on-startup = false` turns the startup scan off. The log
+  failed or not. `scan-on-startup = false` turns the startup scan off.
+  `run-under-xwayland = true` (off by default; no Preferences toggle yet,
+  MOO-302) runs the whole application on X11 through XWayland under a Wayland
+  session, from the next start, so plugin windows can later be kept above the
+  main window; with no X server it stays on Wayland and logs why (MOO-301).
+  The log
   says what the scan found. A song's plugins are found through it, and the
   browser's PLUGINS tab lists it (above). **Preferences > Plugins** (MOO-229)
   shows the standard folders, the added ones (Add Folder…, and a × to

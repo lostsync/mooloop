@@ -1622,6 +1622,103 @@ tests hold the order (GUI, processor, instance) with a fake.
 the XWayland setting, macOS, and the per-compositor record the step asks
 for: MOO-301 and MOO-302.
 
+## Step 11's window and the XWayland setting, recorded 2026-09-28 (MOO-301)
+
+The second leg: the OS-window half, built against MOO-300's types and not
+yet called by anything. The pump that joins the two is MOO-302 (Interface).
+
+**What landed.**
+
+- **A new crate, `crates/mooloop-plugin-window`** (Platform's), so the
+  window and the backend decision build and test in seconds without a
+  `mooloop-ui` build. It depends on `mooloop-plugin-host` for the neutral
+  types only (`NativeWindow`, `GuiSize`, re-exported from it) and never names
+  a plugin format.
+- **`x11::PluginWindows`**: one `x11rb` connection (the pure-Rust one; no
+  libxcb, no features) and every plugin window on it. `connect`, `create`
+  (unmapped, black background, `STRUCTURE_NOTIFY | FOCUS_CHANGE`),
+  `set_title`, `resize`, `set_resizable`, `set_transient_for`, `show`/`hide`
+  (map/unmap), `destroy`, and `drain_events`, which empties `poll_for_event`
+  into `(PluginWindowId, PluginWindowEvent)` pairs without waiting:
+  `CloseRequested`, `Resized(GuiSize)`, `FocusIn`, `FocusOut`.
+  `PluginWindowId::native()` is what goes to `GuiPlacement::Embedded`.
+  With no `DISPLAY`, `WindowError::NoDisplay`, whose text is the badge's.
+- **What a window is made with**: `WM_NAME` (Latin-1, `?` for the rest) and
+  `_NET_WM_NAME` (UTF-8); `WM_CLASS` `mooloop-plugin`/`mooloop`, so a
+  compositor rule can name plugin windows; `WM_PROTOCOLS` =
+  `WM_DELETE_WINDOW`; `_NET_WM_WINDOW_TYPE_DIALOG`; `WM_NORMAL_HINTS` with
+  `PSize`, and min = max = size when the plugin cannot resize. A resize of a
+  fixed window moves its hints first, or a window manager refuses it.
+  Sizes are clamped to 1..=32767, X11's range; a plugin reporting 0x0 is
+  not rare.
+- **Focus, as the pump will need it for hiding.** A plugin's window is a
+  child of ours, so when it takes the keyboard ours hears `FocusOut` with
+  detail `Inferior`. That one is dropped, and so are the `Grab`/`Ungrab`
+  modes a keyboard grab reports and the pointer details; what is left is
+  focus arriving anywhere in the window or leaving all of it. Hiding a
+  focused window reports `FocusOut` too.
+- **A size is reported only when it changed**, and a size the pump set with
+  `resize` is recorded first, so it never comes back as `Resized`.
+- **The "Run under XWayland" setting**: `[plugins] run-under-xwayland`, off
+  by default, in `PluginSettings` (`ui/src/settings.rs`). Read by
+  `select_display_backend()` (`ui/src/display_backend.rs`), which
+  `app/src/main.rs` calls right after logging starts and before the engine
+  or any window.
+- **Which backend the process is on**: `window_display_backend(&slint::Window)`
+  reads the window's display handle (Xlib or Xcb is X11, Wayland is Wayland;
+  `None` before the window is shown), and `window_x11_parent` its X11 id, as
+  the parent for `set_transient_for` and a floating GUI's `set_transient`.
+  `DisplayBackend::can_set_transient` is the pump's question. Both need
+  Slint's `raw-window-handle-06` feature, now on in the root `Cargo.toml`.
+
+**How the process is put on X11, and why that way.** Three candidates:
+
+1. **Clearing `WAYLAND_DISPLAY`** before the backend starts. winit 0.30
+   reads `WAYLAND_DISPLAY`/`WAYLAND_SOCKET` first and `DISPLAY` second, so
+   it works, but it changes the environment of the whole process: every
+   child mooloop starts (the scan child, zenity, `xdg-open`) and every
+   library that reads it. It is also `set_var`/`remove_var`, which is
+   unsound once other threads exist; `unsafe` in edition 2024.
+2. **winit's `with_x11()`** on the event loop builder. winit consults its
+   forced backend before any variable. Slint 1.18.1 accepts a builder only
+   through `BackendSelector::with_winit_event_loop_builder`, behind its
+   `unstable-winit-030` feature, and it is exactly what Slint's own winit
+   backend does to put itself on XWayland under WSL
+   (`i-slint-backend-winit` 1.18.1, `lib.rs`).
+3. **`SLINT_BACKEND`** chooses the backend (winit, Qt, linuxkms) and the
+   renderer, never the display server. Not a candidate.
+
+**Chosen: 2**, because it changes the display backend and nothing else,
+which is what the step's "Done when" asks. The environment is untouched, so
+the audio client, MIDI, plugins and child processes see exactly what they
+saw before. The price is a feature Slint names unstable: it is tied to
+winit 0.30 and may change in a Slint minor release, so the root
+`Cargo.toml` says to check it on every Slint upgrade. The renderer is still
+Slint's choice, and `SLINT_BACKEND` still picks it.
+
+**Two things found about forcing it.**
+
+- **A failed forced event loop cannot be retried.** winit marks its one
+  event loop as created before the platform connects, so a `with_x11()`
+  that cannot reach an X server leaves the process unable to build any
+  event loop at all. So X11 is forced only when `DISPLAY` is set, and only
+  after `x11::probe()` has connected and hung up; either failing leaves the
+  process on Wayland with the reason in the log.
+- **The setting only acts on a Wayland session.** On X11 there is nothing
+  to force, and with no display at all there is nothing to choose.
+  `display::plan_backend_in` is that rule, tested against a given
+  environment.
+
+**Not verified here, for Adam.** No test opened a window: this machine runs
+his Hyprland session. Two `#[ignore]`d tests in `plugin-window/src/x11.rs`
+need an X server (`a_window_on_a_real_x_server`,
+`the_probe_reaches_a_real_x_server`; run them under `Xvfb`). Whether the
+setting actually lands mooloop on XWayland under Hyprland (`hyprctl
+clients` should say `xwayland: 1`), and how it scales there: XWayland
+windows under a fractional scale are drawn at 1x and stretched unless
+Hyprland's `xwayland { force_zero_scaling = true }` is set, and Slint then
+reads its scale from `Xft.dpi`.
+
 ## The test plugins
 
 CI cannot install third-party plugins, so step 01 builds **an in-repo CLAP
