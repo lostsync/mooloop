@@ -30,6 +30,7 @@
 //! does for a processor dropped while started. No plugin in the test set
 //! objects.
 
+use std::cell::RefCell;
 use std::ffi::CString;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -39,6 +40,13 @@ use std::thread::ThreadId;
 use std::time::{Duration, Instant, SystemTime};
 
 use clack_extensions::audio_ports::{AudioPortInfoBuffer, PluginAudioPorts};
+use clack_extensions::gui::{
+    GuiApiType, GuiConfiguration, GuiSize as ClapGuiSize, HostGui, HostGuiImpl, PluginGui, Window,
+};
+#[cfg(unix)]
+use clack_extensions::posix_fd::{FdFlags, HostPosixFd, HostPosixFdImpl, PluginPosixFd};
+use clack_extensions::timer::{HostTimer, HostTimerImpl, PluginTimer, TimerId};
+use clack_host::host::HostError as ClapHostError;
 use clack_extensions::latency::{HostLatency, HostLatencyImpl, PluginLatency};
 use clack_extensions::log::{HostLog, HostLogImpl, LogSeverity};
 use clack_extensions::note_ports::{NoteDialects, NotePortInfoBuffer, PluginNotePorts};
@@ -62,6 +70,11 @@ use mooloop_core::{PluginParamInfo, PluginRef, PluginState, PluginStateChunk};
 use mooloop_dsp::node::{Discontinuity, SILENCE_PEAK};
 use mooloop_dsp::{AudioNode, Event, EventList, HostedParam, ProcessContext, StereoBus, MAX_BLOCK_SIZE};
 
+use crate::gui::{
+    GuiApi, GuiConfig, GuiError, GuiRequest, GuiSize, HostedGui, IoActivity, IoRegistrations,
+    NativeWindow,
+};
+use crate::host_io::HostIo;
 pub use crate::instance::PluginParamEvent;
 use crate::instance::{AudioConfig, HostError, HostedInstance, Lifeline, PluginOpener};
 use crate::notes::{HeldNote, NoteTable, NOTE_ROWS};
@@ -100,8 +113,24 @@ impl HostHandlers for ClapHost {
             .register::<HostThreadCheck>()
             .register::<HostLatency>()
             .register::<HostState>()
-            .register::<HostParams>();
+            .register::<HostParams>()
+            // Step 11 (MOO-300): the GUI, and the event loop it runs on.
+            .register::<HostGui>()
+            .register::<HostTimer>();
+        #[cfg(unix)]
+        builder.register::<HostPosixFd>();
     }
+}
+
+/// The GUI requests a plugin raises from any thread, as bits in one word
+/// ([`ClapShared::gui_requests`]), in the order the pump carries them out.
+mod gui_bits {
+    pub const RESIZE: u32 = 1 << 0;
+    pub const SHOW: u32 = 1 << 1;
+    pub const HIDE: u32 = 1 << 2;
+    pub const HINTS: u32 = 1 << 3;
+    pub const CLOSED: u32 = 1 << 4;
+    pub const DESTROYED: u32 = 1 << 5;
 }
 
 /// What a plugin may reach from any thread. Every callback only raises bits
@@ -110,6 +139,11 @@ impl HostHandlers for ClapHost {
 pub struct ClapShared {
     main_thread: ThreadId,
     requests: Arc<RequestFlags>,
+    /// The GUI's requests of its window ([`gui_bits`]). Kept apart from
+    /// `requests`, which the rack drains every tick for other work.
+    gui_requests: RequestFlags,
+    /// The last size the GUI asked for, packed as CLAP packs it.
+    gui_size: AtomicU64,
     /// Log lines the plugin sent from a thread other than the main one,
     /// which are counted rather than written: writing a log line allocates.
     unlogged: AtomicU64,
@@ -168,12 +202,105 @@ impl HostParamsImplShared for ClapShared {
     fn request_flush(&self) {}
 }
 
+/// The GUI's requests of its window: bits and one packed size, so a request
+/// from the plugin's own GUI thread neither locks nor allocates.
+impl HostGuiImpl for ClapShared {
+    fn resize_hints_changed(&self) {
+        self.gui_requests.raise(gui_bits::HINTS);
+    }
+
+    fn request_resize(&self, new_size: ClapGuiSize) -> Result<(), ClapHostError> {
+        self.gui_size.store(new_size.pack_to_u64(), Ordering::Release);
+        self.gui_requests.raise(gui_bits::RESIZE);
+        Ok(())
+    }
+
+    fn request_show(&self) -> Result<(), ClapHostError> {
+        self.gui_requests.raise(gui_bits::SHOW);
+        Ok(())
+    }
+
+    fn request_hide(&self) -> Result<(), ClapHostError> {
+        self.gui_requests.raise(gui_bits::HIDE);
+        Ok(())
+    }
+
+    fn closed(&self, was_destroyed: bool) {
+        let bits = if was_destroyed {
+            gui_bits::CLOSED | gui_bits::DESTROYED
+        } else {
+            gui_bits::CLOSED
+        };
+        self.gui_requests.raise(bits);
+    }
+}
+
 /// What a plugin may reach only from the main thread.
 pub struct ClapMainThread {
     requests: Arc<RequestFlags>,
+    main_thread: ThreadId,
+    /// The timers and fds the plugin registered (step 11). A `RefCell`
+    /// because the handlers take `&self`; it is borrowed only for a moment,
+    /// never across a call into the plugin, which may register or
+    /// unregister from inside its own callback.
+    io: RefCell<HostIo>,
+}
+
+impl ClapMainThread {
+    /// The registration table, or a refusal off the main thread: CLAP says
+    /// these are main-thread calls, and the table is not shared.
+    fn io(&self) -> Result<std::cell::RefMut<'_, HostIo>, ClapHostError> {
+        if std::thread::current().id() != self.main_thread {
+            return Err(ClapHostError::Message("called off the main thread"));
+        }
+        self.io
+            .try_borrow_mut()
+            .map_err(|_| ClapHostError::Message("the host's event table is busy"))
+    }
 }
 
 impl<'a> MainThreadHandler<'a> for ClapMainThread {}
+
+impl HostTimerImpl for ClapMainThread {
+    fn register_timer(&self, period_ms: u32) -> Result<TimerId, ClapHostError> {
+        Ok(TimerId(self.io()?.register_timer(period_ms, Instant::now())))
+    }
+
+    fn unregister_timer(&self, timer_id: TimerId) -> Result<(), ClapHostError> {
+        if self.io()?.unregister_timer(timer_id.0) {
+            Ok(())
+        } else {
+            Err(ClapHostError::Message("no such timer"))
+        }
+    }
+}
+
+#[cfg(unix)]
+impl HostPosixFdImpl for ClapMainThread {
+    fn register_fd(&self, fd: std::os::unix::io::RawFd, flags: FdFlags) -> Result<(), ClapHostError> {
+        if self.io()?.register_fd(fd, flags.bits()) {
+            Ok(())
+        } else {
+            Err(ClapHostError::Message("that fd is already registered, or not an fd"))
+        }
+    }
+
+    fn modify_fd(&self, fd: std::os::unix::io::RawFd, flags: FdFlags) -> Result<(), ClapHostError> {
+        if self.io()?.modify_fd(fd, flags.bits()) {
+            Ok(())
+        } else {
+            Err(ClapHostError::Message("no such fd"))
+        }
+    }
+
+    fn unregister_fd(&self, fd: std::os::unix::io::RawFd) -> Result<(), ClapHostError> {
+        if self.io()?.unregister_fd(fd) {
+            Ok(())
+        } else {
+            Err(ClapHostError::Message("no such fd"))
+        }
+    }
+}
 
 impl HostLatencyImpl for ClapMainThread {
     fn changed(&self) {
@@ -245,7 +372,30 @@ pub struct ClapInstance {
     flags: Arc<ProcessorFlags>,
     events_out: Option<rtrb::Consumer<PluginParamEvent>>,
     layout: Layout,
+    /// The thread the instance was opened on: every GUI call must be made
+    /// there.
+    main_thread: ThreadId,
+    /// The plugin's side of the GUI, timer and fd extensions, where it has
+    /// them.
+    gui_ext: Option<PluginGui>,
+    timer_ext: Option<PluginTimer>,
+    #[cfg(unix)]
+    fd_ext: Option<PluginPosixFd>,
+    /// The configuration the GUI is open in.
+    gui_open: Option<GuiConfig>,
+    gui_visible: bool,
+    /// Reused by [`HostedInstance::service_io`], so a tick allocates nothing
+    /// once these have grown.
+    io_scratch: IoScratch,
     instance: PluginInstance<ClapHost>,
+}
+
+#[derive(Default)]
+struct IoScratch {
+    timers: Vec<u32>,
+    fds: Vec<(crate::host_io::Fd, u32)>,
+    ready: Vec<(crate::host_io::Fd, u32)>,
+    poll: Vec<crate::host_io::sys::PollFd>,
 }
 
 impl ClapInstance {
@@ -271,15 +421,20 @@ impl ClapInstance {
             .map_err(|_| HostError::Incompatible("its id holds a NUL".into()))?;
         let requests = Arc::new(RequestFlags::new());
         let (shared_requests, main_requests) = (requests.clone(), requests.clone());
+        let main_thread = std::thread::current().id();
         let mut instance = PluginInstance::<ClapHost>::new(
             move |_| ClapShared {
-                main_thread: std::thread::current().id(),
+                main_thread,
                 requests: shared_requests,
+                gui_requests: RequestFlags::new(),
+                gui_size: AtomicU64::new(0),
                 unlogged: AtomicU64::new(0),
                 misbehaviour: AtomicU64::new(0),
             },
             move |_| ClapMainThread {
                 requests: main_requests,
+                main_thread,
+                io: RefCell::new(HostIo::default()),
             },
             &entry,
             &id,
@@ -288,6 +443,10 @@ impl ClapInstance {
         .map_err(|error| HostError::Plugin(format!("{} could not be created: {error}", plugin.id)))?;
         let features = crate::load_features(&entry, &id);
         let layout = check_ports(&mut instance, &features)?;
+        let shared = instance.plugin_shared_handle();
+        let (gui_ext, timer_ext) = (shared.get_extension::<PluginGui>(), shared.get_extension::<PluginTimer>());
+        #[cfg(unix)]
+        let fd_ext = shared.get_extension::<PluginPosixFd>();
         let mut hosted = Self {
             plugin: plugin.clone(),
             params: Vec::new(),
@@ -297,6 +456,14 @@ impl ClapInstance {
             flags: Arc::new(ProcessorFlags::default()),
             events_out: None,
             layout,
+            main_thread,
+            gui_ext,
+            timer_ext,
+            #[cfg(unix)]
+            fd_ext,
+            gui_open: None,
+            gui_visible: false,
+            io_scratch: IoScratch::default(),
             instance,
         };
         if !state.is_empty() {
@@ -413,10 +580,249 @@ fn check_ports(instance: &mut PluginInstance<ClapHost>, features: &[String]) -> 
 
 impl Drop for ClapInstance {
     fn drop(&mut self) {
+        // Step 04's order: the GUI, then the processor, then the instance.
+        // The rack destroys the GUI before it retires an instance; this is
+        // the backstop for any other owner, and says so when it is needed.
+        if self.gui_open.is_some() {
+            mooloop_core::log_warn!("plugin", "{}: its GUI was still open when it was dropped", self.plugin.name);
+            HostedGui::destroy(self);
+        }
         // The rack drops an instance only once its processors are gone, so
         // this succeeds; if it cannot, `clack-host` leaks the plugin rather
         // than destroy it under a running processor.
         let _ = self.deactivate();
+    }
+}
+
+fn clap_config(config: GuiConfig) -> GuiConfiguration<'static> {
+    GuiConfiguration {
+        api_type: match config.api {
+            GuiApi::X11 => GuiApiType::X11,
+        },
+        is_floating: config.floating,
+    }
+}
+
+fn clap_window(window: NativeWindow) -> Result<Window<'static, 'static>, GuiError> {
+    match window.api {
+        GuiApi::X11 => std::ffi::c_ulong::try_from(window.id)
+            .map(Window::from_x11_handle)
+            .map_err(|_| GuiError::Refused("take an X11 window id this wide")),
+    }
+}
+
+impl ClapInstance {
+    /// The plugin's GUI extension, on the control thread only.
+    fn gui_ext(&self) -> Result<PluginGui, GuiError> {
+        if std::thread::current().id() != self.main_thread {
+            return Err(GuiError::WrongThread);
+        }
+        self.gui_ext.ok_or(GuiError::NoGui)
+    }
+
+    /// The extension, and the GUI open.
+    fn open_gui_ext(&self) -> Result<PluginGui, GuiError> {
+        let gui = self.gui_ext()?;
+        if self.gui_open.is_none() {
+            return Err(GuiError::NotOpen);
+        }
+        Ok(gui)
+    }
+}
+
+impl HostedGui for ClapInstance {
+    fn is_api_supported(&mut self, config: GuiConfig) -> bool {
+        let Ok(gui) = self.gui_ext() else {
+            return false;
+        };
+        gui.is_api_supported(&mut self.instance.plugin_handle(), clap_config(config))
+    }
+
+    fn preferred_api(&mut self) -> Option<GuiConfig> {
+        let gui = self.gui_ext().ok()?;
+        let preferred = gui.get_preferred_api(&mut self.instance.plugin_handle())?;
+        (preferred.api_type == GuiApiType::X11).then_some(GuiConfig {
+            api: GuiApi::X11,
+            floating: preferred.is_floating,
+        })
+    }
+
+    fn open_config(&self) -> Option<GuiConfig> {
+        self.gui_open
+    }
+
+    fn is_visible(&self) -> bool {
+        self.gui_visible
+    }
+
+    fn create(&mut self, config: GuiConfig) -> Result<(), GuiError> {
+        let gui = self.gui_ext()?;
+        if self.gui_open.is_some() {
+            return Err(GuiError::AlreadyOpen);
+        }
+        if !gui.is_api_supported(&mut self.instance.plugin_handle(), clap_config(config)) {
+            return Err(GuiError::Unsupported(config));
+        }
+        // Anything raised while no GUI was open is stale.
+        self.instance.access_shared_handler(|shared| shared.gui_requests.take());
+        gui.create(&mut self.instance.plugin_handle(), clap_config(config))
+            .map_err(|_| GuiError::Refused("open"))?;
+        self.gui_open = Some(config);
+        self.gui_visible = false;
+        Ok(())
+    }
+
+    fn set_scale(&mut self, scale: f64) -> Result<(), GuiError> {
+        let gui = self.open_gui_ext()?;
+        gui.set_scale(&mut self.instance.plugin_handle(), scale)
+            .map_err(|_| GuiError::Refused("take the window's scale"))
+    }
+
+    fn size(&mut self) -> Option<GuiSize> {
+        let gui = self.open_gui_ext().ok()?;
+        gui.get_size(&mut self.instance.plugin_handle())
+            .map(|size| GuiSize {
+                width: size.width,
+                height: size.height,
+            })
+    }
+
+    fn can_resize(&mut self) -> bool {
+        let Ok(gui) = self.open_gui_ext() else {
+            return false;
+        };
+        gui.can_resize(&mut self.instance.plugin_handle())
+    }
+
+    fn adjust_size(&mut self, size: GuiSize) -> Option<GuiSize> {
+        let gui = self.open_gui_ext().ok()?;
+        gui.adjust_size(
+            &mut self.instance.plugin_handle(),
+            ClapGuiSize {
+                width: size.width,
+                height: size.height,
+            },
+        )
+        .map(|size| GuiSize {
+            width: size.width,
+            height: size.height,
+        })
+    }
+
+    fn set_size(&mut self, size: GuiSize) -> Result<(), GuiError> {
+        let gui = self.open_gui_ext()?;
+        gui.set_size(
+            &mut self.instance.plugin_handle(),
+            ClapGuiSize {
+                width: size.width,
+                height: size.height,
+            },
+        )
+        .map_err(|_| GuiError::Refused("take that size"))
+    }
+
+    fn set_parent(&mut self, window: NativeWindow) -> Result<(), GuiError> {
+        let gui = self.open_gui_ext()?;
+        let window = clap_window(window)?;
+        // SAFETY: `NativeWindow`'s contract, which the caller keeps: the
+        // window outlives the GUI in it. An X11 id is a number, not a
+        // pointer, so a stale one is an X error in the plugin, not memory
+        // this process could corrupt.
+        unsafe { gui.set_parent(&mut self.instance.plugin_handle(), window) }
+            .map_err(|_| GuiError::Refused("embed in the window"))
+    }
+
+    fn set_transient(&mut self, window: NativeWindow) -> Result<(), GuiError> {
+        let gui = self.open_gui_ext()?;
+        let window = clap_window(window)?;
+        // SAFETY: as for `set_parent`.
+        unsafe { gui.set_transient(&mut self.instance.plugin_handle(), window) }
+            .map_err(|_| GuiError::Refused("stay above the window"))
+    }
+
+    fn suggest_title(&mut self, title: &str) {
+        let Ok(gui) = self.open_gui_ext() else {
+            return;
+        };
+        let title: String = title.chars().filter(|&c| c != '\0').collect();
+        if let Ok(title) = CString::new(title) {
+            gui.suggest_title(&mut self.instance.plugin_handle(), &title);
+        }
+    }
+
+    fn show(&mut self) -> Result<(), GuiError> {
+        let gui = self.open_gui_ext()?;
+        gui.show(&mut self.instance.plugin_handle())
+            .map_err(|_| GuiError::Refused("show"))?;
+        self.gui_visible = true;
+        Ok(())
+    }
+
+    fn hide(&mut self) -> Result<(), GuiError> {
+        let gui = self.open_gui_ext()?;
+        gui.hide(&mut self.instance.plugin_handle())
+            .map_err(|_| GuiError::Refused("hide"))?;
+        self.gui_visible = false;
+        Ok(())
+    }
+
+    fn destroy(&mut self) {
+        let Ok(gui) = self.open_gui_ext() else {
+            return;
+        };
+        gui.destroy(&mut self.instance.plugin_handle());
+        self.gui_open = None;
+        self.gui_visible = false;
+        self.instance.access_shared_handler(|shared| shared.gui_requests.take());
+    }
+
+    fn take_requests(&mut self, sink: &mut dyn FnMut(GuiRequest)) {
+        let (bits, packed) = self.instance.access_shared_handler(|shared| {
+            let bits = shared.gui_requests.take();
+            (bits, shared.gui_size.load(Ordering::Acquire))
+        });
+        if self.gui_open.is_none() || bits.is_empty() {
+            return;
+        }
+        if bits.has(gui_bits::HINTS) {
+            sink(GuiRequest::ResizeHintsChanged);
+        }
+        if bits.has(gui_bits::RESIZE) {
+            let size = ClapGuiSize::unpack_from_u64(packed);
+            sink(GuiRequest::Resize(GuiSize {
+                width: size.width,
+                height: size.height,
+            }));
+        }
+        // A show and a hide in one tick: the later one cannot be told, so
+        // the window ends up shown, which the user can undo and a lost show
+        // could not be.
+        if bits.has(gui_bits::HIDE) && !bits.has(gui_bits::SHOW) {
+            sink(GuiRequest::Hide);
+        }
+        if bits.has(gui_bits::SHOW) {
+            sink(GuiRequest::Show);
+        }
+        if bits.has(gui_bits::CLOSED) {
+            sink(GuiRequest::Closed {
+                destroyed: bits.has(gui_bits::DESTROYED),
+            });
+        }
+    }
+}
+
+impl ClapInstance {
+    /// Is timer `id` still registered? A callback may unregister another
+    /// timer, or an fd, before its own turn comes.
+    fn has_timer(&self, id: u32) -> bool {
+        self.instance
+            .access_handler(|main| main.io.try_borrow().is_ok_and(|io| io.has_timer(id)))
+    }
+
+    #[cfg(unix)]
+    fn has_fd(&self, fd: crate::host_io::Fd) -> bool {
+        self.instance
+            .access_handler(|main| main.io.try_borrow().is_ok_and(|io| io.has_fd(fd)))
     }
 }
 
@@ -535,6 +941,67 @@ impl HostedInstance for ClapInstance {
 
     fn set_audio_config(&mut self, config: AudioConfig) {
         self.config = config;
+    }
+
+    fn gui(&mut self) -> Option<&mut dyn HostedGui> {
+        if self.gui_ext.is_some() {
+            Some(self)
+        } else {
+            None
+        }
+    }
+
+    fn service_io(&mut self, now: Instant) -> IoActivity {
+        let mut activity = IoActivity::default();
+        if std::thread::current().id() != self.main_thread {
+            return activity;
+        }
+        let mut scratch = std::mem::take(&mut self.io_scratch);
+        scratch.timers.clear();
+        scratch.fds.clear();
+        scratch.ready.clear();
+        let empty = self.instance.access_handler(|main| {
+            let Ok(mut io) = main.io.try_borrow_mut() else {
+                return true;
+            };
+            io.take_due_timers(now, &mut scratch.timers);
+            io.fds(&mut scratch.fds);
+            io.is_empty()
+        });
+        if !empty {
+            if let Some(timer) = self.timer_ext {
+                for &id in &scratch.timers {
+                    if self.has_timer(id) {
+                        timer.on_timer(&mut self.instance.plugin_handle(), TimerId(id));
+                        activity.timers_fired += 1;
+                    }
+                }
+            }
+            #[cfg(unix)]
+            if let Some(fd_ext) = self.fd_ext {
+                crate::host_io::poll_ready(&scratch.fds, &mut scratch.poll, &mut scratch.ready);
+                for &(fd, flags) in &scratch.ready {
+                    if self.has_fd(fd) {
+                        fd_ext.on_fd(&mut self.instance.plugin_handle(), fd, FdFlags::from_bits_truncate(flags));
+                        activity.fds_fired += 1;
+                    }
+                }
+            }
+        }
+        self.io_scratch = scratch;
+        activity
+    }
+
+    fn io_registrations(&self) -> IoRegistrations {
+        self.instance.access_handler(|main| {
+            main.io
+                .try_borrow()
+                .map(|io| IoRegistrations {
+                    timers: io.timer_count(),
+                    fds: io.fd_count(),
+                })
+                .unwrap_or_default()
+        })
     }
 
     fn build_processor(&mut self, lifeline: Lifeline) -> Result<Box<dyn AudioNode + Send>, HostError> {
