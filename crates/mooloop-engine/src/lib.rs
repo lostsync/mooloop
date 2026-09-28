@@ -542,6 +542,36 @@ pub(crate) enum StructuralReclaim {
     PanicPayload(Box<dyn std::any::Any + Send>),
 }
 
+impl StructuralReclaim {
+    /// [`mooloop_dsp::AudioNode::retire`] every node this carries, on the
+    /// audio thread, before it goes down the ring (MOO-311): a hosted
+    /// plugin's processor must be stopped on the thread that ran it, and it
+    /// is never called there again. Everything that leaves the callback with
+    /// a node in it passes through here, in `Executor::reclaim`.
+    pub(crate) fn retire_nodes(&mut self) {
+        match self {
+            Self::Effect(effect) => effect.retire_nodes(),
+            Self::Source(node) => node.retire(),
+            Self::HostedProcessor(node) => node.retire(),
+            Self::RenderState { retired, .. } => retired.retire_nodes(),
+            Self::PreviewSample { .. }
+            | Self::SamplerAudio(_)
+            | Self::SamplerStretch(_)
+            | Self::Compensation(_)
+            | Self::ConsoleSum(_)
+            | Self::AudioGraph(_)
+            | Self::TrackGraph(_)
+            | Self::Take(_)
+            | Self::MidiRouting(_)
+            | Self::AudioInputRouting(_)
+            | Self::BufferMidi(_)
+            | Self::ClaimedNotes(_)
+            | Self::Container { .. }
+            | Self::PanicPayload(_) => {}
+        }
+    }
+}
+
 /// A project that has already been instantiated and allocated off the audio
 /// thread. The realtime callback only swaps the box and acknowledges its
 /// generation.
@@ -804,6 +834,19 @@ const NO_DEVICE: &str = "no audio device is open";
 /// restart one, so neither is reported as a dead engine.
 const STALL_AFTER: std::time::Duration = std::time::Duration::from_secs(3);
 
+/// The longest [`EngineHandle`] waits, as it closes, for the callback to
+/// retire the engine's nodes. A callback comes every few milliseconds; this
+/// allows for JACK's longest period with room to spare.
+const TEARDOWN_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// The engine closes its driver only once the audio thread has retired
+/// every node (MOO-311): quit, and any other drop of the handle.
+impl Drop for EngineHandle {
+    fn drop(&mut self) {
+        self.retire_on_audio_thread();
+    }
+}
+
 /// What [`EngineHandle::audio_state`] has seen of the callback.
 struct Watchdog {
     callbacks: u64,
@@ -820,6 +863,7 @@ struct Started {
     audio_slots: render::ChannelAudioBank,
     sample_rate: u32,
     load: Arc<load::LoadMeters>,
+    teardown: Arc<executor::Teardown>,
 }
 
 /// Start the engine on `opening` -- the platform driver, or `Err` with why
@@ -865,6 +909,7 @@ fn start(opening: Result<Opening, String>, config: AudioConfig, shared: &SharedC
         sample_rate,
         load.clone(),
     );
+    let teardown = executor.teardown();
     let driver = match opening {
         Some(opening) => match opening.start(executor, xrun_count, config) {
             Ok(driver) => Driver::Platform(Box::new(driver)),
@@ -893,6 +938,7 @@ fn start(opening: Result<Opening, String>, config: AudioConfig, shared: &SharedC
         audio_slots,
         sample_rate,
         load,
+        teardown,
     }
 }
 
@@ -1394,6 +1440,9 @@ pub struct EngineHandle {
     driver: Driver,
     load: Arc<load::LoadMeters>,
     watchdog: Watchdog,
+    /// How the handle asks the running executor to retire its nodes before
+    /// the driver closes (MOO-311, [`Self::retire_on_audio_thread`]).
+    teardown: Arc<executor::Teardown>,
 }
 
 impl EngineHandle {
@@ -1448,6 +1497,7 @@ impl EngineHandle {
             audio_slots,
             sample_rate,
             load,
+            teardown,
         } = started;
         Self {
             cmd_tx,
@@ -1466,6 +1516,43 @@ impl EngineHandle {
                 progressed: std::time::Instant::now(),
             },
             load,
+            teardown,
+        }
+    }
+
+    /// Have the audio thread retire every node the engine holds before the
+    /// driver closes, and wait, a bounded time, for it to have done so
+    /// (MOO-311). A hosted plugin's processor must be stopped on its audio
+    /// thread, and once the driver has closed there is none: the executor
+    /// would otherwise be dropped on this thread with every processor still
+    /// started, and a strict plugin (Odin2) terminates the process on the
+    /// stop that followed here. One callback is all it takes.
+    ///
+    /// A callback that does not come -- a JACK server that died, a stalled
+    /// thread -- is waited for no longer than [`TEARDOWN_WAIT`]; a processor
+    /// still started then is stopped as it is dropped (`ClapProcessor`'s
+    /// `Drop`).
+    fn retire_on_audio_thread(&mut self) {
+        if matches!(self.driver, Driver::Closed) {
+            return;
+        }
+        // Asked even of a driver that reports itself stopped: a JACK server
+        // that changed its sample rate goes on calling the callback.
+        self.teardown.ask();
+        let asked = std::time::Instant::now();
+        let callbacks = self.load.callbacks();
+        while !self.teardown.is_done() {
+            let waited = asked.elapsed();
+            // No callback at all for a while is a dead one; give up early.
+            let dead = waited >= TEARDOWN_WAIT / 2 && self.load.callbacks() == callbacks;
+            if dead || waited >= TEARDOWN_WAIT {
+                mooloop_core::log_warn!(
+                    "audio",
+                    "the audio callback did not come to retire the engine's plugins before it closed"
+                );
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
     }
 
@@ -1485,6 +1572,7 @@ impl EngineHandle {
     /// would push the new one to `mooloop-01`, and every patchbay connection
     /// saved against `mooloop` would miss it.
     pub fn reconnect(&mut self, config: AudioConfig) -> AudioState {
+        self.retire_on_audio_thread();
         self.driver = Driver::Closed;
         let opening = Opening::connect().map_err(|error| error.to_string());
         if let Err(reason) = &opening {
@@ -1499,8 +1587,10 @@ impl EngineHandle {
             audio_slots,
             sample_rate,
             load,
+            teardown,
         } = started;
         self.driver = driver;
+        self.teardown = teardown;
         self.cmd_tx = cmd_tx;
         self.evt_rx = evt_rx;
         self.reclaim_rx = reclaim_rx;

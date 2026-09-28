@@ -8,7 +8,7 @@
 //! its host API makes different: where the buffers come from, how the thread
 //! is created, and how dropouts are reported.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -27,6 +27,36 @@ pub(crate) struct ExecutorIo {
     pub cmd_rx: Consumer<RealtimeCommand>,
     pub evt_tx: rtrb::Producer<EngineEvent>,
     pub reclaim_tx: rtrb::Producer<StructuralReclaim>,
+}
+
+/// An engine about to close asking its executor to retire every node it
+/// holds, on the audio thread, and render nothing more; and the executor's
+/// answer (MOO-311). A hosted plugin's processor must be stopped on the
+/// thread that ran it, and once the driver has closed, no thread is running
+/// it. An atomic rather than a command, so it can be asked with the command
+/// ring full, and answered ahead of everything queued there.
+pub(crate) struct Teardown(AtomicU8);
+
+impl Teardown {
+    const RUNNING: u8 = 0;
+    const ASKED: u8 = 1;
+    const DONE: u8 = 2;
+
+    fn new() -> Arc<Self> {
+        Arc::new(Self(AtomicU8::new(Self::RUNNING)))
+    }
+
+    /// Ask for it. The executor answers on its next callback.
+    pub(crate) fn ask(&self) {
+        let _ = self
+            .0
+            .compare_exchange(Self::RUNNING, Self::ASKED, Ordering::AcqRel, Ordering::Acquire);
+    }
+
+    /// Whether the executor has retired its nodes and stopped rendering.
+    pub(crate) fn is_done(&self) -> bool {
+        self.0.load(Ordering::Acquire) == Self::DONE
+    }
 }
 
 pub(crate) struct Executor {
@@ -61,6 +91,8 @@ pub(crate) struct Executor {
     /// a driver that does calls [`Executor::begin_run`], so it is asked once
     /// per thread.
     checked_scheduling: bool,
+    /// See [`Teardown`].
+    teardown: Arc<Teardown>,
 }
 
 impl Executor {
@@ -98,6 +130,23 @@ impl Executor {
             last_entered: None,
             hot_spot_percent: crate::load::HOT_SPOT_SHARE_PERCENT,
             checked_scheduling: false,
+            teardown: Teardown::new(),
+        }
+    }
+
+    /// The handle an engine asks this executor to wind down through.
+    pub(crate) fn teardown(&self) -> Arc<Teardown> {
+        self.teardown.clone()
+    }
+
+    /// Push `reclaimed` down the reclaim ring, retiring every node in it
+    /// first ([`StructuralReclaim::retire_nodes`], MOO-311): whatever leaves
+    /// the callback with a node in it leaves through here, and the node is
+    /// never called on this thread again. The caller has checked for room.
+    fn reclaim(&mut self, mut reclaimed: StructuralReclaim) {
+        reclaimed.retire_nodes();
+        if self.reclaim_tx.push(reclaimed).is_err() {
+            unreachable!("reclaim capacity checked before a node left");
         }
     }
 
@@ -123,9 +172,7 @@ impl Executor {
             let Some(effect) = self.render.pop_displaced_effect() else {
                 break;
             };
-            if self.reclaim_tx.push(StructuralReclaim::Effect(effect)).is_err() {
-                unreachable!("reclaim capacity checked before forwarding");
-            }
+            self.reclaim(StructuralReclaim::Effect(effect));
         }
     }
 
@@ -209,6 +256,21 @@ impl Executor {
         out_l: &mut [f32],
         out_r: &mut [f32],
     ) {
+        match self.teardown.0.load(Ordering::Acquire) {
+            Teardown::RUNNING => {}
+            state => {
+                // The engine is closing: retire everything once, on this
+                // thread, and from then on render nothing, so that no node
+                // runs again after it retired.
+                if state == Teardown::ASKED {
+                    self.render.retire_nodes();
+                    self.teardown.0.store(Teardown::DONE, Ordering::Release);
+                }
+                out_l.fill(0.0);
+                out_r.fill(0.0);
+                return;
+            }
+        }
         enable_flush_to_zero();
         // On this thread rather than at engine construction, and for the same
         // reason as the flush-to-zero write above: the property being read
@@ -319,12 +381,7 @@ impl Executor {
                         }
                     }
                     if let Some(displaced) = self.render.apply_structural(command) {
-                        match self.reclaim_tx.push(displaced) {
-                            Ok(()) => {}
-                            Err(_) => {
-                                unreachable!("reclaim capacity checked before structural edit")
-                            }
-                        }
+                        self.reclaim(displaced);
                     }
                     self.forward_displaced_effects();
                     continue;
@@ -387,14 +444,10 @@ impl Executor {
             // built for it go back, to leave with the retired generation and
             // be freed off this thread.
             render.carry_strips_from(&mut self.render, &carry);
+            // What was carried is in the incoming state now, so retiring the
+            // outgoing one stops only what is leaving.
             let retired = std::mem::replace(&mut self.render, render);
-            match self
-                .reclaim_tx
-                .push(StructuralReclaim::RenderState { retired, carry })
-            {
-                Ok(()) => {}
-                Err(_) => unreachable!("reclaim capacity checked before project swap"),
-            }
+            self.reclaim(StructuralReclaim::RenderState { retired, carry });
             let _ = self
                 .evt_tx
                 .push(EngineEvent::ProjectInstalled { generation });

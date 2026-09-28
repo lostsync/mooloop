@@ -612,6 +612,10 @@ impl OfflineRenderer {
             };
             let before = progress.done.load(Ordering::Relaxed);
             let rendered = render_pass(&mut state, pass, first_output, sample_rate, length, progress);
+            // This thread is the pass's audio thread, and the pass is done
+            // with its processors: they stop here, before the state goes
+            // (MOO-311).
+            state.retire_nodes();
             first_output += pass.outputs.len();
             match rendered {
                 Ok(files) => {

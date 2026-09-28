@@ -517,6 +517,22 @@ pub trait AudioNode {
         let _ = ctx;
     }
 
+    /// This node is leaving the thread that ran it and will not be called
+    /// there again (MOO-311): called on that thread, after its last block --
+    /// once a removal or a swap has faded it out, when a song close or an
+    /// export is done with the renderer holding it, and when the engine
+    /// closes -- and before it is handed to another thread to be dropped.
+    ///
+    /// For a hosted plugin's processor, which CLAP says must be stopped on
+    /// its audio thread: a strict plugin terminates the process when a host
+    /// stops it anywhere else. A node that is called again after retiring
+    /// (the engine does not, but a test may) must still work. The default
+    /// does nothing, which is right for every native device. A node that
+    /// holds other nodes passes it on.
+    ///
+    /// Realtime-safe, like everything else the audio thread calls.
+    fn retire(&mut self) {}
+
     /// Process one block in place on `bus`. `events_in` is sorted by sample
     /// offset; nodes that respond to events must split rendering at those
     /// offsets. `events_out` is provided when the engine wants events back

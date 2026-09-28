@@ -748,6 +748,17 @@ pub(crate) struct ReclaimedEffect {
 }
 
 impl ReclaimedEffect {
+    /// [`AudioNode::retire`] for the node leaving, and for every node in the
+    /// channel storage leaving with it (MOO-311). On the audio thread.
+    pub(crate) fn retire_nodes(&mut self) {
+        if let Some(node) = self.node.as_mut() {
+            node.retire();
+        }
+        if let Some(channel) = self.channel.as_mut() {
+            channel.strip.retire_nodes();
+        }
+    }
+
     fn is_empty(&self) -> bool {
         self.node.is_none()
             && self.align.is_none()
@@ -1870,6 +1881,14 @@ struct OpenRun {
 }
 
 impl EffectChain {
+    /// [`AudioNode::retire`] every node in the chain: it is leaving the audio
+    /// thread with them in it (MOO-311).
+    fn retire_nodes(&mut self) {
+        for node in self.nodes.iter_mut().flatten() {
+            node.retire();
+        }
+    }
+
     fn new() -> Self {
         Self {
             nodes: std::array::from_fn(|_| None),
@@ -4076,6 +4095,11 @@ struct BusStrip {
 }
 
 impl BusStrip {
+    /// Its inserts are leaving the audio thread (MOO-311).
+    fn retire_nodes(&mut self) {
+        self.effects.retire_nodes();
+    }
+
     fn new(sample_rate: u32) -> Self {
         Self {
             effects: EffectChain::new(),
@@ -4376,6 +4400,12 @@ fn saved_source_params(source: &ChannelSource) -> GeneratorParams {
 }
 
 impl ChannelStrip {
+    /// Its source and its inserts are leaving the audio thread (MOO-311).
+    fn retire_nodes(&mut self) {
+        self.source.retire();
+        self.effects.retire_nodes();
+    }
+
     /// A strip running `source`, which arrives at its kind's defaults.
     fn new(source: Box<dyn SourceNode + Send>, sample_rate: u32) -> Self {
         Self {
@@ -6949,6 +6979,24 @@ impl RenderState {
 
     /// Hands back one effect-slot occupant a cleared chain displaced, for the
     /// executor to send down the reclaim ring. See the `reclaim` field.
+    /// [`AudioNode::retire`] every node this renderer holds -- each channel's
+    /// source and inserts, each bus's inserts, and whatever is waiting to be
+    /// reclaimed -- on the thread that ran them, because the renderer is
+    /// leaving it: a song close hands it back through the reclaim ring, an
+    /// export is done with it, the engine is closing (MOO-311). Walks the
+    /// whole graph, allocating nothing.
+    pub(crate) fn retire_nodes(&mut self) {
+        for strip in &mut self.strips {
+            strip.retire_nodes();
+        }
+        for bus in &mut self.buses {
+            bus.retire_nodes();
+        }
+        for displaced in &mut self.reclaim {
+            displaced.retire_nodes();
+        }
+    }
+
     pub(crate) fn pop_displaced_effect(&mut self) -> Option<ReclaimedEffect> {
         self.reclaim.pop()
     }

@@ -137,6 +137,9 @@ fn process(mut node: Box<dyn AudioNode + Send>, id: u32, value: f32) -> Box<dyn 
                     position_frames: 0,
                 };
                 node.process(&ctx, &mut bus, &list, None);
+                // Stopped where it ran, as the engine retires a node leaving
+                // the audio thread (MOO-311).
+                node.retire();
                 node
             })
             .join()

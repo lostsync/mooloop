@@ -152,6 +152,13 @@ impl AudioNode for HostedSource {
         }
     }
 
+    /// The processor inside leaves with this source (MOO-311).
+    fn retire(&mut self) {
+        if let Some(node) = self.node.as_mut() {
+            node.retire();
+        }
+    }
+
     /// The processor's own curve path, when it has one; the fallback events
     /// otherwise, which is the default's answer too.
     fn apply_curves(

@@ -29,14 +29,22 @@
 //! and they need not be port 0. What the plugin itself does
 //! inside its `process` is its own affair; mooloop cannot vouch for it.
 //!
-//! **One deviation from CLAP's threading rules, and why.** CLAP says
-//! `stop_processing` is called on the audio thread. A processor that is
-//! removed from a chain never gets another call on the audio thread -- the
-//! engine has no "you are about to be removed" hook, and adding one to
-//! `AudioNode` for this is out of proportion -- so a started processor is
-//! stopped by `deactivate` on the main thread, which is what `clack-host`
-//! does for a processor dropped while started. No plugin in the test set
-//! objects.
+//! **A processor is stopped on its audio thread as it leaves** (MOO-311).
+//! CLAP says `stop_processing` is called on the audio thread, and a plugin
+//! built on `clap-helpers` in strict mode (Odin2) terminates the process
+//! when it is not. It used to be left to `deactivate`, on the main thread,
+//! which is what `clack-host` does for a processor dropped while started.
+//! Now the engine calls [`AudioNode::retire`] on the audio thread once a
+//! node is leaving it for good -- when a removal or a swap has faded it out
+//! and it goes to the reclaim ring, when a song close hands back the
+//! renderer holding it, when an export is done with its renderer, and when
+//! the engine closes or reconnects -- and [`ClapProcessor`] answers with
+//! `stop_processing`. A hook rather than the processor stopping itself on
+//! its last faded block: a song close, an export and a closing engine have
+//! no fade to announce a last block, and one hook the engine calls at the
+//! point a node leaves covers every path the same way. A processor that
+//! leaves still started all the same -- the engine's callback had died --
+//! is stopped by its [`Drop`], never by `deactivate` on the main thread.
 
 use std::cell::RefCell;
 use std::ffi::CString;
@@ -1137,6 +1145,7 @@ impl HostedInstance for ClapInstance {
             flags,
             at_rest: false,
             steady_time: 0,
+            main_thread: self.main_thread,
             _lifeline: lifeline,
         }))
     }
@@ -1189,6 +1198,9 @@ pub struct ClapProcessor {
     flags: Arc<ProcessorFlags>,
     at_rest: bool,
     steady_time: u64,
+    /// The instance's main thread, where a processor dropped while still
+    /// started cannot be stopped ([`Drop`]).
+    main_thread: ThreadId,
     _lifeline: Lifeline,
 }
 
@@ -1280,6 +1292,56 @@ impl ClapProcessor {
 
     fn fail(&mut self) {
         self.flags.failed.store(true, Ordering::Relaxed);
+    }
+
+    /// CLAP's `stop_processing`, if the plugin is processing: on the calling
+    /// thread, which must be its audio thread.
+    fn stop(&mut self) {
+        if let Some(processor) = self.processor.as_mut() {
+            if processor.is_started() {
+                processor.ensure_processing_stopped();
+            }
+        }
+    }
+}
+
+/// The backstop for a processor that leaves still started (MOO-311): one
+/// the engine did not retire because its callback had stopped running (a
+/// JACK server that died, then a reconnect or a quit), or one a caller
+/// dropped without retiring.
+///
+/// Dropped anywhere but the instance's main thread, it is stopped here: the
+/// thread dropping it is the one it ran on, or has taken over from it (a
+/// test's audio thread, an export's render thread). Dropped on the main
+/// thread, it is stopped on a thread made for the purpose and joined at
+/// once. No other thread can be calling it -- whoever drops it owns it --
+/// so that thread is, for that one call, its only audio thread, and the
+/// host's thread check says so. Left to `deactivate`, the stop would come on
+/// the main thread, which is what aborts a strict plugin.
+impl Drop for ClapProcessor {
+    fn drop(&mut self) {
+        if !self.processor.as_ref().is_some_and(PluginAudioProcessor::is_started) {
+            return;
+        }
+        if std::thread::current().id() != self.main_thread {
+            self.stop();
+            return;
+        }
+        mooloop_core::log_warn!(
+            "plugin",
+            "a processor left the engine still processing; stopping it off the main thread"
+        );
+        std::thread::scope(|scope| {
+            let stopped = std::thread::Builder::new()
+                .name("mooloop-plugin-stop".to_owned())
+                .spawn_scoped(scope, || self.stop());
+            if stopped.is_err() {
+                mooloop_core::log_error!(
+                    "plugin",
+                    "no thread to stop a processor on; deactivating will stop it on the main thread"
+                );
+            }
+        });
     }
 }
 
@@ -1389,6 +1451,14 @@ impl AudioNode for ClapProcessor {
     /// CLAP's `steady_time` counts every sample, called or not.
     fn skip_block(&mut self, ctx: &ProcessContext) {
         self.steady_time = self.steady_time.wrapping_add(ctx.frames as u64);
+    }
+
+    /// CLAP's `stop_processing`, on the audio thread, as the processor
+    /// leaves it (MOO-311). One that never ran was never started and needs
+    /// none. Called again, it starts again on its next block, as it would
+    /// waking from sleep.
+    fn retire(&mut self) {
+        self.stop();
     }
 
     /// A seek or a stop resets the plugin: CLAP's `reset`, on the audio

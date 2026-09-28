@@ -182,7 +182,10 @@ fn events(list: &[(u32, Event)]) -> EventList {
 }
 
 /// Render `blocks` through `node` on a thread of its own, each block's
-/// events from `script`, and return the left channel.
+/// events from `script`, and return the left channel. The node is retired
+/// on that thread before it comes back (MOO-311), as the engine retires a
+/// node leaving the audio thread: the test sine's strict mode aborts on a
+/// stop anywhere else.
 fn run(node: &mut Box<dyn AudioNode + Send>, script: Vec<(EventList, Option<Discontinuity>)>) -> Vec<f32> {
     const BLOCK: usize = 512;
     std::thread::scope(|scope| {
@@ -198,6 +201,7 @@ fn run(node: &mut Box<dyn AudioNode + Send>, script: Vec<(EventList, Option<Disc
                     node.process(&context(BLOCK, (index * BLOCK) as u64), &mut bus, events, None);
                     out.extend_from_slice(&bus.l[..BLOCK]);
                 }
+                node.retire();
                 out
             })
             .join()
@@ -227,15 +231,16 @@ fn a_note_off_after_a_choke_does_not_release_a_newer_note_on_its_key() {
     let mut script = vec![(events(&[(0, on(1))]), None)];
     script.push((events(&[(0, Event::Choke), (100, on(2)), (200, Event::NoteOff { id: 1, note: 60 })]), None));
     script.extend((0..10).map(|_| quiet()));
-    let out = run(&mut node, script);
-    let tail = &out[out.len() - 512..];
-    assert!(rms(tail) > 0.1, "note 2 was released by note 1's stale note-off: rms {}", rms(tail));
-
+    // One run, so the note is held across the two halves: `run` retires the
+    // node at its end, which stops the plugin and ends its voices.
+    let first = script.len() * 512;
     // And its own note-off does release it: silence once the 50 ms release
     // has run.
-    let mut script = vec![(events(&[(0, Event::NoteOff { id: 2, note: 60 })]), None)];
+    script.push((events(&[(0, Event::NoteOff { id: 2, note: 60 })]), None));
     script.extend((0..10).map(|_| quiet()));
     let out = run(&mut node, script);
+    let tail = &out[first - 512..first];
+    assert!(rms(tail) > 0.1, "note 2 was released by note 1's stale note-off: rms {}", rms(tail));
     assert_eq!(rms(&out[out.len() - 512..]), 0.0, "note 2 did not end");
     drop(node);
     assert!(life.is_alone());

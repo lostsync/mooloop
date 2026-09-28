@@ -273,6 +273,9 @@ fn run(
                     node.process(&ctx, &mut bus, &list, None);
                     out.extend_from_slice(&bus.l[..frames]);
                 }
+                // Stopped where it ran, as the engine retires a node leaving
+                // the audio thread (MOO-311).
+                node.retire();
                 (out, node)
             })
             .join()
