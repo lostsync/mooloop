@@ -11,7 +11,7 @@
 //! | [`GAIN_MONO_ID`] | the gain with one mono input and one mono output (MOO-266) |
 //! | [`GAIN_MONO_IN_ID`] | the gain with a mono input and a stereo output: both outputs are the input |
 //! | [`GAIN_MONO_OUT_ID`] | the gain with a stereo input and a mono output: the output is the left input |
-//! | [`SINE_ID`] | one sine voice per note id, with a release tail |
+//! | [`SINE_ID`] | one sine voice per note id, with a release tail; `level` (dB, modulatable, MOO-314) |
 //! | [`SINE_GUI_ID`] | the same, declaring the `gui` extension, with a timer and an fd behind it |
 //! | [`SIDECHAIN_ID`] | a unity effect with a sidechain input and two extra outputs, its main ports at 1 and 2, and probes on the sidechain (MOO-308) |
 //!
@@ -19,7 +19,7 @@
 //! no GUI at all (Airwindows is the named case) is a path the host has to
 //! handle from the start, not an afterthought.
 //!
-//! Parameter ids are deliberately sparse (10, 20, 30, and 4 000 000 000,
+//! Parameter ids are deliberately sparse (10, 20, 30, 50, and 4 000 000 000,
 //! which no `i32` holds) so that nothing written
 //! against this plugin can confuse a parameter's id with its position in the
 //! plugin's list (`AGENTS.md`, "Parameter identity across the session
@@ -65,7 +65,9 @@ pub use gui::{
     PROBE_GUIS_LIVE, PROBE_IDS, PROBE_TIMERS_LIVE, PROBE_TIMER_TICKS,
 };
 pub use sidechain::{AUX_LEVEL, PROBE_SIDECHAIN_BLOCKS, PROBE_SIDECHAIN_LOUD};
-pub use sine::{RELEASE_SECONDS, SINE_AMPLITUDE};
+pub use sine::{
+    LEVEL_DB_DEFAULT, LEVEL_DB_MAX, LEVEL_DB_MIN, PARAM_LEVEL, RELEASE_SECONDS, SINE_AMPLITUDE,
+};
 
 /// The stereo gain effect, without a GUI.
 pub const GAIN_ID: &str = "mooloop.test.gain";
