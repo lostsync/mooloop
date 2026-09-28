@@ -1234,11 +1234,15 @@ component PluginsPage inherits VerticalLayout {
     in property <string> scan-status;
     in property <bool> scanning;
     in property <[PluginFailureRow]> failures;
+    // Run the whole application under XWayland (step 11, MOO-301/302): the
+    // saved setting, which the next start reads before the first window.
+    in property <bool> run-under-xwayland;
     callback path-added();
     callback path-removed(int);
     callback scan-timeout-changed(int);
     callback scan-on-startup-toggled(bool);
     callback rescan-requested();
+    callback run-under-xwayland-toggled(bool);
 
     spacing: 8px;
     alignment: start;
@@ -1333,6 +1337,32 @@ component PluginsPage inherits VerticalLayout {
         color: Theme.text-muted;
         font-size: Theme.text-lg;
         overflow: elide;
+    }
+
+    // Adam's ruling of 2026-09-28 (`11-plugin-gui-windows.md`): mooloop is a
+    // native Wayland client by default, and this runs it under XWayland
+    // instead, where a plugin's window can stay above the main one. The
+    // backend is chosen before the first window, so it waits for a restart,
+    // and the note beside it says so.
+    SectionLabel { text: "PLUGIN WINDOWS"; }
+    HorizontalLayout {
+        alignment: start;
+        height: 24px;
+        spacing: 8px;
+        ToggleButton {
+            width: 380px;
+            text: "Run under XWayland (full plugin window behaviour)";
+            tooltip: "Run under XWayland (full plugin window behaviour)";
+            hint: "On a Wayland desktop, run mooloop through XWayland so a plugin's window stays above it rather than hiding when mooloop loses focus";
+            checked: root.run-under-xwayland;
+            toggled(value) => { root.run-under-xwayland-toggled(value); }
+        }
+        Text {
+            text: "Takes effect when mooloop restarts";
+            color: Theme.text-muted;
+            font-size: Theme.text-lg;
+            vertical-alignment: center;
+        }
     }
 
     SectionLabel { text: "COULD NOT BE READ"; }
@@ -1440,6 +1470,8 @@ export component PreferencesDialog inherits Rectangle {
     callback plugin-scan-timeout-changed(int);
     callback plugin-scan-on-startup-toggled(bool);
     callback plugin-rescan-requested();
+    in property <bool> plugin-run-under-xwayland;
+    callback plugin-run-under-xwayland-toggled(bool);
     // No arguments. Every value either callback needs is one of the two-way
     // bound properties above, and Rust reads them back through
     // `window_appearance`; passing fourteen of them positionally would be
@@ -1778,6 +1810,8 @@ export component PreferencesDialog inherits Rectangle {
                                 scan-timeout-changed(v) => { root.plugin-scan-timeout-changed(v); }
                                 scan-on-startup-toggled(v) => { root.plugin-scan-on-startup-toggled(v); }
                                 rescan-requested => { root.plugin-rescan-requested(); }
+                                run-under-xwayland: root.plugin-run-under-xwayland;
+                                run-under-xwayland-toggled(v) => { root.plugin-run-under-xwayland-toggled(v); }
                             }
                         }
                         if root.page == 5 && root.developer-mode : VerticalBox {

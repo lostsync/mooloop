@@ -405,6 +405,10 @@ struct EffectSlotRow {
     plugin-name: string,
     plugin-status: string,
     plugin-params: [PluginParamRow],
+    // The plugin has a GUI of its own, and it is open in its window (step
+    // 11, MOO-302): the face's open-window control.
+    plugin-has-gui: bool,
+    plugin-gui-open: bool,
     // Layer-only: its branches, in rack order, and the rack index of the one
     // it is showing (-1 for none). S, M and each branch's meter are read from
     // the branch head's own row, `effect-slots[branch.slot]`.
@@ -1040,6 +1044,10 @@ export component MainWindow inherits Window {
     callback preferences-plugin-scan-timeout-changed(int);
     callback preferences-plugin-scan-on-startup-toggled(bool);
     callback preferences-plugin-rescan-requested();
+    // "Run under XWayland (full plugin window behaviour)" (MOO-302): the
+    // saved setting, which applies at the next start.
+    in property <bool> preferences-plugin-run-under-xwayland;
+    callback preferences-plugin-run-under-xwayland-toggled(bool);
     // The folder chooser answers on a thread of its own; its answer comes
     // back to the window through this, never from the markup.
     callback preferences-plugin-folder-chosen(string);
@@ -2086,6 +2094,9 @@ export component MainWindow inherits Window {
     // index* in the plugin's list (never its id, which can pass `i32::MAX`),
     // normalized 0..1.
     callback plugin-param-changed(int, int, float);
+    // A plugin face's open-window control (MOO-302), by slot: open the
+    // plugin's own GUI in its window, or bring that window to the front.
+    callback plugin-gui-requested(int);
     // A plugin knob's modulation half (MOO-228), by slot and dense index
     // like the value: the press that arms, learns or names it, and a route
     // depth dragged while a source is armed. Its release is the native
@@ -6088,6 +6099,9 @@ export component MainWindow inherits Window {
                                                     plugin-name: slot.plugin-name;
                                                     status: slot.plugin-status;
                                                     params: slot.plugin-params;
+                                                    has-gui: slot.plugin-has-gui;
+                                                    gui-open: slot.plugin-gui-open;
+                                                    gui-requested => { root.plugin-gui-requested(index); }
                                                     // By dense index, like the rows: Rust
                                                     // turns an index into the plugin's id.
                                                     modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
@@ -8600,6 +8614,8 @@ export component MainWindow inherits Window {
         plugin-scan-timeout-changed(v) => { root.preferences-plugin-scan-timeout-changed(v); }
         plugin-scan-on-startup-toggled(v) => { root.preferences-plugin-scan-on-startup-toggled(v); }
         plugin-rescan-requested => { root.preferences-plugin-rescan-requested(); }
+        plugin-run-under-xwayland: root.preferences-plugin-run-under-xwayland;
+        plugin-run-under-xwayland-toggled(v) => { root.preferences-plugin-run-under-xwayland-toggled(v); }
         appearance-preview() => { root.preferences-appearance-preview(); }
         appearance-mode-changed(m) => { root.preferences-appearance-mode-changed(m); }
         appearance-select-theme(name) => { root.preferences-appearance-select-theme(name); }
