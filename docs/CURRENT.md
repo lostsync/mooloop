@@ -2471,16 +2471,27 @@ land on its own when it starts to matter:
   MIDI mapping. **MIDI learn on a plugin knob works** (MOO-315): the
   mapping list names the parameter ("Drums · Test Gain 1 · Gain") and the
   control moves it, picking it up from the plugin's current value. Before,
-  the mapping read "Unavailable parameter" and moved nothing. The lane
-  picker lists the channel's plugin parameters after its inserts: a plugin
-  instrument's first, under the plugin's name ("Test Sine"), then each
-  plugin effect's under its name and chain place ("Test Gain 1"). The shelf
+  the mapping read "Unavailable parameter" and moved nothing. A sweep of
+  such a control is one undo step, the plugin's own "Plugin Edit"; before
+  MOO-318 an empty "Controller move" step sat under it, so the first undo
+  did nothing. The lane picker lists a plugin instrument's parameters at
+  the head, under the plugin's name ("Test Sine"), before the inserts, and
+  each plugin effect's after the native inserts and before the strip,
+  under its name and chain place ("Test Gain 1"). The shelf
   names a route on one the same way. **A parameter the plugin
   stops listing is kept** (Adam, MOO-74): its lane stays in the picker,
   titled thin and italic by its id ("Parameter 4000000000"), the lane and
   its shelf row draw greyed, and it plays nothing; when the plugin lists the
-  id again they read normally, with nothing to repair. The list covers an
-  insert plugin; a plugin channel's source has no face yet.
+  id again they read normally, with nothing to repair. **A plugin
+  channel's source has the same face** (MOO-304, MOO-316), in the source's
+  place at the head of the chain, under a SOURCE header named after the
+  plugin, one or two units wide as the face would be on a chain: its pinned
+  parameters as knobs, the open-window button when the plugin has a GUI,
+  the badge when it is missing. Selecting the source header puts the
+  instrument's parameters in the sidebar's PARAMETERS list, to find and pin
+  ("Pin Parameter", saved with the song). Its knobs set the instrument's
+  parameters, arm routes, MIDI-learn and name themselves for a lane or a
+  mapping, all as `PluginParam` on the channel's source device.
 - **A plugin device saves and loads presets** (MOO-222) from its rail, like
   any device. A preset keeps which plugin it is and the state the plugin
   holds at that moment, including a knob just turned in its own window. It
@@ -2544,8 +2555,9 @@ land on its own when it starts to matter:
   and nothing hides. A window that cannot open (no X server, a plugin that
   refuses) is said in the face's badge, and the face stays. Every pump tick
   services each plugin's timers and fds, which is what a Linux plugin GUI
-  runs on. Not yet: a GUI for a plugin channel's source (it has no face), and
-  the per-desktop record of how the windows behave, which is Adam's (MOO-86).
+  runs on. A plugin channel's instrument opens its GUI the same way, from
+  the open-window button on its source face (MOO-304). Not yet: the
+  per-desktop record of how the windows behave, which is Adam's (MOO-86).
 - **A hosted plugin's parameters take lanes and routes** (MOO-82,
   plugin-hosting 07). The face's knobs set them (above), but a lane or route
   reaches a plugin parameter only from a song that names one, or through the
@@ -2580,13 +2592,12 @@ land on its own when it starts to matter:
   **That swap fades rather than clicks** (MOO-230): the instrument fades to
   silence over about 35 ms before its processor leaves, and the next one
   fades in. The notes it was holding end with the fade and are not struck
-  again on the new processor; the next note-on plays as usual. Not
-  yet: a plugin channel's editor shows no face (its number is 8, after the
-  eight native kinds; "Add Plugin…" is its own row, not one of the eight), so
-  its parameters have no knobs to route or MIDI-learn from, though a lane
-  opens on one from the lane picker (MOO-315) and a song or the session can
-  name one for a lane, a route or a MIDI mapping (MOO-312); and the plugin's
-  own latency is not compensated. Replacing a plugin instrument forgets the
+  again on the new processor; the next note-on plays as usual. A plugin
+  channel's editor shows the plugin's face (MOO-304, MOO-316; see the
+  plugin face above), with knobs to turn, route and MIDI-learn from; its
+  number is 8, after the eight native kinds, and "Add Plugin…" is its own
+  row, not one of the eight. Not yet: the plugin's own latency is not
+  compensated. Replacing a plugin instrument forgets the
   lanes and routes on its parameters, as deleting an effect does; undo brings
   them back.
 - **A CLAP instrument plays its channel's notes** (MOO-85, plugin-hosting
