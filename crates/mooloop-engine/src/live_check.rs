@@ -200,6 +200,104 @@ pub fn time_through_executor(
     })
 }
 
+/// What [`run_paced_while`] saw of the audio thread.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PacedRun {
+    /// Callbacks run.
+    pub callbacks: usize,
+    /// Callbacks that took longer than their block lasts: what a driver
+    /// would have reported as an xrun, had there been one.
+    pub xruns: usize,
+    /// The slowest callback, in nanoseconds.
+    pub worst_nanos: u64,
+    /// How long one block lasts at the run's rate, in nanoseconds.
+    pub period_nanos: u64,
+}
+
+/// Play `project` through a fresh executor on a thread of its own, **paced
+/// in real time** as a driver would call it -- one callback of `block`
+/// frames every `block / sample_rate` -- for as long as `control` runs on
+/// the calling thread, and say how many callbacks overran.
+///
+/// For holding control-thread work against the audio it must not disturb
+/// (MOO-300: a plugin's GUI opening and closing a hundred times while its
+/// processor plays). `plugins` go in as [`play_through_executor`] sends
+/// them. A callback is late only if its own work took longer than its
+/// block: the thread waking late is the scheduler's, not the callback's,
+/// and is not counted.
+pub fn run_paced_while<R>(
+    project: &Project,
+    plugins: BTreeMap<PluginSlotId, Box<dyn AudioNode + Send>>,
+    sample_rate: u32,
+    block: usize,
+    control: impl FnOnce() -> R,
+) -> (PacedRun, R) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    let Rig {
+        mut executor,
+        mut events,
+        mut reclaim,
+    } = rig(
+        project,
+        RenderState::from_project(sample_rate, project, &[]),
+        plugins,
+        sample_rate,
+    );
+    let block = block.max(1);
+    let period = Duration::from_nanos(block as u64 * 1_000_000_000 / u64::from(sample_rate.max(1)));
+    let stop = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        let audio = scope.spawn(|| {
+            prepare_audio_thread();
+            let silence = vec![0.0f32; block];
+            let (mut l, mut r) = (vec![0.0f32; block], vec![0.0f32; block]);
+            let mut run = PacedRun {
+                period_nanos: period.as_nanos() as u64,
+                ..PacedRun::default()
+            };
+            let mut deadline = Instant::now();
+            while !stop.load(Ordering::Acquire) {
+                let started = Instant::now();
+                executor.process_with_input(std::iter::empty(), &silence, &silence, &mut l, &mut r);
+                let took = started.elapsed();
+                run.callbacks += 1;
+                run.worst_nanos = run.worst_nanos.max(took.as_nanos() as u64);
+                if took > period {
+                    run.xruns += 1;
+                }
+                while events.pop().is_ok() {}
+                while let Ok(reclaimed) = reclaim.pop() {
+                    drop(reclaimed);
+                }
+                deadline += period;
+                let now = Instant::now();
+                if deadline > now {
+                    std::thread::sleep(deadline - now);
+                } else {
+                    deadline = now;
+                }
+            }
+            drop(executor);
+            run
+        });
+        // Stops the audio thread however `control` ends, a panic included,
+        // or the scope would wait on it forever.
+        struct Stop<'a>(&'a AtomicBool);
+        impl Drop for Stop<'_> {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+        let result = {
+            let _stop = Stop(&stop);
+            control()
+        };
+        (audio.join().expect("the audio thread did not panic"), result)
+    })
+}
+
 /// A fresh executor over `project`, with its plugins swapped in and `Play`
 /// queued, and the two rings the control thread would drain.
 struct Rig {
