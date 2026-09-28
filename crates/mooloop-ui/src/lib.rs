@@ -1863,6 +1863,29 @@ struct ControlDrain {
 /// the document, because a transport message or an unmapped knob must not
 /// cost a whole-project clone every tick.
 ///
+/// Whether every parameter the mapped controls listening to `message` would
+/// move is a hosted plugin's (MOO-318). The plugin holds such a value, so the
+/// move changes nothing in the song until the rack captures the plugin's
+/// state, which the pump records as "Plugin Edit" -- the step a plugin
+/// face's knob already makes. A Controller stream opened for it would close
+/// at that step's `before` with nothing in it: an undo that does nothing.
+/// `false` while a learn is waiting, since the message may complete it.
+fn moves_only_plugin_params(session: &Session, message: &mooloop_core::MidiMessage) -> bool {
+    if session.control_learn.is_some() {
+        return false;
+    }
+    let mut params = session
+        .control_state
+        .listening(&session.control_map, message)
+        .into_iter()
+        .filter_map(|index| match &session.control_map.bindings.get(index)?.target {
+            ControlTarget::Param(key) => Some(key.owner),
+            _ => None,
+        })
+        .peekable();
+    params.peek().is_some() && params.all(|owner| matches!(owner, ParamOwner::PluginParam { .. }))
+}
+
 /// A free function rather than the pump's body so it can be tested without
 /// an `EngineHandle`: the commands come back for the pump to send.
 fn drain_control_surface(
@@ -1879,9 +1902,14 @@ fn drain_control_surface(
         let (may_edit, learning) = {
             let st = state.borrow();
             (
-                messages
-                    .iter()
-                    .any(|message| st.session.control_input_may_edit(message, &ports)),
+                // A control that moves only plugin parameters edits the
+                // plugin, not the song: its step is the pump's "Plugin Edit"
+                // once the plugin's state is captured (MOO-318), so it opens
+                // no stream and needs no `before` of its own.
+                messages.iter().any(|message| {
+                    st.session.control_input_may_edit(message, &ports)
+                        && !moves_only_plugin_params(&st.session, message)
+                }),
                 st.session.control_learn.is_some(),
             )
         };
@@ -1903,7 +1931,11 @@ fn drain_control_surface(
                         st.session.control_target_label(&binding.target),
                     ));
                 }
-                first_moved = first_moved.or(effects.moved.first().copied());
+                first_moved = first_moved.or(effects
+                    .moved
+                    .iter()
+                    .find(|address| !matches!(address.owner, ParamOwner::PluginParam { .. }))
+                    .copied());
                 drain.moved |= !effects.is_empty();
                 // A parameter moved by a knob is an edit; a transport gesture
                 // is not. `ControlEffects` has already drawn that line.
