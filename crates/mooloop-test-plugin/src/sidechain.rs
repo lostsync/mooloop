@@ -123,6 +123,15 @@ impl<'a> PluginAudioProcessor<'a, SidechainShared<'a>, SidechainMain<'a>> for Si
         })
     }
 
+    fn start_processing(&mut self) -> Result<(), PluginError> {
+        self.shared.services.strict_start("sidechain");
+        Ok(())
+    }
+
+    fn stop_processing(&mut self) {
+        self.shared.services.strict_stop("sidechain");
+    }
+
     fn process(
         &mut self,
         _process: Process,
@@ -132,6 +141,7 @@ impl<'a> PluginAudioProcessor<'a, SidechainShared<'a>, SidechainMain<'a>> for Si
         self.shared
             .services
             .expect_audio_thread(c"sidechain: process called off an audio thread");
+        self.shared.services.strict_process();
         let frames = audio.frames_count() as usize;
         if frames > self.main[0].len() {
             return Err(PluginError::Message("sidechain: a block over max_frames"));

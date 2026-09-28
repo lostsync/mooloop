@@ -42,7 +42,7 @@ fn sine_ref() -> PluginRef {
     }
 }
 
-fn open_sine() -> ClapInstance {
+pub(crate) fn open_sine() -> ClapInstance {
     ClapInstance::open(
         &test_plugin_path(),
         &sine_ref(),
@@ -61,7 +61,7 @@ const NOTES: [(u32, u32, u8); 4] = [(0, 1, 57), (4, 1, 60), (9, 2, 64), (14, 4, 
 
 /// One channel whose source is the sine, playing [`NOTES`] in a one-bar
 /// loop at 120 bpm.
-fn song() -> (Project, PluginSlotId) {
+pub(crate) fn song() -> (Project, PluginSlotId) {
     let mut project = Project {
         bpm: 120,
         ..Project::default()

@@ -25,6 +25,18 @@
 //! plugin's list (`AGENTS.md`, "Parameter identity across the session
 //! boundary").
 //!
+//! **Strict mode** (MOO-311). Every plugin here holds the host to CLAP's
+//! threading rules the way a plugin built on `clap-helpers` with
+//! `MisbehaviourHandler::Terminate` does (Odin2 is the named case): a host
+//! that breaks one has the process aborted, with the reason on stderr. What
+//! it checks is `HostServices`'s: `start_processing` and `stop_processing`
+//! on an audio thread and never on the main one, `stop_processing` on the
+//! thread that last called `process` (a host that stops a processor from a
+//! thread it never ran on has lost track of its audio thread), and
+//! `note_ports.get` inside `note_ports.count`. It is on unless
+//! [`LENIENT_ENV`] is set, and then a violation is only logged as
+//! `HostMisbehaving`, as the other thread checks here are.
+//!
 //! The crate is built as a `cdylib` for the host to load by path, and as an
 //! `rlib` only so cargo builds it for the host crate's tests. Nothing here is
 //! `unsafe`: `clack-plugin` is a safe API, and the only unsafe code is inside
@@ -36,7 +48,7 @@ use clack_extensions::log::{HostLog, LogSeverity};
 use clack_extensions::thread_check::HostThreadCheck;
 use clack_plugin::entry::prelude::*;
 use clack_plugin::prelude::*;
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 mod gain;
@@ -91,6 +103,10 @@ pub const CRASHES_ON_SCAN: &str = "crashes-on-scan.clap";
 /// A copy of this library whose file name ends in this never returns from
 /// its entry's initialisation.
 pub const HANGS_ON_SCAN: &str = "hangs-on-scan.clap";
+
+/// Set (to anything) in the environment of the process that loads this
+/// library, strict mode only logs what it would otherwise abort on.
+pub const LENIENT_ENV: &str = "MOOLOOP_TEST_PLUGIN_LENIENT";
 
 /// The vendor every descriptor reports.
 pub const VENDOR: &str = "mooloop";
@@ -227,15 +243,32 @@ impl PluginFactoryImpl for TestFactory {
 
 clack_export_entry!(TestEntry);
 
-/// The host services every test plugin uses: logging, and checking that it
-/// is called on the thread CLAP says it will be.
+/// The host services every test plugin uses: logging, checking that it is
+/// called on the thread CLAP says it will be, and strict mode.
 ///
-/// A call on the wrong thread is logged as `HostMisbehaving` rather than
-/// panicking, so a host test can collect the log and fail with the message.
+/// A process or activate call on the wrong thread is logged as
+/// `HostMisbehaving` rather than panicking, so a host test can collect the
+/// log and fail with the message. What strict mode covers aborts instead
+/// (the crate's documentation).
 struct HostServices<'a> {
     host: HostSharedHandle<'a>,
     log: Option<HostLog>,
     thread_check: Option<HostThreadCheck>,
+    /// The thread that created the plugin: the host's main thread.
+    main_thread: u64,
+    /// The thread that last started or ran the processor, 0 for none since
+    /// the last stop.
+    audio_thread: AtomicU64,
+}
+
+/// This thread's number, unique for the life of the process and never 0:
+/// a `ThreadId` cannot live in an atomic.
+fn thread_token() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    thread_local! {
+        static TOKEN: u64 = NEXT.fetch_add(1, Ordering::Relaxed);
+    }
+    TOKEN.with(|token| *token)
 }
 
 impl<'a> HostServices<'a> {
@@ -244,7 +277,66 @@ impl<'a> HostServices<'a> {
             log: host.get_extension(),
             thread_check: host.get_extension(),
             host,
+            main_thread: thread_token(),
+            audio_thread: AtomicU64::new(0),
         }
+    }
+
+    /// Whether this is an audio thread: never the thread that created the
+    /// plugin, and never one the host itself says is not.
+    fn on_an_audio_thread(&self) -> bool {
+        let host_says_no = self
+            .thread_check
+            .is_some_and(|check| check.is_audio_thread(&self.host) == Some(false));
+        thread_token() != self.main_thread && !host_says_no
+    }
+
+    /// Strict mode's check on `start_processing`.
+    fn strict_start(&self, plugin: &str) {
+        if !self.on_an_audio_thread() {
+            self.strict_violation(&format!("{plugin}: start_processing called off the audio thread"));
+        }
+        self.audio_thread.store(thread_token(), Ordering::Relaxed);
+    }
+
+    /// Record the thread a `process` call came on, for [`Self::strict_stop`].
+    fn strict_process(&self) {
+        self.audio_thread.store(thread_token(), Ordering::Relaxed);
+    }
+
+    /// Strict mode's check on `stop_processing`: an audio thread, and the one
+    /// the processor last ran on.
+    fn strict_stop(&self, plugin: &str) {
+        let last = self.audio_thread.swap(0, Ordering::Relaxed);
+        if !self.on_an_audio_thread() {
+            self.strict_violation(&format!("{plugin}: stop_processing called off the audio thread"));
+        } else if last != 0 && last != thread_token() {
+            self.strict_violation(&format!(
+                "{plugin}: stop_processing called on a thread the processor never ran on"
+            ));
+        }
+    }
+
+    /// Strict mode's check on `note_ports.get`.
+    fn strict_note_port(&self, plugin: &str, index: u32, count: u32) {
+        if index >= count {
+            self.strict_violation(&format!(
+                "{plugin}: note_ports.get called with an index out of bounds: {index} >= {count}"
+            ));
+        }
+    }
+
+    /// Log `message` as host misbehaviour, print it, and abort the process
+    /// unless [`LENIENT_ENV`] is set.
+    fn strict_violation(&self, message: &str) {
+        if let Ok(text) = CString::new(message) {
+            self.log(LogSeverity::HostMisbehaving, &text);
+        }
+        if std::env::var_os(LENIENT_ENV).is_some() {
+            return;
+        }
+        eprintln!("mooloop-test-plugin strict mode: {message}; aborting, as a strict plugin would");
+        std::process::abort();
     }
 
     fn log(&self, severity: LogSeverity, message: &CStr) {

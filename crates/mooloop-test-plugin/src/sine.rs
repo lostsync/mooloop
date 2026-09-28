@@ -68,7 +68,7 @@ impl<'a> PluginShared<'a> for SineShared<'a> {}
 /// The main-thread half.
 pub struct SineMain<'a> {
     host: HostMainThreadHandle<'a>,
-    _shared: &'a SineShared<'a>,
+    shared: &'a SineShared<'a>,
     gui: TestGui,
 }
 
@@ -79,7 +79,7 @@ impl<'a> SineMain<'a> {
     ) -> Result<Self, PluginError> {
         Ok(Self {
             host,
-            _shared: shared,
+            shared,
             gui: TestGui::new(),
         })
     }
@@ -135,6 +135,7 @@ impl<'a> PluginAudioProcessor<'a, SineShared<'a>, SineMain<'a>> for SineProcesso
         self.shared
             .services
             .expect_audio_thread(c"sine: process called off an audio thread");
+        self.shared.services.strict_process();
 
         let mut port = audio
             .output_port(0)
@@ -185,7 +186,13 @@ impl<'a> PluginAudioProcessor<'a, SineShared<'a>, SineMain<'a>> for SineProcesso
         })
     }
 
+    fn start_processing(&mut self) -> Result<(), PluginError> {
+        self.shared.services.strict_start("sine");
+        Ok(())
+    }
+
     fn stop_processing(&mut self) {
+        self.shared.services.strict_stop("sine");
         self.voices.clear();
     }
 
@@ -274,6 +281,9 @@ impl PluginNotePortsImpl for SineMain<'_> {
     }
 
     fn get(&self, index: u32, is_input: bool, writer: &mut NotePortInfoWriter) {
+        self.shared
+            .services
+            .strict_note_port("sine", index, PluginNotePortsImpl::count(self, is_input));
         if is_input && index == 0 {
             writer.set(&NotePortInfo {
                 id: ClapId::new(0),

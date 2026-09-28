@@ -29,6 +29,7 @@ use clack_extensions::audio_ports::{
     PluginAudioPortsImpl,
 };
 use clack_extensions::latency::{HostLatency, PluginLatency, PluginLatencyImpl};
+use clack_extensions::note_ports::{NotePortInfoWriter, PluginNotePorts, PluginNotePortsImpl};
 use clack_extensions::params::{
     ParamDisplayWriter, ParamInfo, ParamInfoFlags, ParamInfoWriter, PluginAudioProcessorParams,
     PluginMainThreadParams, PluginParams,
@@ -79,6 +80,10 @@ impl<const GUI: bool> Plugin for GainPlugin<GUI> {
     fn declare_extensions(builder: &mut PluginExtensions<Self>, _shared: Option<&GainShared>) {
         builder
             .register::<PluginAudioPorts>()
+            // No note ports, but the extension, as Surge XT Effects declares
+            // it: a host must ask how many before asking for the first
+            // (MOO-311), and strict mode aborts on one that does not.
+            .register::<PluginNotePorts>()
             .register::<PluginParams>()
             .register::<PluginState>()
             .register::<PluginLatency>();
@@ -273,6 +278,15 @@ impl<'a> PluginAudioProcessor<'a, GainShared<'a>, GainMain<'a>> for GainProcesso
         self.shared.active.store(false, Ordering::Relaxed);
     }
 
+    fn start_processing(&mut self) -> Result<(), PluginError> {
+        self.shared.services.strict_start("gain");
+        Ok(())
+    }
+
+    fn stop_processing(&mut self) {
+        self.shared.services.strict_stop("gain");
+    }
+
     fn process(
         &mut self,
         _process: Process,
@@ -282,6 +296,7 @@ impl<'a> PluginAudioProcessor<'a, GainShared<'a>, GainMain<'a>> for GainProcesso
         self.shared
             .services
             .expect_audio_thread(c"gain: process called off an audio thread");
+        self.shared.services.strict_process();
 
         let mut port = audio
             .port_pair(0)
@@ -373,6 +388,17 @@ impl PluginAudioPortsImpl for GainMain<'_> {
                 in_place_pair: (inputs == outputs).then(|| ClapId::new(0)),
             });
         }
+    }
+}
+
+/// The extension with nothing in it: an effect that takes no notes.
+impl PluginNotePortsImpl for GainMain<'_> {
+    fn count(&self, _is_input: bool) -> u32 {
+        0
+    }
+
+    fn get(&self, index: u32, _is_input: bool, _writer: &mut NotePortInfoWriter) {
+        self.shared.services.strict_note_port("gain", index, 0);
     }
 }
 
