@@ -664,6 +664,8 @@ fn effect_slot(kind: EffectKind) -> EffectSlotRow {
         plugin_name: Default::default(),
         plugin_status: Default::default(),
         plugin_params: Default::default(),
+        plugin_has_gui: false,
+        plugin_gui_open: false,
         branches: Vec::<mooloop_ui::LayerBranchRow>::new().as_slice().into(),
         selected_branch: -1,
         bracket: false,
