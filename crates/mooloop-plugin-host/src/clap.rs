@@ -635,12 +635,12 @@ impl HostedGui for ClapInstance {
         let Ok(gui) = self.gui_ext() else {
             return false;
         };
-        gui.is_api_supported(&mut self.instance.plugin_handle(), clap_config(config))
+        gui.is_api_supported(&self.instance.plugin_handle(), clap_config(config))
     }
 
     fn preferred_api(&mut self) -> Option<GuiConfig> {
         let gui = self.gui_ext().ok()?;
-        let preferred = gui.get_preferred_api(&mut self.instance.plugin_handle())?;
+        let preferred = gui.get_preferred_api(&self.instance.plugin_handle())?;
         (preferred.api_type == GuiApiType::X11).then_some(GuiConfig {
             api: GuiApi::X11,
             floating: preferred.is_floating,
@@ -660,12 +660,12 @@ impl HostedGui for ClapInstance {
         if self.gui_open.is_some() {
             return Err(GuiError::AlreadyOpen);
         }
-        if !gui.is_api_supported(&mut self.instance.plugin_handle(), clap_config(config)) {
+        if !gui.is_api_supported(&self.instance.plugin_handle(), clap_config(config)) {
             return Err(GuiError::Unsupported(config));
         }
         // Anything raised while no GUI was open is stale.
         self.instance.access_shared_handler(|shared| shared.gui_requests.take());
-        gui.create(&mut self.instance.plugin_handle(), clap_config(config))
+        gui.create(&self.instance.plugin_handle(), clap_config(config))
             .map_err(|_| GuiError::Refused("open"))?;
         self.gui_open = Some(config);
         self.gui_visible = false;
@@ -674,13 +674,13 @@ impl HostedGui for ClapInstance {
 
     fn set_scale(&mut self, scale: f64) -> Result<(), GuiError> {
         let gui = self.open_gui_ext()?;
-        gui.set_scale(&mut self.instance.plugin_handle(), scale)
+        gui.set_scale(&self.instance.plugin_handle(), scale)
             .map_err(|_| GuiError::Refused("take the window's scale"))
     }
 
     fn size(&mut self) -> Option<GuiSize> {
         let gui = self.open_gui_ext().ok()?;
-        gui.get_size(&mut self.instance.plugin_handle())
+        gui.get_size(&self.instance.plugin_handle())
             .map(|size| GuiSize {
                 width: size.width,
                 height: size.height,
@@ -691,13 +691,13 @@ impl HostedGui for ClapInstance {
         let Ok(gui) = self.open_gui_ext() else {
             return false;
         };
-        gui.can_resize(&mut self.instance.plugin_handle())
+        gui.can_resize(&self.instance.plugin_handle())
     }
 
     fn adjust_size(&mut self, size: GuiSize) -> Option<GuiSize> {
         let gui = self.open_gui_ext().ok()?;
         gui.adjust_size(
-            &mut self.instance.plugin_handle(),
+            &self.instance.plugin_handle(),
             ClapGuiSize {
                 width: size.width,
                 height: size.height,
@@ -712,7 +712,7 @@ impl HostedGui for ClapInstance {
     fn set_size(&mut self, size: GuiSize) -> Result<(), GuiError> {
         let gui = self.open_gui_ext()?;
         gui.set_size(
-            &mut self.instance.plugin_handle(),
+            &self.instance.plugin_handle(),
             ClapGuiSize {
                 width: size.width,
                 height: size.height,
@@ -728,7 +728,7 @@ impl HostedGui for ClapInstance {
         // window outlives the GUI in it. An X11 id is a number, not a
         // pointer, so a stale one is an X error in the plugin, not memory
         // this process could corrupt.
-        unsafe { gui.set_parent(&mut self.instance.plugin_handle(), window) }
+        unsafe { gui.set_parent(&self.instance.plugin_handle(), window) }
             .map_err(|_| GuiError::Refused("embed in the window"))
     }
 
@@ -736,7 +736,7 @@ impl HostedGui for ClapInstance {
         let gui = self.open_gui_ext()?;
         let window = clap_window(window)?;
         // SAFETY: as for `set_parent`.
-        unsafe { gui.set_transient(&mut self.instance.plugin_handle(), window) }
+        unsafe { gui.set_transient(&self.instance.plugin_handle(), window) }
             .map_err(|_| GuiError::Refused("stay above the window"))
     }
 
@@ -746,13 +746,13 @@ impl HostedGui for ClapInstance {
         };
         let title: String = title.chars().filter(|&c| c != '\0').collect();
         if let Ok(title) = CString::new(title) {
-            gui.suggest_title(&mut self.instance.plugin_handle(), &title);
+            gui.suggest_title(&self.instance.plugin_handle(), &title);
         }
     }
 
     fn show(&mut self) -> Result<(), GuiError> {
         let gui = self.open_gui_ext()?;
-        gui.show(&mut self.instance.plugin_handle())
+        gui.show(&self.instance.plugin_handle())
             .map_err(|_| GuiError::Refused("show"))?;
         self.gui_visible = true;
         Ok(())
@@ -760,7 +760,7 @@ impl HostedGui for ClapInstance {
 
     fn hide(&mut self) -> Result<(), GuiError> {
         let gui = self.open_gui_ext()?;
-        gui.hide(&mut self.instance.plugin_handle())
+        gui.hide(&self.instance.plugin_handle())
             .map_err(|_| GuiError::Refused("hide"))?;
         self.gui_visible = false;
         Ok(())
@@ -770,7 +770,7 @@ impl HostedGui for ClapInstance {
         let Ok(gui) = self.open_gui_ext() else {
             return;
         };
-        gui.destroy(&mut self.instance.plugin_handle());
+        gui.destroy(&self.instance.plugin_handle());
         self.gui_open = None;
         self.gui_visible = false;
         self.instance.access_shared_handler(|shared| shared.gui_requests.take());
@@ -972,7 +972,7 @@ impl HostedInstance for ClapInstance {
             if let Some(timer) = self.timer_ext {
                 for &id in &scratch.timers {
                     if self.has_timer(id) {
-                        timer.on_timer(&mut self.instance.plugin_handle(), TimerId(id));
+                        timer.on_timer(&self.instance.plugin_handle(), TimerId(id));
                         activity.timers_fired += 1;
                     }
                 }
@@ -982,7 +982,7 @@ impl HostedInstance for ClapInstance {
                 crate::host_io::poll_ready(&scratch.fds, &mut scratch.poll, &mut scratch.ready);
                 for &(fd, flags) in &scratch.ready {
                     if self.has_fd(fd) {
-                        fd_ext.on_fd(&mut self.instance.plugin_handle(), fd, FdFlags::from_bits_truncate(flags));
+                        fd_ext.on_fd(&self.instance.plugin_handle(), fd, FdFlags::from_bits_truncate(flags));
                         activity.fds_fired += 1;
                     }
                 }
