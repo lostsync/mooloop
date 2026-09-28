@@ -171,6 +171,13 @@ Files marked *shared* are split in the table above.
   `session/examples/clap_effect_case.rs`
 - `plugin-host/src/clap.rs`: the CLAP adapter (`ClapInstance`,
   `ClapProcessor`, `ClapOpener`), MOO-81
+- A hosted plugin's own GUI, headless (plugin-hosting step 11, MOO-300):
+  `plugin-host/src/gui.rs` (the neutral `HostedGui` contract and its types),
+  `plugin-host/src/host_io.rs` (the timers and fds a plugin's event loop
+  registers, polled without waiting), `plugin-host/tests/gui.rs`, and the
+  session's case, `session/tests/plugin_gui.rs`. The window the GUI goes
+  into is Platform's (MOO-301), and the pump that calls the session's GUI
+  verbs is Interface's (MOO-302)
 - `dsp/src/`: `node.rs` (*shared*), `event.rs`, `bus.rs` (*shared*), `taps.rs`
   — the `AudioNode` contract and what flows through it
 - `core/src/bridge.rs`

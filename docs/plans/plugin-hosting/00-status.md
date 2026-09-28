@@ -537,7 +537,7 @@ words. **Do not reopen this as a version-bump question.**
 | 08 | Plugin browser, the menu row, and the face for plugins without a GUI | #28 | **UI build**, drafted with `slint-sketch` | **done 2026-09-24** (MOO-83; remainder MOO-228, MOO-229: pins, list, selectors landed 2026-09-26) |
 | 09 | A channel source that is a boxed node | #29 | core, engine, session | **done 2026-09-24** (MOO-84) |
 | 10 | CLAP instruments | #29 | plugin-host, engine | **done 2026-09-25** (MOO-85) |
-| 11 | Plugin GUIs in their own windows | #30 | plugin-host, **UI build** | not started |
+| 11 | Plugin GUIs in their own windows | #30 | plugin-host, **UI build** | in progress: host side (MOO-300) recorded below; the window (MOO-301) and the pump (MOO-302) to come |
 | 12 | VST3 | — | plugin-host | outline only |
 | 13 | AU (macOS, optional) | — | plugin-host | outline only |
 
@@ -1521,6 +1521,106 @@ pinned parameters and the sidebar holds the rest.
   through `preferences-plugin-folder-chosen`, as the export card's does.
 - Actions: `browser.plugins` and `plugins.rescan` (Browser category, no
   default chord).
+
+## Step 11's host side, recorded 2026-09-28 (MOO-300)
+
+The first of step 11's three legs: everything but the window, headless.
+Policy 1, "Lifetime" and "Tests" of `11-plugin-gui-windows.md`. The bare X11
+window is MOO-301 (Platform) and the pump's calls are MOO-302 (Interface).
+
+**What landed.**
+
+- **Timers and fds** (`plugin-host/src/host_io.rs`). `ClapHost` registers
+  CLAP's `timer-support` and `posix-fd-support`; the registrations live in a
+  `HostIo` table on the instance's main-thread handler.
+  `HostedInstance::service_io(now)` fires each timer whose period has passed
+  (once per look, however late: no burst of catch-up calls) and polls the fds
+  with a zero timeout, then calls the plugin back for the ready ones.
+  `Session::service_plugin_io()` does it for every live instance; a song with
+  no plugin pays one branch. Timers are fired before fds, so a timer that
+  writes to a pipe is read on the same pass. The table is never borrowed
+  across a call into the plugin, which may register or unregister from
+  inside its own callback, and each id is looked up again before its call.
+- **`poll(2)` is declared in the crate** (`host_io::sys`): the crate has no
+  `libc`, and the orchestrator cleared only the two `clack-extensions`
+  features. `nfds_t` is the one type that differs between Linux and macOS.
+- **The GUI** (`plugin-host/src/gui.rs`): `HostedGui`, reached through
+  `HostedInstance::gui()`, with neutral types only (`GuiApi`, `GuiConfig`,
+  `GuiSize`, `NativeWindow::x11(u64)`, `GuiRequest`, `GuiError`, whose text
+  is what step 08's badge shows). `ClapInstance` implements it.
+- **Control thread only, twice over.** An instance is not `Send`, so the
+  compiler keeps it on the pump's thread; `ClapInstance` also compares the
+  thread and refuses with `GuiError::WrongThread`, and the timer and fd
+  handlers refuse registration off the main thread.
+- **The plugin's GUI requests** (`request_resize`, `request_show`,
+  `request_hide`, `resize_hints_changed`, `closed`) raise bits in a flag word
+  of their own, apart from `Requests`, which the rack drains every tick for
+  other work; the requested size is one packed `AtomicU64`. Nothing locks or
+  allocates, since a GUI thread may call them.
+- **Session verbs** (`session/src/plugin_rack.rs`), the only way the window
+  side reaches a GUI: `plugin_gui_kind`, `plugin_gui_title`,
+  `open_plugin_gui(slot, &PluginGuiOpen)`, `close_plugin_gui`,
+  `plugin_gui_is_open`, `show_plugin_gui`, `hide_plugin_gui`,
+  `resize_plugin_gui`, `set_plugin_gui_scale`, `service_plugin_io`,
+  `drain_plugin_gui_events`. `PluginGuiOpen` carries a `GuiPlacement`
+  (`Embedded { parent }` or `Floating { transient_for }`, X11 ids as `u64`),
+  the title and the scale; what comes back (`PluginGuiOpened`) is the config,
+  the plugin's size and whether it can resize, which is what MOO-301 needs
+  for the size hints that make a tiling compositor float the window.
+- **Teardown: GUI, processor, instance.** `PluginRack::remove`, `close`
+  (so `close_plugins` and the quit path) and `leak_remaining` hide and
+  destroy the GUI before the instance goes to wait for its processor, and
+  report `PluginGuiEvent::Closed` so the window is destroyed after the
+  plugin's `destroy`, never before. `ClapInstance`'s `Drop` destroys a GUI
+  left open, as a backstop, and logs it.
+- **Closing a GUI never touches the processor**: no pull-back, no rebuild.
+  A plugin that says its window closed has its GUI hidden and destroyed by
+  `drain_plugin_gui_events`, which reports it as `Closed`.
+
+**How it differs from the step.**
+
+- **Removing a device does not retire its instance** (it stays live for an
+  undo), so "removing the device destroys the GUI" is the rack's next tick:
+  `service` closes the GUI of any live instance the song no longer names.
+  An instance that is retired (a song opened, a preset loaded over it, a
+  misplaced plugin) loses its GUI at once.
+- **A plugin's `request_show` and `request_hide` are carried out by the
+  session** (it calls the plugin's `show` or `hide`) and then reported, so
+  the window only maps or unmaps. A show and a hide in one tick come out as
+  a show: the order is lost in a flag word, and a lost show is worse than a
+  window the user can close.
+- **A resize the plugin cannot take** returns the size it has, for the
+  window to snap back to, rather than an error.
+- **A close the window asked for is not echoed back as an event**; only a
+  GUI the plugin or the rack closed is.
+- **There is no xrun without a driver.** `live_check` runs the executor with
+  none, so the xrun counter can only read 0. `live_check::run_paced_while`
+  paces the executor as a driver would and counts a callback whose own work
+  outlasted its block as an xrun; the thread waking late is the scheduler's
+  and is not counted. A hundred open/close cycles ran with none.
+
+**The test plugin.** Its GUI variants register a 16 ms timer and a pipe's
+read end on `create`; each tick writes a byte and each `on_fd` reads it. The
+gain's GUI variant answers probe ids no list names through `get_value`: its
+own ticks and reads, and the library-wide counts of GUIs, timers and fds
+live and of GUIs its plugin was destroyed with. Those are process-global,
+so the tests that read them hold a mutex. Its `Cargo.toml` needed the same
+two `clack-extensions` features as the host's, because the plugin side of
+both extensions is behind them.
+
+**The tests.** `plugin-host/tests/gui.rs`: the lifecycle in and out of
+order, embedded and floating; resize through `can_resize`, `adjust_size`
+and `set_size`; a scale change's resize request; the timer and fd firing
+from `service_io` and gone with the GUI; an instance dropped with its GUI
+open leaks nothing. `session/tests/plugin_gui.rs`: open, close, reopen,
+resize, and remove while open through the session's verbs, and quit with a
+GUI open, with the library's counts at zero after each; and a hundred
+open/close cycles against `run_paced_while` with no xrun. The rack's unit
+tests hold the order (GUI, processor, instance) with a fake.
+
+**Not here.** The window, focus hiding, `set_transient` to the main window,
+the XWayland setting, macOS, and the per-compositor record the step asks
+for: MOO-301 and MOO-302.
 
 ## The test plugins
 
