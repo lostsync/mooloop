@@ -333,6 +333,20 @@ pub struct ChannelSetup {
     /// makes a project written before this field loads correctly.
     #[serde(default)]
     pub next_device_id: u32,
+    /// The identity of the source slot when the source is a hosted plugin
+    /// instrument: the `device` a `ParamOwner::PluginParam` address on one of
+    /// its parameters names (MOO-312, within MOO-74's ruling). Minted from
+    /// [`Self::next_device_id`], the namespace the chain's effects draw
+    /// from, so it can never collide with one of them.
+    ///
+    /// [`DeviceId::UNASSIGNED`](crate::DeviceId::UNASSIGNED) for every
+    /// native source, and not written then, so a song with no plugin
+    /// instrument saves byte-identical to one written before this field. A
+    /// plugin source saved before it is given one by
+    /// [`Self::assign_device_ids`]; no such song can hold a lane or route on
+    /// it, so any fresh id is the right one.
+    #[serde(default, skip_serializing_if = "crate::effect::device_id_is_unassigned")]
+    pub source_device: crate::DeviceId,
 }
 
 impl ChannelSetup {
@@ -343,6 +357,7 @@ impl ChannelSetup {
             effects: Vec::new(),
             modulation: ModRack::default(),
             next_device_id: 0,
+            source_device: crate::DeviceId::UNASSIGNED,
         }
     }
 
@@ -357,6 +372,7 @@ impl ChannelSetup {
             effects: Vec::new(),
             modulation: ModRack::default(),
             next_device_id: 0,
+            source_device: crate::DeviceId::UNASSIGNED,
         }
     }
 
@@ -371,6 +387,7 @@ impl ChannelSetup {
             effects: Vec::new(),
             modulation: ModRack::default(),
             next_device_id: 0,
+            source_device: crate::DeviceId::UNASSIGNED,
         }
     }
 
@@ -385,6 +402,7 @@ impl ChannelSetup {
             effects: Vec::new(),
             modulation: ModRack::default(),
             next_device_id: 0,
+            source_device: crate::DeviceId::UNASSIGNED,
         }
     }
 
@@ -399,6 +417,7 @@ impl ChannelSetup {
             effects: Vec::new(),
             modulation: ModRack::default(),
             next_device_id: 0,
+            source_device: crate::DeviceId::UNASSIGNED,
         }
     }
 
@@ -413,6 +432,7 @@ impl ChannelSetup {
             effects: Vec::new(),
             modulation: ModRack::default(),
             next_device_id: 0,
+            source_device: crate::DeviceId::UNASSIGNED,
         }
     }
 
@@ -427,6 +447,7 @@ impl ChannelSetup {
             effects: Vec::new(),
             modulation: ModRack::default(),
             next_device_id: 0,
+            source_device: crate::DeviceId::UNASSIGNED,
         }
     }
 
@@ -441,6 +462,7 @@ impl ChannelSetup {
             effects: Vec::new(),
             modulation: ModRack::default(),
             next_device_id: 0,
+            source_device: crate::DeviceId::UNASSIGNED,
         }
     }
 
@@ -480,7 +502,32 @@ impl ChannelSetup {
     /// it; and a setup carries its own source, so the kind is its own.
     pub fn assign_device_ids(&mut self) {
         crate::assign_device_ids(&mut self.effects, &mut self.next_device_id);
+        self.assign_source_device_id();
         self.modulation.identify_source_kinds(self.source.kind());
+    }
+
+    /// Give a plugin source with no identity one, and put the mint past
+    /// whatever identity the source holds.
+    ///
+    /// After the chain's own pass, so a fresh id lands above every effect's.
+    /// An id that is already assigned is kept -- the lanes and routes on the
+    /// instrument's parameters name it -- unless an effect on the chain
+    /// wears it too, which only a hand-edited file can do; that one is
+    /// re-minted, since two devices cannot share an address. A native source
+    /// is given nothing: it is addressed as `ParamOwner::Source`, not by a
+    /// device.
+    fn assign_source_device_id(&mut self) {
+        let collides = self
+            .effects
+            .iter()
+            .any(|effect| effect.id == self.source_device);
+        if self.source_device.is_assigned() && !collides {
+            self.next_device_id = self.next_device_id.max(self.source_device.0.saturating_add(1));
+        } else if matches!(self.source, ChannelSource::Plugin(_)) {
+            self.source_device = crate::mint_device_id(&mut self.next_device_id);
+        } else {
+            self.source_device = crate::DeviceId::UNASSIGNED;
+        }
     }
 
     pub fn rescope_modulation(&mut self, channel: u8) {

@@ -1453,6 +1453,9 @@ struct ChainShape {
     /// names the identity; the position is only ever used to say *where* in
     /// a message a human reads.
     effects: Vec<(DeviceId, EffectKind)>,
+    /// The source slot's identity when the source is a plugin instrument
+    /// (MOO-312); unassigned otherwise, when it matches no address.
+    source_device: DeviceId,
     modulators: Vec<Option<ModulatorKind>>,
 }
 
@@ -1470,6 +1473,7 @@ impl ChainShape {
                 .iter()
                 .map(|effect| (effect.id, effect.kind()))
                 .collect(),
+            source_device: setup.source_device,
             modulators: setup
                 .modulation
                 .slots
@@ -1547,7 +1551,9 @@ impl ChainShape {
                     )
                 }),
             },
-            ParamOwner::PluginParam { device } => plugin_param_problem(&self.effects, device, None),
+            ParamOwner::PluginParam { device } => {
+                plugin_param_problem(&self.effects, Some(self.source_device), device, None)
+            }
             ParamOwner::Modulator { slot } => match self.modulators.get(slot as usize).copied().flatten() {
                 None => Some(format!("it drives modulator slot {}, which is empty", slot + 1)),
                 Some(kind) => kind.descriptor(id).is_none().then(|| {
@@ -1563,7 +1569,11 @@ impl ChainShape {
 }
 
 /// Why a plugin-parameter address on `device` names nothing, or `None` when
-/// it names a plugin device on the chain.
+/// it names a plugin device on the chain, or the channel's plugin instrument
+/// (`source`, a bus has none: MOO-312).
+///
+/// The instrument is kept on its identity alone, whether or not the plugin
+/// is installed and whatever parameter the address names, by the rule below.
 ///
 /// **The parameter id is never judged.** It is the plugin's own, and the
 /// only list it could be checked against is the one the plugin last
@@ -1575,9 +1585,13 @@ impl ChainShape {
 /// is not on the chain at all names nothing.
 fn plugin_param_problem(
     chain: &[(DeviceId, EffectKind)],
+    source: Option<DeviceId>,
     device: DeviceId,
     bus: Option<u8>,
 ) -> Option<String> {
+    if device.is_assigned() && source == Some(device) {
+        return None;
+    }
     let chain_name = bus.map_or_else(|| "this channel's chain".to_owned(), |bus| format!("bus {bus}'s chain"));
     match find_device(chain, device) {
         None => Some(format!(
@@ -1632,7 +1646,7 @@ fn address_problem(
                         )
                     }),
                 },
-                ParamOwner::PluginParam { device } => plugin_param_problem(chain, device, Some(bus)),
+                ParamOwner::PluginParam { device } => plugin_param_problem(chain, None, device, Some(bus)),
                 ParamOwner::Source { .. }
                 | ParamOwner::SourceRoute { .. }
                 | ParamOwner::Modulator { .. } => {

@@ -3934,6 +3934,12 @@ impl Default for DeviceId {
     }
 }
 
+/// `skip_serializing_if` for a [`DeviceId`] field that is absent until minted:
+/// a channel's source slot, which only a plugin instrument is given (MOO-312).
+pub fn device_id_is_unassigned(id: &DeviceId) -> bool {
+    !id.is_assigned()
+}
+
 /// A channel's durable identity, for the same reason and in the same shape as
 /// [`DeviceId`] one type up.
 ///

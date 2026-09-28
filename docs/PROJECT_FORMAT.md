@@ -747,10 +747,40 @@ A channel whose **source** is a plugin instrument (MOO-84) names its slot
 the same way, and its channel's `kind` is `plugin`:
 
 ```toml
+[document.channels.setup]
+next_device_id = 3
+source_device = 2
+
 [document.channels.setup.source]
 type = "plugin"
 state = 1
 ```
+
+**`source_device` is the instrument's device identity** (MOO-312, MOO-313).
+A lane or route on one of its parameters is
+`owner.plugin_param = { device = <source_device> }` with the plugin's own
+parameter id, exactly as on a plugin effect (MOO-74's address). It is minted
+from the channel's `next_device_id`, the namespace its effects draw from, so
+it never equals an effect's `id`.
+
+- **Written only when assigned.** A native source has none, so a song with
+  no plugin instrument is byte-identical to one written before the field
+  existed. `FORMAT_VERSION` does not move.
+- **A plugin source saved without one** (before 0.1.6) is given one on load,
+  by `ChannelSetup::assign_device_ids`, after the chain's own ids, so it lands
+  above them and the mint moves past it. No repair is counted: no such song
+  can hold an address on it, so any fresh id is the right one. An assigned id
+  an effect on the same chain also wears (a hand edit) is re-minted.
+- **The integrity pass keeps an address on it** whether the plugin is
+  installed or not, and whatever parameter id it names. One naming a device
+  that is neither the source nor on the chain is dropped and counted, as for
+  an effect.
+- **Replacing the instrument** mints the new one a fresh id, and a native
+  source gets none; the old instrument's lanes and routes go with it, as a
+  deleted effect's do, and undo brings them back. That is Adam's recommended
+  answer to the open Question on MOO-312, pending his ruling.
+- An older build ignores the key, but refuses the song anyway on
+  `source.type = "plugin"` (below).
 
 The slot itself lives in the song's `plugins` table, keyed by
 `PluginSlotId`, beside the mint the ids come from:

@@ -146,6 +146,11 @@ pub struct ChannelState {
     /// directions so a mint is never rewound by a round trip through the
     /// document.
     pub next_device_id: u32,
+    /// The source slot's identity when the source is a plugin instrument,
+    /// minted from `next_device_id` by `Session::reset_channel_source`;
+    /// `DeviceId::UNASSIGNED` for every native source. Mirrors
+    /// `ChannelSetup::source_device` (MOO-312).
+    pub source_device: mooloop_core::DeviceId,
     pub modulation: ModRack,
     /// Mixer bus this channel feeds; 0 is the master.
     pub bus: u8,
@@ -237,6 +242,7 @@ impl ChannelState {
             next_note_id: 1,
             effects: Vec::new(),
             next_device_id: 0,
+            source_device: mooloop_core::DeviceId::UNASSIGNED,
             modulation: ModRack::default(),
             bus: MASTER_BUS,
         }

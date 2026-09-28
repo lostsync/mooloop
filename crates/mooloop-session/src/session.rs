@@ -532,6 +532,20 @@ impl Session {
         // was -- this used to reset only the incoming kind's block of eight,
         // and every install rebuilt all eight from the document.
         channel.set_generator(kind.default_generator_params());
+        // The outgoing instrument's identity goes with it, and the incoming
+        // one is given its own: a plugin instance is a new device even when
+        // it is the same plugin, so its parameters must not answer to the
+        // last one's lanes and routes (MOO-312).
+        let outgoing = channel.source_device;
+        channel.source_device = if kind == DeviceKind::Plugin {
+            mooloop_core::mint_device_id(&mut channel.next_device_id)
+        } else {
+            DeviceId::UNASSIGNED
+        };
+        self.forget_replaced_source_device(index, outgoing);
+        let Some(channel) = self.channels.get_mut(index) else {
+            return;
+        };
         // The sample state goes for every kind, the sampler included: a fresh
         // device has loaded nothing, and a synth that kept a waveform would
         // draw one. This was written out once per arm until 2026-09-12 --
@@ -553,6 +567,31 @@ impl Session {
         channel.waveform.clear();
         channel.can_previous_sample = false;
         channel.can_next_sample = false;
+    }
+
+    /// What a source change does to the lanes and routes on the plugin
+    /// instrument it replaces: they go, as a deleted effect's do
+    /// ([`Self::forget_device`]), and undo brings them back, because a
+    /// source change is one recorded document edit.
+    ///
+    /// **This is Adam's open Question on MOO-312** ("when you replace a
+    /// channel's plugin instrument, what should happen to the automation
+    /// lanes and modulation routes you made on its parameters?"), and this
+    /// is his recommended option 1. Option 2 (keep them, shown as missing)
+    /// is this function doing nothing; option 3 (keep them, and bring them
+    /// back when the same plugin returns) is doing nothing here and
+    /// remembering which plugin `outgoing` was. Nothing else in the source
+    /// change depends on the answer.
+    ///
+    /// Nothing is forgotten for a native source: it has no device identity,
+    /// and its lanes are kept across a switch by design (MOO-135).
+    fn forget_replaced_source_device(&mut self, index: usize, outgoing: DeviceId) {
+        let Ok(channel) = u8::try_from(index) else {
+            return;
+        };
+        if outgoing.is_assigned() {
+            self.forget_device(EffectTarget::Channel(channel), outgoing);
+        }
     }
 
     pub fn project_snapshot(&self, bpm: i32, swing_percent: i32) -> Project {
@@ -614,6 +653,7 @@ impl Session {
                         effects: channel.effects.clone(),
                         modulation: channel.modulation,
                         next_device_id: channel.next_device_id,
+                        source_device: channel.source_device,
                     },
                     notes: channel.notes.clone(),
                     automation: channel.automation.clone(),
@@ -1557,6 +1597,7 @@ impl Session {
                     next_note_id: project_channel.next_note_id,
                     effects: setup.effects.clone(),
                     next_device_id: setup.next_device_id,
+                    source_device: setup.source_device,
                     modulation: setup.modulation,
                     bus: setup.channel.bus,
                 }

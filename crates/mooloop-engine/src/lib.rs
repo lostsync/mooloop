@@ -1293,6 +1293,11 @@ fn same_strip_but_effects(
         effects: _,
         modulation,
         next_device_id: _,
+        // The plugin instrument's identity (MOO-312): compared, so a strip
+        // is never carried across a change of the device its lanes and
+        // routes name. It changes only with `source`, so this rebuilds
+        // nothing that comparing the source did not already.
+        source_device,
     } = held;
     let mooloop_core::Channel {
         name,
@@ -1324,6 +1329,7 @@ fn same_strip_but_effects(
         && *midi_input == other.midi_input
         && *source == incoming.source
         && *modulation == incoming.modulation
+        && *source_device == incoming.source_device
 }
 
 /// The renderer a project install hands the audio thread, built and attached
