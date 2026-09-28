@@ -581,7 +581,12 @@ fn check_ports(instance: &mut PluginInstance<ClapHost>, features: &[String]) -> 
         .plugin_shared_handle()
         .get_extension::<PluginNotePorts>();
     let handle = instance.plugin_handle();
+    // Counted before the first is asked for (MOO-311): an effect that
+    // declares the extension with no ports (Surge XT Effects) reports an
+    // out-of-bounds `get` as host misbehaviour, and a strict plugin could
+    // terminate on it.
     let notes = note_ports
+        .filter(|note_ports| note_ports.count(&handle, true) > 0)
         .and_then(|note_ports| {
             let mut buffer = NotePortInfoBuffer::new();
             note_ports
