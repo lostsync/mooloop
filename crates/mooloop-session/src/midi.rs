@@ -420,7 +420,19 @@ impl Session {
                 None => return "Unavailable parameter".to_owned(),
             },
         };
-        let Some(descriptor) = self.param_descriptor(address) else {
+        // A plugin's parameter is named by the list the plugin reported, as
+        // a native one is by its descriptor; one the list no longer has, or
+        // hides, is unavailable, as a deleted device's is.
+        let name = match address.owner {
+            ParamOwner::PluginParam { .. } => self
+                .plugin_param_info(address)
+                .filter(|info| !info.hidden)
+                .map(|info| info.name.clone()),
+            _ => self
+                .param_descriptor(address)
+                .map(|descriptor| descriptor.name.to_owned()),
+        };
+        let Some(name) = name else {
             return "Unavailable parameter".to_owned();
         };
         let scope = match address.scope {
@@ -449,16 +461,14 @@ impl Session {
                 })
                 .unwrap_or_else(|| "?".to_owned()),
             ParamOwner::Strip => "Strip".to_owned(),
+            // The plugin's name, with its place on a chain; a channel's
+            // instrument by its name alone.
             ParamOwner::PluginParam { device } => self
-                .chain_for(address.scope)
-                .and_then(|chain| {
-                    let slot = mooloop_core::device_slot(chain, device)?;
-                    Some(format!("{} {}", chain.get(slot)?.kind().label(), slot + 1))
-                })
+                .plugin_device_label(address.scope, device)
                 .unwrap_or_else(|| "?".to_owned()),
             ParamOwner::Modulator { .. } | ParamOwner::SourceRoute { .. } => "?".to_owned(),
         };
-        format!("{scope} \u{b7} {owner} \u{b7} {}", descriptor.name)
+        format!("{scope} \u{b7} {owner} \u{b7} {name}")
     }
 
     /// Every binding as a mapping list draws it, in map order.
@@ -696,9 +706,10 @@ impl Session {
             }
             ParamOwner::Strip => mooloop_core::modulation::strip_descriptor(address.param),
             // A plugin's parameters have no `&'static` descriptor. Their
-            // ranges and values come from the instance, which step 07 of
-            // `docs/plans/plugin-hosting/` reaches; until then a plugin
-            // parameter reads as unavailable rather than as a native one.
+            // ranges come from the list the plugin reported and their values
+            // from the instance: `plugin_param_normalized` and
+            // `set_plugin_param_at` answer for them, and the callers above
+            // ask those first.
             ParamOwner::PluginParam { .. } => None,
             ParamOwner::Modulator { .. } | ParamOwner::SourceRoute { .. } => None,
         }
@@ -738,9 +749,10 @@ impl Session {
                 _ => None,
             },
             // A plugin's parameters have no `&'static` descriptor. Their
-            // ranges and values come from the instance, which step 07 of
-            // `docs/plans/plugin-hosting/` reaches; until then a plugin
-            // parameter reads as unavailable rather than as a native one.
+            // ranges come from the list the plugin reported and their values
+            // from the instance: `plugin_param_normalized` and
+            // `set_plugin_param_at` answer for them, and the callers above
+            // ask those first.
             ParamOwner::PluginParam { .. } => None,
             ParamOwner::Modulator { .. } | ParamOwner::SourceRoute { .. } => None,
         }
@@ -748,6 +760,9 @@ impl Session {
 
     /// A parameter's present value, normalized against its descriptor.
     pub fn param_normalized(&self, address: ParamAddr) -> Option<f32> {
+        if let ParamOwner::PluginParam { .. } = address.owner {
+            return self.plugin_param_normalized(address);
+        }
         let descriptor = self.param_descriptor(address)?;
         let natural = self.param_natural(address)?;
         Some(descriptor.to_normalized(natural))
@@ -765,6 +780,12 @@ impl Session {
         address: ParamAddr,
         normalized: f32,
     ) -> Option<EngineCommand> {
+        // A plugin's parameter has no `&'static` descriptor: its range is the
+        // one the plugin reported, and the plugin holds its value, so the
+        // write is the command its own knob sends (MOO-315).
+        if let ParamOwner::PluginParam { .. } = address.owner {
+            return self.set_plugin_param_at(address, normalized);
+        }
         let descriptor = self.param_descriptor(address)?;
         let value = descriptor.from_normalized(normalized.clamp(0.0, 1.0));
         match address.owner {
@@ -815,9 +836,10 @@ impl Session {
                 _ => None,
             },
             // A plugin's parameters have no `&'static` descriptor. Their
-            // ranges and values come from the instance, which step 07 of
-            // `docs/plans/plugin-hosting/` reaches; until then a plugin
-            // parameter reads as unavailable rather than as a native one.
+            // ranges come from the list the plugin reported and their values
+            // from the instance: `plugin_param_normalized` and
+            // `set_plugin_param_at` answer for them, and the callers above
+            // ask those first.
             ParamOwner::PluginParam { .. } => None,
             ParamOwner::Modulator { .. } | ParamOwner::SourceRoute { .. } => None,
         }

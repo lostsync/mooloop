@@ -19,8 +19,8 @@
 //! routes still read.
 
 use mooloop_core::{
-    device_slot, EffectParams, EffectTarget, EngineCommand, ModDestinationDescriptor, ParamAddr,
-    ParamOwner, PluginParamInfo, PluginSlotId,
+    device_slot, DeviceId, EffectParams, EffectTarget, EngineCommand, GeneratorParams,
+    ModDestinationDescriptor, ParamAddr, ParamOwner, PluginParamInfo, PluginSlotId,
 };
 
 use crate::session::Session;
@@ -48,14 +48,46 @@ pub fn plugin_normalized(info: &PluginParamInfo, plain: f64) -> f32 {
 }
 
 impl Session {
-    /// The plugin slot of the device `device` on `scope`'s chain, if that
-    /// device is a hosted plugin.
-    pub fn plugin_slot_of(&self, scope: EffectTarget, device: mooloop_core::DeviceId) -> Option<PluginSlotId> {
+    /// The plugin slot of the device `device` on `scope`, if that device is
+    /// a hosted plugin: a device on the chain, or the plugin instrument that
+    /// is a channel's source, named by `source_device` (MOO-312). The two
+    /// never share an id: a channel mints both from one counter.
+    pub fn plugin_slot_of(&self, scope: EffectTarget, device: DeviceId) -> Option<PluginSlotId> {
+        if let Some(slot) = self.plugin_source_slot_of(scope, device) {
+            return Some(slot);
+        }
         let effects = self.effect_chain_of(scope)?;
         match effects.get(device_slot(effects, device)?)?.params {
             EffectParams::Plugin(slot) => Some(slot),
             _ => None,
         }
+    }
+
+    /// The plugin slot of channel `scope`'s source, when `device` is the id
+    /// its source slot holds and that source is a plugin. An id a replaced
+    /// instrument held names nothing: its lanes and routes went with it
+    /// (`Session::forget_replaced_source_device`).
+    pub(crate) fn plugin_source_slot_of(&self, scope: EffectTarget, device: DeviceId) -> Option<PluginSlotId> {
+        let EffectTarget::Channel(channel) = scope else {
+            return None;
+        };
+        let channel = self.channels.get(usize::from(channel))?;
+        if !device.is_assigned() || channel.source_device != device {
+            return None;
+        }
+        match channel.generator {
+            GeneratorParams::Plugin(slot) => Some(slot),
+            _ => None,
+        }
+    }
+
+    /// The selected channel's plugin instrument: its source slot's id and
+    /// the plugin's slot. `None` when its source is not a plugin.
+    pub fn plugin_source(&self) -> Option<(DeviceId, PluginSlotId)> {
+        let channel = self.channels.get(self.selected)?;
+        let scope = EffectTarget::Channel(u8::try_from(self.selected).ok()?);
+        let slot = self.plugin_source_slot_of(scope, channel.source_device)?;
+        Some((channel.source_device, slot))
     }
 
     /// What the song knows about the plugin parameter `address` names: the
@@ -164,6 +196,87 @@ impl Session {
             value: value as f32,
         })
     }
+
+    /// Set parameter `index` of the selected channel's plugin instrument to
+    /// `normalized` of its range: [`Self::set_plugin_param`] for the source,
+    /// by index, with the same law and the same edit counting. Returns
+    /// `SetChannelGeneratorParam` carrying the plugin's own id and its plain
+    /// value, which is what the engine takes on a plugin source (MOO-314).
+    /// Refused for a hidden parameter, and when the source is not a plugin.
+    pub fn set_plugin_source_param(&mut self, index: usize, normalized: f32) -> Option<EngineCommand> {
+        let scope = EffectTarget::Channel(u8::try_from(self.selected).ok()?);
+        let (device, slot) = self.plugin_source()?;
+        let id = self.plugin_param_id(slot, index)?;
+        self.set_plugin_param_at(ParamAddr::plugin_param(scope, device, id), normalized)
+    }
+
+    /// Set the plugin parameter `address` names to `normalized` of its
+    /// range, wherever the plugin is: the path a MIDI binding takes, which
+    /// holds an address, not a face's index. The command is the one the
+    /// device's own knob sends -- `SetEffectParam` for a device on a chain,
+    /// `SetChannelGeneratorParam` for a channel's instrument -- with the
+    /// plugin's id and plain value, and the send counts as an edit of the
+    /// plugin as a knob's does. `None` for a parameter the plugin does not
+    /// list now (missing), a hidden one, or an address naming no plugin.
+    pub fn set_plugin_param_at(&mut self, address: ParamAddr, normalized: f32) -> Option<EngineCommand> {
+        let ParamOwner::PluginParam { device } = address.owner else {
+            return None;
+        };
+        let slot = self.plugin_slot_of(address.scope, device)?;
+        let index = self.plugin_param_index(slot, address.param)?;
+        let info = self.plugins.get(&slot)?.params.get(index)?;
+        if info.hidden {
+            return None;
+        }
+        let (id, value) = (info.id, plugin_plain(info, normalized));
+        let command = if self.plugin_source_slot_of(address.scope, device).is_some() {
+            let EffectTarget::Channel(channel) = address.scope else {
+                return None;
+            };
+            EngineCommand::SetChannelGeneratorParam {
+                channel,
+                id,
+                value: value as f32,
+            }
+        } else {
+            let row = device_slot(self.effect_chain_of(address.scope)?, device)?;
+            EngineCommand::SetEffectParam {
+                target: address.scope,
+                slot: u8::try_from(row).ok()?,
+                id,
+                value: value as f32,
+            }
+        };
+        self.plugin_rack.note_param_sent(slot, index, value);
+        Some(command)
+    }
+
+    /// The plugin parameter `address` names, as a knob's travel from 0 to 1:
+    /// its value now, read from the live instance, against the range the
+    /// plugin reported. `None` when the plugin is not hosted or does not
+    /// list the id.
+    pub fn plugin_param_normalized(&self, address: ParamAddr) -> Option<f32> {
+        let ParamOwner::PluginParam { device } = address.owner else {
+            return None;
+        };
+        let slot = self.plugin_slot_of(address.scope, device)?;
+        let info = self.plugin_param_info(address)?;
+        let index = self.plugin_param_index(slot, address.param)?;
+        Some(plugin_normalized(info, self.plugin_param_value(slot, index)?))
+    }
+
+    /// What the plugin device `device` on `scope` is called in a list: the
+    /// plugin's name and its place on the chain, "Test Gain 2", or the
+    /// plugin's name alone for a channel's instrument.
+    pub fn plugin_device_label(&self, scope: EffectTarget, device: DeviceId) -> Option<String> {
+        let slot = self.plugin_slot_of(scope, device)?;
+        let name = &self.plugins.get(&slot)?.plugin.name;
+        if self.plugin_source_slot_of(scope, device).is_some() {
+            return Some(name.clone());
+        }
+        let position = device_slot(self.effect_chain_of(scope)?, device)?;
+        Some(format!("{name} {}", position + 1))
+    }
 }
 
 /// One plugin parameter a lane or a route on the selected channel can name,
@@ -186,63 +299,86 @@ pub struct PluginDestination {
 }
 
 impl Session {
-    /// Every plugin parameter on the selected channel's own chain, device by
-    /// device in chain order, each device's listed parameters first in the
-    /// plugin's order (hidden ones left out) and then, marked missing, every
-    /// id a lane or route on it names that the list no longer has.
+    /// Every plugin parameter on the selected channel: its plugin
+    /// instrument's first, when its source is one, then its own chain's,
+    /// device by device in chain order. Each device's listed parameters come
+    /// first in the plugin's order (hidden ones left out) and then, marked
+    /// missing, every id a lane or route on it names that the list no longer
+    /// has.
     pub fn plugin_destinations(&self) -> Vec<PluginDestination> {
         let mut rows = Vec::new();
-        let scope = EffectTarget::Channel(self.selected as u8);
         let Some(channel) = self.channels.get(self.selected) else {
             return rows;
         };
+        if let Some((device, slot)) = self.plugin_source() {
+            self.push_plugin_destinations(&mut rows, device, slot, None);
+        }
         for (position, effect) in channel.effects.iter().enumerate() {
-            let EffectParams::Plugin(slot) = effect.params else {
-                continue;
-            };
-            let Some(saved) = self.plugins.get(&slot) else {
-                continue;
-            };
-            let device = format!("{} {}", saved.plugin.name, position + 1);
-            for info in saved.params.iter().filter(|info| !info.hidden) {
-                let address = ParamAddr::plugin_param(scope, effect.id, info.id);
-                rows.push(PluginDestination {
-                    address,
-                    device: device.clone(),
-                    name: info.name.clone(),
-                    missing: false,
-                    lane_allowed: info.automatable,
-                });
-            }
-            // The ids something still names and the list does not: every
-            // pattern's lanes and every route, in the order they are found.
-            let named = channel
-                .automation
-                .iter()
-                .flatten()
-                .map(|lane| lane.target)
-                .chain(channel.modulation.destinations());
-            for address in named {
-                let ParamOwner::PluginParam { device: owner } = address.owner else {
-                    continue;
-                };
-                if owner != effect.id
-                    || address.scope != scope
-                    || saved.param(address.param).is_some()
-                    || rows.iter().any(|row| row.address == address)
-                {
-                    continue;
-                }
-                rows.push(PluginDestination {
-                    address,
-                    device: device.clone(),
-                    name: format!("Parameter {}", address.param),
-                    missing: true,
-                    lane_allowed: false,
-                });
+            if let EffectParams::Plugin(slot) = effect.params {
+                self.push_plugin_destinations(&mut rows, effect.id, slot, Some(position));
             }
         }
         rows
+    }
+
+    /// One plugin device's rows for [`Self::plugin_destinations`]. A device
+    /// on the chain is named with its place, "Test Gain 2", as a native
+    /// insert is "Filter 2"; the instrument, of which there is one, by its
+    /// plugin's name alone.
+    fn push_plugin_destinations(
+        &self,
+        rows: &mut Vec<PluginDestination>,
+        device: DeviceId,
+        slot: PluginSlotId,
+        position: Option<usize>,
+    ) {
+        let Some(saved) = self.plugins.get(&slot) else {
+            return;
+        };
+        let Some(channel) = self.channels.get(self.selected) else {
+            return;
+        };
+        let scope = EffectTarget::Channel(self.selected as u8);
+        let label = match position {
+            Some(position) => format!("{} {}", saved.plugin.name, position + 1),
+            None => saved.plugin.name.clone(),
+        };
+        for info in saved.params.iter().filter(|info| !info.hidden) {
+            rows.push(PluginDestination {
+                address: ParamAddr::plugin_param(scope, device, info.id),
+                device: label.clone(),
+                name: info.name.clone(),
+                missing: false,
+                lane_allowed: info.automatable,
+            });
+        }
+        // The ids something still names and the list does not: every
+        // pattern's lanes and every route, in the order they are found.
+        let named = channel
+            .automation
+            .iter()
+            .flatten()
+            .map(|lane| lane.target)
+            .chain(channel.modulation.destinations());
+        for address in named {
+            let ParamOwner::PluginParam { device: owner } = address.owner else {
+                continue;
+            };
+            if owner != device
+                || address.scope != scope
+                || saved.param(address.param).is_some()
+                || rows.iter().any(|row| row.address == address)
+            {
+                continue;
+            }
+            rows.push(PluginDestination {
+                address,
+                device: label.clone(),
+                name: format!("Parameter {}", address.param),
+                missing: true,
+                lane_allowed: false,
+            });
+        }
     }
 
     /// The live modulation offset on each of `slot`'s parameters, by dense
@@ -251,7 +387,7 @@ impl Session {
     /// [`Session::destination_offsets`] for a native face.
     pub fn plugin_destination_offsets(
         &self,
-        device: mooloop_core::DeviceId,
+        device: DeviceId,
         slot: PluginSlotId,
     ) -> Vec<f32> {
         let Some(saved) = self.plugins.get(&slot) else {
@@ -334,6 +470,69 @@ mod tests {
         session.replace_project(&project, &[]);
         let device = session.channels[0].effects[0].id;
         (session, slot, device)
+    }
+
+    /// A session whose selected channel's source is a plugin listing
+    /// `params`, and the source slot's id.
+    fn instrument_with(params: Vec<PluginParamInfo>) -> (Session, PluginSlotId, DeviceId) {
+        let mut project = mooloop_core::Project::default();
+        let slot = project.add_plugin_slot(PluginSlotState {
+            params,
+            ..PluginSlotState::new(PluginRef {
+                format: PluginFormat::Clap,
+                id: "test.instrument".into(),
+                name: "Synth".into(),
+                vendor: String::new(),
+                version: String::new(),
+            })
+        });
+        project.channels[0].setup.source = mooloop_core::ChannelSource::Plugin(slot);
+        project.assign_device_ids();
+        let mut session = Session::default();
+        session.replace_project(&project, &[]);
+        let device = session.channels[0].source_device;
+        assert!(device.is_assigned(), "a plugin source is given an id");
+        (session, slot, device)
+    }
+
+    /// The source arm: the instrument's id resolves to its slot, a knob on
+    /// it sends the plugin's id and plain value in the command the engine
+    /// takes for a plugin source, and once the source is replaced the old id
+    /// names nothing.
+    #[test]
+    fn an_instruments_id_resolves_to_its_slot_until_it_is_replaced() {
+        let hidden = PluginParamInfo {
+            id: 7,
+            hidden: true,
+            ..nudge()
+        };
+        let (mut session, slot, device) = instrument_with(vec![gain(), hidden]);
+        let scope = EffectTarget::Channel(0);
+        let address = ParamAddr::plugin_param(scope, device, 10);
+        assert_eq!(session.plugin_slot_of(scope, device), Some(slot));
+        assert_eq!(session.plugin_source(), Some((device, slot)));
+        assert_eq!(session.plugin_param_info(address).map(|info| info.id), Some(10));
+        assert!(session.lane_allowed(address));
+        assert!(session.modulation_policy(address).expect("a policy").allowed);
+        assert_eq!(session.plugin_device_label(scope, device).as_deref(), Some("Synth"));
+        assert_eq!(session.plugin_destinations().len(), 1, "the hidden one is left out");
+
+        assert_eq!(
+            session.set_plugin_source_param(0, 0.5),
+            Some(EngineCommand::SetChannelGeneratorParam {
+                channel: 0,
+                id: 10,
+                value: -24.0,
+            })
+        );
+        assert_eq!(session.set_plugin_source_param(1, 0.5), None, "a hidden parameter has no knob");
+        assert_eq!(session.set_plugin_param_at(address, 1.0).map(|_| ()), Some(()));
+
+        session.reset_channel_source(0, mooloop_core::DeviceKind::DrumSynth);
+        assert_eq!(session.plugin_slot_of(scope, device), None);
+        assert_eq!(session.plugin_source(), None);
+        assert_eq!(session.set_plugin_source_param(0, 0.5), None);
+        assert!(session.plugin_destinations().is_empty());
     }
 
     /// The four-billion id goes out as a dense index and comes back as the

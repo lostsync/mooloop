@@ -78,7 +78,8 @@ pub enum ParamOwner {
     /// Volume, pan, mute — the strip itself rather than a device on it.
     Strip,
     /// One parameter of a **hosted plugin** on the channel's or bus's chain,
-    /// by the device's durable id. `param` is the plugin's own parameter id:
+    /// or of the plugin instrument that is a channel's source, by the
+    /// device's durable id. `param` is the plugin's own parameter id:
     /// sparse, arbitrary, and meaningful only against the list the instance
     /// reports (`PluginSlotState::params`), never against a `&'static`
     /// descriptor table.
@@ -96,9 +97,10 @@ pub enum ParamOwner {
     ///
     /// **Effects and instruments alike.** A plugin *instrument*'s parameters
     /// (step 10 of `docs/plans/plugin-hosting/`) use this same owner, with the
-    /// `DeviceId` its channel's source slot is given, not `Source` with the
-    /// plugin's id reinterpreted. The source has no device id today; step 10
-    /// gives it one without widening this payload.
+    /// `DeviceId` its channel's source slot is given
+    /// (`ChannelSetup::source_device`, MOO-312), not `Source` with the
+    /// plugin's id reinterpreted. That id is minted from the channel's own
+    /// device ids, so it never names one of its effects.
     PluginParam {
         device: DeviceId,
     },
