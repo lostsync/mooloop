@@ -87,6 +87,18 @@ export global Icons {
     out property <string> open-window:
         "M 7 3 L 3 3 L 3 13 L 13 13 L 13 9 M 9 3 L 13 3 L 13 7 M 13 3 L 7 9";
 
+    // --- Interface: shared controls -------------------------------------
+    //
+    // `StepperChip`'s arrows (MOO-295): step to the previous or the next
+    // option of a short list, drawn inside the chip at each end. Filled,
+    // Adam's ruling, and so not the sampler's outline chevrons below
+    // (`previous`, `next`), which page rather than step; step 04 decides
+    // whether the two meanings are one. Five units wide and eight tall, the
+    // flat edge on a whole unit so it is a pixel edge at 1x, each the
+    // other's mirror about the grid's middle column.
+    out property <string> step-previous: "M 10 4 L 10 12 L 5 8 Z";
+    out property <string> step-next: "M 6 4 L 11 8 L 6 12 Z";
+
     // --- Mixer: the strip (were `StripIcons` in `strip.slint`) -----------
     //
     // The strip's EQ bands, drawn as the curve each one is. Not merged with
@@ -198,6 +210,7 @@ export global Icons {
         // 16 Bus Comp: Comp's curve, riding a bus.
         "M 1 12 L 8 6 L 15 3 L 15 12 Z M 1 13 L 15 13 L 15 15 L 1 15 Z"
     ];
+
 }
 
 // The one thing that draws an icon: a `Path` of the registry's string, at a
