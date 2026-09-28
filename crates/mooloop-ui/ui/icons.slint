@@ -211,6 +211,30 @@ export global Icons {
         "M 1 12 L 8 6 L 15 3 L 15 12 Z M 1 13 L 15 13 L 15 15 L 1 15 Z"
     ];
 
+    // --- The mixer's own devices (MOO-294, candidates) ----------------
+    //
+    // The headers of the three devices that are not a kind in either table:
+    // a track's strip ("STRIP / 2U"), a bus ("BUS / nU") and the output
+    // ("OUT / 1U"). The master's Bus Comp is `effect-kinds[16]`, the same
+    // compressor as the insert. Drawn by Interface as candidates in the kind
+    // icons' family, the same box and rules; Mixer names the ones it takes.
+    //
+    // Their motif is the desk's signal path, never a kind's: one channel's
+    // fader, many channels summed into one, the sum leaving for the speaker.
+
+    // A channel strip: its fader, the cap across the slot with a grip line
+    // cut through it.
+    out property <string> strip:
+        "M 7 1 L 9 1 L 9 5 L 13 5 L 13 12 L 9 12 L 9 15 L 7 15 L 7 12 L 3 12 L 3 5 L 7 5 Z "
+        + "M 4 8 L 4 9 L 12 9 L 12 8 Z";
+    // A bus: three inputs summed on one rail and leaving as one.
+    out property <string> bus:
+        "M 1 2 L 10 2 L 10 7 L 15 7 L 15 9 L 10 9 L 10 14 L 1 14 L 1 12 L 8 12 "
+        + "L 8 9 L 1 9 L 1 7 L 8 7 L 8 4 L 1 4 Z";
+    // The output: a speaker, and the sound leaving it.
+    out property <string> output:
+        "M 1 6 L 4 6 L 9 2 L 9 14 L 4 10 L 1 10 Z "
+        + "M 11 4 A 4 4 0 0 1 11 12 L 11 10 A 2 2 0 0 0 11 6 Z";
 }
 
 // The one thing that draws an icon: a `Path` of the registry's string, at a

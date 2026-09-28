@@ -501,6 +501,45 @@ export component StepperChipSheet inherits Window {
     }
 }
 
+// The mixer's own headers with the candidate icons Interface drew for them
+// (MOO-294), beside the master's Bus Comp with the kind icon it takes. Mixer
+// names the ones it keeps; this is the sheet Adam sees first. Render it as
+// `StepperChipSheet` above, at 1x and at 2x.
+export component MixerHeaderSheet inherits Window {
+    width: 340px;
+    height: 210px;
+    background: Theme.background;
+    VerticalLayout {
+        padding: 12px;
+        spacing: 4px;
+        alignment: start;
+        DeviceHeader { name: "Drums strip"; kind: "STRIP / 2U"; role: "STRIP"; icon: Icons.strip; }
+        DeviceHeader { name: "Drum bus"; kind: "BUS / 2U"; role: "BUS"; icon: Icons.bus; }
+        DeviceHeader { name: "Fader"; kind: "OUT / 1U"; role: "OUT"; icon: Icons.output; }
+        DeviceHeader {
+            name: "Master";
+            kind: "BUS / 4U";
+            role: "BUS";
+            icon: Icons.bus;
+            device-color: Theme.warning;
+        }
+        DeviceHeader {
+            name: "Bus Comp";
+            kind: "MASTER / 3U";
+            role: "COMP";
+            icon: Icons.effect-kinds[16];
+            device-color: Theme.warning;
+        }
+        DeviceHeader {
+            name: "Drums strip, muted";
+            kind: "STRIP / 2U";
+            role: "STRIP";
+            icon: Icons.strip;
+            enabled: false;
+        }
+    }
+}
+
 // Every palette kind's live rendering, indexed by its position in
 // `MockupCatalog.kinds`. The one if-chain in the tool.
 export component MockupSpecimen inherits Rectangle {

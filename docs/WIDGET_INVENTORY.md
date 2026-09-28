@@ -90,7 +90,9 @@ as wide as its longest option at the current text size, so it does not jump
 as it steps. For a list short enough to walk, like a compressor's three
 voicings; a longer one wants `PickerChip`. The Bus Comp's panel and the
 strip's voicing picker adopt it; `StepperChipSheet` in `mockup-catalog.slint`
-shows it.
+shows it. The mixer's strip, bus and output headers have candidate icons
+beside it (`Icons.strip`, `Icons.bus`, `Icons.output`, MOO-294), shown on
+`MixerHeaderSheet`.
 
 A third caller arrived 2026-09-05 and needed nothing new: `aux-in-device.slint`
 picks a source channel and a published outlet from two `PickerChip`s, and the
