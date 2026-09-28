@@ -3,7 +3,7 @@ import {
     AudioOrientation, ChannelMuteSolo, DraggablePoint, IconButton, InstrumentModule, KnobField,
     LedIndicator, MiniKnob, MixerFader, MuteButton, ParameterFader, ParameterKnob, PeakMeter,
     SectionLabel, SegmentedControl, SelectorBank, SoloButton, StereoPeakMeter, TimeDivisionKnob,
-    ToggleButton, ToolButton, TransportButton, TrimKnob, ValueReadout, ZoomScrollBar
+    StepperChip, ToggleButton, ToolButton, TransportButton, TrimKnob, ValueReadout, ZoomScrollBar
 } from "controls.slint";
 import { EnvelopeEditor } from "envelope.slint";
 import {
@@ -329,6 +329,12 @@ export global MockupCatalog {
             component: "CollapsedDevice", name: "Collapsed device", module: "device-rack.slint",
             groups: ["Device rack"], default-width: 30px, default-height: 268px, behavior: 2,
         },
+        // The `◂ GRIP ▸` voicing chip (MOO-295). Appended: a saved layout
+        // names a kind by its position.
+        {
+            component: "StepperChip", name: "Stepper chip", module: "controls.slint",
+            groups: ["Buttons", "Mixer"], default-width: 90px, default-height: 22px, behavior: 3,
+        },
     ];
 
     // Rack geometry for a device kind, so the tool can only ever produce a
@@ -436,6 +442,61 @@ export component DeviceKindSheet inherits Window {
                 device-color: Theme.warning;
                 enabled: i != 8;
             }
+        }
+    }
+}
+
+// The voicing chip (MOO-295) at every voicing, for looking at before the
+// Bus Comp and the strip adopt it. Render it on its own, at 1x and at 2x:
+//
+//   scripts/slint-sketch --shot --component StepperChipSheet \
+//       crates/mooloop-ui/ui/mockup-catalog.slint
+//   SLINT_SCALE_FACTOR=2 scripts/slint-sketch --shot ...   # the 2x sheet
+//
+// The Bus Comp's three at its 26px row and the text size of the buttons it
+// replaces, the first and last each with an arrow dimmed at its end; the
+// strip's four at the narrow strip's 18px and its smaller type; and a
+// disabled chip.
+export component StepperChipSheet inherits Window {
+    private property <[string]> bus-comp: ["GRIP", "PUNCH", "TUBE"];
+    private property <[string]> strip: ["MOO", "GRIP", "PUNCH", "IRON"];
+    private property <string> hint: "The voicing";
+    width: 420px;
+    height: 170px;
+    background: Theme.background;
+    VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+        alignment: start;
+        Text { text: "Bus Comp"; color: Theme.text-muted; font-size: Theme.text-lg; }
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            height: 26px;
+            for label[i] in root.bus-comp : StepperChip {
+                options: root.bus-comp;
+                selected-index: i;
+                hint: root.hint;
+            }
+        }
+        Text { text: "Strip"; color: Theme.text-muted; font-size: Theme.text-lg; }
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            height: 18px;
+            for label[i] in root.strip : StepperChip {
+                options: root.strip;
+                selected-index: i;
+                hint: root.hint;
+                text-color: Theme.accent;
+                font-size: Theme.text-md;
+            }
+        }
+        Text { text: "Disabled"; color: Theme.text-muted; font-size: Theme.text-lg; }
+        HorizontalLayout {
+            alignment: start;
+            height: 26px;
+            StepperChip { options: root.bus-comp; selected-index: 1; enabled: false; }
         }
     }
 }
@@ -842,5 +903,11 @@ export component MockupSpecimen inherits Rectangle {
         bypassed: root.value > 0.5;
         wet-dry: 1.0;
         wet-dry-text: "100% wet";
+    }
+    if root.kind == 65: StepperChip {
+        options: root.label == "" ? ["GRIP", "PUNCH", "TUBE"] : [root.label, "B", "C"];
+        selected-index: round(root.value * 2);
+        width: 100%;
+        height: 100%;
     }
 }

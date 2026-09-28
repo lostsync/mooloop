@@ -80,6 +80,18 @@ binds it from the row's kind number. An empty `icon` draws nothing, which is
 what the mixer's strip, bus and output headers show until they have a kind.
 `DeviceKindSheet` in `mockup-catalog.slint` shows every kind's header.
 
+**Closed 2026-09-27: the stepping chip.** `StepperChip` in `controls.slint`
+(MOO-295): one box showing the current option of a short list, with a filled
+arrow inside it at each end (`Icons.step-previous`, `Icons.step-next`). An
+arrow or the wheel steps one option; it stops at the ends and dims that
+arrow, as `StepperField` does, rather than wrapping. It is controlled with no
+opt-out: it reads `selected-index` and reports through `selected(int)`. It is
+as wide as its longest option at the current text size, so it does not jump
+as it steps. For a list short enough to walk, like a compressor's three
+voicings; a longer one wants `PickerChip`. The Bus Comp's panel and the
+strip's voicing picker adopt it; `StepperChipSheet` in `mockup-catalog.slint`
+shows it.
+
 A third caller arrived 2026-09-05 and needed nothing new: `aux-in-device.slint`
 picks a source channel and a published outlet from two `PickerChip`s, and the
 whole face is that pair, a `ParameterKnob` and two `SectionLabel`s. A device

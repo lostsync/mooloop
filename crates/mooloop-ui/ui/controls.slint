@@ -1,6 +1,6 @@
 import { ScrollView } from "std-widgets.slint";
 import { StatusHint, Theme } from "theme.slint";
-import { Icon } from "icons.slint";
+import { Icon, Icons } from "icons.slint";
 import { GainMath } from "gain.slint";
 import { MenuRow, MenuSeparator } from "menubar.slint";
 
@@ -578,6 +578,180 @@ export component PickerChip inherits Rectangle {
             }
         }
     }
+}
+
+// One of a stepper chip's two ends: a filled arrow inside the chip's box,
+// lit under the pointer, dim when there is nothing further that way. It takes
+// no pointer events of its own: the chip's one `TouchArea` does, so the wheel
+// and the status-bar hint hold across the whole chip, arrows included.
+component StepperChipArrow inherits Rectangle {
+    in property <string> icon;
+    in property <bool> enabled: true;
+    in property <bool> hovered;
+    in property <bool> pressed;
+    // The screen reader's name for the arrow, "Previous" or "Next".
+    in property <string> label;
+    callback clicked;
+
+    width: 16px;
+    border-radius: Theme.radius-sm;
+    background: !root.enabled ? transparent
+        : root.pressed ? Theme.surface-active
+        : root.hovered ? Theme.surface-raised : transparent;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+
+    Icon {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        size: min(16px, parent.height);
+        icon: root.icon;
+        tint: !root.enabled ? Theme.text-faint
+            : root.hovered ? Theme.text : Theme.text-muted;
+    }
+}
+
+// The current option of a short list, with a filled arrow inside the box at
+// each end that steps to the previous or next option (MOO-295, the top left
+// of Adam's sketch, 2026-09-27). The scroll wheel over the chip steps too, up
+// for next, as the toolbar's `StepperField` counts up.
+//
+// For a list short enough to walk and ordered enough that a neighbour means
+// something: the bus compressor's three voicings, the strip's four. A list
+// past that wants `PickerChip`, which opens it.
+//
+// **It stops at the ends**, dimming that end's arrow, as `StepperField`'s
+// arrows do; it does not wrap. A dim arrow says where in the list the
+// choice sits without reading every label, and a wheel flicked past the end
+// stays on the end instead of spinning round to the far one.
+//
+// **Controlled** (MOO-220, `docs/TEAMS.md`): it reads `selected-index` and
+// reports the index a step would make through `selected`, and never writes
+// its own. The owner republishes the row, so an undo that moves the choice
+// moves the chip. There is no `controlled: false` because nothing needs it.
+//
+// **As wide as its longest option**, measured at the current text size, so
+// it does not jump as it steps and grows with `Theme.text-*`. That is its
+// preferred width, which a layout gives it; a caller placing it in a plain
+// parent says `width: self.preferred-width`, as with any element there. A
+// caller with less room sets a narrower `width`, and the label elides.
+export component StepperChip inherits Rectangle {
+    in property <[string]> options;
+    in property <int> selected-index;
+    in property <bool> enabled: true;
+    /// What the choice does, for the status bar. The tooltip is the current
+    /// option's label, the value alone.
+    in property <string> hint;
+    in property <color> text-color: Theme.text;
+    in property <length> font-size: Theme.text-xl;
+    /// The index a step asks for, always inside `options`.
+    callback selected(int);
+
+    private property <bool> can-go-back: root.enabled && root.selected-index > 0;
+    private property <bool> can-go-on: root.enabled
+        && root.selected-index < root.options.length - 1;
+    private property <string> current: root.selected-index >= 0
+        && root.selected-index < root.options.length
+        ? root.options[root.selected-index] : "";
+    // Which end the pointer is over, from where it is on the chip.
+    private property <bool> over-back: touch.has-hover && touch.mouse-x < back.x + back.width;
+    private property <bool> over-on: touch.has-hover && touch.mouse-x >= on.x;
+
+    function step(by: int) {
+        if (!root.enabled || root.options.length == 0) { return; }
+        let next = clamp(root.selected-index + by, 0, root.options.length - 1);
+        if (next != root.selected-index) { root.selected(next); }
+    }
+
+    min-width: 2 * 16px + 2px + 8px;
+    preferred-width: layout.preferred-width;
+    min-height: 16px;
+    preferred-height: 22px;
+    background: Theme.surface;
+    border-radius: Theme.radius-md;
+    border-width: Theme.hairline;
+    border-color: Theme.border;
+    accessible-role: spinbox;
+    accessible-label: root.hint;
+    accessible-value: root.current;
+    accessible-enabled: root.enabled;
+    accessible-action-increment => { root.step(1); }
+    accessible-action-decrement => { root.step(-1); }
+
+    layout := HorizontalLayout {
+        padding: 1px;
+        back := StepperChipArrow {
+            icon: Icons.step-previous;
+            label: "Previous";
+            enabled: root.can-go-back;
+            hovered: root.over-back;
+            pressed: root.over-back && touch.pressed;
+            clicked => { root.step(-1); }
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            preferred-width: widest.preferred-width + 8px;
+            // Every option laid out, none drawn: this column's preferred
+            // width is the longest label's at the current text size, which
+            // is what the chip asks for. Zero tall, so it constrains nothing
+            // but the width.
+            widest := VerticalLayout {
+                x: 0px;
+                y: 0px;
+                height: 0px;
+                for option in root.options : Text {
+                    text: option;
+                    font-size: root.font-size;
+                    height: 0px;
+                    color: transparent;
+                    overflow: elide;
+                }
+            }
+            Text {
+                width: 100%;
+                height: 100%;
+                text: root.current;
+                font-size: root.font-size;
+                color: root.enabled ? root.text-color : Theme.text-faint;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+        on := StepperChipArrow {
+            icon: Icons.step-next;
+            label: "Next";
+            enabled: root.can-go-on;
+            hovered: root.over-on;
+            pressed: root.over-on && touch.pressed;
+            clicked => { root.step(1); }
+        }
+    }
+
+    // On top, and the chip's only pointer handler: a press on an end steps
+    // that way, and the wheel steps from anywhere on the chip.
+    touch := TouchArea {
+        mouse-cursor: (root.over-back && root.can-go-back) || (root.over-on && root.can-go-on)
+            ? pointer : default;
+        clicked => {
+            if (self.mouse-x < back.x + back.width) { root.step(-1); }
+            else if (self.mouse-x >= on.x) { root.step(1); }
+        }
+        changed has-hover => {
+            if (self.has-hover) { StatusHint.show(root.hint); }
+            else { StatusHint.clear(root.hint); }
+        }
+        scroll-event(e) => {
+            if (e.delta-y == 0) { return reject; }
+            root.step(e.delta-y > 0 ? 1 : -1);
+            accept
+        }
+    }
+
+    Tooltip { text: @markdown("\{root.current}"); }
 }
 
 export component SectionLabel inherits Text {
