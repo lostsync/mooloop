@@ -18337,7 +18337,15 @@ mod footprint {
         // channel running that node pays.
         //
         // MOO-176 added eight, its chain's unpublished fault count.
-        assert_eq!(size_of::<ChannelStrip>(), 22_808);
+        //
+        // MOO-314 added 320: the source's `DeviceId` (4), which is what a
+        // plugin instrument's lanes and routes name, and the plugin's knob
+        // edits waiting for the next block, a `PendingEffectParams` of eight
+        // events, the bound a hosted effect's slot has. The rest is
+        // alignment. Paid by every strip rather than boxed on a plugin
+        // source, because a knob edit lands on the audio thread and the
+        // queue has to be there before the edit is.
+        assert_eq!(size_of::<ChannelStrip>(), 23_128);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -18427,7 +18435,10 @@ mod footprint {
         //
         // And by 64 for MOO-264: ML-P8's voice filters keep their last aim,
         // the widest source now 7,568.
-        assert_eq!(per_live, 143_416);
+        //
+        // And by 320 with the strip for MOO-314: a plugin instrument's
+        // `DeviceId` and its waiting knob edits.
+        assert_eq!(per_live, 143_736);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
@@ -18527,7 +18538,10 @@ mod footprint {
         //
         // MOO-264's filter aims: 64 bytes a live channel, exactly 1 KiB
         // across sixteen.
-        assert_eq!((fixed + per_live * 16) / 1024, 2_727);
+        //
+        // MOO-314's plugin instrument id and knob queue: 320 bytes a live
+        // channel, exactly 5 KiB across sixteen.
+        assert_eq!((fixed + per_live * 16) / 1024, 2_732);
     }
 
 }
