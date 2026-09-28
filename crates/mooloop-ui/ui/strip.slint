@@ -28,7 +28,7 @@
 
 import { Motion, StatusHint, Theme } from "theme.slint";
 import { GainMath } from "gain.slint";
-import { MiniKnob, NoteFormat, PickerChip, SectionLabel, SelectorBank, ToolButton, ValueScale } from "controls.slint";
+import { MiniKnob, NoteFormat, SectionLabel, StepperChip, ToolButton, ValueScale } from "controls.slint";
 import { DynamicsCurveDisplay, EqResponseDisplay } from "device-displays.slint";
 import { Icon, Icons } from "icons.slint";
 
@@ -208,6 +208,9 @@ export global StripMetrics {
     /// reduction.
     out property <length> switch: 16px;
     out property <length> light: 9px;
+    /// The voicing chip's height on the mixer strip, where it is a row of its
+    /// own under DRIVE's knob. `MixerMetrics.strip-page-height` counts it.
+    out property <length> voicing-narrow: 18px;
 }
 
 // The line-art a shape gets instead of a letter.
@@ -402,41 +405,42 @@ component StripSectionHead inherits HorizontalLayout {
 
 // The voicing, which governs all three sections and so belongs beside the
 // input stage rather than inside one of them.
-export component StripVoicingPicker inherits Rectangle {
-    in-out property <int> voicing;
-    in property <bool> wide;
+//
+// One `◂ GRIP ▸` chip on every face (MOO-295, Adam's sketch, 2026-09-27), in
+// place of the list the mixer strip opened and the four-way bank the rack
+// row drew. The bank was what crowded "MOO GRIPPUNCHIRON" into the rack
+// column's 138px (MOO-292); the chip shows one name, as wide as the longest.
+//
+// It reads `voicing` and reports a step through `picked`, never holding a
+// selection of its own, so an undo that moves the voicing moves the chip.
+//
+// Its size is the caller's, from the room it has. The chip wants its arrows'
+// 34px and the longest name, PUNCH, on top: 78px at `Theme.text-md`, 74px at
+// `Theme.text-sm`. The mixer strip's column is 72px while its page scrolls,
+// so the narrow face passes the smaller type and the whole column, where the
+// name's own 32px still fits between the arrows with room either side.
+export component StripVoicingPicker inherits StepperChip {
+    in property <int> voicing;
     callback picked(int);
 
-    private property <string> hint-text: "The strip's voicing: what its input stage "
-        + "distorts, which frequencies its EQ bands offer, how its EQ tracks gain, "
-        + "and how its compressor bends above the knee.";
-
-    if !root.wide : PickerChip {
-        width: 100%;
-        options: StripSpec.voicings;
-        selected-index: root.voicing;
-        tooltip: root.hint-text;
-        text-color: Theme.accent;
-        picked(index) => { root.picked(index); }
-    }
-    // Four segments across whatever room there is, rather than a fixed
-    // segment width: the bank sizes itself to its own labels by default,
-    // which at 150px overflowed the panel it was in and drew `IRON` on top
-    // of the EQ beside it.
-    if root.wide : SelectorBank {
-        width: 100%;
-        options: StripSpec.voicings;
-        selected-index: root.voicing;
-        segment-width: (root.width - 4px) / 4;
-        tooltip: root.hint-text;
-        selected(index) => { root.picked(index); }
-    }
+    options: StripSpec.voicings;
+    selected-index: root.voicing;
+    text-color: Theme.accent;
+    hint: "The strip's voicing: what its input stage distorts, which frequencies "
+        + "its EQ bands offer, how its EQ tracks gain, and how its compressor "
+        + "bends above the knee.";
+    selected(index) => { root.picked(index); }
 }
 
-// DRIVE: the input stage, and the voicing selector beside it.
+// DRIVE: the input stage, and the voicing chip beside it.
 //
 // One row, which is what Adam's redraw asks for -- *"preamp at top, knob
-// beside selector"* -- rather than the selector on a row of its own.
+// beside selector"* -- rather than the selector on a row of its own. The rack
+// column has the room for that since the chip replaced the four-way bank
+// (MOO-295): a 34px knob and a 78px chip in its 138px. The mixer strip does
+// not: beside its 28px knob the chip would have 40px while the page scrolls,
+// and PUNCH would be `P…`. So there the chip is the row under the knob and
+// takes the column's whole width.
 export component StripDrivePage inherits Rectangle {
     in property <StripRow> strip;
     in property <bool> wide;
@@ -455,16 +459,13 @@ export component StripDrivePage inherits Rectangle {
             toggled => { root.switched(StripSpec.pre-in, !root.strip.pre-in); }
         }
         HorizontalLayout {
-            spacing: 4px;
+            spacing: 6px;
             height: root.wide ? StripMetrics.knob-major-wide : StripMetrics.knob-major;
-            // Centred on the rack column, where the knob is alone in the
-            // row; **stretch** on the mixer strip, where the voicing chip
-            // is beside it and has to be squeezed into the 52px left over.
-            // `start` there asked for the chip's preferred width and clipped
-            // it to nothing -- the trap `reference-slint-layout-gotchas`
-            // records as "alignment: start makes a layout's minimum the sum
-            // of its children's preferred sizes".
-            alignment: root.wide ? LayoutAlignment.center : LayoutAlignment.stretch;
+            // Centred, the knob alone on the mixer strip and the knob and the
+            // chip as a pair on the rack column. `center` asks each child
+            // for its preferred width, which is what the chip wants: its
+            // longest name, so it does not jump as it steps.
+            alignment: center;
             StripKnob {
                 param: StripSpec.drive-db;
                 natural: root.strip.drive-db;
@@ -476,22 +477,20 @@ export component StripDrivePage inherits Rectangle {
                     + "Turning it down re-balances the colour as well as reducing it.";
                 changed(v) => { root.moved(StripSpec.drive-db, v); }
             }
-            // Beside the knob on the mixer strip, where it is a chip naming
-            // one voicing; **under** it on the rack column, where it is the
-            // four-way bank and wants the column's whole width. Sharing a
-            // row there left it 100px for four names and clipped `PUNCH`.
-            if !root.wide : StripVoicingPicker {
-                horizontal-stretch: 1;
-                y: (parent.height - self.height) / 2;
-                height: 18px;
-                voicing: root.strip.voicing;
-                picked(index) => { root.voicing-picked(index); }
+            if root.wide : VerticalLayout {
+                alignment: center;
+                StripVoicingPicker {
+                    height: 22px;
+                    font-size: Theme.text-md;
+                    voicing: root.strip.voicing;
+                    picked(index) => { root.voicing-picked(index); }
+                }
             }
         }
-        if root.wide : StripVoicingPicker {
-            height: 22px;
+        if !root.wide : StripVoicingPicker {
+            height: StripMetrics.voicing-narrow;
+            font-size: Theme.text-sm;
             voicing: root.strip.voicing;
-            wide: true;
             picked(index) => { root.voicing-picked(index); }
         }
     }

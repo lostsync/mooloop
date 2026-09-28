@@ -3,7 +3,7 @@ import { ScrollView } from "std-widgets.slint";
 import { ConsoleButton, MixerFader, MiniKnob, MuteButton, ParameterFader, PickerChip, SectionLabel, SoloButton, ToolButton } from "controls.slint";
 import { GainMath } from "gain.slint";
 import { ChannelMeter } from "meters.slint";
-import { StripMeters, StripRow, StripSections } from "strip.slint";
+import { StripMeters, StripMetrics, StripRow, StripSections } from "strip.slint";
 import { Icons } from "icons.slint";
 import { ReorderMath } from "reorder.slint";
 
@@ -90,12 +90,14 @@ export global MixerMetrics {
     /// taller than any mixer pane will be. It scrolls to this rather than
     /// squeezing its knobs, the way the sends area scrolls to its rows.
     ///
-    /// Section by section: DRIVE is a header and a row, EQ is a header, a
-    /// column of labels and four band rows, COMP is a header and three rows
-    /// of captioned knobs. Stated rather than measured because the page
-    /// lives inside the clipping card that makes the turn work, and a
-    /// clipped child reports no preferred height at all.
-    out property <length> strip-page-height: 340px;
+    /// Section by section: DRIVE is a header, its knob and the voicing chip
+    /// under it, EQ is a header, a column of labels and four band rows, COMP
+    /// is a header and three rows of captioned knobs. Stated rather than
+    /// measured because the page lives inside the clipping card that makes
+    /// the turn work, and a clipped child reports no preferred height at
+    /// all. The chip's row is the one term named (MOO-295): it was beside
+    /// the knob until the chip needed the column's width.
+    out property <length> strip-page-height: 340px + StripMetrics.voicing-narrow + 3px;
     /// What a strip's fader face needs, top to bottom: its padding, the
     /// name plate, the output section, the destination and the analog sum.
     ///
