@@ -1608,9 +1608,13 @@ impl crate::session::Session {
                 HostedSource::new(slot)
             }
         };
+        // With the id `reset_channel_source` just minted, so the engine drives
+        // this instrument by what names it, and no longer the replaced one's
+        // lanes and routes (MOO-314).
         let _ = handle.send_structural(StructuralCommand::InstallSource {
             channel,
             node: Box::new(source),
+            device: self.channels[index].source_device,
         });
         self.dirty = true;
         Some(slot)
@@ -2156,7 +2160,7 @@ pub(crate) mod tests {
                 StructuralCommand::SetBranchAlign { slot, align, .. } => {
                     self.branches.push((slot, align.map_or(0, |ring| ring.frames())));
                 }
-                StructuralCommand::InstallSource { channel, node } => {
+                StructuralCommand::InstallSource { channel, node, .. } => {
                     // A hosted source with a processor in it is never at
                     // rest (the fake processor has not opted in); an empty
                     // one always is.

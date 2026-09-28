@@ -945,6 +945,99 @@ impl<const N: usize> CurvePool<N> {
 type EffectCurvePool = CurvePool<MAX_EFFECT_CURVE_DESTINATIONS>;
 type SourceCurvePool = CurvePool<MAX_SOURCE_CURVE_DESTINATIONS>;
 
+/// Write a hosted plugin's driven parameters for one block into `pool`: a
+/// value row for each id a lane under the playhead names on `device`, then
+/// an offset row for each id a route names, every id resolved against
+/// `node`'s own list ([`AudioNode::hosted_param`]). Returns how many
+/// destinations the pool had no row for.
+///
+/// The body of `EffectChain::plugin_curves` (MOO-82), whose comment is the
+/// rule, pulled out so a plugin instrument's source pass resolves through the
+/// same code with the strip's source as the node (MOO-314). A device that is
+/// not the one a lane or route names -- a replaced instrument's, still in the
+/// sequencer until the next install -- matches nothing here.
+fn resolve_plugin_curves<const N: usize, Node: AudioNode + ?Sized>(
+    pool: &mut CurvePool<N>,
+    node: &Node,
+    scope: EffectTarget,
+    device: mooloop_core::DeviceId,
+    modulation: Option<&ModulationBlock<'_>>,
+    automation: Option<&AutomationBlock<'_>>,
+    ticks: usize,
+) -> u64 {
+    let owner = ParamOwner::PluginParam { device };
+    // Every id something names on this device, once each. A fixed array:
+    // this is the audio thread, and the pool below holds no more rows.
+    let mut ids = [0u32; N];
+    let mut count = 0usize;
+    let mut refused = 0u64;
+    {
+        let mut note = |address: ParamAddr| {
+            if address.scope != scope || address.owner != owner || ids[..count].contains(&address.param) {
+                return;
+            }
+            if count == ids.len() {
+                refused += 1;
+                return;
+            }
+            ids[count] = address.param;
+            count += 1;
+        };
+        if let Some(modulation) = modulation {
+            modulation.rack.destinations().for_each(&mut note);
+        }
+        if let Some(automation) = automation {
+            automation.visit_targets(&mut note);
+        }
+    }
+
+    // Values first, then offsets: the pool marks one boundary between
+    // them rather than a kind per row.
+    for &id in &ids[..count] {
+        let Some(param) = node.hosted_param(id) else {
+            continue;
+        };
+        let destination = ParamAddr::plugin_param(scope, device, id);
+        let lane = automation
+            .filter(|_| param.automatable)
+            .and_then(|automation| Some((automation, automation.curve_for(destination)?)));
+        if let Some((automation, curve)) = lane {
+            let Some(row) = pool.begin(id) else {
+                refused += 1;
+                continue;
+            };
+            let mut last = 0.0;
+            for (tick, cell) in row.iter_mut().enumerate().take(ticks) {
+                last = automation.value_at(&curve, tick).unwrap_or(last);
+                *cell = param.plain(last);
+            }
+        }
+    }
+    pool.begin_offsets();
+    for &id in &ids[..count] {
+        let Some(param) = node.hosted_param(id) else {
+            continue;
+        };
+        let destination = ParamAddr::plugin_param(scope, device, id);
+        let policy =
+            ModDestinationDescriptor::for_plugin_param(id, param.steps.is_some(), param.modulatable);
+        let routed = modulation.filter(|modulation| modulation.rack.modulates(destination, &policy));
+        if let Some(modulation) = routed {
+            let Some(row) = pool.begin(id) else {
+                refused += 1;
+                continue;
+            };
+            for (tick, cell) in row.iter_mut().enumerate().take(ticks) {
+                let offset = modulation
+                    .rack
+                    .offset_for(destination, modulation.sources(tick), &policy);
+                *cell = param.plain_offset(offset);
+            }
+        }
+    }
+    refused
+}
+
 /// One channel's modulator outputs for one block, captured at each control
 /// subdivision.
 ///
@@ -2486,6 +2579,9 @@ impl EffectChain {
     /// base this side would have to keep in step with the plugin. That is
     /// `docs/MODULATION.md`'s base-plus-offset rule, with the base kept by
     /// the plugin. The processor zeroes an offset whose route has gone.
+    ///
+    /// The resolution itself is [`resolve_plugin_curves`], which a plugin
+    /// instrument's source pass calls too (MOO-314).
     fn plugin_curves(
         &mut self,
         slot: usize,
@@ -2498,77 +2594,15 @@ impl EffectChain {
         let Some(node) = self.nodes[slot].as_deref() else {
             return;
         };
-        let owner = ParamOwner::PluginParam { device };
-        // Every id something names on this device, once each. A fixed array:
-        // this is the audio thread, and the pool below holds no more rows.
-        let mut ids = [0u32; MAX_EFFECT_CURVE_DESTINATIONS];
-        let mut count = 0usize;
-        let mut overflow = 0u64;
-        {
-            let mut note = |address: ParamAddr| {
-                if address.scope != scope || address.owner != owner || ids[..count].contains(&address.param) {
-                    return;
-                }
-                if count == ids.len() {
-                    overflow += 1;
-                    return;
-                }
-                ids[count] = address.param;
-                count += 1;
-            };
-            if let Some(modulation) = modulation {
-                modulation.rack.destinations().for_each(&mut note);
-            }
-            if let Some(automation) = automation {
-                automation.visit_targets(&mut note);
-            }
-        }
-        self.curve_refusals += overflow;
-
-        // Values first, then offsets: the pool marks one boundary between
-        // them rather than a kind per row.
-        for &id in &ids[..count] {
-            let Some(param) = node.hosted_param(id) else {
-                continue;
-            };
-            let destination = ParamAddr::plugin_param(scope, device, id);
-            let lane = automation
-                .filter(|_| param.automatable)
-                .and_then(|automation| Some((automation, automation.curve_for(destination)?)));
-            if let Some((automation, curve)) = lane {
-                let Some(row) = self.curve_scratch.begin(id) else {
-                    self.curve_refusals += 1;
-                    continue;
-                };
-                let mut last = 0.0;
-                for (tick, cell) in row.iter_mut().enumerate().take(ticks) {
-                    last = automation.value_at(&curve, tick).unwrap_or(last);
-                    *cell = param.plain(last);
-                }
-            }
-        }
-        self.curve_scratch.begin_offsets();
-        for &id in &ids[..count] {
-            let Some(param) = node.hosted_param(id) else {
-                continue;
-            };
-            let destination = ParamAddr::plugin_param(scope, device, id);
-            let policy =
-                ModDestinationDescriptor::for_plugin_param(id, param.steps.is_some(), param.modulatable);
-            let routed = modulation.filter(|modulation| modulation.rack.modulates(destination, &policy));
-            if let Some(modulation) = routed {
-                let Some(row) = self.curve_scratch.begin(id) else {
-                    self.curve_refusals += 1;
-                    continue;
-                };
-                for (tick, cell) in row.iter_mut().enumerate().take(ticks) {
-                    let offset = modulation
-                        .rack
-                        .offset_for(destination, modulation.sources(tick), &policy);
-                    *cell = param.plain_offset(offset);
-                }
-            }
-        }
+        self.curve_refusals += resolve_plugin_curves(
+            &mut self.curve_scratch,
+            node,
+            scope,
+            device,
+            modulation,
+            automation,
+            ticks,
+        );
     }
 
     fn queue_buffer(&mut self, slot: usize, event: mooloop_core::BufferEvent) {
@@ -4251,6 +4285,21 @@ pub struct ChannelStrip {
     /// move underneath an active lane without the two fighting -- the same
     /// split `EffectChain::base_params` makes for effects.
     source_base: GeneratorParams,
+    /// The source's identity, `ChannelSetup::source_device` (MOO-312): what
+    /// a lane or a route on a plugin instrument's parameter names it by.
+    /// `UNASSIGNED` for a native source, whose lanes answer to its kind.
+    /// Set from the song on an install and by `StructuralCommand::InstallSource`
+    /// with the node, so the two never disagree about which instrument is
+    /// here, and read by the source pass (`plugin_curves`) and by a knob edit
+    /// (`SetChannelGeneratorParam`) to decide what drives it (MOO-314).
+    source_device: mooloop_core::DeviceId,
+    /// A hosted instrument's knob edits waiting for the next block, as
+    /// `ParamValue`s in its own units (MOO-314). A plugin keeps its values
+    /// itself, so there is no base here to write, and its edits go to it the
+    /// way a hosted effect's do (`EffectSlot::events`), bounded and
+    /// newest-wins per id. Moved onto the channel's list at the top of the
+    /// block it is heard in.
+    source_pending: PendingEffectParams,
     effects: EffectChain,
     bus: StereoBus,
     output: OutputStage,
@@ -4411,6 +4460,8 @@ impl ChannelStrip {
         Self {
             source_base: arrival_base(&*source),
             source,
+            source_device: mooloop_core::DeviceId::UNASSIGNED,
+            source_pending: PendingEffectParams::empty(),
             published_outlets: [0.0; MAX_GENERATOR_OUTLETS],
             effects: EffectChain::new(),
             bus: StereoBus::with_capacity(MAX_BLOCK_SIZE),
@@ -4433,11 +4484,18 @@ impl ChannelStrip {
     /// arrives at its kind's defaults (see [`build_source`]), so the base
     /// is those defaults too, and the patch follows as parameter commands
     /// the way it always has.
+    ///
+    /// `device` is the arriving source's identity. Knob edits still waiting
+    /// for the one it displaces are dropped with it: they were addressed to
+    /// that instrument.
     fn install_source(
         &mut self,
         source: Box<dyn SourceNode + Send>,
+        device: mooloop_core::DeviceId,
     ) -> Box<dyn SourceNode + Send> {
         self.source_base = arrival_base(&*source);
+        self.source_device = device;
+        self.source_pending.clear();
         std::mem::replace(&mut self.source, source)
     }
 
@@ -5906,9 +5964,11 @@ impl RenderState {
             // the same instrument only when they name the same slot: a
             // channel moved from one plugin to another between installs
             // would otherwise carry the first plugin into the second's place
-            // (MOO-84).
+            // (MOO-84). Nor across a change of the instrument's identity,
+            // which is what its lanes and routes name (MOO-314).
             if live.source.kind() == DeviceKind::Plugin
-                && live.source.generator_params() != fresh.source.generator_params()
+                && (live.source.generator_params() != fresh.source.generator_params()
+                    || live.source_device != fresh.source_device)
             {
                 continue;
             }
@@ -6186,6 +6246,10 @@ impl RenderState {
                     audio_slot,
                     self.sample_rate,
                 ));
+                // The instrument's identity comes with it, and any knob edit
+                // still waiting was for the one it displaced (MOO-314).
+                strip.source_device = channel.setup.source_device;
+                strip.source_pending.clear();
                 strip.output.muted = channel.setup.channel.muted;
                 strip.output.set_volume(channel.setup.channel.volume);
                 strip.output.set_pan(channel.setup.channel.pan);
@@ -6215,11 +6279,14 @@ impl RenderState {
                 // A strip past the end of the project is a spare, and goes
                 // back to a fresh sampler channel.
                 strip.reset_slot(&mut self.reclaim);
-                drop(strip.install_source(build_source(
-                    &DeviceKind::Sampler.default_generator_params(),
-                    audio_slot,
-                    self.sample_rate,
-                )));
+                drop(strip.install_source(
+                    build_source(
+                        &DeviceKind::Sampler.default_generator_params(),
+                        audio_slot,
+                        self.sample_rate,
+                    ),
+                    mooloop_core::DeviceId::UNASSIGNED,
+                ));
             }
         }
         for index in 0..MAX_CHANNELS {
@@ -6838,9 +6905,13 @@ impl RenderState {
             // a modulator's own parameters are not modulation destinations
             // yet, so there is nothing left holding a stale resolved value.
             ParamOwner::Modulator { .. } | ParamOwner::Strip => {}
-            // Nothing resolves a plugin parameter in the control pass yet
-            // (`docs/plans/plugin-hosting/`, step 07, and MOO-195), so there
-            // is no resolved value to go stale.
+            // A hosted plugin's parameter, an effect's or an instrument's
+            // (`resolve_plugin_curves`, MOO-82 and MOO-314), has no base on
+            // this side to restore: the plugin holds its own value, so what
+            // a lane last wrote simply stays as the plugin's value, as a
+            // gesture on its own GUI would. A route's offset is not left
+            // behind either: the processor zeroes an offset whose route has
+            // gone.
             ParamOwner::PluginParam { .. } => {}
         }
     }
@@ -7325,9 +7396,9 @@ impl RenderState {
                 }
                 .map(StructuralReclaim::SamplerStretch)
             }
-            StructuralCommand::InstallSource { channel, node } => {
+            StructuralCommand::InstallSource { channel, node, device } => {
                 let displaced = match self.strips.get_mut(usize::from(channel)) {
-                    Some(strip) => strip.install_source(node),
+                    Some(strip) => strip.install_source(node, device),
                     // No such channel: the node goes straight back, like
                     // every other arrival with nowhere to go.
                     None => node,
@@ -8016,6 +8087,36 @@ impl RenderState {
                 }
             }
             EngineCommand::SetChannelGeneratorParam { channel, id, value } => {
+                // A hosted instrument keeps its own values, so there is no
+                // base to store: the value goes to the plugin, in its plain
+                // units, unless a lane is writing that parameter -- the rule
+                // `set_effect_param` follows for a hosted effect, and for the
+                // same reason a route does not hold it back (MOO-314).
+                // `GeneratorParams::Plugin` has no parameter to set, so this
+                // used to be dropped here without a word.
+                if let Some(device) = self
+                    .strips
+                    .get(channel as usize)
+                    .filter(|strip| strip.source.kind() == DeviceKind::Plugin)
+                    .map(|strip| strip.source_device)
+                {
+                    let destination = ParamAddr::plugin_param(EffectTarget::Channel(channel), device, id);
+                    let lane = device
+                        .is_assigned()
+                        .then(|| {
+                            AutomationCurve::at(&self.sequencer, destination, self.transport.position_ticks)
+                        })
+                        .flatten();
+                    if lane.is_none() {
+                        if let Some(strip) = self.strips.get_mut(channel as usize) {
+                            strip.source_pending.queue(TimedEvent {
+                                offset: 0,
+                                event: Event::ParamValue { id, value },
+                            });
+                        }
+                    }
+                    return;
+                }
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
                     // The base is the authored value modulation offsets from,
                     // so this edits the base and lets the ordinary modulation
@@ -9173,6 +9274,16 @@ impl RenderState {
                 self.strips[index].source_silent_frames = 0;
                 continue;
             }
+            // A hosted instrument's knob edits, at the top of the block
+            // (MOO-314). After the skip above, which keeps them for the
+            // block the channel is next rendered in, and before the idle
+            // check below, which a waiting edit wakes the strip for: a
+            // plugin asleep would otherwise never hear it.
+            {
+                let strip = &mut self.strips[index];
+                self.refused_events += strip.source_pending.copy_to(&mut self.events[index]);
+                strip.source_pending.clear();
+            }
             let performance = self.expression[index].performance;
             let modulation = ModulationBlock {
                 rack: &self.modulation[index],
@@ -9228,6 +9339,25 @@ impl RenderState {
                 // maximal block with even one automated parameter and a
                 // played note could make the note lose the race.
                 self.source_curves[index].clear(resolved_ticks);
+                // A plugin instrument has no table: what drives it is what
+                // names its device, resolved against the running processor's
+                // own list, exactly as for a plugin effect (MOO-314). A lane
+                // is a value in the plugin's units and a route an offset over
+                // the value the plugin holds. Its table below is empty and it
+                // has no internal routes, so the native passes add nothing.
+                // An unassigned device is a source nothing can name.
+                let device = self.strips[index].source_device;
+                if base.kind() == DeviceKind::Plugin && device.is_assigned() {
+                    self.source_curve_refusals += resolve_plugin_curves(
+                        &mut self.source_curves[index],
+                        &*self.strips[index].source,
+                        scope,
+                        device,
+                        Some(&modulation),
+                        automation.as_ref(),
+                        resolved_ticks,
+                    );
+                }
                 // Only what a route or a lane names, not the whole table
                 // (MOO-195): see `driven_positions`.
                 let table = base.kind().descriptors();
@@ -12631,7 +12761,11 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
     /// and drop the displaced one here, off the "audio thread".
     fn switch_source(render: &mut RenderState, channel: u8, kind: DeviceKind) {
         let node = render.build_source_for(channel as usize, &kind.default_generator_params());
-        let displaced = render.apply_structural(StructuralCommand::InstallSource { channel, node });
+        let displaced = render.apply_structural(StructuralCommand::InstallSource {
+            channel,
+            node,
+            device: mooloop_core::DeviceId::UNASSIGNED,
+        });
         assert!(matches!(displaced, Some(StructuralReclaim::Source(_))));
     }
 

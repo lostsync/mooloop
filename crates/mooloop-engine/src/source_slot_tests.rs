@@ -156,7 +156,11 @@ fn project_with(params: GeneratorParams) -> (Project, u8) {
 fn switch_source(render: &mut RenderState, channel: u8, params: GeneratorParams) {
     let defaults = params.kind().default_generator_params();
     let node = render.build_source_for(usize::from(channel), &defaults);
-    let displaced = render.apply_structural(StructuralCommand::InstallSource { channel, node });
+    let displaced = render.apply_structural(StructuralCommand::InstallSource {
+        channel,
+        node,
+        device: mooloop_core::DeviceId::UNASSIGNED,
+    });
     assert!(
         matches!(displaced, Some(StructuralReclaim::Source(_))),
         "a source change must hand the old device back"
@@ -442,12 +446,13 @@ fn a_source_change_crosses_as_an_install_of_the_device_it_names() {
             &bank,
             SAMPLE_RATE,
         );
-        let Some(RealtimeCommand::Structural(StructuralCommand::InstallSource { channel, node })) =
+        let Some(RealtimeCommand::Structural(StructuralCommand::InstallSource { channel, node, device })) =
             command
         else {
             panic!("a change to {kind:?} did not cross as an install");
         };
         assert_eq!((channel, node.kind()), (3, kind));
+        assert_eq!(device, mooloop_core::DeviceId::UNASSIGNED, "a native source has no device identity");
         assert_eq!(node.generator_params(), kind.default_generator_params());
         if let Some(sampler) = node.as_sampler() {
             assert_eq!(sampler.audio_slot_ptr(), Arc::as_ptr(&bank[3]) as usize);

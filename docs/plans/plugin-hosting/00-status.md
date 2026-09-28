@@ -1253,7 +1253,9 @@ is installed; Surge XT and Dexed are still the plan's manual case.
 
 **Not here.** An instrument's parameters have no address yet: a lane or
 route on one needs a `DeviceId` for the source slot (MOO-74's open point,
-Control's `ParamOwner::PluginParam` resolution for sources). Note
+Control's `ParamOwner::PluginParam` resolution for sources). MOO-312 has
+since given them one (below, "Found after step 10: an instrument's
+parameters"). Note
 expression, MPE, several outputs and routing generated notes stay in
 "Deliberately not". MOO-230 (a restart cuts a sounding instrument) is open.
 Adding an instrument from the window is Interface's (MOO-83's follow-up).
@@ -1457,6 +1459,49 @@ The gain now declares an empty note-ports extension, as Surge XT Effects
 does. `plugin_retire_tests.rs` in `mooloop-engine` takes a started processor
 out by every path above and drops its instance on the test thread. All eight
 aborted against the code before the fix.
+
+## Found after step 10: an instrument's parameters (MOO-312, 2026-09-28)
+
+Step 10 left a plugin instrument's parameters with no address. MOO-312
+gives them one in four ordered legs: Document & Session (MOO-313), Realtime
+Engine (MOO-314), Parameters & Control (MOO-315), Interface. The address is
+`ParamOwner::PluginParam { device }`, as for a plugin effect, with the
+`DeviceId` the source slot is given (`ChannelSetup::source_device`).
+
+**The engine drives them (MOO-314).**
+
+- **The strip holds the source's id** (`ChannelStrip::source_device`). It
+  is set from the song on an install and comes with the node in
+  `StructuralCommand::InstallSource`, which `Session::set_plugin_source`
+  sends with the id it minted. A native source's is `UNASSIGNED`.
+- **One resolution for effects and instruments.** `resolve_plugin_curves`
+  is `EffectChain::plugin_curves`'s old body, which is Control's symbol,
+  taken out whole. Both the chain and the source pass call it. A lane is a
+  value in the plugin's units and a route an offset (`ParamMod`) over the
+  value the plugin holds. The processor zeroes an offset whose route has
+  gone.
+- **A knob edit reaches the plugin.** `SetChannelGeneratorParam` on a plugin
+  source queues a `ParamValue` in the plugin's own units for the next block,
+  unless a lane is writing that parameter. A route does not hold it back.
+  This is `set_effect_param`'s rule for a hosted effect. The edit used to be
+  dropped, because `GeneratorParams::Plugin` has no parameter to set.
+- **A replaced instrument's lanes drive nothing.** A source change forgets
+  the old instrument's lanes and routes in the session (MOO-313, option 1
+  of MOO-312's open Question). The engine's sequencer still holds them
+  until the next project install. They name the old device, and the source
+  pass drives only what names the strip's device, so they are inert. That
+  holds whichever way the Question is answered.
+- The test sine has a `level` parameter (`PARAM_LEVEL`, dB, automatable and
+  modulatable) for these tests. At its default the output is unchanged to
+  the bit.
+
+`plugin_instrument_param_tests.rs` in `mooloop-engine` covers four cases:
+a lane on every control tick, with the export equal to the executor at 512
+and 64 frames; a route as an offset, and zeroed once it is removed; a knob
+edit heard, and held back under a lane; and a replaced instrument's lane
+not driving the new one. Every executor block is counted for allocations.
+The session side is MOO-315's: `plugin_destinations`, MIDI learn, and a
+session verb for the knob.
 
 ## Found after step 07: plugin device presets (MOO-222, 2026-09-26)
 

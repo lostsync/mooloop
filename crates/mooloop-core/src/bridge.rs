@@ -300,6 +300,11 @@ pub enum EngineCommand {
     /// Whole-struct installs are unaffected: a project's saved parameters
     /// arrive through `load_source` on the control thread, which never
     /// touches this ring.
+    ///
+    /// On a plugin instrument, `id` is the plugin's own parameter id and
+    /// `value` is in the plugin's plain units. The plugin keeps its own
+    /// values, so the edit goes to it at the next block unless a lane is
+    /// writing that parameter (MOO-314).
     SetChannelGeneratorParam { channel: u8, id: u32, value: f32 },
     /// Add or repoint one of the generator's own internal modulation routes.
     ///

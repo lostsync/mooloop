@@ -276,6 +276,7 @@ fn switching_and_swapping_a_hosted_source_allocates_nothing() {
             RealtimeCommand::Structural(StructuralCommand::InstallSource {
                 channel: 0,
                 node: Box::new(HostedSource::with_processor(slot, fake())),
+                device: mooloop_core::DeviceId::UNASSIGNED,
             }),
         ),
         (
@@ -363,6 +364,7 @@ fn a_hosted_source_is_carried_only_onto_its_own_slot() {
     drop(moved_on.apply_structural(StructuralCommand::InstallSource {
         channel: 0,
         node: Box::new(HostedSource::with_processor(other, fake())),
+        device: mooloop_core::DeviceId::UNASSIGNED,
     }));
     let mut incoming = RenderState::from_project(SAMPLE_RATE, &project, &[]);
     incoming.carry_strips_from(&mut moved_on, &plan);

@@ -207,6 +207,8 @@ mod plugin_automation_tests;
 #[cfg(test)]
 mod plugin_source_tests;
 #[cfg(test)]
+mod plugin_instrument_param_tests;
+#[cfg(test)]
 mod plugin_instrument_tests;
 #[cfg(test)]
 mod plugin_retire_tests;
@@ -340,9 +342,18 @@ pub enum StructuralCommand {
     /// accepted on 2026-09-22 (`docs/plans/plugin-hosting/00-status.md`).
     /// Commands queued behind it wait with it, so a patch sent after the
     /// change can never reach the device it replaced.
+    ///
+    /// `device` is the source's identity (`ChannelSetup::source_device`,
+    /// MOO-312): what a lane or a route on a plugin instrument's parameter
+    /// names it by, `DeviceId::UNASSIGNED` for a native source. The strip
+    /// takes it with the node, so from the block the new instrument lands in,
+    /// only lanes and routes naming *it* drive it; the replaced one's, which
+    /// the sequencer still holds until the next project install, name
+    /// another device and drive nothing (MOO-314).
     InstallSource {
         channel: u8,
         node: Box<dyn SourceNode + Send>,
+        device: mooloop_core::DeviceId,
     },
     /// Put a hosted plugin's processor into `channel`'s source, or pull the
     /// running one out with `None` (MOO-84, `docs/plans/plugin-hosting/` step
@@ -1296,7 +1307,10 @@ fn same_strip_but_effects(
         // The plugin instrument's identity (MOO-312): compared, so a strip
         // is never carried across a change of the device its lanes and
         // routes name. It changes only with `source`, so this rebuilds
-        // nothing that comparing the source did not already.
+        // nothing that comparing the source did not already. The strip
+        // holds it (`ChannelStrip::source_device`, MOO-314) and the source
+        // pass drives only what names it, so a carried strip must hold the
+        // incoming song's id; equal here is what makes that so.
         source_device,
     } = held;
     let mooloop_core::Channel {
@@ -2220,7 +2234,14 @@ fn realtime_command(
         EngineCommand::SetChannelSource { channel, source } => {
             let slot = audio_slots.get(usize::from(channel))?.clone();
             let node = render::build_source(&source.default_generator_params(), slot, sample_rate);
-            Some(RealtimeCommand::Structural(StructuralCommand::InstallSource { channel, node }))
+            // A native source has no device identity: its lanes answer to
+            // its kind (MOO-135). A plugin channel is made by the session's
+            // `set_plugin_source`, which sends the id it minted.
+            Some(RealtimeCommand::Structural(StructuralCommand::InstallSource {
+                channel,
+                node,
+                device: mooloop_core::DeviceId::UNASSIGNED,
+            }))
         }
         cmd => Some(RealtimeCommand::Engine(cmd)),
     }
