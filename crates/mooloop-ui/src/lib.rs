@@ -33,6 +33,7 @@ mod rack_displays;
 mod rack_displays_tests;
 #[cfg(test)]
 mod source_names_tests;
+mod display_backend;
 mod plugin_scan;
 mod plugin_ui;
 mod pump_profile;
@@ -3567,6 +3568,12 @@ pub use settings::PluginSettings;
 /// The binary's startup plugin scan (MOO-80), moved here so the window can
 /// start the same scan again (MOO-229).
 pub use plugin_scan::start_startup_plugin_scan;
+/// The "Run under XWayland" setting applied before the first window, and
+/// which display server the window ended up on (MOO-301, Platform's).
+pub use display_backend::{
+    select_display_backend, window_display_backend, window_x11_parent, BackendPlan,
+    DisplayBackend,
+};
 
 /// What the user saved about finding plugins, for the binary's startup scan
 /// (MOO-80).

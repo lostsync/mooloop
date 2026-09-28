@@ -21,4 +21,6 @@ pub mod display;
 pub mod x11;
 
 pub use display::{BackendPlan, DisplayBackend};
+/// The host's neutral window types, as a plugin window speaks them.
+pub use mooloop_plugin_host::{GuiSize, NativeWindow};
 pub use x11::{PluginWindowEvent, PluginWindowId, PluginWindowSpec, PluginWindows, WindowError};

@@ -1037,6 +1037,15 @@ pub struct PluginSettings {
     /// Unchanged files are never scanned twice either way.
     #[serde(default = "default_true")]
     pub scan_on_startup: bool,
+    /// "Run under XWayland": put the whole process on X11 under a Wayland
+    /// session, so a plugin's window can be kept above the main window the
+    /// way it is on X11 (`11-plugin-gui-windows.md`, Adam's ruling of
+    /// 2026-09-28; MOO-301). Off by default: mooloop is a native Wayland
+    /// client unless asked. Read once, before the first window
+    /// (`display_backend::select_display_backend`), so changing it takes a
+    /// restart. The Preferences toggle is Interface's (MOO-302).
+    #[serde(default)]
+    pub run_under_xwayland: bool,
 }
 
 fn default_scan_timeout_s() -> u32 {
@@ -1049,6 +1058,7 @@ impl Default for PluginSettings {
             extra_paths: Vec::new(),
             scan_timeout_s: default_scan_timeout_s(),
             scan_on_startup: true,
+            run_under_xwayland: false,
         }
     }
 }
@@ -2197,6 +2207,7 @@ mod tests {
                 extra_paths: vec![PathBuf::from("/opt/clap")],
                 scan_timeout_s: 30,
                 scan_on_startup: false,
+                run_under_xwayland: true,
             },
             // Deliberately not the default arrangement, and deliberately one
             // that `sanitized()` must leave alone: the mixer in the dock and
@@ -2240,6 +2251,48 @@ mod tests {
             UiSettings::load_from(&path).unwrap().layout,
             LayoutSettings::default()
         );
+    }
+
+    #[test]
+    fn run_under_xwayland_is_off_by_default() {
+        assert!(!UiSettings::default().plugins.run_under_xwayland);
+    }
+
+    #[test]
+    fn a_config_written_before_the_xwayland_setting_loads_with_it_off() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(
+            &path,
+            "schema-version = 1\n[appearance]\npreset = 'mooloop'\naccent = '#84CC16'\n\
+             [plugins]\nscan-timeout-s = 20\n",
+        )
+        .unwrap();
+        let plugins = UiSettings::load_from(&path).unwrap().plugins;
+        assert!(!plugins.run_under_xwayland);
+        // The rest of the section is still read.
+        assert_eq!(plugins.scan_timeout_s, 20);
+    }
+
+    #[test]
+    fn run_under_xwayland_loads_and_survives_a_save() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(
+            &path,
+            "schema-version = 1\n[appearance]\npreset = 'mooloop'\naccent = '#84CC16'\n\
+             [plugins]\nrun-under-xwayland = true\n",
+        )
+        .unwrap();
+        let loaded = UiSettings::load_from(&path).unwrap();
+        assert!(loaded.plugins.run_under_xwayland);
+
+        let again = directory.path().join("again.toml");
+        loaded.save_to(&again).unwrap();
+        assert!(fs::read_to_string(&again)
+            .unwrap()
+            .contains("run-under-xwayland = true"));
+        assert!(UiSettings::load_from(&again).unwrap().plugins.run_under_xwayland);
     }
 
     #[test]

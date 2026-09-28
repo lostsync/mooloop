@@ -15,6 +15,15 @@ fn main() {
     }
     // First, so that everything below is on the record.
     mooloop_ui::start_logging();
+    // Before any window, and before the audio engine starts any thread:
+    // winit fixes the display backend once per process, and the "Run under
+    // XWayland" setting has to reach it first (MOO-301). It chooses the
+    // display server only; audio and MIDI never see it.
+    let display = mooloop_ui::select_display_backend();
+    match display.expected {
+        Some(backend) => log_info!("display", "display backend: {backend}"),
+        None => log_warn!("display", "no display server named in the environment"),
+    }
     if let Err(e) = run() {
         log_error!("app", "{e}");
         std::process::exit(1);
