@@ -32,6 +32,10 @@ clack-extensions = { version = "0.2", features = [
     "state",
     "tail",
     "thread-check",
+    # A plugin GUI's event loop runs on these (step 11, MOO-300): most JUCE
+    # and DPF plugins drive their X11 connection from host timers and fds.
+    "timer",
+    "posix-fd",
 ] }
 
 # The scan child the scanner's own tests launch (`tests/scan.rs`). The app

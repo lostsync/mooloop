@@ -24,6 +24,8 @@ use std::sync::Arc;
 use mooloop_core::{PluginParamInfo, PluginRef, PluginState};
 use mooloop_dsp::AudioNode;
 
+use crate::gui::{HostedGui, IoActivity, IoRegistrations};
+
 /// Work a plugin asked the main thread for, as bits in one word.
 ///
 /// A plugin may ask from any thread, the audio thread included, so the host
@@ -211,6 +213,27 @@ pub trait HostedInstance {
     /// routed (plugin-hosting step 10, the plan's "Deliberately not").
     fn generated_notes(&self) -> u64 {
         0
+    }
+
+    /// The plugin's own GUI, when it has one (step 11, MOO-300). Opening
+    /// and closing it never touches the processor.
+    fn gui(&mut self) -> Option<&mut dyn HostedGui> {
+        None
+    }
+
+    /// Fire every timer of the plugin's whose period has elapsed at `now`,
+    /// and call it back for every registered file descriptor that is ready,
+    /// polled without waiting (step 11, policy 1). The pump's once-a-tick
+    /// call: it never blocks, though what the plugin does in its callbacks
+    /// is its own affair.
+    fn service_io(&mut self, now: std::time::Instant) -> IoActivity {
+        let _ = now;
+        IoActivity::default()
+    }
+
+    /// The timers and file descriptors the plugin has registered now.
+    fn io_registrations(&self) -> IoRegistrations {
+        IoRegistrations::default()
     }
 
     /// The rate and block ceiling the next processor is built for. The one

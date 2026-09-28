@@ -11,19 +11,28 @@
 //! may ask the host for -- and deliberately nothing more. [`instance`] is
 //! step 04's neutral half, [`scan`] is step 05's scanner, which loads each
 //! library only in a child process, and [`clap`] is step 06's adapter: the
-//! host a real CLAP effect runs under in a chain.
+//! host a real CLAP effect runs under in a chain. [`gui`] and [`host_io`]
+//! are step 11's: a plugin's own GUI, and the timers and file descriptors
+//! its event loop runs on (`host_io` declares `poll(2)` itself, the crate's
+//! other `unsafe`).
 //!
-//! The one `unsafe` block is [`load_entry`]: loading a shared library runs
+//! The one `unsafe` block here is [`load_entry`]: loading a shared library runs
 //! its initialisers, which no Rust type can vouch for. Everything the spike
 //! needed after that is safe `clack-host` API (`00-status.md`, "Step 01").
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod clap;
+pub mod gui;
+pub mod host_io;
 pub mod instance;
 pub mod notes;
 pub mod scan;
 
+pub use gui::{
+    GuiApi, GuiConfig, GuiError, GuiRequest, GuiSize, HostedGui, IoActivity, IoRegistrations,
+    NativeWindow,
+};
 pub use instance::{
     AudioConfig, HostError, HostedInstance, Lifeline, PluginOpener, PluginParamEvent, RequestFlags,
     Requests,
