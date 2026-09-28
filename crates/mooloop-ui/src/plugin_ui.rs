@@ -42,8 +42,8 @@ use mooloop_session::dialogs::{pick_folder_dialog, Picked};
 use crate::plugin_scan::{ScanProgress, ScanState};
 use crate::settings::{PluginSettings, UiSettings};
 use crate::{
-    BrowserRow, EffectSlotRow, MainWindow, PluginFailureRow, PluginListRow, PluginParamRow, UiState,
-    BROWSER_PLUGIN,
+    BrowserRow, EffectSlotRow, MainWindow, PluginFaceRow, PluginFailureRow, PluginListRow, PluginParamRow,
+    UiState, BROWSER_PLUGIN,
 };
 
 // ---------------------------------------------------------------------------
@@ -450,6 +450,11 @@ pub(crate) struct PluginFaces {
     /// Written by [`UiState::refresh_plugin_faces`], which has the running
     /// plugin and the open windows; read by [`PluginFaces::fill_row`].
     gui: RefCell<HashMap<PluginSlotId, GuiFace>>,
+    /// The face of the selected channel's plugin instrument (MOO-304,
+    /// MOO-316): one row while its source is a plugin, none otherwise. Set
+    /// on the window once, by [`wire`], and updated in place, so its knobs
+    /// keep their press across a tick as a chain face's do.
+    source: Rc<VecModel<PluginFaceRow>>,
 }
 
 /// A plugin face's open-window control, and its badge when the window
@@ -641,21 +646,36 @@ impl PluginFaces {
         let EffectParams::Plugin(slot) = effect.params else {
             return;
         };
+        let face = self.face_row(session, slot);
+        row.is_plugin = true;
+        row.units = face.units;
+        row.plugin_name = face.name;
+        row.plugin_status = face.status;
+        row.plugin_has_gui = face.has_gui;
+        row.plugin_gui_open = face.gui_open;
+        row.plugin_params = face.params;
+    }
+
+    /// Everything the face of the plugin in `slot` draws, wherever it sits:
+    /// a device on a chain ([`Self::fill_row`]) or a channel's instrument.
+    /// Its parameters go into the slot's own model, updated in place.
+    fn face_row(&self, session: &Session, slot: PluginSlotId) -> PluginFaceRow {
         let name = session
             .plugins
             .get(&slot)
             .map_or("Plugin", |saved| saved.plugin.name.as_str());
         let (params, units) = self.param_rows(session, slot);
-        row.is_plugin = true;
-        row.units = units;
-        row.plugin_name = name.into();
         let gui = self.gui.borrow().get(&slot).cloned().unwrap_or_default();
-        row.plugin_status = status_text(session, slot, name, gui.problem.as_deref()).into();
-        row.plugin_has_gui = gui.has_gui;
-        row.plugin_gui_open = gui.open;
         let model = self.model(slot);
         update_model(&model, params);
-        row.plugin_params = ModelRc::from(model);
+        PluginFaceRow {
+            name: name.into(),
+            units,
+            status: status_text(session, slot, name, gui.problem.as_deref()).into(),
+            params: ModelRc::from(model),
+            has_gui: gui.has_gui,
+            gui_open: gui.open,
+        }
     }
 }
 
@@ -680,6 +700,7 @@ impl UiState {
     /// is what makes a face follow the song -- an undo, the plugin's own
     /// edits, a plugin that opens late -- as a native face follows its row.
     pub(crate) fn refresh_plugin_faces(&mut self) {
+        self.refresh_source_plugin_face();
         let Some(chain) = self.session.effect_chain() else {
             return;
         };
@@ -692,21 +713,7 @@ impl UiState {
             })
             .collect();
         for (row, slot) in plugins {
-            self.plugin_faces.refresh_texts(&mut self.session, slot);
-            // Whether the running plugin has a GUI of its own: a missing
-            // plugin has none to open, and the control is not drawn.
-            let gui = GuiFace {
-                has_gui: self
-                    .session
-                    .plugin_rack
-                    .instance_mut(slot)
-                    .is_some_and(|instance| instance.gui().is_some()),
-                open: self.plugin_guis.is_open(slot),
-                problem: self.plugin_guis.problem(slot).map(str::to_string),
-            };
-            if self.plugin_faces.gui.borrow().get(&slot) != Some(&gui) {
-                self.plugin_faces.gui.borrow_mut().insert(slot, gui);
-            }
+            self.refresh_plugin_face_state(slot);
             let Some(effect) = self
                 .session
                 .effect_chain()
@@ -742,9 +749,65 @@ impl UiState {
         }
     }
 
+    /// Ask the running plugin in `slot` for what its face shows -- the text
+    /// of its values, its selectors -- and note whether it has a GUI of its
+    /// own and whether that is open.
+    fn refresh_plugin_face_state(&mut self, slot: PluginSlotId) {
+        self.plugin_faces.refresh_texts(&mut self.session, slot);
+        // Whether the running plugin has a GUI of its own: a missing
+        // plugin has none to open, and the control is not drawn.
+        let gui = GuiFace {
+            has_gui: self
+                .session
+                .plugin_rack
+                .instance_mut(slot)
+                .is_some_and(|instance| instance.gui().is_some()),
+            open: self.plugin_guis.is_open(slot),
+            problem: self.plugin_guis.problem(slot).map(str::to_string),
+        };
+        if self.plugin_faces.gui.borrow().get(&slot) != Some(&gui) {
+            self.plugin_faces.gui.borrow_mut().insert(slot, gui);
+        }
+    }
+
+    /// The face of the selected channel's plugin instrument (MOO-304,
+    /// MOO-316): the face a plugin on a chain has, drawn in the source's
+    /// place. No row when the source is not a plugin, or the rack shows a
+    /// bus, which has no source.
+    fn refresh_source_plugin_face(&mut self) {
+        let model = self.plugin_faces.source.clone();
+        let Some(slot) = self.source_plugin_slot() else {
+            if model.row_count() > 0 {
+                model.set_vec(Vec::new());
+            }
+            return;
+        };
+        self.refresh_plugin_face_state(slot);
+        let face = self.plugin_faces.face_row(&self.session, slot);
+        match model.row_data(0) {
+            Some(shown) if shown == face => {}
+            Some(_) => model.set_row_data(0, face),
+            None => model.set_vec(vec![face]),
+        }
+    }
+
+    /// The selected channel's plugin instrument, as the rack shows it: the
+    /// slot whose GUI the source face's open-window control opens.
+    pub(crate) fn source_plugin_slot(&self) -> Option<PluginSlotId> {
+        if !matches!(self.session.effect_target, EffectTarget::Channel(_)) {
+            return None;
+        }
+        self.session.plugin_source().map(|(_, slot)| slot)
+    }
+
     /// The hosted plugin the selected device is, if it is one: the device
     /// the sidebar's PARAMETERS list describes.
     pub(crate) fn selected_plugin_slot(&self) -> Option<PluginSlotId> {
+        // The channel's instrument, when its source is the selection
+        // (MOO-316): its list pins what the source's face shows.
+        if self.session.source_is_selected() {
+            return self.source_plugin_slot();
+        }
         let row = self.session.selected_device_slot()?;
         match self.session.effect_chain()?.get(row)?.params {
             EffectParams::Plugin(slot) => Some(slot),
@@ -892,24 +955,39 @@ pub(crate) fn plugin_overlays(
     overlays
 }
 
-/// The plugin parameter the face on chain row `row` names by `index`, as an
-/// address on the selected channel: the one place a face's index becomes the
-/// plugin's id for a route, a lane or a MIDI mapping. `None` when the rack is
-/// not showing the selected channel, the row is not a plugin, or the plugin
-/// lists no such index.
-pub(crate) fn face_param_address(session: &Session, row: usize, index: usize) -> Option<ParamAddr> {
+/// Where a plugin face sits: on the chain's row `row`, or at the head of the
+/// selected channel as its instrument (MOO-316).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FaceSite {
+    Chain(usize),
+    Source,
+}
+
+/// The plugin parameter the face at `site` names by `index`, as an address
+/// on the selected channel: the one place a face's index becomes the
+/// plugin's id for a route, a lane or a MIDI mapping. An instrument's
+/// parameter is `PluginParam { device: source_device }` (MOO-313). `None`
+/// when the rack is not showing the selected channel, the site is not a
+/// plugin, or the plugin lists no such index.
+pub(crate) fn face_param_address(session: &Session, site: FaceSite, index: usize) -> Option<ParamAddr> {
     let EffectTarget::Channel(channel) = session.effect_target else {
         return None;
     };
     if channel as usize != session.selected {
         return None;
     }
-    let effect = session.channels.get(session.selected)?.effects.get(row)?;
-    let EffectParams::Plugin(slot) = effect.params else {
-        return None;
+    let (device, slot) = match site {
+        FaceSite::Source => session.plugin_source()?,
+        FaceSite::Chain(row) => {
+            let effect = session.channels.get(session.selected)?.effects.get(row)?;
+            let EffectParams::Plugin(slot) = effect.params else {
+                return None;
+            };
+            (effect.id, slot)
+        }
     };
     let id = session.plugin_param_id(slot, index)?;
-    Some(ParamAddr::plugin_param(session.effect_target, effect.id, id))
+    Some(ParamAddr::plugin_param(session.effect_target, device, id))
 }
 
 /// One row of the lane picker: a native destination with its descriptor, or
@@ -925,13 +1003,16 @@ pub(crate) struct LaneDestination {
 }
 
 /// Everything the lane picker offers, in its order: the session's native
-/// destinations, with the selected channel's plugin parameters placed after
-/// its inserts and before its strip -- where they sit in the signal path.
-/// The picker's index, the Automate request and the header label all read
-/// this one list, so they cannot disagree about what a position names.
+/// destinations, with the selected channel's plugin parameters placed where
+/// they sit in the signal path -- a plugin instrument's at the head, after
+/// the source's own rows and before the inserts (MOO-316), and its plugin
+/// inserts' after the native inserts and before the strip. The picker's
+/// index, the Automate request and the header label all read this one list,
+/// so they cannot disagree about what a position names.
 pub(crate) fn lane_destinations(session: &Session) -> Vec<LaneDestination> {
     let native = session.automation_destinations();
-    let mut plugins = session
+    let source = session.plugin_source().map(|(device, _)| device);
+    let (instrument, chain): (Vec<LaneDestination>, Vec<LaneDestination>) = session
         .plugin_destinations()
         .into_iter()
         .map(|row| LaneDestination {
@@ -939,9 +1020,17 @@ pub(crate) fn lane_destinations(session: &Session) -> Vec<LaneDestination> {
             device: row.device,
             name: row.name,
             missing: row.missing,
+        })
+        .partition(|row| {
+            matches!(row.address.owner, ParamOwner::PluginParam { device } if Some(device) == source)
         });
+    let mut instrument = instrument.into_iter();
+    let mut plugins = chain.into_iter();
     let mut rows = Vec::with_capacity(native.len());
     for (address, device, descriptor) in native {
+        if !matches!(address.owner, ParamOwner::Source { .. } | ParamOwner::SourceRoute { .. }) {
+            rows.extend(instrument.by_ref());
+        }
         if address.owner == ParamOwner::Strip {
             rows.extend(plugins.by_ref());
         }
@@ -952,6 +1041,7 @@ pub(crate) fn lane_destinations(session: &Session) -> Vec<LaneDestination> {
             missing: false,
         });
     }
+    rows.extend(instrument);
     rows.extend(plugins);
     rows
 }
@@ -1175,6 +1265,78 @@ pub(crate) fn show_plugin_browser(state: &Rc<RefCell<UiState>>, window: &MainWin
     crate::refresh_browser(&st);
 }
 
+/// The plugin at `site`, when it is running: the one a face's knob edits.
+fn face_slot(st: &UiState, site: FaceSite) -> Option<PluginSlotId> {
+    let slot = match site {
+        FaceSite::Source => st.source_plugin_slot()?,
+        FaceSite::Chain(row) => match st.session.effect_chain()?.get(row)?.params {
+            EffectParams::Plugin(slot) => slot,
+            _ => return None,
+        },
+    };
+    st.session
+        .plugin_rack
+        .instance(slot)
+        .is_some_and(|instance| !instance.failed())
+        .then_some(slot)
+}
+
+/// A knob on the face at `site` turned: its value sent to the plugin by the
+/// session's verb for that site, and the face redrawn.
+fn face_value_changed(st: &mut UiState, tx: &EngineCommandSender, site: FaceSite, index: usize, normalized: f32) {
+    // A plugin that is not running has nobody to hear the value, and the
+    // song keeps what it had: its face draws, and moves nothing.
+    if face_slot(st, site).is_none() {
+        return;
+    }
+    let command = match site {
+        FaceSite::Chain(row) => st.session.set_plugin_param(row, index, normalized),
+        FaceSite::Source => st.session.set_plugin_source_param(index, normalized),
+    };
+    let Some(command) = command else { return };
+    let _ = tx.send(command);
+    st.refresh_plugin_faces();
+}
+
+/// A press on a knob of the face at `site` that is not a plain value edit:
+/// a naming press, a MIDI learn, or the start of a gesture.
+fn face_press(state: &mut UiState, window: &MainWindow, binds_port: bool, site: FaceSite, index: usize) {
+    let Some(address) = face_param_address(&state.session, site, index) else {
+        return;
+    };
+    if state.name_if_asked(window, address) {
+        return;
+    }
+    if state.learn_param_if_armed(window, binds_port, address) {
+        return;
+    }
+    state.begin_gesture(window);
+}
+
+/// A route-depth drag on a knob of the face at `site`, with a modulator
+/// armed: one "Modulation depth" step per gesture.
+fn face_depth_changed(
+    st: &Rc<RefCell<UiState>>,
+    commands: &Rc<RefCell<CommandState>>,
+    tx: &EngineCommandSender,
+    window: &MainWindow,
+    site: FaceSite,
+    index: usize,
+    depth: f32,
+) {
+    crate::with_gesture_history(st, commands, window, "Modulation depth", || {
+        let mut state = st.borrow_mut();
+        let Some(destination) = face_param_address(&state.session, site, index) else {
+            return false;
+        };
+        if !state.set_armed_modulation_depth(window, tx, destination, depth) {
+            state.refresh_modulation(window);
+            return false;
+        }
+        true
+    });
+}
+
 /// Wire the plugin face and the plugin browser's callbacks. Called by
 /// `AppUi::new`, and by the tests, which then drive the same handlers.
 pub(crate) fn wire(
@@ -1194,6 +1356,9 @@ pub(crate) fn wire(
         reset_tx: reset_tx.clone(),
     };
     wire_param_list(window, state, commands);
+    // The instrument's face, one row or none, followed in place by
+    // `refresh_plugin_faces` (MOO-304).
+    window.set_source_plugin_face(ModelRc::from(state.borrow().plugin_faces.source.clone()));
     {
         // A knob on a plugin face: the value half of the edit. The plugin
         // holds the value, so the song has it once its state is captured;
@@ -1203,32 +1368,22 @@ pub(crate) fn wire(
         // `dupe-audit unrecorded-edit` reports this handler, because the
         // record is the pump's (`record_finished_plugin_edits`), not here:
         // until the plugin has heard the value there is no state to record.
+        // A channel's plugin instrument's face is the same face at the head
+        // of the chain (MOO-316), and its handlers below are these, at
+        // `FaceSite::Source`.
         let st = state.clone();
         let tx = tx.clone();
         window.on_plugin_param_changed(move |row, index, normalized| {
             let (Ok(row), Ok(index)) = (usize::try_from(row), usize::try_from(index)) else {
                 return;
             };
-            let mut st = st.borrow_mut();
-            // A plugin that is not running has nobody to hear the value, and
-            // the song keeps what it had: its face draws, and moves nothing.
-            let running = st
-                .session
-                .effect_chain()
-                .and_then(|chain| chain.get(row))
-                .and_then(|effect| match effect.params {
-                    EffectParams::Plugin(slot) => st.session.plugin_rack.instance(slot),
-                    _ => None,
-                })
-                .is_some_and(|instance| !instance.failed());
-            if !running {
-                return;
-            }
-            let Some(command) = st.session.set_plugin_param(row, index, normalized) else {
-                return;
-            };
-            let _ = tx.send(command);
-            st.refresh_plugin_faces();
+            face_value_changed(&mut st.borrow_mut(), &tx, FaceSite::Chain(row), index, normalized);
+        });
+        let st = state.clone();
+        let tx = tx.clone();
+        window.on_source_plugin_param_changed(move |index, normalized| {
+            let Ok(index) = usize::try_from(index) else { return };
+            face_value_changed(&mut st.borrow_mut(), &tx, FaceSite::Source, index, normalized);
         });
     }
     {
@@ -1245,17 +1400,16 @@ pub(crate) fn wire(
             else {
                 return;
             };
-            let mut state = st.borrow_mut();
-            let Some(address) = face_param_address(&state.session, row, index) else {
+            face_press(&mut st.borrow_mut(), &window, binds_port(), FaceSite::Chain(row), index);
+        });
+        let st = state.clone();
+        let weak = window.as_weak();
+        let binds_port = learn_binds_port.clone();
+        window.on_source_plugin_modulation_edit_started(move |index| {
+            let (Some(window), Ok(index)) = (weak.upgrade(), usize::try_from(index)) else {
                 return;
             };
-            if state.name_if_asked(&window, address) {
-                return;
-            }
-            if state.learn_param_if_armed(&window, binds_port(), address) {
-                return;
-            }
-            state.begin_gesture(&window);
+            face_press(&mut st.borrow_mut(), &window, binds_port(), FaceSite::Source, index);
         });
     }
     {
@@ -1269,23 +1423,24 @@ pub(crate) fn wire(
             else {
                 return;
             };
-            crate::with_gesture_history(&st, &commands, &window, "Modulation depth", || {
-                let mut state = st.borrow_mut();
-                let Some(destination) = face_param_address(&state.session, row, index) else {
-                    return false;
-                };
-                if !state.set_armed_modulation_depth(&window, &tx, destination, depth) {
-                    state.refresh_modulation(&window);
-                    return false;
-                }
-                true
-            });
+            face_depth_changed(&st, &commands, &tx, &window, FaceSite::Chain(row), index, depth);
+        });
+        let st = state.clone();
+        let commands = commands.clone();
+        let tx = tx.clone();
+        let weak = window.as_weak();
+        window.on_source_plugin_modulation_depth_changed(move |index, depth| {
+            let (Some(window), Ok(index)) = (weak.upgrade(), usize::try_from(index)) else {
+                return;
+            };
+            face_depth_changed(&st, &commands, &tx, &window, FaceSite::Source, index, depth);
         });
     }
     {
         // The face's open-window control (step 11, MOO-302): the plugin's
         // own GUI in a window of its own, or that window brought to the
-        // front. A failure is the face's badge, and the face stays.
+        // front. A failure is the face's badge, and the face stays. A
+        // channel's instrument opens its own the same way (MOO-304).
         let st = state.clone();
         let weak = window.as_weak();
         window.on_plugin_gui_requested(move |row| {
@@ -1294,6 +1449,15 @@ pub(crate) fn wire(
             };
             let main = crate::plugin_gui::MainWindowState::of(window.window());
             if let Err(why) = st.borrow_mut().open_plugin_gui_at(row, &main) {
+                window.set_status_message(format!("The plugin's window did not open: {why}").into());
+            }
+        });
+        let st = state.clone();
+        let weak = window.as_weak();
+        window.on_source_plugin_gui_requested(move || {
+            let Some(window) = weak.upgrade() else { return };
+            let main = crate::plugin_gui::MainWindowState::of(window.window());
+            if let Err(why) = st.borrow_mut().open_source_plugin_gui(&main) {
                 window.set_status_message(format!("The plugin's window did not open: {why}").into());
             }
         });

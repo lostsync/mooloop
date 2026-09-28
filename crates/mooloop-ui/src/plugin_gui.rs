@@ -592,6 +592,17 @@ impl crate::UiState {
         result
     }
 
+    /// The control on the selected channel's instrument face (MOO-304): the
+    /// same window a plugin on a chain opens, for the source's slot.
+    pub(crate) fn open_source_plugin_gui(&mut self, main: &MainWindowState) -> Result<(), String> {
+        let Some(slot) = self.source_plugin_slot() else {
+            return Err("this channel's source is not a plugin".to_string());
+        };
+        let result = self.plugin_guis.open_or_raise(&mut self.session, slot, main);
+        self.refresh_plugin_faces();
+        result
+    }
+
     /// Quit: destroy every plugin window once `close_plugins` has destroyed
     /// the GUIs in them.
     pub(crate) fn close_plugin_windows(&mut self) {

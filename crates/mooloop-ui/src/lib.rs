@@ -5570,9 +5570,13 @@ impl UiState {
         // repainting with nothing else changing.
         let mut refresh = ModulationOffsetsRefresh::default();
         let source_kind = channel.generator_params().kind();
-        let source = self.session.destination_offsets(source_kind.descriptors(), |param| {
-            ParamAddr::source(scope, source_kind, param)
-        });
+        let source = match self.session.plugin_source() {
+            // By dense index, the plugin face's own numbering (MOO-316).
+            Some((device, slot)) => self.session.plugin_destination_offsets(device, slot),
+            None => self.session.destination_offsets(source_kind.descriptors(), |param| {
+                ParamAddr::source(scope, source_kind, param)
+            }),
+        };
         match write_offsets(&window.get_source_modulation_offsets(), &source) {
             OffsetsWrite::Unchanged => {}
             OffsetsWrite::InPlace => refresh.values_moved += 1,
@@ -6056,6 +6060,15 @@ impl UiState {
             generator.descriptors(),
             |param| ParamAddr::source(scope, generator, param),
         ));
+        // A plugin instrument has no descriptor table: its face's overlays
+        // are by dense index, as a plugin insert's are (MOO-316).
+        if let Some((device, slot)) = self.session.plugin_source() {
+            let overlays = plugin_ui::plugin_overlays(&self.session, armed, device, slot);
+            window.set_source_modulation_depths(overlays.depths.as_slice().into());
+            window.set_source_modulation_allowed(overlays.allowed.as_slice().into());
+            window.set_source_modulation_offsets(overlays.offsets.as_slice().into());
+            window.set_source_modulation_route_counts(overlays.counts.as_slice().into());
+        }
         window.set_strip_modulation_depths(self.destination_depths(
             armed,
             &STRIP_DESCRIPTORS,
