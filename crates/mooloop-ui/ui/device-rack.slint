@@ -1,4 +1,3 @@
-import { HorizontalBox } from "std-widgets.slint";
 import { StatusHint, Theme } from "theme.slint";
 import { GainMath } from "gain.slint";
 import { IconButton, MiniKnob, ToolButton, TrimKnob } from "controls.slint";
@@ -9,7 +8,14 @@ export global DeviceRackMetrics {
     out property <length> unit-width: 220px;
     out property <length> half-gap: 4px;
     out property <length> face-height: 268px;
-    out property <length> header-height: 28px;
+    // The strip every face paints below. 28px at every text size whose name
+    // line fits in it with a pixel to spare, and grown with the text beyond
+    // that (MOO-296), so the name is never cut: 33px at "Text size 175%",
+    // 38px at 200%, and every face's controls start that much lower. 1.4 is
+    // `text-xl`'s line height over its font size, measured for the default
+    // font at 1.37-1.46 across 65-200%.
+    out property <length> header-height:
+        max(28px, ceil(Theme.text-xl * 1.4 / 1px) * 1px + 2px);
     // The shared device shell owns these two narrow action rails. Faces keep
     // their working controls in the central rectangle, so future devices get
     // the same chain affordances without duplicating chrome.
@@ -592,7 +598,7 @@ export component DeviceFrame inherits Rectangle {
         // IconButton's size property only sets its layout constraints.  This
         // control is absolutely positioned, so give the Rectangle a real box
         // as well; otherwise its active background fills the remaining face.
-        y: 3px; z: 100; width: 22px; height: 22px; size: 22px;
+        y: (DeviceRackMetrics.header-height - 22px) / 2; z: 100; width: 22px; height: 22px; size: 22px;
         text: root.bypassed ? "○" : "●";
         active: !root.bypassed;
         tooltip: root.bypassed ? "Enable" : "Bypass"; hint: root.bypassed ? "Enable this device" : "Bypass this device";
@@ -600,7 +606,7 @@ export component DeviceFrame inherits Rectangle {
     }
     if root.wet-dry-enabled : MiniKnob {
         x: root.width - (root.tail-rail ? DeviceRackMetrics.rail-width : 0px) - 26px;
-        y: 3px;
+        y: (DeviceRackMetrics.header-height - 22px) / 2;
         z: 100;
         width: 22px;
         diameter: 22px;
@@ -700,7 +706,11 @@ export component DeviceHeader inherits Rectangle {
         height: 1px;
         background: Theme.border;
     }
-    HorizontalBox {
+    // A plain layout, not a `HorizontalBox`: the box added the style's 8px
+    // above and below, which left the name 12px of a 28px header for an 18px
+    // line and cut off every p, g and y (MOO-296). Unpadded, each Text is the
+    // header's full height and centres its whole line in it.
+    HorizontalLayout {
         padding-left: 6px;
         padding-right: 6px;
         spacing: 6px;
