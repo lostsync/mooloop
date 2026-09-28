@@ -2,6 +2,7 @@ import { Theme } from "theme.slint";
 import { GainMath } from "gain.slint";
 import { MiniKnob, StepperChip, ToolButton } from "controls.slint";
 import { DeviceHeader, DeviceRackMetrics } from "device-rack.slint";
+import { Icons } from "icons.slint";
 import { StripSpec } from "strip.slint";
 
 // The master bus compressor's face (MOO-13, `docs/plans/archive/master-bus-compressor/`).
@@ -547,6 +548,8 @@ export component MasterCompFace inherits Rectangle {
         name: "Bus Comp";
         kind: "MASTER / 3U";
         role: "COMP";
+        // The insert's own icon (MOO-294): one compressor, drawn once.
+        icon: Icons.effect-kinds[16];
         device-color: Theme.warning;
         enabled: root.on && !root.muted;
     }

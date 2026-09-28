@@ -76,8 +76,10 @@ Every device kind has a filled icon (MOO-273): `Icons.source-kinds[n]` and
 `Icons.plugin` for a plugin of either role. `DeviceHeader.icon` and
 `CollapsedDevice.icon` take one, tinted with the device colour, faint while
 bypassed; `EffectDeviceShell.icon` forwards to its header, and `main.slint`
-binds it from the row's kind number. An empty `icon` draws nothing, which is
-what the mixer's strip, bus and output headers show until they have a kind.
+binds it from the row's kind number. An empty `icon` draws nothing. The
+mixer's own headers, which have no kind, name theirs (MOO-294): the strip
+`Icons.strip`, a bus and the master `Icons.bus`, the output `Icons.output`,
+and the master's Bus Comp the insert's `Icons.effect-kinds[16]`.
 `DeviceKindSheet` in `mockup-catalog.slint` shows every kind's header.
 
 **Closed 2026-09-27: the stepping chip.** `StepperChip` in `controls.slint`
@@ -90,7 +92,7 @@ as wide as its longest option at the current text size, so it does not jump
 as it steps. For a list short enough to walk, like a compressor's three
 voicings; a longer one wants `PickerChip`. The Bus Comp's panel and the
 strip's voicing picker adopt it; `StepperChipSheet` in `mockup-catalog.slint`
-shows it. The mixer's strip, bus and output headers have candidate icons
+shows it. The mixer's strip, bus and output headers took the icons drawn
 beside it (`Icons.strip`, `Icons.bus`, `Icons.output`, MOO-294), shown on
 `MixerHeaderSheet`.
 

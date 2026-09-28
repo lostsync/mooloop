@@ -5,6 +5,7 @@ import { NameField } from "toolbar.slint";
 import { GainMath } from "gain.slint";
 import { ChannelMeter } from "meters.slint";
 import { DeviceHeader, DeviceRackMetrics } from "device-rack.slint";
+import { Icons } from "icons.slint";
 // `send-feed-count` below is the *incoming* count, which is why this
 // face still knows the word: the sends it once edited are the
 // outgoing ones, and they live in the channel sidebar now.
@@ -72,6 +73,8 @@ export component StripRackRow inherits Rectangle {
         name: root.name + " strip";
         kind: "STRIP / 2U";
         role: "STRIP";
+        // A fader cap across its slot (MOO-294): the channel's own strip.
+        icon: Icons.strip;
         device-color: Theme.accent;
         enabled: !root.muted;
     }
@@ -369,6 +372,8 @@ export component BusDeviceFace inherits Rectangle {
         name: root.name;
         kind: "BUS / " + root.units + "U";
         role: "BUS";
+        // Three inputs joining one rail (MOO-294), the master's as any bus's.
+        icon: Icons.bus;
         device-color: root.is-master ? Theme.warning : Theme.accent;
         enabled: !root.muted;
     }
@@ -486,6 +491,8 @@ export component BusFaderRow inherits Rectangle {
         name: "Fader";
         kind: "OUT / 1U";
         role: "OUT";
+        // A speaker (MOO-294): where the track leaves its rack.
+        icon: Icons.output;
         device-color: root.is-master ? Theme.warning : Theme.accent;
         enabled: !root.muted;
     }
