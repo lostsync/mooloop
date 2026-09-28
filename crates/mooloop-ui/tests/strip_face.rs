@@ -422,16 +422,18 @@ slint::slint! {
 /// `moved` callback with the ids `MasterSpec` was handed, which is the
 /// callback `main.slint` forwards to `bus-strip-param`.
 ///
-/// The coordinates are the face's own layout: the left column is 250px wide
-/// under a 28px header and 8px padding, and its bottom row -- In at 44px,
-/// then the `◂ PUNCH ▸` chip (MOO-295) 6px after it -- is 26px tall at the
-/// bottom of the face. The chip's `◂` is its first 16px inside a 1px
-/// border; the wheel steps from anywhere on it, so its far end, which
-/// depends on how wide the font makes PUNCH, is never needed.
+/// The In switch is at a fixed place: the panel's top-right corner, a 16px
+/// square inside the face's 8px padding under its 28px header (Adam,
+/// 2026-09-28). The `◂ PUNCH ▸` chip (MOO-295) is centred under the knobs,
+/// whose column runs from the needle's 250px plus a 10px gap to the switch's
+/// column, and how far down it sits depends on the knobs' captions. So it is
+/// **found** rather than probed: the wheel is turned up the middle of the
+/// knob column from the bottom of the face, and the first thing that
+/// answers is the chip, which is below everything else in that column.
 ///
-/// The chip is controlled: the row stays on Punch throughout, so the `◂`
-/// and the wheel each report a neighbour of Punch, which is what lets an
-/// undo that moves the voicing move the chip.
+/// The chip is controlled: the row stays on Punch throughout, so the wheel
+/// up and down report both neighbours of Punch, which is what lets an undo
+/// that moves the voicing move the chip.
 #[test]
 fn the_master_face_s_switches_reach_the_callback() {
     use slint::platform::{PointerEventButton, WindowEvent};
@@ -465,30 +467,51 @@ fn the_master_face_s_switches_reach_the_callback() {
             button: PointerEventButton::Left,
         });
     };
-    let scroll_up = |x: f32, y: f32| {
+    let scroll = |x: f32, y: f32, delta_y: f32| {
         let position = LogicalPosition::new(x, y);
         let window = ui.window();
         window.dispatch_event(WindowEvent::PointerMoved { position });
         window.dispatch_event(WindowEvent::PointerScrolled {
             position,
             delta_x: 0.0,
-            delta_y: 1.0,
+            delta_y,
         });
     };
     ui.set_voicing(1);
-    // The row's vertical centre: 268 tall, 8px padding, 26px row.
-    let row = 268.0 - 8.0 - 13.0;
-    let chip = 8.0 + 44.0 + 6.0;
-    click(30.0, row);
-    click(chip + 9.0, row);
-    scroll_up(chip + 24.0, row);
+    // The face: 3 units of 220 and two 4px half-gaps, 268 tall; the panel
+    // 8px in from each side and under the 28px header.
+    let face_width = 3.0 * 220.0 + 2.0 * 4.0;
+    let panel_right = face_width - 8.0;
+    let panel_top = 28.0 + 8.0;
+    click(panel_right - 8.0, panel_top + 8.0);
+    assert_eq!(
+        *seen.borrow(),
+        vec![(mooloop_core::strip::MASTER_COMP_IN as i32, 1.0)],
+        "the In switch in the panel's top-right corner did not reach the callback"
+    );
+
+    // The knob column's middle: after the needle and its gap, before the
+    // switch's column and its gap.
+    let knobs_middle = (8.0 + 250.0 + 10.0 + panel_right - 16.0 - 10.0) / 2.0;
+    let mut chip_y = None;
+    let mut y = 268.0 - 8.0;
+    while y > panel_top {
+        scroll(knobs_middle, y, 1.0);
+        if seen.borrow().len() > 1 {
+            chip_y = Some(y);
+            break;
+        }
+        y -= 2.0;
+    }
+    let chip_y = chip_y.expect("nothing under the knobs answered the wheel");
+    scroll(knobs_middle, chip_y, -1.0);
     assert_eq!(
         *seen.borrow(),
         vec![
             (mooloop_core::strip::MASTER_COMP_IN as i32, 1.0),
-            (mooloop_core::strip::MASTER_COMP_VOICING as i32, 0.0),
             (mooloop_core::strip::MASTER_COMP_VOICING as i32, 2.0),
+            (mooloop_core::strip::MASTER_COMP_VOICING as i32, 0.0),
         ],
-        "the In switch and the voicing chip's arrow and wheel did not reach the callback"
+        "the first thing under the knobs to answer the wheel was not the voicing chip"
     );
 }

@@ -1,9 +1,9 @@
 import { Theme } from "theme.slint";
 import { GainMath } from "gain.slint";
-import { MiniKnob, StepperChip, ToolButton } from "controls.slint";
+import { MiniKnob, StepperChip } from "controls.slint";
 import { DeviceHeader, DeviceRackMetrics } from "device-rack.slint";
 import { Icons } from "icons.slint";
-import { StripSpec } from "strip.slint";
+import { StripInSwitch, StripSpec } from "strip.slint";
 
 // The master bus compressor's face (MOO-13, `docs/plans/archive/master-bus-compressor/`).
 //
@@ -268,8 +268,9 @@ export component ReductionNeedle inherits Rectangle {
     }
 }
 
-// The section's working face: the needle and the switches on the left, the
-// voicing's own knobs on the right. Drawn by the master (`MasterCompFace`)
+// The section's working face: the needle on the left, the voicing's own
+// knobs on the right with the voicing chip under them, and the master's in
+// switch in the top-right corner. Drawn by the master (`MasterCompFace`)
 // and by the Bus Comp insert (`bus-comp-device.slint`), so the two cannot
 // come to look or behave differently (MOO-216).
 //
@@ -312,45 +313,15 @@ export component BusCompPanel inherits HorizontalLayout {
 
     spacing: 10px;
 
+    // The needle, the column's whole height since its switches moved out
+    // (Adam, 2026-09-28).
     VerticalLayout {
         width: 250px;
-        spacing: 6px;
         ReductionNeedle {
             vertical-stretch: 1;
             reduction-db: root.reduction-db;
             held-db: root.held-reduction-db;
             active: root.on;
-        }
-        // The IN switch, then the voicing where its first button used to
-        // start, so the insert (which has no IN) keeps it at the left edge
-        // under the needle. The room the other two buttons took stays empty
-        // rather than stretching the chip: a wide chip puts its arrows far
-        // apart over a label that does nothing when pressed.
-        HorizontalLayout {
-            spacing: 6px;
-            height: 26px;
-            alignment: start;
-            if root.in-switch : ToolButton {
-                text: root.on ? "IN" : "OUT";
-                tooltip: root.on ? "In" : "Out";
-                hint: "Run the bus compressor. Out is out: the mix is not touched.";
-                active: root.on;
-                min-width: 44px;
-                max-width: 44px;
-                clicked => { root.moved(MasterSpec.comp-in, root.on ? 0 : 1); }
-            }
-            // One `◂ GRIP ▸` chip (MOO-295, Adam's sketch, 2026-09-27) in
-            // place of the three buttons. It reads the row and reports a
-            // step rather than holding its own selection: a control that
-            // kept its own would overwrite the binding on a click, and an
-            // undo that moved the voicing would then not move it.
-            StepperChip {
-                options: MasterSpec.voicings;
-                selected-index: root.section.voicing;
-                hint: "Grip is the SSL bus compressor's law, Punch the API-2500's, "
-                    + "Tube the Fairchild 670's. Each keeps its own settings.";
-                selected(i) => { root.moved(MasterSpec.voicing, i); }
-            }
         }
     }
 
@@ -510,6 +481,38 @@ export component BusCompPanel inherits HorizontalLayout {
                 modulation-edit-started => { root.modulation-edit-started(self.param); }
                 modulation-edit-finished => { root.modulation-edit-finished(self.param); }
             }
+        }
+        // One `◂ GRIP ▸` chip (MOO-295, Adam's sketch, 2026-09-27) in place
+        // of the three voicing buttons, centred under the knobs it swaps
+        // (Adam, 2026-09-28: *"the model selector should be centered under
+        // the meter or knobs"*). It reads the row and reports a step rather
+        // than holding its own selection: a control that kept its own would
+        // overwrite the binding on a click, and an undo that moved the
+        // voicing would then not move it.
+        HorizontalLayout {
+            alignment: center;
+            height: 26px;
+            StepperChip {
+                options: MasterSpec.voicings;
+                selected-index: root.section.voicing;
+                hint: "Grip is the SSL bus compressor's law, Punch the API-2500's, "
+                    + "Tube the Fairchild 670's. Each keeps its own settings.";
+                selected(i) => { root.moved(MasterSpec.voicing, i); }
+            }
+        }
+    }
+
+    // The master's in-and-out switch, in the panel's top-right corner: the
+    // strip's own section switch, the square with `Icons.on`, because it
+    // means what DRIVE's, EQ's and COMP's mean. Adam, 2026-09-28: *"the
+    // in/out button can just be a power or toggle icon - we don't need to
+    // literally say IN/OUT."* The insert has none; its frame's bypass is it.
+    if root.in-switch : VerticalLayout {
+        alignment: start;
+        StripInSwitch {
+            on: root.on;
+            hint: "Run the bus compressor. Out is out: the mix is not touched.";
+            clicked => { root.moved(MasterSpec.comp-in, root.on ? 0 : 1); }
         }
     }
 }
