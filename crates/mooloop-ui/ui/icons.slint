@@ -79,6 +79,14 @@ export global Icons {
     // box until the registry; these are its (4, 16)-(16, 4) scaled to 16.
     out property <string> color-none: "M 3.2 12.8 L 12.8 3.2";
 
+    // --- Interface: the plugin face (MOO-302) ---------------------------
+    //
+    // A hosted plugin's own window, opened from its face: a window frame
+    // left open at its top right, and an arrow leaving through the gap.
+    // Outline, like the rest of this section.
+    out property <string> open-window:
+        "M 7 3 L 3 3 L 3 13 L 13 13 L 13 9 M 9 3 L 13 3 L 13 7 M 13 3 L 7 9";
+
     // --- Mixer: the strip (were `StripIcons` in `strip.slint`) -----------
     //
     // The strip's EQ bands, drawn as the curve each one is. Not merged with

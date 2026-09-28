@@ -1,5 +1,6 @@
 import { Theme } from "theme.slint";
-import { ParameterKnob, SegmentedControl } from "controls.slint";
+import { IconButton, ParameterKnob, SegmentedControl } from "controls.slint";
+import { Icons } from "icons.slint";
 import { DevicePageButton, DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 
 // One parameter of a hosted plugin, as the face draws it
@@ -61,6 +62,13 @@ export component PluginDeviceFace inherits EffectDeviceShell {
     // or empty when it is.
     in property <string> status;
     in property <[PluginParamRow]> params;
+    // The plugin has a GUI of its own (step 11, MOO-302), and whether it is
+    // open. The control that opens it is drawn only when it has one: a
+    // plugin without a GUI has this face and nothing else.
+    in property <bool> has-gui;
+    in property <bool> gui-open;
+    // Open the plugin's window, or bring it to the front when it is open.
+    callback gui-requested();
     // The shell's modulation overlays (`modulation-depths` and the rest)
     // are indexed here by a parameter's dense index (`PluginParamRow.index`),
     // never its id, which may not fit an `int`. They stay apart from the
@@ -212,27 +220,43 @@ export component PluginDeviceFace inherits EffectDeviceShell {
             }
         }
 
-        if root.pages > 1 : HorizontalLayout {
-            alignment: center;
+        // The foot: the plugin's own window at the left, when it has one,
+        // and the page buttons centred. The spacer on the right matches the
+        // window button, so the pages sit centred with it or without it.
+        if root.pages > 1 || root.has-gui : HorizontalLayout {
             spacing: 4px;
-            DevicePageButton {
-                text: "<";
-                tooltip: "Previous parameters";
-                enabled: root.shown-page > 0;
-                clicked => { root.page = max(root.shown-page - 1, 0); }
+            if root.has-gui : IconButton {
+                size: 22px;
+                icon: Icons.open-window;
+                active: root.gui-open;
+                tooltip: root.gui-open ? "Bring the plugin's window to the front" : "Open the plugin's window";
+                hint: "The plugin's own interface, in a window of its own";
+                clicked => { root.gui-requested(); }
             }
-            Text {
-                text: (root.shown-page + 1) + " / " + root.pages;
-                color: Theme.text-muted;
-                font-size: Theme.text-md;
-                vertical-alignment: center;
+            Rectangle { horizontal-stretch: 1; }
+            if root.pages > 1 : HorizontalLayout {
+                spacing: 4px;
+                DevicePageButton {
+                    text: "<";
+                    tooltip: "Previous parameters";
+                    enabled: root.shown-page > 0;
+                    clicked => { root.page = max(root.shown-page - 1, 0); }
+                }
+                Text {
+                    text: (root.shown-page + 1) + " / " + root.pages;
+                    color: Theme.text-muted;
+                    font-size: Theme.text-md;
+                    vertical-alignment: center;
+                }
+                DevicePageButton {
+                    text: ">";
+                    tooltip: "More parameters";
+                    enabled: root.shown-page < root.pages - 1;
+                    clicked => { root.page = min(root.shown-page + 1, root.pages - 1); }
+                }
             }
-            DevicePageButton {
-                text: ">";
-                tooltip: "More parameters";
-                enabled: root.shown-page < root.pages - 1;
-                clicked => { root.page = min(root.shown-page + 1, root.pages - 1); }
-            }
+            Rectangle { horizontal-stretch: 1; }
+            if root.has-gui : Rectangle { width: 22px; }
         }
     }
 }
