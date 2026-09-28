@@ -408,7 +408,7 @@ fn midi_learn_binds_an_instruments_and_an_effects_plugin_parameter() {
     let index = session.plugin_param_index(slot, test_plugin::PARAM_LEVEL).expect("listed");
     assert_eq!(session.plugin_param_value(slot, index), Some(test_plugin::LEVEL_DB_MIN));
 
-    let gain = ParamAddr::plugin_param(EffectTarget::Channel(0), inserted.id, test_plugin::PARAM_GAIN);
+    let gain = ParamAddr::plugin_param(EffectTarget::Channel(0), inserted.device, test_plugin::PARAM_GAIN);
     let (label, command) = learn_and_sweep(&mut session, gain, 21);
     assert_eq!(label, format!("{channel} \u{b7} Test Gain 1 \u{b7} Gain"));
     assert_eq!(
