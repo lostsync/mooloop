@@ -2468,9 +2468,14 @@ land on its own when it starts to matter:
   is a destination like a native one** (MOO-228): with a modulator armed it
   authors a route on the plugin's own parameter and draws the ring, the
   offset and the route dots, and its context menu names it for a lane or a
-  MIDI mapping. The lane picker lists the channel's plugin parameters after
-  its inserts, under the plugin's name and chain place ("Test Gain 1"), and
-  the shelf names a route on one the same way. **A parameter the plugin
+  MIDI mapping. **MIDI learn on a plugin knob works** (MOO-315): the
+  mapping list names the parameter ("Drums · Test Gain 1 · Gain") and the
+  control moves it, picking it up from the plugin's current value. Before,
+  the mapping read "Unavailable parameter" and moved nothing. The lane
+  picker lists the channel's plugin parameters after its inserts: a plugin
+  instrument's first, under the plugin's name ("Test Sine"), then each
+  plugin effect's under its name and chain place ("Test Gain 1"). The shelf
+  names a route on one the same way. **A parameter the plugin
   stops listing is kept** (Adam, MOO-74): its lane stays in the picker,
   titled thin and italic by its id ("Parameter 4000000000"), the lane and
   its shelf row draw greyed, and it plays nothing; when the plugin lists the
@@ -2577,8 +2582,13 @@ land on its own when it starts to matter:
   fades in. The notes it was holding end with the fade and are not struck
   again on the new processor; the next note-on plays as usual. Not
   yet: a plugin channel's editor shows no face (its number is 8, after the
-  eight native kinds; "Add Plugin…" is its own row, not one of the eight); the plugin's own latency
-  is not compensated; and its parameters take no lanes or routes.
+  eight native kinds; "Add Plugin…" is its own row, not one of the eight), so
+  its parameters have no knobs to route or MIDI-learn from, though a lane
+  opens on one from the lane picker (MOO-315) and a song or the session can
+  name one for a lane, a route or a MIDI mapping (MOO-312); and the plugin's
+  own latency is not compensated. Replacing a plugin instrument forgets the
+  lanes and routes on its parameters, as deleting an effect does; undo brings
+  them back.
 - **A CLAP instrument plays its channel's notes** (MOO-85, plugin-hosting
   10), from the pattern, a keyboard or an audition, each at its own frame,
   live and in an export alike. Where a plugin may go is its own word: one

@@ -1177,8 +1177,10 @@ install does not carry is rebuilt silent and gets its processor back a tick
 or two later, as the rack's rule does for effects, with the voices it held
 lost (as a native strip's are); a generator preset of a plugin channel would
 carry only the slot number; and the source's parameters have no address yet
-(MOO-74's `PluginParam { device }` needs a `DeviceId` for the source slot,
-which is step 10's). Step 10 (MOO-85) is next and takes the notes.
+(MOO-74's `PluginParam { device }` needs a `DeviceId` for the source slot;
+step 10 did not give it one either, and MOO-312 did, in "Found after step
+10: an instrument's parameters" below). Step 10 (MOO-85) is next and takes
+the notes.
 
 **The tests.** Engine (`engine/src/plugin_source_tests.rs`, a fake
 instrument: a cosine per note id): a pattern played through the export path
@@ -1500,8 +1502,48 @@ a lane on every control tick, with the export equal to the executor at 512
 and 64 frames; a route as an offset, and zeroed once it is removed; a knob
 edit heard, and held back under a lane; and a replaced instrument's lane
 not driving the new one. Every executor block is counted for allocations.
-The session side is MOO-315's: `plugin_destinations`, MIDI learn, and a
-session verb for the knob.
+**The session resolves them, and MIDI learn binds plugin parameters
+(MOO-315).**
+
+- **The source arm.** `Session::plugin_slot_of` answers for a channel's
+  source when the address's `device` is the channel's `source_device` and
+  the source is a plugin, so `plugin_param_info`, `modulation_policy`,
+  `lane_allowed` and `plugin_destination_offsets` follow without a change.
+  An id a replaced instrument held names nothing. `Session::plugin_source`
+  is the selected channel's instrument as `(device, slot)`.
+- **The lane menu lists the instrument first.** `plugin_destinations` puts
+  the source's parameters, under the plugin's name alone ("Test Sine"),
+  before the chain's ("Test Gain 1"), with missing ids marked as for an
+  effect.
+- **The knob.** `set_plugin_source_param(index, normalized)` is
+  `set_plugin_param` for the source: an index in, the plugin's id and plain
+  value out in `SetChannelGeneratorParam`, counted as an edit of the plugin
+  and closed when it goes quiet. `set_plugin_param_at(address, normalized)`
+  is the same write by address, for either kind of device.
+- **MIDI learn works on a plugin parameter, an effect's or an
+  instrument's.** It did not for effects either: `param_descriptor` has no
+  descriptor for a plugin parameter, so the mapping read "Unavailable
+  parameter" and a CC moved nothing. `control_target_label` now names it
+  from the plugin's list ("Drums · Test Gain 1 · Gain", "Drums · Test Sine ·
+  Level"), `param_normalized` reads the live value for pickup, and
+  `set_param_normalized` sends what the device's own knob sends. A
+  parameter the plugin no longer lists, or hides, stays unavailable and
+  moves nothing, and its binding is kept.
+
+`session/tests/plugin_instrument_params.rs` is MOO-82's case on the test
+sine through the scan cache. A lane and a route on its level are heard in
+the export, which is the same after a save and reopen. Reopened with the
+plugin missing and saved, the lane, the route, the slot and the source id
+come through, and with the plugin back the export is the same again. The
+instrument's own GUI edit is one "Plugin Edit" step that an unrelated undo
+leaves alone. The lane menu lists the instrument, with a missing id marked.
+A CC learned onto the sine's level and onto a plugin effect's gain moves
+each. The sine has neither a GUI edit of its own nor a state, so the GUI
+case wraps the real instance in a test stand-in (`PanelOpener`) that adds
+both.
+
+The instrument's face (the knobs that call `set_plugin_source_param`, and
+the learn and route presses on them) is the Interface leg (MOO-316).
 
 ## Found after step 07: plugin device presets (MOO-222, 2026-09-26)
 
@@ -1605,7 +1647,9 @@ overlays and edits by dense index. The overlays are depth, allowed (from
 `plugin-modulation-edit-started` and `-depth-changed`. `plugin_ui` turns
 the index into the address (`face_param_address`, the one place that
 happens), then asks for the same three answers as a native knob: a naming
-press for the control menu, a MIDI learn, or a route-depth drag. The
+press for the control menu, a MIDI learn (which bound the control but
+moved nothing and read "Unavailable parameter" until MOO-315, below), or a
+route-depth drag. The
 offsets ride the per-tick in-place path (`refresh_modulation_offsets`,
 `Session::plugin_destination_offsets`), never a row with text in it
 (MOO-258).

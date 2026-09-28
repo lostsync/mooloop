@@ -117,6 +117,15 @@ would judge a plugin id against a native table without a compiler error.
 Adam's words: *"we don't want to not know what something belongs to"*.
 `docs/plans/plugin-hosting/00-status.md`, "Parameters", has the ruling.
 
+A plugin **instrument**'s parameters use the same owner (MOO-312). The
+`device` is the id the channel's source slot is given,
+`ChannelSetup::source_device`, minted from the channel's own device ids when
+a plugin becomes its source, so it never names one of the channel's effects.
+There is no "source arm" of `PluginParam` and no `Source` owner holding a
+plugin's id. Replacing the instrument forgets its lanes and routes, as
+deleting an effect does, and undo brings them back; a plugin missing on load
+keeps them.
+
 **The generator owner names its kind** (MOO-135, 2026-09-26, the same
 ruling applied to a channel's source). A descriptor id is stable *per kind*,
 and a channel's kind can change: id 12 is the sampler's Cutoff and the v1
@@ -406,7 +415,12 @@ until it is changed. Whether a route may drive a plugin parameter is
 `ModDestinationDescriptor::for_plugin_param`: continuous and marked
 modulatable by the plugin. The engine finds a plugin's driven parameters by
 walking the routes and lanes that name the device, not a descriptor table it
-does not have (`EffectChain::plugin_curves`; MOO-195 generalizes the walk).
+does not have (`resolve_plugin_curves` in `render.rs`, for a chain's devices
+and for a channel's plugin instrument alike; MOO-195 generalizes the walk).
+A knob or MIDI control on a plugin parameter sends the plugin's own id and
+plain value in the command its device takes (`SetEffectParam` on a chain,
+`SetChannelGeneratorParam` for the instrument), and a lane writing that
+parameter holds it back.
 
 ### Control rate, not audio rate
 
