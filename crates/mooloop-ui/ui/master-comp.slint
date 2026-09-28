@@ -1,6 +1,6 @@
 import { Theme } from "theme.slint";
 import { GainMath } from "gain.slint";
-import { MiniKnob, ToolButton } from "controls.slint";
+import { MiniKnob, StepperChip, ToolButton } from "controls.slint";
 import { DeviceHeader, DeviceRackMetrics } from "device-rack.slint";
 import { StripSpec } from "strip.slint";
 
@@ -320,9 +320,15 @@ export component BusCompPanel inherits HorizontalLayout {
             held-db: root.held-reduction-db;
             active: root.on;
         }
+        // The IN switch, then the voicing where its first button used to
+        // start, so the insert (which has no IN) keeps it at the left edge
+        // under the needle. The room the other two buttons took stays empty
+        // rather than stretching the chip: a wide chip puts its arrows far
+        // apart over a label that does nothing when pressed.
         HorizontalLayout {
             spacing: 6px;
             height: 26px;
+            alignment: start;
             if root.in-switch : ToolButton {
                 text: root.on ? "IN" : "OUT";
                 tooltip: root.on ? "In" : "Out";
@@ -332,21 +338,17 @@ export component BusCompPanel inherits HorizontalLayout {
                 max-width: 44px;
                 clicked => { root.moved(MasterSpec.comp-in, root.on ? 0 : 1); }
             }
-            // Buttons that read the row rather than a bank that holds its
-            // own selection: a bank's click overwrites the binding, and
-            // an undo that moved the voicing would then not move it.
-            HorizontalLayout {
-                spacing: 1px;
-                for label[i] in MasterSpec.voicings : ToolButton {
-                    text: label;
-                    tooltip: label;
-                    hint: "Grip is the SSL bus compressor's law, Punch the API-2500's, "
-                        + "Tube the Fairchild 670's. Each keeps its own settings.";
-                    active: root.section.voicing == i;
-                    min-width: 60px;
-                    max-width: 60px;
-                    clicked => { root.moved(MasterSpec.voicing, i); }
-                }
+            // One `◂ GRIP ▸` chip (MOO-295, Adam's sketch, 2026-09-27) in
+            // place of the three buttons. It reads the row and reports a
+            // step rather than holding its own selection: a control that
+            // kept its own would overwrite the binding on a click, and an
+            // undo that moved the voicing would then not move it.
+            StepperChip {
+                options: MasterSpec.voicings;
+                selected-index: root.section.voicing;
+                hint: "Grip is the SSL bus compressor's law, Punch the API-2500's, "
+                    + "Tube the Fairchild 670's. Each keeps its own settings.";
+                selected(i) => { root.moved(MasterSpec.voicing, i); }
             }
         }
     }

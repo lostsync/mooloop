@@ -934,7 +934,8 @@ it is shown since MOO-216) is the
 master's own section, drawn in the master's device rack between its inserts
 and its fader, where it runs. Three voicings, each a measured unit's law:
 **Grip** (the SSL G bus), **Punch** (the API-2500) and **Tube** (the
-Fairchild 670). Grip and Punch show ratio, attack and release, each a switch
+Fairchild 670), picked with one `◂ GRIP ▸` chip whose arrows or wheel step
+through them (MOO-295). Grip and Punch show ratio, attack and release, each a switch
 reading the unit's own markings; Tube shows the 670's six-position TIME
 instead. Threshold, makeup and wet/dry are shared, and each voicing keeps its
 own settings when another is picked. A needle meter reads its gain reduction,
@@ -944,7 +945,7 @@ master's strip.
 **The Bus Comp is also an insert** (MOO-216), in the insert menu after Comp,
 so a drum bus, a channel or a container branch can have one. It is the
 master section's compressor, not a copy: the same DSP, the same face
-(needle, voicing switches, per-voicing knobs) in the accent colour, three
+(needle, voicing chip, per-voicing knobs) in the accent colour, three
 units wide, and the same settings and defaults. Its in/out is the rail's
 bypass, so it has no IN switch, and it has no lookahead. Every knob automates
 and takes modulation, it reports no latency, and it ships a factory bank of

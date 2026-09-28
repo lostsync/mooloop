@@ -418,13 +418,20 @@ slint::slint! {
 }
 
 /// **Something presses the buttons** (`AGENTS.md`, *Duplication*). Real
-/// pointer events on the face's In switch and on a voicing reach its
+/// pointer events on the face's In switch and on the voicing chip reach its
 /// `moved` callback with the ids `MasterSpec` was handed, which is the
 /// callback `main.slint` forwards to `bus-strip-param`.
 ///
 /// The coordinates are the face's own layout: the left column is 250px wide
-/// under a 28px header and 8px padding, and its bottom row -- In, then the
-/// three voicings at 60px each -- is 26px tall at the bottom of the face.
+/// under a 28px header and 8px padding, and its bottom row -- In at 44px,
+/// then the `◂ PUNCH ▸` chip (MOO-295) 6px after it -- is 26px tall at the
+/// bottom of the face. The chip's `◂` is its first 16px inside a 1px
+/// border; the wheel steps from anywhere on it, so its far end, which
+/// depends on how wide the font makes PUNCH, is never needed.
+///
+/// The chip is controlled: the row stays on Punch throughout, so the `◂`
+/// and the wheel each report a neighbour of Punch, which is what lets an
+/// undo that moves the voicing move the chip.
 #[test]
 fn the_master_face_s_switches_reach_the_callback() {
     use slint::platform::{PointerEventButton, WindowEvent};
@@ -458,16 +465,30 @@ fn the_master_face_s_switches_reach_the_callback() {
             button: PointerEventButton::Left,
         });
     };
+    let scroll_up = |x: f32, y: f32| {
+        let position = LogicalPosition::new(x, y);
+        let window = ui.window();
+        window.dispatch_event(WindowEvent::PointerMoved { position });
+        window.dispatch_event(WindowEvent::PointerScrolled {
+            position,
+            delta_x: 0.0,
+            delta_y: 1.0,
+        });
+    };
+    ui.set_voicing(1);
     // The row's vertical centre: 268 tall, 8px padding, 26px row.
     let row = 268.0 - 8.0 - 13.0;
+    let chip = 8.0 + 44.0 + 6.0;
     click(30.0, row);
-    click(58.0 + 2.0 * 61.0 + 30.0, row);
+    click(chip + 9.0, row);
+    scroll_up(chip + 24.0, row);
     assert_eq!(
         *seen.borrow(),
         vec![
             (mooloop_core::strip::MASTER_COMP_IN as i32, 1.0),
+            (mooloop_core::strip::MASTER_COMP_VOICING as i32, 0.0),
             (mooloop_core::strip::MASTER_COMP_VOICING as i32, 2.0),
         ],
-        "the In switch and the Tube button did not reach the callback"
+        "the In switch and the voicing chip's arrow and wheel did not reach the callback"
     );
 }
