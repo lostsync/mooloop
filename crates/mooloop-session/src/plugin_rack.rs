@@ -1725,6 +1725,26 @@ pub(crate) mod tests {
         pub built_rate: AtomicU32,
         /// It says it is an instrument (MOO-85): only a source may host it.
         pub instrument: AtomicBool,
+        /// It has a GUI (step 11).
+        pub has_gui: AtomicBool,
+        /// Its GUI refuses to embed.
+        pub refuses_parent: AtomicBool,
+        pub gui_creates: AtomicUsize,
+        pub gui_destroys: AtomicUsize,
+        /// What its GUI asks of the window, until the rack drains it.
+        pub gui_requests: std::sync::Mutex<Vec<GuiRequest>>,
+        /// The order its GUI, processors and instances went in.
+        pub order: std::sync::Mutex<Vec<&'static str>>,
+    }
+
+    impl FakeProbe {
+        fn happened(&self, what: &'static str) {
+            self.order.lock().unwrap().push(what);
+        }
+
+        pub(crate) fn order(&self) -> Vec<&'static str> {
+            self.order.lock().unwrap().clone()
+        }
     }
 
     /// The rack's test double: a plugin with no library behind it.
@@ -1733,6 +1753,9 @@ pub(crate) mod tests {
         params: Vec<PluginParamInfo>,
         config: AudioConfig,
         probe: Arc<FakeProbe>,
+        gui_open: Option<GuiConfig>,
+        gui_parented: bool,
+        gui_visible: bool,
     }
 
     pub(crate) fn fake_ref() -> PluginRef {
@@ -1755,13 +1778,101 @@ pub(crate) mod tests {
                     max_frames: PLUGIN_MAX_FRAMES,
                 },
                 probe,
+                gui_open: None,
+                gui_parented: false,
+                gui_visible: false,
             })
         }
     }
 
     impl Drop for FakeInstance {
         fn drop(&mut self) {
+            if self.gui_open.is_some() {
+                self.probe.happened("instance dropped with its GUI open");
+            }
+            self.probe.happened("instance dropped");
             self.probe.instances_dropped.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl HostedGui for FakeInstance {
+        fn is_api_supported(&mut self, _config: GuiConfig) -> bool {
+            true
+        }
+        fn preferred_api(&mut self) -> Option<GuiConfig> {
+            Some(GuiConfig::X11_EMBEDDED)
+        }
+        fn open_config(&self) -> Option<GuiConfig> {
+            self.gui_open
+        }
+        fn is_visible(&self) -> bool {
+            self.gui_visible
+        }
+        fn create(&mut self, config: GuiConfig) -> Result<(), GuiError> {
+            if self.gui_open.is_some() {
+                return Err(GuiError::AlreadyOpen);
+            }
+            self.gui_open = Some(config);
+            self.gui_parented = false;
+            self.probe.gui_creates.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn set_scale(&mut self, _scale: f64) -> Result<(), GuiError> {
+            Ok(())
+        }
+        fn size(&mut self) -> Option<GuiSize> {
+            self.gui_open.map(|_| GuiSize {
+                width: 300,
+                height: 200,
+            })
+        }
+        fn can_resize(&mut self) -> bool {
+            false
+        }
+        fn adjust_size(&mut self, size: GuiSize) -> Option<GuiSize> {
+            Some(size)
+        }
+        fn set_size(&mut self, _size: GuiSize) -> Result<(), GuiError> {
+            Err(GuiError::Refused("take that size"))
+        }
+        fn set_parent(&mut self, _window: NativeWindow) -> Result<(), GuiError> {
+            if self.probe.refuses_parent.load(Ordering::SeqCst) {
+                return Err(GuiError::Refused("embed in the window"));
+            }
+            self.gui_parented = true;
+            Ok(())
+        }
+        fn set_transient(&mut self, _window: NativeWindow) -> Result<(), GuiError> {
+            Ok(())
+        }
+        fn suggest_title(&mut self, _title: &str) {}
+        fn show(&mut self) -> Result<(), GuiError> {
+            match self.gui_open {
+                None => Err(GuiError::NotOpen),
+                Some(config) if !config.floating && !self.gui_parented => Err(GuiError::Refused("show")),
+                Some(_) => {
+                    self.gui_visible = true;
+                    Ok(())
+                }
+            }
+        }
+        fn hide(&mut self) -> Result<(), GuiError> {
+            self.gui_open.ok_or(GuiError::NotOpen)?;
+            self.gui_visible = false;
+            Ok(())
+        }
+        fn destroy(&mut self) {
+            if self.gui_open.take().is_some() {
+                self.gui_visible = false;
+                self.probe.gui_destroys.fetch_add(1, Ordering::SeqCst);
+                self.probe.happened("gui destroyed");
+            }
+        }
+        fn take_requests(&mut self, sink: &mut dyn FnMut(GuiRequest)) {
+            let requests = std::mem::take(&mut *self.probe.gui_requests.lock().unwrap());
+            if self.gui_open.is_some() {
+                requests.into_iter().for_each(sink);
+            }
         }
     }
 
@@ -1772,6 +1883,7 @@ pub(crate) mod tests {
 
     impl Drop for FakeProcessor {
         fn drop(&mut self) {
+            self.probe.happened("processor dropped");
             self.probe.processors_dropped.fetch_add(1, Ordering::SeqCst);
         }
     }
@@ -1818,6 +1930,13 @@ pub(crate) mod tests {
         }
         fn set_audio_config(&mut self, config: AudioConfig) {
             self.config = config;
+        }
+        fn gui(&mut self) -> Option<&mut dyn HostedGui> {
+            if self.probe.has_gui.load(Ordering::SeqCst) {
+                Some(self)
+            } else {
+                None
+            }
         }
         fn build_processor(
             &mut self,
@@ -2487,5 +2606,177 @@ pub(crate) mod tests {
         session.collect_plugins();
         assert_eq!(session.plugin_rack.dying(), 0);
         assert!(session.plugin_rack.instance(slot).is_some(), "the live one stays");
+    }
+
+    // Step 11 (MOO-300): a plugin's GUI, against the rack's fake.
+
+    fn embedded(parent: u64) -> PluginGuiOpen {
+        PluginGuiOpen {
+            placement: GuiPlacement::Embedded { parent },
+            title: "Fake - Channel 1".to_owned(),
+            scale: Some(1.0),
+        }
+    }
+
+    fn with_gui() -> Arc<FakeProbe> {
+        let probe = Arc::new(FakeProbe::default());
+        probe.has_gui.store(true, Ordering::SeqCst);
+        probe
+    }
+
+    /// Step 04's order, with the GUI in front: GUI, processor, instance.
+    #[test]
+    fn removing_a_plugin_destroys_its_gui_then_its_processor_then_its_instance() {
+        let probe = with_gui();
+        let mut rack = PluginRack::new();
+        let slot = PluginSlotId(0);
+        let processor = rack.insert(slot, FakeInstance::new(Arc::clone(&probe))).unwrap();
+        let opened = rack.open_gui(slot, &embedded(42)).expect("it opens");
+        assert_eq!(opened.config, GuiConfig::X11_EMBEDDED);
+        assert_eq!(opened.size, Some(GuiSize { width: 300, height: 200 }));
+        assert!(rack.gui_is_open(slot));
+
+        assert!(rack.remove(slot));
+        assert_eq!(probe.order(), ["gui destroyed"], "the GUI goes at once");
+        assert_eq!(rack.drain_gui_events(), [(slot, PluginGuiEvent::Closed)], "and the window is told");
+        assert_eq!(rack.collect(), 0, "the instance waits for its processor");
+        drop(processor);
+        assert_eq!(rack.collect(), 1);
+        assert_eq!(probe.order(), ["gui destroyed", "processor dropped", "instance dropped"]);
+    }
+
+    /// Closing a GUI and opening it again never touches the processor.
+    #[test]
+    fn closing_and_reopening_a_gui_leaves_the_processor_running() {
+        let probe = with_gui();
+        let mut rack = PluginRack::new();
+        let slot = PluginSlotId(2);
+        let named = BTreeSet::from([slot]);
+        let _processor = rack.insert(slot, FakeInstance::new(Arc::clone(&probe))).unwrap();
+        for cycle in 1..=3 {
+            rack.open_gui(slot, &embedded(7)).expect("it opens");
+            assert_eq!(rack.open_gui(slot, &embedded(7)), Err(GuiError::AlreadyOpen));
+            assert!(rack.close_gui(slot));
+            assert!(!rack.close_gui(slot), "closed once");
+            assert!(
+                rack.service(&PluginSlots::new(), &named, config()).is_empty(),
+                "cycle {cycle}: no pull-back, no rebuild"
+            );
+            assert_eq!(probe.gui_creates.load(Ordering::SeqCst), cycle);
+            assert_eq!(probe.gui_destroys.load(Ordering::SeqCst), cycle);
+        }
+        assert_eq!(probe.builds.load(Ordering::SeqCst), 1);
+        assert_eq!(probe.processors_dropped.load(Ordering::SeqCst), 0);
+        assert!(rack.drain_gui_events().is_empty(), "a close the window asked for is not echoed back");
+    }
+
+    #[test]
+    fn a_gui_that_fails_to_embed_is_not_left_open() {
+        let probe = with_gui();
+        probe.refuses_parent.store(true, Ordering::SeqCst);
+        let mut rack = PluginRack::new();
+        let slot = PluginSlotId(0);
+        let _processor = rack.insert(slot, FakeInstance::new(Arc::clone(&probe))).unwrap();
+        assert!(matches!(rack.open_gui(slot, &embedded(3)), Err(GuiError::Refused(_))));
+        assert!(!rack.gui_is_open(slot));
+        assert_eq!(probe.gui_destroys.load(Ordering::SeqCst), 1);
+        // Floating needs no parent.
+        let floating = PluginGuiOpen {
+            placement: GuiPlacement::Floating { transient_for: None },
+            ..embedded(0)
+        };
+        assert!(rack.open_gui(slot, &floating).is_ok());
+    }
+
+    #[test]
+    fn a_plugin_without_a_gui_or_a_slot_without_a_plugin_says_so() {
+        let probe = Arc::new(FakeProbe::default());
+        let mut rack = PluginRack::new();
+        let _processor = rack.insert(PluginSlotId(0), FakeInstance::new(Arc::clone(&probe))).unwrap();
+        assert_eq!(rack.open_gui(PluginSlotId(0), &embedded(1)), Err(GuiError::NoGui));
+        assert_eq!(rack.gui_placement_kind(PluginSlotId(0)), Err(GuiError::NoGui));
+        assert_eq!(rack.open_gui(PluginSlotId(9), &embedded(1)), Err(GuiError::Missing));
+        assert!(!GuiError::NoGui.to_string().is_empty(), "the badge has words to show");
+    }
+
+    /// The plugin's own requests reach the window side, and a plugin that
+    /// closes its own window has its GUI hidden and destroyed for it.
+    #[test]
+    fn a_plugins_requests_are_carried_out_and_its_own_close_destroys_the_gui() {
+        let probe = with_gui();
+        let mut rack = PluginRack::new();
+        let slot = PluginSlotId(4);
+        let _processor = rack.insert(slot, FakeInstance::new(Arc::clone(&probe))).unwrap();
+        rack.open_gui(slot, &embedded(8)).expect("it opens");
+        let size = GuiSize { width: 500, height: 400 };
+        probe.gui_requests.lock().unwrap().extend([
+            GuiRequest::Resize(size),
+            GuiRequest::Hide,
+            GuiRequest::Closed { destroyed: false },
+        ]);
+        assert_eq!(
+            rack.drain_gui_events(),
+            [
+                (slot, PluginGuiEvent::Resize(size)),
+                (slot, PluginGuiEvent::Hide),
+                (slot, PluginGuiEvent::Closed),
+            ]
+        );
+        assert!(!rack.gui_is_open(slot));
+        assert_eq!(probe.gui_destroys.load(Ordering::SeqCst), 1);
+        assert_eq!(probe.processors_dropped.load(Ordering::SeqCst), 0, "the processor runs on");
+    }
+
+    /// A device removed from its chain keeps its instance for an undo, but
+    /// its window closes on the next tick.
+    #[test]
+    fn a_device_nobody_names_loses_its_gui_on_the_next_tick() {
+        let probe = with_gui();
+        let mut rack = PluginRack::new();
+        let slot = PluginSlotId(1);
+        let _processor = rack.insert(slot, FakeInstance::new(Arc::clone(&probe))).unwrap();
+        rack.open_gui(slot, &embedded(2)).expect("it opens");
+        rack.service(&PluginSlots::new(), &BTreeSet::from([slot]), config());
+        assert!(rack.gui_is_open(slot), "named, it stays");
+        rack.service(&PluginSlots::new(), &BTreeSet::new(), config());
+        assert!(!rack.gui_is_open(slot));
+        assert_eq!(rack.drain_gui_events(), [(slot, PluginGuiEvent::Closed)]);
+        assert!(rack.instance(slot).is_some(), "the instance is kept for an undo");
+        assert_eq!(probe.processors_dropped.load(Ordering::SeqCst), 0);
+    }
+
+    /// Closing the song, or quitting, destroys every GUI before any
+    /// processor comes back or any instance goes.
+    #[test]
+    fn closing_the_plugins_destroys_every_gui_first() {
+        let probe = with_gui();
+        let (mut session, slot, processor) = session_hosting(&probe);
+        let title = session.plugin_gui_title(slot).expect("a title");
+        assert!(title.starts_with("Fake"), "{title}");
+        session.open_plugin_gui(slot, &embedded(5)).expect("it opens");
+        assert!(session.plugin_gui_is_open(slot));
+        let mut sink = Sink::default();
+        session.close_plugins(&mut sink);
+        assert_eq!(probe.order(), ["gui destroyed"]);
+        assert_eq!(session.drain_plugin_gui_events(), [(slot, PluginGuiEvent::Closed)]);
+        assert_eq!(sink.replaced.len(), 1, "then the processor is pulled back");
+        drop(processor);
+        session.collect_plugins();
+        assert!(session.plugins_retired());
+        assert_eq!(probe.order(), ["gui destroyed", "processor dropped", "instance dropped"]);
+    }
+
+    /// A quit whose wait ran out still destroys the GUI of an instance it
+    /// has to leak.
+    #[test]
+    fn a_leaked_instance_still_has_its_gui_destroyed() {
+        let probe = with_gui();
+        let mut rack = PluginRack::new();
+        let slot = PluginSlotId(0);
+        let processor = rack.insert(slot, FakeInstance::new(Arc::clone(&probe))).unwrap();
+        rack.open_gui(slot, &embedded(6)).expect("it opens");
+        assert_eq!(rack.leak_remaining(), 1);
+        assert_eq!(probe.gui_destroys.load(Ordering::SeqCst), 1);
+        std::mem::forget(processor);
     }
 }
