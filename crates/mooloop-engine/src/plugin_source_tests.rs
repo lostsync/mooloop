@@ -309,6 +309,7 @@ fn switching_and_swapping_a_hosted_source_allocates_nothing() {
         assert!(live.commands.push(command).is_ok());
         let mut back = "nothing".to_owned();
         for _ in 0..24 {
+            let locks = mooloop_core::lock_check::locks_taken();
             let (allocations, frees) = (crate::COUNTING.allocations(), crate::COUNTING.frees());
             block(&mut live);
             let counted = (
@@ -316,6 +317,8 @@ fn switching_and_swapping_a_hosted_source_allocates_nothing() {
                 crate::COUNTING.frees() - frees,
             );
             assert_eq!(counted, (0, 0), "{what} allocated or freed in the callback");
+            let locked = mooloop_core::lock_check::locks_taken() - locks;
+            assert_eq!(locked, 0, "{what} took a lock {locked} times in the callback");
             match live.reclaim.pop() {
                 Ok(StructuralReclaim::Source(node)) => back = format!("source {:?}", node.kind()),
                 Ok(StructuralReclaim::HostedProcessor(_)) => back = "processor".to_owned(),

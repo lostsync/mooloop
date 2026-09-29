@@ -194,6 +194,14 @@ contract is strict:
 - bounded work derived from declared capacities;
 - identical signal behavior for realtime and offline block sizes.
 
+Two of these are checked by tests that run blocks through the executor
+(`soak_tests.rs`, and the hosted-plugin tests beside it). Allocation and
+deallocation are counted by the engine's test-only `CountingAllocator`.
+Locks are counted by `mooloop_core::lock_check` (MOO-173), but only locks
+taken through its `Mutex`, which a lock on the render path must therefore
+be. An uncontended `std::sync::Mutex` never leaves user space, and no test
+can see one taken. The counter is compiled out without `debug_assertions`.
+
 Prepared states and structural nodes cross to the executor by ownership. At a
 block boundary it may swap pointers or fixed-size values. Anything displaced
 returns through a bounded reclaim channel and is destroyed on the control

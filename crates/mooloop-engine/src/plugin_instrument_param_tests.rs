@@ -148,6 +148,7 @@ fn play(
                         assert!(live.commands.push(command).is_ok(), "the command ring has room");
                     }
                     let n = block.min(frames - done);
+                    let locks = mooloop_core::lock_check::locks_taken();
                     let before = (crate::COUNTING.allocations(), crate::COUNTING.frees());
                     live.executor.process_with_input(
                         std::iter::empty(),
@@ -163,6 +164,8 @@ fn play(
                         after.0 - before.0,
                         after.1 - before.1
                     );
+                    let locked = mooloop_core::lock_check::locks_taken() - locks;
+                    assert_eq!(locked, 0, "block {index} at {block} frames took a lock {locked} times");
                     for frame in 0..n {
                         out.push(l[frame]);
                         out.push(r[frame]);

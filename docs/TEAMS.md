@@ -184,7 +184,8 @@ Files marked *shared* are split in the table above.
   verbs is Interface's (MOO-302)
 - `dsp/src/`: `node.rs` (*shared*), `event.rs`, `bus.rs` (*shared*), `taps.rs`
   — the `AudioNode` contract and what flows through it
-- `core/src/bridge.rs`
+- `core/src/bridge.rs`, and `core/src/lock_check.rs` (the counted mutex a
+  render-path lock must be, MOO-173)
 - `session/src/engine.rs` (*shared*); `session/tests/ordering.rs`,
   `session/tests/delivery.rs`, and `session/tests/song_block_cost.rs` (what a
   real song's callbacks cost and which device kind or channel carries it; a

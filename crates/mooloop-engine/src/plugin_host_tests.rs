@@ -440,6 +440,7 @@ fn sixty_four_hosted_channels_allocate_nothing_on_the_callback() {
                                 .push(replace(EffectTarget::Channel(0), 0, slots[0], node))
                                 .is_ok());
                         }
+                        let locks = mooloop_core::lock_check::locks_taken();
                         let before = (crate::COUNTING.allocations(), crate::COUNTING.frees());
                         live.executor.process_with_input(std::iter::empty(), &silence, &silence, &mut l, &mut r);
                         let after = (crate::COUNTING.allocations(), crate::COUNTING.frees());
@@ -449,6 +450,8 @@ fn sixty_four_hosted_channels_allocate_nothing_on_the_callback() {
                             after.0 - before.0,
                             after.1 - before.1
                         );
+                        let locked = mooloop_core::lock_check::locks_taken() - locks;
+                        assert_eq!(locked, 0, "block {index} at {block} frames took a lock {locked} times");
                         assert!(l.iter().chain(&r).all(|s| s.is_finite()));
                         loudest = l.iter().chain(&r).fold(loudest, |m, s| m.max(s.abs()));
                         // Control-thread work, outside the counted window.
