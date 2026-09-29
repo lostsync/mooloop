@@ -2215,10 +2215,13 @@ export component MuteButton inherits ToolButton {
     active: root.muted;
     active-color: Theme.destructive-active;
     text-color: root.muted ? #fecaca : Theme.text-faint;
-    min-width: 18px;
-    max-width: 18px;
-    min-height: 18px;
-    max-height: 18px;
+    // 18px square at 100%, growing with the text above it (MOO-334, the rule
+    // MOO-278 gave menu rows), so at 200% the "M" stays inside its chip.
+    property <length> chip: 18px * Theme.row-growth;
+    min-width: root.chip;
+    max-width: root.chip;
+    min-height: root.chip;
+    max-height: root.chip;
 }
 
 /// The analog-sum switch for one strip: does this strip's output go into its
@@ -2963,10 +2966,13 @@ export component SoloButton inherits ToolButton {
     active: root.soloed;
     active-color: #78500a;
     text-color: root.soloed ? #fde68a : Theme.text-faint;
-    min-width: 18px;
-    max-width: 18px;
-    min-height: 18px;
-    max-height: 18px;
+    // 18px square at 100%, growing with the text above it, as `MuteButton`
+    // does (MOO-334).
+    property <length> chip: 18px * Theme.row-growth;
+    min-width: root.chip;
+    max-width: root.chip;
+    min-height: root.chip;
+    max-height: root.chip;
 }
 
 // Solo over mute, in the footprint one mute button used to have.

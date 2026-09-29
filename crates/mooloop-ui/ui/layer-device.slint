@@ -39,9 +39,6 @@ export component LayerBranchListRow inherits Rectangle {
     // either side. The list is a layout of these, so its pitch follows; at
     // 100% nothing moves, and `layer_face.rs` aims at 100% pixels.
     height: 22px * Theme.row-growth;
-    // S and M's chips, the same: 18px at 100%. `SoloButton` and
-    // `MuteButton` pin themselves to 18px, which their 2x letters overflow.
-    property <length> chip: 18px * Theme.row-growth;
     border-radius: Theme.radius-sm;
     background: root.selected ? Theme.surface-raised : transparent;
 
@@ -127,10 +124,6 @@ export component LayerBranchListRow inherits Rectangle {
         if root.controls : VerticalLayout {
             alignment: center;
             SoloButton {
-                min-width: root.chip;
-                max-width: root.chip;
-                min-height: root.chip;
-                max-height: root.chip;
                 soloed: root.soloed;
                 tooltip: "Solo this branch within the layer";
                 clicked => { root.solo-toggled(); }
@@ -139,10 +132,6 @@ export component LayerBranchListRow inherits Rectangle {
         if root.controls : VerticalLayout {
             alignment: center;
             MuteButton {
-                min-width: root.chip;
-                max-width: root.chip;
-                min-height: root.chip;
-                max-height: root.chip;
                 muted: root.muted;
                 tooltip: "Mute this branch";
                 clicked => { root.mute-toggled(); }
