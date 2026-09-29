@@ -303,6 +303,12 @@ pub struct ChannelClipboard {
     /// [`crate::session::Session::admit_zone_audio`] on paste. A zone whose
     /// audio the copied channel did not have is absent, and stays missing.
     pub zones: Vec<(PathBuf, Arc<SampleData>)>,
+    /// What the song kept about the channel's plugin instrument when it was
+    /// copied -- the plugin, its parameter list, its pins and its state --
+    /// for the paste to mint a slot of its own from (MOO-317). `None` for any
+    /// other source, and for a plugin source whose slot the song did not
+    /// have.
+    pub source_plugin: Option<mooloop_core::PluginSlotState>,
 }
 
 impl crate::session::Session {
@@ -338,6 +344,24 @@ impl crate::session::Session {
         // pick is re-made deliberately.
         channel.setup.channel.audio_input = mooloop_core::AudioInputSource::Off;
         channel.setup.channel.midi_input = mooloop_core::midi::ChannelMidiInput::default();
+        // **A plugin instrument gets a slot of its own** (MOO-317). The copy
+        // names its slot in the song it came from: pasted back into that
+        // song, two channels named one slot, and the rack -- which hosts one
+        // instance per slot -- gave its processor to the first of them, so
+        // the paste was silent; pasted into another song, the number named
+        // whatever that song kept there. The carried plugin, with its state,
+        // takes a fresh slot in *this* song, and `service_plugins` opens it
+        // from that state on the next tick, as it opens a song's plugins on
+        // load. The source device keeps its id: device ids are per channel,
+        // so the copy's lanes and routes on the instrument stay its own.
+        if let mooloop_core::ChannelSource::Plugin(slot) = &mut channel.setup.source {
+            *slot = match clipboard.source_plugin {
+                Some(plugin) => project.add_plugin_slot(plugin),
+                // Nothing to open it from: a number that names nothing here
+                // rather than one that may name something else.
+                None => mooloop_core::PluginSlotId::UNASSIGNED,
+            };
+        }
         channel
             .notes
             .resize_with(project.pattern_lengths.len(), Vec::new);

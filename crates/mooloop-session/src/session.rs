@@ -1960,10 +1960,21 @@ impl Session {
             .iter()
             .filter_map(|zone| Some((zone.path()?.to_path_buf(), zone.sample.clone()?)))
             .collect();
+        let channel = project.channels.get(index)?.clone();
+        // The song's copy, as the undo history has it: the pump captures each
+        // edit a plugin *finishes* (MOO-82), so a gesture still open, a run
+        // of values not yet quiet, or state the plugin changed without
+        // reporting a parameter is not in it. Reading the live instance
+        // needs `&mut self`, which this method's callers do not hold.
+        let source_plugin = match channel.setup.source {
+            ChannelSource::Plugin(slot) => project.plugins.get(&slot).cloned(),
+            _ => None,
+        };
         Some(crate::channel::ChannelClipboard {
-            channel: project.channels.get(index)?.clone(),
+            channel,
             sample: self.sample_snapshots().get(index)?.clone(),
             zones,
+            source_plugin,
         })
     }
 }
