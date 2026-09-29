@@ -1016,6 +1016,18 @@ fn a_missing_plugin_parameter_is_drawn_missing_and_reunited() {
 // opens a window: the window side is `plugin_gui::fake`, which records what
 // it was asked, and the plugin is the test double's GUI variant, which draws
 // nothing.
+//
+// **The tests that expect a GUI to open run only where the host can open
+// one** (MOO-337). The host asks a plugin for its GUI through `GuiApi::X11`
+// alone (`mooloop-plugin-host/src/gui.rs`: Cocoa and Win32 arrive with the
+// platforms that need them), and the window side is a bare X11 window, so a
+// plugin GUI is a feature of the targets with X11: the same `cfg` as
+// `display_backend.rs`'s `force_x11`. On macOS the test double truthfully
+// refuses X11, and those tests fail by testing a feature macOS does not
+// have. That is a scope, not a quarantine: what a macOS user gets instead --
+// the face, its control, and a badge saying why no window opened -- is
+// `a_window_that_cannot_open_is_the_badge`, which runs everywhere. When the
+// host learns Cocoa, the gate moves with it.
 
 /// The scanner's cache with the test gain's and the test sine's GUI variants
 /// beside the rest.
@@ -1072,6 +1084,7 @@ fn window_buttons(h: &Harness) -> Vec<Control> {
         .collect()
 }
 
+#[cfg(all(unix, not(target_vendor = "apple")))] // X11 only: MOO-337, above.
 fn gui_slot(h: &Harness) -> PluginSlotId {
     match h.state.borrow().session.effect_chain().expect("a chain")[1].params {
         EffectParams::Plugin(slot) => slot,
@@ -1079,10 +1092,12 @@ fn gui_slot(h: &Harness) -> PluginSlotId {
     }
 }
 
+#[cfg(all(unix, not(target_vendor = "apple")))] // X11 only: MOO-337, above.
 fn calls(log: &FakeLog) -> Vec<String> {
     log.borrow().calls.clone()
 }
 
+#[cfg(all(unix, not(target_vendor = "apple")))] // X11 only: MOO-337, above.
 fn open_gui(h: &Harness) {
     let main = crate::plugin_gui::MainWindowState::of(h.window.window());
     h.state.borrow_mut().open_plugin_gui_at(1, &main).expect("it opens");
@@ -1093,6 +1108,7 @@ fn open_gui(h: &Harness) {
 /// sized to the plugin and shown; pressed again, it brings that window to
 /// the front rather than opening a second.
 #[test]
+#[cfg(all(unix, not(target_vendor = "apple")))] // X11 only: MOO-337, above.
 fn only_a_plugin_with_a_gui_has_the_control_and_it_opens_or_raises() {
     let (mut h, log) = gui_harness();
     let rows: Vec<EffectSlotRow> = h.state.borrow().effect_slot_model.iter().collect();
@@ -1130,6 +1146,7 @@ fn only_a_plugin_with_a_gui_has_the_control_and_it_opens_or_raises() {
 /// removed with its GUI open has the GUI closed by the session, and its
 /// window destroyed on the tick that reports it. Quit does the same for all.
 #[test]
+#[cfg(all(unix, not(target_vendor = "apple")))] // X11 only: MOO-337, above.
 fn a_window_goes_only_after_its_plugin_gui() {
     use mooloop_plugin_window::{GuiSize, PluginWindowEvent, PluginWindowId};
     let destroyed = |log: &FakeLog| calls(log).iter().filter(|call| call.starts_with("destroy ")).count();
@@ -1186,9 +1203,16 @@ fn a_window_goes_only_after_its_plugin_gui() {
 }
 
 /// **A window that cannot open is the face's badge, and the face stays.**
-/// No X server here: the reason is the window side's own.
+/// No X server here: the reason is the window side's own. Where the host
+/// offers no GUI API the plugin can embed in -- macOS, until the host learns
+/// Cocoa (MOO-337) -- the plugin refuses first and the reason is its own:
+/// this is what a macOS user gets for a plugin with a GUI, and it runs there.
 #[test]
 fn a_window_that_cannot_open_is_the_badge() {
+    #[cfg(all(unix, not(target_vendor = "apple")))]
+    let reason = "DISPLAY";
+    #[cfg(not(all(unix, not(target_vendor = "apple"))))]
+    let reason = "cannot open an embedded window in X11";
     let (mut h, _log) = gui_harness();
     h.state.borrow_mut().plugin_guis =
         crate::plugin_gui::PluginGuis::new(Box::new(|| Err(mooloop_plugin_window::WindowError::NoDisplay)));
@@ -1198,7 +1222,7 @@ fn a_window_that_cannot_open_is_the_badge() {
     assert!(row.is_plugin && row.plugin_has_gui, "the face stays, control and all");
     assert!(!row.plugin_gui_open);
     assert!(row.plugin_status.contains("window did not open"), "{}", row.plugin_status);
-    assert!(row.plugin_status.contains("DISPLAY"), "the reason is said: {}", row.plugin_status);
+    assert!(row.plugin_status.contains(reason), "the reason is said: {}", row.plugin_status);
     assert_eq!(window_buttons(&h).len(), 1, "and it can be pressed again");
 }
 
@@ -1283,6 +1307,7 @@ fn instrument(h: &Harness) -> (mooloop_core::DeviceId, PluginSlotId) {
 /// effect's does** (MOO-304), through `PluginGuis::open_or_raise` with the
 /// source's slot.
 #[test]
+#[cfg(all(unix, not(target_vendor = "apple")))] // X11 only: MOO-337, above.
 fn a_plugin_instrument_with_a_gui_opens_it_from_its_face() {
     let (mut h, log) = instrument_harness(test_plugin::SINE_GUI_ID);
     let (_, slot) = instrument(&h);
