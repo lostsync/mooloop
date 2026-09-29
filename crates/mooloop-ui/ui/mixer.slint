@@ -79,7 +79,10 @@ export global MixerMetrics {
     /// it, and it is the last of the three numbers
     /// that had to come down before the analog-sum switch fit the room a
     /// 200px dock leaves.
-    out property <length> fader-floor: 82px;
+    /// That column at 100% is 82px; above it the column's buttons grow with
+    /// the text (MOO-335), and the floor with them, so the analog-sum switch
+    /// under the section is not pushed out of the strip's clip.
+    out property <length> fader-floor: max(82px, root.column-height);
     /// And the floor it stops at once the strip is turned over, where the
     /// fader is there to be *watched* rather than dragged: an EQ is set by
     /// ear against what it does to the level, which a short fader still
@@ -113,7 +116,20 @@ export global MixerMetrics {
     out property <length> strip-min-height:
         2 * root.strip-padding + 20px + 3px + root.column-height + 3px + root.front-height;
     /// Pan knob, three 18px buttons, and the gaps between them.
-    out property <length> column-height: 22px + 3 * 18px + 3 * 2px;
+    out property <length> column-height: 22px + 3 * root.column-button-height + 3 * 2px;
+
+    /// One of the column's three buttons: solo, mute and polarity. 18px tall
+    /// at 100%, growing with the text above it (MOO-335, the rule MOO-278
+    /// and MOO-334 gave menu rows and these buttons elsewhere), so the
+    /// letters stay inside their chips.
+    out property <length> column-button-height: 18px * Theme.row-growth;
+    /// The column's width: 24px at 100%, growing with the text above it, but
+    /// never past what the strip leaves beside the meter and the fader (28px
+    /// at 92px), since the strip itself does not widen.
+    out property <length> column-width: min(24px * Theme.row-growth,
+        root.strip-width - 2 * root.strip-padding - root.meter-width - root.fader-width - 2 * 2px);
+    /// Its buttons, 2px narrower than the column: 22px at 100%.
+    out property <length> column-button-width: root.column-width - 2px;
 
     /// Room for a scroll bar, which Slint draws **over** the edge of a
     /// viewport rather than beside it. `SendRow` has the same allowance for
@@ -645,7 +661,7 @@ component StripOutput inherits HorizontalLayout {
     // could not give a pixel back. The spacer at the end takes
     // whatever is over instead.
     VerticalLayout {
-        width: 24px;
+        width: MixerMetrics.column-width;
         spacing: 2px;
         MiniKnob {
             label: "Pan";
@@ -670,20 +686,22 @@ component StripOutput inherits HorizontalLayout {
         // plus the pan knob is taller than the fader's floor -- so
         // the column grew the output section and clipped the analog
         // sum off the bottom of the strip.
+        // Bounded by `MixerMetrics`, which grows them with the text
+        // above 100% and the fader's floor with them (MOO-335).
         if !root.strip.is-master : SoloButton {
             soloed: root.strip.solo;
-            min-width: 22px;
-            max-width: 22px;
-            min-height: 18px;
-            max-height: 18px;
+            min-width: MixerMetrics.column-button-width;
+            max-width: MixerMetrics.column-button-width;
+            min-height: MixerMetrics.column-button-height;
+            max-height: MixerMetrics.column-button-height;
             clicked => { root.solo-toggled(); }
         }
         MuteButton {
             muted: root.strip.muted;
-            min-width: 22px;
-            max-width: 22px;
-            min-height: 18px;
-            max-height: 18px;
+            min-width: MixerMetrics.column-button-width;
+            max-width: MixerMetrics.column-button-width;
+            min-height: MixerMetrics.column-button-height;
+            max-height: MixerMetrics.column-button-height;
             clicked => { root.mute-toggled(); }
         }
         // The cheapest control on the mockup, and drawn where it is
@@ -696,10 +714,10 @@ component StripOutput inherits HorizontalLayout {
             hint: "Invert this track's polarity. It acts on the way in, so "
                 + "everything after it -- including a pre-fader send -- is flipped.";
             active: root.strip.polarity;
-            min-width: 22px;
-            max-width: 22px;
-            min-height: 18px;
-            max-height: 18px;
+            min-width: MixerMetrics.column-button-width;
+            max-width: MixerMetrics.column-button-width;
+            min-height: MixerMetrics.column-button-height;
+            max-height: MixerMetrics.column-button-height;
             clicked => { root.polarity-toggled(); }
         }
         Rectangle { vertical-stretch: 1; }
