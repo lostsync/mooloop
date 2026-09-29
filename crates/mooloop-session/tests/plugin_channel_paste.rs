@@ -1,5 +1,6 @@
-//! A channel whose source is a hosted plugin, copied and pasted or cloned
-//! (MOO-317), with the in-repo test sine.
+//! A channel that runs hosted plugins, copied and pasted or cloned, with the
+//! in-repo test plugins: the sine as its source (MOO-317) and the gain on
+//! its chain (MOO-331).
 //!
 //! Copy, paste and clone all go through `Session::channel_clipboard` and
 //! `Session::paste_channel` -- clone is a copy pasted straight after itself
@@ -13,7 +14,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use mooloop_core::{
-    ChannelSource, NoteEvent, PluginFormat, PluginRef, PluginSlotId, Project, ProjectChannel,
+    ChannelSource, EffectParams, NoteEvent, PluginFormat, PluginRef, PluginSlotId, Project,
+    ProjectChannel,
 };
 use mooloop_dsp::{AudioNode, SourceNode};
 use mooloop_engine::{
@@ -100,7 +102,9 @@ fn melody() -> Project {
 struct Engine {
     _sources: Vec<Box<dyn SourceNode + Send>>,
     hosted: Vec<(u8, PluginSlotId, Box<dyn AudioNode + Send>)>,
-    _installed: Vec<Box<dyn AudioNode + Send>>,
+    /// A chain's devices and processors, by resource key: a plugin device's
+    /// is its slot.
+    effects: Vec<(Option<u64>, Box<dyn AudioNode + Send>)>,
 }
 
 impl CommandSink for Engine {
@@ -115,7 +119,12 @@ impl CommandSink for Engine {
                 slot,
                 node: Some(node),
             } => self.hosted.push((channel, slot, node)),
-            StructuralCommand::InstallEffect { node, .. } => self._installed.push(node),
+            StructuralCommand::InstallEffect {
+                node, resource_key, ..
+            } => self.effects.push((resource_key, node)),
+            StructuralCommand::ReplaceEffect {
+                node, resource_key, ..
+            } => self.effects.push((Some(resource_key), node)),
             _ => {}
         }
         true
@@ -298,4 +307,112 @@ fn a_plugin_instrument_channel_pasted_into_another_song_brings_its_plugin() {
     assert!(session.plugin_problem(slot).is_none(), "{:?}", session.plugin_problem(slot));
     let heard = export_solo(&mut session, index, dir.path(), "pasted.wav");
     assert!(peak(&heard) > 0.05, "the paste is silent, peak {}", peak(&heard));
+}
+
+/// The test gain inserted at the head of `seat`'s chain, and its slot.
+fn insert_gain(session: &mut Session, engine: &mut Engine, seat: i32) -> PluginSlotId {
+    session.select_channel(seat);
+    let inserted = session
+        .insert_plugin_effect(gain_ref(), 0, engine)
+        .expect("the device is inserted");
+    let EffectParams::Plugin(slot) = inserted.params else {
+        unreachable!("a plugin device");
+    };
+    assert!(session.plugin_problem(slot).is_none(), "the test gain opened");
+    slot
+}
+
+/// The plugin slot row `row` of `seat`'s chain runs.
+fn chain_slot(project: &Project, seat: usize, row: usize) -> PluginSlotId {
+    match project.channels[seat].setup.effects[row].params {
+        EffectParams::Plugin(slot) => slot,
+        other => panic!("channel {seat}'s row {row} is not a plugin device: {other:?}"),
+    }
+}
+
+/// **A pasted channel's plugin inserts get slots of their own** (MOO-331).
+/// The test gain on the channel's chain, and a second one boxed in a Chain
+/// container, copied and pasted after the channel in the same song: every
+/// plugin row of the paste names a slot minted for it, carrying the plugin
+/// it was copied from, and the pump hosts a second instance in each and
+/// swaps its processor into the pasted device. The export has a processor
+/// for all four.
+#[test]
+fn a_pasted_channels_plugin_inserts_get_slots_of_their_own() {
+    let mut session = session_with(cache_listing(&test_plugin_path()), &melody());
+    let mut engine = Engine::default();
+    let boxed = insert_gain(&mut session, &mut engine, 0);
+    session.wrap_effects_in_container(0..1).expect("wrapped");
+    let plain = insert_gain(&mut session, &mut engine, 0);
+    session.capture_plugin_states();
+
+    let before = snapshot(&session);
+    // The chain: the plain gain, the Chain, and the gain inside it.
+    assert_eq!(chain_slot(&before.project, 0, 0), plain, "test setup");
+    assert_eq!(chain_slot(&before.project, 0, 2), boxed, "test setup");
+    let copy = session.channel_clipboard(0, 120, 0).expect("a channel to copy");
+    let (pasted, index) = session
+        .paste_channel(&before, 0, copy)
+        .expect("room to paste");
+
+    let (plain_copy, boxed_copy) = (
+        chain_slot(&pasted.project, index, 0),
+        chain_slot(&pasted.project, index, 2),
+    );
+    assert_eq!(chain_slot(&pasted.project, 0, 0), plain, "the original keeps its slots");
+    assert_eq!(chain_slot(&pasted.project, 0, 2), boxed, "the original keeps its slots");
+    for (copied, original) in [(plain_copy, plain), (boxed_copy, boxed)] {
+        assert!(
+            copied.is_assigned() && copied != plain && copied != boxed,
+            "the pasted row names slot {}, one of the original's",
+            copied.0
+        );
+        assert_eq!(
+            pasted.project.plugins.get(&copied),
+            pasted.project.plugins.get(&original),
+            "the paste carries the plugin, its parameters and its state"
+        );
+    }
+    assert_ne!(plain_copy, boxed_copy);
+
+    session.replace_project(&pasted.project, &pasted.seated());
+    session.service_plugins(&mut engine);
+    for slot in [plain_copy, boxed_copy] {
+        assert!(session.plugin_problem(slot).is_none(), "{:?}", session.plugin_problem(slot));
+        assert!(session.plugin_rack.instance(slot).is_some(), "a second instance");
+        assert!(
+            engine.effects.iter().any(|(key, _)| *key == Some(u64::from(slot.0))),
+            "its processor went into the pasted device"
+        );
+    }
+    let exported = session.export_plugin_processors(RATE);
+    for slot in [plain, boxed, plain_copy, boxed_copy] {
+        assert!(exported.contains_key(&slot), "the export has no processor for slot {}", slot.0);
+    }
+}
+
+/// Pasted into another song, a channel's plugin insert brings its plugin,
+/// not its slot number: the second song's sine instrument holds the number
+/// the gain had, and is left alone.
+#[test]
+fn a_channels_plugin_insert_pasted_into_another_song_brings_its_plugin() {
+    let mut session = session_with(cache_listing(&test_plugin_path()), &melody());
+    let mut engine = Engine::default();
+    let gain = insert_gain(&mut session, &mut engine, 0);
+    let copy = session.channel_clipboard(0, 120, 0).expect("a channel to copy");
+
+    session.replace_project(&melody(), &[]);
+    let sine = session
+        .set_plugin_source(0, sine_ref(), &mut engine)
+        .expect("channel 0 exists");
+    assert_eq!(sine, gain, "test setup: the same number in both songs");
+
+    let before = snapshot(&session);
+    let (pasted, index) = session
+        .paste_channel(&before, 0, copy)
+        .expect("room to paste");
+    let landed = chain_slot(&pasted.project, index, 0);
+    assert_ne!(landed, sine, "the pasted gain names the other song's sine");
+    assert_eq!(pasted.project.plugins[&landed].plugin, gain_ref());
+    assert_eq!(pasted.project.plugins[&sine].plugin, sine_ref(), "the sine is left alone");
 }

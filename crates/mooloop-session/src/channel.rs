@@ -303,12 +303,32 @@ pub struct ChannelClipboard {
     /// [`crate::session::Session::admit_zone_audio`] on paste. A zone whose
     /// audio the copied channel did not have is absent, and stays missing.
     pub zones: Vec<(PathBuf, Arc<SampleData>)>,
-    /// What the song kept about the channel's plugin instrument when it was
-    /// copied -- the plugin, its parameter list, its pins and its state --
-    /// for the paste to mint a slot of its own from (MOO-317). `None` for any
-    /// other source, and for a plugin source whose slot the song did not
-    /// have.
-    pub source_plugin: Option<mooloop_core::PluginSlotState>,
+    /// Every hosted plugin the copied channel runs -- its instrument
+    /// (MOO-317) and each plugin row on its chain, inside containers too
+    /// (MOO-331) -- with its parameter list, its pins and its state, keyed by
+    /// the slot the copied channel names it by in the song it came from. The
+    /// paste mints each a slot of its own from this. A slot the song did not
+    /// have is absent.
+    pub plugins: mooloop_core::PluginSlots,
+}
+
+impl ChannelClipboard {
+    /// Every plugin slot `channel` names: its source's, and each plugin
+    /// row's on its chain. A container's rows sit on the chain after it, so
+    /// they are among them.
+    pub(crate) fn named_slots(
+        channel: &ProjectChannel,
+    ) -> impl Iterator<Item = mooloop_core::PluginSlotId> + '_ {
+        let source = match channel.setup.source {
+            mooloop_core::ChannelSource::Plugin(slot) => Some(slot),
+            _ => None,
+        };
+        let rows = channel.setup.effects.iter().filter_map(|effect| match effect.params {
+            mooloop_core::EffectParams::Plugin(slot) => Some(slot),
+            _ => None,
+        });
+        source.into_iter().chain(rows)
+    }
 }
 
 impl crate::session::Session {
@@ -344,23 +364,36 @@ impl crate::session::Session {
         // pick is re-made deliberately.
         channel.setup.channel.audio_input = mooloop_core::AudioInputSource::Off;
         channel.setup.channel.midi_input = mooloop_core::midi::ChannelMidiInput::default();
-        // **A plugin instrument gets a slot of its own** (MOO-317). The copy
-        // names its slot in the song it came from: pasted back into that
+        // **Every hosted plugin gets a slot of its own** -- the instrument
+        // (MOO-317) and each plugin row on the chain (MOO-331). The copy
+        // names its slots in the song it came from: pasted back into that
         // song, two channels named one slot, and the rack -- which hosts one
-        // instance per slot -- gave its processor to the first of them, so
-        // the paste was silent; pasted into another song, the number named
-        // whatever that song kept there. The carried plugin, with its state,
-        // takes a fresh slot in *this* song, and `service_plugins` opens it
-        // from that state on the next tick, as it opens a song's plugins on
-        // load. The source device keeps its id: device ids are per channel,
-        // so the copy's lanes and routes on the instrument stay its own.
+        // instance per slot -- gave its processor to the first of them;
+        // pasted into another song, the number named whatever that song kept
+        // there. Each carried plugin, with its state, takes a fresh slot in
+        // *this* song, and `service_plugins` opens it from that state on the
+        // next tick, as it opens a song's plugins on load. Every device keeps
+        // its id: device ids are per channel, so the copy's lanes and routes
+        // on them stay its own.
+        let mut landed = std::collections::BTreeMap::new();
+        let mut land = |slot: &mut mooloop_core::PluginSlotId| {
+            let copied = *slot;
+            *slot = *landed
+                .entry(copied)
+                .or_insert_with(|| match clipboard.plugins.get(&copied) {
+                    Some(plugin) => project.add_plugin_slot(plugin.clone()),
+                    // Nothing to open it from: a number that names nothing
+                    // here rather than one that may name something else.
+                    None => mooloop_core::PluginSlotId::UNASSIGNED,
+                });
+        };
         if let mooloop_core::ChannelSource::Plugin(slot) = &mut channel.setup.source {
-            *slot = match clipboard.source_plugin {
-                Some(plugin) => project.add_plugin_slot(plugin),
-                // Nothing to open it from: a number that names nothing here
-                // rather than one that may name something else.
-                None => mooloop_core::PluginSlotId::UNASSIGNED,
-            };
+            land(slot);
+        }
+        for effect in &mut channel.setup.effects {
+            if let mooloop_core::EffectParams::Plugin(slot) = &mut effect.params {
+                land(slot);
+            }
         }
         channel
             .notes

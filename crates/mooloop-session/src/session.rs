@@ -1966,15 +1966,14 @@ impl Session {
         // of values not yet quiet, or state the plugin changed without
         // reporting a parameter is not in it. Reading the live instance
         // needs `&mut self`, which this method's callers do not hold.
-        let source_plugin = match channel.setup.source {
-            ChannelSource::Plugin(slot) => project.plugins.get(&slot).cloned(),
-            _ => None,
-        };
+        let plugins = crate::channel::ChannelClipboard::named_slots(&channel)
+            .filter_map(|slot| Some((slot, project.plugins.get(&slot)?.clone())))
+            .collect();
         Some(crate::channel::ChannelClipboard {
             channel,
             sample: self.sample_snapshots().get(index)?.clone(),
             zones,
-            source_plugin,
+            plugins,
         })
     }
 }
