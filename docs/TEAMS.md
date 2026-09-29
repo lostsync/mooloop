@@ -320,8 +320,10 @@ Files marked *shared* are split in the table above.
   `file_names.rs` (a free name, and a write that never replaces a file:
   takes, assets and exports, MOO-241, MOO-188), `lib.rs`
 - `session/tests/`: `gesture_undo.rs`, `structure.rs`, `source_switch.rs`,
-  `document_fixtures.rs`, `plugin_channel_paste.rs` (a plugin-instrument
-  channel copied, pasted or cloned gets a slot of its own, MOO-317)
+  `document_fixtures.rs`, `plugin_channel_paste.rs` (a channel copied,
+  pasted or cloned gets a slot of its own for its plugin instrument and
+  each plugin on its chain, with the state each holds now, MOO-317,
+  MOO-331, MOO-332)
 - `project/tests/source_param_kind.rs` (a song saved before generator
   addresses carried a kind loads with each one intact, MOO-135)
 - `ui/ui/save-preset-dialog.slint`

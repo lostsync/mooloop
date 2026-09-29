@@ -1,6 +1,6 @@
 //! A channel that runs hosted plugins, copied and pasted or cloned, with the
-//! in-repo test plugins: the sine as its source (MOO-317) and the gain on
-//! its chain (MOO-331).
+//! in-repo test plugins: the sine as its source (MOO-317), the gain on its
+//! chain (MOO-331), and the state each carries (MOO-332).
 //!
 //! Copy, paste and clone all go through `Session::channel_clipboard` and
 //! `Session::paste_channel` -- clone is a copy pasted straight after itself
@@ -9,20 +9,23 @@
 //! Before the paste minted a slot, the copy kept the original's
 //! `PluginSlotId`: two channels named one slot, the rack hosts one instance
 //! per slot, and the pasted channel was silent.
+//!
+//! The test thread is the plugins' main thread, and a processor the test
+//! runs, runs on a thread of its own.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use mooloop_core::{
-    ChannelSource, EffectParams, NoteEvent, PluginFormat, PluginRef, PluginSlotId, Project,
-    ProjectChannel,
+    ChannelSource, EffectParams, NoteEvent, PluginFormat, PluginRef, PluginSlotId,
+    PluginStateText, Project, ProjectChannel,
 };
-use mooloop_dsp::{AudioNode, SourceNode};
+use mooloop_dsp::{AudioNode, Event, EventList, ProcessContext, SourceNode, StereoBus, TimedEvent};
 use mooloop_engine::{
     CommandSink, ExportFormat, ExportProgress, ExportSpec, OfflineRenderer, RenderScope,
     StructuralCommand, WavEncoding,
 };
-use mooloop_plugin_host::clap::ClapOpener;
+use mooloop_plugin_host::clap::{ClapOpener, STATE_TAG};
 use mooloop_plugin_host::scan::PluginCache;
 use mooloop_session::project::{normalize_project_pattern_banks, ProjectSnapshot};
 use mooloop_session::session::Session;
@@ -309,6 +312,13 @@ fn a_plugin_instrument_channel_pasted_into_another_song_brings_its_plugin() {
     assert!(peak(&heard) > 0.05, "the paste is silent, peak {}", peak(&heard));
 }
 
+/// The test gain's gain, in dB, read out of a saved state.
+fn saved_gain(state: &PluginStateText) -> f64 {
+    let chunk = state.0.chunks.iter().find(|chunk| chunk.tag == STATE_TAG).expect("a CLAP chunk");
+    assert_eq!(chunk.data[..4], test_plugin::STATE_MAGIC);
+    f64::from_le_bytes(chunk.data[4..12].try_into().expect("eight bytes"))
+}
+
 /// The test gain inserted at the head of `seat`'s chain, and its slot.
 fn insert_gain(session: &mut Session, engine: &mut Engine, seat: i32) -> PluginSlotId {
     session.select_channel(seat);
@@ -328,6 +338,52 @@ fn chain_slot(project: &Project, seat: usize, row: usize) -> PluginSlotId {
         EffectParams::Plugin(slot) => slot,
         other => panic!("channel {seat}'s row {row} is not a plugin device: {other:?}"),
     }
+}
+
+/// Nudge the test gain in `slot` from inside the plugin, as its own window
+/// would: its processor runs one block with the nudge raised, and the plugin
+/// moves its own gain. The live instance then holds a state the song has
+/// not captured (the pump's capture is not run here).
+fn nudge(session: &mut Session, engine: &mut Engine, slot: PluginSlotId) {
+    let at = engine
+        .effects
+        .iter()
+        .rposition(|(key, _)| *key == Some(u64::from(slot.0)))
+        .expect("the processor");
+    let (key, mut node) = engine.effects.remove(at);
+    node = std::thread::scope(|scope| {
+        scope
+            .spawn(move || {
+                let mut bus = StereoBus::with_capacity(256);
+                let mut list = EventList::empty();
+                assert!(list.push_ordered(TimedEvent {
+                    offset: 10,
+                    event: Event::ParamValue {
+                        id: test_plugin::PARAM_NUDGE,
+                        value: 1.0,
+                    },
+                }));
+                let ctx = ProcessContext {
+                    sample_rate: RATE,
+                    frames: 256,
+                    playing: true,
+                    bpm: 120.0,
+                    position_ticks: 0.0,
+                    position_frames: 0,
+                };
+                node.process(&ctx, &mut bus, &list, None);
+                // Stopped where it ran, as the engine retires a node leaving
+                // the audio thread (MOO-311).
+                node.retire();
+                node
+            })
+            .join()
+            .expect("the processing thread did not panic")
+    });
+    engine.effects.push((key, node));
+    session.service_plugins(engine);
+    let gain = session.plugin_param_index(slot, test_plugin::PARAM_GAIN).expect("listed");
+    assert_eq!(session.plugin_param_value(slot, gain), Some(test_plugin::NUDGE_DB));
 }
 
 /// **A pasted channel's plugin inserts get slots of their own** (MOO-331).
@@ -415,4 +471,49 @@ fn a_channels_plugin_insert_pasted_into_another_song_brings_its_plugin() {
     assert_ne!(landed, sine, "the pasted gain names the other song's sine");
     assert_eq!(pasted.project.plugins[&landed].plugin, gain_ref());
     assert_eq!(pasted.project.plugins[&sine].plugin, sine_ref(), "the sine is left alone");
+}
+
+/// **A channel copy carries its plugins as they are now** (MOO-332), not as
+/// the song last captured them. The gain on the chain is nudged from inside
+/// the plugin and not captured; the pasted channel's gain carries, and opens
+/// with, the nudged state, and the copy is not an edit of the original. The
+/// instrument's plugin is read through the same call.
+#[test]
+fn a_channel_copy_carries_its_plugins_live_state() {
+    let mut session = session_with(cache_listing(&test_plugin_path()), &melody());
+    let mut engine = Engine::default();
+    let gain = insert_gain(&mut session, &mut engine, 0);
+    session.capture_plugin_states();
+    nudge(&mut session, &mut engine, gain);
+    assert_eq!(
+        saved_gain(&session.plugins[&gain].state),
+        test_plugin::GAIN_DB_DEFAULT,
+        "test setup: the nudge is not captured"
+    );
+
+    let before = snapshot(&session);
+    let copy = session.channel_clipboard(0, 120, 0).expect("a channel to copy");
+    assert_eq!(
+        saved_gain(&session.plugins[&gain].state),
+        test_plugin::GAIN_DB_DEFAULT,
+        "a copy is not an edit"
+    );
+    let (pasted, index) = session
+        .paste_channel(&before, 0, copy)
+        .expect("room to paste");
+    let landed = chain_slot(&pasted.project, index, 0);
+    assert_eq!(
+        saved_gain(&pasted.project.plugins[&landed].state),
+        test_plugin::NUDGE_DB,
+        "the copy carries the live state, not the song's last capture"
+    );
+
+    session.replace_project(&pasted.project, &pasted.seated());
+    session.service_plugins(&mut engine);
+    let param = session.plugin_param_index(landed, test_plugin::PARAM_GAIN).expect("listed");
+    assert_eq!(
+        session.plugin_param_value(landed, param),
+        Some(test_plugin::NUDGE_DB),
+        "the pasted gain opened with it"
+    );
 }

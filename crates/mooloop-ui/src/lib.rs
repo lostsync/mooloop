@@ -10583,7 +10583,7 @@ impl AppUi {
                         }
                     }
                     2 => {
-                        let Some(copy) = st.borrow().session.channel_clipboard(
+                        let Some(copy) = st.borrow_mut().session.channel_clipboard(
                             index,
                             window.get_bpm(),
                             window.get_swing_percent(),
@@ -10602,7 +10602,7 @@ impl AppUi {
                         }
                     }
                     3 => {
-                        let Some(copy) = st.borrow().session.channel_clipboard(
+                        let Some(copy) = st.borrow_mut().session.channel_clipboard(
                             index,
                             window.get_bpm(),
                             window.get_swing_percent(),
@@ -10624,7 +10624,7 @@ impl AppUi {
                         }
                     }
                     5 => {
-                        let Some(copy) = st.borrow().session.channel_clipboard(
+                        let Some(copy) = st.borrow_mut().session.channel_clipboard(
                             index,
                             window.get_bpm(),
                             window.get_swing_percent(),
