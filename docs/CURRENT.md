@@ -1014,6 +1014,16 @@ pipewire-jack). Each instance names its own ports from the name it was given,
 so two instances each connect, move and reconnect only their own outputs and
 MIDI input, and neither offers a mooloop's inputs as an output.
 
+On Linux the engine picks which `libjack` it loads before JACK is first
+touched (MOO-342). Debian, Ubuntu and Mint keep pipewire-jack's library off
+the default search path, where the name finds JACK2's client library and no
+server, so when PipeWire is running, its JACK library is installed, no JACK
+server answers, and neither `LD_LIBRARY_PATH` (`pw-jack`) nor `LD_PRELOAD`
+names a libjack, the engine opens PipeWire's by its full path and the `jack`
+crate is answered with it. Otherwise the default stands. The log names the
+file actually loaded, and Preferences > Audio shows it beside the driver's
+name. The `.deb` lists `pipewire-jack` first among its libjack alternatives.
+
 Channels render in a compiled order rather than in index order, so a producer
 runs before any channel subscribed to one of its audio outlets and the samples
 arrive in the same block. A project with no subscriptions compiles to the

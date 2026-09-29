@@ -149,6 +149,8 @@ mod executor;
 mod handoff;
 #[cfg(not(target_os = "macos"))]
 mod jack_driver;
+#[cfg(target_os = "linux")]
+mod jack_library;
 // Test support, not API: the executor without a driver, for a check outside
 // this crate that holds an export against playback (MOO-82). Only this
 // crate's tests and the `test-support` feature compile it.
@@ -2210,7 +2212,22 @@ impl EngineHandle {
             sample_rate: self.sample_rate,
             buffer_size: self.driver.buffer_size(),
             current_target: self.driver.current_target(),
+            library: audio_library(),
         }
+    }
+}
+
+/// Which audio library the driver talks through, for a person: under JACK,
+/// the `libjack` actually loaded and whether it is PipeWire's (MOO-342).
+/// `None` where the driver has no such choice, or no library loaded.
+fn audio_library() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        jack_driver::loaded_library()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
     }
 }
 

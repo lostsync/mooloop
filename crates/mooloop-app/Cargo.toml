@@ -43,6 +43,12 @@ tempfile = "3"
 #   Slint's renderer, and xkbcommon, Wayland and the X11 client libraries for
 #   winit. Without them the app opens with no audio, or not at all, and
 #   nothing at install time says why (MOO-141).
+# - pipewire-jack comes first among the libjack alternatives: apt installs
+#   the first one when none is present, and JACK2's client library on a
+#   PipeWire desktop finds no server. Debian and Ubuntu keep PipeWire's
+#   libjack off the library path, so the engine loads it itself
+#   (`mooloop-engine/src/jack_library.rs`, MOO-342). Where there is no
+#   pipewire-jack package (Ubuntu 20.04), apt takes the next alternative.
 [package.metadata.deb]
 maintainer = "adam <lostsync@gmail.com>"
 copyright = "2026, adam"
@@ -55,7 +61,7 @@ compatibility layer."""
 section = "sound"
 priority = "optional"
 depends = """$auto, zenity, \
-libjack-jackd2-0 | libjack0 | pipewire-jack, \
+pipewire-jack | libjack-jackd2-0 | libjack0, \
 libegl1, libgl1, libxkbcommon0, libxkbcommon-x11-0, \
 libwayland-client0, libwayland-cursor0, libwayland-egl1, \
 libx11-6, libx11-xcb1, libxcursor1, libxi6, libxrandr2"""
