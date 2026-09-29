@@ -93,16 +93,32 @@ struct Engine {
     rx: mpsc::Receiver<PendingEngineMessage>,
     nodes: Vec<Box<dyn AudioNode + Send>>,
     sent: Vec<EngineCommand>,
+    /// The key each `InstallEffect` gave its slot, in the order sent.
+    install_keys: Vec<Option<u64>>,
+    /// The key each `ReplaceEffect` expected to find, in the order sent.
+    /// The engine lets a replacement in only where the slot's key is
+    /// `Some` of this (`EffectChain::replace_if_kind`).
+    replace_keys: Vec<u64>,
 }
 
 impl Engine {
     fn drain(&mut self) {
         while let Ok(message) = self.rx.try_recv() {
             match message {
-                PendingEngineMessage::Structural(
-                    StructuralCommand::InstallEffect { node, .. }
-                    | StructuralCommand::ReplaceEffect { node, .. },
-                ) => self.nodes.push(node),
+                PendingEngineMessage::Structural(StructuralCommand::InstallEffect {
+                    node, resource_key, ..
+                }) => {
+                    self.install_keys.push(resource_key);
+                    self.nodes.push(node);
+                }
+                PendingEngineMessage::Structural(StructuralCommand::ReplaceEffect {
+                    node,
+                    expected_resource_key,
+                    ..
+                }) => {
+                    self.replace_keys.push(expected_resource_key);
+                    self.nodes.push(node);
+                }
                 PendingEngineMessage::Command(command) => {
                     if let EngineCommand::SetEffectParam { id, value, .. } = command {
                         if let Some(node) = self.nodes.pop() {
@@ -235,6 +251,8 @@ fn harness_with(project: &Project) -> Harness {
             rx,
             nodes: Vec::new(),
             sent: Vec::new(),
+            install_keys: Vec::new(),
+            replace_keys: Vec::new(),
         },
         tx,
         stx,
@@ -1009,6 +1027,99 @@ fn a_missing_plugin_parameter_is_drawn_missing_and_reunited() {
     assert!(!menu.missing && menu.param_name.as_str() == "Nudge", "{menu:?}");
     assert!(!lane_missing);
     assert!(!route.missing && route.destination.contains("Nudge"), "{route:?}");
+}
+
+/// **A container preset holding a plugin lets that plugin's processor in**
+/// (MOO-322). A Chain holding the test gain is saved as a preset and loaded
+/// back over the Chain, through `load_effect_run` and the window's mirror of
+/// it, `install_loaded_run`. The pump opens the gain in the slot the load
+/// minted and sends its processor down as a `ReplaceEffect` expecting that
+/// slot's key; the engine lets a replacement in only where the slot was
+/// installed with `Some` of that key (`EffectChain::replace_if_kind`). So
+/// the placeholder the mirror installed has to carry it, or the device is a
+/// silent pass-through for good, with no problem reported anywhere.
+#[test]
+fn a_container_preset_holding_a_plugin_lets_its_processor_in() {
+    let mut h = harness_with(&drum_loop());
+    h.state.borrow_mut().enter_browser_tab(BrowserTab::Plugins);
+    let queues = plugin_ui::Queues {
+        tx: h.tx.clone(),
+        stx: h.stx.clone(),
+        reset_tx: mpsc::channel().0,
+    };
+    assert!(plugin_ui::add_plugin(&h.state, &h.commands, &h.window, test_plugin::GAIN_ID, Some(0), &queues));
+    for _ in 0..3 {
+        h.tick();
+    }
+    let original = h.plugin_slot();
+
+    // The gain boxed in a Chain, and the Chain saved as a preset.
+    let path = h.dir.path().join("boxed.mooloop-effect");
+    {
+        let mut st = h.state.borrow_mut();
+        st.session.wrap_effects_in_container(0..1).expect("wrapped");
+        let device = st.session.effect_chain().expect("a chain")[0].id;
+        st.session.pending_preset_save = st
+            .session
+            .chain_key(st.session.effect_target)
+            .map(|target| PresetSaveTarget::Effect { target, device });
+        let source = st.session.take_preset_save(120, 0).expect("a save was pending");
+        let run = source.run.expect("a container saves its run");
+        mooloop_project::save_effect_run_preset(
+            &path,
+            &run,
+            PresetInfo {
+                name: "Boxed".into(),
+                category: String::new(),
+                tags: Vec::new(),
+            },
+            AssetMode::Embedded,
+        )
+        .expect("saved");
+    }
+    let LoadedDocument::EffectRun(run) = mooloop_project::load_bundle(&path).expect("it loads").document else {
+        panic!("not a container preset");
+    };
+
+    // Loaded back over the Chain, as the rail's preset menu does.
+    h.engine.drain();
+    let (installs, replaces) = (h.engine.install_keys.len(), h.engine.replace_keys.len());
+    {
+        let mut st = h.state.borrow_mut();
+        let loaded = st.session.load_effect_run(0, &run, "Boxed").expect("the preset fits the Chain");
+        st.install_loaded_run(&loaded, 120.0, RATE, &h.tx, &h.stx);
+        st.sync_effects();
+    }
+    let landed = h
+        .state
+        .borrow()
+        .session
+        .effect_chain()
+        .expect("a chain")
+        .iter()
+        .find_map(|effect| match effect.params {
+            EffectParams::Plugin(slot) => Some(slot),
+            _ => None,
+        })
+        .expect("the preset's gain is in the chain");
+    assert_ne!(landed, original, "test premise: the load mints a slot of its own");
+    for _ in 0..3 {
+        h.tick();
+    }
+    assert!(h.state.borrow().session.plugin_problem(landed).is_none(), "the gain opened");
+
+    let key = u64::from(landed.0);
+    let replaced = &h.engine.replace_keys[replaces..];
+    assert!(
+        replaced.contains(&key),
+        "the rack sent the gain's processor, keyed by its slot: {replaced:?}"
+    );
+    let installed = &h.engine.install_keys[installs..];
+    assert!(
+        installed.contains(&Some(key)),
+        "the placeholder the load installed carries the slot's key, so the engine lets the \
+         processor in rather than refusing it on every retry: installed {installed:?}, key {key}"
+    );
 }
 
 // ---------------------------------------------------------------------------
