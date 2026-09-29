@@ -4236,7 +4236,11 @@ export component MainWindow inherits Window {
                                             channel-context-menu := PopupWindow {
                                                 x: 0px;
                                                 y: parent.height + 2px;
-                                                width: 172px;
+                                                // 172px, or its rows' width when that is more
+                                                // (MOO-327): the rows with a shortcut are, even
+                                                // at 100%, and every row is at a large text
+                                                // size. It grows to the right only.
+                                                width: max(172px, context-frame.preferred-width);
                                                 height: context-frame.preferred-height;
                                                 close-policy: close-on-click;
                                                 context-frame := Rectangle {
@@ -7498,7 +7502,11 @@ export component MainWindow inherits Window {
                                             pattern-context-menu := PopupWindow {
                                                 x: 0px;
                                                 y: parent.height + 2px;
-                                                width: 150px;
+                                                // 150px, or its rows' width when that is more
+                                                // (MOO-327): "Delete Pattern" beside
+                                                // "Ctrl+Shift+Delete" is, even at 100%, and
+                                                // every row is at a large text size.
+                                                width: max(150px, pattern-context-frame.preferred-width);
                                                 height: pattern-context-frame.preferred-height;
                                                 close-policy: close-on-click;
                                                 pattern-context-frame := Rectangle {
