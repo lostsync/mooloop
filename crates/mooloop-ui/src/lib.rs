@@ -129,7 +129,7 @@ use mooloop_session::channel::{
     apply_sample_references, ChannelClipboard, ChannelState,
 };
 use mooloop_session::command::{cycle_pane, CommandState, Pane};
-use mooloop_session::effects::EffectParamWrite;
+use mooloop_session::effects::{EffectParamWrite, EffectPlace};
 use mooloop_session::dialogs::{
     pick_bundle_dialog, pick_folder_dialog, pick_sample_dialog,
     pick_save_dialog, pick_song_dialog, Picked,
@@ -1696,6 +1696,37 @@ fn record_project_history(
 ) {
     let gesture = commands.borrow().gesture;
     record_project_history_as(commands, before, state, window, label, gesture);
+}
+
+/// The append join's add (MOO-340): `kind` as the last device inside the
+/// Chain in `container`, mirrored onto the engine and recorded as one undo
+/// step. The join after a Chain's last device, inside its box, is the only
+/// way to reach the end of a box that holds something; the join past its
+/// rails adds after it. Nothing happens where the session refuses: a full
+/// chain, or a box that is not a Chain.
+fn append_effect_into_container(
+    st: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    commands: &Rc<RefCell<CommandState>>,
+    (tx, stx): (&EngineCommandSender, &StructuralCommandSender),
+    kind: EffectKind,
+    container: usize,
+) {
+    let before = project_snapshot(&st.borrow(), window);
+    {
+        let mut state = st.borrow_mut();
+        let Some(added) = state.session.append_effect_into_container(kind, container) else {
+            return;
+        };
+        state.sync_effects();
+        state.refresh_automation(window);
+        state.refresh_modulation(window);
+        let sample_rate = state.audio_sample_rate;
+        // Installed at the tail and moved into place, and the container
+        // spans republished: the box and every box around it grew.
+        state.install_added_effect(&added, window.get_bpm() as f64, sample_rate, tx, stx);
+    }
+    record_project_history(commands, before, st, window, "Effect added");
 }
 
 /// [`record_project_history`] under a gesture token the caller chose, rather
@@ -3268,6 +3299,7 @@ fn effect_slot_row(
         label: kind.label().into(),
         depth,
         closing: ModelRc::from(Rc::new(VecModel::from(view.closing))),
+        closing_joins: ModelRc::from(Rc::new(VecModel::from(view.closing_joins))),
         selected,
         wrap_enabled,
         is_layer: slot.params.container_flow() == Some(mooloop_core::ContainerFlow::Parallel),
@@ -4417,8 +4449,9 @@ struct UiState {
     /// The cache file the PLUGINS tab reads: the scanner's, except in a test.
     plugin_cache_path: PathBuf,
     /// Where the insert menu's "Plugin…" aimed the next plugin picked in the
-    /// browser: the row it lands before. Taken by the next insert.
-    plugin_insert_before: Option<usize>,
+    /// browser: before a row, or at the end of a box when the join is inside
+    /// a Chain (MOO-340). Taken by the next insert.
+    plugin_place: Option<EffectPlace>,
     /// The plugin faces' parameter models and value texts, kept across
     /// republishes so a knob is updated rather than rebuilt.
     plugin_faces: plugin_ui::PluginFaces,
@@ -4608,7 +4641,7 @@ impl UiState {
             preset_catalog: Vec::new(),
             plugin_catalog: plugin_ui::PluginCatalog::default(),
             plugin_cache_path: plugin_cache_path(),
-            plugin_insert_before: None,
+            plugin_place: None,
             plugin_faces: plugin_ui::PluginFaces::default(),
             plugin_guis: plugin_gui::PluginGuis::default(),
             plugin_scan: plugin_ui::ScanWatch::default(),
@@ -5242,6 +5275,21 @@ impl UiState {
         }
     }
 
+    /// The key a live install gives a device's engine slot, which a later
+    /// `ReplaceEffect` has to name to be let in (MOO-322). A hosted plugin is
+    /// keyed by its song slot, since the rack swaps its processor into the
+    /// placeholder by that key once the plugin opens; a buffer by its
+    /// allocation; anything else by nothing. Installed with no key, a plugin
+    /// row refused its processor on every retry and stayed a silent
+    /// pass-through. The rule is `render.rs`'s `effect_resource_key`, which
+    /// keys a project install; one for the three live installs here.
+    fn effect_resource_key(params: mooloop_core::EffectParams) -> Option<u64> {
+        match params {
+            mooloop_core::EffectParams::Plugin(slot) => Some(u64::from(slot.0)),
+            _ => params.buffer().copied().map(buffer_allocation_key),
+        }
+    }
+
     /// Mirror a freshly inserted device onto the engine.
     ///
     /// Installed into the vacant tail and moved into place, which is what
@@ -5265,7 +5313,7 @@ impl UiState {
             target: added.target,
             slot: added.tail as u8,
             kind: added.kind,
-            resource_key: added.params.buffer().copied().map(buffer_allocation_key),
+            resource_key: Self::effect_resource_key(added.params),
             node,
             align,
             analyzer: Box::new(SpectrumAnalyzer::new()),
@@ -5321,7 +5369,7 @@ impl UiState {
             target,
             slot,
             kind: effect.kind(),
-            resource_key: effect.params.buffer().copied().map(buffer_allocation_key),
+            resource_key: Self::effect_resource_key(effect.params),
             node,
             align,
             analyzer: Box::new(SpectrumAnalyzer::new()),
@@ -5371,7 +5419,7 @@ impl UiState {
                         target,
                         slot: into,
                         kind: effect.kind(),
-                        resource_key: effect.params.buffer().copied().map(buffer_allocation_key),
+                        resource_key: Self::effect_resource_key(effect.params),
                         node,
                         align,
                         analyzer: Box::new(SpectrumAnalyzer::new()),
@@ -10583,7 +10631,7 @@ impl AppUi {
                         }
                     }
                     2 => {
-                        let Some(copy) = st.borrow().session.channel_clipboard(
+                        let Some(copy) = st.borrow_mut().session.channel_clipboard(
                             index,
                             window.get_bpm(),
                             window.get_swing_percent(),
@@ -10602,7 +10650,7 @@ impl AppUi {
                         }
                     }
                     3 => {
-                        let Some(copy) = st.borrow().session.channel_clipboard(
+                        let Some(copy) = st.borrow_mut().session.channel_clipboard(
                             index,
                             window.get_bpm(),
                             window.get_swing_percent(),
@@ -10624,7 +10672,7 @@ impl AppUi {
                         }
                     }
                     5 => {
-                        let Some(copy) = st.borrow().session.channel_clipboard(
+                        let Some(copy) = st.borrow_mut().session.channel_clipboard(
                             index,
                             window.get_bpm(),
                             window.get_swing_percent(),
@@ -12640,6 +12688,25 @@ impl AppUi {
                     st.install_added_effect(&added, window.get_bpm() as f64, sample_rate, &tx, &stx);
                 }
                 record_project_history(&commands, before, &st, &window, "Effect added");
+            });
+        }
+        // The join inside a Chain after its last device (MOO-340): the end
+        // of the box, which no index can name.
+        {
+            let tx = cmd_tx.clone();
+            let stx = structural_tx.clone();
+            let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_append_effect_into_container(move |kind_index, container| {
+                let Some(kind) = effect_kind_from_index(kind_index) else {
+                    return;
+                };
+                let Some(window) = weak.upgrade() else { return };
+                let Ok(container) = usize::try_from(container) else {
+                    return;
+                };
+                append_effect_into_container(&st, &window, &commands, (&tx, &stx), kind, container);
             });
         }
 
@@ -16294,31 +16361,22 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_browser_preset_dropped(move |path, before| {
                 let Some(window) = weak.upgrade() else { return };
-                let path_buf = PathBuf::from(path.to_string());
-                let effect = {
-                    let st = st.borrow();
-                    st.preset_catalog.iter().find_map(|group| {
-                        let PresetSlot::Effect(kind) = group.slot else {
-                            return None;
-                        };
-                        let preset =
-                            group.presets.iter().find(|preset| preset.path == path_buf)?;
-                        Some((kind, preset.name.clone()))
-                    })
-                };
-                let Some((kind, name)) = effect else {
-                    window.invoke_browser_preset_loaded(path);
-                    return;
-                };
-                let before = usize::try_from(before).ok();
-                if let Some((snapshot_before, after)) =
-                    place_effect_preset(&st, &window, &path_buf, kind, &name, before)
-                {
-                    if queue_project_edit(&edit_tx, snapshot_before, after, "Effect preset added") {
-                        commands.borrow_mut().project_edit_pending = true;
-                        sync_command_availability(&window, &commands.borrow());
-                    }
-                }
+                let place = usize::try_from(before).ok().map(EffectPlace::Before);
+                drop_browser_preset(&st, &window, &edit_tx, &commands, path, place);
+            });
+        }
+        {
+            // A preset dropped on the join inside a Chain after its last
+            // device (MOO-340): a new device at the end of that box.
+            let st = state.clone();
+            let edit_tx = project_edit_tx.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_browser_preset_dropped_into(move |path, container| {
+                let Some(window) = weak.upgrade() else { return };
+                let Ok(container) = usize::try_from(container) else { return };
+                let place = Some(EffectPlace::LastIn(container));
+                drop_browser_preset(&st, &window, &edit_tx, &commands, path, place);
             });
         }
         {
@@ -20687,16 +20745,51 @@ fn append_effect_preset(
     place_effect_preset(st, window, path, kind, name, None)
 }
 
-/// `append_effect_preset`, landing before the row `at` names rather than
-/// at the end -- a preset dropped on the join in front of that row
-/// (MOO-218). `None` is the end of the chain.
+/// A preset from the browser dropped on a join: an effect preset becomes a
+/// new device at `place` (MOO-218, MOO-340), as one queued project edit. Any
+/// other preset has no place in a chain to land at, so it loads the way a
+/// double-click does.
+fn drop_browser_preset(
+    st: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    edit_tx: &ProjectEditSender,
+    commands: &Rc<RefCell<CommandState>>,
+    path: SharedString,
+    place: Option<EffectPlace>,
+) {
+    let path_buf = PathBuf::from(path.to_string());
+    let effect = {
+        let st = st.borrow();
+        st.preset_catalog.iter().find_map(|group| {
+            let PresetSlot::Effect(kind) = group.slot else {
+                return None;
+            };
+            let preset = group.presets.iter().find(|preset| preset.path == path_buf)?;
+            Some((kind, preset.name.clone()))
+        })
+    };
+    let Some((kind, name)) = effect else {
+        window.invoke_browser_preset_loaded(path);
+        return;
+    };
+    if let Some((snapshot_before, after)) = place_effect_preset(st, window, &path_buf, kind, &name, place) {
+        if queue_project_edit(edit_tx, snapshot_before, after, "Effect preset added") {
+            commands.borrow_mut().project_edit_pending = true;
+            sync_command_availability(window, &commands.borrow());
+        }
+    }
+}
+
+/// `append_effect_preset`, landing at `place` rather than at the end: before
+/// the row a join leads into (MOO-218), or at the end of the container a
+/// join inside a Chain belongs to (MOO-340). `None` is the end of the chain.
 fn place_effect_preset(
     st: &Rc<RefCell<UiState>>,
     window: &MainWindow,
     path: &Path,
     kind: EffectKind,
     name: &str,
-    at: Option<usize>,
+    place: Option<EffectPlace>,
 ) -> Option<(ProjectSnapshot, ProjectSnapshot)> {
     let loaded = match mooloop_project::load_bundle(path) {
         Ok(report) => match report.document {
@@ -20719,15 +20812,25 @@ fn place_effect_preset(
     {
         let mut state = st.borrow_mut();
         let len = state.session.effect_chain().map(Vec::len)?;
-        let tail = at.map_or(len, |at| at.min(len));
+        let place = match place {
+            None => EffectPlace::Before(len),
+            Some(EffectPlace::Before(at)) => EffectPlace::Before(at.min(len)),
+            Some(into) => into,
+        };
         // The row the preset lands on has to exist before it can be loaded
         // over, and it has to be the preset's own kind -- a run always starts
-        // with the container that `load_effect_run` insists on.
-        if state.session.insert_effect_at(kind, tail).is_none() {
+        // with the container that `load_effect_run` insists on. Where it
+        // landed is the session's to say: at the end of a box, that is not an
+        // index the caller had.
+        let Some(inserted) = state
+            .session
+            .place_effect(mooloop_core::EffectSlotState::of_kind(kind), place)
+        else {
             drop(state);
             window.set_status_message("This chain is full".into());
             return None;
-        }
+        };
+        let tail = inserted.slot;
         let landed = match &loaded {
             Ok(effect) => state.session.load_effect_preset(tail, effect, name).is_some(),
             Err(run) => state.session.load_effect_run(tail, run, name).is_some(),

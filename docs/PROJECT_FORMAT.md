@@ -725,6 +725,58 @@ a run is not carried — a route's source is a module in the channel's rack, not
 in the container — and `docs/plans/archive/containers/00-status.md` records why that
 is a deferred decision rather than an omission.
 
+**A container with a hosted plugin inside** (MOO-321, 2026-09-29) carries the
+plugin. Each plugin row's slot is renumbered to a key into the run itself,
+from `0`, and the run's own `plugins` table holds each key's
+`PluginSlotState`, exactly as a song's `plugins` table writes one (see
+"Hosted plugins" below). The list becomes
+`contains = ["effect_params", "effect_run", "effect_plugin"]`:
+
+```toml
+format_version = 1
+document_type = "effect_run"
+asset_mode = "embedded"
+contains = ["effect_params", "effect_run", "effect_plugin"]
+
+[[document.effects]]
+[document.effects.params]
+type = "chain"
+
+[document.effects.params.state]
+children = 1
+
+[[document.effects]]
+[document.effects.params]
+type = "plugin"
+state = 0
+
+[document.plugins.0.plugin]
+format = "clap"
+id = "org.example.gain"
+name = "Gain"
+
+[[document.plugins.0.state]]
+tag = "clap"
+data = "..."
+```
+
+- The state is what each plugin held when the preset was saved, asked of the
+  live instance (`Session::lift_run_live`), not the song's last capture.
+- Loading it mints each plugin row a **new slot** in the song it lands in,
+  opened with the carried state, as a copied or duplicated container does
+  (MOO-271). A key is never a slot number in any song.
+- **0.1.5 refuses it.** 0.1.5 checks an `effect_run` bundle's list against
+  `["effect_params", "effect_run"]` before it parses the document, so it meets
+  `effect_plugin` and refuses the bundle rather than landing the row on
+  whatever the song has at that number
+  (`an_older_reader_refuses_a_container_preset_with_a_plugin`).
+- A bundle with a plugin row whose key has no entry is refused whole and not
+  listed. That includes a container preset holding a plugin that was saved
+  before this change, which wrote the row's song slot number and no plugin.
+  A save refuses such a run too.
+- A run with no plugin in it writes neither the table nor the entry, so it
+  is byte-identical to one written before.
+
 ## Hosted plugins
 
 A song that uses a third-party plugin (`docs/plans/plugin-hosting/`) says two

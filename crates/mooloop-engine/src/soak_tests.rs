@@ -1,6 +1,6 @@
 //! The engine soak (MOO-113): every device kind at once, through the
 //! executor, block after block, allocating and freeing nothing on the
-//! callback and producing nothing that is not a number.
+//! callback, taking no lock, and producing nothing that is not a number.
 //!
 //! Every allocation test before this one guards a single path --
 //! `carrying_strips_allocates_nothing`, `a_routing_change_frees_nothing_on_the_callback`,
@@ -18,6 +18,10 @@
 //! allocates is still an allocation on the audio thread, and a warm-up would
 //! hide precisely the one-time paths (a lazily grown buffer, a first-use
 //! table) that no other test reaches.
+//!
+//! The lock half (MOO-173) is counted the same way, by
+//! `mooloop_core::lock_check`, and sees what that module says it sees: a
+//! lock on a type we own, not an uncontended `std::sync::Mutex`.
 //!
 //! What it does not cover, deliberately: the driver adapters (they are
 //! Platform's and need a device), and offline export (`offline.rs` runs the
@@ -431,9 +435,11 @@ fn soak_at(frames: usize, blocks: usize) -> f32 {
             _ => Vec::new(),
         };
 
+        let locks = mooloop_core::lock_check::locks_taken();
         let before = (crate::COUNTING.allocations(), crate::COUNTING.frees());
         executor.process_with_input(midi.iter().copied(), &in_l, &in_r, &mut out_l, &mut out_r);
         let after = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+        let locked = mooloop_core::lock_check::locks_taken() - locks;
 
         assert_eq!(
             after,
@@ -442,6 +448,11 @@ fn soak_at(frames: usize, blocks: usize) -> f32 {
              times on the callback",
             after.0 - before.0,
             after.1 - before.1
+        );
+        assert_eq!(
+            locked, 0,
+            "block {block} of {blocks} at {frames} frames took a lock {locked} times on the \
+             callback"
         );
         if let Some((index, sample)) = out_l
             .iter()
@@ -473,10 +484,14 @@ fn soak_at(frames: usize, blocks: usize) -> f32 {
 }
 
 /// **Every device kind, through the executor, allocates nothing, frees
-/// nothing and stays finite** -- at a small block, an odd one, the ordinary
-/// one and the largest the engine accepts.
+/// nothing, takes no lock and stays finite** -- at a small block, an odd one,
+/// the ordinary one and the largest the engine accepts.
 #[test]
-fn every_device_kind_soaks_through_the_executor_without_allocating() {
+fn every_device_kind_soaks_through_the_executor_without_allocating_or_locking() {
+    assert!(
+        mooloop_core::lock_check::counting(),
+        "a build without debug assertions counts no locks, so the lock half would pass unchecked"
+    );
     // About two bars at each size: long enough for every note to start and
     // end, the take to run, the install to land and its retired generation
     // to leave through the reclaim ring.

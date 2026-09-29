@@ -1944,9 +1944,11 @@ impl Session {
     ///
     /// The sample and the key zones' buffers travel with it, so a paste
     /// never has to decode on the UI thread, and a paste into a song opened
-    /// since still has them (MOO-242).
+    /// since still has them (MOO-242). So do its hosted plugins, with the
+    /// state each holds now (MOO-317, MOO-331, MOO-332), which is why this
+    /// takes `&mut self`: a plugin saves its state through its instance.
     pub fn channel_clipboard(
-        &self,
+        &mut self,
         index: usize,
         bpm: i32,
         swing_percent: i32,
@@ -1960,10 +1962,24 @@ impl Session {
             .iter()
             .filter_map(|zone| Some((zone.path()?.to_path_buf(), zone.sample.clone()?)))
             .collect();
+        let channel = project.channels.get(index)?.clone();
+        // Each plugin as it is *now* (MOO-332), through the one clone of a
+        // hosted plugin's state for a copy of it (`plugin_slot_state_now`,
+        // MOO-271). The song's copy lags the plugin: the pump captures an
+        // edit only once the plugin finishes it (MOO-82), so a gesture still
+        // open, a run of values not yet quiet, or state the plugin changed
+        // without reporting a parameter would be left behind. Nothing is
+        // written into the song: a copy is not an edit.
+        let slots: Vec<_> = crate::channel::ChannelClipboard::named_slots(&channel).collect();
+        let plugins = slots
+            .into_iter()
+            .filter_map(|slot| Some((slot, self.plugin_slot_state_now(slot)?)))
+            .collect();
         Some(crate::channel::ChannelClipboard {
-            channel: project.channels.get(index)?.clone(),
+            channel,
             sample: self.sample_snapshots().get(index)?.clone(),
             zones,
+            plugins,
         })
     }
 }

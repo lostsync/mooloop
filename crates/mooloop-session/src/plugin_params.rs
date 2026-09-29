@@ -131,15 +131,29 @@ impl Session {
             .map(|(_, descriptor)| ModDestinationDescriptor::for_param(descriptor))
     }
 
-    /// Whether a new lane may be opened on `address`: always for a native
-    /// destination, and for a plugin parameter only when the song knows it
-    /// and the plugin marks it automatable. An existing lane is always
-    /// reopened, missing parameter or not.
+    /// Whether a new lane may be opened on `address`: for a generator
+    /// parameter only when it names the kind its channel runs now, for a
+    /// plugin parameter only when the song knows it and the plugin marks it
+    /// automatable, and always for any other native destination. An existing
+    /// lane is always reopened, missing parameter or not.
+    ///
+    /// A generator address naming another kind is inert (MOO-135). An old
+    /// lane on one is kept and listed as missing so it can be removed
+    /// (MOO-270), and picking that row must reopen it, never make a second
+    /// inert lane in a pattern that has none.
     pub fn lane_allowed(&self, address: ParamAddr) -> bool {
         match address.owner {
             ParamOwner::PluginParam { .. } => self
                 .plugin_param_info(address)
                 .is_some_and(|info| info.automatable),
+            ParamOwner::Source { kind } => {
+                let EffectTarget::Channel(channel) = address.scope else {
+                    return false;
+                };
+                self.channels
+                    .get(channel as usize)
+                    .is_some_and(|state| kind == Some(state.kind()))
+            }
             _ => true,
         }
     }

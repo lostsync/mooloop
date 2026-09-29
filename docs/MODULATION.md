@@ -134,8 +134,13 @@ kind the address was made on, and the address still costs 16 bytes. A
 resolver builds its addresses from the kind the channel runs now, so one
 made on another kind matches nothing. It is **inert, never dropped**: kept,
 saved back unchanged, and live again when the channel is switched back. This
-is the "never drop" rule from MOO-74. On disk the owner is still spelled
-`"source"`, and the kind is a sibling key (`PROJECT_FORMAT.md`), so the saved
+is the "never drop" rule from MOO-74. An inert lane keeps its slot among a
+pattern's eight (MOO-270 took the route that costs no engine storage), so
+`Session::inert_source_lanes` lists it for the lane picker to show as
+missing, MOO-74's treatment, where it can be removed. An existing one is
+reopened; `Session::lane_allowed` refuses to make a new one. On disk the
+owner is still spelled `"source"`, and the kind is a sibling key
+(`PROJECT_FORMAT.md`), so the saved
 bytes of every other address did not change.
 
 This is deliberately a destination address, not a claim that every parameter

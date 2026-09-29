@@ -80,6 +80,7 @@ ids (C2, P4, …) are the report's.
 | A hosted plugin's processor in a chain: built by the rack and swapped into its device's placeholder by `ReplaceEffect` keyed by the plugin's slot | Engine, with Effects owning the `EffectChain` it lands in, unchanged | nobody | MOO-81. The chain hosts it like any node (`replace_if_kind`, `build_effect`'s `PluginPlaceholder`). A plugin inside a container sizes its container's rings (MOO-212): Effects' `Session::resize_plugin_containers`, called from `service_plugins` on install and on a latency change, and `EffectChain::resize_container_rings` from `host_plugins` for an export, both from `mooloop_core::container_rings_with` |
 | A hosted plugin's parameter driven by a lane or a route: which ids are driven, their conversion to the plugin's units, and the offset a route sends | Control, with Engine owning the adapter that turns `ParamValue`/`ParamMod` into CLAP events | nobody | MOO-82. `EffectChain::plugin_curves` (in Effects' `EffectChain`) walks the routes and lanes naming the device and resolves each id with `AudioNode::hosted_param`, through `resolve_plugin_curves`, which the source pass also calls for a plugin instrument with the strip's `source_device` (MOO-314); a lane is a value, a route an offset (`Event::ParamMod`), because the plugin holds the base. A plugin's own edits are undo steps, recorded by the pump around `Session::capture_plugin_edits` |
 | The Bus Comp as an insert: `EffectKind::BusComp`, `BusCompEffect`, its face and bank | Effects, running Mixer's `strip::bus_comp::BusComp` and drawing Mixer's `BusCompPanel` (`master-comp.slint`) unchanged | nothing | MOO-216. One compressor for the master's section and the insert: the insert's ids are the master's moved down (`bus_comp_master_id`), its descriptor table is derived from `MasterSectionParams::descriptors()`, and a change to the law or the panel is Mixer's and reaches both |
+| A plugin device inside a run of rows: a copied device or container, a duplicate, a container preset (`EffectRun::plugins`) | Effects (the field, lifting a run and landing one: `lift_run`, `lift_run_live`, `land_run_plugins` and the shared `plugin_slot_state_now` in `session/src/effects.rs`), Document (the container preset's file format and `take_preset_save`) | nobody | MOO-271, MOO-321. A plugin row in a run names a key into the run's own `plugins`, never a song slot, and every landing mints a fresh song slot for it that the pump opens from the carried state. A run whose plugin row carries no plugin is refused. The container preset does not write the table yet, so it is refused until MOO-321 gives it a `contains` entry. A copied plugin *instrument* channel (MOO-317, Document) should clone its plugin through `plugin_slot_state_now` |
 | Output-stage declicking: fader, mute, solo, polarity | Mixer | between Engine and Mixer | M2 fell between the two |
 | The session reconcilers, the channel output verbs, `STRIP_DESCRIPTORS`, `pan_gains`/`balance_gains`, `ui/src/meter.rs` | Mixer | Session, core, dsp, Interface | Mixer state kept outside the mixer |
 | The browser preview voice | Instruments | nobody | It plays files at the wrong pitch (I2) |
@@ -125,7 +126,7 @@ lines. Until then, this table is the boundary.
 | --- | --- | --- |
 | `engine/src/render.rs` | Engine: `RenderState`, `process_block_inner`, `apply_command`, install, takes, the discontinuity fan-out, the tests | **Effects:** `EffectChain`, `EffectSlot`, `HostRamps`, `LeafPath`, `ContainerScratch`, `PendingEffectParams`, `ReclaimedEffect`. **Mixer:** `SendBank`, `OutputStage`, `BusStrip`, `AudioTapBank`, `mix_into`, the bus walk. **Sequencing:** `release_all_voices`, `inject_choke_events`, `HeldKeys`, `Audition`, `RecordingNote`, the transport and sequencer arms. **Control:** `apply_midi`, `AutomationBlock`, `AutomationCurve`, `AutomationPosition`, `ModulationBlock`, the modulator ticks, and `EffectChain::plugin_curves` with the `resolve_plugin_curves` it calls (a hosted plugin's lanes and routes, MOO-82; the source pass calls it too for a plugin instrument, MOO-314). **Instruments:** `PreviewVoice`, `RetiredPreviews`, `render_preview`, and each source's arm in `build_source` (the one match over the native kinds since MOO-56; `ChannelStrip` and its one `source` slot are Engine's). |
 | `ui/src/lib.rs` | Interface: `AppUi::new` as a shell, the pump, the `wire_*!` macros as a framework | **Each feature team:** the wiring for its own faces and views inside `AppUi::new`. **Document:** the document lifecycle, and tempo, swing and embed. **Control:** the pump's control drain. **Engine:** hosted plugins' wiring (MOO-81): the opener set in `AppUi::new`, the export's plugin processors, and `AppUi::retire_plugins` with the pump's branch that waits for them at quit. **Platform:** the startup entry points the binary calls (`start_logging`, `saved_audio_config`, `saved_plugin_settings`) and the `display_backend` re-exports (MOO-301). |
-| `ui/ui/main.slint` | Interface | **Sequencing:** the step grid and the playlist, both inline. **Each device team:** its entries in the DEVICES block. |
+| `ui/ui/main.slint` | Interface | **Sequencing:** the step grid and the playlist, both inline. **Control:** the automation lane picker, `AutomationMenuRow` and `AutomationLaneMenu` (lane editing, MOO-328). **Each device team:** its entries in the DEVICES block. |
 | `ui/src/settings.rs` | Interface | **Platform:** the XDG paths and the settings-load policy, and `PluginSettings`/`plugin_cache_path` (the scanner's, MOO-80). |
 | `ui/ui/device-rack.slint` | Interface: the shell every face is drawn in (`DeviceFrame`, `DeviceHeader`, `EffectDeviceShell`, the rails) | **Effects:** `ContainerEnclosure` and the container drawing, which the layer device's branches extend. |
 | `engine/src/sequencer.rs` | Sequencing | **Control:** the automation functions (`automation_lane_at`, `has_automation_at`, `open_automation_lane` and the rest). |
@@ -169,10 +170,12 @@ Files marked *shared* are split in the table above.
   that runs a hosted plugin's processor, silent without one, MOO-84)
 - `session/src/plugin_rack.rs`: the control thread's hosted plugins
   (`PluginRack`, `Session::service_plugins`, `Session::device_latency`,
-  `insert_plugin_effect`, `export_plugin_processors`, `close_plugins`),
-  in a Document-owned directory by agreement with Document & Session; and
-  step 06's case, `session/tests/clap_effect.rs` and
-  `session/examples/clap_effect_case.rs`
+  `insert_plugin_effect`, `place_plugin_effect`, `export_plugin_processors`,
+  `close_plugins`), in a Document-owned directory by agreement with
+  Document & Session; step 06's case, `session/tests/clap_effect.rs` and
+  `session/examples/clap_effect_case.rs`; and `session/tests/plugin_place.rs`
+  (a plugin put inside a box, at a Chain's end or first in an empty one,
+  MOO-339)
 - `plugin-host/src/clap.rs`: the CLAP adapter (`ClapInstance`,
   `ClapProcessor`, `ClapOpener`), MOO-81
 - A hosted plugin's own GUI, headless (plugin-hosting step 11, MOO-300):
@@ -184,7 +187,8 @@ Files marked *shared* are split in the table above.
   verbs is Interface's (MOO-302)
 - `dsp/src/`: `node.rs` (*shared*), `event.rs`, `bus.rs` (*shared*), `taps.rs`
   — the `AudioNode` contract and what flows through it
-- `core/src/bridge.rs`
+- `core/src/bridge.rs`, and `core/src/lock_check.rs` (the counted mutex a
+  render-path lock must be, MOO-173)
 - `session/src/engine.rs` (*shared*); `session/tests/ordering.rs`,
   `session/tests/delivery.rs`, and `session/tests/song_block_cost.rs` (what a
   real song's callbacks cost and which device kind or channel carries it; a
@@ -318,7 +322,10 @@ Files marked *shared* are split in the table above.
   `file_names.rs` (a free name, and a write that never replaces a file:
   takes, assets and exports, MOO-241, MOO-188), `lib.rs`
 - `session/tests/`: `gesture_undo.rs`, `structure.rs`, `source_switch.rs`,
-  `document_fixtures.rs`
+  `document_fixtures.rs`, `plugin_channel_paste.rs` (a channel copied,
+  pasted or cloned gets a slot of its own for its plugin instrument and
+  each plugin on its chain, with the state each holds now, MOO-317,
+  MOO-331, MOO-332)
 - `project/tests/source_param_kind.rs` (a song saved before generator
   addresses carried a kind loads with each one intact, MOO-135)
 - `ui/ui/save-preset-dialog.slint`

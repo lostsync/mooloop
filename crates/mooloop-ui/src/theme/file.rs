@@ -45,8 +45,10 @@
 //! density = 1.0
 //! ```
 //!
-//! **Fonts are named, not shipped.** Slint 1.17.1 has no runtime font
-//! registration -- `register_font_from_path` is not in its public API -- so a
+//! **Fonts are named, not shipped.** Slint 1.18.1 has no stable runtime font
+//! registration -- `register_font_from_path` is not in its public API, and
+//! the one runtime hook, `slint::fontique_011`, sits behind the unstable
+//! `unstable-fontique-011` feature, which mooloop leaves off (MOO-320) -- so a
 //! family is either compiled in or resolved from the system, and a theme can
 //! only ask. `family` is therefore a *list*, CSS-style: mooloop hands the
 //! whole string to Slint, which walks it. A theme naming a font nobody has

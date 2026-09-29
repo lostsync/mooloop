@@ -72,7 +72,13 @@ impl SiteTimes {
         if !self.enabled {
             return;
         }
-        let now = Instant::now();
+        self.lap_at(site, Instant::now());
+    }
+
+    /// [`Self::lap`] at a given instant, so a test can hand it a clock no
+    /// scheduler can stretch (MOO-293).
+    #[inline]
+    fn lap_at(&mut self, site: Option<Site>, now: Instant) {
         if let Some((slot, since)) = self.running.take() {
             let spent = now.saturating_duration_since(since).as_nanos();
             let spent = u32::try_from(spent).unwrap_or(u32::MAX);
@@ -129,28 +135,52 @@ mod tests {
 
     /// The costliest three, dearest first, a site that was visited twice
     /// charged for both laps, and the gap between walks charged to nobody.
+    ///
+    /// On instants the test writes down rather than the wall clock
+    /// (MOO-293): a spin on a busy box can be preempted for longer than the
+    /// margins between the sites, which reorders them, and once pushed a
+    /// 2 ms spin past a 5 ms bound. Here every lap is exactly as long as
+    /// written, so the order and every sum are asserted exactly.
     #[test]
     fn the_dearest_sites_come_first_and_a_gap_is_nobodys() {
+        let start = Instant::now();
+        let at = |micros: u64| start + std::time::Duration::from_micros(micros);
         let mut times = SiteTimes::new();
         times.set_enabled(true);
         times.begin(4);
+        times.lap_at(Some(Site::Channel(0)), at(0));
+        times.lap_at(Some(Site::Channel(1)), at(200));
+        times.lap_at(Some(Site::Channel(2)), at(2_200));
+        times.lap_at(None, at(2_200));
+        times.lap_at(Some(Site::Bus(3)), at(7_200));
+        times.lap_at(Some(Site::Channel(0)), at(8_200));
+        times.lap_at(None, at(8_500));
+        assert_eq!(
+            times.costliest(),
+            [
+                Some((Site::Channel(1), 2_000_000)),
+                Some((Site::Bus(3), 1_000_000)),
+                // 200 us and 300 us, both laps. The 5 ms gap before the bus
+                // is nobody's; charged to channel 2, it would come first.
+                Some((Site::Channel(0), 500_000)),
+            ]
+        );
+    }
+
+    /// On the real clock a lap is charged at least the time spent in it.
+    /// Only a lower bound: preemption can only lengthen a lap, so this is
+    /// the one claim about wall time a busy box cannot break.
+    #[test]
+    fn a_lap_on_the_real_clock_is_charged_at_least_its_time() {
+        let mut times = SiteTimes::new();
+        times.set_enabled(true);
+        times.begin(1);
         times.lap(Some(Site::Channel(0)));
-        spin(200_000);
-        times.lap(Some(Site::Channel(1)));
         spin(2_000_000);
-        times.lap(Some(Site::Channel(2)));
         times.lap(None);
-        spin(5_000_000);
-        times.lap(Some(Site::Bus(3)));
-        spin(1_000_000);
-        times.lap(Some(Site::Channel(0)));
-        spin(200_000);
-        times.lap(None);
-        let top = times.costliest();
-        let sites: Vec<Site> = top.iter().flatten().map(|(site, _)| *site).collect();
-        assert_eq!(sites, [Site::Channel(1), Site::Bus(3), Site::Channel(0)]);
-        let (_, first) = top[0].unwrap();
-        assert!((2_000_000..5_000_000).contains(&first), "{first}");
+        let (site, nanos) = times.costliest()[0].expect("one site ran");
+        assert_eq!(site, Site::Channel(0));
+        assert!(nanos >= 2_000_000, "{nanos}");
     }
 
     /// A new block starts from zero, and timing that is off records nothing.

@@ -19,7 +19,19 @@ export component MenuRow inherits Rectangle {
     in property <bool> checked: false;
     callback selected;
 
-    height: 24px;
+    // The room the shortcut takes at the right: 76px, or the shortcut and its
+    // margins when that is wider -- as "Ctrl+Shift+Delete" is at 100%, and
+    // every shortcut is at 200%, where the two texts ran into each other.
+    property <length> shortcut-column: root.shortcut != ""
+        ? max(76px, shortcut-text.preferred-width + 18px) : 8px;
+
+    // 24px at 100%, growing with the text above it (MOO-278). Every popup of
+    // these rows takes its height from its layout, so it grows with them.
+    height: 24px * Theme.row-growth;
+    // Wide enough for the whole label beside its shortcut. A menu of these
+    // rows is as wide as its design width or this, whichever is more, so a
+    // row's text grows with the text size rather than eliding (MOO-278).
+    preferred-width: 26px + label.preferred-width + root.shortcut-column;
     background: touch.has-hover && root.enabled ? Theme.surface-active : transparent;
     // A row is a command: a screen reader, and a test walking the tree by
     // role (`window_probe.rs`), find it as the button it behaves as.
@@ -29,9 +41,9 @@ export component MenuRow inherits Rectangle {
     accessible-checkable: root.checked;
     accessible-checked: root.checked;
 
-    Text {
+    label := Text {
         x: 26px;
-        width: parent.width - 26px - (root.shortcut != "" ? 76px : 8px);
+        width: parent.width - 26px - root.shortcut-column;
         text: root.text;
         color: root.enabled ? Theme.text : Theme.text-faint;
         font-size: Theme.text-xl;
@@ -50,7 +62,7 @@ export component MenuRow inherits Rectangle {
         vertical-alignment: center;
     }
 
-    Text {
+    shortcut-text := Text {
         x: parent.width - self.width - 10px;
         text: root.shortcut;
         visible: root.shortcut != "";
@@ -160,7 +172,7 @@ export component MenuBarItem inherits Rectangle {
         // reassign `open-menu` directly.
         x: -root.x;
         y: 0;
-        width: max(root.bar-width, 216px);
+        width: max(root.bar-width, root.x + menu-frame.width);
         height: root.height + 2px + menu-frame-content.preferred-height;
         close-policy: close-on-click;
 
@@ -200,7 +212,9 @@ export component MenuBarItem inherits Rectangle {
             // item's own title instead of always under the first one.
             x: root.x;
             y: root.height + 2px;
-            width: 216px;
+            // 216px, or wider when a row needs it: a long label beside a long
+            // shortcut, or any row at a large text size (MOO-278).
+            width: max(216px, menu-frame-content.preferred-width);
             height: menu-frame-content.preferred-height;
             background: Theme.surface;
             border-width: Theme.hairline;

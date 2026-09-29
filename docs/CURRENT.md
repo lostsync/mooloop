@@ -119,7 +119,12 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   destination, and the mapping list shows the binding as an unavailable
   parameter. Switching the channel back makes all three work again. The new
   device still arrives at its defaults (MOO-192). An inert lane still counts
-  toward the channel's eight lanes per pattern.
+  toward the channel's eight lanes per pattern, and the cap stays (MOO-270,
+  route 2). The lane picker lists a pattern's inert lanes as missing rows
+  (italic, thin) after the device's own rows, under the device they were
+  drawn on (MOO-329). Picking one opens the lane, and Remove lane takes it
+  out as one undo step, which frees its slot. No new lane can be made on a
+  device the channel no longer runs.
 - Patterns are chosen with a fixed-width stepper plus a jump menu and can be
   named; the selector costs the same width at any pattern count.
 - Pattern length moves a beat at a time with Shift -- on the STEPS field's
@@ -587,8 +592,9 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   the tabs, and taken away again by a theme that doesn't state one), and
   **two font families** -- one for the
   interface and one for readouts. A font that is not installed falls back to
-  the platform default, because Slint has no runtime font registration and a
-  theme can only name a family. Themes save to
+  the platform default, because mooloop registers no fonts at runtime (Slint
+  1.18.1 can do it only behind an unstable feature, which mooloop leaves off)
+  and a theme can only name a family. Themes save to
   `<config>/mooloop/themes/<name>.toml`, one file per theme, and a malformed
   one is skipped with a message rather than stopping startup. **Density** has
   no control on the page since 0.1.6, but a theme that states one (Impulse)
@@ -1966,7 +1972,12 @@ land on its own when it starts to matter:
   (MOO-218, 2026-09-24): the `→` turns into a `+` under the pointer and opens
   the insert menu, and the device lands in that gap -- inside a box when the
   arrow is inside it, after the box when the arrow leads out of it. An empty
-  box draws an arrow of its own inside it, which adds into the box. The arrow
+  box draws an arrow of its own inside it, which adds into the box. **A Chain
+  holding devices draws an arrow after its last one, inside the box and
+  before its rail, which adds at the end of the Chain** (MOO-299, MOO-340,
+  2026-09-29); the arrow past its rail still adds after it. The same arrow
+  takes **Plugin…** and a dropped preset, and so does an empty Chain's own
+  arrow; a layer's shown Chain branch has one, a layer does not. The arrow
   after a layer's head adds nothing: a new branch is the layer face's `+`.
   There is no `+` on a device's rail and no add slot after the chain; the
   last arrow adds at the end. A preset dragged out of the browser and dropped
@@ -1981,10 +1992,10 @@ land on its own when it starts to matter:
   fold is saved with the song and is not an undo step**; undo and redo keep
   whatever is folded now, so no Ctrl+Z unfolds anything (whether it should
   be saved at all is Adam's call: MOO-219).
-  Appending to the end of a box is a drag rather than an insert, because the
-  end of a run has to stay addressable as "after the container" -- for an
-  empty box, "just inside" and "just after" are the same position, so which
-  one is meant has to come from the gesture rather than from the index. Its one control is a dry/wet mix across the
+  The end of a box is named rather than indexed, because the index past a
+  run means "after the container" -- for an empty box, "just inside" and
+  "just after" are the same position, so which one is meant has to come from
+  the arrow pressed rather than from the index. Its one control is a dry/wet mix across the
   whole run, delayed to match that run's latency — the wet/dry that a
   *single* device has always had, applied to a group. It really is the one
   control: the shell's own dry/wet is not offered on a container row, because
@@ -2755,6 +2766,22 @@ land on its own when it starts to matter:
   at a *row*, and only the second one can say which side of the boundary it
   meant. Duplicate is on every rack row's left rail; all four are on
   Ctrl+Shift+C/X/V/D, and all but copy are undoable.
+  **A copied, pasted or duplicated plugin device is a second instance of
+  its plugin** (MOO-271), in a slot of its own, opened with the copied
+  plugin's state: a duplicate takes the state the plugin holds now, a copy
+  the state its last finished edit left in the song. It lands the same way
+  in another song. Before, the copy named the original's slot, so two
+  devices shared one plugin, or a paste into another song ran whatever that
+  song had under the same number. A container copied with a plugin inside
+  carries it the same way. **A container preset carries the plugins inside
+  it** (MOO-321), with the state each held when it was saved, and loads them
+  into slots of their own; 0.1.5 refuses such a preset. One saved before
+  that, holding a plugin, is refused rather than landing on whatever the
+  target song had at the plugin's old slot number.
+  **A pasted or cloned channel runs its own instances of its plugins**
+  (MOO-317, MOO-331): its instrument and every plugin on its chain, inside
+  containers too, each in a slot of its own, with the state the plugin held
+  when the channel was copied (MOO-332).
   **A pasted channel arrives with its MIDI and AUDIO inputs off**: the picks
   name something in the document the channel was copied from, and the
   clipboard outlives New Song and Open Song.

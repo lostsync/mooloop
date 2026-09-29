@@ -18,6 +18,10 @@
 //!   allocate and free nothing per block (the counting allocator, as in
 //!   `soak_tests.rs`).
 //!
+//! And one the host owes every plugin (MOO-324): **a plugin that logs from
+//! `process` costs the callback nothing**, and the main thread can still
+//! count what it said.
+//!
 //! Every instance is created on the test's own thread, which is its CLAP
 //! main thread, and every processor runs on a thread spawned for it: the
 //! test plugin asks the host which thread it is on, and a process call on
@@ -440,6 +444,7 @@ fn sixty_four_hosted_channels_allocate_nothing_on_the_callback() {
                                 .push(replace(EffectTarget::Channel(0), 0, slots[0], node))
                                 .is_ok());
                         }
+                        let locks = mooloop_core::lock_check::locks_taken();
                         let before = (crate::COUNTING.allocations(), crate::COUNTING.frees());
                         live.executor.process_with_input(std::iter::empty(), &silence, &silence, &mut l, &mut r);
                         let after = (crate::COUNTING.allocations(), crate::COUNTING.frees());
@@ -449,6 +454,8 @@ fn sixty_four_hosted_channels_allocate_nothing_on_the_callback() {
                             after.0 - before.0,
                             after.1 - before.1
                         );
+                        let locked = mooloop_core::lock_check::locks_taken() - locks;
+                        assert_eq!(locked, 0, "block {index} at {block} frames took a lock {locked} times");
                         assert!(l.iter().chain(&r).all(|s| s.is_finite()));
                         loudest = l.iter().chain(&r).fold(loudest, |m, s| m.max(s.abs()));
                         // Control-thread work, outside the counted window.
@@ -470,4 +477,136 @@ fn sixty_four_hosted_channels_allocate_nothing_on_the_callback() {
             assert_eq!(instance.misbehaviour(), 0);
         }
     }
+}
+
+/// **A plugin that logs from `process` costs the callback nothing**
+/// (MOO-324): the test gain in its chatty build logs one line from every
+/// `process` call, as a plugin with debug logging left on does. Through the
+/// executor, no block allocates, frees or takes a lock, and every line the
+/// plugin sent is still accounted for on the main thread, as a count.
+#[test]
+fn a_plugin_that_logs_from_process_costs_the_callback_nothing() {
+    the_chatty_gain_costs_the_callback_nothing(|audio| {
+        std::thread::scope(|scope| scope.spawn(audio).join().expect("the audio thread did not panic"));
+    });
+}
+
+/// **The same, on a callback thread std never created** (MOO-336): JACK's
+/// process thread is made by libjack and Core Audio's IO thread by the OS,
+/// and every other test here runs its callback on a thread `std::thread`
+/// spawned. The host asks `std::thread::current()` on the audio thread
+/// (a plugin's log, its thread checks), and on a thread std has not seen
+/// that could have built the thread's handle on first use. It does not, on
+/// the pinned 1.98.0: checked against f8f6fc5, the first call on such a
+/// thread made no allocation. This keeps it that way across a toolchain
+/// bump, and counts every block, the first above all.
+#[test]
+fn a_plugin_that_logs_from_process_costs_nothing_on_a_thread_std_did_not_spawn() {
+    the_chatty_gain_costs_the_callback_nothing(on_a_thread_std_did_not_spawn);
+}
+
+/// Run `body` on a thread made by `pthread_create`, as a driver's callback
+/// thread is, and wait for it. A panic in `body` is carried back and
+/// resumed here, since it cannot unwind out of the thread's C entry point.
+fn on_a_thread_std_did_not_spawn(body: Box<dyn FnOnce() + Send>) {
+    struct Job {
+        body: Option<Box<dyn FnOnce() + Send>>,
+        outcome: Option<std::thread::Result<()>>,
+    }
+
+    extern "C" fn start(job: *mut libc::c_void) -> *mut libc::c_void {
+        // SAFETY: `job` is the `Job` below, which outlives this thread:
+        // the spawning thread joins it before `job` goes out of scope.
+        let job = unsafe { &mut *job.cast::<Job>() };
+        let body = job.body.take().expect("the job runs once");
+        job.outcome = Some(std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)));
+        std::ptr::null_mut()
+    }
+
+    let mut job = Job {
+        body: Some(body),
+        outcome: None,
+    };
+    // SAFETY: a zeroed `pthread_t` is only a place for `pthread_create` to
+    // write the new thread's id into.
+    let mut thread: libc::pthread_t = unsafe { std::mem::zeroed() };
+    // SAFETY: `start` has the signature pthread expects, and `job` stays
+    // alive and unmoved until the join below returns.
+    let made = unsafe {
+        libc::pthread_create(
+            &mut thread,
+            std::ptr::null(),
+            start,
+            (&mut job as *mut Job).cast(),
+        )
+    };
+    assert_eq!(made, 0, "pthread_create failed");
+    // SAFETY: `thread` was created above and is joined exactly once.
+    let joined = unsafe { libc::pthread_join(thread, std::ptr::null_mut()) };
+    assert_eq!(joined, 0, "pthread_join failed");
+    if let Err(panic) = job.outcome.take().expect("the thread ran its job") {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+/// The chatty gain on one channel for 64 blocks through the executor, the
+/// blocks run by `on_audio_thread` on a thread of its choosing. No block
+/// may allocate, free or take a lock, and the main thread can count what
+/// the plugin logged.
+fn the_chatty_gain_costs_the_callback_nothing(on_audio_thread: impl FnOnce(Box<dyn FnOnce() + Send>)) {
+    let block = 256usize;
+    let (project, slots) = drum_loop(1, &[0]);
+    let chatty = PluginRef {
+        id: test_plugin::GAIN_CHATTY_ID.to_owned(),
+        name: "Test Gain (chatty)".to_owned(),
+        ..gain_ref()
+    };
+    let config = AudioConfig {
+        sample_rate: SAMPLE_RATE,
+        max_frames: MAX_FRAMES,
+    };
+    let mut instance = ClapInstance::open(&test_plugin_path(), &chatty, &gain_state(-3.0, 0), config)
+        .expect("the chatty gain opens");
+    let lifeline = Lifeline::new();
+    let processor = instance.build_processor(lifeline.tie()).expect("a processor");
+    let render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+    let mut live = live(render);
+    assert!(live
+        .commands
+        .push(replace(EffectTarget::Channel(0), 0, slots[0], processor))
+        .is_ok());
+    assert!(live.commands.push(RealtimeCommand::Engine(EngineCommand::Play)).is_ok());
+
+    let blocks = 64;
+    on_audio_thread(Box::new(move || {
+        // What a driver's thread-start hook does, before anything is counted.
+        crate::executor::prepare_audio_thread();
+        let silence = vec![0.0f32; block];
+        let (mut l, mut r) = (vec![0.0f32; block], vec![0.0f32; block]);
+        for index in 0..blocks {
+            let locks = mooloop_core::lock_check::locks_taken();
+            let before = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+            live.executor.process_with_input(std::iter::empty(), &silence, &silence, &mut l, &mut r);
+            let after = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+            let locked = mooloop_core::lock_check::locks_taken() - locks;
+            assert_eq!(
+                (after.0 - before.0, after.1 - before.1, locked),
+                (0, 0, 0),
+                "block {index}: allocations, frees and locks on the callback"
+            );
+            while live.events.pop().is_ok() {}
+            while let Ok(reclaimed) = live.reclaim.pop() {
+                drop(reclaimed);
+            }
+        }
+        drop(live);
+    }));
+    assert!(lifeline.is_alone(), "the processor came back");
+    assert!(!instance.failed());
+    assert_eq!(instance.misbehaviour(), 0);
+    let unlogged = instance.unlogged();
+    assert!(
+        (1..=blocks as u64).contains(&unlogged),
+        "the plugin logged from process in at most every block, and the count says so: {unlogged}"
+    );
 }

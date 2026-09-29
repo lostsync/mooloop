@@ -746,6 +746,9 @@ impl Session {
         // A container saves as its run: the box, and everything in it, with
         // every identity stripped. `load_effect_run` mints fresh ones,
         // because which devices these are belongs to the chain they land on.
+        // A hosted plugin inside goes with it, as it holds its state *now*
+        // (MOO-321, the MOO-222 rule), keyed by a run-local slot: Effects'
+        // `lift_run_live`, the one lift a duplicate uses too.
         let run = match target {
             PresetSaveTarget::Effect {
                 target: chain,
@@ -753,12 +756,8 @@ impl Session {
             } if effect.is_some_and(|effect| effect.kind().is_container()) => {
                 let chain = self.effect_chain_of(self.chain_target(chain)?)?;
                 let slot = mooloop_core::device_slot(chain, device)?;
-                Some(mooloop_core::EffectRun {
-                    effects: chain[mooloop_core::run_of(chain, slot)]
-                        .iter()
-                        .map(|effect| effect.with_id(mooloop_core::DeviceId::UNASSIGNED))
-                        .collect(),
-                })
+                let rows = chain[mooloop_core::run_of(chain, slot)].to_vec();
+                Some(self.lift_run_live(&rows))
             }
             _ => None,
         };

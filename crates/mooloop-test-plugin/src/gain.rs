@@ -111,11 +111,21 @@ pub struct GainShared<'a> {
     active_latency_step: AtomicU32,
     /// Channels of the one input port and of the one output port.
     ports: [u32; 2],
+    /// Log one line from every `process` call, as a plugin with debug
+    /// logging left on does ([`crate::GAIN_CHATTY_ID`], MOO-324).
+    chatty: bool,
 }
 
 impl<'a> GainShared<'a> {
     pub(crate) fn new(host: HostSharedHandle<'a>) -> Result<Self, PluginError> {
         Self::with_ports(host, 2, 2)
+    }
+
+    /// The stereo gain that logs from `process` (MOO-324).
+    pub(crate) fn chatty(host: HostSharedHandle<'a>) -> Result<Self, PluginError> {
+        let mut shared = Self::with_ports(host, 2, 2)?;
+        shared.chatty = true;
+        Ok(shared)
     }
 
     /// The gain with `inputs` channels in and `outputs` out, each 1 or 2.
@@ -135,6 +145,7 @@ impl<'a> GainShared<'a> {
             active: AtomicBool::new(false),
             active_latency_step: AtomicU32::new(0),
             ports: [inputs, outputs],
+            chatty: false,
         })
     }
 
@@ -297,6 +308,11 @@ impl<'a> PluginAudioProcessor<'a, GainShared<'a>, GainMain<'a>> for GainProcesso
             .services
             .expect_audio_thread(c"gain: process called off an audio thread");
         self.shared.services.strict_process();
+        if self.shared.chatty {
+            self.shared
+                .services
+                .log(clack_extensions::log::LogSeverity::Debug, c"gain: process");
+        }
 
         let mut port = audio
             .port_pair(0)

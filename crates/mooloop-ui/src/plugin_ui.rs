@@ -32,6 +32,7 @@ use mooloop_engine::{CommandSink, StructuralCommand};
 use mooloop_plugin_host::scan::{PluginCache, ScannedPlugin};
 use mooloop_plugin_host::HostError;
 use mooloop_session::command::CommandState;
+use mooloop_session::effects::EffectPlace;
 use mooloop_session::engine::{EngineCommandSender, StructuralCommandSender};
 use mooloop_session::plugin_params::{plugin_normalized, plugin_plain};
 use mooloop_session::session::Session;
@@ -1009,6 +1010,12 @@ pub(crate) struct LaneDestination {
 /// inserts' after the native inserts and before the strip. The picker's
 /// index, the Automate request and the header label all read this one list,
 /// so they cannot disagree about what a position names.
+///
+/// A lane a device change left inert -- drawn on the sampler, kept while the
+/// channel plays the drum synth -- is listed as missing right after the
+/// source's own rows and before a plugin instrument's (MOO-329). It still
+/// takes one of the pattern's lane slots, so it has to be somewhere the
+/// window can open it and remove it.
 pub(crate) fn lane_destinations(session: &Session) -> Vec<LaneDestination> {
     let native = session.automation_destinations();
     let source = session.plugin_source().map(|(device, _)| device);
@@ -1024,7 +1031,13 @@ pub(crate) fn lane_destinations(session: &Session) -> Vec<LaneDestination> {
         .partition(|row| {
             matches!(row.address.owner, ParamOwner::PluginParam { device } if Some(device) == source)
         });
-    let mut instrument = instrument.into_iter();
+    let inert = session.inert_source_lanes().into_iter().map(|lane| LaneDestination {
+        address: lane.address,
+        device: lane.device,
+        name: lane.name,
+        missing: true,
+    });
+    let mut instrument = inert.chain(instrument);
     let mut plugins = chain.into_iter();
     let mut rows = Vec::with_capacity(native.len());
     for (address, device, descriptor) in native {
@@ -1195,6 +1208,21 @@ pub(crate) fn add_plugin(
     before: Option<usize>,
     queues: &Queues,
 ) -> bool {
+    add_plugin_at(state, commands, window, id, before.map(EffectPlace::Before), queues)
+}
+
+/// [`add_plugin`] at a place rather than before a row: the end of a box, for
+/// a plugin dropped on, or aimed from, the join inside a Chain after its
+/// last device (MOO-340). `None` is where "Plugin…" aimed it, else
+/// [`default_position`].
+pub(crate) fn add_plugin_at(
+    state: &Rc<RefCell<UiState>>,
+    commands: &Rc<RefCell<CommandState>>,
+    window: &MainWindow,
+    id: &str,
+    place: Option<EffectPlace>,
+    queues: &Queues,
+) -> bool {
     let entry = state.borrow().plugin_catalog.find(id).cloned();
     let Some(entry) = entry else {
         window.set_status_message(format!("{id} is not in the plugin list").into());
@@ -1209,11 +1237,15 @@ pub(crate) fn add_plugin(
         return add_plugin_channel(state, commands, window, &entry, queues);
     }
     let (tx, stx) = (&queues.tx, &queues.stx);
-    let position = {
+    let place = {
         let mut st = state.borrow_mut();
-        let aimed = st.plugin_insert_before.take();
+        let aimed = st.plugin_place.take();
         let length = st.session.effect_chain().map_or(0, |chain| chain.len());
-        before.or(aimed).unwrap_or_else(|| default_position(&st)).min(length)
+        match place.or(aimed) {
+            Some(EffectPlace::Before(at)) => EffectPlace::Before(at.min(length)),
+            Some(into) => into,
+            None => EffectPlace::Before(default_position(&st).min(length)),
+        }
     };
     let snapshot = crate::project_snapshot(&state.borrow(), window);
     let inserted = {
@@ -1224,7 +1256,7 @@ pub(crate) fn add_plugin(
             sample_rate: st.audio_sample_rate,
         };
         st.session
-            .insert_plugin_effect(entry.plugin.plugin.clone(), position, &mut sink)
+            .place_plugin_effect(entry.plugin.plugin.clone(), place, &mut sink)
     };
     let Some(inserted) = inserted else {
         window.set_status_message(format!("{name} could not be added: the rack is full").into());
@@ -1471,7 +1503,22 @@ pub(crate) fn wire(
         let weak = window.as_weak();
         window.on_add_plugin_requested(move |before| {
             let Some(window) = weak.upgrade() else { return };
-            st.borrow_mut().plugin_insert_before = usize::try_from(before).ok();
+            st.borrow_mut().plugin_place = usize::try_from(before).ok().map(EffectPlace::Before);
+            show_plugin_browser(&st, &window);
+            window.set_status_message(
+                "Pick a plugin: double-click it, press Enter, or drag it onto the rack".into(),
+            );
+        });
+    }
+    {
+        // "Plugin…" on a join inside a Chain (MOO-340): aimed at the end of
+        // that box, which no index can name.
+        let st = state.clone();
+        let weak = window.as_weak();
+        window.on_add_plugin_into_requested(move |container| {
+            let Some(window) = weak.upgrade() else { return };
+            let Ok(container) = usize::try_from(container) else { return };
+            st.borrow_mut().plugin_place = Some(EffectPlace::LastIn(container));
             show_plugin_browser(&st, &window);
             window.set_status_message(
                 "Pick a plugin: double-click it, press Enter, or drag it onto the rack".into(),
@@ -1489,13 +1536,27 @@ pub(crate) fn wire(
         });
     }
     {
+        // A plugin dropped on the join inside a Chain after its last device:
+        // at the end of that box (MOO-340).
+        let st = state.clone();
+        let commands = commands.clone();
+        let queues = queues.clone();
+        let weak = window.as_weak();
+        window.on_browser_plugin_added_into(move |id, container| {
+            let Some(window) = weak.upgrade() else { return };
+            let Ok(container) = usize::try_from(container) else { return };
+            let place = Some(EffectPlace::LastIn(container));
+            add_plugin_at(&st, &commands, &window, &id, place, &queues);
+        });
+    }
+    {
         // The add-channel menu's "Add Plugin…": the instrument is chosen in
         // the browser, which makes the channel.
         let st = state.clone();
         let weak = window.as_weak();
         window.on_add_plugin_channel_requested(move || {
             let Some(window) = weak.upgrade() else { return };
-            st.borrow_mut().plugin_insert_before = None;
+            st.borrow_mut().plugin_place = None;
             show_plugin_browser(&st, &window);
             window.set_status_message(
                 "Pick an instrument: double-click it or press Enter to add it on a new channel".into(),

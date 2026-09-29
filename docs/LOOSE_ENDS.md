@@ -1008,10 +1008,29 @@ reclaimed no node: `RenderState::reclaim` was an undrained `Vec::new()`
 else: `MlP8::reset` rebuilt its chorus delay line, and the UI's
 `SetChannelSource` reaches that same reset in production. Both are fixed.
 
-**What is still open is the locks half**, which is measured by nothing. The
-allocator can only answer the allocation question; a lock taken on the
-callback would pass every test in the tree. Nobody has proposed an instrument
-for it (open: MOO-173).
+**The locks half got its instrument 2026-09-29** (MOO-173), and it sees less
+than the allocation half does. `mooloop_core::lock_check::Mutex` is
+`std::sync::Mutex` with a per-thread count of `lock` and `try_lock` attempts,
+built the same way as `allocations()` and compiled out without
+`debug_assertions`. The soak and the three hosted-plugin executor tests read
+it around every block beside the allocation count. Validated the same way:
+with a `try_lock` on a `lock_check::Mutex` put at the top of
+`RenderState::process_block_inner`, the soak fails on block 0 ("took a lock 1
+times on the callback"), and so do six of the plugin tests.
+
+What it cannot see is a lock on a type we do not own. An uncontended
+`std::sync::Mutex` is a compare-and-swap in user space, and nothing outside
+`std` can observe it: the same temporary `try_lock` on a `std::sync::Mutex`
+passes the soak. The same goes for `stderr().lock()` inside an `eprintln!`,
+and for a lock inside a hosted plugin's own code. A lock on the render path
+is checked only if it is a `lock_check::Mutex`. No lock on the render path
+is known. The one suspected here, `HostShared`'s plugin log, belongs to the
+spike host alone. The engine's host, `ClapShared`, counts a plugin's
+audio-thread log lines and drops them, and
+`a_plugin_that_logs_from_process_costs_the_callback_nothing` holds that to
+zero allocations, frees and locks per block (MOO-324). It runs on a thread
+std spawned, as every engine test does; a callback thread std did not
+create is open as MOO-336.
 
 ---
 
@@ -1028,8 +1047,8 @@ never had its output level matched to the other two.
 **Three things left over when Buffer closed, 2026-09-18.** None blocked
 closing `plans/archive/buffer-implementation/`, and all three were
 listed only in its status until it was archived. (A fourth, the locks half of
-acceptance test 8, already has its own entry under "Cannot currently be
-tested".)
+acceptance test 8, has its own entry under "Cannot currently be tested", and
+has had an instrument since MOO-173.)
 
 - **A quantized Buffer press starts two frames behind the newest frame.**
   A press landing on a frame's end reads `now` after that frame is written and

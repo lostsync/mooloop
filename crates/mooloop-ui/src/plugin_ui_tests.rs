@@ -93,16 +93,32 @@ struct Engine {
     rx: mpsc::Receiver<PendingEngineMessage>,
     nodes: Vec<Box<dyn AudioNode + Send>>,
     sent: Vec<EngineCommand>,
+    /// The key each `InstallEffect` gave its slot, in the order sent.
+    install_keys: Vec<Option<u64>>,
+    /// The key each `ReplaceEffect` expected to find, in the order sent.
+    /// The engine lets a replacement in only where the slot's key is
+    /// `Some` of this (`EffectChain::replace_if_kind`).
+    replace_keys: Vec<u64>,
 }
 
 impl Engine {
     fn drain(&mut self) {
         while let Ok(message) = self.rx.try_recv() {
             match message {
-                PendingEngineMessage::Structural(
-                    StructuralCommand::InstallEffect { node, .. }
-                    | StructuralCommand::ReplaceEffect { node, .. },
-                ) => self.nodes.push(node),
+                PendingEngineMessage::Structural(StructuralCommand::InstallEffect {
+                    node, resource_key, ..
+                }) => {
+                    self.install_keys.push(resource_key);
+                    self.nodes.push(node);
+                }
+                PendingEngineMessage::Structural(StructuralCommand::ReplaceEffect {
+                    node,
+                    expected_resource_key,
+                    ..
+                }) => {
+                    self.replace_keys.push(expected_resource_key);
+                    self.nodes.push(node);
+                }
                 PendingEngineMessage::Command(command) => {
                     if let EngineCommand::SetEffectParam { id, value, .. } = command {
                         if let Some(node) = self.nodes.pop() {
@@ -235,6 +251,8 @@ fn harness_with(project: &Project) -> Harness {
             rx,
             nodes: Vec::new(),
             sent: Vec::new(),
+            install_keys: Vec::new(),
+            replace_keys: Vec::new(),
         },
         tx,
         stx,
@@ -885,6 +903,70 @@ fn the_picker_keeps_every_native_row_in_order() {
     );
 }
 
+/// **A lane a device change left inert is in the picker as missing, right
+/// after the source's own rows** (MOO-329, MOO-270's picker half). Three
+/// lanes drawn on the sampler, the channel switched to the drum synth: the
+/// three are kept and still take lane slots, so the picker lists them --
+/// missing, in the pattern's order, after the drum synth's rows and before
+/// anything else -- where the window can open and remove them. Switched
+/// back, they are the sampler's live rows again and nothing is missing.
+#[test]
+fn a_lane_left_by_a_device_change_is_a_missing_row_after_the_source() {
+    let is_source = |row: &plugin_ui::LaneDestination| {
+        matches!(row.address.owner, ParamOwner::Source { .. } | ParamOwner::SourceRoute { .. })
+    };
+    let mut session = Session::default();
+    session.change_selected_source(DeviceKind::Sampler);
+    let sampler: Vec<ParamAddr> = DeviceKind::Sampler
+        .descriptors()
+        .iter()
+        .take(3)
+        .map(|descriptor| session.selected_source_address(descriptor.id).expect("a sampler parameter"))
+        .collect();
+    for &address in &sampler {
+        session.open_automation_lane_at(address).expect("within the lane ceiling");
+    }
+    assert!(
+        plugin_ui::lane_destinations(&session).iter().all(|row| !row.missing),
+        "a lane on the device the channel runs is not missing"
+    );
+
+    session.change_selected_source(DeviceKind::DrumSynth);
+    let picker = plugin_ui::lane_destinations(&session);
+    let missing: Vec<usize> = (0..picker.len()).filter(|&i| picker[i].missing).collect();
+    assert_eq!(
+        missing.iter().map(|&i| picker[i].address).collect::<Vec<_>>(),
+        sampler,
+        "every inert lane is listed as missing, in the pattern's order"
+    );
+    let last_live_source = picker
+        .iter()
+        .rposition(|row| !row.missing && is_source(row))
+        .expect("the drum synth's own rows are offered");
+    assert_eq!(
+        missing,
+        (last_live_source + 1..last_live_source + 1 + sampler.len()).collect::<Vec<_>>(),
+        "the inert lanes sit right after the drum synth's rows"
+    );
+    assert!(
+        picker[..last_live_source].iter().all(|row| !row.missing && is_source(row)),
+        "nothing but the drum synth's rows comes before them"
+    );
+    assert_eq!(picker[missing[0]].device, DeviceKind::Sampler.label());
+    assert_eq!(picker[missing[0]].name, DeviceKind::Sampler.descriptors()[0].name);
+
+    session.change_selected_source(DeviceKind::Sampler);
+    let picker = plugin_ui::lane_destinations(&session);
+    assert!(picker.iter().all(|row| !row.missing), "switched back, nothing is missing");
+    for address in &sampler {
+        assert_eq!(
+            picker.iter().filter(|row| row.address == *address).count(),
+            1,
+            "each sampler lane is its live row again, once"
+        );
+    }
+}
+
 /// **A parameter the plugin stops listing is kept and drawn as missing, and
 /// comes back when it returns** (Adam, MOO-74; plugin-hosting 08). A lane
 /// and a route on Nudge; the plugin's list loses it, as a `params.rescan`
@@ -947,11 +1029,116 @@ fn a_missing_plugin_parameter_is_drawn_missing_and_reunited() {
     assert!(!route.missing && route.destination.contains("Nudge"), "{route:?}");
 }
 
+/// **A container preset holding a plugin lets that plugin's processor in**
+/// (MOO-322). A Chain holding the test gain is saved as a preset and loaded
+/// back over the Chain, through `load_effect_run` and the window's mirror of
+/// it, `install_loaded_run`. The pump opens the gain in the slot the load
+/// minted and sends its processor down as a `ReplaceEffect` expecting that
+/// slot's key; the engine lets a replacement in only where the slot was
+/// installed with `Some` of that key (`EffectChain::replace_if_kind`). So
+/// the placeholder the mirror installed has to carry it, or the device is a
+/// silent pass-through for good, with no problem reported anywhere.
+#[test]
+fn a_container_preset_holding_a_plugin_lets_its_processor_in() {
+    let mut h = harness_with(&drum_loop());
+    h.state.borrow_mut().enter_browser_tab(BrowserTab::Plugins);
+    let queues = plugin_ui::Queues {
+        tx: h.tx.clone(),
+        stx: h.stx.clone(),
+        reset_tx: mpsc::channel().0,
+    };
+    assert!(plugin_ui::add_plugin(&h.state, &h.commands, &h.window, test_plugin::GAIN_ID, Some(0), &queues));
+    for _ in 0..3 {
+        h.tick();
+    }
+    let original = h.plugin_slot();
+
+    // The gain boxed in a Chain, and the Chain saved as a preset.
+    let path = h.dir.path().join("boxed.mooloop-effect");
+    {
+        let mut st = h.state.borrow_mut();
+        st.session.wrap_effects_in_container(0..1).expect("wrapped");
+        let device = st.session.effect_chain().expect("a chain")[0].id;
+        st.session.pending_preset_save = st
+            .session
+            .chain_key(st.session.effect_target)
+            .map(|target| PresetSaveTarget::Effect { target, device });
+        let source = st.session.take_preset_save(120, 0).expect("a save was pending");
+        let run = source.run.expect("a container saves its run");
+        mooloop_project::save_effect_run_preset(
+            &path,
+            &run,
+            PresetInfo {
+                name: "Boxed".into(),
+                category: String::new(),
+                tags: Vec::new(),
+            },
+            AssetMode::Embedded,
+        )
+        .expect("saved");
+    }
+    let LoadedDocument::EffectRun(run) = mooloop_project::load_bundle(&path).expect("it loads").document else {
+        panic!("not a container preset");
+    };
+
+    // Loaded back over the Chain, as the rail's preset menu does.
+    h.engine.drain();
+    let (installs, replaces) = (h.engine.install_keys.len(), h.engine.replace_keys.len());
+    {
+        let mut st = h.state.borrow_mut();
+        let loaded = st.session.load_effect_run(0, &run, "Boxed").expect("the preset fits the Chain");
+        st.install_loaded_run(&loaded, 120.0, RATE, &h.tx, &h.stx);
+        st.sync_effects();
+    }
+    let landed = h
+        .state
+        .borrow()
+        .session
+        .effect_chain()
+        .expect("a chain")
+        .iter()
+        .find_map(|effect| match effect.params {
+            EffectParams::Plugin(slot) => Some(slot),
+            _ => None,
+        })
+        .expect("the preset's gain is in the chain");
+    assert_ne!(landed, original, "test premise: the load mints a slot of its own");
+    for _ in 0..3 {
+        h.tick();
+    }
+    assert!(h.state.borrow().session.plugin_problem(landed).is_none(), "the gain opened");
+
+    let key = u64::from(landed.0);
+    let replaced = &h.engine.replace_keys[replaces..];
+    assert!(
+        replaced.contains(&key),
+        "the rack sent the gain's processor, keyed by its slot: {replaced:?}"
+    );
+    let installed = &h.engine.install_keys[installs..];
+    assert!(
+        installed.contains(&Some(key)),
+        "the placeholder the load installed carries the slot's key, so the engine lets the \
+         processor in rather than refusing it on every retry: installed {installed:?}, key {key}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // A plugin's own GUI in a window of its own (step 11, MOO-302). No test here
 // opens a window: the window side is `plugin_gui::fake`, which records what
 // it was asked, and the plugin is the test double's GUI variant, which draws
 // nothing.
+//
+// **The tests that expect a GUI to open run only where the host can open
+// one** (MOO-337). The host asks a plugin for its GUI through `GuiApi::X11`
+// alone (`mooloop-plugin-host/src/gui.rs`: Cocoa and Win32 arrive with the
+// platforms that need them), and the window side is a bare X11 window, so a
+// plugin GUI is a feature of the targets with X11: the same `cfg` as
+// `display_backend.rs`'s `force_x11`. On macOS the test double truthfully
+// refuses X11, and those tests fail by testing a feature macOS does not
+// have. That is a scope, not a quarantine: what a macOS user gets instead --
+// the face, its control, and a badge saying why no window opened -- is
+// `a_window_that_cannot_open_is_the_badge`, which runs everywhere. When the
+// host learns Cocoa, the gate moves with it.
 
 /// The scanner's cache with the test gain's and the test sine's GUI variants
 /// beside the rest.
@@ -1008,6 +1195,7 @@ fn window_buttons(h: &Harness) -> Vec<Control> {
         .collect()
 }
 
+#[cfg(all(unix, not(target_vendor = "apple")))] // X11 only: MOO-337, above.
 fn gui_slot(h: &Harness) -> PluginSlotId {
     match h.state.borrow().session.effect_chain().expect("a chain")[1].params {
         EffectParams::Plugin(slot) => slot,
@@ -1015,10 +1203,12 @@ fn gui_slot(h: &Harness) -> PluginSlotId {
     }
 }
 
+#[cfg(all(unix, not(target_vendor = "apple")))] // X11 only: MOO-337, above.
 fn calls(log: &FakeLog) -> Vec<String> {
     log.borrow().calls.clone()
 }
 
+#[cfg(all(unix, not(target_vendor = "apple")))] // X11 only: MOO-337, above.
 fn open_gui(h: &Harness) {
     let main = crate::plugin_gui::MainWindowState::of(h.window.window());
     h.state.borrow_mut().open_plugin_gui_at(1, &main).expect("it opens");
@@ -1029,6 +1219,7 @@ fn open_gui(h: &Harness) {
 /// sized to the plugin and shown; pressed again, it brings that window to
 /// the front rather than opening a second.
 #[test]
+#[cfg(all(unix, not(target_vendor = "apple")))] // X11 only: MOO-337, above.
 fn only_a_plugin_with_a_gui_has_the_control_and_it_opens_or_raises() {
     let (mut h, log) = gui_harness();
     let rows: Vec<EffectSlotRow> = h.state.borrow().effect_slot_model.iter().collect();
@@ -1066,6 +1257,7 @@ fn only_a_plugin_with_a_gui_has_the_control_and_it_opens_or_raises() {
 /// removed with its GUI open has the GUI closed by the session, and its
 /// window destroyed on the tick that reports it. Quit does the same for all.
 #[test]
+#[cfg(all(unix, not(target_vendor = "apple")))] // X11 only: MOO-337, above.
 fn a_window_goes_only_after_its_plugin_gui() {
     use mooloop_plugin_window::{GuiSize, PluginWindowEvent, PluginWindowId};
     let destroyed = |log: &FakeLog| calls(log).iter().filter(|call| call.starts_with("destroy ")).count();
@@ -1122,9 +1314,16 @@ fn a_window_goes_only_after_its_plugin_gui() {
 }
 
 /// **A window that cannot open is the face's badge, and the face stays.**
-/// No X server here: the reason is the window side's own.
+/// No X server here: the reason is the window side's own. Where the host
+/// offers no GUI API the plugin can embed in -- macOS, until the host learns
+/// Cocoa (MOO-337) -- the plugin refuses first and the reason is its own:
+/// this is what a macOS user gets for a plugin with a GUI, and it runs there.
 #[test]
 fn a_window_that_cannot_open_is_the_badge() {
+    #[cfg(all(unix, not(target_vendor = "apple")))]
+    let reason = "DISPLAY";
+    #[cfg(not(all(unix, not(target_vendor = "apple"))))]
+    let reason = "cannot open an embedded window in X11";
     let (mut h, _log) = gui_harness();
     h.state.borrow_mut().plugin_guis =
         crate::plugin_gui::PluginGuis::new(Box::new(|| Err(mooloop_plugin_window::WindowError::NoDisplay)));
@@ -1134,7 +1333,7 @@ fn a_window_that_cannot_open_is_the_badge() {
     assert!(row.is_plugin && row.plugin_has_gui, "the face stays, control and all");
     assert!(!row.plugin_gui_open);
     assert!(row.plugin_status.contains("window did not open"), "{}", row.plugin_status);
-    assert!(row.plugin_status.contains("DISPLAY"), "the reason is said: {}", row.plugin_status);
+    assert!(row.plugin_status.contains(reason), "the reason is said: {}", row.plugin_status);
     assert_eq!(window_buttons(&h).len(), 1, "and it can be pressed again");
 }
 
@@ -1219,6 +1418,7 @@ fn instrument(h: &Harness) -> (mooloop_core::DeviceId, PluginSlotId) {
 /// effect's does** (MOO-304), through `PluginGuis::open_or_raise` with the
 /// source's slot.
 #[test]
+#[cfg(all(unix, not(target_vendor = "apple")))] // X11 only: MOO-337, above.
 fn a_plugin_instrument_with_a_gui_opens_it_from_its_face() {
     let (mut h, log) = instrument_harness(test_plugin::SINE_GUI_ID);
     let (_, slot) = instrument(&h);

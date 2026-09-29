@@ -5,11 +5,63 @@
 
 use crate::session::Session;
 use mooloop_core::{
-    AutomationLane, AutomationPoint, EngineCommand, ParamAddr, PointId,
+    AutomationLane, AutomationPoint, EffectTarget, EngineCommand, ParamAddr, ParamOwner, PointId,
     MAX_AUTOMATION_LANES_PER_CHANNEL, TICKS_PER_STEP,
 };
 
+/// A lane in the current pattern that names a generator kind its channel no
+/// longer runs (MOO-135): inert, kept, saved unchanged, and live again when
+/// the channel is switched back. It still takes one of the pattern's
+/// [`MAX_AUTOMATION_LANES_PER_CHANNEL`] slots, so the lane menu lists it as
+/// missing -- MOO-74's treatment, as a plugin parameter the plugin stopped
+/// listing is -- where it can be opened and removed (MOO-270).
+#[derive(Clone, Debug, PartialEq)]
+pub struct InertLane {
+    pub address: ParamAddr,
+    /// The kind the lane was drawn on, "Sampler": the device it belongs to.
+    pub device: String,
+    /// The parameter's name on that kind, or "Parameter 12" for an id the
+    /// kind's table does not have.
+    pub name: String,
+}
+
 impl Session {
+    /// The selected channel's inert generator lanes in the current pattern,
+    /// in the order the pattern holds them. Only this pattern's: the lane
+    /// menu is the pattern's, and a row with no lane behind it would open
+    /// nothing ([`Session::lane_allowed`] refuses a new inert lane).
+    pub fn inert_source_lanes(&self) -> Vec<InertLane> {
+        let Some(state) = self.channels.get(self.selected) else {
+            return Vec::new();
+        };
+        let scope = EffectTarget::Channel(self.selected as u8);
+        let live = ParamOwner::source(state.kind());
+        let Some(lanes) = state.automation.get(self.current_pattern) else {
+            return Vec::new();
+        };
+        lanes
+            .iter()
+            .filter_map(|lane| {
+                let address = lane.target;
+                let ParamOwner::Source { kind } = address.owner else {
+                    return None;
+                };
+                if address.scope != scope || address.owner == live {
+                    return None;
+                }
+                let descriptor = kind.and_then(|kind| kind.descriptor(address.param));
+                Some(InertLane {
+                    address,
+                    device: kind.map_or("Unknown device", |kind| kind.label()).to_owned(),
+                    name: descriptor.map_or_else(
+                        || format!("Parameter {}", address.param),
+                        |descriptor| descriptor.name.to_owned(),
+                    ),
+                })
+            })
+            .collect()
+    }
+
     /// The command addressing whichever lane is open, given its payload.
     fn lane_command(
         &self,

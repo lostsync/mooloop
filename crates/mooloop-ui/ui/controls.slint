@@ -540,7 +540,9 @@ export component PickerChip inherits Rectangle {
                         padding-bottom: row.visible ? 1px : 0px;
                         row := Rectangle {
                             visible: !root.hidden[index] || index == root.selected-index;
-                            height: self.visible ? 18px : 0px;
+                            // 18px at 100%, growing with the text above it
+                            // (MOO-278); the popup sizes to the list.
+                            height: self.visible ? 18px * Theme.row-growth : 0px;
                             border-radius: Theme.radius-sm;
                             background: index == root.selected-index
                                 ? Theme.surface-active
@@ -754,10 +756,17 @@ export component StepperChip inherits Rectangle {
     Tooltip { text: @markdown("\{root.current}"); }
 }
 
+// 12px at 100%, growing with the text above it (MOO-291). It was a fixed
+// 12px, so at 200% the capitals were cut in half and the next row drawn over
+// them. It grows by `row-growth` rather than to its text's preferred height
+// because it is placed in sixty-odd layouts, many of them device faces that
+// pointer tests aim at by the pixel: at 100% a label keeps the height every
+// face was laid out around, and above it keeps the same proportion to its
+// capitals, which is what a label in capitals needs.
 export component SectionLabel inherits Text {
     color: Theme.text-faint;
     font-size: Theme.text-md;
-    height: 12px;
+    height: 12px * Theme.row-growth;
 }
 
 // Bounded functional group used to tile instrument editors. Children live in
@@ -1441,7 +1450,9 @@ export component ParameterKnob inherits Rectangle {
     context-menu := PopupWindow {
         x: root.menu-x;
         y: root.menu-y;
-        width: 168px;
+        // 168px, or wider when its rows need it (MOO-278): "Type a Value…"
+        // beside "Enter" is, even at 100%.
+        width: max(168px, menu-frame.preferred-width);
         height: menu-frame.preferred-height;
         close-policy: close-on-click;
         menu-frame := Rectangle {
@@ -2204,10 +2215,13 @@ export component MuteButton inherits ToolButton {
     active: root.muted;
     active-color: Theme.destructive-active;
     text-color: root.muted ? #fecaca : Theme.text-faint;
-    min-width: 18px;
-    max-width: 18px;
-    min-height: 18px;
-    max-height: 18px;
+    // 18px square at 100%, growing with the text above it (MOO-334, the rule
+    // MOO-278 gave menu rows), so at 200% the "M" stays inside its chip.
+    property <length> chip: 18px * Theme.row-growth;
+    min-width: root.chip;
+    max-width: root.chip;
+    min-height: root.chip;
+    max-height: root.chip;
 }
 
 /// The analog-sum switch for one strip: does this strip's output go into its
@@ -2952,10 +2966,13 @@ export component SoloButton inherits ToolButton {
     active: root.soloed;
     active-color: #78500a;
     text-color: root.soloed ? #fde68a : Theme.text-faint;
-    min-width: 18px;
-    max-width: 18px;
-    min-height: 18px;
-    max-height: 18px;
+    // 18px square at 100%, growing with the text above it, as `MuteButton`
+    // does (MOO-334).
+    property <length> chip: 18px * Theme.row-growth;
+    min-width: root.chip;
+    max-width: root.chip;
+    min-height: root.chip;
+    max-height: root.chip;
 }
 
 // Solo over mute, in the footprint one mute button used to have.

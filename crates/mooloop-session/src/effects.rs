@@ -80,6 +80,27 @@ pub struct EffectInserted {
     pub params: EffectParams,
 }
 
+/// Where a new device goes on the chain the rack is pointed at.
+///
+/// Three places, not one index, because an index cannot say "into this box"
+/// (MOO-299). The position just past a container's run is both "the last
+/// device inside it" and "the next device after it"; `mooloop_core::
+/// insert_effect` reads it as the second, which is the rule at every depth,
+/// so the first has to be named. The position just after a container's own
+/// row is the same ambiguity at the other end, for an empty box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectPlace {
+    /// Before the row at this index, at that row's depth; past the last row
+    /// is the end of the chain, outside every box.
+    Before(usize),
+    /// The first device inside the container at this index.
+    FirstIn(usize),
+    /// The last device inside the serial container (a Chain, or a layer
+    /// branch that is one) at this index. Not a layer: a device added at a
+    /// layer's end would be a new branch, which is the layer face's `+`.
+    LastIn(usize),
+}
+
 /// A container preset that replaced a run.
 ///
 /// The engine mirror is the removal it did and the insertion it did, in that
@@ -282,18 +303,51 @@ impl Session {
         kind: EffectKind,
         insert_before: usize,
     ) -> Option<EffectInserted> {
+        self.place_effect(EffectSlotState::of_kind(kind), EffectPlace::Before(insert_before))
+    }
+
+    /// Puts `effect` at `place` on the chain the rack is pointed at, minting
+    /// it an identity, and says where it landed and where the engine has to
+    /// install it from (the chain's tail).
+    ///
+    /// **The one placement every way of adding a device goes through**: a
+    /// native device from a join or a container's `+`, and a hosted plugin
+    /// (`insert_plugin_effect`, Engine's, which mints the plugin's slot and
+    /// opens it). It records nothing and sends nothing; the caller mirrors
+    /// the insert onto the engine and records the undo step.
+    ///
+    /// `None` when the chain is full, `place` names no row, or names a box
+    /// that cannot take it there.
+    pub fn place_effect(
+        &mut self,
+        effect: EffectSlotState,
+        place: EffectPlace,
+    ) -> Option<EffectInserted> {
         let target = self.effect_target;
         let (effects, next_id) = self.effect_chain_parts_mut()?;
         let tail = effects.len();
-        let effect = EffectSlotState::of_kind(kind);
-        let slot = insert_effect(effects, next_id, insert_before, effect)?;
-        let device = effects[slot].id;
+        let slot = match place {
+            EffectPlace::Before(before) => insert_effect(effects, next_id, before, effect)?,
+            EffectPlace::FirstIn(container) => {
+                insert_into_container(effects, next_id, container, effect)?
+            }
+            EffectPlace::LastIn(container) => {
+                // A layer's end is a new branch: the layer face's `+`
+                // (`add_layer_branch`), never the rack's.
+                if effects.get(container)?.params.container_flow()
+                    != Some(mooloop_core::ContainerFlow::Series)
+                {
+                    return None;
+                }
+                mooloop_core::append_into_container(effects, next_id, container, effect)?
+            }
+        };
         Some(EffectInserted {
             target,
             slot,
             tail,
-            device,
-            kind,
+            device: effects[slot].id,
+            kind: effect.kind(),
             params: effect.params,
         })
     }
@@ -328,19 +382,28 @@ impl Session {
         kind: EffectKind,
         slot: usize,
     ) -> Option<EffectInserted> {
-        let target = self.effect_target;
-        let (effects, next_id) = self.effect_chain_parts_mut()?;
-        let tail = effects.len();
-        let effect = EffectSlotState::of_kind(kind);
-        let landed = insert_into_container(effects, next_id, slot, effect)?;
-        Some(EffectInserted {
-            target,
-            slot: landed,
-            tail,
-            device: effects[landed].id,
-            kind,
-            params: effect.params,
-        })
+        self.place_effect(EffectSlotState::of_kind(kind), EffectPlace::FirstIn(slot))
+    }
+
+    /// Inserts `kind` as the last device inside the Chain in `slot`: what the
+    /// join after a Chain's last device, inside its box, adds (MOO-299).
+    ///
+    /// The join past the box's rails adds after the Chain, through
+    /// `insert_effect_at` at the index past its run, and that index cannot
+    /// also mean "the end of the box" -- so, like
+    /// [`Self::insert_effect_into_container`], this names the box. For an
+    /// empty Chain the two ends are one place and this is that verb.
+    ///
+    /// The same undo step and engine mirror as any insert: the caller
+    /// records "Effect added" and installs from the tail. `None` when `slot`
+    /// is not a serial container -- a layer's end is a new branch, the layer
+    /// face's `+` -- or the chain or the nesting is full.
+    pub fn append_effect_into_container(
+        &mut self,
+        kind: EffectKind,
+        slot: usize,
+    ) -> Option<EffectInserted> {
+        self.place_effect(EffectSlotState::of_kind(kind), EffectPlace::LastIn(slot))
     }
 
     /// Adds an empty branch at the end of the layer in `slot`: what the
@@ -520,8 +583,13 @@ impl Session {
     /// that used to be in slot 2 has no claim on whatever the preset put
     /// there.
     ///
+    /// Every plugin row is minted a fresh slot in this song, opened by the
+    /// pump from the state the run carries (MOO-271): the rows' own slot
+    /// numbers are keys into `run.plugins` and name nothing here.
+    ///
     /// `None` when `slot` does not hold a container, when the preset is not a
-    /// well-formed run, or when the chain has no room for it.
+    /// well-formed run, when a plugin row in it carries no plugin, or when the
+    /// chain has no room for it.
     pub fn load_effect_run(
         &mut self,
         slot: usize,
@@ -535,22 +603,25 @@ impl Session {
         if mooloop_core::span_problem(&run.effects).is_some() {
             return None;
         }
-        let (removed, devices, removed_tail) = {
-            let (effects, next_id) = self.effect_chain_parts_mut()?;
-            if !effects.get(slot)?.kind().is_container() {
-                return None;
-            }
+        if !self.effect_chain()?.get(slot)?.kind().is_container() {
+            return None;
+        }
+        let (rows, minted) = self.land_run_plugins(run)?;
+        let replaced = self.effect_chain_parts_mut().and_then(|(effects, next_id)| {
             let before = effects.len();
             // One call, because the boxes around this one lose the run that
             // left and gain the run that arrived, and those are two different
             // numbers.
-            let removed = mooloop_core::replace_run(effects, next_id, slot, &run.effects)?;
-            let devices: Vec<mooloop_core::DeviceId> = effects
-                [slot..slot + run.effects.len()]
+            let removed = mooloop_core::replace_run(effects, next_id, slot, &rows)?;
+            let devices: Vec<mooloop_core::DeviceId> = effects[slot..slot + rows.len()]
                 .iter()
                 .map(|effect| effect.id)
                 .collect();
-            (removed, devices, before - 1)
+            Some((removed, devices, before - 1))
+        });
+        let Some((removed, devices, removed_tail)) = replaced else {
+            self.unmint_plugin_slots(&minted);
+            return None;
         };
         for effect in &removed {
             self.forget_device(target, effect.id);
@@ -627,17 +698,21 @@ impl Session {
     /// from, and `insert_run` mints fresh ones on the way back in. A
     /// clipboard holds a design, not a device.
     ///
+    /// A plugin device is copied with its plugin (MOO-271): the run carries
+    /// what the song keeps about it, and a paste mints it a slot of its own,
+    /// in this song or another. The song's copy of its state is current to
+    /// the plugin's last finished edit, which the pump captures every tick;
+    /// a copy cannot ask the live instance, because it is not an edit and
+    /// takes the session by shared reference.
+    ///
     /// Read-only, so a copy is not an edit and does not touch history.
     pub fn copy_device(&self, slot: usize) -> Option<EffectRun> {
         let effects = self.effect_chain()?;
         if slot >= effects.len() {
             return None;
         }
-        let effects = effects[mooloop_core::run_of(effects, slot)]
-            .iter()
-            .map(|effect| effect.with_id(DeviceId::UNASSIGNED))
-            .collect();
-        Some(EffectRun { effects })
+        let rows = &effects[mooloop_core::run_of(effects, slot)];
+        Some(lift_run(rows, |plugin| self.plugins.get(&plugin).cloned()))
     }
 
     /// Puts `run` into the chain immediately after the run at `after`, or at
@@ -650,21 +725,34 @@ impl Session {
     /// child puts the arrival after the box. That is one rule at every
     /// depth, and it is the same rule the rack's own `+` follows.
     ///
-    /// `None` when `after` names nothing, the run is malformed, or the chain
-    /// has no room.
+    /// Every plugin row lands in a slot minted for it here, opened by the
+    /// pump from the plugin the run carries (MOO-271): pasted twice, or into
+    /// the song it was copied from, it is a second instance, never a second
+    /// device on the first one's slot.
+    ///
+    /// `None` when `after` names nothing, the run is malformed, a plugin row
+    /// in it carries no plugin, or the chain has no room.
     pub fn paste_device(&mut self, run: &EffectRun, after: usize) -> Option<EffectRunInserted> {
         let target = self.effect_target;
-        let (effects, next_id) = self.effect_chain_parts_mut()?;
-        let at = if effects.is_empty() {
-            0
-        } else {
-            mooloop_core::run_of(effects, after.min(effects.len() - 1)).end
+        self.effect_chain()?;
+        let (rows, minted) = self.land_run_plugins(run)?;
+        let landed = self.effect_chain_parts_mut().and_then(|(effects, next_id)| {
+            let at = if effects.is_empty() {
+                0
+            } else {
+                mooloop_core::run_of(effects, after.min(effects.len() - 1)).end
+            };
+            let slot = mooloop_core::insert_run(effects, next_id, at, &rows)?;
+            let devices: Vec<DeviceId> = effects[slot..slot + rows.len()]
+                .iter()
+                .map(|effect| effect.id)
+                .collect();
+            Some((slot, devices))
+        });
+        let Some((slot, devices)) = landed else {
+            self.unmint_plugin_slots(&minted);
+            return None;
         };
-        let slot = mooloop_core::insert_run(effects, next_id, at, &run.effects)?;
-        let devices = effects[slot..slot + run.effects.len()]
-            .iter()
-            .map(|effect| effect.id)
-            .collect();
         self.mark_dirty();
         Some(EffectRunInserted {
             target,
@@ -693,15 +781,34 @@ impl Session {
     /// `insert_run_beside` resolves the ambiguity by asking `slot` rather
     /// than the index after it, which is what "duplicate" has always meant:
     /// the copy is enclosed by exactly the containers the original is.
+    ///
+    /// A plugin device's copy is a second instance of its plugin in a slot of
+    /// its own, opened with the state the original holds *now* (MOO-271).
+    /// Before, the copy named the original's slot, so two devices shared one
+    /// hosted instance keyed by that slot.
     pub fn duplicate_device(&mut self, slot: usize) -> Option<EffectRunInserted> {
-        let run = self.copy_device(slot)?;
+        let rows = {
+            let effects = self.effect_chain()?;
+            if slot >= effects.len() {
+                return None;
+            }
+            effects[mooloop_core::run_of(effects, slot)].to_vec()
+        };
+        let run = self.lift_run_live(&rows);
         let target = self.effect_target;
-        let (effects, next_id) = self.effect_chain_parts_mut()?;
-        let slot = mooloop_core::insert_run_beside(effects, next_id, slot, &run.effects)?;
-        let devices = effects[slot..slot + run.effects.len()]
-            .iter()
-            .map(|effect| effect.id)
-            .collect();
+        let (rows, minted) = self.land_run_plugins(&run)?;
+        let landed = self.effect_chain_parts_mut().and_then(|(effects, next_id)| {
+            let slot = mooloop_core::insert_run_beside(effects, next_id, slot, &rows)?;
+            let devices: Vec<DeviceId> = effects[slot..slot + rows.len()]
+                .iter()
+                .map(|effect| effect.id)
+                .collect();
+            Some((slot, devices))
+        });
+        let Some((slot, devices)) = landed else {
+            self.unmint_plugin_slots(&minted);
+            return None;
+        };
         self.mark_dirty();
         Some(EffectRunInserted {
             target,
@@ -1137,6 +1244,21 @@ impl Session {
         let EffectParams::Plugin(slot) = effect.params else {
             return None;
         };
+        self.plugin_slot_state_now(slot)
+    }
+
+    /// What the song keeps about plugin `slot`, with the state its live
+    /// instance holds *now*: the song's copy when it is not hosted, when it
+    /// refused that state on opening, or when it fails to save. Nothing is
+    /// written into the song. `None` when the song has no such slot.
+    ///
+    /// **The one clone of a hosted plugin's state for a copy of it** --
+    /// a preset (MOO-222), a duplicate or a container preset (MOO-271) --
+    /// and the helper a copied plugin *instrument* should share (MOO-317).
+    pub(crate) fn plugin_slot_state_now(
+        &mut self,
+        slot: mooloop_core::PluginSlotId,
+    ) -> Option<mooloop_core::PluginSlotState> {
         let mut saved = self.plugins.get(&slot)?.clone();
         if !self.plugin_rack.refused_state(slot) {
             if let Some(instance) = self.plugin_rack.instance_mut(slot) {
@@ -1149,6 +1271,63 @@ impl Session {
             }
         }
         Some(saved)
+    }
+
+    /// `rows` lifted out of this song as a run, each plugin row carrying its
+    /// plugin with the live state ([`Self::plugin_slot_state_now`]). What a
+    /// duplicate copies, and what a container preset should save (MOO-321).
+    pub(crate) fn lift_run_live(&mut self, rows: &[EffectSlotState]) -> EffectRun {
+        lift_run(rows, |plugin| self.plugin_slot_state_now(plugin))
+    }
+
+    /// `run`'s rows ready to land in this song: every plugin row pointed at a
+    /// slot minted for it here from the plugin the run carries under that
+    /// row's key, and the slots minted, for [`Self::unmint_plugin_slots`]
+    /// should the landing fail.
+    ///
+    /// Nothing is opened here. A minted slot is named by a row once the
+    /// caller lands it, and the pump's `service_plugins` opens every named
+    /// slot nothing hosts with the state the song keeps for it and swaps its
+    /// processor into the device's placeholder -- the same way an opened
+    /// song or an undo brings a plugin back, and it needs no engine handle,
+    /// which none of the landing paths has.
+    ///
+    /// `None`, with nothing minted, when a plugin row's key names nothing in
+    /// the run: a bare slot number from another song, which would name
+    /// whatever this song has at that number.
+    fn land_run_plugins(
+        &mut self,
+        run: &EffectRun,
+    ) -> Option<(Vec<EffectSlotState>, Vec<mooloop_core::PluginSlotId>)> {
+        let carried = |effect: &EffectSlotState| match effect.params {
+            EffectParams::Plugin(key) => run.plugins.contains_key(&key),
+            _ => true,
+        };
+        if !run.effects.iter().all(carried) {
+            return None;
+        }
+        let mut rows = run.effects.clone();
+        let mut minted = Vec::new();
+        for row in &mut rows {
+            if let EffectParams::Plugin(key) = row.params {
+                let slot = mooloop_core::mint_plugin_slot(
+                    &mut self.plugins,
+                    &mut self.next_plugin_slot,
+                    run.plugins[&key].clone(),
+                );
+                row.params = EffectParams::Plugin(slot);
+                minted.push(slot);
+            }
+        }
+        Some((rows, minted))
+    }
+
+    /// Takes back slots [`Self::land_run_plugins`] minted for a landing that
+    /// then did not fit. No row names them and nothing hosts them yet.
+    fn unmint_plugin_slots(&mut self, minted: &[mooloop_core::PluginSlotId]) {
+        for slot in minted {
+            self.plugins.remove(slot);
+        }
     }
 
 
@@ -1178,6 +1357,31 @@ impl Session {
 /// 1.1, and the plugin reads its own older state.
 fn same_plugin_id(a: &mooloop_core::PluginRef, b: &mooloop_core::PluginRef) -> bool {
     a.format == b.format && a.id == b.id
+}
+
+/// `rows` as a run that belongs to no song: identities stripped, and each
+/// plugin row renumbered to a key into the run's own `plugins`, under which
+/// `plugin_of` supplies its plugin (MOO-271). A row whose plugin `plugin_of`
+/// cannot supply keeps a key with no entry, and a landing refuses it.
+fn lift_run(
+    rows: &[EffectSlotState],
+    mut plugin_of: impl FnMut(mooloop_core::PluginSlotId) -> Option<mooloop_core::PluginSlotState>,
+) -> EffectRun {
+    let mut run = EffectRun::of(Vec::with_capacity(rows.len()));
+    let mut next_key = 0u32;
+    for row in rows {
+        let mut row = row.with_id(DeviceId::UNASSIGNED);
+        if let EffectParams::Plugin(slot) = row.params {
+            let key = mooloop_core::PluginSlotId(next_key);
+            next_key += 1;
+            if let Some(plugin) = plugin_of(slot) {
+                run.plugins.insert(key, plugin);
+            }
+            row.params = EffectParams::Plugin(key);
+        }
+        run.effects.push(row);
+    }
+    run
 }
 
 /// The rate a synced modulation effect should now be running at, as a command,
@@ -2079,7 +2283,7 @@ mod tests {
         let run = session.copy_device(0).expect("the delay");
 
         assert!(
-            session.paste_device(&EffectRun { effects: Vec::new() }, 0).is_none(),
+            session.paste_device(&EffectRun::of(Vec::new()), 0).is_none(),
             "an empty run is not a paste"
         );
 
@@ -2386,17 +2590,136 @@ mod tests {
         session.insert_effect_at(EffectKind::Delay, 0).expect("room");
         let before = session.channels[0].effects.clone();
 
-        let headless = mooloop_core::EffectRun {
-            effects: vec![EffectSlotState::of_kind(EffectKind::Filter)],
-        };
+        let headless =
+            mooloop_core::EffectRun::of(vec![EffectSlotState::of_kind(EffectKind::Filter)]);
         assert!(session.load_effect_run(0, &headless, "No").is_none());
 
-        let fine = mooloop_core::EffectRun {
-            effects: vec![EffectSlotState::of_kind(EffectKind::Chain)],
-        };
+        let fine = mooloop_core::EffectRun::of(vec![EffectSlotState::of_kind(EffectKind::Chain)]);
         // Slot 0 holds a delay, not a container.
         assert!(session.load_effect_run(0, &fine, "No").is_none());
         assert_eq!(session.channels[0].effects, before);
+    }
+
+    /// **MOO-299.** In a Chain holding a Filter and a Drive, appending adds
+    /// after the Drive and still inside the box. The index past the box's
+    /// run -- what the join past its rails passes -- still adds after it.
+    #[test]
+    fn appending_into_a_chain_lands_after_its_last_device_inside_the_box() {
+        let mut session = Session::default();
+        for kind in [EffectKind::Filter, EffectKind::Drive] {
+            session.insert_effect_at(kind, usize::MAX).expect("room");
+        }
+        session.wrap_effects_in_container(0..2).expect("a chain");
+        session.insert_effect_at(EffectKind::Reverb, usize::MAX).expect("room");
+        // [Chain, Filter, Drive], Reverb
+
+        let added = session
+            .append_effect_into_container(EffectKind::Bitcrush, 0)
+            .expect("room in the box");
+        assert_eq!(
+            kinds(&session),
+            [
+                EffectKind::Chain,
+                EffectKind::Filter,
+                EffectKind::Drive,
+                EffectKind::Bitcrush,
+                EffectKind::Reverb,
+            ]
+        );
+        assert_eq!(depths(&session), [0, 1, 1, 1, 0], "inside the box, not after it");
+        assert_eq!(children(&session, 0), 3);
+        assert_eq!(added.slot, 3);
+        assert_eq!(added.tail, 4, "installed from the old tail and moved up");
+        assert_eq!(added.kind, EffectKind::Bitcrush);
+        assert_eq!(added.device, session.channels[0].effects[3].id);
+
+        // The join past the rails: the index past the run, after the box.
+        let outside = session.insert_effect_at(EffectKind::Delay, 4).expect("room");
+        assert_eq!(outside.slot, 4);
+        assert_eq!(depths(&session), [0, 1, 1, 1, 0, 0]);
+        assert_eq!(children(&session, 0), 3, "the box did not grow");
+        assert_eq!(
+            mooloop_core::span_problem(&session.channels[0].effects),
+            None
+        );
+    }
+
+    /// Nested boxes: appending into the inner one lands inside both; into
+    /// the outer one, after the inner box's whole run and inside the outer.
+    /// An empty Chain's end is its start, the same as its own `+`.
+    #[test]
+    fn appending_into_nested_and_empty_chains() {
+        let mut session = Session::default();
+        session.insert_effect_at(EffectKind::Filter, 0).expect("room");
+        session.wrap_effects_in_container(0..1).expect("inner");
+        session.wrap_effects_in_container(0..2).expect("outer");
+        // [Chain(outer), [Chain(inner), Filter]]
+        assert_eq!(depths(&session), [0, 1, 2]);
+
+        session
+            .append_effect_into_container(EffectKind::Drive, 1)
+            .expect("room in the inner box");
+        assert_eq!(depths(&session), [0, 1, 2, 2]);
+        assert_eq!((children(&session, 0), children(&session, 1)), (3, 2));
+
+        session
+            .append_effect_into_container(EffectKind::Delay, 0)
+            .expect("room in the outer box");
+        assert_eq!(
+            kinds(&session),
+            [
+                EffectKind::Chain,
+                EffectKind::Chain,
+                EffectKind::Filter,
+                EffectKind::Drive,
+                EffectKind::Delay,
+            ]
+        );
+        assert_eq!(depths(&session), [0, 1, 2, 2, 1], "past the inner box, inside the outer");
+        assert_eq!((children(&session, 0), children(&session, 1)), (4, 2));
+
+        let mut empty = Session::default();
+        empty.insert_effect_at(EffectKind::Chain, 0).expect("room");
+        let added = empty
+            .append_effect_into_container(EffectKind::Drive, 0)
+            .expect("room");
+        assert_eq!(added.slot, 1);
+        assert_eq!(depths(&empty), [0, 1]);
+    }
+
+    /// A layer's end is a new branch, which is the layer face's `+`, so an
+    /// append onto the layer is refused. Its branch's Chain is an ordinary
+    /// Chain and takes one.
+    #[test]
+    fn a_layer_refuses_an_append_and_its_branch_chain_takes_one() {
+        let mut session = Session::default();
+        session.insert_effect_at(EffectKind::Drive, 0).expect("room");
+        session.wrap_effects_in(0..1, EffectKind::Layer).expect("wrapped");
+        // [Layer, [Chain, Drive]]
+        let before = session.channels[0].effects.clone();
+        assert!(session
+            .append_effect_into_container(EffectKind::Filter, 0)
+            .is_none());
+        assert_eq!(session.channels[0].effects, before, "refused, and nothing moved");
+        assert!(
+            session.append_effect_into_container(EffectKind::Filter, 2).is_none(),
+            "a leaf is not a box"
+        );
+
+        let added = session
+            .append_effect_into_container(EffectKind::Filter, 1)
+            .expect("the branch's chain");
+        assert_eq!(added.slot, 3);
+        assert_eq!(
+            kinds(&session),
+            [
+                EffectKind::Layer,
+                EffectKind::Chain,
+                EffectKind::Drive,
+                EffectKind::Filter
+            ]
+        );
+        assert_eq!(depths(&session), [0, 1, 2, 2]);
     }
 
     fn kinds(session: &Session) -> Vec<EffectKind> {

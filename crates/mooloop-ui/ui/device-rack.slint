@@ -101,11 +101,17 @@ export global BrowserDrag {
     // pointer (MOO-218), or -1 when no join is: then the rack as a whole
     // takes it, as a double-click would.
     in-out property <int> target-before: -1;
+    // The container a drop would land at the end of, set by a join inside a
+    // Chain after its last device (MOO-340), or -1. A join sets one of the
+    // two: no index can say "the end of this box", because the index past
+    // a box's run means "after the box".
+    in-out property <int> target-into: -1;
 
     public function end() {
         active = false;
         over-rack = false;
         target-before = -1;
+        target-into = -1;
         path = "";
         name = "";
     }
@@ -180,7 +186,9 @@ component EffectTypeRow inherits Rectangle {
     callback selected;
 
     preferred-width: label.preferred-width + 20px;
-    height: 22px;
+    // 22px at 100%, growing with the text above it (MOO-278). The menus of
+    // these rows take their height from their layout, so they grow with it.
+    height: 22px * Theme.row-growth;
     border-radius: Theme.radius-md;
     background: touch.has-hover ? Theme.surface-active : transparent;
     accessible-role: button;
@@ -628,7 +636,11 @@ export component DeviceFrame inherits Rectangle {
         x: DeviceRackMetrics.rail-width;
         y: 80px;
         width: 220px;
-        height: min(root.preset-options.length, 12) * 22px + 8px;
+        // One row, which the popup's height and its scroll height are both
+        // counted in. 22px at 100%, growing with the text above it
+        // (MOO-278), so the popup still matches its rows.
+        property <length> row-height: 22px * Theme.row-growth;
+        height: min(root.preset-options.length, 12) * self.row-height + 8px;
         close-policy: close-on-click;
 
         Rectangle {
@@ -642,10 +654,10 @@ export component DeviceFrame inherits Rectangle {
                 y: 4px;
                 width: parent.width - 8px;
                 height: parent.height - 8px;
-                content-height: root.preset-options.length * 22px;
+                content-height: root.preset-options.length * preset-menu.row-height;
                 VerticalLayout {
                     for option[i] in root.preset-options : Rectangle {
-                        height: 22px;
+                        height: preset-menu.row-height;
                         border-radius: Theme.radius-sm;
                         background: row-touch.has-hover ? Theme.surface-active : transparent;
                         HorizontalLayout {
@@ -721,11 +733,19 @@ export component DeviceHeader inherits Rectangle {
                 tint: root.enabled ? root.device-color : Theme.text-faint;
             }
         }
+        // At a large text size the row outgrows a rack unit, and a layout
+        // squeezes every elidable text in proportion. The name is what the
+        // header is for, so it keeps its whole width and the preset and the
+        // tags give way first -- down to an ellipsis each, which is what the
+        // room it leaves them is: the padding, the icon and the spacing, and
+        // about an ellipsis and a half of `text-sm` per tag (MOO-297).
         Text {
             text: root.name;
             color: Theme.text;
             font-size: Theme.text-xl;
             vertical-alignment: center;
+            overflow: elide;
+            min-width: min(self.preferred-width, root.width - 40px - 3 * Theme.text-sm);
         }
         if root.preset != "" : Text {
             text: "| " + root.preset;
@@ -737,11 +757,14 @@ export component DeviceHeader inherits Rectangle {
             max-width: 104px;
             overflow: elide;
         }
+        // The kind and role tags elide rather than run off the header's
+        // right edge when the text size outgrows a rack unit (MOO-297).
         Text {
             text: root.kind;
             color: Theme.text-faint;
             font-size: Theme.text-sm;
             vertical-alignment: center;
+            overflow: elide;
         }
         Rectangle { horizontal-stretch: 1; }
         Text {
@@ -749,6 +772,7 @@ export component DeviceHeader inherits Rectangle {
             color: Theme.text-faint;
             font-size: Theme.text-sm;
             vertical-alignment: center;
+            overflow: elide;
         }
     }
 }
@@ -1053,17 +1077,21 @@ export component CollapsedDevice inherits Rectangle {
 // rows a layer is hiding.
 export component DeviceJoin inherits Rectangle {
     in property <bool> enabled: true;
-    // The row a preset dropped here lands before, or -1 when this join is not
-    // a place to drop one (the inner join of an empty box, which inserts
-    // *into* rather than before anything).
+    // The row a preset dropped here lands before, or -1 when this join does
+    // not insert before a row.
     in property <int> drop-before: -1;
+    // The container a preset dropped here lands at the end of, or -1: the
+    // join inside a Chain after its last device, and an empty Chain's own
+    // join (MOO-340). Set instead of `drop-before`, never with it.
+    in property <int> drop-into: -1;
     callback kind-selected(int);
-    // The menu's "Plugin…" row (MOO-83): offered where the join inserts
-    // before a row, which is where a plugin from the browser can land.
+    // The menu's "Plugin…" row (MOO-83): offered wherever a plugin from the
+    // browser can land, which is wherever a preset can be dropped.
     callback plugin-requested();
 
+    property <bool> droppable: root.drop-before >= 0 || root.drop-into >= 0;
     // A preset from the browser is over this join: the drop lands here.
-    property <bool> drop-hot: BrowserDrag.active && root.enabled && root.drop-before >= 0
+    property <bool> drop-hot: BrowserDrag.active && root.enabled && self.droppable
         && BrowserDrag.pointer-x >= self.absolute-position.x
         && BrowserDrag.pointer-x < self.absolute-position.x + self.width
         && BrowserDrag.pointer-y >= self.absolute-position.y
@@ -1071,8 +1099,11 @@ export component DeviceJoin inherits Rectangle {
     changed drop-hot => {
         if (self.drop-hot) {
             BrowserDrag.target-before = root.drop-before;
-        } else if (BrowserDrag.target-before == root.drop-before) {
+            BrowserDrag.target-into = root.drop-into;
+        } else if (BrowserDrag.target-before == root.drop-before
+                && BrowserDrag.target-into == root.drop-into) {
             BrowserDrag.target-before = -1;
+            BrowserDrag.target-into = -1;
         }
     }
     property <bool> lit: (touch.has-hover || root.drop-hot) && root.enabled;
@@ -1132,7 +1163,7 @@ export component DeviceJoin inherits Rectangle {
             border-color: Theme.border;
             border-radius: Theme.radius-md;
             menu-content := EffectTypeMenu {
-                plugin-enabled: root.drop-before >= 0;
+                plugin-enabled: root.droppable;
                 kind-selected(kind) => {
                     root.kind-selected(kind);
                     insert-menu.close();

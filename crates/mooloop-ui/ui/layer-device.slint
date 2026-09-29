@@ -34,7 +34,11 @@ export component LayerBranchListRow inherits Rectangle {
     // The row's menu: take the branch and everything in it out of the layer.
     callback remove-requested();
 
-    height: 22px;
+    // 22px at 100%, growing with the text above it (MOO-333, the rule
+    // MOO-278 gave menu rows), so at 200% a name no longer touches the rows
+    // either side. The list is a layout of these, so its pitch follows; at
+    // 100% nothing moves, and `layer_face.rs` aims at 100% pixels.
+    height: 22px * Theme.row-growth;
     border-radius: Theme.radius-sm;
     background: root.selected ? Theme.surface-raised : transparent;
 
@@ -62,7 +66,9 @@ export component LayerBranchListRow inherits Rectangle {
     branch-menu := PopupWindow {
         x: 0px;
         y: parent.height;
-        width: 140px;
+        // 140px, or wider when its row needs it (MOO-326, the rule MOO-278
+        // gave the other menus): at a large text size "Remove branch" is.
+        width: max(140px, menu-frame.preferred-width);
         height: menu-frame.preferred-height;
         close-policy: close-on-click;
         menu-frame := Rectangle {
@@ -73,10 +79,14 @@ export component LayerBranchListRow inherits Rectangle {
             VerticalLayout {
                 padding: 4px;
                 Rectangle {
-                    height: 22px;
+                    // 22px at 100%, growing with the text above it (MOO-326);
+                    // the popup takes its height from this layout and its
+                    // width from this row's, so it grows with the row.
+                    height: 22px * Theme.row-growth;
+                    preferred-width: remove-label.preferred-width + 20px;
                     border-radius: Theme.radius-md;
                     background: remove-touch.has-hover ? Theme.surface-active : transparent;
-                    Text {
+                    remove-label := Text {
                         x: 10px;
                         text: "Remove branch";
                         color: Theme.text;
@@ -173,7 +183,8 @@ export component LayerDeviceFace inherits EffectDeviceShell {
                 alignment: start;
                 @children
                 if root.branch-count == 0 : Text {
-                    height: 22px;
+                    // A branch row's height, growing with it (MOO-333).
+                    height: 22px * Theme.row-growth;
                     vertical-alignment: center;
                     horizontal-alignment: center;
                     text: "no branches";

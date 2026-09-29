@@ -19,6 +19,7 @@ pub mod gain;
 pub mod generator;
 pub mod log;
 pub mod input;
+pub mod lock_check;
 pub mod midi;
 pub mod modulation;
 pub mod mixer;

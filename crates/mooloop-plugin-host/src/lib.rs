@@ -41,8 +41,9 @@ pub use instance::{
 use std::ffi::CStr;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Mutex;
 use std::thread::ThreadId;
+
+use mooloop_core::lock_check::Mutex;
 
 use clack_extensions::latency::{HostLatency, HostLatencyImpl};
 use clack_extensions::log::{HostLog, HostLogImpl, LogSeverity};
@@ -134,8 +135,12 @@ pub struct HostShared {
     process_requested: AtomicBool,
     callback_requested: AtomicBool,
     flush_requested: AtomicBool,
-    /// Messages the plugin logged, in order. A spike-only convenience: the
-    /// real host must not lock on a plugin's audio thread.
+    /// Messages the plugin logged, in order, from any thread. A spike-only
+    /// convenience: only [`SpikeHost`] (`tests/spike.rs`) runs under this.
+    /// The engine's host is `clap::ClapShared`, which counts a line from any
+    /// thread but the main one and drops it rather than lock or allocate
+    /// (MOO-324). Still the counted mutex (MOO-173), so a lock-counting test
+    /// that ever ran a spike processor would see it.
     log: Mutex<Vec<(LogSeverity, String)>>,
     /// Calls the plugin itself reported as made on the wrong thread.
     misbehaviour: AtomicU32,

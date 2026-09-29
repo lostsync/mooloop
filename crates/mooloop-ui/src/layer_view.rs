@@ -43,6 +43,26 @@ pub(crate) struct RowView {
     /// The containers whose last *drawn* row this is, innermost first, as
     /// rack indices.
     pub closing: Vec<i32>,
+    /// Beside `closing`, entry for entry: how many **append joins** are drawn
+    /// up to and including the one before that box's output rail (MOO-299).
+    ///
+    /// A Chain whose last drawn row this is draws a join inside its box,
+    /// after that row and before its rail, which adds a device at the end of
+    /// the box (`Session::append_effect_into_container`). The join past the
+    /// rails still adds after the box. A layer draws none -- a device at a
+    /// layer's end would be a new branch, the layer face's `+` -- and nor
+    /// does an empty Chain closing on its own row, whose join inside it is
+    /// already there (`inner-join`).
+    ///
+    /// A running count rather than a flag per box, because the markup cannot
+    /// sum a list and every rail after an append join moves along by one
+    /// join's width: rail `t` sits `t` rails and `closing_joins[t]` joins
+    /// past the row, box `t` draws an append join exactly when its count is
+    /// one more than box `t - 1`'s (or than 0), and the last entry is how
+    /// many joins the row's tail holds -- which is part of the row's pitch,
+    /// and so of the drag's gap (`DeviceRackMetrics.join-width`). The rack
+    /// reads it as `EffectSlotRow.closing-joins` (MOO-340).
+    pub closing_joins: Vec<i32>,
     /// On a layer's row: its branches, in rack order.
     pub branches: Vec<BranchView>,
     /// On a layer's row: the rack index of the branch it is showing, or -1
@@ -209,9 +229,24 @@ pub(crate) fn rack_view(
         let last = span.rev().find(|row| visible(*row, &rows)).unwrap_or(container);
         rows[last].closing.push(container as i32);
     }
-    for row in &mut rows {
+    for (index, row) in rows.iter_mut().enumerate() {
         // Innermost first is the greatest index first, because boxes nest.
         row.closing.sort_unstable_by(|a, b| b.cmp(a));
+        let mut joins = 0;
+        row.closing_joins = row
+            .closing
+            .iter()
+            .map(|&container| {
+                let container = container as usize;
+                if container != index
+                    && effects[container].params.container_flow()
+                        == Some(mooloop_core::ContainerFlow::Series)
+                {
+                    joins += 1;
+                }
+                joins
+            })
+            .collect();
     }
     rows
 }
@@ -394,6 +429,63 @@ mod tests {
         assert!(view[4].bracket && view[4].bracket_end);
         // Every box that ends here ends at the Drive, innermost first.
         assert_eq!(view[4].closing, [3, 2, 1, 0]);
+    }
+
+    /// **MOO-299.** A Chain holding devices draws an append join after its
+    /// last one, before its rail; the join past the rail still leads out.
+    /// Nested Chains draw one each, innermost first, and each rail sits past
+    /// the joins before it.
+    #[test]
+    fn a_chain_draws_an_append_join_before_its_rail() {
+        // [Chain, Drive, Filter], Delay
+        let effects = chain(&[
+            (EffectKind::Chain, 2),
+            (EffectKind::Drive, 0),
+            (EffectKind::Filter, 0),
+            (EffectKind::Delay, 0),
+        ]);
+        let view = rack_view(&effects, |_| None, |_| None);
+        assert_eq!(view[2].closing, [0]);
+        assert_eq!(view[2].closing_joins, [1], "the Filter's tail holds the Chain's append join");
+        assert_eq!(view[2].join_before, 3, "and the join past the rail still leads out");
+        assert!(
+            [0, 1, 3].iter().all(|row| view[*row].closing_joins.is_empty()),
+            "nothing else closes a box"
+        );
+
+        // [Outer, [Inner, Drive]]: both end at the Drive, and both append.
+        let effects = chain(&[
+            (EffectKind::Chain, 2),
+            (EffectKind::Chain, 1),
+            (EffectKind::Drive, 0),
+        ]);
+        let view = rack_view(&effects, |_| None, |_| None);
+        assert_eq!(view[2].closing, [1, 0]);
+        assert_eq!(view[2].closing_joins, [1, 2]);
+    }
+
+    /// An empty Chain's join inside it is its own (`inner-join`), so it draws
+    /// no append join as well; a layer draws none, because its end is a new
+    /// branch. A layer's shown Chain branch is an ordinary Chain and does.
+    #[test]
+    fn empty_chains_and_layers_draw_no_append_join() {
+        let effects = chain(&[(EffectKind::Chain, 0), (EffectKind::Drive, 0)]);
+        let view = rack_view(&effects, |_| None, |_| None);
+        assert_eq!(view[0].closing, [0]);
+        assert_eq!(view[0].closing_joins, [0]);
+
+        // [Layer, [Chain, Drive, Bitcrush], [Chain, Filter]], Delay: the
+        // first branch is shown, and its Chain and the layer end at the
+        // Bitcrush.
+        let view = rack_view(&two_branches(), |_| None, |_| None);
+        assert_eq!(view[3].closing, [1, 0]);
+        assert_eq!(view[3].closing_joins, [1, 1], "the branch's Chain appends; the layer does not");
+
+        // A leaf branch closes only its layer.
+        let effects = chain(&[(EffectKind::Layer, 1), (EffectKind::Drive, 0)]);
+        let view = rack_view(&effects, |_| None, |_| None);
+        assert_eq!(view[1].closing, [0]);
+        assert_eq!(view[1].closing_joins, [0]);
     }
 
     #[test]
