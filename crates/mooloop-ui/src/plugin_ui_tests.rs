@@ -885,6 +885,70 @@ fn the_picker_keeps_every_native_row_in_order() {
     );
 }
 
+/// **A lane a device change left inert is in the picker as missing, right
+/// after the source's own rows** (MOO-329, MOO-270's picker half). Three
+/// lanes drawn on the sampler, the channel switched to the drum synth: the
+/// three are kept and still take lane slots, so the picker lists them --
+/// missing, in the pattern's order, after the drum synth's rows and before
+/// anything else -- where the window can open and remove them. Switched
+/// back, they are the sampler's live rows again and nothing is missing.
+#[test]
+fn a_lane_left_by_a_device_change_is_a_missing_row_after_the_source() {
+    let is_source = |row: &plugin_ui::LaneDestination| {
+        matches!(row.address.owner, ParamOwner::Source { .. } | ParamOwner::SourceRoute { .. })
+    };
+    let mut session = Session::default();
+    session.change_selected_source(DeviceKind::Sampler);
+    let sampler: Vec<ParamAddr> = DeviceKind::Sampler
+        .descriptors()
+        .iter()
+        .take(3)
+        .map(|descriptor| session.selected_source_address(descriptor.id).expect("a sampler parameter"))
+        .collect();
+    for &address in &sampler {
+        session.open_automation_lane_at(address).expect("within the lane ceiling");
+    }
+    assert!(
+        plugin_ui::lane_destinations(&session).iter().all(|row| !row.missing),
+        "a lane on the device the channel runs is not missing"
+    );
+
+    session.change_selected_source(DeviceKind::DrumSynth);
+    let picker = plugin_ui::lane_destinations(&session);
+    let missing: Vec<usize> = (0..picker.len()).filter(|&i| picker[i].missing).collect();
+    assert_eq!(
+        missing.iter().map(|&i| picker[i].address).collect::<Vec<_>>(),
+        sampler,
+        "every inert lane is listed as missing, in the pattern's order"
+    );
+    let last_live_source = picker
+        .iter()
+        .rposition(|row| !row.missing && is_source(row))
+        .expect("the drum synth's own rows are offered");
+    assert_eq!(
+        missing,
+        (last_live_source + 1..last_live_source + 1 + sampler.len()).collect::<Vec<_>>(),
+        "the inert lanes sit right after the drum synth's rows"
+    );
+    assert!(
+        picker[..last_live_source].iter().all(|row| !row.missing && is_source(row)),
+        "nothing but the drum synth's rows comes before them"
+    );
+    assert_eq!(picker[missing[0]].device, DeviceKind::Sampler.label());
+    assert_eq!(picker[missing[0]].name, DeviceKind::Sampler.descriptors()[0].name);
+
+    session.change_selected_source(DeviceKind::Sampler);
+    let picker = plugin_ui::lane_destinations(&session);
+    assert!(picker.iter().all(|row| !row.missing), "switched back, nothing is missing");
+    for address in &sampler {
+        assert_eq!(
+            picker.iter().filter(|row| row.address == *address).count(),
+            1,
+            "each sampler lane is its live row again, once"
+        );
+    }
+}
+
 /// **A parameter the plugin stops listing is kept and drawn as missing, and
 /// comes back when it returns** (Adam, MOO-74; plugin-hosting 08). A lane
 /// and a route on Nudge; the plugin's list loses it, as a `params.rescan`

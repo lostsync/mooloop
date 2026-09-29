@@ -1009,6 +1009,12 @@ pub(crate) struct LaneDestination {
 /// inserts' after the native inserts and before the strip. The picker's
 /// index, the Automate request and the header label all read this one list,
 /// so they cannot disagree about what a position names.
+///
+/// A lane a device change left inert -- drawn on the sampler, kept while the
+/// channel plays the drum synth -- is listed as missing right after the
+/// source's own rows and before a plugin instrument's (MOO-329). It still
+/// takes one of the pattern's lane slots, so it has to be somewhere the
+/// window can open it and remove it.
 pub(crate) fn lane_destinations(session: &Session) -> Vec<LaneDestination> {
     let native = session.automation_destinations();
     let source = session.plugin_source().map(|(device, _)| device);
@@ -1024,7 +1030,13 @@ pub(crate) fn lane_destinations(session: &Session) -> Vec<LaneDestination> {
         .partition(|row| {
             matches!(row.address.owner, ParamOwner::PluginParam { device } if Some(device) == source)
         });
-    let mut instrument = instrument.into_iter();
+    let inert = session.inert_source_lanes().into_iter().map(|lane| LaneDestination {
+        address: lane.address,
+        device: lane.device,
+        name: lane.name,
+        missing: true,
+    });
+    let mut instrument = inert.chain(instrument);
     let mut plugins = chain.into_iter();
     let mut rows = Vec::with_capacity(native.len());
     for (address, device, descriptor) in native {

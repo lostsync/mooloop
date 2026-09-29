@@ -120,10 +120,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   parameter. Switching the channel back makes all three work again. The new
   device still arrives at its defaults (MOO-192). An inert lane still counts
   toward the channel's eight lanes per pattern, and the cap stays (MOO-270,
-  route 2). The session lists a pattern's inert lanes so the lane picker can
-  show them as missing, where they can be opened and removed as one undo
-  step; the picker does not list them yet (open: MOO-329). No new lane can
-  be made on a device the channel no longer runs.
+  route 2). The lane picker lists a pattern's inert lanes as missing rows
+  (italic, thin) after the device's own rows, under the device they were
+  drawn on (MOO-329). Picking one opens the lane, and Remove lane takes it
+  out as one undo step, which frees its slot. No new lane can be made on a
+  device the channel no longer runs.
 - Patterns are chosen with a fixed-width stepper plus a jump menu and can be
   named; the selector costs the same width at any pattern count.
 - Pattern length moves a beat at a time with Shift -- on the STEPS field's
