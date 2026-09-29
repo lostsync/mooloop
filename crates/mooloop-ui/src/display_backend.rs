@@ -7,7 +7,7 @@
 //! without a display; this is only where it meets Slint. Nothing here
 //! touches the environment, audio or MIDI.
 
-use mooloop_core::{log_info, log_warn};
+use mooloop_core::log_warn;
 use mooloop_plugin_window::NativeWindow;
 use mooloop_plugin_window::display::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 pub use mooloop_plugin_window::display::{BackendPlan, DisplayBackend};
@@ -39,6 +39,9 @@ pub fn select_display_backend() -> BackendPlan {
 
 #[cfg(all(unix, not(target_vendor = "apple")))]
 fn force_x11(plan: BackendPlan) -> BackendPlan {
+    // Here, not at the top: this is its only use, and an import no Apple
+    // build reads fails macOS clippy under `-D warnings` (MOO-323).
+    use mooloop_core::log_info;
     use slint::winit_030::{winit, SlintEvent};
     use winit::platform::x11::EventLoopBuilderExtX11;
 
