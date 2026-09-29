@@ -518,15 +518,24 @@ export component BusPicker inherits Rectangle {
     bus-menu := PopupWindow {
         x: 0px;
         y: root.height + 2px;
-        width: 96px;
-        height: root.bus-names.length * 21px + 8px;
+        // One row, which the rows, their buttons and the popup's height are
+        // all counted in. 20px at 100%, growing with the text above it
+        // (MOO-325, the shape MOO-278 gave the other menus), so a name's line
+        // fits its row and the popup still ends under its last row.
+        property <length> row-height: 20px * Theme.row-growth;
+        // 96px, or wider when a name needs it: a long bus name, or any name
+        // at a large text size.
+        width: max(96px, bus-menu-frame.preferred-width);
+        // Each row and the 1px between rows, plus the 4px padding top and
+        // bottom.
+        height: root.bus-names.length * (self.row-height + 1px) + 8px;
         // A destination is chosen by clicking *inside* this popup. With
         // `close-on-click`, Slint consumes that click to dismiss the popup
         // before the row's ToolButton can report `picked`, leaving every
         // channel apparently stuck on Master. Report the choice before
         // explicitly closing; only outside clicks otherwise auto-dismiss.
         close-policy: close-on-click-outside;
-        Rectangle {
+        bus-menu-frame := Rectangle {
             background: Theme.surface;
             border-width: Theme.hairline;
             border-color: Theme.border;
@@ -537,10 +546,19 @@ export component BusPicker inherits Rectangle {
                 for name[i] in root.bus-names : Rectangle {
                     property <bool> permitted:
                         root.allowed.length == 0 || root.allowed[i];
-                    height: 20px;
+                    height: bus-menu.row-height;
+                    // The name's width and 8px either side. `ToolButton`
+                    // reports a fixed 44px however long its text is, so the
+                    // name is measured here, in the button's own font size.
+                    preferred-width: name-width.preferred-width + 16px;
+                    name-width := Text {
+                        visible: false;
+                        text: name;
+                        font-size: Theme.text-xl;
+                    }
                     ToolButton {
                         width: 100%;
-                        height: 20px;
+                        height: bus-menu.row-height;
                         text: name;
                         active: i == root.value;
                         enabled: parent.permitted;
