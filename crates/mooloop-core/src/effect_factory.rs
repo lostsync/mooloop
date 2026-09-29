@@ -855,7 +855,7 @@ fn layer_of(mix: f32, gain: f32, branches: &[(f32, Vec<EffectSlotState>)]) -> cr
     }
     let children = (effects.len() - 1) as u8;
     effects[0].params.set_container_children(children);
-    crate::EffectRun { effects }
+    crate::EffectRun::of(effects)
 }
 
 fn layer_runs() -> Vec<EffectFactoryRun> {

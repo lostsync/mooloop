@@ -605,6 +605,10 @@ pub fn save_effect_run_preset(
             .iter()
             .map(|effect| effect.with_id(mooloop_core::DeviceId::UNASSIGNED))
             .collect(),
+        // Not written yet: a run's plugins need a `contains` entry of their
+        // own first, or 0.1.5 would load the rows' bare slot numbers
+        // (MOO-321). `load_effect_run` refuses a plugin row with none.
+        plugins: Default::default(),
     };
     if run.effects.is_empty() {
         return Err(Error::Invalid("an effect run preset holds no devices".into()));

@@ -758,6 +758,9 @@ impl Session {
                         .iter()
                         .map(|effect| effect.with_id(mooloop_core::DeviceId::UNASSIGNED))
                         .collect(),
+                    // Carried once the format can say so (MOO-321):
+                    // `load_effect_run` refuses a plugin row without one.
+                    plugins: Default::default(),
                 })
             }
             _ => None,

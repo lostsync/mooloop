@@ -322,3 +322,232 @@ fn a_plugin_preset_does_not_load_onto_another_plugin() {
     assert_eq!(session.project_snapshot(120, 0), before);
     assert!(session.plugin_rack.instance(slot).is_some());
 }
+
+/// Another plugin, which the test cache does not list: it never opens, and
+/// that does not matter here. It is only something for a slot number to name.
+fn other_ref() -> PluginRef {
+    PluginRef {
+        id: "org.example.other".into(),
+        name: "Other".into(),
+        ..gain_ref()
+    }
+}
+
+/// The plugin slot a row runs, or a panic when it is not a plugin device.
+fn plugin_slot(session: &Session, row: usize) -> PluginSlotId {
+    match session.effect_chain().expect("a chain")[row].params {
+        EffectParams::Plugin(slot) => slot,
+        other => panic!("row {row} is not a plugin device: {other:?}"),
+    }
+}
+
+/// `other_ref` inserted at the head of channel 0 of `session`, and its slot.
+fn insert_other(session: &mut Session, engine: &mut Engine) -> PluginSlotId {
+    session.select_channel(0);
+    let inserted = session
+        .insert_plugin_effect(other_ref(), 0, engine)
+        .expect("the device is inserted");
+    let EffectParams::Plugin(slot) = inserted.params else {
+        unreachable!("a plugin device");
+    };
+    slot
+}
+
+/// Nudge the test gain in `slot` from inside the plugin, as its own window
+/// would, so the live instance holds a state the song has not captured.
+fn nudge(session: &mut Session, engine: &mut Engine, slot: PluginSlotId) {
+    let at = engine
+        .nodes
+        .iter()
+        .rposition(|(key, _)| *key == u64::from(slot.0))
+        .expect("the processor");
+    let (key, node) = engine.nodes.remove(at);
+    let node = process(
+        node,
+        vec![TimedEvent {
+            offset: 10,
+            event: Event::ParamValue {
+                id: test_plugin::PARAM_NUDGE,
+                value: 1.0,
+            },
+        }],
+    );
+    engine.nodes.push((key, node));
+    session.service_plugins(engine);
+    let gain = session.plugin_param_index(slot, test_plugin::PARAM_GAIN).expect("listed");
+    assert_eq!(session.plugin_param_value(slot, gain), Some(test_plugin::NUDGE_DB));
+}
+
+/// **MOO-271, duplicate.** A duplicated plugin device is a second instance
+/// of its plugin, in a slot of its own, opened with the state the original
+/// holds now -- not a second device on the original's slot, which the rack
+/// keys one instance by.
+#[test]
+fn a_duplicated_plugin_device_is_a_second_instance_in_a_slot_of_its_own() {
+    let mut session = session_with(&drum_loop(1));
+    let mut engine = Engine::default();
+    let original = insert_gain(&mut session, &mut engine, 0);
+    nudge(&mut session, &mut engine, original);
+
+    session.duplicate_device(0).expect("room");
+    assert_eq!(plugin_slot(&session, 0), original, "the original keeps its slot");
+    let copy = plugin_slot(&session, 1);
+    assert_ne!(copy, original, "two devices, two slots");
+    assert_eq!(session.plugins[&copy].plugin, gain_ref());
+    assert_eq!(
+        saved_gain(&session.plugins[&copy].state),
+        test_plugin::NUDGE_DB,
+        "the copy carries the live state, not the song's last capture"
+    );
+
+    // The pump opens it and swaps its processor into the copy's placeholder.
+    session.service_plugins(&mut engine);
+    assert!(session.plugin_rack.instance(copy).is_some(), "a second instance");
+    assert!(session.plugin_problem(copy).is_none());
+    let gain = session.plugin_param_index(copy, test_plugin::PARAM_GAIN).expect("listed");
+    assert_eq!(session.plugin_param_value(copy, gain), Some(test_plugin::NUDGE_DB));
+    assert_eq!(
+        engine.nodes.last().map(|(key, _)| *key),
+        Some(u64::from(copy.0)),
+        "its processor goes to the copy, keyed by the copy's slot"
+    );
+}
+
+/// **MOO-271, copy and paste.** A plugin device pasted into another song
+/// lands in a slot minted there, running the plugin it was copied from --
+/// never on whatever that song has at the number the copy came from. Pasted
+/// back into its own song it is a second instance too.
+#[test]
+fn a_pasted_plugin_device_lands_in_a_slot_minted_where_it_lands() {
+    let mut first = session_with(&drum_loop(1));
+    let mut engine = Engine::default();
+    let original = insert_gain(&mut first, &mut engine, 0);
+    let clip = first.copy_device(0).expect("the device");
+
+    // The second song already has another plugin at the number the gain
+    // had in the first.
+    let mut second = session_with(&drum_loop(1));
+    let taken = insert_other(&mut second, &mut engine);
+    assert_eq!(taken, original, "test setup: the same number in both songs");
+
+    second.paste_device(&clip, 0).expect("room");
+    let landed = plugin_slot(&second, 1);
+    assert_ne!(landed, taken, "not the other plugin's slot");
+    assert_eq!(second.plugins[&landed].plugin, gain_ref(), "the plugin that was copied");
+    assert_eq!(second.plugins[&taken].plugin, other_ref(), "and the other one untouched");
+    second.paste_device(&clip, 1).expect("room");
+    let again = plugin_slot(&second, 2);
+    assert!(again != landed && again != taken, "a second paste, a third slot");
+
+    first.paste_device(&clip, 0).expect("room");
+    assert_ne!(plugin_slot(&first, 1), original, "pasted into its own song, a second slot");
+}
+
+/// **MOO-271, container preset.** The issue's case: the test gain in a
+/// Chain, saved as a container preset, loaded onto a Chain in a second song
+/// whose slot 0 holds a different plugin. The format does not carry the
+/// plugin yet (MOO-321), so the preset's plugin row is a bare slot number,
+/// and the load is refused rather than landing on the other plugin's slot.
+///
+/// Once MOO-321 lands, this load succeeds, into a minted slot running the
+/// gain: the next test is what that landing does.
+#[test]
+fn a_container_preset_with_a_plugin_never_lands_on_the_target_songs_slot() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("boxed.mooloop-effect");
+
+    let mut first = session_with(&drum_loop(1));
+    let mut engine = Engine::default();
+    let original = insert_gain(&mut first, &mut engine, 0);
+    first.wrap_effects_in_container(0..1).expect("wrapped");
+    let device = first.effect_chain().expect("a chain")[0].id;
+    first.pending_preset_save = first
+        .chain_key(first.effect_target)
+        .map(|target| PresetSaveTarget::Effect { target, device });
+    let source = first.take_preset_save(120, 0).expect("a save was pending");
+    let run = source.run.expect("a container saves its run");
+    mooloop_project::save_effect_run_preset(
+        &path,
+        &run,
+        PresetInfo {
+            name: "Boxed".into(),
+            category: String::new(),
+            tags: Vec::new(),
+        },
+        AssetMode::Embedded,
+    )
+    .expect("saved");
+    let LoadedDocument::EffectRun(run) =
+        mooloop_project::load_bundle(&path).expect("it loads").document
+    else {
+        panic!("not a container preset");
+    };
+
+    let mut second = session_with(&drum_loop(1));
+    let taken = insert_other(&mut second, &mut engine);
+    assert_eq!(taken, original, "test setup: the same number in both songs");
+    second
+        .insert_effect_at(mooloop_core::EffectKind::Chain, 1)
+        .expect("room");
+    let before = second.project_snapshot(120, 0);
+
+    if second.load_effect_run(1, &run, "Boxed").is_some() {
+        let landed = plugin_slot(&second, 2);
+        panic!(
+            "the preset's plugin row landed on slot {} ({}), a number from another song",
+            landed.0,
+            second
+                .plugins
+                .get(&landed)
+                .map_or("nothing", |state| state.plugin.name.as_str()),
+        );
+    }
+    assert_eq!(
+        second.project_snapshot(120, 0),
+        before,
+        "refused whole, and nothing minted"
+    );
+}
+
+/// **MOO-271, a container run that carries its plugin**: a copied Chain,
+/// and what a container preset will be once MOO-321 writes the plugin.
+/// Loaded onto a Chain in a song whose slot 0 holds another plugin, the
+/// plugin row lands in a slot minted there, and the pump opens the gain in
+/// it with the state it was copied with.
+#[test]
+fn a_container_run_carrying_its_plugin_lands_in_a_fresh_slot_in_another_song() {
+    let mut first = session_with(&drum_loop(1));
+    let mut engine = Engine::default();
+    let original = insert_gain(&mut first, &mut engine, 0);
+    nudge(&mut first, &mut engine, original);
+    first.capture_plugin_states();
+    first.wrap_effects_in_container(0..1).expect("wrapped");
+    let run = first.copy_device(0).expect("the box and the gain");
+    assert_eq!(run.effects.len(), 2);
+
+    let mut second = session_with(&drum_loop(1));
+    let taken = insert_other(&mut second, &mut engine);
+    assert_eq!(taken, original, "test setup: the same number in both songs");
+    second
+        .insert_effect_at(mooloop_core::EffectKind::Chain, 1)
+        .expect("room");
+
+    second
+        .load_effect_run(1, &run, "Boxed")
+        .expect("a well-formed run onto a Chain");
+    let landed = plugin_slot(&second, 2);
+    assert_ne!(landed, taken, "not the other plugin's slot");
+    assert_eq!(second.plugins[&landed].plugin, gain_ref());
+    assert_eq!(second.plugins[&taken].plugin, other_ref(), "the other one untouched");
+
+    second.service_plugins(&mut engine);
+    assert!(second.plugin_problem(landed).is_none());
+    let gain = second
+        .plugin_param_index(landed, test_plugin::PARAM_GAIN)
+        .expect("listed");
+    assert_eq!(
+        second.plugin_param_value(landed, gain),
+        Some(test_plugin::NUDGE_DB),
+        "opened with the state it was copied with"
+    );
+}

@@ -3247,6 +3247,35 @@ impl Default for ContainerParams {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EffectRun {
     pub effects: Vec<EffectSlotState>,
+    /// The hosted plugin behind each plugin row (MOO-271), keyed by the slot
+    /// that row names -- **a key into this run, not into any song**. A
+    /// plugin row's `EffectParams::Plugin(slot)` is otherwise a key into the
+    /// song it was lifted from, and names whatever the song it lands in has
+    /// at that number, or nothing. The session lifts a run with the rows
+    /// renumbered `0..` and each row's plugin here, and every path that
+    /// lands one mints each plugin row a fresh slot in the song it lands in
+    /// (`Session::copy_device`, `paste_device`, `duplicate_device`,
+    /// `load_effect_run`). A run whose plugin row has no entry here is
+    /// refused rather than landed on a bare number.
+    ///
+    /// Empty, and skipped, for a run with no plugin in it, so such a run
+    /// serializes exactly as it did before the field existed.
+    #[serde(
+        default,
+        skip_serializing_if = "std::collections::BTreeMap::is_empty",
+        with = "crate::plugin::slot_table"
+    )]
+    pub plugins: crate::plugin::PluginSlots,
+}
+
+impl EffectRun {
+    /// A run of `effects` that holds no hosted plugin.
+    pub fn of(effects: Vec<EffectSlotState>) -> Self {
+        Self {
+            effects,
+            plugins: crate::plugin::PluginSlots::new(),
+        }
+    }
 }
 
 /// `Event::ParamValue` ids for [`ContainerParams`].

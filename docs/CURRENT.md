@@ -2760,6 +2760,17 @@ land on its own when it starts to matter:
   at a *row*, and only the second one can say which side of the boundary it
   meant. Duplicate is on every rack row's left rail; all four are on
   Ctrl+Shift+C/X/V/D, and all but copy are undoable.
+  **A copied, pasted or duplicated plugin device is a second instance of
+  its plugin** (MOO-271), in a slot of its own, opened with the copied
+  plugin's state: a duplicate takes the state the plugin holds now, a copy
+  the state its last finished edit left in the song. It lands the same way
+  in another song. Before, the copy named the original's slot, so two
+  devices shared one plugin, or a paste into another song ran whatever that
+  song had under the same number. A container copied with a plugin inside
+  carries it the same way. **A container preset holding a plugin does not
+  load yet**: it is refused, because the preset file does not carry the
+  plugin (MOO-321). Before, it loaded onto whatever the target song had at
+  the plugin's old slot number.
   **A pasted channel arrives with its MIDI and AUDIO inputs off**: the picks
   name something in the document the channel was copied from, and the
   clipboard outlives New Song and Open Song.

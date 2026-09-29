@@ -520,8 +520,13 @@ impl Session {
     /// that used to be in slot 2 has no claim on whatever the preset put
     /// there.
     ///
+    /// Every plugin row is minted a fresh slot in this song, opened by the
+    /// pump from the state the run carries (MOO-271): the rows' own slot
+    /// numbers are keys into `run.plugins` and name nothing here.
+    ///
     /// `None` when `slot` does not hold a container, when the preset is not a
-    /// well-formed run, or when the chain has no room for it.
+    /// well-formed run, when a plugin row in it carries no plugin, or when the
+    /// chain has no room for it.
     pub fn load_effect_run(
         &mut self,
         slot: usize,
@@ -535,22 +540,25 @@ impl Session {
         if mooloop_core::span_problem(&run.effects).is_some() {
             return None;
         }
-        let (removed, devices, removed_tail) = {
-            let (effects, next_id) = self.effect_chain_parts_mut()?;
-            if !effects.get(slot)?.kind().is_container() {
-                return None;
-            }
+        if !self.effect_chain()?.get(slot)?.kind().is_container() {
+            return None;
+        }
+        let (rows, minted) = self.land_run_plugins(run)?;
+        let replaced = self.effect_chain_parts_mut().and_then(|(effects, next_id)| {
             let before = effects.len();
             // One call, because the boxes around this one lose the run that
             // left and gain the run that arrived, and those are two different
             // numbers.
-            let removed = mooloop_core::replace_run(effects, next_id, slot, &run.effects)?;
-            let devices: Vec<mooloop_core::DeviceId> = effects
-                [slot..slot + run.effects.len()]
+            let removed = mooloop_core::replace_run(effects, next_id, slot, &rows)?;
+            let devices: Vec<mooloop_core::DeviceId> = effects[slot..slot + rows.len()]
                 .iter()
                 .map(|effect| effect.id)
                 .collect();
-            (removed, devices, before - 1)
+            Some((removed, devices, before - 1))
+        });
+        let Some((removed, devices, removed_tail)) = replaced else {
+            self.unmint_plugin_slots(&minted);
+            return None;
         };
         for effect in &removed {
             self.forget_device(target, effect.id);
@@ -627,17 +635,21 @@ impl Session {
     /// from, and `insert_run` mints fresh ones on the way back in. A
     /// clipboard holds a design, not a device.
     ///
+    /// A plugin device is copied with its plugin (MOO-271): the run carries
+    /// what the song keeps about it, and a paste mints it a slot of its own,
+    /// in this song or another. The song's copy of its state is current to
+    /// the plugin's last finished edit, which the pump captures every tick;
+    /// a copy cannot ask the live instance, because it is not an edit and
+    /// takes the session by shared reference.
+    ///
     /// Read-only, so a copy is not an edit and does not touch history.
     pub fn copy_device(&self, slot: usize) -> Option<EffectRun> {
         let effects = self.effect_chain()?;
         if slot >= effects.len() {
             return None;
         }
-        let effects = effects[mooloop_core::run_of(effects, slot)]
-            .iter()
-            .map(|effect| effect.with_id(DeviceId::UNASSIGNED))
-            .collect();
-        Some(EffectRun { effects })
+        let rows = &effects[mooloop_core::run_of(effects, slot)];
+        Some(lift_run(rows, |plugin| self.plugins.get(&plugin).cloned()))
     }
 
     /// Puts `run` into the chain immediately after the run at `after`, or at
@@ -650,21 +662,34 @@ impl Session {
     /// child puts the arrival after the box. That is one rule at every
     /// depth, and it is the same rule the rack's own `+` follows.
     ///
-    /// `None` when `after` names nothing, the run is malformed, or the chain
-    /// has no room.
+    /// Every plugin row lands in a slot minted for it here, opened by the
+    /// pump from the plugin the run carries (MOO-271): pasted twice, or into
+    /// the song it was copied from, it is a second instance, never a second
+    /// device on the first one's slot.
+    ///
+    /// `None` when `after` names nothing, the run is malformed, a plugin row
+    /// in it carries no plugin, or the chain has no room.
     pub fn paste_device(&mut self, run: &EffectRun, after: usize) -> Option<EffectRunInserted> {
         let target = self.effect_target;
-        let (effects, next_id) = self.effect_chain_parts_mut()?;
-        let at = if effects.is_empty() {
-            0
-        } else {
-            mooloop_core::run_of(effects, after.min(effects.len() - 1)).end
+        self.effect_chain()?;
+        let (rows, minted) = self.land_run_plugins(run)?;
+        let landed = self.effect_chain_parts_mut().and_then(|(effects, next_id)| {
+            let at = if effects.is_empty() {
+                0
+            } else {
+                mooloop_core::run_of(effects, after.min(effects.len() - 1)).end
+            };
+            let slot = mooloop_core::insert_run(effects, next_id, at, &rows)?;
+            let devices: Vec<DeviceId> = effects[slot..slot + rows.len()]
+                .iter()
+                .map(|effect| effect.id)
+                .collect();
+            Some((slot, devices))
+        });
+        let Some((slot, devices)) = landed else {
+            self.unmint_plugin_slots(&minted);
+            return None;
         };
-        let slot = mooloop_core::insert_run(effects, next_id, at, &run.effects)?;
-        let devices = effects[slot..slot + run.effects.len()]
-            .iter()
-            .map(|effect| effect.id)
-            .collect();
         self.mark_dirty();
         Some(EffectRunInserted {
             target,
@@ -693,15 +718,34 @@ impl Session {
     /// `insert_run_beside` resolves the ambiguity by asking `slot` rather
     /// than the index after it, which is what "duplicate" has always meant:
     /// the copy is enclosed by exactly the containers the original is.
+    ///
+    /// A plugin device's copy is a second instance of its plugin in a slot of
+    /// its own, opened with the state the original holds *now* (MOO-271).
+    /// Before, the copy named the original's slot, so two devices shared one
+    /// hosted instance keyed by that slot.
     pub fn duplicate_device(&mut self, slot: usize) -> Option<EffectRunInserted> {
-        let run = self.copy_device(slot)?;
+        let rows = {
+            let effects = self.effect_chain()?;
+            if slot >= effects.len() {
+                return None;
+            }
+            effects[mooloop_core::run_of(effects, slot)].to_vec()
+        };
+        let run = self.lift_run_live(&rows);
         let target = self.effect_target;
-        let (effects, next_id) = self.effect_chain_parts_mut()?;
-        let slot = mooloop_core::insert_run_beside(effects, next_id, slot, &run.effects)?;
-        let devices = effects[slot..slot + run.effects.len()]
-            .iter()
-            .map(|effect| effect.id)
-            .collect();
+        let (rows, minted) = self.land_run_plugins(&run)?;
+        let landed = self.effect_chain_parts_mut().and_then(|(effects, next_id)| {
+            let slot = mooloop_core::insert_run_beside(effects, next_id, slot, &rows)?;
+            let devices: Vec<DeviceId> = effects[slot..slot + rows.len()]
+                .iter()
+                .map(|effect| effect.id)
+                .collect();
+            Some((slot, devices))
+        });
+        let Some((slot, devices)) = landed else {
+            self.unmint_plugin_slots(&minted);
+            return None;
+        };
         self.mark_dirty();
         Some(EffectRunInserted {
             target,
@@ -1137,6 +1181,21 @@ impl Session {
         let EffectParams::Plugin(slot) = effect.params else {
             return None;
         };
+        self.plugin_slot_state_now(slot)
+    }
+
+    /// What the song keeps about plugin `slot`, with the state its live
+    /// instance holds *now*: the song's copy when it is not hosted, when it
+    /// refused that state on opening, or when it fails to save. Nothing is
+    /// written into the song. `None` when the song has no such slot.
+    ///
+    /// **The one clone of a hosted plugin's state for a copy of it** --
+    /// a preset (MOO-222), a duplicate or a container preset (MOO-271) --
+    /// and the helper a copied plugin *instrument* should share (MOO-317).
+    pub(crate) fn plugin_slot_state_now(
+        &mut self,
+        slot: mooloop_core::PluginSlotId,
+    ) -> Option<mooloop_core::PluginSlotState> {
         let mut saved = self.plugins.get(&slot)?.clone();
         if !self.plugin_rack.refused_state(slot) {
             if let Some(instance) = self.plugin_rack.instance_mut(slot) {
@@ -1149,6 +1208,63 @@ impl Session {
             }
         }
         Some(saved)
+    }
+
+    /// `rows` lifted out of this song as a run, each plugin row carrying its
+    /// plugin with the live state ([`Self::plugin_slot_state_now`]). What a
+    /// duplicate copies, and what a container preset should save (MOO-321).
+    pub(crate) fn lift_run_live(&mut self, rows: &[EffectSlotState]) -> EffectRun {
+        lift_run(rows, |plugin| self.plugin_slot_state_now(plugin))
+    }
+
+    /// `run`'s rows ready to land in this song: every plugin row pointed at a
+    /// slot minted for it here from the plugin the run carries under that
+    /// row's key, and the slots minted, for [`Self::unmint_plugin_slots`]
+    /// should the landing fail.
+    ///
+    /// Nothing is opened here. A minted slot is named by a row once the
+    /// caller lands it, and the pump's `service_plugins` opens every named
+    /// slot nothing hosts with the state the song keeps for it and swaps its
+    /// processor into the device's placeholder -- the same way an opened
+    /// song or an undo brings a plugin back, and it needs no engine handle,
+    /// which none of the landing paths has.
+    ///
+    /// `None`, with nothing minted, when a plugin row's key names nothing in
+    /// the run: a bare slot number from another song, which would name
+    /// whatever this song has at that number.
+    fn land_run_plugins(
+        &mut self,
+        run: &EffectRun,
+    ) -> Option<(Vec<EffectSlotState>, Vec<mooloop_core::PluginSlotId>)> {
+        let carried = |effect: &EffectSlotState| match effect.params {
+            EffectParams::Plugin(key) => run.plugins.contains_key(&key),
+            _ => true,
+        };
+        if !run.effects.iter().all(carried) {
+            return None;
+        }
+        let mut rows = run.effects.clone();
+        let mut minted = Vec::new();
+        for row in &mut rows {
+            if let EffectParams::Plugin(key) = row.params {
+                let slot = mooloop_core::mint_plugin_slot(
+                    &mut self.plugins,
+                    &mut self.next_plugin_slot,
+                    run.plugins[&key].clone(),
+                );
+                row.params = EffectParams::Plugin(slot);
+                minted.push(slot);
+            }
+        }
+        Some((rows, minted))
+    }
+
+    /// Takes back slots [`Self::land_run_plugins`] minted for a landing that
+    /// then did not fit. No row names them and nothing hosts them yet.
+    fn unmint_plugin_slots(&mut self, minted: &[mooloop_core::PluginSlotId]) {
+        for slot in minted {
+            self.plugins.remove(slot);
+        }
     }
 
 
@@ -1178,6 +1294,31 @@ impl Session {
 /// 1.1, and the plugin reads its own older state.
 fn same_plugin_id(a: &mooloop_core::PluginRef, b: &mooloop_core::PluginRef) -> bool {
     a.format == b.format && a.id == b.id
+}
+
+/// `rows` as a run that belongs to no song: identities stripped, and each
+/// plugin row renumbered to a key into the run's own `plugins`, under which
+/// `plugin_of` supplies its plugin (MOO-271). A row whose plugin `plugin_of`
+/// cannot supply keeps a key with no entry, and a landing refuses it.
+fn lift_run(
+    rows: &[EffectSlotState],
+    mut plugin_of: impl FnMut(mooloop_core::PluginSlotId) -> Option<mooloop_core::PluginSlotState>,
+) -> EffectRun {
+    let mut run = EffectRun::of(Vec::with_capacity(rows.len()));
+    let mut next_key = 0u32;
+    for row in rows {
+        let mut row = row.with_id(DeviceId::UNASSIGNED);
+        if let EffectParams::Plugin(slot) = row.params {
+            let key = mooloop_core::PluginSlotId(next_key);
+            next_key += 1;
+            if let Some(plugin) = plugin_of(slot) {
+                run.plugins.insert(key, plugin);
+            }
+            row.params = EffectParams::Plugin(key);
+        }
+        run.effects.push(row);
+    }
+    run
 }
 
 /// The rate a synced modulation effect should now be running at, as a command,
@@ -2079,7 +2220,7 @@ mod tests {
         let run = session.copy_device(0).expect("the delay");
 
         assert!(
-            session.paste_device(&EffectRun { effects: Vec::new() }, 0).is_none(),
+            session.paste_device(&EffectRun::of(Vec::new()), 0).is_none(),
             "an empty run is not a paste"
         );
 
@@ -2386,14 +2527,11 @@ mod tests {
         session.insert_effect_at(EffectKind::Delay, 0).expect("room");
         let before = session.channels[0].effects.clone();
 
-        let headless = mooloop_core::EffectRun {
-            effects: vec![EffectSlotState::of_kind(EffectKind::Filter)],
-        };
+        let headless =
+            mooloop_core::EffectRun::of(vec![EffectSlotState::of_kind(EffectKind::Filter)]);
         assert!(session.load_effect_run(0, &headless, "No").is_none());
 
-        let fine = mooloop_core::EffectRun {
-            effects: vec![EffectSlotState::of_kind(EffectKind::Chain)],
-        };
+        let fine = mooloop_core::EffectRun::of(vec![EffectSlotState::of_kind(EffectKind::Chain)]);
         // Slot 0 holds a delay, not a container.
         assert!(session.load_effect_run(0, &fine, "No").is_none());
         assert_eq!(session.channels[0].effects, before);
