@@ -721,11 +721,19 @@ export component DeviceHeader inherits Rectangle {
                 tint: root.enabled ? root.device-color : Theme.text-faint;
             }
         }
+        // At a large text size the row outgrows a rack unit, and a layout
+        // squeezes every elidable text in proportion. The name is what the
+        // header is for, so it keeps its whole width and the preset and the
+        // tags give way first -- down to an ellipsis each, which is what the
+        // room it leaves them is: the padding, the icon and the spacing, and
+        // about an ellipsis and a half of `text-sm` per tag (MOO-297).
         Text {
             text: root.name;
             color: Theme.text;
             font-size: Theme.text-xl;
             vertical-alignment: center;
+            overflow: elide;
+            min-width: min(self.preferred-width, root.width - 40px - 3 * Theme.text-sm);
         }
         if root.preset != "" : Text {
             text: "| " + root.preset;
@@ -737,11 +745,14 @@ export component DeviceHeader inherits Rectangle {
             max-width: 104px;
             overflow: elide;
         }
+        // The kind and role tags elide rather than run off the header's
+        // right edge when the text size outgrows a rack unit (MOO-297).
         Text {
             text: root.kind;
             color: Theme.text-faint;
             font-size: Theme.text-sm;
             vertical-alignment: center;
+            overflow: elide;
         }
         Rectangle { horizontal-stretch: 1; }
         Text {
@@ -749,6 +760,7 @@ export component DeviceHeader inherits Rectangle {
             color: Theme.text-faint;
             font-size: Theme.text-sm;
             vertical-alignment: center;
+            overflow: elide;
         }
     }
 }
