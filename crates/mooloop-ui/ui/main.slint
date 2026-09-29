@@ -906,7 +906,9 @@ component PaneTabs inherits Rectangle {
             tab-menu := PopupWindow {
                 x: 0px;
                 y: parent.height + 2px;
-                width: 176px;
+                // Its rows' width when that is more, as at a large text size
+                // (MOO-278).
+                width: max(176px, tab-menu-frame.preferred-width);
                 height: tab-menu-frame.preferred-height;
                 close-policy: close-on-click;
                 tab-menu-frame := Rectangle {
@@ -8198,7 +8200,9 @@ export component MainWindow inherits Window {
                                     browser-preset-context-menu := PopupWindow {
                                         x: 0px;
                                         y: parent.height + 2px;
-                                        width: 190px;
+                                        // Its rows' width when that is more, as
+                                        // at a large text size (MOO-278).
+                                        width: max(190px, browser-preset-context-frame.preferred-width);
                                         height: browser-preset-context-frame.preferred-height;
                                         close-policy: close-on-click;
                                         browser-preset-context-frame := Rectangle {
@@ -8220,7 +8224,7 @@ export component MainWindow inherits Window {
                                     browser-sample-context-menu := PopupWindow {
                                         x: 0px;
                                         y: parent.height + 2px;
-                                        width: 190px;
+                                        width: max(190px, browser-sample-context-frame.preferred-width);
                                         height: browser-sample-context-frame.preferred-height;
                                         close-policy: close-on-click;
                                         browser-sample-context-frame := Rectangle {

@@ -210,6 +210,11 @@ export component MenuField inherits Rectangle {
     in property <bool> controlled: true;
     callback selected(int);
 
+    // One row of the drop-down, which the popup's height and its scroll
+    // height are both counted in. 22px at 100%, growing with the text above
+    // it (MOO-278), so the popup still matches its rows.
+    property <length> row-height: 22px * Theme.row-growth;
+
     height: ToolbarMetrics.control-height;
     width: menu-layout.preferred-width;
     border-radius: Theme.radius-md;
@@ -263,7 +268,7 @@ export component MenuField inherits Rectangle {
         x: 0;
         y: root.height + 2px;
         width: root.menu-width;
-        height: min(root.options.length, root.visible-rows) * 22px + 8px;
+        height: min(root.options.length, root.visible-rows) * root.row-height + 8px;
         close-policy: close-on-click;
 
         Rectangle {
@@ -277,10 +282,10 @@ export component MenuField inherits Rectangle {
                 y: 4px;
                 width: parent.width - 8px;
                 height: parent.height - 8px;
-                content-height: root.options.length * 22px;
+                content-height: root.options.length * root.row-height;
                 VerticalLayout {
                     for option[i] in root.options : Rectangle {
-                        height: 22px;
+                        height: root.row-height;
                         // A row a screen reader -- and a test -- can find by
                         // what it says.
                         accessible-role: list-item;

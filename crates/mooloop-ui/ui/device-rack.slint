@@ -180,7 +180,9 @@ component EffectTypeRow inherits Rectangle {
     callback selected;
 
     preferred-width: label.preferred-width + 20px;
-    height: 22px;
+    // 22px at 100%, growing with the text above it (MOO-278). The menus of
+    // these rows take their height from their layout, so they grow with it.
+    height: 22px * Theme.row-growth;
     border-radius: Theme.radius-md;
     background: touch.has-hover ? Theme.surface-active : transparent;
     accessible-role: button;
@@ -628,7 +630,11 @@ export component DeviceFrame inherits Rectangle {
         x: DeviceRackMetrics.rail-width;
         y: 80px;
         width: 220px;
-        height: min(root.preset-options.length, 12) * 22px + 8px;
+        // One row, which the popup's height and its scroll height are both
+        // counted in. 22px at 100%, growing with the text above it
+        // (MOO-278), so the popup still matches its rows.
+        property <length> row-height: 22px * Theme.row-growth;
+        height: min(root.preset-options.length, 12) * self.row-height + 8px;
         close-policy: close-on-click;
 
         Rectangle {
@@ -642,10 +648,10 @@ export component DeviceFrame inherits Rectangle {
                 y: 4px;
                 width: parent.width - 8px;
                 height: parent.height - 8px;
-                content-height: root.preset-options.length * 22px;
+                content-height: root.preset-options.length * preset-menu.row-height;
                 VerticalLayout {
                     for option[i] in root.preset-options : Rectangle {
-                        height: 22px;
+                        height: preset-menu.row-height;
                         border-radius: Theme.radius-sm;
                         background: row-touch.has-hover ? Theme.surface-active : transparent;
                         HorizontalLayout {

@@ -72,10 +72,14 @@ export global Theme {
     out property <length> text-4xl: 22px * root.type-base * root.type-scale;
 
     // What a height drawn around one line of text at 100% is multiplied by:
-    // a section label (MOO-291). It was chosen at 100% and never grew, so at
-    // 200% the label's capitals were cut in half. 1 up to 100%, so nothing
-    // laid out around it at the default size moves; the type scale above it,
-    // so it keeps the proportion to its text that it was drawn with.
+    // a menu's rows (MOO-278), a section label (MOO-291). Those were chosen
+    // at 100% and never grew, so at 200% a 30px line sat in a 24px menu row
+    // and touched the rows either side. 1 up to 100%, so a row keeps its
+    // height and its hit target below it, and nothing laid out around it at
+    // the default size moves; the type scale above it, so the row keeps the
+    // proportion to its text that it was drawn with. A popup that sums its
+    // rows' heights multiplies the same per-row number by this, so its height
+    // still matches its rows.
     out property <float> row-growth: max(1.0, root.type-scale);
 
     // Stroke. A theme that wants a borderless interface sets `hairline` to 0

@@ -540,7 +540,9 @@ export component PickerChip inherits Rectangle {
                         padding-bottom: row.visible ? 1px : 0px;
                         row := Rectangle {
                             visible: !root.hidden[index] || index == root.selected-index;
-                            height: self.visible ? 18px : 0px;
+                            // 18px at 100%, growing with the text above it
+                            // (MOO-278); the popup sizes to the list.
+                            height: self.visible ? 18px * Theme.row-growth : 0px;
                             border-radius: Theme.radius-sm;
                             background: index == root.selected-index
                                 ? Theme.surface-active
@@ -1448,7 +1450,9 @@ export component ParameterKnob inherits Rectangle {
     context-menu := PopupWindow {
         x: root.menu-x;
         y: root.menu-y;
-        width: 168px;
+        // 168px, or wider when its rows need it (MOO-278): "Type a Value…"
+        // beside "Enter" is, even at 100%.
+        width: max(168px, menu-frame.preferred-width);
         height: menu-frame.preferred-height;
         close-policy: close-on-click;
         menu-frame := Rectangle {
