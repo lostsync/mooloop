@@ -80,6 +80,27 @@ pub struct EffectInserted {
     pub params: EffectParams,
 }
 
+/// Where a new device goes on the chain the rack is pointed at.
+///
+/// Three places, not one index, because an index cannot say "into this box"
+/// (MOO-299). The position just past a container's run is both "the last
+/// device inside it" and "the next device after it"; `mooloop_core::
+/// insert_effect` reads it as the second, which is the rule at every depth,
+/// so the first has to be named. The position just after a container's own
+/// row is the same ambiguity at the other end, for an empty box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectPlace {
+    /// Before the row at this index, at that row's depth; past the last row
+    /// is the end of the chain, outside every box.
+    Before(usize),
+    /// The first device inside the container at this index.
+    FirstIn(usize),
+    /// The last device inside the serial container (a Chain, or a layer
+    /// branch that is one) at this index. Not a layer: a device added at a
+    /// layer's end would be a new branch, which is the layer face's `+`.
+    LastIn(usize),
+}
+
 /// A container preset that replaced a run.
 ///
 /// The engine mirror is the removal it did and the insertion it did, in that
@@ -282,18 +303,51 @@ impl Session {
         kind: EffectKind,
         insert_before: usize,
     ) -> Option<EffectInserted> {
+        self.place_effect(EffectSlotState::of_kind(kind), EffectPlace::Before(insert_before))
+    }
+
+    /// Puts `effect` at `place` on the chain the rack is pointed at, minting
+    /// it an identity, and says where it landed and where the engine has to
+    /// install it from (the chain's tail).
+    ///
+    /// **The one placement every way of adding a device goes through**: a
+    /// native device from a join or a container's `+`, and a hosted plugin
+    /// (`insert_plugin_effect`, Engine's, which mints the plugin's slot and
+    /// opens it). It records nothing and sends nothing; the caller mirrors
+    /// the insert onto the engine and records the undo step.
+    ///
+    /// `None` when the chain is full, `place` names no row, or names a box
+    /// that cannot take it there.
+    pub fn place_effect(
+        &mut self,
+        effect: EffectSlotState,
+        place: EffectPlace,
+    ) -> Option<EffectInserted> {
         let target = self.effect_target;
         let (effects, next_id) = self.effect_chain_parts_mut()?;
         let tail = effects.len();
-        let effect = EffectSlotState::of_kind(kind);
-        let slot = insert_effect(effects, next_id, insert_before, effect)?;
-        let device = effects[slot].id;
+        let slot = match place {
+            EffectPlace::Before(before) => insert_effect(effects, next_id, before, effect)?,
+            EffectPlace::FirstIn(container) => {
+                insert_into_container(effects, next_id, container, effect)?
+            }
+            EffectPlace::LastIn(container) => {
+                // A layer's end is a new branch: the layer face's `+`
+                // (`add_layer_branch`), never the rack's.
+                if effects.get(container)?.params.container_flow()
+                    != Some(mooloop_core::ContainerFlow::Series)
+                {
+                    return None;
+                }
+                mooloop_core::append_into_container(effects, next_id, container, effect)?
+            }
+        };
         Some(EffectInserted {
             target,
             slot,
             tail,
-            device,
-            kind,
+            device: effects[slot].id,
+            kind: effect.kind(),
             params: effect.params,
         })
     }
@@ -328,19 +382,28 @@ impl Session {
         kind: EffectKind,
         slot: usize,
     ) -> Option<EffectInserted> {
-        let target = self.effect_target;
-        let (effects, next_id) = self.effect_chain_parts_mut()?;
-        let tail = effects.len();
-        let effect = EffectSlotState::of_kind(kind);
-        let landed = insert_into_container(effects, next_id, slot, effect)?;
-        Some(EffectInserted {
-            target,
-            slot: landed,
-            tail,
-            device: effects[landed].id,
-            kind,
-            params: effect.params,
-        })
+        self.place_effect(EffectSlotState::of_kind(kind), EffectPlace::FirstIn(slot))
+    }
+
+    /// Inserts `kind` as the last device inside the Chain in `slot`: what the
+    /// join after a Chain's last device, inside its box, adds (MOO-299).
+    ///
+    /// The join past the box's rails adds after the Chain, through
+    /// `insert_effect_at` at the index past its run, and that index cannot
+    /// also mean "the end of the box" -- so, like
+    /// [`Self::insert_effect_into_container`], this names the box. For an
+    /// empty Chain the two ends are one place and this is that verb.
+    ///
+    /// The same undo step and engine mirror as any insert: the caller
+    /// records "Effect added" and installs from the tail. `None` when `slot`
+    /// is not a serial container -- a layer's end is a new branch, the layer
+    /// face's `+` -- or the chain or the nesting is full.
+    pub fn append_effect_into_container(
+        &mut self,
+        kind: EffectKind,
+        slot: usize,
+    ) -> Option<EffectInserted> {
+        self.place_effect(EffectSlotState::of_kind(kind), EffectPlace::LastIn(slot))
     }
 
     /// Adds an empty branch at the end of the layer in `slot`: what the
@@ -2535,6 +2598,128 @@ mod tests {
         // Slot 0 holds a delay, not a container.
         assert!(session.load_effect_run(0, &fine, "No").is_none());
         assert_eq!(session.channels[0].effects, before);
+    }
+
+    /// **MOO-299.** In a Chain holding a Filter and a Drive, appending adds
+    /// after the Drive and still inside the box. The index past the box's
+    /// run -- what the join past its rails passes -- still adds after it.
+    #[test]
+    fn appending_into_a_chain_lands_after_its_last_device_inside_the_box() {
+        let mut session = Session::default();
+        for kind in [EffectKind::Filter, EffectKind::Drive] {
+            session.insert_effect_at(kind, usize::MAX).expect("room");
+        }
+        session.wrap_effects_in_container(0..2).expect("a chain");
+        session.insert_effect_at(EffectKind::Reverb, usize::MAX).expect("room");
+        // [Chain, Filter, Drive], Reverb
+
+        let added = session
+            .append_effect_into_container(EffectKind::Bitcrush, 0)
+            .expect("room in the box");
+        assert_eq!(
+            kinds(&session),
+            [
+                EffectKind::Chain,
+                EffectKind::Filter,
+                EffectKind::Drive,
+                EffectKind::Bitcrush,
+                EffectKind::Reverb,
+            ]
+        );
+        assert_eq!(depths(&session), [0, 1, 1, 1, 0], "inside the box, not after it");
+        assert_eq!(children(&session, 0), 3);
+        assert_eq!(added.slot, 3);
+        assert_eq!(added.tail, 4, "installed from the old tail and moved up");
+        assert_eq!(added.kind, EffectKind::Bitcrush);
+        assert_eq!(added.device, session.channels[0].effects[3].id);
+
+        // The join past the rails: the index past the run, after the box.
+        let outside = session.insert_effect_at(EffectKind::Delay, 4).expect("room");
+        assert_eq!(outside.slot, 4);
+        assert_eq!(depths(&session), [0, 1, 1, 1, 0, 0]);
+        assert_eq!(children(&session, 0), 3, "the box did not grow");
+        assert_eq!(
+            mooloop_core::span_problem(&session.channels[0].effects),
+            None
+        );
+    }
+
+    /// Nested boxes: appending into the inner one lands inside both; into
+    /// the outer one, after the inner box's whole run and inside the outer.
+    /// An empty Chain's end is its start, the same as its own `+`.
+    #[test]
+    fn appending_into_nested_and_empty_chains() {
+        let mut session = Session::default();
+        session.insert_effect_at(EffectKind::Filter, 0).expect("room");
+        session.wrap_effects_in_container(0..1).expect("inner");
+        session.wrap_effects_in_container(0..2).expect("outer");
+        // [Chain(outer), [Chain(inner), Filter]]
+        assert_eq!(depths(&session), [0, 1, 2]);
+
+        session
+            .append_effect_into_container(EffectKind::Drive, 1)
+            .expect("room in the inner box");
+        assert_eq!(depths(&session), [0, 1, 2, 2]);
+        assert_eq!((children(&session, 0), children(&session, 1)), (3, 2));
+
+        session
+            .append_effect_into_container(EffectKind::Delay, 0)
+            .expect("room in the outer box");
+        assert_eq!(
+            kinds(&session),
+            [
+                EffectKind::Chain,
+                EffectKind::Chain,
+                EffectKind::Filter,
+                EffectKind::Drive,
+                EffectKind::Delay,
+            ]
+        );
+        assert_eq!(depths(&session), [0, 1, 2, 2, 1], "past the inner box, inside the outer");
+        assert_eq!((children(&session, 0), children(&session, 1)), (4, 2));
+
+        let mut empty = Session::default();
+        empty.insert_effect_at(EffectKind::Chain, 0).expect("room");
+        let added = empty
+            .append_effect_into_container(EffectKind::Drive, 0)
+            .expect("room");
+        assert_eq!(added.slot, 1);
+        assert_eq!(depths(&empty), [0, 1]);
+    }
+
+    /// A layer's end is a new branch, which is the layer face's `+`, so an
+    /// append onto the layer is refused. Its branch's Chain is an ordinary
+    /// Chain and takes one.
+    #[test]
+    fn a_layer_refuses_an_append_and_its_branch_chain_takes_one() {
+        let mut session = Session::default();
+        session.insert_effect_at(EffectKind::Drive, 0).expect("room");
+        session.wrap_effects_in(0..1, EffectKind::Layer).expect("wrapped");
+        // [Layer, [Chain, Drive]]
+        let before = session.channels[0].effects.clone();
+        assert!(session
+            .append_effect_into_container(EffectKind::Filter, 0)
+            .is_none());
+        assert_eq!(session.channels[0].effects, before, "refused, and nothing moved");
+        assert!(
+            session.append_effect_into_container(EffectKind::Filter, 2).is_none(),
+            "a leaf is not a box"
+        );
+
+        let added = session
+            .append_effect_into_container(EffectKind::Filter, 1)
+            .expect("the branch's chain");
+        assert_eq!(added.slot, 3);
+        assert_eq!(
+            kinds(&session),
+            [
+                EffectKind::Layer,
+                EffectKind::Chain,
+                EffectKind::Drive,
+                EffectKind::Filter
+            ]
+        );
+        assert_eq!(depths(&session), [0, 1, 2, 2]);
     }
 
     fn kinds(session: &Session) -> Vec<EffectKind> {
