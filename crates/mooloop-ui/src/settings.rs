@@ -158,8 +158,10 @@ pub(crate) struct AppearanceSettings {
     pub density: f32,
     /// Font families, CSS-style lists. Empty means the platform default.
     ///
-    /// **A theme names a font; it cannot ship one.** Slint 1.17.1 has no
-    /// runtime font registration, so a family is resolved from what is
+    /// **A theme names a font; it cannot ship one.** Slint 1.18.1 has no
+    /// stable runtime font registration (only the unstable
+    /// `unstable-fontique-011` feature, which mooloop leaves off; MOO-320),
+    /// so a family is resolved from what is
     /// compiled in or installed, and a name nobody has falls back silently.
     /// That is why the Appearance page reports what was resolved.
     #[serde(default)]

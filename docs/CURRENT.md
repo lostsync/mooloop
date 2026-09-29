@@ -587,8 +587,9 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   the tabs, and taken away again by a theme that doesn't state one), and
   **two font families** -- one for the
   interface and one for readouts. A font that is not installed falls back to
-  the platform default, because Slint has no runtime font registration and a
-  theme can only name a family. Themes save to
+  the platform default, because mooloop registers no fonts at runtime (Slint
+  1.18.1 can do it only behind an unstable feature, which mooloop leaves off)
+  and a theme can only name a family. Themes save to
   `<config>/mooloop/themes/<name>.toml`, one file per theme, and a malformed
   one is skipped with a message rather than stopping startup. **Density** has
   no control on the page since 0.1.6, but a theme that states one (Impulse)

@@ -76,13 +76,20 @@ part of the work that is design rather than sweeping, and it is why step 02
 exists on its own.
 
 **3. A theme cannot ship a font, and the format must not pretend otherwise.**
-Slint 1.17.1 has no runtime font registration -- `slint::register_font_from_path`
-does not exist in its public API, and the only runtime hook is the unstable
-`fontique_010` module. A font is embedded at compile time by `import "./x.ttf"`
-in a `.slint` file, or it is resolved by name from the system. So a theme file
-names a family and mooloop resolves it: first against the families it has
-compiled in, then against the system, then a documented fallback. A theme that
-asks for a font nobody has still loads and still looks deliberate.
+Checked against Slint 1.18.1: its stable API has no runtime font registration
+-- `slint::register_font_from_path` does not exist in its public API (only on
+the renderer's unexported `RendererSealed` trait) -- and the only runtime hook
+is the unstable `fontique_011` module, behind the opt-in
+`unstable-fontique-011` feature, which mooloop does not enable. That hook does
+register fonts (`shared_collection().register_fonts(..)`), process-wide, and
+Slint says it may change in any minor release; 1.17.1 had it as `fontique_010`.
+Whether a theme may ship a font through it is Adam's call, open as MOO-320;
+until then a theme ships none. A font is embedded at compile time by
+`import "./x.ttf"` in a `.slint` file, or it is resolved by name from the
+system. So a theme file names a family and mooloop resolves it: first
+against the families it has compiled in, then against the system, then a
+documented fallback. A theme that asks for a font nobody has still loads and
+still looks deliberate.
 
 **4. Accessibility is the reason, and homage is the payoff.** See below. It is
 stated in that order because it decides what gets built when the work has to

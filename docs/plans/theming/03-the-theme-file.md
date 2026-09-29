@@ -49,10 +49,17 @@ and a theme that only wants to change three colors should be nine lines.
 
 ## Fonts: the constraint, written into the format
 
-Slint 1.17.1 has **no runtime font registration**. `register_font_from_path`
-is not in the public API; the only runtime hook is the unstable
-`fontique_010` module. A font is either embedded at build time by
-`import "./x.ttf"` in a `.slint` file, or resolved by name from the system.
+Checked against Slint 1.18.1: its stable API has **no runtime font
+registration**. `register_font_from_path` is not in the public API (it is a
+method of the renderer's unexported `RendererSealed` trait); the only runtime
+hook is the unstable `fontique_011` module, behind the opt-in
+`unstable-fontique-011` feature. That hook does register a font from its bytes
+(`slint::fontique_011::shared_collection().register_fonts(..)`, process-wide),
+but Slint says it may change in any minor release -- it was `fontique_010` in
+1.17.1 -- and mooloop does not enable it. Whether a theme may ship a font
+through it is open as MOO-320; this step assumes it may not. A font is
+either embedded at build time by `import "./x.ttf"` in a `.slint` file, or
+resolved by name from the system.
 
 So `family` is a **list**, CSS-style, and mooloop walks it: each name is tried
 against the families compiled in, then against the system, and the first hit

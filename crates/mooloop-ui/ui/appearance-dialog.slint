@@ -765,8 +765,10 @@ export component AppearancePage inherits VerticalLayout {
         changed(v) => { root.preview-changed(); }
     }
 
-    // A theme names a font; it cannot ship one. Slint 1.17.1 has no runtime
-    // font registration, so a family is resolved from what is installed and a
+    // A theme names a font; it cannot ship one. Slint 1.18.1 has no stable
+    // runtime font registration (only the unstable `unstable-fontique-011`
+    // feature, which mooloop leaves off; MOO-320 asks whether a theme may
+    // ship one), so a family is resolved from what is installed and a
     // name nobody has falls back to the platform default without a word --
     // which is why the hint says so rather than the interface pretending.
     SectionLabel { text: "TYPE"; }
