@@ -5242,6 +5242,21 @@ impl UiState {
         }
     }
 
+    /// The key a live install gives a device's engine slot, which a later
+    /// `ReplaceEffect` has to name to be let in (MOO-322). A hosted plugin is
+    /// keyed by its song slot, since the rack swaps its processor into the
+    /// placeholder by that key once the plugin opens; a buffer by its
+    /// allocation; anything else by nothing. Installed with no key, a plugin
+    /// row refused its processor on every retry and stayed a silent
+    /// pass-through. The rule is `render.rs`'s `effect_resource_key`, which
+    /// keys a project install; one for the three live installs here.
+    fn effect_resource_key(params: mooloop_core::EffectParams) -> Option<u64> {
+        match params {
+            mooloop_core::EffectParams::Plugin(slot) => Some(u64::from(slot.0)),
+            _ => params.buffer().copied().map(buffer_allocation_key),
+        }
+    }
+
     /// Mirror a freshly inserted device onto the engine.
     ///
     /// Installed into the vacant tail and moved into place, which is what
@@ -5265,7 +5280,7 @@ impl UiState {
             target: added.target,
             slot: added.tail as u8,
             kind: added.kind,
-            resource_key: added.params.buffer().copied().map(buffer_allocation_key),
+            resource_key: Self::effect_resource_key(added.params),
             node,
             align,
             analyzer: Box::new(SpectrumAnalyzer::new()),
@@ -5321,7 +5336,7 @@ impl UiState {
             target,
             slot,
             kind: effect.kind(),
-            resource_key: effect.params.buffer().copied().map(buffer_allocation_key),
+            resource_key: Self::effect_resource_key(effect.params),
             node,
             align,
             analyzer: Box::new(SpectrumAnalyzer::new()),
@@ -5371,7 +5386,7 @@ impl UiState {
                         target,
                         slot: into,
                         kind: effect.kind(),
-                        resource_key: effect.params.buffer().copied().map(buffer_allocation_key),
+                        resource_key: Self::effect_resource_key(effect.params),
                         node,
                         align,
                         analyzer: Box::new(SpectrumAnalyzer::new()),
