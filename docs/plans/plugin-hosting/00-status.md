@@ -537,7 +537,7 @@ words. **Do not reopen this as a version-bump question.**
 | 08 | Plugin browser, the menu row, and the face for plugins without a GUI | #28 | **UI build**, drafted with `slint-sketch` | **done 2026-09-24** (MOO-83; remainder MOO-228, MOO-229: pins, list, selectors landed 2026-09-26) |
 | 09 | A channel source that is a boxed node | #29 | core, engine, session | **done 2026-09-24** (MOO-84) |
 | 10 | CLAP instruments | #29 | plugin-host, engine | **done 2026-09-25** (MOO-85) |
-| 11 | Plugin GUIs in their own windows | #30 | plugin-host, **UI build** | built: host side (MOO-300), the window (MOO-301) and the pump and face (MOO-302) recorded below; the real-desktop record is Adam's (MOO-86) |
+| 11 | Plugin GUIs in their own windows | #30 | plugin-host, **UI build** | **done 2026-09-29** (MOO-86: host side MOO-300, the window MOO-301, the pump and face MOO-302; Adam's real-desktop checks passed; remainder MOO-303, MOO-343) |
 | 12 | VST3 | — | plugin-host | outline only |
 | 13 | AU (macOS, optional) | — | plugin-host | outline only |
 
@@ -1489,10 +1489,11 @@ Engine (MOO-314), Parameters & Control (MOO-315), Interface. The address is
   dropped, because `GeneratorParams::Plugin` has no parameter to set.
 - **A replaced instrument's lanes drive nothing.** A source change forgets
   the old instrument's lanes and routes in the session (MOO-313, option 1
-  of MOO-312's open Question). The engine's sequencer still holds them
-  until the next project install. They name the old device, and the source
-  pass drives only what names the strip's device, so they are inert. That
-  holds whichever way the Question is answered.
+  of MOO-312's Question). Adam kept option 1 on 2026-09-29: *"option 1 is
+  still the answer, no need to relitigate"*. The engine's sequencer still
+  holds them until the next project install. They name the old device, and
+  the source pass drives only what names the strip's device, so they are
+  inert.
 - The test sine has a `level` parameter (`PARAM_LEVEL`, dB, automatable and
   modulatable) for these tests. At its default the output is unchanged to
   the bit.
