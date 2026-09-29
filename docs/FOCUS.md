@@ -65,8 +65,8 @@ Later the same night:
 - MOO-322 (a loaded container preset's plugin processes);
 - MOO-336 was refuted, and its regression test kept.
 
-CI is green on Linux and macOS at the head. MOO-270 and MOO-320 carry
-questions for Adam. The container's disk filled twice under `mooloop-ui`
+CI is green on Linux and macOS at the head. MOO-320 carries a question
+for Adam. The container's disk filled twice under `mooloop-ui`
 builds: see `docs/OPERATIONS.md`, *Working In A Cloud Container*.
 
 Two items are still open in 0.1.6, and both wait on Adam:
