@@ -1137,6 +1137,14 @@ fn sync_audio_status(handle: &EngineHandle, window: &MainWindow) {
     window.set_preferences_audio_sample_rate_text(
         format!("{} Hz — {}", status.sample_rate, DRIVER_COPY.sample_rate_source).into(),
     );
+    // Which library the driver went through, beside its name: on a machine
+    // with several JACK installs, what mooloop is actually talking to
+    // (MOO-342).
+    let mut driver = DRIVER_COPY.to_slint();
+    if let Some(library) = status.library {
+        driver.note = format!("through {library}").into();
+    }
+    window.set_preferences_audio_driver(driver);
 }
 
 /// Shows a pane and records which one it is.

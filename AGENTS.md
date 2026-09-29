@@ -107,6 +107,11 @@ not notify anyone of their own actions.
 
 - Put the question on the issue whose work waits on it. If there is none,
   file one -- with a project and a `Team` label -- whose job is the question.
+- **A question never rides on a Done issue.** Done means done, and Adam
+  clears `Question` off closed issues to keep his view clean (2026-09-29), so
+  a question left there is dropped without an answer. If the work closes
+  while its question is still open, file a new issue for the question and
+  link it.
 - Ask in a comment that can be answered without reading anything else: the
   question in one sentence, the options, what you recommend and why, and
   what waits on the answer. Number several questions on one issue so he can

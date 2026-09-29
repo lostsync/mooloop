@@ -287,4 +287,7 @@ pub struct DriverStatus {
     pub sample_rate: u32,
     pub buffer_size: u32,
     pub current_target: (String, String),
+    /// The audio library in use, described for the Audio preferences: under
+    /// JACK, which `libjack` was loaded (MOO-342). `None` on Core Audio.
+    pub library: Option<String>,
 }

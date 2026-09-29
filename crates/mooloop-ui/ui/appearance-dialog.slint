@@ -1595,7 +1595,7 @@ export component PreferencesDialog inherits Rectangle {
                                     spacing: 8px;
                                     padding: 0px;
                                     SegmentedControl { width: 96px; options: [root.audio-driver.name]; selected-index: 0; }
-                                    Text { text: root.audio-driver.note; color: Theme.text-faint; font-size: Theme.text-lg; vertical-alignment: center; }
+                                    Text { text: root.audio-driver.note; color: Theme.text-faint; font-size: Theme.text-lg; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                                     Rectangle { horizontal-stretch: 1; }
                                 }
                                 HorizontalBox {

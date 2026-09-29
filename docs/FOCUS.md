@@ -47,8 +47,8 @@ Comp's layout himself. That landed as `fd0dcfce..07434472`. MOO-296 (a device
 header cut off its name's descenders since MOO-286) is `5f9d6de6`.
 
 **2026-09-29, overnight:** team orchestration worked the unlabelled backlog,
-bugs first, on PR lostsync/mooloop#345, which is not yet on `main`. Each issue is
-In Review and names its commit. In summary:
+bugs first, on PR lostsync/mooloop#345, merged to `main` as `7dfad16`. Each issue
+names its commit. In summary:
 - the plugin copy paths all mint a slot of their own: MOO-271, 317, 321,
   331, 332;
 - text no longer clips at large sizes: MOO-278, 291, 297, 325 to 329 and
@@ -65,8 +65,8 @@ Later the same night:
 - MOO-322 (a loaded container preset's plugin processes);
 - MOO-336 was refuted, and its regression test kept.
 
-CI is green on Linux and macOS at the head. MOO-270 and MOO-320 carry
-questions for Adam. The container's disk filled twice under `mooloop-ui`
+CI is green on Linux and macOS at the head. MOO-320 carries a question
+for Adam. The container's disk filled twice under `mooloop-ui`
 builds: see `docs/OPERATIONS.md`, *Working In A Cloud Container*.
 
 Two items are still open in 0.1.6, and both wait on Adam:
@@ -189,9 +189,10 @@ decide only what can be wired.
 
 - **Plugin hosting's rest:** a plugin face's modulation ring and parameter
   naming (MOO-228), pinned parameters and a Plugins preferences page
-  (MOO-229), and plugin presets (MOO-222). Also an instrument's parameters,
-  which need a source-slot id (MOO-74's open point), GUI windows (MOO-86),
-  VST3 (MOO-87) and AU (MOO-88). Most of this needs someone to look at it.
+  (MOO-229), and plugin presets (MOO-222). Also VST3 (MOO-87) and AU
+  (MOO-88). An instrument's parameters (MOO-312) and GUI windows (MOO-86)
+  landed and passed Adam's checks on 2026-09-29; the XWayland setting's
+  scale is MOO-343. Most of this needs someone to look at it.
 - **The browser:** rename by double-click (MOO-224), spring-loaded preset
   drag (MOO-225), and the full-size pane (MOO-10).
 - **The listening passes themselves:** eighteen are queued, and nothing

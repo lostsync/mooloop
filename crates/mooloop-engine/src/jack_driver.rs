@@ -1,7 +1,9 @@
 //! JACK adapter: a client with two audio outputs and one MIDI input, whose
 //! process callback hands its buffers to the shared [`Executor`].
 //!
-//! Works against pipewire-jack transparently.
+//! Works against pipewire-jack transparently, and loads PipeWire's libjack
+//! itself where a distribution leaves it off the library path
+//! (`jack_library`, MOO-342).
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -280,6 +282,25 @@ fn open_error(error: jack::Error) -> Error {
     }
 }
 
+/// Say once which libjack was loaded: on a machine with several JACK
+/// installs, the one line that explains what mooloop is talking to.
+fn log_loaded_library() {
+    #[cfg(target_os = "linux")]
+    {
+        static LOGGED: std::sync::Once = std::sync::Once::new();
+        LOGGED.call_once(|| match loaded_library() {
+            Some(library) => mooloop_core::log_info!("audio", "JACK library: {library}"),
+            None => mooloop_core::log_info!("audio", "no JACK library is loaded"),
+        });
+    }
+}
+
+/// The libjack in use, described (MOO-342); `None` before any is loaded.
+#[cfg(target_os = "linux")]
+pub(crate) fn loaded_library() -> Option<String> {
+    crate::jack_library::loaded_library().map(|path| crate::jack_library::describe(&path))
+}
+
 /// A JACK client that is open but not yet running: enough to learn the sample
 /// rate the render state has to be built for.
 pub(crate) struct Opening {
@@ -288,8 +309,12 @@ pub(crate) struct Opening {
 
 impl Opening {
     pub(crate) fn connect() -> Result<Self, Error> {
-        let (client, _status) =
-            Client::new(CLIENT_NAME, ClientOptions::NO_START_SERVER).map_err(open_error)?;
+        // Before the `jack` crate first loads libjack, which it does once.
+        #[cfg(target_os = "linux")]
+        crate::jack_library::choose();
+        let opened = Client::new(CLIENT_NAME, ClientOptions::NO_START_SERVER).map_err(open_error);
+        log_loaded_library();
+        let (client, _status) = opened?;
         Ok(Self { client })
     }
 
