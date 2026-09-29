@@ -2,7 +2,7 @@
 //!
 //! CI cannot install third-party plugins, so every plugin-hosting step's
 //! automated tests run against this one library. It exports one CLAP entry
-//! whose factory holds eight plugins, [`PLUGIN_IDS`]:
+//! whose factory holds nine plugins, [`PLUGIN_IDS`]:
 //!
 //! | id | what |
 //! | --- | --- |
@@ -14,6 +14,7 @@
 //! | [`SINE_ID`] | one sine voice per note id, with a release tail; `level` (dB, modulatable, MOO-314) |
 //! | [`SINE_GUI_ID`] | the same, declaring the `gui` extension, with a timer and an fd behind it |
 //! | [`SIDECHAIN_ID`] | a unity effect with a sidechain input and two extra outputs, its main ports at 1 and 2, and probes on the sidechain (MOO-308) |
+//! | [`GAIN_CHATTY_ID`] | the stereo gain, logging one `Debug` line from every `process` call, as a plugin with debug logging left on does (MOO-324) |
 //!
 //! The plugins without a GUI are the ones that matter most: a plugin that has
 //! no GUI at all (Airwindows is the named case) is a path the host has to
@@ -85,10 +86,12 @@ pub const GAIN_MONO_IN_ID: &str = "mooloop.test.gain.mono-in";
 pub const GAIN_MONO_OUT_ID: &str = "mooloop.test.gain.mono-out";
 /// A unity effect with a sidechain and extra outputs (MOO-308).
 pub const SIDECHAIN_ID: &str = "mooloop.test.sidechain";
+/// The stereo gain, logging from its audio thread (MOO-324).
+pub const GAIN_CHATTY_ID: &str = "mooloop.test.gain.chatty";
 
 /// Every plugin the factory lists, in its order: a test that checks what a
 /// scan found reads this rather than its own copy.
-pub const PLUGIN_IDS: [&str; 8] = [
+pub const PLUGIN_IDS: [&str; 9] = [
     GAIN_ID,
     GAIN_GUI_ID,
     SINE_ID,
@@ -97,6 +100,7 @@ pub const PLUGIN_IDS: [&str; 8] = [
     GAIN_MONO_IN_ID,
     GAIN_MONO_OUT_ID,
     SIDECHAIN_ID,
+    GAIN_CHATTY_ID,
 ];
 
 /// A copy of this library whose file name ends in this aborts the process
@@ -171,6 +175,8 @@ impl TestFactory {
                 describe(GAIN_MONO_IN_ID, "Test Gain (mono in)").with_features([AUDIO_EFFECT, UTILITY]),
                 describe(GAIN_MONO_OUT_ID, "Test Gain (mono out)").with_features([AUDIO_EFFECT, UTILITY]),
                 describe(SIDECHAIN_ID, "Test Sidechain").with_features([AUDIO_EFFECT, UTILITY, STEREO]),
+                describe(GAIN_CHATTY_ID, "Test Gain (chatty)")
+                    .with_features([AUDIO_EFFECT, UTILITY, STEREO]),
             ],
         }
     }
@@ -225,6 +231,12 @@ impl PluginFactoryImpl for TestFactory {
                 descriptor,
                 sidechain::SidechainShared::new,
                 sidechain::SidechainMain::new,
+            ),
+            8 => PluginInstance::new::<gain::GainPlugin<false>>(
+                host_info,
+                descriptor,
+                gain::GainShared::chatty,
+                gain::GainMain::new,
             ),
             _ => {
                 let (inputs, outputs) = match index {

@@ -1023,10 +1023,14 @@ What it cannot see is a lock on a type we do not own. An uncontended
 `std` can observe it: the same temporary `try_lock` on a `std::sync::Mutex`
 passes the soak. The same goes for `stderr().lock()` inside an `eprintln!`,
 and for a lock inside a hosted plugin's own code. A lock on the render path
-is checked only if it is a `lock_check::Mutex`. The one lock on the render
-path that we know of is `HostShared`'s log, which a plugin reaches by
-logging from `process`, and it is now counted (and filed to be removed:
-MOO-324).
+is checked only if it is a `lock_check::Mutex`. No lock on the render path
+is known. The one suspected here, `HostShared`'s plugin log, belongs to the
+spike host alone. The engine's host, `ClapShared`, counts a plugin's
+audio-thread log lines and drops them, and
+`a_plugin_that_logs_from_process_costs_the_callback_nothing` holds that to
+zero allocations, frees and locks per block (MOO-324). It runs on a thread
+std spawned, as every engine test does; a callback thread std did not
+create is open as MOO-336.
 
 ---
 

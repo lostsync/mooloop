@@ -161,7 +161,8 @@ pub struct ClapShared {
     /// The last size the GUI asked for, packed as CLAP packs it.
     gui_size: AtomicU64,
     /// Log lines the plugin sent from a thread other than the main one,
-    /// which are counted rather than written: writing a log line allocates.
+    /// which are counted rather than written: writing a log line allocates
+    /// and locks. Read by [`ClapInstance::unlogged`].
     unlogged: AtomicU64,
     /// Calls the plugin itself reported as the host misbehaving.
     misbehaviour: AtomicU64,
@@ -559,6 +560,15 @@ impl ClapInstance {
     pub fn misbehaviour(&self) -> u64 {
         self.instance
             .access_shared_handler(|shared| shared.misbehaviour.load(Ordering::Relaxed))
+    }
+
+    /// How many log lines the plugin sent from a thread other than the main
+    /// one, all of which were counted and dropped rather than written
+    /// (MOO-324): a plugin logging from `process` costs the callback one
+    /// atomic add, and this is where the main thread finds out it happened.
+    pub fn unlogged(&self) -> u64 {
+        self.instance
+            .access_shared_handler(|shared| shared.unlogged.load(Ordering::Relaxed))
     }
 
     /// Deactivate, if a processor was ever built. Fails while the last

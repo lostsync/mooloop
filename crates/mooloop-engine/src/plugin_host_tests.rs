@@ -18,6 +18,10 @@
 //!   allocate and free nothing per block (the counting allocator, as in
 //!   `soak_tests.rs`).
 //!
+//! And one the host owes every plugin (MOO-324): **a plugin that logs from
+//! `process` costs the callback nothing**, and the main thread can still
+//! count what it said.
+//!
 //! Every instance is created on the test's own thread, which is its CLAP
 //! main thread, and every processor runs on a thread spawned for it: the
 //! test plugin asks the host which thread it is on, and a process call on
@@ -473,4 +477,72 @@ fn sixty_four_hosted_channels_allocate_nothing_on_the_callback() {
             assert_eq!(instance.misbehaviour(), 0);
         }
     }
+}
+
+/// **A plugin that logs from `process` costs the callback nothing**
+/// (MOO-324): the test gain in its chatty build logs one line from every
+/// `process` call, as a plugin with debug logging left on does. Through the
+/// executor, no block allocates, frees or takes a lock, and every line the
+/// plugin sent is still accounted for on the main thread, as a count.
+#[test]
+fn a_plugin_that_logs_from_process_costs_the_callback_nothing() {
+    let block = 256usize;
+    let (project, slots) = drum_loop(1, &[0]);
+    let chatty = PluginRef {
+        id: test_plugin::GAIN_CHATTY_ID.to_owned(),
+        name: "Test Gain (chatty)".to_owned(),
+        ..gain_ref()
+    };
+    let config = AudioConfig {
+        sample_rate: SAMPLE_RATE,
+        max_frames: MAX_FRAMES,
+    };
+    let mut instance = ClapInstance::open(&test_plugin_path(), &chatty, &gain_state(-3.0, 0), config)
+        .expect("the chatty gain opens");
+    let lifeline = Lifeline::new();
+    let processor = instance.build_processor(lifeline.tie()).expect("a processor");
+    let render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+    let mut live = live(render);
+    assert!(live
+        .commands
+        .push(replace(EffectTarget::Channel(0), 0, slots[0], processor))
+        .is_ok());
+    assert!(live.commands.push(RealtimeCommand::Engine(EngineCommand::Play)).is_ok());
+
+    let blocks = 64;
+    std::thread::scope(|scope| {
+        scope
+            .spawn(move || {
+                crate::executor::prepare_audio_thread();
+                let silence = vec![0.0f32; block];
+                let (mut l, mut r) = (vec![0.0f32; block], vec![0.0f32; block]);
+                for index in 0..blocks {
+                    let locks = mooloop_core::lock_check::locks_taken();
+                    let before = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+                    live.executor.process_with_input(std::iter::empty(), &silence, &silence, &mut l, &mut r);
+                    let after = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+                    let locked = mooloop_core::lock_check::locks_taken() - locks;
+                    assert_eq!(
+                        (after.0 - before.0, after.1 - before.1, locked),
+                        (0, 0, 0),
+                        "block {index}: allocations, frees and locks on the callback"
+                    );
+                    while live.events.pop().is_ok() {}
+                    while let Ok(reclaimed) = live.reclaim.pop() {
+                        drop(reclaimed);
+                    }
+                }
+                drop(live);
+            })
+            .join()
+            .expect("the audio thread did not panic")
+    });
+    assert!(lifeline.is_alone(), "the processor came back");
+    assert!(!instance.failed());
+    assert_eq!(instance.misbehaviour(), 0);
+    let unlogged = instance.unlogged();
+    assert!(
+        (1..=blocks as u64).contains(&unlogged),
+        "the plugin logged from process in at most every block, and the count says so: {unlogged}"
+    );
 }
