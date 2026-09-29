@@ -527,10 +527,17 @@ component AutomationMenuRow inherits Rectangle {
     // lane selection menu" (MOO-74).
     in property <bool> missing: false;
     callback selected();
-    height: 20px;
+    // 20px at 100%, growing with the text above it (MOO-328, the rule
+    // MOO-278 set for menu rows); the picker takes its height from its
+    // layout, so it grows with its rows.
+    height: 20px * Theme.row-growth;
     min-width: 150px;
+    // Wide enough for the whole name, and the picker is as wide as its design
+    // width or this, whichever is more, so a long name, or any name at a
+    // large text size, is read whole rather than cut at the picker's edge.
+    preferred-width: label.preferred-width + 16px;
     background: touch.has-hover ? Theme.surface-raised : transparent;
-    Text {
+    label := Text {
         x: 8px;
         text: root.text;
         color: root.current ? Theme.accent : root.missing ? Theme.text-muted : Theme.text;
@@ -583,7 +590,8 @@ component AutomationLaneMenu inherits VerticalLayout {
                 // Rust marks the first row of each device so the header can be
                 // drawn here; Slint's `for` cannot see the previous element.
                 if row.starts-group : Text {
-                    height: 16px;
+                    // 16px at 100%, growing with the text above it (MOO-328).
+                    height: 16px * Theme.row-growth;
                     text: row.device;
                     color: Theme.text-faint;
                     font-size: Theme.text-sm;
