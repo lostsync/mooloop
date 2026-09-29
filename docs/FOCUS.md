@@ -46,6 +46,23 @@ voicing with one `◂ GRIP ▸` chip (MOO-295). The mixer's headers got icons
 Comp's layout himself. That landed as `fd0dcfce..07434472`. MOO-296 (a device
 header cut off its name's descenders since MOO-286) is `5f9d6de6`.
 
+**2026-09-29, overnight:** team orchestration worked the unlabelled backlog,
+bugs first, on PR lostsync/mooloop#345, which is not yet on `main`. Each issue is
+In Review and names its commit. In summary:
+- the plugin copy paths all mint a slot of their own: MOO-271, 317, 321,
+  331, 332;
+- text no longer clips at large sizes: MOO-278, 291, 297, 325 to 329 and
+  333 to 335 (MOO-205 lists what's left);
+- lanes left inert by an instrument change are listed and removable
+  (MOO-270, 329);
+- the callback's lock check (MOO-173, gap MOO-330), MOO-290, MOO-293 and
+  MOO-324;
+- macOS CI is green again (MOO-323, MOO-337).
+
+MOO-336, the MOO-299 split (MOO-338 to 340) and MOO-322 are started but
+need local builds the container's disk could not hold. MOO-270 and MOO-320
+carry questions for Adam.
+
 Two items are still open in 0.1.6, and both wait on Adam:
 - **MOO-289**'s launch case, which wasn't reproduced headless. He has two
   checks to make on the laptop (Hyprland, `follow_mouse = 1`).

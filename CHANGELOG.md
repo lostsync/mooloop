@@ -69,12 +69,25 @@ too big.
 - **Preferences → Plugins:** extra plugin folders, the scan timeout, rescan
   at startup, **Rescan All** with progress, and the files that could not be
   read and why.
+- **A copied plugin gets its own instance.** A plugin device you copy,
+  paste or duplicate gets its own copy of the plugin in the song it lands
+  in, starting from the plugin's current settings. That holds on its own or
+  inside a Chain or Layer, and for a copied or cloned channel whose
+  instrument or effects are plugins. Before, the copy shared the original's
+  plugin, or was silent, or picked up whichever plugin the other song kept
+  under the same number.
+- A Chain or Layer saved as a preset keeps the plugins inside it. 0.1.5
+  can't open such a preset.
+- The Buffer's HISTORY shows "64 BARS" whole.
 
 ### Automation and modulation
 
 - Changing a channel's instrument no longer sends its lanes, LFO routes and
   MIDI mappings to whatever parameter shares the old one's number. They go
   quiet, stay in the song, and work again if you switch back.
+- A lane left quiet that way is listed in the lane picker, greyed, under
+  the instrument it was drawn on. Open it there and remove it when it's
+  taking a lane slot you need.
 
 ### Export
 
@@ -99,6 +112,17 @@ too big.
   row, which ran its four names together. The master's IN/OUT button is now
   the same on/off square the strip's sections use.
 - At large text sizes a device header grows so its name is no longer cut off.
+- **At large text sizes nothing is cut off:**
+  - Menu rows grow with the text: the menubar, the context menus, the preset
+    menu, the bus picker, the lane picker and the layer's branch list.
+    Menus widen to fit their rows.
+  - Section labels grow, and so do the Solo, Mute and polarity buttons.
+  - A device header's kind and role end in "…" rather than running off its
+    edge.
+
+  At 100% nothing moves, except that a menu too narrow for its text now
+  fits it. The knob menu's "Type a Value…" and the Pattern menu's "Delete
+  Pattern" read whole.
 - The rack's `+` menu is wide enough for every row at every text size.
 - The window's content runs to its edges, with no border round it.
 - **The pane your keyboard shortcuts act on is outlined.** Click in a pane,
