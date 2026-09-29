@@ -59,9 +59,15 @@ In Review and names its commit. In summary:
   MOO-324;
 - macOS CI is green again (MOO-323, MOO-337).
 
-MOO-336, the MOO-299 split (MOO-338 to 340) and MOO-322 are started but
-need local builds the container's disk could not hold. MOO-270 and MOO-320
-carry questions for Adam.
+Later the same night:
+- MOO-299 (a Chain can take a device at its end) landed as MOO-338, 339
+  and 340;
+- MOO-322 (a loaded container preset's plugin processes);
+- MOO-336 was refuted, and its regression test kept.
+
+CI is green on Linux and macOS at the head. MOO-270 and MOO-320 carry
+questions for Adam. The container's disk filled twice under `mooloop-ui`
+builds: see `docs/OPERATIONS.md`, *Working In A Cloud Container*.
 
 Two items are still open in 0.1.6, and both wait on Adam:
 - **MOO-289**'s launch case, which wasn't reproduced headless. He has two

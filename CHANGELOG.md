@@ -78,6 +78,11 @@ too big.
   under the same number.
 - A Chain or Layer saved as a preset keeps the plugins inside it. 0.1.5
   can't open such a preset.
+- **A Chain with devices in it can take one at its end.** The last join
+  inside the box, after its last device, adds there: from the insert menu,
+  with **Plugin…**, or by dropping a preset or plugin from the browser.
+  Before, every add landed in front of the last device, or outside the box.
+  The join past the Chain's edge still adds after it.
 - The Buffer's HISTORY shows "64 BARS" whole.
 
 ### Automation and modulation

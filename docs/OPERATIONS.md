@@ -677,6 +677,30 @@ profile's own dependency tree on top. That last pair is 11 GB and half an hour
 (987 s and 1007 s at `-j 1`). Budget for it, or split rung 4 across two
 sessions.
 
+**Several team agents in one container fill it faster than one session
+does.** Measured 2026-09-29, in the overnight team batch on PR
+lostsync/mooloop#345: branches built one after another through a shared
+`CARGO_TARGET_DIR` took the disk from 29 GB free to 2 GB, twice. Three
+findings, each cheaper to know than to rediscover:
+
+- **rustc keeps the previous incremental session next to the new one** until
+  that unit's next compile collects it. Each `mooloop_ui-*` directory held
+  two 2.5 GB sessions. A unit compiled again is roughly disk-neutral; a *new*
+  unit is not. The integration test binaries and `clippy --all-targets`'
+  check units are new units.
+- **`--exclude mooloop-app` changes feature unification**, so external
+  crates (`zbus` among them) rebuild under new hashes beside the old ones.
+  Excluding it to keep `mooloop-ui` out of a rung-3 run cost more disk than
+  it saved. Leave rung 3 as `--exclude mooloop-ui`, or skip it and let CI
+  run the workspace.
+- **CI is the other verifier.** When the disk couldn't hold a `mooloop-ui`
+  test build, the UI stack's first compile was CI's (Linux and macOS: check,
+  clippy `-D warnings`, the full workspace tests), and it passed. Before
+  such a push, read every changed Rust line against the APIs it calls, and
+  run `scripts/slint-sketch crates/mooloop-ui/ui/main.slint` on the tree
+  being pushed. The session-start hook drops `target/debug/incremental` on a
+  resume when the disk is low, which is how the space came back both times.
+
 Everything else in this document still holds, `scripts/exit-code` included.
 What does not carry over is the timing. Measured on four container cores that
 day: `cargo check -p mooloop-ui` 4m50s with its dependencies already built;
