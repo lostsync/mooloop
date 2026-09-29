@@ -43,7 +43,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mooloop_core::{
-    insert_effect, log_warn, mint_plugin_slot, DeviceKind, EffectKind, EffectParams,
+    log_warn, mint_plugin_slot, DeviceKind, EffectKind, EffectParams,
     EffectSlotState, EffectTarget, EngineCommand, GeneratorParams, PluginParamInfo, PluginRef,
     PluginSlotId, PluginSlotState, PluginSlots, PluginState, PluginStateText,
 };
@@ -55,7 +55,7 @@ use mooloop_plugin_host::{
     IoActivity, Lifeline, NativeWindow, PluginOpener, PluginParamEvent, Requests,
 };
 
-use crate::effects::EffectInserted;
+use crate::effects::{EffectInserted, EffectPlace};
 
 /// The largest block a hosted processor is activated for: the most frames
 /// the executor ever hands a node (`mooloop_dsp::MAX_BLOCK_SIZE`).
@@ -1183,22 +1183,40 @@ impl crate::session::Session {
     }
 
     /// Insert the plugin `plugin` as a new device before `insert_before` on
-    /// the chain the rack is pointed at, open it, and install its processor
-    /// -- or the placeholder, when it cannot be opened, with the reason kept
-    /// for [`Self::plugin_problem`].
-    ///
-    /// The session path of step 06: there is no menu row for it until step
-    /// 08. Mirrors the native insert (`Session::insert_effect_at` and the
-    /// interface's `install_added_effect`): installed at the chain's tail
-    /// and moved into place. It does not publish container spans, so it is
-    /// for a position outside any container.
+    /// the chain the rack is pointed at: [`Self::place_plugin_effect`] at
+    /// [`EffectPlace::Before`], the way `insert_effect_at` is `place_effect`
+    /// there. An index past a container's run lands after the container;
+    /// inside a box, name the box with `place_plugin_effect`.
     pub fn insert_plugin_effect(
         &mut self,
         plugin: PluginRef,
         insert_before: usize,
         handle: &mut impl CommandSink,
     ) -> Option<EffectInserted> {
-        let target = self.effect_target;
+        self.place_plugin_effect(plugin, EffectPlace::Before(insert_before), handle)
+    }
+
+    /// Put the plugin `plugin` at `place` on the chain the rack is pointed
+    /// at as a new device, open it, and install its processor -- or the
+    /// placeholder, when it cannot be opened, with the reason kept for
+    /// [`Self::plugin_problem`] (MOO-339).
+    ///
+    /// The row goes where `place_effect` puts any device, so **Plugin…** on
+    /// the join at a Chain's end ([`EffectPlace::LastIn`]) or inside an
+    /// empty box ([`EffectPlace::FirstIn`]) lands inside it, as a native
+    /// device from the same join does. Mirrored the same way too: installed
+    /// at the chain's tail and moved into place. It does not publish
+    /// container spans; the interface's caller does, after it.
+    ///
+    /// `None`, with the slot it minted let go again, when `place_effect`
+    /// refuses: the chain is full, `place` names no row, or it names a box
+    /// that cannot take a device there (a layer's end is a new branch).
+    pub fn place_plugin_effect(
+        &mut self,
+        plugin: PluginRef,
+        place: EffectPlace,
+        handle: &mut impl CommandSink,
+    ) -> Option<EffectInserted> {
         let slot = mint_plugin_slot(
             &mut self.plugins,
             &mut self.next_plugin_slot,
@@ -1206,43 +1224,31 @@ impl crate::session::Session {
         );
         let mut effect = EffectSlotState::of_kind(EffectKind::Plugin);
         effect.params = EffectParams::Plugin(slot);
-        let inserted = self.effect_chain_parts_mut().and_then(|(effects, next_id)| {
-            let tail = effects.len();
-            let row = insert_effect(effects, next_id, insert_before, effect)?;
-            Some((tail, row, effects[row].id))
-        });
-        let Some((tail, row, device)) = inserted else {
+        let Some(inserted) = self.place_effect(effect, place) else {
             self.plugins.remove(&slot);
             return None;
         };
         let node = self.host_new_plugin(slot, &plugin, &PluginState::default(), &*handle);
         let align = IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
         let _ = handle.send_structural(StructuralCommand::InstallEffect {
-            target,
-            slot: tail as u8,
+            target: inserted.target,
+            slot: inserted.tail as u8,
             kind: EffectKind::Plugin,
             resource_key: Some(u64::from(slot.0)),
             node,
             align,
             analyzer: Box::new(SpectrumAnalyzer::new()),
-            state: Box::new(EffectSlot::for_device(device)),
+            state: Box::new(EffectSlot::for_device(inserted.device)),
         });
-        if row != tail {
+        if inserted.slot != inserted.tail {
             let _ = handle.send(EngineCommand::MoveEffect {
-                target,
-                from: tail as u8,
-                to: row as u8,
+                target: inserted.target,
+                from: inserted.tail as u8,
+                to: inserted.slot as u8,
             });
         }
         self.dirty = true;
-        Some(EffectInserted {
-            target,
-            slot: row,
-            tail,
-            device,
-            kind: EffectKind::Plugin,
-            params: EffectParams::Plugin(slot),
-        })
+        Some(inserted)
     }
 
     /// Open `plugin` with `state` into the freshly minted `slot` and return

@@ -170,10 +170,12 @@ Files marked *shared* are split in the table above.
   that runs a hosted plugin's processor, silent without one, MOO-84)
 - `session/src/plugin_rack.rs`: the control thread's hosted plugins
   (`PluginRack`, `Session::service_plugins`, `Session::device_latency`,
-  `insert_plugin_effect`, `export_plugin_processors`, `close_plugins`),
-  in a Document-owned directory by agreement with Document & Session; and
-  step 06's case, `session/tests/clap_effect.rs` and
-  `session/examples/clap_effect_case.rs`
+  `insert_plugin_effect`, `place_plugin_effect`, `export_plugin_processors`,
+  `close_plugins`), in a Document-owned directory by agreement with
+  Document & Session; step 06's case, `session/tests/clap_effect.rs` and
+  `session/examples/clap_effect_case.rs`; and `session/tests/plugin_place.rs`
+  (a plugin put inside a box, at a Chain's end or first in an empty one,
+  MOO-339)
 - `plugin-host/src/clap.rs`: the CLAP adapter (`ClapInstance`,
   `ClapProcessor`, `ClapOpener`), MOO-81
 - A hosted plugin's own GUI, headless (plugin-hosting step 11, MOO-300):
