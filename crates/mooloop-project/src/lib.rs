@@ -107,7 +107,22 @@ pub const EFFECT_RUN_PRESET_CONTAINS: &[&str] = &["effect_params", "effect_run"]
 /// names nothing in the song it lands in.
 pub const EFFECT_PLUGIN_PRESET_CONTAINS: &[&str] = &["effect_params", "effect_plugin"];
 
-/// The `contains` entry that marks a plugin device's preset.
+/// What a container preset holds when a hosted plugin is inside it
+/// (MOO-321): the run, and the plugin behind each plugin row -- which
+/// plugin, its parameter list, its pinned ids and its state -- in the run's
+/// own `plugins` table, keyed by the run-local slot each row names.
+///
+/// Added for [`EFFECT_PLUGIN_PRESET_CONTAINS`]'s reason: 0.1.5, and every
+/// build before this, checks an `effect_run` bundle's list against
+/// [`EFFECT_RUN_PRESET_CONTAINS`] alone, so it meets `effect_plugin`, does
+/// not know it, and refuses the bundle rather than landing the rows' slot
+/// numbers on whatever the song it loads into keeps under them. A run with
+/// no plugin in it writes [`EFFECT_RUN_PRESET_CONTAINS`], exactly as before.
+pub const EFFECT_RUN_PLUGIN_PRESET_CONTAINS: &[&str] =
+    &["effect_params", "effect_run", "effect_plugin"];
+
+/// The `contains` entry that marks a preset carrying a hosted plugin: a
+/// plugin device's, or a container's with one inside.
 const EFFECT_PLUGIN: &str = "effect_plugin";
 
 /// Indexable metadata for a saved preset, carried alongside the document so
@@ -593,22 +608,43 @@ pub fn save_plugin_effect_preset(
 /// Identities are stripped on the way out: a preset is what a group of
 /// devices sounds like, and which devices they *are* belongs to the chain
 /// they were lifted from. `load_effect_run` mints fresh ones on the way in.
+///
+/// **A hosted plugin inside goes with it** (MOO-321): each plugin row's key
+/// is a key into `run.plugins`, which the session fills from the live
+/// instances (`Session::lift_run_live`), and the bundle is written under
+/// [`EFFECT_RUN_PLUGIN_PRESET_CONTAINS`] so an older reader refuses it.
+/// Refused when a plugin row has no plugin to carry: that preset could only
+/// ever be refused on the way back in. An entry no row names is dropped.
 pub fn save_effect_run_preset(
     path: &Path,
     run: &EffectRun,
     info: PresetInfo,
     mode: AssetMode,
 ) -> Result<SaveReport, Error> {
+    let mut plugins = mooloop_core::PluginSlots::new();
+    for effect in &run.effects {
+        if let mooloop_core::EffectParams::Plugin(key) = effect.params {
+            let Some(plugin) = run.plugins.get(&key) else {
+                return Err(Error::Invalid(format!(
+                    "the plugin device in this container carries no plugin (slot {})",
+                    key.0
+                )));
+            };
+            plugins.insert(key, plugin.clone());
+        }
+    }
+    let contains = if plugins.is_empty() {
+        EFFECT_RUN_PRESET_CONTAINS
+    } else {
+        EFFECT_RUN_PLUGIN_PRESET_CONTAINS
+    };
     let mut run = EffectRun {
         effects: run
             .effects
             .iter()
             .map(|effect| effect.with_id(mooloop_core::DeviceId::UNASSIGNED))
             .collect(),
-        // Not written yet: a run's plugins need a `contains` entry of their
-        // own first, or 0.1.5 would load the rows' bare slot numbers
-        // (MOO-321). `load_effect_run` refuses a plugin row with none.
-        plugins: Default::default(),
+        plugins,
     };
     if run.effects.is_empty() {
         return Err(Error::Invalid("an effect run preset holds no devices".into()));
@@ -637,10 +673,7 @@ pub fn save_effect_run_preset(
         run,
         mode,
         Some(info),
-        EFFECT_RUN_PRESET_CONTAINS
-            .iter()
-            .map(|entry| (*entry).to_string())
-            .collect(),
+        contains.iter().map(|entry| (*entry).to_string()).collect(),
         None,
         |_| Vec::new(),
     )?;
@@ -1448,9 +1481,10 @@ fn parse_manifest(manifest: &str) -> Result<(LoadedDocument, AssetMode), Error> 
             (document, envelope.asset_mode)
         }
         "effect_run" => {
-            validate_contains(&header.contains, EFFECT_RUN_PRESET_CONTAINS)?;
+            validate_contains(&header.contains, run_contains(&header.contains))?;
             let envelope: Envelope<EffectRun> = table.try_into()?;
             validate_envelope(&envelope, "effect_run")?;
+            check_run_plugins(&envelope.document)?;
             (
                 LoadedDocument::EffectRun(Box::new(envelope.document)),
                 envelope.asset_mode,
@@ -1597,8 +1631,9 @@ fn summarize_preset(path: &Path) -> Option<PresetSummary> {
             }
         }
         "effect_run" => {
-            validate_contains(&header.contains, EFFECT_RUN_PRESET_CONTAINS).ok()?;
+            validate_contains(&header.contains, run_contains(&header.contains)).ok()?;
             let envelope: Envelope<EffectRun> = toml::from_str(&manifest).ok()?;
+            check_run_plugins(&envelope.document).ok()?;
             // A run preset belongs to the container it starts with, so it
             // lists on that container's rail -- a chain's beside the chain's
             // presets, a layer's beside the layer's (`containers/10`).
@@ -1627,6 +1662,45 @@ fn effect_contains(contains: &[String]) -> &'static [&'static str] {
     } else {
         EFFECT_PRESET_CONTAINS
     }
+}
+
+/// The `contains` list an `effect_run` bundle is checked against: a
+/// container's with a plugin inside when it says it holds one (MOO-321), the
+/// plain run's otherwise.
+fn run_contains(contains: &[String]) -> &'static [&'static str] {
+    if contains.iter().any(|entry| entry == EFFECT_PLUGIN) {
+        EFFECT_RUN_PLUGIN_PRESET_CONTAINS
+    } else {
+        EFFECT_RUN_PRESET_CONTAINS
+    }
+}
+
+/// Whether every plugin row of `run` carries the plugin it runs, with an
+/// identifier (MOO-321). Refused whole otherwise, never half loaded: a row
+/// whose key names nothing in the run is a bare slot number from the song it
+/// was lifted from, and would land on whatever the target song keeps there
+/// -- a container preset saved before this change, holding a plugin, is one.
+fn check_run_plugins(run: &EffectRun) -> Result<(), Error> {
+    for effect in &run.effects {
+        let mooloop_core::EffectParams::Plugin(key) = effect.params else {
+            continue;
+        };
+        match run.plugins.get(&key) {
+            None => {
+                return Err(Error::Invalid(
+                    "this container preset holds a plugin device but not the plugin it runs"
+                        .into(),
+                ))
+            }
+            Some(plugin) if plugin.plugin.id.is_empty() => {
+                return Err(Error::Invalid(
+                    "this container preset names a plugin with no identifier".into(),
+                ))
+            }
+            Some(_) => {}
+        }
+    }
+    Ok(())
 }
 
 /// A plugin device's preset, from its row and its `plugin` table, or why it
@@ -5010,6 +5084,109 @@ id = "default_kick"
         let manifest_path = path.join(MANIFEST_FILE);
         let manifest = fs::read_to_string(&manifest_path).unwrap();
         let cut = manifest.find("[plugin").expect("the plugin table was written");
+        fs::write(&manifest_path, &manifest[..cut]).unwrap();
+        assert!(matches!(load_bundle(&path), Err(Error::Invalid(_))));
+        assert!(list_presets(temp.path()).is_empty());
+    }
+
+    /// A Chain holding one plugin device, as `Session::lift_run_live` lifts
+    /// it: the row keyed `0` in the run, and the run's plugin under that key.
+    fn boxed_plugin_run() -> EffectRun {
+        let mut chain = EffectSlotState::of_kind(EffectKind::Chain);
+        chain.params = mooloop_core::EffectParams::Chain(mooloop_core::ContainerParams {
+            children: 1,
+            ..Default::default()
+        });
+        let mut row = plugin_row();
+        row.params = mooloop_core::EffectParams::Plugin(mooloop_core::PluginSlotId(0));
+        row.wet_dry = 0.5;
+        let mut run = EffectRun::of(vec![chain.with_id(mooloop_core::DeviceId(4)), row]);
+        run.plugins.insert(mooloop_core::PluginSlotId(0), saved_plugin());
+        run
+    }
+
+    /// **A container preset with a plugin inside carries the plugin**
+    /// (MOO-321): the run's `plugins` table round-trips with the plugin, its
+    /// list, its pins and its state bytes, under a `contains` list naming
+    /// `effect_plugin`, and the bundle lists as its container's preset. A
+    /// run with no plugin in it writes the plain list, as before.
+    #[test]
+    fn a_container_preset_carries_the_plugin_inside_it() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("boxed.mooloop-effect");
+        let run = boxed_plugin_run();
+        save_effect_run_preset(&path, &run, effect_info("Boxed"), AssetMode::Embedded).unwrap();
+
+        let manifest = fs::read_to_string(path.join(MANIFEST_FILE)).unwrap();
+        let header: Header = toml::from_str(&manifest).unwrap();
+        assert_eq!(header.contains, EFFECT_RUN_PLUGIN_PRESET_CONTAINS);
+        let LoadedDocument::EffectRun(back) = load_bundle(&path).unwrap().document else {
+            panic!("a container preset did not load as one");
+        };
+        assert_eq!(back.plugins, run.plugins);
+        assert_eq!(back.effects[1].params, run.effects[1].params);
+        assert_eq!(back.effects[1].wet_dry, 0.5);
+        assert!(back.effects.iter().all(|effect| !effect.id.is_assigned()));
+        let listed = list_presets(temp.path());
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].kind, PresetKind::Effect(EffectKind::Chain));
+
+        let plain = temp.path().join("plain.mooloop-effect");
+        let mut chain = EffectSlotState::of_kind(EffectKind::Chain);
+        chain.params = mooloop_core::EffectParams::Chain(mooloop_core::ContainerParams {
+            children: 1,
+            ..Default::default()
+        });
+        let run = EffectRun::of(vec![chain, EffectSlotState::of_kind(EffectKind::Delay)]);
+        save_effect_run_preset(&plain, &run, effect_info("Plain"), AssetMode::Embedded).unwrap();
+        let manifest = fs::read_to_string(plain.join(MANIFEST_FILE)).unwrap();
+        let header: Header = toml::from_str(&manifest).unwrap();
+        assert_eq!(header.contains, EFFECT_RUN_PRESET_CONTAINS);
+        assert!(!manifest.contains("plugins"), "an empty table was written:\n{manifest}");
+    }
+
+    /// **0.1.5 refuses a container preset with a plugin inside** (MOO-321)
+    /// rather than landing its row's slot number on the song it loads into.
+    /// Its reader checks an `effect_run` bundle's list against
+    /// `["effect_params", "effect_run"]` -- `EFFECT_RUN_PRESET_CONTAINS`,
+    /// unchanged since -- before it parses the document.
+    #[test]
+    fn an_older_reader_refuses_a_container_preset_with_a_plugin() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("boxed.mooloop-effect");
+        save_effect_run_preset(&path, &boxed_plugin_run(), effect_info("Boxed"), AssetMode::Embedded)
+            .unwrap();
+        let manifest = fs::read_to_string(path.join(MANIFEST_FILE)).unwrap();
+        let header: Header = toml::from_str(&manifest).unwrap();
+        const V0_1_5_EFFECT_RUN_CONTAINS: &[&str] = &["effect_params", "effect_run"];
+        assert_eq!(EFFECT_RUN_PRESET_CONTAINS, V0_1_5_EFFECT_RUN_CONTAINS);
+        match validate_contains(&header.contains, V0_1_5_EFFECT_RUN_CONTAINS) {
+            Err(Error::UnsupportedContents(entry)) => assert_eq!(entry, "effect_plugin"),
+            other => panic!("0.1.5 would have opened it: {other:?}"),
+        }
+    }
+
+    /// A container whose plugin device carries no plugin is refused on save,
+    /// and a bundle that lost its plugin -- or was written before a
+    /// container's plugins were -- is refused on load and not listed:
+    /// never half loaded onto a bare slot number.
+    #[test]
+    fn a_container_preset_without_its_plugin_is_refused() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("gone.mooloop-effect");
+        let mut bare = boxed_plugin_run();
+        bare.plugins.clear();
+        assert!(matches!(
+            save_effect_run_preset(&path, &bare, effect_info("Gone"), AssetMode::Embedded),
+            Err(Error::Invalid(_))
+        ));
+        assert!(!path.exists());
+
+        save_effect_run_preset(&path, &boxed_plugin_run(), effect_info("Gone"), AssetMode::Embedded)
+            .unwrap();
+        let manifest_path = path.join(MANIFEST_FILE);
+        let manifest = fs::read_to_string(&manifest_path).unwrap();
+        let cut = manifest.find("[document.plugins").expect("the plugins table was written");
         fs::write(&manifest_path, &manifest[..cut]).unwrap();
         assert!(matches!(load_bundle(&path), Err(Error::Invalid(_))));
         assert!(list_presets(temp.path()).is_empty());

@@ -443,14 +443,13 @@ fn a_pasted_plugin_device_lands_in_a_slot_minted_where_it_lands() {
     assert_ne!(plugin_slot(&first, 1), original, "pasted into its own song, a second slot");
 }
 
-/// **MOO-271, container preset.** The issue's case: the test gain in a
-/// Chain, saved as a container preset, loaded onto a Chain in a second song
-/// whose slot 0 holds a different plugin. The format does not carry the
-/// plugin yet (MOO-321), so the preset's plugin row is a bare slot number,
-/// and the load is refused rather than landing on the other plugin's slot.
-///
-/// Once MOO-321 lands, this load succeeds, into a minted slot running the
-/// gain: the next test is what that landing does.
+/// **MOO-271 and MOO-321, container preset.** The issue's case: the test
+/// gain in a Chain, nudged in the plugin and not captured, saved as a
+/// container preset, loaded onto a Chain in a second song whose slot 0 holds
+/// a different plugin. The preset carries the plugin with the state it held
+/// when saved, under a `contains` entry 0.1.5 refuses, and the plugin row
+/// lands in a slot minted in the second song -- never on the other plugin's
+/// slot -- where the pump opens the gain with that state.
 #[test]
 fn a_container_preset_with_a_plugin_never_lands_on_the_target_songs_slot() {
     let folder = tempfile::tempdir().unwrap();
@@ -459,6 +458,8 @@ fn a_container_preset_with_a_plugin_never_lands_on_the_target_songs_slot() {
     let mut first = session_with(&drum_loop(1));
     let mut engine = Engine::default();
     let original = insert_gain(&mut first, &mut engine, 0);
+    first.capture_plugin_states();
+    nudge(&mut first, &mut engine, original);
     first.wrap_effects_in_container(0..1).expect("wrapped");
     let device = first.effect_chain().expect("a chain")[0].id;
     first.pending_preset_save = first
@@ -466,6 +467,11 @@ fn a_container_preset_with_a_plugin_never_lands_on_the_target_songs_slot() {
         .map(|target| PresetSaveTarget::Effect { target, device });
     let source = first.take_preset_save(120, 0).expect("a save was pending");
     let run = source.run.expect("a container saves its run");
+    assert_eq!(
+        saved_gain(&first.plugins[&original].state),
+        test_plugin::GAIN_DB_DEFAULT,
+        "a preset save is not an edit"
+    );
     mooloop_project::save_effect_run_preset(
         &path,
         &run,
@@ -477,6 +483,11 @@ fn a_container_preset_with_a_plugin_never_lands_on_the_target_songs_slot() {
         AssetMode::Embedded,
     )
     .expect("saved");
+    let manifest = std::fs::read_to_string(path.join(mooloop_project::MANIFEST_FILE)).unwrap();
+    assert!(
+        manifest.contains("\"effect_plugin\""),
+        "the bundle names what an older reader must refuse"
+    );
     let LoadedDocument::EffectRun(run) =
         mooloop_project::load_bundle(&path).expect("it loads").document
     else {
@@ -489,28 +500,29 @@ fn a_container_preset_with_a_plugin_never_lands_on_the_target_songs_slot() {
     second
         .insert_effect_at(mooloop_core::EffectKind::Chain, 1)
         .expect("room");
-    let before = second.project_snapshot(120, 0);
 
-    if second.load_effect_run(1, &run, "Boxed").is_some() {
-        let landed = plugin_slot(&second, 2);
-        panic!(
-            "the preset's plugin row landed on slot {} ({}), a number from another song",
-            landed.0,
-            second
-                .plugins
-                .get(&landed)
-                .map_or("nothing", |state| state.plugin.name.as_str()),
-        );
-    }
+    second
+        .load_effect_run(1, &run, "Boxed")
+        .expect("a container preset carrying its plugin loads onto a Chain");
+    let landed = plugin_slot(&second, 2);
+    assert_ne!(landed, taken, "not the other plugin's slot");
+    assert_eq!(second.plugins[&landed].plugin, gain_ref());
+    assert_eq!(second.plugins[&taken].plugin, other_ref(), "the other one untouched");
+
+    second.service_plugins(&mut engine);
+    assert!(second.plugin_problem(landed).is_none());
+    let gain = second
+        .plugin_param_index(landed, test_plugin::PARAM_GAIN)
+        .expect("listed");
     assert_eq!(
-        second.project_snapshot(120, 0),
-        before,
-        "refused whole, and nothing minted"
+        second.plugin_param_value(landed, gain),
+        Some(test_plugin::NUDGE_DB),
+        "opened with the state the plugin held when the preset was saved"
     );
 }
 
 /// **MOO-271, a container run that carries its plugin**: a copied Chain,
-/// and what a container preset will be once MOO-321 writes the plugin.
+/// which carries it as a container preset does (MOO-321).
 /// Loaded onto a Chain in a song whose slot 0 holds another plugin, the
 /// plugin row lands in a slot minted there, and the pump opens the gain in
 /// it with the state it was copied with.

@@ -2768,10 +2768,15 @@ land on its own when it starts to matter:
   in another song. Before, the copy named the original's slot, so two
   devices shared one plugin, or a paste into another song ran whatever that
   song had under the same number. A container copied with a plugin inside
-  carries it the same way. **A container preset holding a plugin does not
-  load yet**: it is refused, because the preset file does not carry the
-  plugin (MOO-321). Before, it loaded onto whatever the target song had at
-  the plugin's old slot number.
+  carries it the same way. **A container preset carries the plugins inside
+  it** (MOO-321), with the state each held when it was saved, and loads them
+  into slots of their own; 0.1.5 refuses such a preset. One saved before
+  that, holding a plugin, is refused rather than landing on whatever the
+  target song had at the plugin's old slot number.
+  **A pasted or cloned channel runs its own instances of its plugins**
+  (MOO-317, MOO-331): its instrument and every plugin on its chain, inside
+  containers too, each in a slot of its own, with the state the plugin held
+  when the channel was copied (MOO-332).
   **A pasted channel arrives with its MIDI and AUDIO inputs off**: the picks
   name something in the document the channel was copied from, and the
   clipboard outlives New Song and Open Song.
