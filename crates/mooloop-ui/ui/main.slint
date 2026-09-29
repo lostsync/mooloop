@@ -377,6 +377,14 @@ struct EffectSlotRow {
     // is inside, not what ends at it. Since `containers/09` it is the last
     // *drawn* row, because a layer hides the branches it is not showing.
     closing: [int],
+    // Beside `closing`, entry for entry: how many append joins -- the join
+    // inside a Chain after its last device, which adds at the end of the box
+    // (MOO-340) -- are drawn up to and including the one before that box's
+    // rail. Box `t` draws one when its count is one more than box `t - 1`'s
+    // (or than 0); rail `t` sits `t` rails and `closing-joins[t]` joins past
+    // the row; the last entry is what the row's tail holds. Rust's
+    // (`RowView.closing_joins`), because a markup list cannot be summed.
+    closing-joins: [int],
     // Whether this row is a layer, which draws `LayerDeviceFace` rather than
     // the chain's face. A bool for `is-container`'s reason: the markup asks
     // what a row is, not what number its kind has this frame.
@@ -1980,6 +1988,9 @@ export component MainWindow inherits Window {
     callback browser-preset-appended(string);
     // A preset dropped on a join: a new device before that row (MOO-218).
     callback browser-preset-dropped(string, int);
+    // A preset dropped on the join inside a Chain after its last device: a
+    // new device at the end of that container (MOO-340).
+    callback browser-preset-dropped-into(string, int);   // path, container slot
     // The browser's filter field, both tabs (MOO-9).
     in-out property <string> browser-filter;
     callback browser-filter-changed(string);
@@ -2079,6 +2090,9 @@ export component MainWindow inherits Window {
     callback effect-collapse-toggled(int);
     // Insert a device as the first thing inside the container in this slot.
     callback add-effect-into-container(int, int);   // kind, container slot
+    // Add a device as the last thing inside the Chain in this slot: the join
+    // after a Chain's last device, inside its box (MOO-340).
+    callback append-effect-into-container(int, int);   // kind, container slot
     // A layer's list (`containers/09`): show this branch in the rack, which
     // is looking rather than an edit and reaches no engine; and add an empty
     // branch at the end of the layer.
@@ -2135,6 +2149,9 @@ export component MainWindow inherits Window {
     // The insert menu's "Plugin…" row: open the browser's PLUGINS tab, aimed
     // at the row a plugin picked there should land before.
     callback add-plugin-requested(int);
+    // The same, aimed at the end of the container in this slot: "Plugin…" on
+    // a join inside a Chain (MOO-340).
+    callback add-plugin-into-requested(int);
     // The add-channel menu's "Add Plugin…": open the browser's PLUGINS tab,
     // where an instrument picked becomes a new channel's source.
     callback add-plugin-channel-requested();
@@ -2142,6 +2159,9 @@ export component MainWindow inherits Window {
     // for where a double-click puts it (after the selected device, else at
     // the end of the chain, unless the menu row aimed it somewhere).
     callback browser-plugin-added(string, int);
+    // A plugin dropped on a join inside a Chain: its id, and the container
+    // it lands at the end of (MOO-340).
+    callback browser-plugin-added-into(string, int);
     callback delay-tempo-sync-changed(int, bool);
     callback modulation-tempo-sync-changed(int, bool);
     callback modulation-rate-division-changed(int, int);
@@ -5417,9 +5437,16 @@ export component MainWindow inherits Window {
                                                     + DeviceRackMetrics.rail-width
                                                         * (self.is-container ? 1 : 2);
                                             // The rails the boxes ending here contribute,
-                                            // innermost first, between this row and the join.
+                                            // innermost first, between this row and the join,
+                                            // and the append join each Chain among them draws
+                                            // before its rail (MOO-340). Part of the cell's
+                                            // width, so of the pitch a drag takes out of the
+                                            // rack. An out-of-range index is 0 in Slint, so a
+                                            // row closing nothing adds no joins.
                                             property <length> tail-width:
-                                                slot.closing.length * DeviceRackMetrics.rail-width;
+                                                slot.closing.length * DeviceRackMetrics.rail-width
+                                                + slot.closing-joins[slot.closing.length - 1]
+                                                    * DeviceRackMetrics.join-width;
                                             // An empty box draws a join inside it, between its
                                             // face and its own output rail (MOO-218).
                                             property <bool> inner-join: self.is-container && slot.children == 0
@@ -5519,11 +5546,16 @@ export component MainWindow inherits Window {
                                                     // rail and before the join arrow, which is
                                                     // leading out of it. A box that carries on
                                                     // spans the arrow too, because that arrow is
-                                                    // inside it.
+                                                    // inside it. The box closing at this level is
+                                                    // `closing[innermost-close - level]`, and it
+                                                    // holds the append joins up to its own
+                                                    // (MOO-340).
                                                     width: self.cap-right
                                                         ? cell.frame-width + cell.inner-width
                                                             + (cell.innermost-close - level + 1)
                                                                 * DeviceRackMetrics.rail-width
+                                                            + slot.closing-joins[cell.innermost-close - level]
+                                                                * DeviceRackMetrics.join-width
                                                         : cell.width;
                                                 }
                                             }
@@ -6252,9 +6284,14 @@ export component MainWindow inherits Window {
                                             // container's own row rather than this one: it is
                                             // that device's control, standing at the far end
                                             // of its own run.
+                                            //
+                                            // Each rail sits past the rails before it and past
+                                            // the append joins up to and including its own box's
+                                            // (MOO-340).
                                             for container[tail] in slot.closing : DeviceOutputRail {
                                                 x: cell.shift + cell.frame-width + cell.inner-width
-                                                    + tail * DeviceRackMetrics.rail-width;
+                                                    + tail * DeviceRackMetrics.rail-width
+                                                    + slot.closing-joins[tail] * DeviceRackMetrics.join-width;
                                                 y: 0px;
                                                 height: DeviceRackMetrics.face-height;
                                                 container-chrome: true;
@@ -6302,10 +6339,37 @@ export component MainWindow inherits Window {
                                             // than an index, because the position just
                                             // after an empty container is also the position
                                             // just after it, and no index can mean both.
+                                            //
+                                            // An empty Chain's first and last are one place,
+                                            // so a preset or a plugin lands here at the end of
+                                            // the box, like the append join below (MOO-340). An
+                                            // empty layer takes neither: a device at a layer's
+                                            // end would be a new branch.
                                             if cell.inner-join : DeviceJoin {
                                                 x: cell.shift + cell.frame-width;
                                                 y: 0px;
+                                                drop-into: slot.is-layer ? -1 : index;
                                                 kind-selected(kind) => { root.add-effect-into-container(kind, index); }
+                                                plugin-requested => { root.add-plugin-into-requested(index); }
+                                            }
+                                            // The append join of each Chain ending here: inside
+                                            // the box, after its last device and before its rail,
+                                            // adding at the end of the box (MOO-340). Box `tail`
+                                            // draws one where its running count steps up; the
+                                            // holder is a bare, cell-sized item, so a box that
+                                            // draws none has no join at all, hidden or not.
+                                            for container[tail] in slot.closing : append-holder := Rectangle {
+                                                property <int> joins-before:
+                                                    tail == 0 ? 0 : slot.closing-joins[tail - 1];
+                                                if slot.closing-joins[tail] > append-holder.joins-before : DeviceJoin {
+                                                    x: cell.shift + cell.frame-width + cell.inner-width
+                                                        + tail * DeviceRackMetrics.rail-width
+                                                        + append-holder.joins-before * DeviceRackMetrics.join-width;
+                                                    y: 0px;
+                                                    drop-into: container;
+                                                    kind-selected(kind) => { root.append-effect-into-container(kind, container); }
+                                                    plugin-requested => { root.add-plugin-into-requested(container); }
+                                                }
                                             }
                                             // The join leading out of this row, and past any
                                             // box that ends here: a device added from it lands
@@ -8169,7 +8233,18 @@ export component MainWindow inherits Window {
                                                     // (MOO-218). Anywhere else on the rack: the
                                                     // same load a double-click does.
                                                     if (BrowserDrag.active && e.kind == PointerEventKind.up) {
-                                                        if (row.kind == 4) {
+                                                        // On a join inside a Chain after its
+                                                        // last device: at the end of that box
+                                                        // (MOO-340), plugin or preset alike.
+                                                        if (BrowserDrag.target-into >= 0) {
+                                                            if (row.kind == 4) {
+                                                                root.browser-plugin-added-into(BrowserDrag.path,
+                                                                    BrowserDrag.target-into);
+                                                            } else {
+                                                                root.browser-preset-dropped-into(BrowserDrag.path,
+                                                                    BrowserDrag.target-into);
+                                                            }
+                                                        } else if (row.kind == 4) {
                                                             // A plugin: before that join's
                                                             // row, or where a double-click
                                                             // puts one (MOO-83).

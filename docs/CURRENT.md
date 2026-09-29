@@ -1972,7 +1972,12 @@ land on its own when it starts to matter:
   (MOO-218, 2026-09-24): the `→` turns into a `+` under the pointer and opens
   the insert menu, and the device lands in that gap -- inside a box when the
   arrow is inside it, after the box when the arrow leads out of it. An empty
-  box draws an arrow of its own inside it, which adds into the box. The arrow
+  box draws an arrow of its own inside it, which adds into the box. **A Chain
+  holding devices draws an arrow after its last one, inside the box and
+  before its rail, which adds at the end of the Chain** (MOO-299, MOO-340,
+  2026-09-29); the arrow past its rail still adds after it. The same arrow
+  takes **Plugin…** and a dropped preset, and so does an empty Chain's own
+  arrow; a layer's shown Chain branch has one, a layer does not. The arrow
   after a layer's head adds nothing: a new branch is the layer face's `+`.
   There is no `+` on a device's rail and no add slot after the chain; the
   last arrow adds at the end. A preset dragged out of the browser and dropped
@@ -1987,10 +1992,10 @@ land on its own when it starts to matter:
   fold is saved with the song and is not an undo step**; undo and redo keep
   whatever is folded now, so no Ctrl+Z unfolds anything (whether it should
   be saved at all is Adam's call: MOO-219).
-  Appending to the end of a box is a drag rather than an insert, because the
-  end of a run has to stay addressable as "after the container" -- for an
-  empty box, "just inside" and "just after" are the same position, so which
-  one is meant has to come from the gesture rather than from the index. Its one control is a dry/wet mix across the
+  The end of a box is named rather than indexed, because the index past a
+  run means "after the container" -- for an empty box, "just inside" and
+  "just after" are the same position, so which one is meant has to come from
+  the arrow pressed rather than from the index. Its one control is a dry/wet mix across the
   whole run, delayed to match that run's latency — the wet/dry that a
   *single* device has always had, applied to a group. It really is the one
   control: the shell's own dry/wet is not offered on a container row, because

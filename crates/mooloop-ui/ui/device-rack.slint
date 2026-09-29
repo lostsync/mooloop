@@ -101,11 +101,17 @@ export global BrowserDrag {
     // pointer (MOO-218), or -1 when no join is: then the rack as a whole
     // takes it, as a double-click would.
     in-out property <int> target-before: -1;
+    // The container a drop would land at the end of, set by a join inside a
+    // Chain after its last device (MOO-340), or -1. A join sets one of the
+    // two: no index can say "the end of this box", because the index past
+    // a box's run means "after the box".
+    in-out property <int> target-into: -1;
 
     public function end() {
         active = false;
         over-rack = false;
         target-before = -1;
+        target-into = -1;
         path = "";
         name = "";
     }
@@ -1071,17 +1077,21 @@ export component CollapsedDevice inherits Rectangle {
 // rows a layer is hiding.
 export component DeviceJoin inherits Rectangle {
     in property <bool> enabled: true;
-    // The row a preset dropped here lands before, or -1 when this join is not
-    // a place to drop one (the inner join of an empty box, which inserts
-    // *into* rather than before anything).
+    // The row a preset dropped here lands before, or -1 when this join does
+    // not insert before a row.
     in property <int> drop-before: -1;
+    // The container a preset dropped here lands at the end of, or -1: the
+    // join inside a Chain after its last device, and an empty Chain's own
+    // join (MOO-340). Set instead of `drop-before`, never with it.
+    in property <int> drop-into: -1;
     callback kind-selected(int);
-    // The menu's "Plugin…" row (MOO-83): offered where the join inserts
-    // before a row, which is where a plugin from the browser can land.
+    // The menu's "Plugin…" row (MOO-83): offered wherever a plugin from the
+    // browser can land, which is wherever a preset can be dropped.
     callback plugin-requested();
 
+    property <bool> droppable: root.drop-before >= 0 || root.drop-into >= 0;
     // A preset from the browser is over this join: the drop lands here.
-    property <bool> drop-hot: BrowserDrag.active && root.enabled && root.drop-before >= 0
+    property <bool> drop-hot: BrowserDrag.active && root.enabled && self.droppable
         && BrowserDrag.pointer-x >= self.absolute-position.x
         && BrowserDrag.pointer-x < self.absolute-position.x + self.width
         && BrowserDrag.pointer-y >= self.absolute-position.y
@@ -1089,8 +1099,11 @@ export component DeviceJoin inherits Rectangle {
     changed drop-hot => {
         if (self.drop-hot) {
             BrowserDrag.target-before = root.drop-before;
-        } else if (BrowserDrag.target-before == root.drop-before) {
+            BrowserDrag.target-into = root.drop-into;
+        } else if (BrowserDrag.target-before == root.drop-before
+                && BrowserDrag.target-into == root.drop-into) {
             BrowserDrag.target-before = -1;
+            BrowserDrag.target-into = -1;
         }
     }
     property <bool> lit: (touch.has-hover || root.drop-hot) && root.enabled;
@@ -1150,7 +1163,7 @@ export component DeviceJoin inherits Rectangle {
             border-color: Theme.border;
             border-radius: Theme.radius-md;
             menu-content := EffectTypeMenu {
-                plugin-enabled: root.drop-before >= 0;
+                plugin-enabled: root.droppable;
                 kind-selected(kind) => {
                     root.kind-selected(kind);
                     insert-menu.close();

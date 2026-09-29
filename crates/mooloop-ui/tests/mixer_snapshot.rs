@@ -299,6 +299,7 @@ fn render_mixer_pane_with_a_bus_chain() {
             // about the depth cap, so wrapping is offered.
             wrap_enabled: true,
             closing: Vec::<i32>::new().as_slice().into(),
+            closing_joins: Vec::<i32>::new().as_slice().into(),
             // `containers/09`: what the rack draws of a layer. Nothing here is
             // hidden or bracketed, and the next row's depth is the caller's to set.
             is_layer: false,
@@ -366,6 +367,7 @@ fn render_mixer_pane_with_a_bus_chain() {
             // about the depth cap, so wrapping is offered.
             wrap_enabled: true,
             closing: Vec::<i32>::new().as_slice().into(),
+            closing_joins: Vec::<i32>::new().as_slice().into(),
             // `containers/09`: what the rack draws of a layer. Nothing here is
             // hidden or bracketed, and the next row's depth is the caller's to set.
             is_layer: false,

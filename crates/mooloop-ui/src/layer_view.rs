@@ -60,10 +60,8 @@ pub(crate) struct RowView {
     /// past the row, box `t` draws an append join exactly when its count is
     /// one more than box `t - 1`'s (or than 0), and the last entry is how
     /// many joins the row's tail holds -- which is part of the row's pitch,
-    /// and so of the drag's gap (`DeviceRackMetrics.join-width`).
-    // Read by the rack's row once Interface's half of MOO-299 carries it
-    // into `EffectSlotRow` (MOO-340); remove this with that change.
-    #[allow(dead_code)]
+    /// and so of the drag's gap (`DeviceRackMetrics.join-width`). The rack
+    /// reads it as `EffectSlotRow.closing-joins` (MOO-340).
     pub closing_joins: Vec<i32>,
     /// On a layer's row: its branches, in rack order.
     pub branches: Vec<BranchView>,
