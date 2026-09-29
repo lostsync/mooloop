@@ -754,10 +754,17 @@ export component StepperChip inherits Rectangle {
     Tooltip { text: @markdown("\{root.current}"); }
 }
 
+// 12px at 100%, growing with the text above it (MOO-291). It was a fixed
+// 12px, so at 200% the capitals were cut in half and the next row drawn over
+// them. It grows by `row-growth` rather than to its text's preferred height
+// because it is placed in sixty-odd layouts, many of them device faces that
+// pointer tests aim at by the pixel: at 100% a label keeps the height every
+// face was laid out around, and above it keeps the same proportion to its
+// capitals, which is what a label in capitals needs.
 export component SectionLabel inherits Text {
     color: Theme.text-faint;
     font-size: Theme.text-md;
-    height: 12px;
+    height: 12px * Theme.row-growth;
 }
 
 // Bounded functional group used to tile instrument editors. Children live in

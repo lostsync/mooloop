@@ -71,6 +71,13 @@ export global Theme {
     out property <length> text-3xl: 16px * root.type-base * root.type-scale;
     out property <length> text-4xl: 22px * root.type-base * root.type-scale;
 
+    // What a height drawn around one line of text at 100% is multiplied by:
+    // a section label (MOO-291). It was chosen at 100% and never grew, so at
+    // 200% the label's capitals were cut in half. 1 up to 100%, so nothing
+    // laid out around it at the default size moves; the type scale above it,
+    // so it keeps the proportion to its text that it was drawn with.
+    out property <float> row-growth: max(1.0, root.type-scale);
+
     // Stroke. A theme that wants a borderless interface sets `hairline` to 0
     // and gets one without any face knowing that is what it asked for; the
     // conditional strokes keep their condition, because whether a border is
