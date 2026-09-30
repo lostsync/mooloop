@@ -511,8 +511,14 @@ fn a_layer_round_trips_through_the_document() {
     let path = temp.path().join("layered.mooloop");
 
     let mut layered = three_device_chain();
-    wrap_as(&mut layered, EffectKind::Layer, 1..3, 0.4);
-    wrap_as(&mut layered, EffectKind::Chain, 0..4, 0.8);
+    // Every branch of a layer is a Chain (MOO-456), which is what
+    // `Session::wrap_effects_in` and the layer's `+` produce; `load_bundle`
+    // wraps a bare child on open (MOO-461), so a bare-built layer would come
+    // back in a different shape. Later branch first, so indices stay put.
+    wrap_as(&mut layered, EffectKind::Chain, 2..3, 1.0);
+    wrap_as(&mut layered, EffectKind::Chain, 1..2, 1.0);
+    wrap_as(&mut layered, EffectKind::Layer, 1..5, 0.4);
+    wrap_as(&mut layered, EffectKind::Chain, 0..6, 0.8);
     let before = render_blocks(&layered, 0.5, 128);
 
     mooloop_project::save_song(&path, &layered, mooloop_project::AssetMode::Referenced)
@@ -533,8 +539,10 @@ fn a_layer_round_trips_through_the_document() {
             (0, EffectKind::Chain),
             (1, EffectKind::Filter),
             (1, EffectKind::Layer),
-            (2, EffectKind::Drive),
-            (2, EffectKind::Delay),
+            (2, EffectKind::Chain),
+            (3, EffectKind::Drive),
+            (2, EffectKind::Chain),
+            (3, EffectKind::Delay),
         ],
         "the layer did not survive the round trip as a layer"
     );
