@@ -488,6 +488,28 @@ removes, or alters user-visible behavior updates it in the same commit; so
 does a change that invalidates a fact stated in any other document. Leaving
 a document to be corrected later is how it stops being trusted.
 
+## Comments
+
+A code comment is one of three kinds, and each has one place (Adam,
+2026-09-30):
+
+1. **`///` and `//!` are the contract**: what the item does, what it
+   guarantees, its units, which thread may call it. Write it for someone
+   reading the rendered docs, who sees nothing but the signature beside it.
+2. **`//` in a body says why the code is this way**, and only where the code
+   cannot say it itself.
+3. **History goes elsewhere**: what the code used to do, which issue changed
+   it, what broke before. That belongs in the commit message, the Linear
+   issue or `docs/JOURNAL.md`. An issue id stays in a comment only while that
+   issue holds a decision that is still open.
+
+When you change a function, fold what you learned into its contract and
+delete what is no longer true; do not append a paragraph. A comment that
+grows by one paragraph and one issue id per fix is how `carry_strips_from`
+came to have 121 comment lines for 82 lines of code
+(`docs/workflows/accretion/`). This governs comments in code, not the prose
+documents under `docs/`, whose job is often the history.
+
 ## Slint
 
 This project pins Slint `1.18.1`. Before editing `.slint`, `slint::` Rust API,
