@@ -7,7 +7,8 @@
 //! state and the GUI, and a **processor** -- an `AudioNode + Send` -- that
 //! crosses to the audio thread through the ordinary structural commands.
 //! [`HostedInstance`] is the first half with every plugin format's types
-//! taken out: the CLAP adapter (step 06) implements it, and so does the test
+//! taken out: the CLAP adapter ([`crate::clap::ClapInstance`]) implements
+//! it, and so does the test
 //! double the rack's tests use.
 //!
 //! [`Lifeline`] is what keeps the two halves in order. Every processor an
@@ -48,10 +49,12 @@ impl Requests {
     /// CLAP `state.mark_dirty`: the song has changed.
     pub const STATE_DIRTY: u32 = 1 << 4;
 
+    /// Whether any of `bit` (one or more of the constants above) is raised.
     pub const fn has(self, bit: u32) -> bool {
         self.0 & bit != 0
     }
 
+    /// Whether nothing is raised.
     pub const fn is_empty(self) -> bool {
         self.0 == 0
     }
@@ -62,6 +65,7 @@ impl Requests {
 pub struct RequestFlags(AtomicU32);
 
 impl RequestFlags {
+    /// Nothing raised.
     pub const fn new() -> Self {
         Self(AtomicU32::new(0))
     }
@@ -80,12 +84,16 @@ impl RequestFlags {
 /// One of the plugin's own parameter changes, as its processor reported
 /// it: a GUI drag, a preset it loaded itself, or a value it moved on its
 /// own. Read on the control thread ([`HostedInstance::drain_param_events`]).
-/// These update what the session knows and never send anything back to the
-/// plugin, which is what keeps them from looping (MOO-82).
+/// These update what the session knows and are never sent back to the
+/// plugin, which is what keeps them from looping.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PluginParamEvent {
+    /// Parameter `id` now holds `value`, in the plugin's plain units.
     Value { id: u32, value: f64 },
+    /// The user took hold of parameter `id` in the plugin (a drag in its
+    /// GUI, say). The values up to its [`Self::GestureEnd`] are one gesture.
     GestureBegin { id: u32 },
+    /// The user let go of parameter `id`.
     GestureEnd { id: u32 },
 }
 
@@ -94,7 +102,7 @@ pub enum PluginParamEvent {
 pub enum HostError {
     /// The plugin reported failure, with whatever it said.
     Plugin(String),
-    /// The plugin's ports or format are not ones this host runs (step 06).
+    /// The plugin's ports or format are not ones this host runs.
     Incompatible(String),
     /// The plugin is not loaded: missing, or failed to instantiate.
     Missing,
@@ -121,6 +129,7 @@ impl std::error::Error for HostError {}
 pub struct Lifeline(Arc<()>);
 
 impl Lifeline {
+    /// The rack's end, with nothing tied to it yet.
     pub fn new() -> Self {
         Self::default()
     }
@@ -153,8 +162,10 @@ pub trait HostedInstance {
     /// active, and it can change while it runs ([`Requests::LATENCY_CHANGED`]).
     fn latency_frames(&self) -> u32;
 
+    /// The plugin's state as it is now, for the song to save.
     fn save_state(&mut self) -> Result<PluginState, HostError>;
 
+    /// Load `state`, as [`Self::save_state`] made it, into the plugin.
     fn load_state(&mut self, state: &PluginState) -> Result<(), HostError>;
 
     /// The plugin's own text for `value` of parameter `id`, if it has any.
@@ -198,26 +209,25 @@ pub trait HostedInstance {
 
     /// Whether it may be a device on a chain:
     /// [`crate::scan::main_port_effect_refusal`] on what it declared when it
-    /// opened (MOO-85, MOO-307). The session refuses a
-    /// plugin in a place it does not fit.
+    /// opened. The session refuses a plugin in a place it does not fit.
     fn fits_effect(&self) -> bool {
         true
     }
 
     /// Whether it may be a channel's source:
     /// [`crate::scan::main_port_source_refusal`] on what it declared when it
-    /// opened (MOO-85, MOO-307).
+    /// opened.
     fn fits_source(&self) -> bool {
         false
     }
 
     /// How many notes the plugin sent out of its own. They are counted, not
-    /// routed (plugin-hosting step 10, the plan's "Deliberately not").
+    /// routed anywhere.
     fn generated_notes(&self) -> u64 {
         0
     }
 
-    /// The plugin's own GUI, when it has one (step 11, MOO-300). Opening
+    /// The plugin's own GUI, when it has one. Opening
     /// and closing it never touches the processor.
     fn gui(&mut self) -> Option<&mut dyn HostedGui> {
         None
@@ -225,7 +235,7 @@ pub trait HostedInstance {
 
     /// Fire every timer of the plugin's whose period has elapsed at `now`,
     /// and call it back for every registered file descriptor that is ready,
-    /// polled without waiting (step 11, policy 1). The pump's once-a-tick
+    /// polled without waiting. The pump's once-a-tick
     /// call: it never blocks, though what the plugin does in its callbacks
     /// is its own affair.
     fn service_io(&mut self, now: std::time::Instant) -> IoActivity {
@@ -256,15 +266,16 @@ pub trait HostedInstance {
 /// The audio configuration a processor is built for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AudioConfig {
+    /// Frames per second.
     pub sample_rate: u32,
     /// The largest block the processor will ever be handed.
     pub max_frames: u32,
 }
 
-/// Finds and opens a plugin a song names (step 06).
+/// Finds and opens a plugin a song names.
 ///
 /// The app's is the CLAP opener over the scanner's cache
-/// (`crate::clap::ClapOpener`); a test hands the rack whatever it likes.
+/// ([`crate::clap::ClapOpener`]); a test hands the rack whatever it likes.
 pub trait PluginOpener {
     /// Create `plugin`, with `state` loaded into it, ready to build a
     /// processor for `config`. [`HostError::Missing`] when it is not
