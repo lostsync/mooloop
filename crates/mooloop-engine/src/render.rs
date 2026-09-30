@@ -6240,6 +6240,9 @@ impl RenderState {
         // point rather than a hazard.
         self.grow_channels(project.channels.len());
         self.grow_buses(project.buses.len());
+        // Notes in flight belong to the project being replaced: they would
+        // land in the new one, measured against a playhead that just reset.
+        self.recording = [None; 128];
         self.transport.stop();
         self.transport.set_tempo(project.bpm.into());
         self.loop_range = project.loop_range;
@@ -7698,6 +7701,7 @@ impl RenderState {
                 self.release_all_sequenced();
             }
             EngineCommand::Stop => {
+                self.flush_recording();
                 self.transport.stop();
                 self.cancel_deferred();
                 self.release_all_sequenced();
@@ -8821,11 +8825,17 @@ impl RenderState {
 
     /// Note up while recording: report the whole note.
     fn capture_note_off(&mut self, offset: u32, note: u8) {
+        let end_frames = self.transport.frames_played() + u64::from(offset);
+        self.report_recorded(note, end_frames);
+    }
+
+    /// Reports the in-flight note on `note`, if any, as ending at
+    /// `end_frames`, and forgets it.
+    fn report_recorded(&mut self, note: u8, end_frames: u64) {
         let Some(held) = self.recording[usize::from(note & 0x7f)].take() else {
             return;
         };
-        let frames = (self.transport.frames_played() + u64::from(offset))
-            .saturating_sub(held.start_frames);
+        let frames = end_frames.saturating_sub(held.start_frames);
         // At least one tick: a note tapped inside a single block is still a
         // note, and a zero-length one would be invisible in the pattern.
         let length_ticks = ((frames as f64 * self.transport.ticks_per_sample()).round() as u32)
@@ -8838,6 +8848,16 @@ impl RenderState {
             start_tick: held.start_tick,
             length_ticks,
         });
+    }
+
+    /// Stop resets `frames_played`, which every in-flight note measures its
+    /// length against, so each is reported up to the stop rather than left to
+    /// come out as one tick when its key comes up (MOO-412).
+    fn flush_recording(&mut self) {
+        let end_frames = self.transport.frames_played();
+        for note in 0..128u8 {
+            self.report_recorded(note, end_frames);
+        }
     }
 
     /// Where `offset` frames into this block falls on the playhead.
@@ -11516,6 +11536,53 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         // tick 432 (108 000 frames: 421 blocks and 224) is heard at 422.4.
         let mut render = rig(true);
         assert_eq!(tap(&mut render, 421, 224), 38);
+    }
+
+    /// A key still down when the transport stops is reported at the length it
+    /// had been held to the stop, not as a one-tick note measured from a
+    /// playhead Stop had just zeroed (MOO-412).
+    #[test]
+    fn a_key_held_through_stop_records_the_length_held_to_the_stop() {
+        use mooloop_core::{
+            EngineEvent, MidiChannelFilter, MidiInputRoute, MidiKind, MidiMessage, MidiPortId,
+            MidiRouteSource,
+        };
+
+        let mut render = two_channel_render();
+        let _ = render.set_midi_routing(Box::new(MidiRouting {
+            routes: vec![MidiInputRoute {
+                source: MidiRouteSource::AllPorts,
+                channel: MidiChannelFilter::Omni,
+            }],
+        }));
+        render.set_record_armed(true);
+        render.play();
+        let message = |kind| MidiMessage {
+            offset: 0,
+            port: MidiPortId::FIRST,
+            channel: 0,
+            kind,
+        };
+        render.apply_midi(&[message(MidiKind::NoteOn {
+            note: 60,
+            velocity: 90,
+        })]);
+        // 20 blocks of 256 frames at 120 bpm and 48 kHz is 20.48 ticks.
+        for _ in 0..20 {
+            render.process_block(256);
+        }
+        render.apply_command(EngineCommand::Stop);
+        render.apply_midi(&[message(MidiKind::NoteOff { note: 60 })]);
+        render.process_block(256);
+
+        let recorded: Vec<_> = std::iter::from_fn(|| render.pop_outgoing()).collect();
+        let [EngineEvent::RecordedNote { length_ticks, .. }] = recorded[..] else {
+            panic!("expected exactly one recorded note, got {recorded:?}");
+        };
+        assert!(
+            (19..=21).contains(&length_ticks),
+            "the held length was lost: {length_ticks} ticks"
+        );
     }
 
     /// A recorded note names the pattern it was folded into, and that is the
