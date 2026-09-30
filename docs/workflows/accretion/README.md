@@ -17,7 +17,7 @@ for every finding.
 Not the textbook shape. The example that commissioned this workflow
 (`scripts/fixtures/accreted_fn.rs`) overwrites one local 29 times in 19
 top-level `if`s; on 2026-09-30 no function in the workspace overwrote a local
-more than 3 times. mooloop's code accretes in these four ways instead, each
+more than 3 times. mooloop's code accretes in these ways instead, each
 first seen in `RenderState::carry_strips_from` (`engine/src/render.rs`):
 
 1. **The field list.** A function that carries, copies, resets or compares a
@@ -47,6 +47,16 @@ first seen in `RenderState::carry_strips_from` (`engine/src/render.rs`):
    doc block, so the block describes the wrong thing. MOO-410 found one in
    `modulation.rs`; `session.rs` has another, where `retune_effect`'s summary
    ("One effect's answer to a tempo change") heads `source_params`' doc.
+
+5. **A policy computed in several places, where only the newer ones
+   learned.** Shape 2 across functions, and where the Engine trial found its
+   one real defect. Three parts of the block loop ask "has this channel gone
+   quiet?": the sleep check and the send rings each learned (MOO-401,
+   MOO-402) that the latency-compensation ring still holds audio after the
+   fader reaches zero; the mute's `faded` never did, so a mute on a
+   compensated channel cuts instead of fading (MOO-449). Nothing in the
+   function that computes `faded` looks wrong; the defect is only visible
+   beside its siblings.
 
 A search cannot find any of these reliably. Tried on 2026-09-30: runs of
 field-name-only-differs statements match every UI property-setter list and
@@ -94,7 +104,7 @@ tracks, keep a ring of the same length, then solo, the instrument box, voice
 releases, the Buffer's history, plugins, plugin identity, moved notes. Each
 added a case; none restated the whole.
 
-Then read the body looking for the four shapes above, and ask:
+Then read the body looking for the shapes above, and ask:
 
 - **Field lists:** what decides which fields are in the list? Is that rule
   written down once, as code, where the struct is? What happens to the next
@@ -106,6 +116,17 @@ Then read the body looking for the four shapes above, and ask:
 - **Dead branches:** is there a guard or a case that an earlier block has
   already made impossible? The fixture's `/ 100` branch runs after `gain` was
   clamped to 1.0 and can never be taken.
+- **Dead since a deletion:** a path whose last producer was removed. Find
+  the commit with `git log -S'<the removed name>'` and ask what now runs only
+  in tests. `apply_structural`'s spare-slot `AddChannel` path has had no
+  production caller since `a3a9626a` deleted `RemoveChannel` (MOO-448).
+- **Siblings:** does another function answer the same question? Read it
+  beside this one (shape 5).
+- **Orphaned docs:** `git log -S'<first words of the doc>'` names the commit
+  that inserted a function under someone else's doc. Sometimes the fix is to
+  delete, not move: when the function it described was renamed later and
+  given a doc of its own, the stranded block describes nothing
+  (`carry_strips_from`'s, MOO-444).
 
 ### 3. Judge: state the contract
 
@@ -118,6 +139,12 @@ For a function whose result is decided by several flags (the fixture's
 `muted`, `soloed`, `preview_mode`...), the paragraph is a **truth table**:
 every combination, the output today, and whether it is intended. Rows that
 never change or change for no reason are the dead and overridden blocks.
+Few functions here are decided that way; the Engine trial wrote none, and
+the contract paragraph did the work.
+
+A function too large for one paragraph (`process_block_inner`, 1,100 lines)
+gets its contract written for the part you read, and the size is its own
+finding for whoever owns splitting it.
 
 ### 4. File
 
@@ -142,8 +169,28 @@ agent this directory, its `--under` paths from `docs/TEAMS.md`, and ask for
 the report block from the `team-brief` skill plus, per lead read: the lead
 line, the contract paragraph (or why one cannot be written), and the issues
 filed. A lead read and found clean is worth reporting; say what was checked.
+Ask for its own history ranking too (the most-fixed functions in its paths
+the check did not report), and for the siblings of each lead.
+
+**Where it runs git.** A team agent works in a worktree the harness made, and
+may be refused git in the main checkout. The history commands work from any
+worktree of the same repository, as long as it holds the commits: make sure
+the worktree's HEAD is the tree being reviewed, or check that `crates/` is
+identical to it. A shallow clone needs `git fetch --deepen` before the run,
+since worktrees share its history.
 
 ## Runs
+
+**2026-09-30, Realtime Engine (the first team run).** Eight issues, MOO-442
+to MOO-451 without the comment pilot's two. Both calibration defects
+confirmed (MOO-442, MOO-443), and a second orphaned doc in
+`carry_strips_from` that calibration missed (MOO-444). The most serious
+finding, a mute on a latency-compensated channel that cuts instead of fading
+(MOO-449, Mixer & Routing), came from the agent's own history ranking, not
+from `accreted-fn`: its growth gate and 400-line cap had filtered out the
+three most-fixed functions in the area. Both are now ranking signals rather
+than filters, and shape 5 was added. The truth-table step did not apply to
+any function read.
 
 **2026-09-30.** Calibration, before any team run. `accreted-fn` was written
 against the tree and a synthetic example together, and came back with the

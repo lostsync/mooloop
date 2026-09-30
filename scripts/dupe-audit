@@ -1603,10 +1603,12 @@ def _churn() -> dict:
 # evidence, or one far outside what ordinary code here does.
 _STRONG = {"overwrite": 6, "ifs": 10}
 _WEAK = {"overwrite": 3, "rebind": 4, "guard": 3, "ifs": 6, "history": 2}
-_GOD_FUNCTION = 600
-# The history half: a function of ordinary size that fix commits keep
-# returning to. Six fixes is past what the tree's ordinary busy functions
-# collect over its first seven weeks; tune it when the history is longer.
+# The history half: fix commits keep returning to it and its body is
+# stitched from many commits. Growth (lines gained per line lost) ranks but
+# does not gate: the Realtime Engine trial (2026-09-30) found the three
+# most-fixed functions in its area at growth 4.9, 4.1 and 3.2, because fixes
+# prune as they add, and its best finding was in one of them. Size over
+# `_HOT_SIZE` demotes a lead to the bottom and marks it; it is not dropped.
 _HOT_FIXES = 3
 _HOT_SIZE = 400
 _HOT_BODY = 8
@@ -1679,7 +1681,7 @@ def _accreted_in(paths, blame: bool = True):
             # whole since and the history is somebody else's.
             found = None
             hot = False
-            if fixed >= _HOT_FIXES and growth >= _HOT_GROWTH and size <= _HOT_SIZE:
+            if fixed >= _HOT_FIXES:
                 found = _blame(path, first, last)
                 hot = bool(found) and found[0] >= _HOT_BODY
             if hot:
@@ -1712,8 +1714,16 @@ def _accreted_in(paths, blame: bool = True):
                 found = _blame(path, first, last)
             if found:
                 detail.append(f"body from {found[0]} commit(s)")
-            detail.append(f"{size} lines" + (" -- size first, accretion second" if size > _GOD_FUNCTION else ""))
-            rank = (len(strong) + len(kinds), fixed + strata, sum(values.values()))
+            detail.append(f"{size} lines" + (" -- size first, accretion second" if size > _HOT_SIZE else ""))
+            # Size demotes, it does not hide: the functions with the most
+            # strata are the largest, and the Engine trial's best finding
+            # was in one the first version filtered out at 400 lines.
+            rank = (
+                size <= _HOT_SIZE,
+                len(strong) + len(kinds),
+                fixed + strata + int(growth >= _HOT_GROWTH),
+                sum(values.values()),
+            )
             hits.append((rank, f"{rel(path)}:{first} fn {match.group(1)}", ", ".join(detail)))
     hits.sort(key=lambda hit: hit[0], reverse=True)
     return [(place, detail) for _, place, detail in hits]
