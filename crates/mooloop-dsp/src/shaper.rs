@@ -57,6 +57,11 @@ const TAPE_BIAS_DC: f32 = 0.119_427_3;
 /// `mooloop_core::gain::REFERENCE_PEAK_DBFS`.
 pub(crate) const DRIVE_REFERENCE_LINEAR: f32 = 0.251;
 
+/// The drive below which [`apply_drive_compensated`] fades from the identity
+/// to the shaped signal (MOO-374). At and above it the law is unchanged, so a
+/// saved patch with drive of 0.05 or more sounds as it did.
+pub(crate) const DRIVE_KNEE: f32 = 0.05;
+
 /// Output scaling anchored at full scale: a full-scale input stays near full
 /// scale as drive rises. DS-01's Hard, Fold and Crush characters are
 /// calibrated against this; the Drive effect uses
@@ -461,6 +466,11 @@ pub(crate) mod before_moo250 {
 /// at every input; anchoring at the operating level
 /// (`mooloop_core::gain::REFERENCE_PEAK_DBFS`) is the compromise, and it
 /// also caps a full-scale peak at the reference rather than at clipping.
+///
+/// Continuous at zero (MOO-374): the shaped signal is blended in over the
+/// bottom [`DRIVE_KNEE`] of the knob, because the curve's limit as drive goes
+/// to 0 is `tanh(x) * 1.0214`, not the identity `drive == 0` returns, and a
+/// smoothed drive crossing zero stepped a hot signal by about 0.17.
 pub fn apply_drive(input: f32, drive: f32) -> f32 {
     let drive = clamp_param(drive, 0.0, 1.0);
     if drive <= f32::EPSILON {
@@ -498,7 +508,11 @@ pub fn apply_drive_compensated(input: f32, drive: f32, compensation: f32) -> f32
         return input;
     }
     let input_gain = 1.0 + drive * 15.0;
-    (input * input_gain).tanh() * compensation
+    let shaped = (input * input_gain).tanh() * compensation;
+    if drive >= DRIVE_KNEE {
+        return shaped;
+    }
+    input + (shaped - input) * (drive / DRIVE_KNEE)
 }
 
 /// A safety ceiling for a voice's output: exactly transparent below the knee,
@@ -632,7 +646,41 @@ impl Default for PreDrive {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::{alias_db, frames_for, sine, Probe, RATES};
+    use crate::testkit::{alias_db, frames_for, max_step, sine, Probe, RATES};
+
+    /// MOO-374: the drive law is continuous at zero. Its limit as drive goes
+    /// to 0 used to be `tanh(x) * 1.0214`, not the identity that `drive == 0`
+    /// returns, so a hot signal stepped by about 0.17 on the sample a smoothed
+    /// drive left zero.
+    #[test]
+    fn apply_drive_is_continuous_at_zero_drive() {
+        for x in (-100..=100).map(|i| i as f32 / 100.0) {
+            let off = (apply_drive(x, 1.0e-4) - x).abs();
+            assert!(off < 1.0e-3, "x={x}: drive 1e-4 moved the sample by {off}");
+        }
+        let hot = apply_drive(0.9, 1.0e-6);
+        assert!((hot - 0.9).abs() < 1.0e-3, "0.9 became {hot}");
+    }
+
+    /// MOO-374: a drive smoothed from 0 to 0.05 over a full-scale sine adds
+    /// no step beyond the sine's own (plus the 6% the shaped curve's own slope at
+    /// zero adds; a click is a step ten times that), at every rate.
+    #[test]
+    fn a_drive_ramp_from_zero_does_not_click() {
+        for rate in RATES {
+            let frames = frames_for(0.05, rate);
+            // Start at the sine's crest, where the old step was largest.
+            let quarter = rate as usize / 400;
+            let dry = sine(100.0, 1.0, rate, frames + quarter)[quarter..].to_vec();
+            let ramped: Vec<f32> = dry
+                .iter()
+                .enumerate()
+                .map(|(i, &x)| apply_drive(x, 0.05 * i as f32 / (frames - 1) as f32))
+                .collect();
+            let (own, got) = (max_step(&dry), max_step(&ramped));
+            assert!(got <= own * 1.1, "{rate} Hz: step {got} vs the sine's own {own}");
+        }
+    }
 
     /// MOO-249: the followers' coefficient is made once per sample rate
     /// instead of every sample, by the same expression, so the output is
