@@ -77,7 +77,8 @@ pub(crate) fn scan_config(settings: &PluginSettings) -> std::io::Result<ScanConf
 
 /// Run `config` on a thread of its own against the cache file at
 /// `cache_path`, reporting to `progress`. `forget_failures` is Rescan All:
-/// the files that failed before are scanned again rather than remembered.
+/// the whole cache is forgotten, so every file is scanned again rather than
+/// remembered by its fingerprint (MOO-368).
 /// `None`, having started nothing, when another scan is running.
 pub(crate) fn spawn_scan(
     config: ScanConfig,
@@ -96,9 +97,9 @@ pub(crate) fn spawn_scan(
             let _claim = claim;
             let progress = thread_progress.as_ref();
             let mut cache = PluginCache::load(&cache_path);
-            let forgot = forget_failures && cache.failures().next().is_some();
+            let forgot = forget_failures && !cache.is_empty();
             if forget_failures {
-                cache.clear_failures();
+                cache.clear();
             }
             let summary = mooloop_plugin_host::scan::scan(&config, &mut cache, |at, of, file| {
                 if progress.is_some() {
@@ -188,11 +189,15 @@ mod tests {
     use super::*;
     use mooloop_plugin_host::scan::ChildCommand;
 
+    /// The scan claim is process-wide, so the tests that scan take turns.
+    static ONE_SCAN: Mutex<()> = Mutex::new(());
+
     /// **One scan at a time.** While a scan holds the claim, a second is
     /// refused and says so, and starts no thread and no child; once the
     /// first is done, the next one runs.
     #[test]
     fn a_second_scan_while_one_runs_is_refused() {
+        let _turn = ONE_SCAN.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().expect("a scratch directory");
         let config = ScanConfig {
             search_paths: vec![dir.path().to_path_buf()],
@@ -214,5 +219,52 @@ mod tests {
         handle.join().expect("the scan thread did not panic");
         assert_eq!(*progress.lock().unwrap(), ScanState::Done { plugins: 0, failed: 0 });
         assert!(ScanClaim::take().is_some(), "a finished scan gives the claim back");
+    }
+
+    /// **Rescan All scans every file again**, not only the ones that failed:
+    /// a plugin replaced by a build with the same size and mtime is a
+    /// fingerprint match, and would otherwise be reused (MOO-368). The cache
+    /// holds a successful entry that matches the real file; the child cannot
+    /// be launched, so a file that was scanned again is one that now failed.
+    #[test]
+    fn rescan_all_scans_a_file_whose_fingerprint_matches() {
+        let _turn = ONE_SCAN.lock().unwrap_or_else(|e| e.into_inner());
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let plugin = dir.path().join("synth.clap");
+        std::fs::write(&plugin, b"not a real plugin").expect("a plugin file");
+        let plugin = std::fs::canonicalize(&plugin).expect("a canonical path");
+        let meta = std::fs::metadata(&plugin).expect("metadata");
+        let modified_ns =
+            u64::try_from(meta.mtime()).unwrap() * 1_000_000_000 + u64::try_from(meta.mtime_nsec()).unwrap();
+        let cache_file = dir.path().join("plugins.toml");
+        std::fs::write(
+            &cache_file,
+            format!(
+                "version = {}\n[[file]]\npath = {:?}\nmodified-ns = {modified_ns}\nsize = {}\n",
+                mooloop_plugin_host::scan::CACHE_VERSION,
+                plugin.to_str().unwrap(),
+                meta.len()
+            ),
+        )
+        .expect("a cache file");
+        let seeded = PluginCache::load(&cache_file);
+        assert_eq!((seeded.files().len(), seeded.failures().count()), (1, 0));
+
+        let config = ScanConfig {
+            search_paths: vec![dir.path().to_path_buf()],
+            timeout: std::time::Duration::from_secs(1),
+            child: ChildCommand {
+                program: PathBuf::from("/nonexistent/scan-child"),
+                args: Vec::new(),
+            },
+        };
+        let handle = spawn_scan(config, cache_file.clone(), true, None).expect("the scan starts");
+        handle.join().expect("the scan thread did not panic");
+        assert_eq!(
+            PluginCache::load(&cache_file).failures().count(),
+            1,
+            "the file was scanned again (and its child could not start)"
+        );
     }
 }
