@@ -25,6 +25,8 @@ pub struct DecodedAudioFile {
     pub source_channels: usize,
     pub bits_per_sample: Option<u32>,
     pub codec_name: &'static str,
+    /// Packets the decoder reported as malformed and decode skipped.
+    pub skipped_packets: usize,
 }
 
 pub fn is_supported_extension(path: &Path) -> bool {
@@ -79,6 +81,7 @@ pub fn decode(path: &Path) -> Result<DecodedAudioFile, String> {
 
     let mut frames = Vec::new();
     let mut interleaved = Vec::<f32>::new();
+    let mut skipped_packets = 0usize;
     let mut sample_rate = codec_params.sample_rate;
     let mut source_channels = codec_params
         .channels
@@ -98,9 +101,17 @@ pub fn decode(path: &Path) -> Result<DecodedAudioFile, String> {
             continue;
         }
 
-        let decoded = decoder
-            .decode(&packet)
-            .map_err(|error| format!("sample decode failed: {error}"))?;
+        let decoded = match decoder.decode(&packet) {
+            Ok(decoded) => decoded,
+            // A malformed packet is recoverable by symphonia's contract:
+            // skip it and go on, as every player does (MOO-385). The count
+            // is reported so the caller can warn.
+            Err(Error::DecodeError(_)) => {
+                skipped_packets += 1;
+                continue;
+            }
+            Err(error) => return Err(format!("sample decode failed: {error}")),
+        };
         let packet_rate = decoded.spec().rate();
         let packet_channels = decoded.spec().channels().count();
         if packet_channels == 0 {
@@ -137,6 +148,7 @@ pub fn decode(path: &Path) -> Result<DecodedAudioFile, String> {
         source_channels,
         bits_per_sample: codec_params.bits_per_sample,
         codec_name,
+        skipped_packets,
     })
 }
 
@@ -176,6 +188,86 @@ mod tests {
         }
         assert!(!is_supported_extension(Path::new("sample.opus")));
         assert!(!is_supported_extension(Path::new("sample.txt")));
+    }
+
+    fn crc8(bytes: &[u8]) -> u8 {
+        bytes.iter().fold(0u8, |mut crc, byte| {
+            crc ^= byte;
+            for _ in 0..8 {
+                crc = if crc & 0x80 != 0 { (crc << 1) ^ 0x07 } else { crc << 1 };
+            }
+            crc
+        })
+    }
+
+    fn crc16(bytes: &[u8]) -> u16 {
+        bytes.iter().fold(0u16, |mut crc, byte| {
+            crc ^= u16::from(*byte) << 8;
+            for _ in 0..8 {
+                crc = if crc & 0x8000 != 0 { (crc << 1) ^ 0x8005 } else { crc << 1 };
+            }
+            crc
+        })
+    }
+
+    /// One mono 16-bit 44.1 kHz FLAC frame of `samples`. `subframe` is the
+    /// subframe header byte: `0x02` is a verbatim subframe (a good packet),
+    /// `0x04` a reserved subframe type, which passes the frame's CRCs and
+    /// fails in the decoder -- a damaged packet as symphonia reports one.
+    fn flac_frame(number: u8, subframe: u8, samples: &[i16]) -> Vec<u8> {
+        let mut frame = vec![0xFF, 0xF8, 0x69, 0x08, number, (samples.len() - 1) as u8];
+        frame.push(crc8(&frame));
+        frame.push(subframe);
+        for sample in samples {
+            frame.extend_from_slice(&sample.to_be_bytes());
+        }
+        frame.extend_from_slice(&crc16(&frame).to_be_bytes());
+        frame
+    }
+
+    fn flac_file(frames: &[Vec<u8>], block: u16, total: u64) -> Vec<u8> {
+        let mut file = b"fLaC".to_vec();
+        file.extend_from_slice(&[0x80, 0, 0, 34]);
+        file.extend_from_slice(&block.to_be_bytes());
+        file.extend_from_slice(&block.to_be_bytes());
+        file.extend_from_slice(&[0; 6]);
+        // 44.1 kHz (20 bits), mono (3), 16 bits (5), total samples (36).
+        let packed = (44_100u64 << 44) | (15u64 << 36) | total;
+        file.extend_from_slice(&packed.to_be_bytes());
+        file.extend_from_slice(&[0; 16]);
+        for frame in frames {
+            file.extend_from_slice(frame);
+        }
+        file
+    }
+
+    /// A file with one damaged packet still opens: symphonia's `DecodeError`
+    /// is recoverable, the packet is skipped and decoding goes on (MOO-385).
+    #[test]
+    fn one_corrupt_packet_does_not_fail_the_whole_file() {
+        let block = 64usize;
+        let ramp = |offset: i16| (0..block as i16).map(|i| (offset + i) * 100).collect::<Vec<_>>();
+        let temp = tempfile::tempdir().unwrap();
+
+        let good = [
+            flac_frame(0, 0x02, &ramp(0)),
+            flac_frame(1, 0x02, &ramp(64)),
+            flac_frame(2, 0x02, &ramp(128)),
+        ];
+        let whole = temp.path().join("whole.flac");
+        std::fs::write(&whole, flac_file(&good, block as u16, 3 * block as u64)).unwrap();
+        assert_eq!(decode(&whole).unwrap().sample.frames.len(), 3 * block);
+
+        let damaged = [good[0].clone(), flac_frame(1, 0x04, &ramp(64)), good[2].clone()];
+        let path = temp.path().join("damaged.flac");
+        std::fs::write(&path, flac_file(&damaged, block as u16, 3 * block as u64)).unwrap();
+        let decoded = decode(&path).expect("one bad packet should be skipped");
+        assert_eq!(decoded.skipped_packets, 1);
+        let frames = decoded.sample.frames.len();
+        assert!(
+            frames >= 2 * block && frames <= 3 * block,
+            "decoded {frames} frames from three packets with one skipped"
+        );
     }
 
     /// Manual codec-matrix check. `ffmpeg` is only a test-fixture generator;
