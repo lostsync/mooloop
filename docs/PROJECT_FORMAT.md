@@ -390,6 +390,13 @@ before any of them existed still loads:
   live folds across the snapshot they install). Defaulted and not written
   while false, so a song saved with nothing folded is byte-identical to one
   written before the field existed.
+- **A Buffer's `freeze` is not saved** (MOO-196, 2026-09-30). Adam,
+  2026-09-23: *"dont save freeze state or data. freeze is temporary."* It is
+  never written, and a `freeze` key in an older song or preset is ignored, so
+  a Buffer saved frozen opens unfrozen, recording, with the rest of its
+  settings as saved. A copied or pasted Buffer arrives unfrozen too. The
+  ring's audio was never saved. Undo is not a save: it keeps the freeze and
+  the ring.
 - **A channel carries a durable `id`, and `next_channel_id` is the mint it
   comes from.** Both default and are skipped when unset, so a song written
   before channels had identities is byte-identical to one saved now with

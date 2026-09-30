@@ -1362,7 +1362,8 @@ fn same_plugin_id(a: &mooloop_core::PluginRef, b: &mooloop_core::PluginRef) -> b
 /// `rows` as a run that belongs to no song: identities stripped, and each
 /// plugin row renumbered to a key into the run's own `plugins`, under which
 /// `plugin_of` supplies its plugin (MOO-271). A row whose plugin `plugin_of`
-/// cannot supply keeps a key with no entry, and a landing refuses it.
+/// cannot supply keeps a key with no entry, and a landing refuses it. A
+/// Buffer comes out unfrozen, as it would from a saved song.
 fn lift_run(
     rows: &[EffectSlotState],
     mut plugin_of: impl FnMut(mooloop_core::PluginSlotId) -> Option<mooloop_core::PluginSlotState>,
@@ -1371,6 +1372,7 @@ fn lift_run(
     let mut next_key = 0u32;
     for row in rows {
         let mut row = row.with_id(DeviceId::UNASSIGNED);
+        row.params.thaw();
         if let EffectParams::Plugin(slot) = row.params {
             let key = mooloop_core::PluginSlotId(next_key);
             next_key += 1;
@@ -2071,6 +2073,31 @@ mod tests {
             copy.params, original.params,
             "and it must still sound like what was copied"
         );
+    }
+
+    /// A copied or duplicated Buffer is a new device with an empty ring, so
+    /// it arrives unfrozen, as it would from a saved song; the original
+    /// stays frozen.
+    #[test]
+    fn a_frozen_buffer_is_copied_and_duplicated_unfrozen() {
+        let mut session = Session::default();
+        session.insert_effect_at(EffectKind::Buffer, usize::MAX).expect("room");
+        let (effects, _) = session.effect_chain_parts_mut().expect("a chain");
+        let EffectParams::Buffer(params) = &mut effects[0].params else {
+            panic!("not a Buffer");
+        };
+        params.freeze = 1.0;
+        let frozen = |session: &Session, slot: usize| {
+            session.effect_chain().unwrap()[slot].params.buffer().unwrap().freeze
+        };
+
+        let run = session.copy_device(0).expect("the Buffer");
+        assert_eq!(run.effects[0].params.buffer().unwrap().freeze, 0.0);
+        session.paste_device(&run, 0).expect("room");
+        session.duplicate_device(0).expect("room");
+        assert_eq!(frozen(&session, 0), 1.0, "the original thawed");
+        assert_eq!(frozen(&session, 1), 0.0, "the duplicate arrived frozen");
+        assert_eq!(frozen(&session, 2), 0.0, "the paste arrived frozen");
     }
 
     /// A container is copied as its whole run, the same unit it is deleted

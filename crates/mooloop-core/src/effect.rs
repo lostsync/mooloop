@@ -2746,10 +2746,12 @@ pub struct BufferParams {
     /// holding, *"the frozen audio should be a musically loopable chunk"*.
     /// Quantizing the freeze to a bar line is what makes the chunk join up.
     ///
-    /// It persists like every other parameter, and a project saved frozen
-    /// reopens frozen -- over an **empty ring**, because the frozen audio
-    /// itself is not saved yet.
-    #[serde(default)]
+    /// **Never saved and never read**: a song, a preset or a copied device
+    /// arrives unfrozen, because a freeze is a performance gesture and a
+    /// Buffer rebuilt with it on would loop whatever it happened to catch
+    /// (Adam, 2026-09-23: *"dont save freeze state or data. freeze is
+    /// temporary."*). Undo keeps it, because an undo carries the ring.
+    #[serde(skip_serializing)]
     pub freeze: f32,
     /// Held while the JUMP gesture is down. A **gate**, not a trigger: the
     /// gesture lasts exactly as long as this is nonzero, so a lane, a MIDI
@@ -2905,13 +2907,12 @@ pub const BUFFER_SPAN_FULL: f32 = crate::ModTimeDivision::ALL.len() as f32;
 /// nothing in the device they configured survives to be given their value.
 ///
 /// Serialization stays derived, so the retired keys are read and never
-/// written: a song opened and saved leaves them behind for good.
+/// written: a song opened and saved leaves them behind for good. `freeze` is
+/// not read at all, so an older song saved frozen opens unfrozen.
 #[derive(serde::Deserialize)]
 struct BufferParamsOnDisk {
     #[serde(default = "default_buffer_bars")]
     bars: u8,
-    #[serde(default)]
-    freeze: f32,
     #[serde(default)]
     jump: f32,
     #[serde(default = "default_buffer_jump_back")]
@@ -2957,7 +2958,7 @@ impl From<BufferParamsOnDisk> for BufferParams {
         });
         Self {
             bars,
-            freeze: disk.freeze,
+            freeze: 0.0,
             jump: disk.jump,
             jump_back: disk.jump_back,
             reverse: disk.reverse,
@@ -3554,6 +3555,14 @@ impl EffectParams {
         match self {
             Self::Buffer(p) => Some(p),
             _ => None,
+        }
+    }
+
+    /// Releases a Buffer's freeze, and leaves any other kind alone. For a
+    /// copy that will be rebuilt as a new device, whose ring starts empty.
+    pub fn thaw(&mut self) {
+        if let Self::Buffer(p) = self {
+            p.freeze = 0.0;
         }
     }
 
@@ -4928,5 +4937,27 @@ width = 1.0
             let back: EffectSlotState = toml::from_str(&text).unwrap();
             assert_eq!(slot, back, "{} did not round-trip:\n{text}", kind.label());
         }
+    }
+
+    /// Freeze is a performance gesture: a song saved frozen writes no
+    /// `freeze`, and one an older build wrote frozen opens unfrozen, with
+    /// the rest of the device as it was saved.
+    #[test]
+    fn a_buffer_freeze_is_never_saved_or_loaded() {
+        let mut slot = EffectSlotState::of_kind(EffectKind::Buffer);
+        slot.params = EffectParams::Buffer(BufferParams {
+            bars: 8,
+            freeze: 1.0,
+            ..BufferParams::default()
+        });
+        let text = toml::to_string(&slot).unwrap();
+        assert!(!text.contains("freeze"), "a freeze was written:\n{text}");
+
+        let old = text.replace("bars = 8", "bars = 8\nfreeze = 1.0");
+        assert!(old.contains("freeze = 1.0"), "the older spelling was not put back");
+        let back: EffectSlotState = toml::from_str(&old).unwrap();
+        let params = back.params.buffer().expect("still a Buffer");
+        assert_eq!(params.freeze, 0.0, "an older frozen song opened frozen");
+        assert_eq!(params.bars, 8);
     }
 }

@@ -2183,13 +2183,13 @@ land on its own when it starts to matter:
   ring** until it thaws and something resizes it again. An undo, a redo or
   any other whole-project install keeps a Buffer whose own settings did not
   change, with its ring, and keeps the channel it sits on sounding.
-  `Freeze` persists, but the frozen audio itself is not saved (MOO-196 asks
-  whether it should be). So a Buffer that arrives with Freeze on and an empty
-  ring -- a reopened song, a preset, a paste -- records, with the freeze
-  armed (the face shows ARMED), and the freeze lands once the ring holds a
-  full history. It used to latch the empty ring and play silence under a
-  face reading FROZEN. A document saved with a gesture held reopens holding
-  it.
+  **A freeze is not saved** (MOO-196, Adam: *"freeze is temporary"*), and
+  neither is the ring's audio. A reopened song, a preset, a pasted device or
+  a pasted channel arrives unfrozen and recording; an undo keeps a freeze and
+  its ring. A Buffer that is rebuilt with Freeze on and an empty ring anyway
+  -- a Freeze lane, say -- records with the freeze armed (the face shows
+  ARMED), and the freeze lands once the ring holds a full history. A
+  document saved with a gesture held reopens holding it.
   The face's SEAMS readout counts wraps and cuts — a stutter's repeats, a
   reverse head lapping the ring — which is the number that says whether the
   head is doing what the picture claims. It replaced RETURNS, a count of

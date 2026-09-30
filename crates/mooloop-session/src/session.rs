@@ -1962,7 +1962,12 @@ impl Session {
             .iter()
             .filter_map(|zone| Some((zone.path()?.to_path_buf(), zone.sample.clone()?)))
             .collect();
-        let channel = project.channels.get(index)?.clone();
+        let mut channel = project.channels.get(index)?.clone();
+        // A pasted Buffer is a new device with an empty ring, so it arrives
+        // unfrozen, as it would from a saved song.
+        for effect in &mut channel.setup.effects {
+            effect.params.thaw();
+        }
         // Each plugin as it is *now* (MOO-332), through the one clone of a
         // hosted plugin's state for a copy of it (`plugin_slot_state_now`,
         // MOO-271). The song's copy lags the plugin: the pump captures an
