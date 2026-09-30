@@ -2076,8 +2076,27 @@ land on its own when it starts to matter:
   whose face now has a **Level** knob beside its Mix: inside a layer it is
   the branch's fader. Mute takes a branch out of the sum and Solo keeps only
   the soloed branches of that one layer; both ramp, and both are undoable
-  and saved. A device sitting directly inside a layer, not in a chain, is a
-  branch with no S or M.
+  and saved.
+- **Every branch of a layer is a Chain** (MOO-456, 2026-09-30). A layer is
+  chains in parallel. Wrap in Layer, the layer's `+` and a drop into a layer
+  all put the device inside a branch's Chain: a drop on the layer, or on the
+  gap between two branches, lands first in a branch's Chain, and a device put
+  beside one already in a branch joins that branch. Only `+` makes a branch;
+  a layer with no branch takes no device until it has one. A paste or a move
+  follows the same rule, a container preset for a whole Layer will not
+  replace a branch, unwrapping a branch's Chain that holds a device is
+  refused, and a wrap the nesting cap leaves no room for both boxes of is
+  refused rather than leaving a Layer straight round a device. **A song with
+  a bare device directly in a layer gets that device wrapped in a fresh Chain
+  when it opens**: the file format is unchanged, every existing device keeps
+  its id, the new Chain is transparent (default Level, Mix, Mute and Solo),
+  and it is part of loading rather than an undo step. This supersedes
+  `containers/07`'s "a leaf direct child is a one-device branch" and
+  `containers/09`'s "a device directly inside a layer is a branch with no S
+  or M"; the engine still plays a bare device in a layer if one is ever
+  found. Session and model are done (`normalize_layer_branches` in
+  `core/src/effect.rs`); the rack's drawing of a branch's Chain is the rack
+  run's.
 - **Making and emptying a layer** (`containers/10`). The rail's wrap button
   opens a menu, **Chain** or **Layer**. Wrapping in a layer makes a layer of
   one branch, a Chain holding what was wrapped, so the branch has its S, M
