@@ -21623,6 +21623,30 @@ mod tests {
     /// rather than out of a copy, which is the whole point of them.
     const MAIN_SLINT: &str = include_str!("../ui/main.slint");
     const CONTROLS_SLINT: &str = include_str!("../ui/controls.slint");
+    const AUDIO_PREFERENCES_SLINT: &str = include_str!("../ui/audio-preferences.slint");
+
+    /// The Audio page's BUFFER SIZE labels are written in markup and Rust
+    /// turns the clicked index into frames from `BUFFER_SIZES`: the same
+    /// values, matched by position. Read the labels out of the markup so a
+    /// list changed alone fails here rather than setting the wrong size on a
+    /// whole JACK server (MOO-372).
+    #[test]
+    fn buffer_size_labels_match_buffer_sizes() {
+        let declaration = "buffer-size-options:";
+        let at = AUDIO_PREFERENCES_SLINT
+            .find(declaration)
+            .expect("audio-preferences.slint no longer declares `buffer-size-options`")
+            + declaration.len();
+        let list = &AUDIO_PREFERENCES_SLINT[at..];
+        let list = &list[list.find('[').expect("a list") + 1..];
+        let list = &list[..list.find(']').expect("a list end")];
+        let labels: Vec<String> = list
+            .split(',')
+            .map(|label| label.trim().trim_matches('"').to_string())
+            .collect();
+        let frames: Vec<String> = super::BUFFER_SIZES.iter().map(u32::to_string).collect();
+        assert_eq!(labels, frames);
+    }
 
     /// Pull an `index == 0 ? a : index == 1 ? b : ... : z` chain out of one
     /// Slint function body, as the values in index order.
