@@ -23,6 +23,7 @@
 //! declared by hand because the crate has no `libc`.
 
 #![deny(unsafe_op_in_unsafe_fn)]
+#![warn(missing_docs)]
 
 pub mod clap;
 pub mod gui;

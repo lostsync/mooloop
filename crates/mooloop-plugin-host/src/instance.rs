@@ -88,13 +88,24 @@ impl RequestFlags {
 /// plugin, which is what keeps them from looping.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PluginParamEvent {
-    /// Parameter `id` now holds `value`, in the plugin's plain units.
-    Value { id: u32, value: f64 },
-    /// The user took hold of parameter `id` in the plugin (a drag in its
-    /// GUI, say). The values up to its [`Self::GestureEnd`] are one gesture.
-    GestureBegin { id: u32 },
-    /// The user let go of parameter `id`.
-    GestureEnd { id: u32 },
+    /// A parameter has a new value.
+    Value {
+        /// The parameter's id, as the plugin numbers it.
+        id: u32,
+        /// Its new value, in the plugin's plain units.
+        value: f64,
+    },
+    /// The user took hold of a parameter in the plugin (a drag in its GUI,
+    /// say). The values up to its [`Self::GestureEnd`] are one gesture.
+    GestureBegin {
+        /// The parameter's id.
+        id: u32,
+    },
+    /// The user let go of a parameter.
+    GestureEnd {
+        /// The parameter's id.
+        id: u32,
+    },
 }
 
 /// Why a plugin could not do what it was asked.

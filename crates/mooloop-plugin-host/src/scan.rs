@@ -346,12 +346,20 @@ impl ScanFailure {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "kebab-case")]
 pub enum ChildReport {
-    /// The factory's plugins, at least one. A plugin that could not be
-    /// created is here too, with its `error` set.
-    Scanned { plugins: Vec<ScannedPlugin> },
-    /// The file as a whole failed, as the child saw it: `Load` or
-    /// `Incompatible`. The other kinds are the parent's to judge.
-    Failed { kind: FailureKind, reason: String },
+    /// The file's factory listed its plugins.
+    Scanned {
+        /// The factory's plugins, at least one. A plugin that could not be
+        /// created is here too, with its `error` set.
+        plugins: Vec<ScannedPlugin>,
+    },
+    /// The file as a whole failed, as the child saw it.
+    Failed {
+        /// `Load` or `Incompatible`; the other kinds are the parent's to
+        /// judge.
+        kind: FailureKind,
+        /// What went wrong, for the Plugins page.
+        reason: String,
+    },
 }
 
 /// One candidate file in the cache.

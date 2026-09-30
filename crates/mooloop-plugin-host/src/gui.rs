@@ -102,9 +102,12 @@ pub enum GuiRequest {
     /// again.
     ResizeHintsChanged,
     /// The plugin's floating window was closed, or its connection to the
-    /// display was lost. `destroyed` says the plugin has already torn its
-    /// GUI down and wants `destroy` called to acknowledge it.
-    Closed { destroyed: bool },
+    /// display was lost.
+    Closed {
+        /// The plugin has already torn its GUI down and wants `destroy`
+        /// called to acknowledge it.
+        destroyed: bool,
+    },
 }
 
 /// Why a GUI could not do what it was asked. Its `Display` text is what the
