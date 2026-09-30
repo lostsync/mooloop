@@ -1434,6 +1434,11 @@ fn length_text(ticks: u32) -> String {
 /// Pressing in the roll focuses its pane, so a marquee still aims the chords
 /// at the notes it drew.
 fn focused_surface(window: &MainWindow) -> actions::Surface {
+    // A pane that is not on screen is not focused (MOO-345): its outline is
+    // gone, so the chords fall back to the selected channel.
+    if !window.get_active_pane_shown() {
+        return actions::Surface::Channels;
+    }
     actions::Surface::from_name(window.get_focused_surface().as_str())
 }
 

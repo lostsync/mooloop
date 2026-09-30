@@ -1845,6 +1845,17 @@ export component MainWindow inherits Window {
     function view-showing(v: int, s: int) -> bool {
         return root.slot-active(s) == v && (root.zoomed < 0 || root.zoomed == s);
     }
+    // Whether the focused pane (`active-pane`) is on screen: its view showing
+    // in a slot that has room (a collapsed dock has none), or the browser
+    // with its sidebar open. The outline draws only while this holds, and
+    // Rust's `focused_surface` aims the chords at the channel when it does
+    // not, so a pane that has gone away is never where a chord lands
+    // (MOO-345).
+    out property <bool> active-pane-shown: root.active-pane == PaneViews.browser
+        ? root.sidebar-visible
+        : root.active-pane >= 0 && root.active-pane < PaneViews.names.length
+            && root.view-showing(root.active-pane, root.slot-of(root.active-pane))
+            && (root.slot-of(root.active-pane) != 2 || root.bottom-pane-visible);
     // What Rust asks instead of comparing a page index. Each is "this view is
     // the active view of whichever slot holds it", which stays true however
     // the panes are arranged.
@@ -7771,7 +7782,7 @@ export component MainWindow inherits Window {
                     // slots, under the drop target and the dividers, and
                     // only while the pane is on screen.
                     if root.active-pane >= 0 && root.active-pane < PaneViews.names.length
-                            && root.view-showing(root.active-pane, root.slot-of(root.active-pane))
+                            && root.active-pane-shown
                             : Rectangle {
                         property <PaneRect> r: work.slot-rect(root.slot-of(root.active-pane));
                         x: self.r.x;
