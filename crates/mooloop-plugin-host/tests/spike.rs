@@ -1,4 +1,4 @@
-//! Step 01's six checks (`docs/plans/plugin-hosting/01-spike.md`): can
+//! The spike's six checks (`docs/plans/plugin-hosting/01-spike.md`): can
 //! `clack-host` 0.2 load and run a CLAP plugin, with no `unsafe` beyond
 //! loading the library?
 //!
@@ -25,13 +25,12 @@ const MAX_FRAMES: u32 = 4096;
 /// The test plugin's library, which cargo built because this crate names it
 /// as a dev-dependency.
 ///
-/// Neither of the two ways `01-spike.md` suggested works on the pinned stable
-/// toolchain: `CARGO_CDYLIB_FILE_*` is an artifact-dependency variable
-/// (nightly `-Z bindeps`), and `CARGO_TARGET_DIR` is not set when a caller
-/// uses the default target directory, nor when the build box redirects it. A
-/// test binary lives in `<target>/<profile>/deps/`, and cargo writes a
-/// dependency's cdylib into that same `deps/` directory, so the library is
-/// found next to the running test.
+/// Found next to the running test: a test binary lives in
+/// `<target>/<profile>/deps/`, and cargo writes a dependency's cdylib into
+/// the same directory. No environment variable says where it is on stable:
+/// `CARGO_CDYLIB_FILE_*` needs nightly's `-Z bindeps`, and
+/// `CARGO_TARGET_DIR` is unset under the default target directory and wrong
+/// when the build box redirects it.
 fn test_plugin_path() -> PathBuf {
     let exe = std::env::current_exe().expect("the test binary has a path");
     let deps = exe.parent().expect("the test binary is in a directory");

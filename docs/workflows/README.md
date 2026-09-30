@@ -15,6 +15,7 @@ is worth recording too: it is the only evidence the procedure still works.
 | Workflow | What it is for |
 | --- | --- |
 | [rust-slint-boundary/](rust-slint-boundary/) | Finding and fixing values, ranges, ids and policies that are stated on both sides of the Rust/Slint boundary with nothing holding them together. |
+| [accretion/](accretion/) | Finding functions that grew one patch at a time and were never pruned -- field lists, predicates restated weaker, comment strata, orphaned doc blocks -- and stating what each is for in one place. |
 
 ## Running one
 

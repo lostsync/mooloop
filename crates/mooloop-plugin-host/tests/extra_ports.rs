@@ -1,5 +1,5 @@
-//! A CLAP plugin with ports beyond its main ones, run through the adapter
-//! (MOO-306, MOO-308): the test plugin's `mooloop.test.sidechain`, a unity
+//! A CLAP plugin with ports beyond its main ones, run through the adapter:
+//! the test plugin's `mooloop.test.sidechain`, a unity
 //! effect with a mono sidechain at input 0, its main stereo input at 1, and
 //! outputs `[aux, aux mono, main]`, its main output at 2.
 //!

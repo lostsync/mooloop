@@ -427,6 +427,19 @@ reports the four sites that carried those seven kinds. It is the macro
 lesson again from another side: a check's list of places to look is a claim
 about where edits come from, and this program has two front doors.
 
+`accreted-fn`, added 2026-09-30 with `docs/workflows/accretion/`, looks for a
+**history** rather than a copy: a function that grew one patch at a time and
+was never pruned. Its lesson is that the textbook shape was the wrong target.
+Written first to find one local overwritten again and again, it found nothing
+real, because no function here does that more than three times. What
+accretion looks like in *this* code was found by reading `carry_strips_from`:
+a field list that grew one fix at a time, a predicate restated weaker twenty
+lines later, and a paragraph and an issue id per fix. None of that has a
+textual signature, so the check ranks from git history (fix commits that keep
+returning, lines added against lines removed) and leaves the judging to the
+workflow. **Calibrate a check against a real case from the tree, not only the
+example that commissioned it.**
+
 There is a third limit, and it is the one to keep in mind when a check comes
 back clean. **`repeated-line` matches bytes, so a rename hides a copy from it
 completely.** On 2026-09-12 it reported the effect event-splitting loop in ten
@@ -474,6 +487,51 @@ audit every plain integer it accepts for this kind of lost semantic type.
 removes, or alters user-visible behavior updates it in the same commit; so
 does a change that invalidates a fact stated in any other document. Leaving
 a document to be corrected later is how it stops being trusted.
+
+## Comments
+
+A code comment is one of three kinds, and each has one place (Adam,
+2026-09-30, refined the same day from the `mooloop-plugin-host` pilot,
+MOO-445):
+
+1. **`///` and `//!` state the contract**: what the item does, what it
+   guarantees, its units, which thread may call it. Write it for someone
+   reading the rendered docs, who sees nothing but the signature beside it.
+   A still-true design reason may stay here as one sentence. A trait
+   impl's doc says only what the impl adds to or changes about the trait's
+   contract.
+2. **`//` in a body says why the code is this way**, and only where the code
+   cannot say it itself. Tests are never rendered, so everything in them is
+   this kind.
+3. **History goes elsewhere**: what the code used to do, which issue or plan
+   step changed it, what broke before. That belongs in the commit message,
+   the Linear issue or `docs/JOURNAL.md`.
+   - A link to a plan or design document is a reference, not history; keep
+     it. A bare "step 05" is history; drop it.
+   - An issue id stays only while its issue holds a decision that is still
+     open, and the sentence around it says what is *to come*, in the future
+     tense.
+   - Where a closed issue was the only path to evidence (a measurement, a
+     spec table), name the evidence in the comment, not the ticket.
+   - Who owns the code is `docs/TEAMS.md`'s to say; do not copy it into a
+     module doc, where it will drift.
+
+The work is stating contracts at least as much as cutting history: the pilot
+added more lines than it removed, and the useful find was seven docs that had
+stopped being true.
+
+**Keep the contract true as the code moves.** When you change a function,
+fold what you learned into its contract and delete what is no longer true;
+do not append a paragraph. When you change what a function is *used for*, a
+caller in another crate included, update that function's contract in the
+same change: two of the pilot's untrue docs went wrong that way. A comment
+that grows by one paragraph and one issue id per fix is how
+`carry_strips_from` came to have 121 comment lines for 82 lines of code
+(`docs/workflows/accretion/`).
+
+A crate that has been through a comment pass gets `#![warn(missing_docs)]`,
+so the contract cannot quietly go missing again. This governs comments in
+code, not the prose documents under `docs/`, whose job is often the history.
 
 ## Slint
 

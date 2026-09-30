@@ -1,9 +1,9 @@
 //! A hosted plugin's own GUI, as the rest of mooloop sees it
-//! (`docs/plans/plugin-hosting/11-plugin-gui-windows.md`, MOO-300).
+//! (`docs/plans/plugin-hosting/11-plugin-gui-windows.md`).
 //!
 //! No plugin format's types are here. The window the GUI goes into is
 //! somebody else's: on Linux a bare X11 window the platform layer creates
-//! (MOO-301) and hands over as a plain id. This module only says what a GUI
+//! and hands over as a plain id. This module only says what a GUI
 //! can be asked to do, in what order, and what it asks back.
 //!
 //! **Control thread only.** Every [`HostedGui`] call happens on the thread
@@ -15,18 +15,19 @@
 //! **Order.** `create`, then (embedded) `set_parent` or (floating)
 //! `suggest_title` and `set_transient`, then `show`. `destroy` undoes
 //! `create` and is always allowed. Closing a GUI never touches the audio
-//! processor: the two halves are independent (`00-status.md`, step 04).
+//! processor.
 
 use std::fmt;
 
 /// A windowing API a GUI can be opened in.
 ///
 /// Only X11 for now: it is what nearly every Linux plugin GUI embeds into,
-/// under a Wayland session too, through XWayland (the step's "Platform
-/// facts"). Cocoa and Win32 arrive with the platforms that need them.
+/// under a Wayland session too, through XWayland. Cocoa and Win32 arrive
+/// with the platforms that need them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum GuiApi {
+    /// X11, by window id.
     X11,
 }
 
@@ -34,18 +35,21 @@ pub enum GuiApi {
 /// its own (`floating`) or is embedded in the host's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GuiConfig {
+    /// The windowing API.
     pub api: GuiApi,
+    /// In a window of the plugin's own, rather than embedded in the host's.
     pub floating: bool,
 }
 
 impl GuiConfig {
-    /// Embedded in an X11 window of the host's: what step 11 asks for first.
+    /// Embedded in an X11 window of the host's: the configuration to try
+    /// first.
     pub const X11_EMBEDDED: Self = Self {
         api: GuiApi::X11,
         floating: false,
     };
     /// Floating in a window of the plugin's own: the fallback for a plugin
-    /// that does not embed (policy 4).
+    /// that does not embed.
     pub const X11_FLOATING: Self = Self {
         api: GuiApi::X11,
         floating: true,
@@ -55,7 +59,9 @@ impl GuiConfig {
 /// A GUI's size, in the API's own pixels (physical for X11).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GuiSize {
+    /// Pixels across.
     pub width: u32,
+    /// Pixels down.
     pub height: u32,
 }
 
@@ -66,7 +72,9 @@ pub struct GuiSize {
 /// out from under it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NativeWindow {
+    /// The API `id` belongs to.
     pub api: GuiApi,
+    /// The window's id in that API.
     pub id: u64,
 }
 
@@ -94,13 +102,16 @@ pub enum GuiRequest {
     /// again.
     ResizeHintsChanged,
     /// The plugin's floating window was closed, or its connection to the
-    /// display was lost. `destroyed` says the plugin has already torn its
-    /// GUI down and wants `destroy` called to acknowledge it.
-    Closed { destroyed: bool },
+    /// display was lost.
+    Closed {
+        /// The plugin has already torn its GUI down and wants `destroy`
+        /// called to acknowledge it.
+        destroyed: bool,
+    },
 }
 
-/// Why a GUI could not do what it was asked. Its text is what the device's
-/// badge (step 08) shows.
+/// Why a GUI could not do what it was asked. Its `Display` text is what the
+/// device's badge shows the user.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GuiError {
     /// The plugin has no GUI at all: its face is the only one.
@@ -186,8 +197,10 @@ pub trait HostedGui {
     /// The title a floating GUI's window should have.
     fn suggest_title(&mut self, title: &str);
 
+    /// Show the GUI: once it is created, and embedded, once it has a parent.
     fn show(&mut self) -> Result<(), GuiError>;
 
+    /// Hide the GUI without closing it.
     fn hide(&mut self) -> Result<(), GuiError>;
 
     /// Tear the GUI down. Allowed whatever state it is in, and a no-op when
@@ -219,6 +232,8 @@ impl std::ops::AddAssign for IoActivity {
 /// What a plugin has registered with the host's event loop right now.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct IoRegistrations {
+    /// Timers registered.
     pub timers: usize,
+    /// File descriptors registered.
     pub fds: usize,
 }

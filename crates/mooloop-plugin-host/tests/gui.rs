@@ -1,7 +1,8 @@
-//! Step 11's host side, headless (`docs/plans/plugin-hosting/11-plugin-gui-windows.md`,
-//! MOO-300): a plugin's GUI opened, resized, closed and reopened through
-//! [`HostedGui`], and the timer and fd its event loop registers, serviced
-//! without waiting.
+//! A plugin GUI's host side, headless
+//! (`docs/plans/plugin-hosting/11-plugin-gui-windows.md`): a plugin's GUI
+//! opened, resized, closed and reopened through
+//! [`mooloop_plugin_host::HostedGui`], and the timer and fd its event loop
+//! registers, serviced without waiting.
 //!
 //! The test plugin's GUI draws nothing and needs no display: it tracks its
 //! lifecycle and refuses calls made out of order. Its counters are read

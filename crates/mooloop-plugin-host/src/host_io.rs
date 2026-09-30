@@ -1,30 +1,32 @@
 //! The host's side of a plugin's event loop: the timers and file
 //! descriptors it registers, and the one pass the pump makes over them
-//! (`docs/plans/plugin-hosting/11-plugin-gui-windows.md`, policy 1, MOO-300).
+//! (`docs/plans/plugin-hosting/11-plugin-gui-windows.md`, policy 1).
 //!
 //! Most Linux plugin GUIs (JUCE, DPF) do not run an event loop of their
 //! own. They register a timer and their X11 connection's fd with the host
 //! and expect to be called back from the host's main thread. Without that a
 //! GUI can open and then never repaint or take input.
 //!
-//! **Nothing here waits.** The pump is wait-free (`00-status.md`, "Three
-//! things the tree already gives"), so a timer fires when its period has
-//! elapsed at the moment the pump looks, at most once a look, and the fds
-//! are `poll`ed with a zero timeout. A timer shorter than the pump's 8 ms
-//! fires every tick, which CLAP allows ("the host may adjust the period").
+//! **Nothing here waits,** because the pump must not. A timer fires when
+//! its period has elapsed at the moment the pump looks, at most once a
+//! look, and the fds are `poll`ed with a zero timeout. A timer shorter than
+//! the pump's 8 ms fires every tick, which CLAP allows ("the host may adjust
+//! the period").
 //!
-//! This is format-neutral bookkeeping; the CLAP adapter owns one per
-//! instance and makes the calls into the plugin.
+//! This is format-neutral bookkeeping; the CLAP adapter owns one
+//! [`HostIo`] per instance and makes the calls into the plugin.
 
 use std::time::{Duration, Instant};
 
 /// A file descriptor, as the OS numbers it.
 pub type Fd = i32;
 
-/// Readiness bits, in the order CLAP numbers them (`CLAP_POSIX_FD_READ` and
-/// so on), so the adapter converts nothing.
+/// Readable. This and the other readiness bits are CLAP's own values
+/// (`CLAP_POSIX_FD_READ` and so on), so the adapter converts nothing.
 pub const FD_READ: u32 = 1 << 0;
+/// Writable.
 pub const FD_WRITE: u32 = 1 << 1;
+/// An error or a hang-up. Reported whether or not it was asked for.
 pub const FD_ERROR: u32 = 1 << 2;
 
 #[derive(Debug, Clone, Copy)]
@@ -57,18 +59,20 @@ impl HostIo {
         id
     }
 
-    /// Returns whether `id` was registered.
+    /// Unregister timer `id`. Returns whether it was registered.
     pub fn unregister_timer(&mut self, id: u32) -> bool {
         let before = self.timers.len();
         self.timers.retain(|timer| timer.id != id);
         self.timers.len() != before
     }
 
+    /// Whether timer `id` is registered.
     pub fn has_timer(&self, id: u32) -> bool {
         self.timers.iter().any(|timer| timer.id == id)
     }
 
-    /// Returns whether `fd` was new. A negative fd is refused.
+    /// Poll `fd` for `flags` ([`FD_READ`], [`FD_WRITE`]). Returns whether
+    /// `fd` was new; one already registered, or a negative one, is refused.
     pub fn register_fd(&mut self, fd: Fd, flags: u32) -> bool {
         if fd < 0 || self.fds.iter().any(|&(known, _)| known == fd) {
             return false;
@@ -77,7 +81,7 @@ impl HostIo {
         true
     }
 
-    /// Returns whether `fd` was registered.
+    /// Poll `fd` for `flags` instead. Returns whether it was registered.
     pub fn modify_fd(&mut self, fd: Fd, flags: u32) -> bool {
         match self.fds.iter_mut().find(|(known, _)| *known == fd) {
             Some(entry) => {
@@ -88,25 +92,29 @@ impl HostIo {
         }
     }
 
-    /// Returns whether `fd` was registered.
+    /// Stop polling `fd`. Returns whether it was registered.
     pub fn unregister_fd(&mut self, fd: Fd) -> bool {
         let before = self.fds.len();
         self.fds.retain(|&(known, _)| known != fd);
         self.fds.len() != before
     }
 
+    /// Whether `fd` is registered.
     pub fn has_fd(&self, fd: Fd) -> bool {
         self.fds.iter().any(|&(known, _)| known == fd)
     }
 
+    /// How many timers are registered.
     pub fn timer_count(&self) -> usize {
         self.timers.len()
     }
 
+    /// How many fds are registered.
     pub fn fd_count(&self) -> usize {
         self.fds.len()
     }
 
+    /// Whether nothing is registered.
     pub fn is_empty(&self) -> bool {
         self.timers.is_empty() && self.fds.is_empty()
     }
