@@ -237,6 +237,11 @@ pub struct HarmonicShaper {
     /// because the small-signal gain `1 - 3a₃` and the reference-level gain
     /// are nearly the same number.
     makeup: f32,
+    /// The polynomial's own output at zero input (`-a₂`, since `T₂(0) = -1`),
+    /// subtracted in [`Self::shape`] so silence stays silent (MOO-378).
+    /// Without it a zero input came out as a constant of about -28 dBFS for
+    /// Iron, which kept a preamp-in strip from ever reporting at rest.
+    dc_at_zero: f32,
     transparent: bool,
 }
 
@@ -297,8 +302,20 @@ impl HarmonicShaper {
     /// it was not authored at, and to pin the `a = 1` reduction.
     fn at_amplitude(profile: HarmonicProfile, a: f32) -> Self {
         let (coefficients, fundamental) = solve_at(profile, a);
+        // T₀ = 1, T₁ = 0, Tₙ₊₁ = -Tₙ₋₁ at zero.
+        let dc_at_zero = {
+            let (mut previous, mut current, mut out) = (1.0f32, 0.0f32, 0.0f32);
+            for coefficient in coefficients {
+                let next = -previous;
+                previous = current;
+                current = next;
+                out += coefficient * current;
+            }
+            out
+        };
         Self {
             coefficients,
+            dc_at_zero,
             makeup: if fundamental.abs() > 1e-6 {
                 1.0 / fundamental
             } else {
@@ -336,7 +353,7 @@ impl HarmonicShaper {
             current = next;
             out += coefficient * current;
         }
-        out * self.makeup
+        (out - self.dc_at_zero) * self.makeup
     }
 }
 
@@ -576,6 +593,20 @@ mod tests {
         for step in -1000..=1000 {
             let x = step as f32 / 500.0;
             assert_eq!(shaper.shape(x), x, "Moo altered {x}");
+        }
+    }
+
+    /// MOO-378: silence in is silence out. `T₂(0) = -1`, so the bare
+    /// polynomial turned a zero sample into `-a₂` (about -28 dBFS for Iron),
+    /// which held a strip's preamp state off zero for as long as it stayed
+    /// silent and so kept it from ever reporting at rest.
+    #[test]
+    fn silence_stays_silent_for_every_voicing() {
+        for (name, profile) in [("Moo", MOO), ("Grip", GRIP), ("Punch", PUNCH), ("Iron", IRON)] {
+            for amplitude in [0.05, reference_amplitude(), 1.0] {
+                let shaper = HarmonicShaper::at_amplitude(profile, amplitude);
+                assert_eq!(shaper.shape(0.0), 0.0, "{name} at {amplitude}");
+            }
         }
     }
 
