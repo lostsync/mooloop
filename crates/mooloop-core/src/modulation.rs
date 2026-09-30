@@ -2412,18 +2412,6 @@ impl ModRack {
         changed
     }
 
-    /// Re-scope every channel-addressed address after a channel edit,
-    /// dropping the routes whose channel is gone. Returns whether anything
-    /// changed.
-    ///
-    /// An envelope's gate channel is one of these addresses and moves here
-    /// too. It was outside this pass until 2026-09-13, so inserting or
-    /// reordering a channel left every envelope gating off whichever channel
-    /// inherited the old index -- and `ChannelEdit::Moved` never returns
-    /// `None`, so a mixer reorder retargeted every gate in the song
-    /// silently. `gates.get` is bounded by `MAX_CHANNELS`, so a wrong index
-    /// always names *some* channel: there is no inert failure mode to fall
-    /// into.
     /// Give every route onto a generator that was saved without its kind the
     /// kind of the generator this rack sits beside (MOO-135). Idempotent; see
     /// [`ParamOwner::Source`].
@@ -2485,6 +2473,18 @@ impl ModRack {
         changed
     }
 
+    /// Re-scope every channel-addressed address after a channel edit,
+    /// dropping the routes whose channel is gone. Returns whether anything
+    /// changed.
+    ///
+    /// An envelope's gate channel is one of these addresses and moves here
+    /// too. It was outside this pass until 2026-09-13, so inserting or
+    /// reordering a channel left every envelope gating off whichever channel
+    /// inherited the old index -- and `ChannelEdit::Moved` never returns
+    /// `None`, so a mixer reorder retargeted every gate in the song
+    /// silently. `gates.get` is bounded by `MAX_CHANNELS`, so a wrong index
+    /// always names *some* channel: there is no inert failure mode to fall
+    /// into.
     pub fn rescope_channels(&mut self, edit: crate::structure::ChannelEdit) -> bool {
         let mut changed = false;
         for entry in self.slots.iter_mut().flatten() {
