@@ -247,6 +247,34 @@ const ONSET_WINDOW: usize = 4 * ONSET_HOP;
 /// the attack began, in hops.
 const ONSET_REFINE_HOPS: usize = 4;
 
+/// Running sums of each band's energy (each channel, and each channel's
+/// first difference) at the hop boundaries of `region`: entry `k` is the sum
+/// over its first `k * ONSET_HOP` frames, for `k` in `0..=hops`.
+///
+/// One entry per hop, not per frame -- the detector only ever reads the
+/// boundaries, and a per-frame array was 32 bytes a frame of the region
+/// (MOO-380). The sums are accumulated in frame order exactly as before, so
+/// every entry is bit-identical to the per-frame sum it replaces.
+fn hop_prefix_sums(region: &[[f32; 2]], hops: usize) -> Vec<[f64; 4]> {
+    let mut sums = Vec::with_capacity(hops + 1);
+    let mut acc = [0.0f64; 4];
+    let mut previous = region[0];
+    for (n, frame) in region.iter().take(hops * ONSET_HOP).enumerate() {
+        if n % ONSET_HOP == 0 {
+            sums.push(acc);
+        }
+        let (l, r) = (f64::from(frame[0]), f64::from(frame[1]));
+        let (dl, dr) = (
+            f64::from(frame[0] - previous[0]),
+            f64::from(frame[1] - previous[1]),
+        );
+        previous = *frame;
+        acc = [acc[0] + l * l, acc[1] + r * r, acc[2] + dl * dl, acc[3] + dr * dr];
+    }
+    sums.push(acc);
+    sums
+}
+
 /// Onsets in `frames[start..end]`, as source frames, earliest first.
 ///
 /// A time-domain detector, because a break's hits are broadband and the
@@ -279,30 +307,14 @@ pub fn detect_onsets(
     if end <= start + 2 * ONSET_HOP || sample_rate == 0 {
         return Vec::new();
     }
-    // Running sums of each band's energy, so any window is two lookups.
+    // Running sums of each band's energy at every hop boundary, so any
+    // window is two lookups.
     let span = end - start;
-    let mut sums = vec![[0.0f64; 4]; span + 1];
-    let mut previous = frames[start];
-    for n in 0..span {
-        let frame = frames[start + n];
-        let (l, r) = (f64::from(frame[0]), f64::from(frame[1]));
-        let (dl, dr) = (
-            f64::from(frame[0] - previous[0]),
-            f64::from(frame[1] - previous[1]),
-        );
-        previous = frame;
-        let before = sums[n];
-        sums[n + 1] = [
-            before[0] + l * l,
-            before[1] + r * r,
-            before[2] + dl * dl,
-            before[3] + dr * dr,
-        ];
-    }
     let hops = span / ONSET_HOP;
+    let sums = hop_prefix_sums(&frames[start..end], hops);
     let energy = |hop: usize, band: usize| {
-        let to = ((hop + 1) * ONSET_HOP).min(span);
-        let from = to.saturating_sub(ONSET_WINDOW);
+        let to = hop + 1;
+        let from = to.saturating_sub(ONSET_WINDOW / ONSET_HOP);
         (sums[to][band] - sums[from][band]).max(0.0)
     };
     // A floor 90 dB under the region's loudest window: below it a rise is
@@ -598,6 +610,44 @@ mod tests {
                 onset + tolerance_before >= hit && onset <= hit + tolerance_after,
                 "{what}: onset {onset} is not at the hit at {hit} ({found:?})"
             );
+        }
+    }
+
+    /// The detector keeps its running energy sums per hop, not per frame
+    /// (MOO-380): a per-frame array was 32 bytes a frame of the region. Each
+    /// entry is bit-identical to the per-frame running sum it replaces, so the
+    /// detection is unchanged.
+    #[test]
+    fn the_onset_sums_are_kept_per_hop_and_match_the_per_frame_sums() {
+        // A minute of a noisy tone, in a region that is not a whole number of
+        // hops, starting off zero.
+        let frames: Vec<[f32; 2]> = (0..60 * SR as usize + 77)
+            .map(|n| {
+                let x = n as f32;
+                [(x * 0.013).sin() * 0.7, (x * 0.031).cos() * (1.0 + (x * 0.0007).sin())]
+            })
+            .collect();
+        let (start, end) = (1_001, frames.len());
+        let span = end - start;
+        let hops = span / ONSET_HOP;
+        let sums = hop_prefix_sums(&frames[start..end], hops);
+        assert_eq!(sums.len(), span / ONSET_HOP + 1, "the working set is O(hops)");
+
+        // The per-frame sums, as the detector used to hold them.
+        let mut acc = [0.0f64; 4];
+        let mut previous = frames[start];
+        for n in 0..=hops * ONSET_HOP {
+            if n % ONSET_HOP == 0 {
+                assert_eq!(sums[n / ONSET_HOP], acc, "boundary {n}");
+            }
+            if n == hops * ONSET_HOP {
+                break;
+            }
+            let frame = frames[start + n];
+            let (l, r) = (f64::from(frame[0]), f64::from(frame[1]));
+            let (dl, dr) = (f64::from(frame[0] - previous[0]), f64::from(frame[1] - previous[1]));
+            previous = frame;
+            acc = [acc[0] + l * l, acc[1] + r * r, acc[2] + dl * dl, acc[3] + dr * dr];
         }
     }
 
