@@ -881,7 +881,8 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   target instead of playing a note (a pad defaults to a toggle, or fires a
   transport gesture). Every other key still plays. A mapped control takes over on **pickup** by
   default, so a fader left at zero does not slam a filter shut the first time
-  it is touched, and a control that has taken over gives the parameter back
+  it is touched (a control resting within one step of the value takes over at
+  once), and a control that has taken over gives the parameter back
   the moment anything else moves it. A mapped fader on a channel or track
   volume follows the mixer fader's own taper, so unity sits at
   three-quarter travel and the top is +6 dB, as it is under the mouse; a
@@ -1101,8 +1102,10 @@ boundary.
   decoded file, a blown-up upstream device -- is lost, but it no longer stays
   in any SVF, cascade, ladder, biquad or one-pole state, and a delay does not
   feed it back round its loop: the next finite sample is heard (MOO-174).
-  Other devices' internal state (reverb, plate, chorus) is not yet covered
-  (MOO-176).
+  The reverb, plate, modulation effect, dynamics, limiter and Buffer clear
+  their own state too (MOO-176, described under "Inside the graph" above;
+  `a_nan_in_the_input_is_gone_within_a_block_in_every_insert` holds them to
+  it).
 - The ML-M1's Ladder and Acid filters put their corner in the same place at
   every sample rate: their stages are cornered by solving the stage's own
   response rather than by the impulse-invariant pole, so one Cutoff is one
@@ -1376,11 +1379,6 @@ land on its own when it starts to matter:
   The toggle now says which of the three it is, and to commit, in the status
   bar; `StatusHint` reaches it from any face without the threaded property
   this entry used to ask for.
-- **Auditions never fire a choke.** `inject_choke_events` is a pre-pass over
-  the block's sequenced notes and runs before auditions are dispatched, so a
-  slice auditioned from the face does not silence the rest of its choke group.
-  A sequenced note in the group does still choke the audition. Making the
-  pre-pass see auditions means queueing them before it rather than after.
 - **Markers outside the committed region collapse onto its edges.** A commit
   renders only the playback region; a marker before it maps to frame 0 and a
   marker past it to the render's end, and the map then drops the duplicates.
@@ -1570,7 +1568,10 @@ land on its own when it starts to matter:
   whose control-rate staircase the lag rounds off. A mute is a fade: the
   channel or track goes on rendering, its output and its sends aimed at
   silence, and stops contributing only once both have arrived, about a
-  hundred milliseconds later. Polarity crossfades through zero. A document
+  hundred milliseconds later. Polarity crossfades through zero. So does a
+  send: switching one off fades it out and lets its delay drain before it is
+  held, and moving it between pre- and post-fader fades out, switches tap and
+  fades back in, all within about ten milliseconds (MOO-397). A document
   arriving starts at its own values rather than ramping into them, so a
   bounce's first milliseconds are at the levels the song holds.
   `continuity_tests.rs` holds each of these moves on a sustained sine to the
@@ -1778,7 +1779,11 @@ land on its own when it starts to matter:
   previous block, which is a deliberate feature rather than a fallback and
   needs a latency story this engine does not have.
 - A muted bus still processes, so effect tails on it decay rather than freeze,
-  but contributes no audio and meters as silent.
+  but contributes no audio and meters as silent. A muted channel does the same
+  once it has faded (MOO-418): its generator is left uncalled, but its effect
+  chain is fed silence until it reports at rest, so a delay or reverb tail
+  decays under the mute instead of replaying on unmute. A muted channel whose
+  chain is at rest costs nothing.
 - Per-bus peaks reach the GUI through a shared array of atomics rather than the
   event ring, which the ring's drain rate could not keep up with. The published
   value is a peak hold that only the GUI's read clears, so a transient landing

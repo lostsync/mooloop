@@ -3,9 +3,9 @@
 //! This is a shared primitive, not a private part of the delay effect. The
 //! retained-audio buffer device in `docs/BUFFER_ENGINE.md` needs the same
 //! thing — a bounded ring, fractional reads, and clean discontinuities when a
-//! head moves — so it is built once here and both use it. See
-//! `docs/MODULATION.md` ("The delay line is shared with the buffer
-//! device").
+//! head moves — so it is meant to be the second user rather than growing its
+//! own ring. Today the delay effect is the only one: `buffer_device.rs` keeps
+//! a ring of its own.
 //!
 //! ## Realtime contract
 //!

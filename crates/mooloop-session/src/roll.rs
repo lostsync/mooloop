@@ -410,10 +410,14 @@ impl Session {
             .filter(|note| resizing.contains(&note.id))
         {
             floor = floor.max(1 - note.duration_ticks as i64);
-            ceiling = ceiling.min(
-                length_ticks.saturating_sub(note.start_tick).max(1) as i64
-                    - note.duration_ticks as i64,
-            );
+            // A tail already past the end has no room to grow, and must not
+            // pull the group's ceiling below zero: that would shorten every
+            // note, the grabbed one included, whatever the drag asked for.
+            let room = length_ticks.saturating_sub(note.start_tick).max(1) as i64
+                - note.duration_ticks as i64;
+            if room >= 0 {
+                ceiling = ceiling.min(room);
+            }
         }
         if floor == i64::MIN {
             return None;
@@ -425,7 +429,9 @@ impl Session {
             .iter_mut()
             .filter(|note| resizing.contains(&note.id))
         {
-            note.duration_ticks = (note.duration_ticks as i64 + delta).max(1) as u32;
+            let overhangs = note.start_tick + note.duration_ticks > length_ticks;
+            let applied = if overhangs { delta.min(0) } else { delta };
+            note.duration_ticks = (note.duration_ticks as i64 + applied).max(1) as u32;
             edited.push(*note);
         }
         if edited.len() == 1 {
@@ -1035,6 +1041,34 @@ mod tests {
             4 * TICKS_PER_STEP,
             "nudging trimmed a tail it never used to"
         );
+    }
+
+    /// A selected note that already overhangs the end must not turn a drag to
+    /// lengthen into a shortening of the whole group (MOO-390).
+    #[test]
+    fn lengthening_a_note_is_not_undone_by_a_selected_overhang() {
+        let mut session = Session::default();
+        let a = session.channels[0]
+            .create_note(0, 0, 4 * TICKS_PER_STEP, 60).expect("room")
+            .id;
+        let b = session.channels[0]
+            .create_note(0, 13 * TICKS_PER_STEP, 4 * TICKS_PER_STEP, 62).expect("room")
+            .id;
+        session.selected_note_ids = [a, b].into_iter().collect();
+        assert_eq!(session.pattern_ticks(), 16 * TICKS_PER_STEP);
+
+        session
+            .resize_selection(a, 8 * TICKS_PER_STEP as i32)
+            .expect("the anchor is in the pattern");
+        let duration = |id| {
+            session.channels[0].notes[0]
+                .iter()
+                .find(|note| note.id == id)
+                .unwrap()
+                .duration_ticks
+        };
+        assert_eq!(duration(a), 8 * TICKS_PER_STEP, "the dragged note did not grow");
+        assert_eq!(duration(b), 4 * TICKS_PER_STEP, "the overhang was changed");
     }
 
     /// Grabbing a note outside the selection acts on that note alone.

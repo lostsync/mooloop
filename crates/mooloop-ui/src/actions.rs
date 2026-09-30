@@ -760,10 +760,10 @@ impl ShortcutTable {
     pub(crate) fn build(overrides: &HashMap<String, String>) -> Self {
         let mut bindings = HashMap::new();
         for spec in ACTIONS {
-            // An empty override means "explicitly unbound" (the prefpane's
-            // Reset clears an action to this rather than dropping the key
-            // from `overrides`, so a chord that collided with the default
-            // stays cleared instead of springing back). Unparseable
+            // An empty override means "explicitly unbound" (written for an
+            // action that lost its chord to another action, so it stays
+            // cleared instead of springing back; the prefpane's Reset drops
+            // the key instead, through `reset_chord`). Unparseable
             // non-empty text -- hand-edited settings.toml -- falls back to
             // the registry default rather than silently going unbound.
             let chord = match overrides.get(spec.id) {
@@ -815,9 +815,71 @@ impl ShortcutTable {
     }
 }
 
+/// Gives `chord` to `action_id` and unbinds every other action holding it,
+/// so no chord ever has two owners (`ShortcutTable::resolve` would reach
+/// only one). Returns the unbound owners. Shared by rebind and Reset.
+pub(crate) fn assign_chord(
+    overrides: &mut HashMap<String, String>,
+    action_id: &str,
+    chord: &KeyChord,
+) -> Vec<&'static str> {
+    let owners = ShortcutTable::build(overrides).owners_of(chord, action_id);
+    for owner in &owners {
+        overrides.insert((*owner).to_string(), String::new());
+    }
+    overrides.insert(action_id.to_string(), chord.to_string());
+    owners
+}
+
+/// Restores `action_id` to its registry default, unbinding whichever other
+/// action holds that chord now. Returns the unbound owners.
+pub(crate) fn reset_chord(
+    overrides: &mut HashMap<String, String>,
+    action_id: &str,
+) -> Vec<&'static str> {
+    let default = ACTIONS
+        .iter()
+        .find(|spec| spec.id == action_id)
+        .and_then(ActionSpec::default_chord);
+    let owners = default
+        .as_ref()
+        .map(|chord| assign_chord(overrides, action_id, chord))
+        .unwrap_or_default();
+    overrides.remove(action_id);
+    owners
+}
+
+/// Display label of an action id, falling back to the id.
+pub(crate) fn label_of(action_id: &'static str) -> &'static str {
+    ACTIONS
+        .iter()
+        .find(|spec| spec.id == action_id)
+        .map_or(action_id, |spec| spec.label)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reset_does_not_leave_two_owners_of_the_default_chord() {
+        let save = ACTIONS.iter().find(|s| s.id == "file.save").unwrap();
+        let chord = save.default_chord().unwrap();
+        let other = ACTIONS
+            .iter()
+            .find(|s| s.id != "file.save")
+            .unwrap()
+            .id;
+        let mut overrides = HashMap::new();
+        assign_chord(&mut overrides, other, &chord);
+        assert_eq!(overrides.get("file.save").map(String::as_str), Some(""));
+        let unbound = reset_chord(&mut overrides, "file.save");
+        assert_eq!(unbound, vec![other]);
+        let table = ShortcutTable::build(&overrides);
+        assert_eq!(table.resolve(&chord), Some("file.save"));
+        assert!(table.owners_of(&chord, "file.save").is_empty());
+        assert_eq!(table.chord_for(other), None);
+    }
 
     #[test]
     fn action_ids_are_unique() {

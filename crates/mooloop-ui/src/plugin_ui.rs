@@ -451,6 +451,11 @@ pub(crate) struct PluginFaces {
     /// Written by [`UiState::refresh_plugin_faces`], which has the running
     /// plugin and the open windows; read by [`PluginFaces::fill_row`].
     gui: RefCell<HashMap<PluginSlotId, GuiFace>>,
+    /// The plugin each slot held when its cached texts, options and gui
+    /// were filled (MOO-346). A slot id is handed out again by an undo or a
+    /// song open, so those caches are keyed by something that can name a
+    /// different plugin later; see [`Self::forget_if_replaced`].
+    seen: RefCell<HashMap<PluginSlotId, mooloop_core::PluginRef>>,
     /// The face of the selected channel's plugin instrument (MOO-304,
     /// MOO-316): one row while its source is a plugin, none otherwise. Set
     /// on the window once, by [`wire`], and updated in place, so its knobs
@@ -563,6 +568,22 @@ impl PluginFaces {
             })
             .collect();
         (rows, units)
+    }
+
+    /// Drop what is cached for `slot` when the plugin in it is not the one
+    /// the cache was filled from, so a reused slot id never shows a former
+    /// plugin's value texts or selector names (MOO-346).
+    fn forget_if_replaced(&self, slot: PluginSlotId, plugin: Option<&mooloop_core::PluginRef>) {
+        if self.seen.borrow().get(&slot) == plugin {
+            return;
+        }
+        self.texts.borrow_mut().retain(|key, _| key.0 != slot);
+        self.options.borrow_mut().retain(|key, _| key.0 != slot);
+        self.gui.borrow_mut().remove(&slot);
+        match plugin {
+            Some(plugin) => self.seen.borrow_mut().insert(slot, plugin.clone()),
+            None => self.seen.borrow_mut().remove(&slot),
+        };
     }
 
     /// Ask the running plugin in `slot` for the text of every value its face
@@ -754,6 +775,8 @@ impl UiState {
     /// of its values, its selectors -- and note whether it has a GUI of its
     /// own and whether that is open.
     fn refresh_plugin_face_state(&mut self, slot: PluginSlotId) {
+        let plugin = self.session.plugins.get(&slot).map(|saved| saved.plugin.clone());
+        self.plugin_faces.forget_if_replaced(slot, plugin.as_ref());
         self.plugin_faces.refresh_texts(&mut self.session, slot);
         // Whether the running plugin has a GUI of its own: a missing
         // plugin has none to open, and the control is not drawn.
@@ -1818,6 +1841,35 @@ mod face_tests {
                 version: String::new(),
             })
         }
+    }
+
+    /// **A slot id handed to a different plugin starts with empty caches**
+    /// (MOO-346): an undo or a song open reuses ids, and the value texts and
+    /// selector names cached for the old plugin must not be shown for the
+    /// new one. Reached by both a chain face and the instrument face, which
+    /// share `refresh_plugin_face_state`.
+    #[test]
+    fn a_reused_slot_forgets_the_former_plugins_caches() {
+        let faces = PluginFaces::default();
+        let x = slot(1).plugin;
+        let mut y = x.clone();
+        y.id = "other".into();
+        let s = PluginSlotId(0);
+        let fill = |faces: &PluginFaces| {
+            faces.texts.borrow_mut().insert((s, 0), (0.5, "X text".into()));
+            faces.options.borrow_mut().insert((s, 0), (0, None));
+            faces.gui.borrow_mut().insert(s, GuiFace { has_gui: true, ..GuiFace::default() });
+            faces.texts.borrow_mut().insert((PluginSlotId(1), 0), (0.5, "kept".into()));
+        };
+        faces.forget_if_replaced(s, Some(&x));
+        fill(&faces);
+        faces.forget_if_replaced(s, Some(&x));
+        assert!(faces.texts.borrow().contains_key(&(s, 0)), "the same plugin keeps its cache");
+        faces.forget_if_replaced(s, Some(&y));
+        assert!(!faces.texts.borrow().contains_key(&(s, 0)));
+        assert!(faces.options.borrow().is_empty());
+        assert!(faces.gui.borrow().is_empty());
+        assert!(faces.texts.borrow().contains_key(&(PluginSlotId(1), 0)), "another slot is left");
     }
 
     /// Nothing pinned shows the first eight the plugin does not hide; a pin

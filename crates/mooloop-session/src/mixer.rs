@@ -169,6 +169,11 @@ impl Session {
         // and `mix_into` then returns early so the track is silently
         // inaudible. `add_send` two functions below has always checked.
         self.buses.get(output as usize)?;
+        // Re-picking the current output is not an edit: no undo step, and
+        // the song is not marked unsaved.
+        if self.buses[index].bus.output == output {
+            return None;
+        }
         if would_create_cycle(&self.buses, index as u8, output) {
             return Some(Err(RoutingLoop {
                 feeder: self.buses[output as usize].bus.name.clone(),
@@ -463,6 +468,23 @@ mod tests {
     }
     use super::*;
     use mooloop_core::{EffectKind, MASTER_BUS};
+
+    /// The output picker reports the lit row too. Re-picking the current
+    /// destination must say "nothing changed" (`None`), or the handler
+    /// records an empty undo step that drops the redo history (MOO-403).
+    #[test]
+    fn re_picking_a_tracks_current_output_is_not_an_edit() {
+        let mut session = Session::default();
+        session.ensure_tracks(3);
+        session.dirty = false;
+
+        let current = i32::from(session.buses[1].bus.output);
+        assert!(session.set_bus_output(1, current).is_none());
+        assert!(!session.dirty, "an unchanged output marked the song unsaved");
+
+        assert!(matches!(session.set_bus_output(1, 2), Some(Ok(()))));
+        assert!(session.dirty, "a real change must still mark it");
+    }
 
     /// The rename this crate already had and nothing exercised. A blank name
     /// is refused here where `rename_pattern` accepts one: a mixer column is

@@ -430,9 +430,9 @@ impl MlM1 {
     /// fallback, long after the transport said stop.
     fn release_all(&mut self) {
         self.held.clear();
-        if self.voice.active && !self.voice.amp_env.is_releasing() {
-            self.voice.amp_env.release_with(STOP_RELEASE_S);
-            self.voice.filter_env.release_with(STOP_RELEASE_S);
+        if self.voice.active {
+            self.voice.amp_env.release_within(STOP_RELEASE_S);
+            self.voice.filter_env.release_within(STOP_RELEASE_S);
         }
     }
 
@@ -760,6 +760,44 @@ mod tests {
         let mut bus = StereoBus::with_capacity(256);
         synth.process(&ctx(256), &mut bus, &EventList::empty(), None);
         assert_eq!(bus.peak(256), (0.0, 0.0));
+    }
+
+    /// A choke on a voice already 1 s into an 8 s release has to end it within
+    /// `STOP_RELEASE_S`, not leave the natural tail ringing (MOO-391).
+    #[test]
+    fn a_choke_shortens_a_release_already_running() {
+        let mut params = saw_patch();
+        params.release = 8.0;
+        params.filter_release = 8.0;
+        let mut synth = MlM1::new(params, SR);
+        let sr = SR as usize;
+        let mut bus = StereoBus::with_capacity(sr);
+        let mut on = EventList::empty();
+        on.push(note_on(0, 1, 48));
+        synth.process(&ctx(4800), &mut bus, &on, None);
+        let mut off = EventList::empty();
+        off.push(note_off(0, 1, 48));
+        bus.clear(sr);
+        synth.process(&ctx(sr), &mut bus, &off, None);
+        assert!(
+            synth.voice.active && synth.voice.amp_env.is_releasing(),
+            "the note should be one second into its release"
+        );
+
+        let mut choke = EventList::empty();
+        choke.push(TimedEvent {
+            offset: 0,
+            event: Event::Choke,
+        });
+        bus.clear(480);
+        synth.process(&ctx(480), &mut bus, &choke, None);
+        bus.clear(64);
+        synth.process(&ctx(64), &mut bus, &EventList::empty(), None);
+        let (l, r) = bus.peak(64);
+        assert!(
+            l.max(r) < 1.0e-3,
+            "a choke left the release tail ringing ({l:.5}, {r:.5})"
+        );
     }
 
     #[test]

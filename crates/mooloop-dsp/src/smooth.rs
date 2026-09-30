@@ -37,11 +37,19 @@ impl Smoothed {
             target: initial,
             coeff: 0.0,
         };
-        smoothed.set_time(time_s, sample_rate);
+        // A non-finite first time has no earlier coefficient to keep, so it
+        // takes the shortest lag rather than the frozen 0.0 above.
+        smoothed.set_time(if time_s.is_finite() { time_s } else { 0.0 }, sample_rate);
         smoothed
     }
 
+    /// Set the time constant. A non-finite `time_s` is ignored and the lag
+    /// keeps the one it had, as in [`Self::set_target`]: `+inf` used to give
+    /// a coefficient of exactly 0, which froze the lag for minutes (MOO-396).
     pub fn set_time(&mut self, time_s: f32, sample_rate: u32) {
+        if !time_s.is_finite() {
+            return;
+        }
         let samples = (time_s.max(1.0e-5) * sample_rate as f32).max(1.0);
         self.coeff = 1.0 - (-1.0 / samples).exp();
     }
@@ -311,22 +319,50 @@ mod tests {
         }
     }
 
-    /// A NaN or infinite target or time is ignored rather than taken in: the
-    /// lag carries on toward the last good target (MOO-117).
-    #[test]
-    fn a_non_finite_target_is_ignored() {
+    /// A NaN or infinite target, value or time is ignored rather than taken
+    /// in: the lag carries on toward the last good target (MOO-117). One
+    /// smoother per bad value, because in a single loop the last `set_time`
+    /// overwrote the coefficient `+inf` had frozen and the test could not see
+    /// it (MOO-396).
+    fn ignores_non_finite(bad: f32) {
         for sr in RATES {
             let mut smoothed = Smoothed::new(0.25, 0.005, sr);
             smoothed.set_target(0.75);
-            for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-                smoothed.set_target(bad);
-                smoothed.reset_to(bad);
-                smoothed.set_time(bad, sr);
-            }
+            smoothed.set_target(bad);
+            smoothed.reset_to(bad);
+            smoothed.set_time(bad, sr);
             for _ in 0..frames_for(0.5, sr) {
                 assert!(smoothed.advance().is_finite());
             }
-            assert_eq!(smoothed.value(), 0.75);
+            assert_eq!(smoothed.value(), 0.75, "{bad} at {sr} Hz");
+        }
+    }
+
+    #[test]
+    fn a_nan_is_ignored() {
+        ignores_non_finite(f32::NAN);
+    }
+
+    #[test]
+    fn a_positive_infinity_is_ignored() {
+        ignores_non_finite(f32::INFINITY);
+    }
+
+    #[test]
+    fn a_negative_infinity_is_ignored() {
+        ignores_non_finite(f32::NEG_INFINITY);
+    }
+
+    /// A smoother built with a non-finite time still has a working lag.
+    #[test]
+    fn a_non_finite_first_time_still_smooths() {
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut smoothed = Smoothed::new(0.25, bad, 48_000);
+            smoothed.set_target(0.75);
+            for _ in 0..frames_for(0.5, 48_000) {
+                smoothed.advance();
+            }
+            assert_eq!(smoothed.value(), 0.75, "{bad}");
         }
     }
 }

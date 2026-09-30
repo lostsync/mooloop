@@ -165,6 +165,38 @@ mod tests {
     /// A knob that reports a different number from the one the engine runs is
     /// worse than no knob. Round-trip both stretch mappings across their
     /// declared ranges.
+    /// The knob laws above are a second copy of the sampler descriptors'
+    /// `Exponential` curve. Lanes, routes and MIDI bindings convert through
+    /// the descriptor and the face through these, so the two must agree at
+    /// every point or the same value sits at two knob positions (MOO-376).
+    #[test]
+    fn the_stretch_knob_laws_agree_with_the_descriptors() {
+        use mooloop_core::generator::{
+            SAMPLER_PARAM_STRETCH_BARS, SAMPLER_PARAM_STRETCH_GRAIN, SAMPLER_PARAM_STRETCH_RATIO,
+        };
+        use mooloop_core::DeviceKind;
+        let descriptor = |id| DeviceKind::Sampler.descriptor(id).expect("sampler parameter");
+        let ratio = descriptor(SAMPLER_PARAM_STRETCH_RATIO);
+        let grain = descriptor(SAMPLER_PARAM_STRETCH_GRAIN);
+        let bars = descriptor(SAMPLER_PARAM_STRETCH_BARS);
+        for i in 0..=32 {
+            let norm = i as f32 / 32.0;
+            let close = |a: f32, b: f32, what: &str| {
+                assert!((a - b).abs() <= 1.0e-4 * b.abs().max(1.0), "{what} at {norm}: {a} vs {b}");
+            };
+            close(stretch_ratio_from_norm(norm), ratio.from_normalized(norm), "ratio");
+            close(stretch_bars_from_norm(norm), bars.from_normalized(norm), "bars");
+            // Grain is whole frames on the face; the descriptor is unrounded.
+            close(
+                f32::from(stretch_grain_from_norm(norm)),
+                grain.from_normalized(norm).round(),
+                "grain",
+            );
+            close(stretch_ratio_to_norm(ratio.from_normalized(norm)), norm, "ratio norm");
+            close(stretch_bars_to_norm(bars.from_normalized(norm)), norm, "bars norm");
+        }
+    }
+
     #[test]
     fn the_stretch_mappings_round_trip() {
         for ratio in [0.25f32, 0.5, 0.75, 1.0, 1.5, 2.0, 6.5, 16.0] {

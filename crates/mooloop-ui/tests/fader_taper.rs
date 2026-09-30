@@ -25,8 +25,11 @@ slint::slint! {
     export component TaperHarness inherits Window {
         in property <float> travel;
         in property <float> db;
+        in property <float> gain;
         out property <float> db-for-travel: GainMath.fader-position-to-db(root.travel);
         out property <float> travel-for-db: GainMath.fader-db-to-position(root.db);
+        out property <float> travel-for-gain:
+            GainMath.fader-gain-to-position(root.gain);
         out property <float> round-tripped:
             GainMath.fader-db-to-position(GainMath.fader-position-to-db(root.travel));
     }
@@ -98,5 +101,36 @@ fn a_position_survives_the_trip_through_db_and_back() {
             "travel {travel} round-tripped to {back}"
         );
         travel += 0.005;
+    }
+}
+
+/// What a fader and a send bar draw from a stored gain. The markup composes
+/// `linear-to-db` with the taper, and `linear-to-db` floors silence at -60 dB,
+/// so a gain of 0 used to land on the 5% breakpoint instead of the bottom of
+/// the throw (MOO-399). The tests above cover the two taper halves, never
+/// this composition.
+#[test]
+fn a_gain_draws_at_the_travel_rust_gives_it_including_silence() {
+    i_slint_backend_testing::init_no_event_loop();
+    let harness = TaperHarness::new().expect("harness builds");
+
+    let gains = [
+        0.0,
+        1e-4,
+        0.001,
+        0.01,
+        0.1,
+        0.5,
+        1.0,
+        mooloop_core::gain::FADER_MAX_GAIN,
+    ];
+    for gain in gains {
+        harness.set_gain(gain);
+        let slint_travel = harness.get_travel_for_gain();
+        let rust_travel = mooloop_core::gain::fader_gain_to_position(gain);
+        assert!(
+            (slint_travel - rust_travel).abs() < 1e-3,
+            "gain {gain}: slint travel {slint_travel}, rust {rust_travel}"
+        );
     }
 }

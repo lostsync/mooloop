@@ -146,12 +146,17 @@ pub fn commit_is_stale(channel: &ChannelState, commit: &SampleCommit, bpm: f64) 
         loop_end: commit.source_loop_end,
         ..channel.sampler_params()
     };
-    let now = mooloop_dsp::Sampler::effective_ratio(
+    // The markers the commit was baked against: a Slices loop grid snaps the
+    // loop to them (MOO-367).
+    let mut slices = SliceMap::new();
+    slices.rebuild(commit.source_markers.iter().copied());
+    let now = mooloop_dsp::Sampler::effective_ratio_in(
         params,
         source.frames.len(),
         source.sample_rate,
         bpm,
         1.0,
+        Some(&slices),
     );
     (now - f64::from(commit.ratio)).abs() > 1.0e-3
 }
@@ -1386,6 +1391,38 @@ mod tests {
         let on = session.set_stretch_sync(true, 140.0).expect("a change");
         assert!(on.stretch_sync);
         assert_eq!(on.stretch_ratio, running, "turning SYNC on moved the knob");
+    }
+
+    /// A stretch commit fits the loop the voice plays, and the stale badge
+    /// measures it the same way: with a Slices loop grid that is the loop
+    /// snapped to the markers, so a fresh commit is not stale (MOO-367).
+    #[test]
+    fn a_fresh_slices_snapped_commit_is_not_stale() {
+        use mooloop_core::sampler::{LoopMode, LoopQuantize};
+
+        let mut session = session_with_audio();
+        if let Some(params) = session.channels[0].sampler_params_mut() {
+            params.stretch_enabled = true;
+            params.stretch_sync = true;
+            params.stretch_bars = 1.0;
+            params.loop_mode = LoopMode::Forward;
+            params.loop_quantize = LoopQuantize::Slices;
+            params.loop_start = 0.26;
+            params.loop_end = 0.74;
+        }
+        session.channels[0].slices.add(12_000);
+        session.channels[0].slices.add(36_000);
+
+        // The loop snaps to 12,000..36,000 (half a second), which one bar at
+        // 120 BPM (two seconds) stretches by 4. Fitting the free loop would
+        // say 2.
+        let committed = session.commit_stretch(120.0).expect("a commit");
+        assert!((committed.ratio - 4.0).abs() < 1.0e-4, "{}", committed.ratio);
+
+        let channel = &session.channels[0];
+        let commit = channel.commit.as_ref().expect("the commit");
+        assert!(!commit_is_stale(channel, commit, 120.0), "stale straight after the commit");
+        assert!(commit_is_stale(channel, commit, 100.0), "a tempo change should still show");
     }
 
     /// Markers are reported as fractions of the published buffer, which is

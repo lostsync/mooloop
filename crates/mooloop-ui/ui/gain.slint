@@ -81,6 +81,15 @@ export global GainMath {
         return inverse(db, root.fader-travel[0], root.fader-db[0], root.fader-travel[1], root.fader-db[1]);
     }
 
+    // Linear gain to fader travel: `fader_gain_to_position` in mooloop-core.
+    // Silence is travel 0. `linear-to-db` floors it at `min-db`, which the taper
+    // reads as the -60 dB breakpoint (5% travel), so the composition alone
+    // cannot say it.
+    public pure function fader-gain-to-position(linear: float) -> float {
+        if (linear <= 0.0) { return root.fader-travel[6]; }
+        return root.fader-db-to-position(root.linear-to-db(linear));
+    }
+
     // Linear interpolation in dB between a segment's endpoints.
     pure function between(p: float, top-travel: float, top-db: float, bottom-travel: float, bottom-db: float) -> float {
         return bottom-db + (p - bottom-travel) / (top-travel - bottom-travel) * (top-db - bottom-db);

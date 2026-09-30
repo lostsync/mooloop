@@ -1530,9 +1530,9 @@ impl Voice {
     fn retire(&mut self) {
         self.gate = false;
         self.age = 0;
-        if self.active && !self.env.is_releasing() {
-            self.env.release_with(STOP_RELEASE_S);
-            self.filter_env.release_with(STOP_RELEASE_S);
+        if self.active {
+            self.env.release_within(STOP_RELEASE_S);
+            self.filter_env.release_within(STOP_RELEASE_S);
         }
     }
 
@@ -2365,9 +2365,9 @@ impl MlP8 {
     fn release_all(&mut self) {
         for voice in &mut self.voices {
             voice.gate = false;
-            if voice.active && !voice.env.is_releasing() {
-                voice.env.release_with(STOP_RELEASE_S);
-                voice.filter_env.release_with(STOP_RELEASE_S);
+            if voice.active {
+                voice.env.release_within(STOP_RELEASE_S);
+                voice.filter_env.release_within(STOP_RELEASE_S);
             }
         }
     }
@@ -5416,6 +5416,44 @@ mod tests {
 
     /// Note Off is a group operation too: one event id releases every member,
     /// and none of them is left gated behind.
+    /// A choke on a voice already 1 s into an 8 s release has to end it within
+    /// `STOP_RELEASE_S`, not leave the natural tail ringing (MOO-391).
+    #[test]
+    fn a_choke_shortens_a_release_already_running() {
+        let mut params = init_saw();
+        params.release = 8.0;
+        params.filter_release = 8.0;
+        let mut synth = MlP8::new(params, SR);
+        let sr = SR as usize;
+        let mut bus = StereoBus::with_capacity(sr);
+        let mut on = EventList::empty();
+        on.push(note_on(0, 1, 48));
+        synth.process(&ctx(4800), &mut bus, &on, None);
+        let mut off = EventList::empty();
+        off.push(note_off(0, 1, 48));
+        bus.clear(sr);
+        synth.process(&ctx(sr), &mut bus, &off, None);
+        assert!(
+            synth.voices.iter().any(|v| v.active && v.env.is_releasing()),
+            "the note should be one second into its release"
+        );
+
+        let mut choke = EventList::empty();
+        choke.push(TimedEvent {
+            offset: 0,
+            event: Event::Choke,
+        });
+        bus.clear(480);
+        synth.process(&ctx(480), &mut bus, &choke, None);
+        bus.clear(64);
+        synth.process(&ctx(64), &mut bus, &EventList::empty(), None);
+        let (l, r) = bus.peak(64);
+        assert!(
+            l.max(r) < 1.0e-3,
+            "a choke left the release tail ringing ({l:.5}, {r:.5})"
+        );
+    }
+
     #[test]
     fn note_off_releases_every_member_of_its_group() {
         let mut params = init_saw();
@@ -5462,6 +5500,14 @@ mod tests {
         assert!(
             synth.voices.iter().all(|v| !v.active || v.env.is_releasing()),
             "a voice kept sounding at its old group size"
+        );
+        // Silent within `STOP_RELEASE_S` plus a block, not merely releasing:
+        // a voice on its natural release satisfies `is_releasing` (MOO-391).
+        bus.clear(512);
+        synth.process(&ctx(512), &mut bus, &EventList::empty(), None);
+        assert!(
+            synth.voices.iter().all(|v| !v.active || v.env.is_idle()),
+            "a voice outlived STOP_RELEASE_S after the topology change"
         );
 
         // And the next note gets the new topology, whole.
@@ -5679,6 +5725,12 @@ mod tests {
             assert!(
                 synth.voices.iter().all(|v| !v.active || v.env.is_releasing()),
                 "a voice was left running without a gate"
+            );
+            // ...and the tail is `STOP_RELEASE_S` long, not the natural
+            // release: silent within a block of the stop (MOO-391).
+            assert!(
+                synth.voices.iter().all(|v| !v.active || v.env.is_idle()),
+                "a voice outlived STOP_RELEASE_S after the stop"
             );
         }
     }

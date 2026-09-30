@@ -387,7 +387,7 @@ export component SendBar inherits Rectangle {
     callback removed();
 
     private property <float> position:
-        GainMath.fader-db-to-position(GainMath.linear-to-db(root.send.level));
+        GainMath.fader-gain-to-position(root.send.level);
     private property <float> pressed-position;
     private property <bool> dragging;
     private property <bool> fine-drag;

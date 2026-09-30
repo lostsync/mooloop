@@ -34,11 +34,12 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # See ci.yml: this repo's committed .cargo/config.toml pins a linker and
-  # target-dir from the maintainer's own machine. Clear RUSTFLAGS so CI uses
-  # the default linker instead.
+  # See ci.yml: this repo's committed .cargo/config.toml pins the mold linker
+  # for the maintainer's own machine. Clear RUSTFLAGS so CI uses the default
+  # linker instead.
   RUSTFLAGS: ""
-  # Keep package artifacts in the runner workspace, not the maintainer's path.
+  # Keep package artifacts in the runner workspace's target/, where the
+  # packaging steps below read them, whatever CARGO_TARGET_DIR the runner sets.
   CARGO_TARGET_DIR: target
   # A release of linuxdeploy, not its moving `continuous` tag, which made the
   # same commit package differently from one week to the next.

@@ -3113,7 +3113,7 @@ export component MixerFader inherits Rectangle {
 
     private property <float> normalized: root.maximum <= root.minimum
         ? 0 : root.db-taper
-            ? clamp(GainMath.fader-db-to-position(GainMath.linear-to-db(root.value)), 0, 1)
+            ? clamp(GainMath.fader-gain-to-position(root.value), 0, 1)
             : clamp((root.value - root.minimum) / (root.maximum - root.minimum), 0, 1);
     private property <[float]> tick-positions: root.db-taper
         ? [1.0, 0.75, 0.5, 0.3, 0.15, 0.0]

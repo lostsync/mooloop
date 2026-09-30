@@ -15,6 +15,21 @@ use mooloop_core::{
 
 use crate::render::{MidiRouting, RenderState};
 
+/// How long the engine's sequencer takes `project`'s song to be: the period it
+/// schedules Song mode on and wraps a recorded note by. Here so a check
+/// outside this crate can hold it against `Session::song_length_ticks`, the
+/// period the session wraps a Replace take by (MOO-393).
+pub fn song_length_ticks(project: &Project) -> u32 {
+    let mut sequencer = crate::sequencer::Sequencer::new(
+        1,
+        1,
+        mooloop_core::DEFAULT_STEPS as usize,
+        mooloop_core::Ppq::DEFAULT,
+    );
+    sequencer.load_project(project);
+    sequencer.song_length_ticks()
+}
+
 /// A renderer that takes MIDI on every channel's first route from every
 /// port, as a keyboard played into channel 0 does.
 pub struct RecordRig {

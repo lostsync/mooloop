@@ -284,6 +284,26 @@ struct CompiledSend {
     /// What this send waits before summing into `target`, from
     /// `mooloop_core::compile_latency`'s per-send answer.
     compensation: Option<Box<IntegerDelay>>,
+    /// Consecutive frames of silence fed into `compensation`, counted after
+    /// the send's level where the ring is fed (MOO-402): the send-ring twin
+    /// of `ChannelStrip::ring_silent_frames` (MOO-401). A ring that was just
+    /// emptied holds only silence and reads `u32::MAX`; a new send starts at
+    /// zero, which only delays its producer's sleep by the ring's length.
+    ring_silent_frames: u32,
+    /// A tap change waiting for the send to fade out (MOO-397).
+    pending_tap: Option<SendTap>,
+}
+
+impl CompiledSend {
+    /// Whether the level has arrived at silence.
+    fn is_dark(&self) -> bool {
+        self.level.is_settled() && self.level.value() == 0.0
+    }
+
+    /// Whether the last block fed it silence, or it was emptied since.
+    fn input_is_silent(&self) -> bool {
+        self.ring_silent_frames > 0
+    }
 }
 
 /// Scratch buffers a block's sends work in.
@@ -436,6 +456,8 @@ impl SendBank {
                     // in the middle of a song is heard to ramp.
                     level: Smoothed::new(0.0, STRIP_GAIN_SMOOTH_S, sample_rate),
                     compensation: IntegerDelay::new(spec.delay).map(Box::new),
+                    ring_silent_frames: 0,
+                    pending_tap: None,
                 })
                 .collect(),
             starts,
@@ -497,10 +519,16 @@ impl SendBank {
                 // the next block, so a rebuild never steps a send that
                 // survived it.
                 self.sends[matched].level = old.sends[index].level;
+                let same_ring = ring_frames(&self.sends[matched].compensation)
+                    == ring_frames(&old.sends[index].compensation);
                 keep_live_ring(
                     &mut self.sends[matched].compensation,
                     &mut old.sends[index].compensation,
                 );
+                if same_ring {
+                    // The live ring came with what it is known to hold.
+                    self.sends[matched].ring_silent_frames = old.sends[index].ring_silent_frames;
+                }
             }
         }
     }
@@ -521,7 +549,7 @@ impl SendBank {
     fn taps(&self, producer: EffectTarget, tap: SendTap) -> bool {
         self.sends[self.range(producer)]
             .iter()
-            .any(|send| send.tap == tap && send.enabled)
+            .any(|send| send.tap == tap && (send.enabled || !send.is_dark()))
     }
 
     /// Keep a copy of `bus` as `producer`'s `tap` signal.
@@ -573,7 +601,21 @@ impl SendBank {
             if let Some(delay) = send.compensation.as_mut() {
                 delay.reset();
             }
+            send.ring_silent_frames = u32::MAX;
         }
+    }
+
+    /// Whether every one of `producer`'s send rings holds only silence: each
+    /// has been fed silence for at least its own length (MOO-402).
+    ///
+    /// What a track weighs before it sleeps, beside its own ring, because
+    /// [`Self::reset`] on the way down empties these too -- and a send is
+    /// owed its own delay, which can be longer than the track's.
+    fn rings_are_silent(&self, producer: EffectTarget) -> bool {
+        self.is_empty()
+            || self.sends[self.range(producer)]
+                .iter()
+                .all(|send| send.ring_silent_frames as usize >= ring_frames(&send.compensation))
     }
 
     /// Whether every one of `producer`'s sends has faded all the way out, so
@@ -614,16 +656,16 @@ impl SendBank {
 
     /// Sum `producer`'s captured sends into the tracks they feed.
     ///
-    /// Called once the strip's own borrow has ended. A disabled send resets
-    /// its ring rather than advancing it, so re-enabling one does not emit the
-    /// audio it was holding when it was switched off.
+    /// Called once the strip's own borrow has ended. A disabled send fades out
+    /// and drains its ring, and only then resets it and is skipped, so
+    /// re-enabling one does not emit the audio it was holding when it was
+    /// switched off.
     ///
     /// `silenced` is the producer's mute or solo verdict: while it holds,
     /// every send is aimed at silence rather than at its authored level, and
-    /// fades there with the producer's own output. A disabled send is held at
-    /// silence outright -- nothing of it is heard, so there is nothing to
-    /// fade -- which also means switching one on ramps it in from nothing
-    /// rather than stepping.
+    /// fades there with the producer's own output. A disabled send is aimed
+    /// at silence the same way, which also means switching one on ramps it in
+    /// from nothing rather than stepping.
     fn emit(
         &mut self,
         producer: EffectTarget,
@@ -640,15 +682,21 @@ impl SendBank {
             return;
         };
         for send in &mut sends[range] {
-            if !send.enabled {
+            // Off and a tap change fade the send out like a mute does
+            // (MOO-397); only a send that has faded to nothing *and* whose
+            // ring has drained is held and emptied.
+            let held = silenced || !send.enabled || send.pending_tap.is_some();
+            send.level.set_target(if held { 0.0 } else { send.authored });
+            if !send.enabled
+                && send.is_dark()
+                && send.ring_silent_frames as usize >= ring_frames(&send.compensation)
+            {
                 if let Some(delay) = send.compensation.as_mut() {
                     delay.reset();
                 }
-                send.level.reset_to(0.0);
+                send.ring_silent_frames = u32::MAX;
                 continue;
             }
-            send.level
-                .set_target(if silenced { 0.0 } else { send.authored });
             let Some(destination) = buses.get_mut(send.target as usize) else {
                 continue;
             };
@@ -661,6 +709,15 @@ impl SendBank {
                 frames,
             );
             apply_smoothed_gain(&mut send.level, work, frames);
+            // What goes in, after the level: this is what the ring will hold,
+            // so this is what has to have gone quiet before the producer may
+            // sleep and empty it (MOO-402), or a disabled send be held.
+            let (left, right) = work.peak(frames);
+            send.ring_silent_frames = if left.max(right) <= SILENCE_PEAK {
+                send.ring_silent_frames.saturating_add(frames as u32)
+            } else {
+                0
+            };
             if let Some(delay) = send.compensation.as_mut() {
                 delay.process(&mut work.l[..frames], &mut work.r[..frames]);
             }
@@ -670,6 +727,13 @@ impl SendBank {
             // switch or not at all.
             destination.bus.add_from(work, frames);
             destination.dirty = true;
+            // The new tap is read from the next block, whose capture has
+            // already been asked for it, and fades back in from nothing.
+            if send.is_dark() {
+                if let Some(tap) = send.pending_tap.take() {
+                    send.tap = tap;
+                }
+            }
         }
     }
 
@@ -693,14 +757,28 @@ impl SendBank {
     fn set_enabled(&mut self, producer: EffectTarget, index: usize, enabled: bool) {
         let range = self.range(producer);
         if let Some(send) = self.sends[range].get_mut(index) {
+            // Nothing is coming in (the producer is asleep, or silent), so
+            // there is nothing to fade -- and a fade would let the start of
+            // its next phrase leak through a send that is off.
+            if !enabled && send.input_is_silent() {
+                send.level.reset_to(0.0);
+            }
             send.enabled = enabled;
         }
     }
 
+    /// Fades out, switches tap, fades in (MOO-397): the two taps differ by
+    /// the producer's fader and balance, so switching in one sample steps the
+    /// return by the difference. The swap is in [`Self::emit`].
     fn set_tap(&mut self, producer: EffectTarget, index: usize, tap: SendTap) {
         let range = self.range(producer);
         if let Some(send) = self.sends[range].get_mut(index) {
-            send.tap = tap;
+            if send.input_is_silent() || send.is_dark() {
+                send.tap = tap;
+                send.pending_tap = None;
+            } else {
+                send.pending_tap = (tap != send.tap).then_some(tap);
+            }
         }
     }
 }
@@ -4328,6 +4406,11 @@ pub struct ChannelStrip {
     /// measurement that covers every reason a device might still be making
     /// sound, including the finishing stages that outlive its voices.
     source_silent_frames: u32,
+    /// Consecutive frames of silence fed into the compensation ring, counted
+    /// after the fader where the ring is fed (MOO-401). The source's silence
+    /// is not that: a chain with a tail keeps feeding the ring audio long
+    /// after the source has gone quiet. Only kept while a ring exists.
+    ring_silent_frames: u32,
     /// Whether the strip was left uncalled last block. Only used to do the
     /// once-off tidying that falling asleep needs -- emptying the bus and the
     /// compensation ring -- rather than repeating it every idle block.
@@ -4470,6 +4553,7 @@ impl ChannelStrip {
             destination: MASTER_BUS,
             compensation: None,
             source_silent_frames: 0,
+            ring_silent_frames: 0,
             sleeping: false,
             take: None,
             sequenced: SequencedVoices::new(),
@@ -4641,6 +4725,11 @@ impl ChannelStrip {
         source.is_at_rest()
             && self.source_silent_frames > source.tail_frames()
             && self.effects.is_at_rest()
+            // The ring has to have been fed silence for at least its own
+            // length: until then it still holds audio it has not emitted,
+            // and `sleep` empties it (MOO-401). `BusStrip::is_resting` has
+            // the same clause.
+            && self.ring_silent_frames as usize >= ring_frames(&self.compensation)
     }
 
     /// Spend a block asleep: move whatever runs on the clock, and the first
@@ -4651,10 +4740,41 @@ impl ChannelStrip {
         self.effects.on_discontinuity(kind);
     }
 
+    /// Feed this strip's chain a block of silence, for a channel that is
+    /// muted and has faded out while something in the chain is still ringing
+    /// (MOO-418). Nothing that comes out is used: the strip is not summed
+    /// anywhere. What matters is that a delay line or a reverb tank keeps
+    /// draining, so the tail is gone by the time the mute lifts and not
+    /// waiting to be played out late. Returns the faults the chain found, for
+    /// the caller to publish.
+    #[allow(clippy::too_many_arguments)]
+    fn ring_out_on_silence(
+        &mut self,
+        context: &ProcessContext,
+        scope: EffectTarget,
+        device_display: Option<(&DeviceMeters, &DeviceTelemetry, usize)>,
+        modulation: Option<&ModulationBlock<'_>>,
+        automation: Option<&AutomationBlock<'_>>,
+        skip_idle: bool,
+    ) -> u32 {
+        self.bus.clear(context.frames);
+        self.effects.process(
+            context,
+            &mut self.bus,
+            scope,
+            device_display,
+            modulation,
+            automation,
+            skip_idle,
+        );
+        std::mem::take(&mut self.effects.faults_unpublished)
+    }
+
     fn sleep(&mut self, context: &ProcessContext) {
         self.source_node_mut().skip_block(context);
         self.effects.sleep(context);
         self.source_silent_frames = self.source_silent_frames.saturating_add(context.frames as u32);
+        self.ring_silent_frames = self.ring_silent_frames.saturating_add(context.frames as u32);
         if self.sleeping {
             return;
         }
@@ -4786,10 +4906,12 @@ const MAX_AUDITIONS_PER_BLOCK: usize = 64;
 
 /// The most events one block hands back to the control layer. Control input is
 /// forwarded, not acted on here, and a desk sending a fader stream must not be
-/// able to make the audio thread grow a buffer -- so the surplus is dropped,
-/// which for a stream of positions means the control layer sees a slightly
-/// coarser sweep and nothing worse. A note-off is never in this list: notes
-/// sound on the audio thread and their release does not depend on it.
+/// able to make the audio thread grow a buffer -- so the surplus is dropped
+/// and counted in `refused_events`, which for a stream of positions means the
+/// control layer sees a slightly coarser sweep. A note-off is never in this
+/// list: notes sound on the audio thread and their release does not depend on
+/// it. A `RecordedNote` is, and losing one is a note missing from the take, so
+/// it takes a forwarded control message's slot rather than being dropped.
 const MAX_OUTGOING_EVENTS_PER_BLOCK: usize = 128;
 
 /// The sustain pedal's controller number (MOO-128).
@@ -5032,6 +5154,17 @@ pub struct AudioInputRouting {
     pub taps: Vec<Option<mooloop_core::AudioTap>>,
 }
 
+/// Whether editing a stored note from `old` to `new` moves its note-off
+/// somewhere the playhead will not reach: re-pitched (a note-off names its
+/// pitch), moved, or shortened. A note that only grows, or changes velocity,
+/// keeps its voice. The one rule a live edit and an install both apply
+/// (MOO-99, MOO-383).
+fn note_off_out_of_reach(old: &mooloop_core::NoteEvent, new: &mooloop_core::NoteEvent) -> bool {
+    old.note != new.note
+        || old.start_tick != new.start_tick
+        || new.duration_ticks < old.duration_ticks
+}
+
 /// One note being recorded, from its press until its release.
 #[derive(Clone, Copy)]
 struct RecordingNote {
@@ -5162,7 +5295,11 @@ impl BufferCcState {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RenderReport {
+    /// The song position at the block's end, after any loop fold.
     pub position_tick: u64,
+    /// The song position at the block's start (MOO-358): where a slow block
+    /// was when it ran long.
+    pub start_tick: u64,
     pub beat_in_bar: u8,
     pub playing: bool,
     pub peak_l: f32,
@@ -5434,6 +5571,10 @@ pub(crate) struct RenderState {
     /// Samples that reached the guard above 0 dBFS and were limited, since
     /// this state was built. See [`Self::output_overs`].
     output_overs: u64,
+    /// How many leading frames of the next block the two counts above leave
+    /// out; taken back to zero by that block. See
+    /// [`Self::count_output_from`].
+    output_count_from: usize,
     /// Which channels reached their output in the last block: what a take
     /// of a channel and an export's channel stem (MOO-183) may read. A
     /// muted, faded or sleeping channel's buffer holds stale or pre-fader
@@ -5599,6 +5740,7 @@ impl RenderState {
             output_guard: OutputGuard::new(sample_rate),
             output_non_finite: 0,
             output_overs: 0,
+            output_count_from: 0,
             channels_heard: [false; MAX_CHANNELS],
         };
         // The sequencer starts with one channel, so the graph starts with
@@ -6025,11 +6167,26 @@ impl RenderState {
             // The voices came across with the strip, and so did the table
             // naming them. One whose note the incoming song no longer has,
             // or has at another pitch, will never see its note-off (MOO-99).
+            //
+            // Also one whose note-off the install moved out of reach, by the
+            // rule a live `UpsertNote` uses, or that lost the placement it
+            // was scheduled through, as `SetPlaylistPlacement` does live
+            // (MOO-383). Undo and redo arrive here.
             let sequencer = &self.sequencer;
+            let before = &outgoing.sequencer;
             fresh.sequenced.release_where(|voice| {
-                sequencer
-                    .note(usize::from(voice.origin.pattern), to, voice.note_id())
-                    .is_none_or(|note| note.note != voice.note)
+                let pattern = usize::from(voice.origin.pattern);
+                let Some(note) = sequencer.note(pattern, to, voice.note_id()) else {
+                    return true;
+                };
+                note.note != voice.note
+                    || before
+                        .note(pattern, from, voice.note_id())
+                        .is_none_or(|old| note_off_out_of_reach(&old, &note))
+                    || voice
+                        .origin
+                        .placement
+                        .is_some_and(|start| !sequencer.has_placement(pattern, start))
             });
         }
         // A track's live strip, for a track whose id and setup survived: its
@@ -6231,6 +6388,9 @@ impl RenderState {
         // point rather than a hazard.
         self.grow_channels(project.channels.len());
         self.grow_buses(project.buses.len());
+        // Notes in flight belong to the project being replaced: they would
+        // land in the new one, measured against a playhead that just reset.
+        self.recording = [None; 128];
         self.transport.stop();
         self.transport.set_tempo(project.bpm.into());
         self.loop_range = project.loop_range;
@@ -7689,6 +7849,7 @@ impl RenderState {
                 self.release_all_sequenced();
             }
             EngineCommand::Stop => {
+                self.flush_recording();
                 self.transport.stop();
                 self.cancel_deferred();
                 self.release_all_sequenced();
@@ -7930,10 +8091,7 @@ impl RenderState {
                 // that only grows, or changes velocity, keeps its voice: its
                 // note-off is still ahead (MOO-99).
                 if let Some(old) = self.sequencer.note(pattern as usize, channel as usize, note.id) {
-                    if old.note != note.note
-                        || old.start_tick != note.start_tick
-                        || note.duration_ticks < old.duration_ticks
-                    {
+                    if note_off_out_of_reach(&old, &note) {
                         self.release_edited_note(pattern, channel, note.id);
                     }
                 }
@@ -8424,11 +8582,25 @@ impl RenderState {
         self.outgoing.iter_mut().find(|slot| slot.is_some())?.take()
     }
 
-    /// Queue one event for the control layer. Dropped past the cap; see
+    /// Queue one event for the control layer. Past the cap something is
+    /// dropped and counted in [`Self::refused_events`]: the event itself, or
+    /// -- for a recorded note, which is the take and cannot be recovered --
+    /// the oldest forwarded control message in its place. See
     /// [`MAX_OUTGOING_EVENTS_PER_BLOCK`].
     fn emit(&mut self, event: mooloop_core::EngineEvent) {
         if let Some(slot) = self.outgoing.iter_mut().find(|slot| slot.is_none()) {
             *slot = Some(event);
+            return;
+        }
+        self.refused_events += 1;
+        if matches!(event, mooloop_core::EngineEvent::RecordedNote { .. }) {
+            if let Some(slot) = self
+                .outgoing
+                .iter_mut()
+                .find(|slot| matches!(slot, Some(mooloop_core::EngineEvent::ControlInput(_))))
+            {
+                *slot = Some(event);
+            }
         }
     }
 
@@ -8788,9 +8960,24 @@ impl RenderState {
         let played = self.tick_at(message.offset);
         let latency = f64::from(self.capture_latency.load(Ordering::Relaxed))
             * self.transport.ticks_per_sample();
+        let mut heard = played - latency;
+        // Just after a Song-mode loop folds back, what the player heard
+        // was the end of the loop, not the bar before its start that this
+        // pass never played (MOO-388).
+        if self.sequencer.playback_mode() == PlaybackMode::Song {
+            if let Some((start, end)) = self
+                .loop_range
+                .active(self.sequencer.song_length_ticks())
+                .map(|(start, end)| (f64::from(start), f64::from(end)))
+            {
+                if played >= start && heard < start {
+                    heard += end - start;
+                }
+            }
+        }
         let Some((pattern, start_tick)) = self
             .sequencer
-            .recording_tick(played - latency)
+            .recording_tick(heard)
             .or_else(|| {
                 self.sequencer
                     .recording_tick(played)
@@ -8812,11 +8999,17 @@ impl RenderState {
 
     /// Note up while recording: report the whole note.
     fn capture_note_off(&mut self, offset: u32, note: u8) {
+        let end_frames = self.transport.frames_played() + u64::from(offset);
+        self.report_recorded(note, end_frames);
+    }
+
+    /// Reports the in-flight note on `note`, if any, as ending at
+    /// `end_frames`, and forgets it.
+    fn report_recorded(&mut self, note: u8, end_frames: u64) {
         let Some(held) = self.recording[usize::from(note & 0x7f)].take() else {
             return;
         };
-        let frames = (self.transport.frames_played() + u64::from(offset))
-            .saturating_sub(held.start_frames);
+        let frames = end_frames.saturating_sub(held.start_frames);
         // At least one tick: a note tapped inside a single block is still a
         // note, and a zero-length one would be invisible in the pattern.
         let length_ticks = ((frames as f64 * self.transport.ticks_per_sample()).round() as u32)
@@ -8829,6 +9022,16 @@ impl RenderState {
             start_tick: held.start_tick,
             length_ticks,
         });
+    }
+
+    /// Stop resets `frames_played`, which every in-flight note measures its
+    /// length against, so each is reported up to the stop rather than left to
+    /// come out as one tick when its key comes up (MOO-412).
+    fn flush_recording(&mut self) {
+        let end_frames = self.transport.frames_played();
+        for note in 0..128u8 {
+            self.report_recorded(note, end_frames);
+        }
     }
 
     /// Where `offset` frames into this block falls on the playhead.
@@ -8882,18 +9085,48 @@ impl RenderState {
         self.release_lifted_sustain(0);
         let last_frame = frames.saturating_sub(1) as u32;
         self.dispatch_expression(last_frame);
+        let choke_groups = self.choke_groups();
+        let live = self.live_channels();
         for slot in self.auditions.iter_mut() {
             let Some(audition) = slot.take() else {
                 continue;
             };
-            if let Some(events) = self.events.get_mut(audition.channel as usize) {
+            let offset = audition.offset.min(last_frame);
+            let channel = audition.channel as usize;
+            // The sequenced notes' choke pass ran before these joined the
+            // lists, so a note auditioned or played here chokes the rest of
+            // its group itself (MOO-392).
+            let group = choke_groups[..live].get(channel).copied().unwrap_or(0);
+            if group != 0 && matches!(audition.event, Event::NoteOn { .. }) {
+                for target in (0..live).filter(|&target| target != channel) {
+                    if choke_groups[target] == group {
+                        let _ = self.events[target].push_ordered(TimedEvent {
+                            offset,
+                            event: Event::Choke,
+                        });
+                    }
+                }
+            }
+            if let Some(events) = self.events.get_mut(channel) {
                 // A refusal is counted by the list itself.
                 let _ = events.push_ordered(TimedEvent {
-                    offset: audition.offset.min(last_frame),
+                    offset,
                     event: audition.event,
                 });
             }
         }
+    }
+
+    /// Each live channel's choke group, `0` for one that is muted or
+    /// silenced by a solo: it neither chokes nor is choked.
+    fn choke_groups(&self) -> [u8; MAX_CHANNELS] {
+        let mut choke_groups = [0; MAX_CHANNELS];
+        for (index, strip) in self.strips.iter().enumerate().take(self.live_channels()) {
+            if !strip.output.muted && !strip.solo_silenced {
+                choke_groups[index] = strip.choke_group();
+            }
+        }
+        choke_groups
     }
 
     pub fn process_block(&mut self, frames: usize) -> RenderReport {
@@ -8977,17 +9210,7 @@ impl RenderState {
                     &mut self.events,
                 );
             }
-            let mut choke_groups = [0; MAX_CHANNELS];
-            for (index, strip) in self
-                .strips
-                .iter()
-                .enumerate()
-                .take(self.live_channels())
-            {
-                if !strip.output.muted && !strip.solo_silenced {
-                    choke_groups[index] = strip.choke_group();
-                }
-            }
+            let choke_groups = self.choke_groups();
             inject_choke_events(
                 &choke_groups[..self.live_channels()],
                 &mut self.events,
@@ -9259,6 +9482,16 @@ impl RenderState {
                 .iter()
                 .any(|event| matches!(event.event, Event::NoteOff { .. } | Event::Choke))
                 && !self.strips[index].source_node().is_at_rest();
+            // Built ahead of the skip below, which a chain still ringing out
+            // needs it for.
+            let performance = self.expression[index].performance;
+            let modulation = ModulationBlock {
+                rack: &self.modulation[index],
+                outputs: &self.control_outputs[index],
+                outlets: &outlets,
+                performance: &performance,
+                ticks,
+            };
             if faded && !self.audio.produces(index) && !owes_a_release {
                 // A muted channel renders nothing, so its compensation ring
                 // would still be holding the audio from before the mute and
@@ -9272,6 +9505,25 @@ impl RenderState {
                 // from it: unmuting always renders at least one block before
                 // the channel is allowed to decide it is idle.
                 self.strips[index].source_silent_frames = 0;
+                self.strips[index].ring_silent_frames = 0;
+                // The generator is not called, but its chain still is while
+                // anything in it rings, exactly as a muted bus does: a delay
+                // or reverb tail decays under the mute instead of freezing
+                // and replaying on unmute (MOO-418). Once the chain is at
+                // rest this costs one check.
+                if !self.strips[index].effects.is_at_rest() {
+                    let faults = self.strips[index].ring_out_on_silence(
+                        &context,
+                        producer,
+                        Some((&self.device_meters, &self.device_telemetry, index)),
+                        Some(&modulation),
+                        automation.as_ref(),
+                        skip_idle,
+                    );
+                    if faults > 0 {
+                        self.meters.publish_effect_faults(faults);
+                    }
+                }
                 continue;
             }
             // A hosted instrument's knob edits, at the top of the block
@@ -9284,14 +9536,6 @@ impl RenderState {
                 self.refused_events += strip.source_pending.copy_to(&mut self.events[index]);
                 strip.source_pending.clear();
             }
-            let performance = self.expression[index].performance;
-            let modulation = ModulationBlock {
-                rack: &self.modulation[index],
-                outputs: &self.control_outputs[index],
-                outlets: &outlets,
-                performance: &performance,
-                ticks,
-            };
             // The generator's driven parameters go into their own curve
             // pool now (`source_curves[index]`); its internal route amounts
             // (`SourceRouteAmount`, just below) still go into the channel's
@@ -9607,6 +9851,23 @@ impl RenderState {
                 // authors a channel send, correct the day something does.
                 self.sends.reset(EffectTarget::Channel(index as u8));
                 self.strips[index].source_silent_frames = 0;
+                self.strips[index].ring_silent_frames = 0;
+                // Its chain rings out on silence, for the reason the skip
+                // above gives (MOO-418). What the generator made went to the
+                // tap and is not the chain's input any more.
+                if !self.strips[index].effects.is_at_rest() {
+                    let faults = self.strips[index].ring_out_on_silence(
+                        &context,
+                        producer,
+                        Some((&self.device_meters, &self.device_telemetry, index)),
+                        Some(&modulation),
+                        automation.as_ref(),
+                        skip_idle,
+                    );
+                    if faults > 0 {
+                        self.meters.publish_effect_faults(faults);
+                    }
+                }
                 continue;
             }
             let strip = &mut self.strips[index];
@@ -9651,6 +9912,15 @@ impl RenderState {
             // same bus. Last, so what waits is the finished channel, and
             // immediately before the sum it is being aligned for.
             if let Some(delay) = strip.compensation.as_mut() {
+                // What goes in, not what the source made: this is what the
+                // ring will hold, so this is what has to have gone quiet
+                // before the strip may sleep and empty it (MOO-401).
+                let (left, right) = strip.bus.peak(frames);
+                strip.ring_silent_frames = if left.max(right) <= SILENCE_PEAK {
+                    strip.ring_silent_frames.saturating_add(frames as u32)
+                } else {
+                    0
+                };
                 delay.process(&mut strip.bus.l[..frames], &mut strip.bus.r[..frames]);
             }
             heard[index] = true;
@@ -9702,7 +9972,14 @@ impl RenderState {
             // a song uses one or two, so this is most of what an empty block
             // was spending: sixteen buffers emptied, peaked twice, balanced
             // and metered to say nothing.
-            if skip_idle && !strip.dirty && strip.is_resting() {
+            //
+            // And so does every send ring it owns (MOO-402): a send is owed
+            // its own delay, which `is_resting` knows nothing about.
+            if skip_idle
+                && !strip.dirty
+                && strip.is_resting()
+                && self.sends.rings_are_silent(EffectTarget::Bus(index as u8))
+            {
                 strip.effects.sleep(&context);
                 if !strip.sleeping {
                     strip.sleeping = true;
@@ -9911,9 +10188,13 @@ impl RenderState {
         // preview, and the limiter has to follow it. So the scrub runs twice
         // on the master: here, and inside the guard below, which is what
         // catches a preview's. Only the master, and a pass of `is_finite`.
+        // The frames before `output_count_from` are scrubbed and limited like
+        // the rest but not counted (an export's pre-roll, MOO-351).
+        let count_from = std::mem::take(&mut self.output_count_from).min(frames);
         let scrubbed = {
             let master = &mut self.buses[MASTER_BUS as usize].bus;
-            OutputGuard::scrub(&mut master.l[..frames], &mut master.r[..frames])
+            OutputGuard::scrub(&mut master.l[..count_from], &mut master.r[..count_from]);
+            OutputGuard::scrub(&mut master.l[count_from..frames], &mut master.r[count_from..frames])
         };
         self.channels_heard = heard;
         self.advance_takes(&spans[..span_count], ticks_per_sample, &heard);
@@ -9925,8 +10206,14 @@ impl RenderState {
         // that the limiter is working, rather than the limiter hiding it.
         let mut guarded = {
             let master = &mut self.buses[MASTER_BUS as usize].bus;
+            // One pass per side of `count_from`, which runs the same frames
+            // in the same order as one pass over the block.
             self.output_guard
-                .process(&mut master.l[..frames], &mut master.r[..frames])
+                .process(&mut master.l[..count_from], &mut master.r[..count_from]);
+            self.output_guard.process(
+                &mut master.l[count_from..frames],
+                &mut master.r[count_from..frames],
+            )
         };
         guarded.non_finite = guarded.non_finite.saturating_add(scrubbed);
         if guarded.non_finite > 0 {
@@ -9941,6 +10228,7 @@ impl RenderState {
         let (peak_l, peak_r) = master_peak;
         RenderReport {
             position_tick: self.transport.position_ticks as u64,
+            start_tick: start_tick as u64,
             beat_in_bar: self.transport.beat_in_bar(),
             playing: self.transport.playing,
             peak_l,
@@ -10163,6 +10451,17 @@ impl RenderState {
         self.output_non_finite
     }
 
+    /// Leave the first `frames` frames of the next block out of
+    /// [`Self::output_overs`] and [`Self::output_non_finite`]. They are still
+    /// scrubbed and limited, so the audio is the same; only the counts move.
+    ///
+    /// What a range export calls for its pre-roll, and for the block the
+    /// range starts inside, so the master's counts cover the frames the file
+    /// holds as a stem's do (MOO-351). Applies to one block.
+    pub fn count_output_from(&mut self, frames: usize) {
+        self.output_count_from = frames;
+    }
+
     /// Samples that reached the output guard above 0 dBFS, since this state
     /// was built. The limiter brought each of them down to the ceiling, so
     /// what left is not quite what was mixed; an export reports it
@@ -10270,6 +10569,38 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         assert_eq!(events[0].len(), 1);
         assert_eq!(events[1].iter().next().unwrap().event, Event::Choke);
         assert!(events[2].is_empty());
+    }
+
+    /// A note auditioned from the face, or played on a keyboard, chokes the
+    /// rest of its group, as a sequenced note does (MOO-392). The starter
+    /// kit's closed and open hats share a group.
+    #[test]
+    fn an_auditioned_note_chokes_the_rest_of_its_choke_group() {
+        let mut render = RenderState::from_project(48_000, &Project::starter_kit(), &[]);
+        let (closed, open, kick) = (2u8, 3u8, 0u8);
+        assert_ne!(render.strips[usize::from(closed)].choke_group(), 0);
+        assert_eq!(
+            render.strips[usize::from(closed)].choke_group(),
+            render.strips[usize::from(open)].choke_group(),
+            "the premise: the hats share a group"
+        );
+
+        render.apply_command(EngineCommand::TriggerChannelNote {
+            channel: closed,
+            note: 60,
+            velocity: 100,
+        });
+        render.dispatch_auditions(128);
+
+        let chokes = |channel: u8| {
+            render.events[usize::from(channel)]
+                .iter()
+                .filter(|event| event.event == Event::Choke)
+                .count()
+        };
+        assert_eq!(chokes(open), 1, "the open hat was left ringing");
+        assert_eq!(chokes(closed), 0, "a note chokes the others in its group, not itself");
+        assert_eq!(chokes(kick), 0, "a channel outside the group was choked");
     }
 
     #[test]
@@ -11206,6 +11537,63 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         assert_eq!(incoming.capturing(60), None, "the take note was left open");
     }
 
+    /// A full outgoing buffer never costs a take its note (MOO-421): the
+    /// recorded note evicts a forwarded control message instead, and every
+    /// drop is counted.
+    #[test]
+    fn a_full_outgoing_buffer_keeps_the_recorded_note() {
+        use mooloop_core::{
+            EngineEvent, MidiChannelFilter, MidiInputRoute, MidiKind, MidiMessage, MidiPortId,
+            MidiRouteSource,
+        };
+
+        let mut render = two_channel_render();
+        render.set_midi_routing(Box::new(MidiRouting {
+            routes: vec![MidiInputRoute {
+                source: MidiRouteSource::AllPorts,
+                channel: MidiChannelFilter::Omni,
+            }],
+        }));
+        let message = |kind| MidiMessage {
+            offset: 0,
+            port: MidiPortId::FIRST,
+            channel: 0,
+            kind,
+        };
+        render.set_record_armed(true);
+        render.play();
+        render.apply_midi(&[message(MidiKind::NoteOn {
+            note: 60,
+            velocity: 90,
+        })]);
+        render.process_block(256);
+
+        // The control layer has stopped draining: nothing pops, and the
+        // buffer fills with forwarded controller messages.
+        let controllers: Vec<_> = (0..MAX_OUTGOING_EVENTS_PER_BLOCK)
+            .map(|index| {
+                message(MidiKind::ControlChange {
+                    controller: 74,
+                    value: index as u8,
+                })
+            })
+            .collect();
+        render.apply_midi(&controllers);
+        assert_eq!(render.refused_events(), 0, "the buffer was filled, not overrun");
+
+        render.apply_midi(&[message(MidiKind::NoteOff { note: 60 })]);
+        render.process_block(256);
+
+        let delivered: Vec<_> = std::iter::from_fn(|| render.pop_outgoing()).collect();
+        assert!(
+            delivered
+                .iter()
+                .any(|event| matches!(event, EngineEvent::RecordedNote { note: 60, .. })),
+            "the recorded note was dropped for a controller message"
+        );
+        assert!(render.refused_events() >= 1, "the eviction was not counted");
+    }
+
     /// Recording reports a note when its key comes up, with the position it
     /// was played at and the length it was actually held.
     #[test]
@@ -11485,6 +11873,129 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         // tick 432 (108 000 frames: 421 blocks and 224) is heard at 422.4.
         let mut render = rig(true);
         assert_eq!(tap(&mut render, 421, 224), 38);
+    }
+
+    /// A note played just after a Song-mode loop folds back is stamped where
+    /// the player heard the song -- the end of the loop -- not a loop early,
+    /// in a bar the loop never plays (MOO-388).
+    #[test]
+    fn a_recorded_note_just_after_a_song_loop_folds_lands_at_the_loop_end() {
+        use mooloop_core::{
+            EngineEvent, LoopRange, MidiChannelFilter, MidiInputRoute, MidiKind, MidiMessage,
+            MidiPortId, MidiRouteSource, PlaybackMode,
+        };
+
+        let mut render = two_channel_render();
+        let _ = render.set_midi_routing(Box::new(MidiRouting {
+            routes: vec![MidiInputRoute {
+                source: MidiRouteSource::AllPorts,
+                channel: MidiChannelFilter::Omni,
+            }],
+        }));
+        // 2400 frames at 120 bpm and 48 kHz is 9.6 ticks.
+        render.attach_capture_latency(Arc::new(AtomicU32::new(2400)));
+        // Two bars placed at 0, looping over the second.
+        render.apply_command(EngineCommand::SetPatternLength {
+            pattern: 0,
+            length_steps: 32,
+        });
+        render.apply_command(EngineCommand::SetPlaylistPlacement {
+            pattern: 0,
+            start_tick: 0,
+            on: true,
+        });
+        render.apply_command(EngineCommand::SetPlaybackMode(PlaybackMode::Song));
+        render.apply_command(EngineCommand::SetLoopRange(LoopRange {
+            start_tick: 384,
+            end_tick: 768,
+            enabled: true,
+        }));
+        render.apply_command(EngineCommand::Seek { tick: 700.0 });
+        render.set_record_armed(true);
+        render.play();
+
+        // Run to the block whose end is about 5.6 ticks past the fold, then
+        // press at 390.1 ticks: heard at 380.5, which is 764.5 of the loop.
+        let mut folded = false;
+        loop {
+            let before = render.transport.position_ticks;
+            render.process_block(256);
+            folded |= render.transport.position_ticks < before;
+            if folded && render.transport.position_ticks > 389.1 {
+                break;
+            }
+        }
+        let offset = ((390.1 - render.transport.position_ticks) * 250.0).round() as u32;
+        assert!(offset < 256, "the press is not in the next block: {offset}");
+        let message = |offset, kind| MidiMessage {
+            offset,
+            port: MidiPortId::FIRST,
+            channel: 0,
+            kind,
+        };
+        render.apply_midi(&[message(
+            offset,
+            MidiKind::NoteOn {
+                note: 60,
+                velocity: 90,
+            },
+        )]);
+        render.process_block(256);
+        render.apply_midi(&[message(0, MidiKind::NoteOff { note: 60 })]);
+        render.process_block(256);
+
+        let recorded: Vec<_> = std::iter::from_fn(|| render.pop_outgoing()).collect();
+        let [EngineEvent::RecordedNote { start_tick, .. }] = recorded[..] else {
+            panic!("expected exactly one recorded note, got {recorded:?}");
+        };
+        assert_eq!(start_tick, 764, "the note landed outside the loop the player heard");
+    }
+
+    /// A key still down when the transport stops is reported at the length it
+    /// had been held to the stop, not as a one-tick note measured from a
+    /// playhead Stop had just zeroed (MOO-412).
+    #[test]
+    fn a_key_held_through_stop_records_the_length_held_to_the_stop() {
+        use mooloop_core::{
+            EngineEvent, MidiChannelFilter, MidiInputRoute, MidiKind, MidiMessage, MidiPortId,
+            MidiRouteSource,
+        };
+
+        let mut render = two_channel_render();
+        let _ = render.set_midi_routing(Box::new(MidiRouting {
+            routes: vec![MidiInputRoute {
+                source: MidiRouteSource::AllPorts,
+                channel: MidiChannelFilter::Omni,
+            }],
+        }));
+        render.set_record_armed(true);
+        render.play();
+        let message = |kind| MidiMessage {
+            offset: 0,
+            port: MidiPortId::FIRST,
+            channel: 0,
+            kind,
+        };
+        render.apply_midi(&[message(MidiKind::NoteOn {
+            note: 60,
+            velocity: 90,
+        })]);
+        // 20 blocks of 256 frames at 120 bpm and 48 kHz is 20.48 ticks.
+        for _ in 0..20 {
+            render.process_block(256);
+        }
+        render.apply_command(EngineCommand::Stop);
+        render.apply_midi(&[message(MidiKind::NoteOff { note: 60 })]);
+        render.process_block(256);
+
+        let recorded: Vec<_> = std::iter::from_fn(|| render.pop_outgoing()).collect();
+        let [EngineEvent::RecordedNote { length_ticks, .. }] = recorded[..] else {
+            panic!("expected exactly one recorded note, got {recorded:?}");
+        };
+        assert!(
+            (19..=21).contains(&length_ticks),
+            "the held length was lost: {length_ticks} ticks"
+        );
     }
 
     /// A recorded note names the pattern it was folded into, and that is the
@@ -17986,6 +18497,90 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             }
         }
     }
+
+    /// **An install ends a carried voice whose note-off it has moved out of
+    /// reach** (MOO-383). Undo and redo are installs, and a notes-only change
+    /// carries the strip: the live rule for `UpsertNote` releases a voice
+    /// whose note was moved or shortened, and the install used to release it
+    /// only when the note was gone or re-pitched -- so undoing a move while
+    /// the note sounded left the pad droning until Stop.
+    #[test]
+    fn an_install_ends_a_carried_voice_whose_note_off_it_moved() {
+        use crate::render_test_support::SAMPLE_RATE;
+
+        const BLOCK: usize = 256;
+        // One bar of 16 steps; a note of `duration` ticks from `start`.
+        let project = |start: u32, duration: u32, steps: u16| {
+            let mut project = held_note_project();
+            project.channels[0].notes[0].clear();
+            project.channels[0].notes[0].push(NoteEvent::new(1, start, duration, 60, 127));
+            project.pattern_lengths = vec![steps, DEFAULT_STEPS];
+            project.assign_channel_ids();
+            project
+        };
+        // The voice sounding on the live renderer at tick 216, then the
+        // incoming project installed with the transport kept: does the
+        // incoming renderer end it within two laps?
+        let ended = |live: Project, incoming: Project| {
+            let mut live_render = RenderState::from_project(SAMPLE_RATE, &live, &[]);
+            live_render.play();
+            let mut sounding = None;
+            // 216 ticks is 54 000 frames at 120 bpm and 48 kHz.
+            for _ in 0..(54_000 / BLOCK) {
+                live_render.process_block(BLOCK);
+                for event in live_render.events[0].iter() {
+                    match event.event {
+                        Event::NoteOn { id, .. } => sounding = Some(id),
+                        Event::NoteOff { id, .. } if sounding == Some(id) => sounding = None,
+                        _ => {}
+                    }
+                }
+            }
+            let id = sounding.expect("the premise: a note is sounding");
+            let plan = crate::carry_plan(&live, &incoming);
+            let mut render = RenderState::from_project(SAMPLE_RATE, &incoming, &[]);
+            render.adopt_performance_state(&live_render);
+            render.carry_strips_from(&mut live_render, &plan);
+            for _ in 0..(2 * 2 * SAMPLE_RATE as usize / BLOCK) {
+                render.process_block(BLOCK);
+                for event in render.events[0].iter() {
+                    match event.event {
+                        Event::NoteOff { id: off, .. } if off == id => return true,
+                        Event::Choke => return true,
+                        _ => {}
+                    }
+                }
+            }
+            false
+        };
+
+        assert!(
+            ended(project(192, 96, 16), project(0, 96, 16)),
+            "undoing a move left the voice droning"
+        );
+        assert!(
+            ended(project(0, 300, 16), project(0, 96, 16)),
+            "undoing a lengthen left the voice droning"
+        );
+        // Song mode: the placement the voice was scheduled through is gone.
+        let song = |placed: bool| {
+            let mut project = project(0, 300, 16);
+            project.playback_mode = PlaybackMode::Song;
+            project.playlist = if placed {
+                vec![mooloop_core::PatternPlacement {
+                    pattern: 0,
+                    start_tick: 0,
+                }]
+            } else {
+                Vec::new()
+            };
+            project
+        };
+        assert!(
+            ended(song(true), song(false)),
+            "undoing an added placement left the voice droning"
+        );
+    }
 }
 
 
@@ -18345,7 +18940,10 @@ mod footprint {
         // alignment. Paid by every strip rather than boxed on a plugin
         // source, because a knob edit lands on the audio thread and the
         // queue has to be there before the edit is.
-        assert_eq!(size_of::<ChannelStrip>(), 23_128);
+        //
+        // MOO-401 added eight: `ring_silent_frames`, four bytes and
+        // alignment padding.
+        assert_eq!(size_of::<ChannelStrip>(), 23_136);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -18438,7 +19036,9 @@ mod footprint {
         //
         // And by 320 with the strip for MOO-314: a plugin instrument's
         // `DeviceId` and its waiting knob edits.
-        assert_eq!(per_live, 143_736);
+        //
+        // And by 8 for MOO-401: the strip's `ring_silent_frames`.
+        assert_eq!(per_live, 143_744);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
@@ -18541,7 +19141,10 @@ mod footprint {
         //
         // MOO-314's plugin instrument id and knob queue: 320 bytes a live
         // channel, exactly 5 KiB across sixteen.
-        assert_eq!((fixed + per_live * 16) / 1024, 2_732);
+        //
+        // MOO-401's ring silence count: 8 bytes a live channel, which
+        // carried the total over one more KiB boundary.
+        assert_eq!((fixed + per_live * 16) / 1024, 2_733);
     }
 
 }

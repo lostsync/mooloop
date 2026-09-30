@@ -253,6 +253,9 @@ impl Session {
                     .retain(|existing| !learn.is_replacing(existing));
                 self.control_map.bind(binding.clone());
                 self.control_state.resolve(&self.control_map, ports);
+                // The retain and `bind` above may have removed a row from
+                // the middle, and pickup is kept by position (MOO-350).
+                self.control_state.release_all();
                 effects.learned = Some(binding);
                 effects.edits = true;
                 return effects;
@@ -509,6 +512,9 @@ impl Session {
         }
         self.control_map.bindings.remove(index);
         self.resolve_control_map(ports);
+        // Pickup is kept by position, so every later row just changed
+        // places with its neighbour's state (MOO-350).
+        self.release_control_pickup();
         true
     }
 
@@ -1445,6 +1451,84 @@ mod tests {
         let effects = session.apply_control_input(&cc(21, 0), &ports(), false);
         assert_eq!(effects.moved.len(), 1);
         assert_ne!(session.channels[0].volume, volume_before);
+    }
+
+    /// A CC bound to `target`, with the default mode for its target.
+    fn cc_binding(controller: u8, target: ControlTarget) -> ControlBinding {
+        ControlBinding::new(
+            ControlSource::Cc {
+                port: MidiPortFilter::Any,
+                channel: MidiChannelFilter::Omni,
+                controller,
+            },
+            target,
+        )
+    }
+
+    /// Deleting a row moves the rows after it up a place, and their pickup
+    /// state has to go with them -- or be forgotten. Here the Play button
+    /// inherited the cutoff's "caught", which its transport arm reads as
+    /// "already held", and swallowed its first press (MOO-350).
+    #[test]
+    fn deleting_a_row_does_not_hand_its_pickup_to_the_next_one() {
+        let mut session = Session::default();
+        session.channels[0].volume = 1.0;
+        session.control_map.bind(cc_binding(21, ControlTarget::Param(VOLUME)));
+        session
+            .control_map
+            .bind(cc_binding(20, ControlTarget::Transport(TransportControl::Play)));
+        session.resolve_control_map(&ports());
+
+        // Sweep the knob up through the fader until it catches.
+        session.apply_control_input(&cc(21, 0), &ports(), false);
+        let effects = session.apply_control_input(&cc(21, 127), &ports(), false);
+        assert!(!effects.moved.is_empty(), "the knob caught the fader");
+
+        assert!(session.remove_control_binding(0, &ports()));
+        let effects = session.apply_control_input(&cc(20, 127), &ports(), false);
+        assert_eq!(effects.commands, vec![EngineCommand::Play]);
+    }
+
+    /// The reverse: a held-high button's "caught" must not let the knob
+    /// after it skip pickup and jump the parameter (MOO-350).
+    #[test]
+    fn deleting_a_row_does_not_let_the_next_knob_skip_pickup() {
+        let mut session = Session::default();
+        session.channels[0].volume = 1.0;
+        session
+            .control_map
+            .bind(cc_binding(20, ControlTarget::Transport(TransportControl::Play)));
+        session.control_map.bind(cc_binding(21, ControlTarget::Param(VOLUME)));
+        session.resolve_control_map(&ports());
+
+        session.apply_control_input(&cc(20, 127), &ports(), false);
+        assert!(session.remove_control_binding(0, &ports()));
+
+        let effects = session.apply_control_input(&cc(21, 0), &ports(), false);
+        assert!(effects.moved.is_empty(), "far from the fader: no jump");
+        assert_eq!(session.channels[0].volume, 1.0);
+    }
+
+    /// A relearn removes the old row from the middle and appends the new
+    /// one, which shifts the rows after it just as a delete does (MOO-350).
+    #[test]
+    fn a_relearn_that_displaces_a_middle_row_does_not_skip_pickup() {
+        let mut session = Session::default();
+        session.channels[0].volume = 1.0;
+        session
+            .control_map
+            .bind(cc_binding(20, ControlTarget::Transport(TransportControl::Play)));
+        session.control_map.bind(cc_binding(21, ControlTarget::Param(VOLUME)));
+        session.resolve_control_map(&ports());
+
+        session.apply_control_input(&cc(20, 127), &ports(), false);
+        session.begin_control_relearn(0, false);
+        let effects = session.apply_control_input(&cc(30, 127), &ports(), false);
+        assert!(effects.learned.is_some());
+
+        let effects = session.apply_control_input(&cc(21, 0), &ports(), false);
+        assert!(effects.moved.is_empty(), "far from the fader: no jump");
+        assert_eq!(session.channels[0].volume, 1.0);
     }
 
     /// A relearn that is cancelled leaves its row as it was: the row is

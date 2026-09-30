@@ -624,7 +624,13 @@ export component PianoGrid inherits Rectangle {
                         root.note-at(min(self.marquee-anchor-y, self.marquee-y)));
                 }
             } else if (e.kind == PointerEventKind.move
-                    && self.pressed && self.grabbed-id >= 0) {
+                    && self.pressed && self.grabbed-id >= 0
+                    // Dead zone, the marquee's 3px: a click whose hand moves
+                    // a pixel is still a click, not a copy stacked on its
+                    // original (MOO-416). Once past it, the drag stays a drag.
+                    && (self.dragged
+                        || abs(self.mouse-x - self.origin-x) > 3px
+                        || abs(self.mouse-y - self.origin-y) > 3px)) {
                 self.dragged = true;
                 // A free drag leaves the grid on both axes' time component,
                 // matching the automation lane.

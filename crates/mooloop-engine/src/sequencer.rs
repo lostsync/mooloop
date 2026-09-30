@@ -370,6 +370,15 @@ impl Sequencer {
         }
     }
 
+    /// Whether `pattern` is placed at `start_tick` in the playlist.
+    pub fn has_placement(&self, pattern: usize, start_tick: u32) -> bool {
+        u8::try_from(pattern).is_ok_and(|pattern| {
+            self.playlist
+                .binary_search(&PatternPlacement::new(pattern, start_tick))
+                .is_ok()
+        })
+    }
+
     pub fn pattern_length_ticks(&self, pattern: usize) -> Option<u32> {
         (pattern < self.active_patterns).then(|| self.patterns[pattern].length_ticks())
     }

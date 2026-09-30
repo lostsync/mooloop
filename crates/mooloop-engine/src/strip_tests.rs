@@ -909,3 +909,64 @@ fn a_master_section_switched_in_by_command_compresses_and_meters() {
     assert_eq!(meters.take_reduction(0), 0.0, "the strip's own lamp lit instead");
     assert_eq!(moved.strip_is_at_rest(0), Some(false), "the master slept mid-reduction");
 }
+
+/// **A muted channel's effect tail decays while it is muted** (MOO-418). A
+/// channel muted while its delay is still ringing used to stop calling its
+/// chain once the fade had finished, so the echoes froze in the delay line
+/// and the first block after the unmute played out what was left of a phrase
+/// the listener had long forgotten. A muted bus has always kept processing
+/// for exactly this reason.
+#[test]
+fn a_muted_channels_delay_tail_decays_instead_of_freezing() {
+    let mut channel = one_note_channel(45);
+    channel.notes[0].clear();
+    channel.notes[0].push(NoteEvent::new(1, 0, 24, 45, 127));
+    channel.setup.push_effect(EffectSlotState::new(EffectParams::Delay(
+        mooloop_core::DelayParams {
+            time_ms: 100.0,
+            feedback: 0.5,
+            mix: 0.5,
+            ..mooloop_core::DelayParams::default()
+        },
+    )));
+    let mut project = Project {
+        channels: vec![channel],
+        ..Project::default()
+    };
+    project.ensure_tracks(1);
+
+    let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+    render.play();
+    let block = 256;
+    let blocks_of = |seconds: f32| (seconds * SAMPLE_RATE as f32) as usize / block;
+    let mut heard = 0.0f32;
+    // Muted once the note itself has ended, so what is left ringing is the
+    // delay's and nothing of the generator's.
+    for _ in 0..blocks_of(0.4) {
+        render.process_once_block(block);
+        heard = heard.max(peak_of(&render.master().l[..block]));
+    }
+    assert!(heard > 0.01, "the note and its echoes were not heard: {heard}");
+
+    render.apply_command(EngineCommand::SetChannelMuted {
+        channel: 0,
+        muted: true,
+    });
+    // Long enough for the fade, and then a second on top.
+    for _ in 0..blocks_of(1.5) {
+        render.process_once_block(block);
+    }
+    render.apply_command(EngineCommand::SetChannelMuted {
+        channel: 0,
+        muted: false,
+    });
+    let mut after = 0.0f32;
+    for _ in 0..blocks_of(0.5) {
+        render.process_once_block(block);
+        after = after.max(peak_of(&render.master().l[..block]));
+    }
+    assert!(
+        after < 10f32.powf(-90.0 / 20.0),
+        "the tail froze while muted and replayed on unmute: peak {after}"
+    );
+}

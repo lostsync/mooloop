@@ -443,6 +443,13 @@ impl PluginCache {
             .filter_map(|file| file.failed.as_ref().map(|f| (file.path.as_path(), f)))
     }
 
+    /// Forget everything, so the next scan launches a child for every file
+    /// rather than trusting a fingerprint (Rescan All, MOO-368): the one way
+    /// to pick up a plugin replaced by a build of the same size and mtime.
+    pub fn clear(&mut self) {
+        self.files.clear();
+    }
+
     /// Forget every failure, so the next scan tries those files again (the
     /// "rescan all" button, step 08).
     pub fn clear_failures(&mut self) {

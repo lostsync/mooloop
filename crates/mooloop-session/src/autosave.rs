@@ -275,10 +275,14 @@ fn reference_in_place(mut project: Project) -> (Project, Vec<PathBuf>) {
     let mut owned = Vec::new();
     for channel in &mut project.channels {
         if let Some(sampler) = channel.setup.source.sampler_state_mut() {
-            if let SampleReference::File { path, embedded } = &mut sampler.sample {
-                if *embedded {
-                    owned.push(path.clone());
-                    *embedded = false;
+            // The key zones' samples too (MOO-353): the save walks them.
+            let zones = sampler.zones.iter_mut().map(|zone| &mut zone.sample);
+            for reference in std::iter::once(&mut sampler.sample).chain(zones) {
+                if let SampleReference::File { path, embedded } = reference {
+                    if *embedded {
+                        owned.push(path.clone());
+                        *embedded = false;
+                    }
                 }
             }
         }
@@ -449,9 +453,12 @@ pub fn recover(recoverable: &Recoverable) -> Result<ResolvedDocument, DocumentPr
     if let LoadedDocument::Song(project) = &mut document.report.document {
         for channel in &mut project.channels {
             if let Some(sampler) = channel.setup.source.sampler_state_mut() {
-                if let SampleReference::File { path, embedded } = &mut sampler.sample {
-                    if owned.contains(&same(path)) {
-                        *embedded = true;
+                let zones = sampler.zones.iter_mut().map(|zone| &mut zone.sample);
+                for reference in std::iter::once(&mut sampler.sample).chain(zones) {
+                    if let SampleReference::File { path, embedded } = reference {
+                        if owned.contains(&same(path)) {
+                            *embedded = true;
+                        }
                     }
                 }
             }
@@ -666,6 +673,68 @@ mod tests {
             SampleReference::File { path, embedded } => {
                 assert!(*embedded, "the song owns its sample again");
                 assert_eq!(path.canonicalize().unwrap(), kick.canonicalize().unwrap());
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// **A key zone's embedded sample is referenced in place too** (MOO-353).
+    /// The save walks the zones as well as the base sample, so a zone left
+    /// embedded was copied into the autosave once a minute, and a recovered
+    /// song's zone pointed into a folder the next autosave deleted.
+    #[test]
+    fn an_embedded_zone_sample_is_referenced_in_place_and_owned_again_on_recovery() {
+        let root = tempfile::tempdir().unwrap();
+        let sidecar = root.path().join("Groove.mooloop-assets").join("samples");
+        fs::create_dir_all(&sidecar).unwrap();
+        let zone_file = sidecar.join("01-c3.wav");
+        write_wav(&zone_file);
+
+        let mut project = edited_song();
+        project.channels[0].setup = mooloop_core::ChannelSetup::sampler("Multi");
+        project.channels[0]
+            .setup
+            .source
+            .sampler_state_mut()
+            .unwrap()
+            .zones
+            .push(mooloop_core::SampleZone {
+                sample: SampleReference::File {
+                    path: zone_file.clone(),
+                    embedded: true,
+                },
+                ..Default::default()
+            });
+
+        let autosaves = root.path().join("autosave");
+        let mut autosave = Autosave::start_with_interval(&autosaves, Duration::ZERO).unwrap();
+        let state = DocumentState {
+            embed: true,
+            ..state(1, true, None)
+        };
+        for _ in 0..2 {
+            let project = project.clone();
+            autosave.update(Instant::now(), state.clone(), move || project);
+        }
+        autosave.finish(true);
+
+        let copied: Vec<_> = walk(&autosaves)
+            .into_iter()
+            .filter(|path| path.to_string_lossy().contains("-assets"))
+            .collect();
+        assert_eq!(copied, Vec::<PathBuf>::new(), "a zone sample was copied into the autosave");
+
+        let found = find_recoverable(&autosaves);
+        let Ok(document) = recover(&found[0]) else {
+            panic!("the autosave recovers");
+        };
+        let LoadedDocument::Song(recovered) = document.report.document else {
+            panic!("a song");
+        };
+        match &recovered.channels[0].setup.source.sampler_state().unwrap().zones[0].sample {
+            SampleReference::File { path, embedded } => {
+                assert!(*embedded, "the song owns its zone sample again");
+                assert_eq!(path.canonicalize().unwrap(), zone_file.canonicalize().unwrap());
             }
             other => panic!("{other:?}"),
         }

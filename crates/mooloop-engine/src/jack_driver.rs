@@ -534,7 +534,7 @@ impl JackDriver {
     }
 
     pub(crate) fn available_output_targets(&self) -> Vec<OutputTarget> {
-        stereo_destinations(&audio_destination_ports(self.client.as_client()))
+        output_destinations(&self.own, &audio_destination_ports(self.client.as_client()))
     }
 
     /// Connect the outputs to `target`, or to the system default if it is
@@ -687,6 +687,17 @@ fn stereo_destinations(ports: &[String]) -> Vec<OutputTarget> {
         .collect()
 }
 
+/// The stereo destinations the master output may go to: [`stereo_destinations`]
+/// without any mooloop's ([`is_mooloop`]). The one filter the preferences page
+/// and [`output_candidates`] share, so the page never offers what the fallback
+/// would refuse (MOO-355).
+fn output_destinations(own: &OwnPorts, ports: &[String]) -> Vec<OutputTarget> {
+    stereo_destinations(ports)
+        .into_iter()
+        .filter(|target| !is_mooloop(&target.client, own))
+        .collect()
+}
+
 /// What one connection attempt came to, reduced to what [`retarget`] needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Connection {
@@ -790,14 +801,20 @@ fn output_candidates(
     ports: &[String],
 ) -> Vec<(String, String)> {
     let present = |port: &String| ports.contains(port);
+    // A pick saved while mooloop's own inputs were on offer is not restored:
+    // it would reconnect the feedback loop on every start.
+    let of_mooloop = |port: &String| {
+        port.split_once(':')
+            .is_some_and(|(client, _)| is_mooloop(client, own))
+    };
     let mut candidates: Vec<(String, String)> = picks
         .iter()
-        .filter(|(l, r)| present(l) && present(r))
+        .filter(|(l, r)| present(l) && present(r) && !of_mooloop(l) && !of_mooloop(r))
         .cloned()
         .collect();
-    for destination in stereo_destinations(ports) {
+    for destination in output_destinations(own, ports) {
         let pair = (destination.port_l, destination.port_r);
-        if !is_mooloop(&destination.client, own) && !candidates.contains(&pair) {
+        if !candidates.contains(&pair) {
             candidates.push(pair);
         }
     }
@@ -879,7 +896,7 @@ mod open_error_tests {
 
 #[cfg(test)]
 mod output_candidate_tests {
-    use super::{output_candidates, OwnPorts, CLIENT_NAME};
+    use super::{output_candidates, output_destinations, OwnPorts, CLIENT_NAME};
 
     fn ports(clients: &[&str]) -> Vec<String> {
         clients
@@ -935,6 +952,28 @@ mod output_candidate_tests {
     fn with_no_pick_there_anything_will_do() {
         let graph = ports(&["hdmi", "speaker"]);
         assert_eq!(clients(&[pair("gone")], &graph), ["hdmi", "speaker"]);
+    }
+
+    /// The Preferences list is built from the same rule as the fallback: it
+    /// does not offer mooloop's own inputs, or another instance's (MOO-355).
+    #[test]
+    fn the_preferences_list_leaves_out_every_mooloop() {
+        let graph = ports(&[CLIENT_NAME, "mooloop-01", "speaker"]);
+        let offered: Vec<_> = output_destinations(&OwnPorts::of(CLIENT_NAME), &graph)
+            .into_iter()
+            .map(|target| target.client)
+            .collect();
+        assert_eq!(offered, ["speaker"]);
+    }
+
+    /// A pick saved while the page still offered mooloop's own inputs is not
+    /// restored, even though its ports are in the graph (MOO-355).
+    #[test]
+    fn a_saved_pick_of_mooloop_itself_is_not_a_candidate() {
+        let own_pair = ("mooloop:in_l".to_owned(), "mooloop:in_r".to_owned());
+        let mut graph = ports(&["speaker"]);
+        graph.extend([own_pair.0.clone(), own_pair.1.clone()]);
+        assert_eq!(clients(&[own_pair], &graph), ["speaker"]);
     }
 
     /// Mooloop's own input ports are in the graph like anyone else's. Routing

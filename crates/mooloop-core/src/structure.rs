@@ -50,7 +50,9 @@ use crate::MAX_EFFECTS_PER_CHANNEL;
 /// invisible at the same time. [`can_wrap`], [`can_insert_into_container`]
 /// and [`can_move_into_container`] are what the three gestures now ask, and
 /// the rack's wrap button asks the same function rather than comparing a
-/// depth of its own.
+/// depth of its own. The index primitives, [`insert_effect`],
+/// [`insert_run`] and [`move_effect`], ask the same of the depth at their
+/// index (MOO-363).
 ///
 /// **The second sentence above is still not true**, and `LOOSE_ENDS.md`
 /// carries why. `integrity.rs` has no depth check, because every way it has
@@ -154,6 +156,17 @@ pub fn can_move_into_container(
         depth_at(effects, container) + 1,
         container_reach(effects, run),
     )
+}
+
+/// Whether a run whose containers reach `reach` below their own top may be
+/// put before row `at`, at the depth `at` has.
+///
+/// What the index primitives ([`insert_effect`], [`insert_run`],
+/// [`move_effect`]) ask, as the `can_*` guards above are asked by the
+/// primitives that name a box (MOO-363). `at` is an index into the chain the
+/// run is going into.
+fn can_place(effects: &[EffectSlotState], at: usize, reach: Option<usize>) -> bool {
+    depth_fits(depth_at(effects, at.min(effects.len())), reach)
 }
 
 /// The run of rows `slot` encloses, as `slot + 1 .. end`.
@@ -358,16 +371,24 @@ pub fn move_effect(effects: &mut Vec<EffectSlotState>, from: usize, to: usize) -
     }
     let run = run_of(effects, from);
     let len = run.len();
+    let reach = container_reach(effects, run.clone());
+    // `to` indexes the chain with the run lifted out, so the depth it lands
+    // at is worked out there, on a copy: a refusal leaves `effects` alone.
+    let mut rest = effects.clone();
     // Out of the boxes it was in, then into the boxes it lands in. Two
     // separate facts, and doing them in one pass is how a chain ends up
     // describing a shape it does not have.
-    resize_enclosing(effects, from, -(len as isize));
-    let moved: Vec<EffectSlotState> = effects.drain(run).collect();
-    let at = to.min(effects.len());
-    resize_enclosing(effects, at, len as isize);
-    let tail = effects.split_off(at);
-    effects.extend(moved);
-    effects.extend(tail);
+    resize_enclosing(&mut rest, from, -(len as isize));
+    let moved: Vec<EffectSlotState> = rest.drain(run).collect();
+    let at = to.min(rest.len());
+    if !can_place(&rest, at, reach) {
+        return false;
+    }
+    resize_enclosing(&mut rest, at, len as isize);
+    let tail = rest.split_off(at);
+    rest.extend(moved);
+    rest.extend(tail);
+    *effects = rest;
     true
 }
 
@@ -479,6 +500,9 @@ pub fn insert_effect(
         return None;
     }
     let at = at.min(effects.len());
+    if !can_place(effects, at, effect.params.is_container().then_some(0)) {
+        return None;
+    }
     // Every container whose run `at` falls inside gains a row. Landing on a
     // run's end boundary is landing *after* the container, not in it, which
     // is what makes "insert before slot N" mean the same thing at every
@@ -615,6 +639,9 @@ pub fn insert_run(
         return None;
     }
     let at = at.min(effects.len());
+    if !can_place(effects, at, container_reach(rows, 0..rows.len())) {
+        return None;
+    }
     // One resize for the whole run, for the reason `replace_run` gives about
     // doing this arithmetic once: the boxes around `at` gain every row that
     // arrives, and counting them one at a time means re-deriving the
@@ -1964,5 +1991,94 @@ mod depth_tests {
         let outer = innermost.saturating_sub(1);
         assert_eq!(effects[outer].kind(), EffectKind::Chain);
         assert!(can_move_into_container(&effects, tail, outer));
+    }
+
+    /// The four-box chain with two filters in the innermost:
+    /// `Box1(5) Box2(4) Box3(3) Box4(2) FilterA FilterB`, then a top-level
+    /// box holding one delay at slots 6-7. Index 5 is inside the innermost
+    /// box, so a box put there would be the fifth level (MOO-363).
+    fn full_depth_with_a_spare_box() -> (Vec<EffectSlotState>, u32) {
+        let (mut effects, mut next) = nested(MAX_CONTAINER_DEPTH);
+        let innermost = MAX_CONTAINER_DEPTH - 1;
+        insert_into_container(
+            &mut effects,
+            &mut next,
+            innermost,
+            EffectSlotState::of_kind(EffectKind::Filter),
+        )
+        .expect("a leaf fits at the bottom");
+        let tail = effects.len();
+        insert_effect(
+            &mut effects,
+            &mut next,
+            tail,
+            EffectSlotState::of_kind(EffectKind::Delay),
+        );
+        wrap_in_container(
+            &mut effects,
+            &mut next,
+            tail..tail + 1,
+            EffectSlotState::of_kind(EffectKind::Chain),
+        )
+        .expect("a top-level wrap");
+        assert_eq!(depth_at(&effects, 5), MAX_CONTAINER_DEPTH);
+        (effects, next)
+    }
+
+    fn a_box() -> EffectSlotState {
+        EffectSlotState::of_kind(EffectKind::Chain)
+    }
+
+    /// **The three primitives that add rows by index ask the cap too**
+    /// (MOO-363). Paste, a drop on a row and the rack's add-before-row went
+    /// through `insert_run`, `move_effect` and `insert_effect`, none of which
+    /// compared the depth of the index with the boxes they carry.
+    #[test]
+    fn insert_run_refuses_a_box_past_the_cap() {
+        let (mut effects, mut next) = full_depth_with_a_spare_box();
+        let before = effects.clone();
+        let mut minted = next;
+        assert_eq!(insert_run(&mut effects, &mut minted, 5, &[a_box()]), None);
+        assert_eq!(effects, before);
+        assert_eq!(minted, next, "and minted nothing");
+
+        // A leaf run fits, and a box fits one level out.
+        assert!(insert_run(
+            &mut effects,
+            &mut next,
+            5,
+            &[EffectSlotState::of_kind(EffectKind::Drive)],
+        )
+        .is_some());
+        assert!(insert_run(&mut effects, &mut next, 3, &[a_box()]).is_some());
+    }
+
+    #[test]
+    fn insert_effect_refuses_a_box_past_the_cap() {
+        let (mut effects, mut next) = full_depth_with_a_spare_box();
+        let before = effects.clone();
+        assert_eq!(insert_effect(&mut effects, &mut next, 5, a_box()), None);
+        assert_eq!(effects, before);
+
+        assert!(insert_effect(
+            &mut effects,
+            &mut next,
+            5,
+            EffectSlotState::of_kind(EffectKind::Drive),
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn move_effect_refuses_a_box_past_the_cap() {
+        let (mut effects, _) = full_depth_with_a_spare_box();
+        let before = effects.clone();
+        assert!(!move_effect(&mut effects, 6, 5));
+        assert_eq!(effects, before);
+
+        // A leaf may go there, and the box may go one level out.
+        assert!(move_effect(&mut effects, 7, 5));
+        let (mut effects, _) = full_depth_with_a_spare_box();
+        assert!(move_effect(&mut effects, 6, 3));
     }
 }

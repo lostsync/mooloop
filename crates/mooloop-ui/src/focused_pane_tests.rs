@@ -147,6 +147,8 @@ fn a_selection_outlines_the_pane_that_shows_it() {
     let window = window();
     set_focused_surface(&window, actions::Surface::Rack);
     assert_eq!(outlined(&window), view::DEVICES);
+    // Ctrl+B reveals the sidebar before it aims the keys (`browser_take_focus`).
+    window.set_sidebar_visible(true);
     set_focused_surface(&window, actions::Surface::Browser);
     assert_eq!(outlined(&window), 5, "the browser sidebar is pane 5");
     assert_eq!(focused_surface(&window), actions::Surface::Browser);
@@ -259,6 +261,7 @@ fn every_focused_chord_lands_on_the_outlined_pane() {
 
     // The browser, taken with Ctrl+B: the arrows walk it, and the clipboard
     // chords mean the channel, as they do in any pane without a clipboard.
+    window.set_sidebar_visible(true);
     set_focused_surface(&window, actions::Surface::Browser);
     assert_eq!(outlined(&window), 5);
     for id in &focused {
@@ -275,4 +278,42 @@ fn every_focused_chord_lands_on_the_outlined_pane() {
     assert!(window.get_showing_notes(), "the roll is still on screen");
     assert_eq!(lands(&window, "edit.copy-channel"), Target::Channel);
     assert_eq!(lands(&window, "edit.paste-channel"), Target::Channel);
+}
+
+/// **A pane that is not on screen is not focused** (MOO-345). The outline is
+/// drawn only while its pane shows, so the chords must not stay aimed at one
+/// that does not: closing the split with the roll focused left Up/Down
+/// transposing hidden notes.
+#[test]
+fn closing_the_split_on_the_focused_roll_aims_the_chords_at_the_channel() {
+    let window = window();
+    window.set_notes_slot(1);
+    window.set_split_active(view::NOTES);
+    window.invoke_focus_pane(view::NOTES);
+    assert!(window.get_showing_notes());
+    assert_eq!(focused_surface(&window), actions::Surface::Notes);
+    window.invoke_toggle_split();
+    assert!(!window.get_showing_notes(), "closing the split took the roll off screen");
+    assert_ne!(focused_surface(&window), actions::Surface::Notes);
+    assert_eq!(focused_surface(&window), actions::Surface::Channels);
+}
+
+/// The same rule for the browser sidebar and for a dock that is collapsed.
+#[test]
+fn a_hidden_sidebar_or_dock_is_not_where_the_chords_go() {
+    let window = window();
+    window.set_sidebar_visible(true);
+    set_focused_surface(&window, actions::Surface::Browser);
+    assert_eq!(focused_surface(&window), actions::Surface::Browser);
+    window.set_sidebar_visible(false);
+    assert_eq!(focused_surface(&window), actions::Surface::Channels, "the browser is hidden");
+
+    window.invoke_show_view(view::NOTES);
+    window.invoke_focus_pane(view::NOTES);
+    window.set_bottom_pane_visible(true);
+    // NOTES lives in the dock by default (`notes-slot: 2`).
+    assert_eq!(window.get_notes_slot(), 2);
+    assert_eq!(focused_surface(&window), actions::Surface::Notes);
+    window.set_bottom_pane_visible(false);
+    assert_eq!(focused_surface(&window), actions::Surface::Channels, "the dock is collapsed");
 }

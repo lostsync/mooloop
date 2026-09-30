@@ -1434,6 +1434,11 @@ fn length_text(ticks: u32) -> String {
 /// Pressing in the roll focuses its pane, so a marquee still aims the chords
 /// at the notes it drew.
 fn focused_surface(window: &MainWindow) -> actions::Surface {
+    // A pane that is not on screen is not focused (MOO-345): its outline is
+    // gone, so the chords fall back to the selected channel.
+    if !window.get_active_pane_shown() {
+        return actions::Surface::Channels;
+    }
     actions::Surface::from_name(window.get_focused_surface().as_str())
 }
 
@@ -2608,7 +2613,7 @@ fn feeding_track_color(
 /// unsaved song's take is not the quit's to sweep. Those belong to File >
 /// Clean Up Takes, which lists them unticked and says why.
 fn unused_session_takes(st: &UiState, commands: &CommandState) -> Vec<recordings::UnusedTake> {
-    let referenced = recordings::referenced_by(&st.session, &commands.history);
+    let referenced = recordings::referenced_by(&st.session, commands);
     recordings::unused_takes(
         &settings::recordings_dir(),
         &referenced,
@@ -4520,6 +4525,30 @@ enum BrowserTab {
     Presets,
     /// What the plugin scanner found (MOO-83).
     Plugins,
+}
+
+impl BrowserTab {
+    /// Whether the tab's rows depend on the project (the selected channel's
+    /// device, for a preset's loadability), so an edit or an undo must
+    /// rebuild them. The SAMPLES tree does not: it is the disk, and
+    /// rebuilding it walks the disk (MOO-408).
+    fn follows_the_project(self) -> bool {
+        self != BrowserTab::Samples
+    }
+}
+
+#[cfg(test)]
+mod browser_tab_tests {
+    use super::*;
+
+    /// A project edit, undo or redo rebuilds PRESETS and PLUGINS rows, and
+    /// leaves the SAMPLES tree, which costs a filesystem walk, alone.
+    #[test]
+    fn a_project_edit_does_not_rebuild_the_samples_tree() {
+        assert!(!BrowserTab::Samples.follows_the_project());
+        assert!(BrowserTab::Presets.follows_the_project());
+        assert!(BrowserTab::Plugins.follows_the_project());
+    }
 }
 
 impl UiState {
@@ -8180,7 +8209,7 @@ impl AppUi {
                 let lists = {
                     let st = st.borrow();
                     let mut referenced =
-                        recordings::referenced_by(&st.session, &commands.borrow().history);
+                        recordings::referenced_by(&st.session, &commands.borrow());
                     // A take an autosave plays -- this run's or a crashed
                     // one's not yet recovered -- is not unused (MOO-103).
                     referenced.extend(autosave::referenced_samples(&settings::autosave_dir()));
@@ -8757,19 +8786,12 @@ impl AppUi {
                     // the same chord: `ShortcutTable::resolve` would only ever
                     // reach one of them, so a silent second owner is worse than
                     // a visible unbind.
-                    let owners: Vec<&'static str> =
-                        table.borrow().owners_of(&chord, action_id.as_str());
                     let mut settings = settings.borrow_mut();
-                    for owner in &owners {
-                        settings
-                            .shortcuts
-                            .overrides
-                            .insert((*owner).to_string(), String::new());
-                    }
-                    settings
-                        .shortcuts
-                        .overrides
-                        .insert(action_id.to_string(), chord.to_string());
+                    let owners = actions::assign_chord(
+                        &mut settings.shortcuts.overrides,
+                        action_id.as_str(),
+                        &chord,
+                    );
                     let result = settings.save();
                     *table.borrow_mut() =
                         actions::ShortcutTable::build(&settings.shortcuts.overrides);
@@ -8778,10 +8800,7 @@ impl AppUi {
                     match result {
                         Ok(()) => {
                             if let Some(owner) = owners.first() {
-                                let label = actions::ACTIONS
-                                    .iter()
-                                    .find(|spec| spec.id == *owner)
-                                    .map_or(*owner, |spec| spec.label);
+                                let label = actions::label_of(owner);
                                 window.set_status_message(format!("{label} is now unbound").into());
                             } else {
                                 window.set_status_message("Shortcut updated".into());
@@ -8803,13 +8822,17 @@ impl AppUi {
             window.on_preferences_shortcut_reset(move |action_id| {
                 let Some(window) = weak.upgrade() else { return };
                 let mut settings = settings.borrow_mut();
-                settings.shortcuts.overrides.remove(action_id.as_str());
+                let owners =
+                    actions::reset_chord(&mut settings.shortcuts.overrides, action_id.as_str());
                 let result = settings.save();
                 *table.borrow_mut() = actions::ShortcutTable::build(&settings.shortcuts.overrides);
                 drop(settings);
                 sync_shortcut_rows(&window, &table.borrow());
                 if let Err(error) = result {
                     window.set_status_message(format!("Could not save shortcut: {error}").into());
+                } else if let Some(owner) = owners.first() {
+                    let label = actions::label_of(owner);
+                    window.set_status_message(format!("{label} is now unbound").into());
                 }
             });
         }
@@ -19387,10 +19410,16 @@ fn refresh_preset_menus(state: &Rc<RefCell<UiState>>, window: &MainWindow) {
     st.sync_effects();
     // Whether a generator preset is loadable depends on the selected
     // channel's device, so the browser's rows go stale on exactly the
-    // switches this function already exists to catch. Cheap: it rebuilds a
-    // row list from a catalogue that is already in memory, and does nothing
-    // at all while the SAMPLES tab is showing.
-    refresh_browser(&st);
+    // switches this function already exists to catch. Cheap on PRESETS and
+    // PLUGINS: it rebuilds a row list from a catalogue already in memory.
+    // Not run at all on SAMPLES (MOO-408): those rows come from the
+    // locations, the expansion set and the filter, none of which a project
+    // edit changes, and building them walks the disk on the UI thread
+    // (`has_playable_descendant`) -- on every edit, undo and redo. Each of
+    // those inputs has its own refresh.
+    if st.browser_tab.follows_the_project() {
+        refresh_browser(&st);
+    }
 }
 
 
@@ -21594,6 +21623,30 @@ mod tests {
     /// rather than out of a copy, which is the whole point of them.
     const MAIN_SLINT: &str = include_str!("../ui/main.slint");
     const CONTROLS_SLINT: &str = include_str!("../ui/controls.slint");
+    const AUDIO_PREFERENCES_SLINT: &str = include_str!("../ui/audio-preferences.slint");
+
+    /// The Audio page's BUFFER SIZE labels are written in markup and Rust
+    /// turns the clicked index into frames from `BUFFER_SIZES`: the same
+    /// values, matched by position. Read the labels out of the markup so a
+    /// list changed alone fails here rather than setting the wrong size on a
+    /// whole JACK server (MOO-372).
+    #[test]
+    fn buffer_size_labels_match_buffer_sizes() {
+        let declaration = "buffer-size-options:";
+        let at = AUDIO_PREFERENCES_SLINT
+            .find(declaration)
+            .expect("audio-preferences.slint no longer declares `buffer-size-options`")
+            + declaration.len();
+        let list = &AUDIO_PREFERENCES_SLINT[at..];
+        let list = &list[list.find('[').expect("a list") + 1..];
+        let list = &list[..list.find(']').expect("a list end")];
+        let labels: Vec<String> = list
+            .split(',')
+            .map(|label| label.trim().trim_matches('"').to_string())
+            .collect();
+        let frames: Vec<String> = super::BUFFER_SIZES.iter().map(u32::to_string).collect();
+        assert_eq!(labels, frames);
+    }
 
     /// Pull an `index == 0 ? a : index == 1 ? b : ... : z` chain out of one
     /// Slint function body, as the values in index order.

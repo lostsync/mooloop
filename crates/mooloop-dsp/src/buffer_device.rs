@@ -205,6 +205,10 @@ pub struct BufferDevice {
 
     // --- standing settings, in the units the descriptors publish ----------
     crossfade_ms: f32,
+    /// The session rate, for the one place that has no `ProcessContext`:
+    /// [`Self::release`] sizes its fade back to live from it. Set at
+    /// construction and refreshed every block.
+    sample_rate: u32,
     /// Where `Position` last asked the playhead to be, normalized over its
     /// span.
     position: f32,
@@ -270,7 +274,9 @@ impl BufferDevice {
     /// for a reason. Construction time, not `process`, so the float is free.
     pub fn with_bars(sample_rate: u32, bpm: f64, bars: u32) -> Self {
         let frames_per_bar = mooloop_core::frames_per_bar(sample_rate, bpm).ceil() as usize;
-        Self::with_capacity((frames_per_bar * bars.max(1) as usize).max(4))
+        let mut device = Self::with_capacity((frames_per_bar * bars.max(1) as usize).max(4));
+        device.sample_rate = sample_rate;
+        device
     }
 
     /// Allocate an explicit number of frames. Primarily useful for tests and
@@ -289,6 +295,7 @@ impl BufferDevice {
             armed_freeze: None,
             gate_waits: [None; 3],
             crossfade_ms: defaults.crossfade_ms,
+            sample_rate: 48_000,
             position: defaults.position,
             position_was: defaults.position,
             position_still: POSITION_STILL_FRAMES,
@@ -357,6 +364,7 @@ impl BufferDevice {
         params: &[TimedBufferParam],
     ) {
         debug_assert!(context.frames <= bus.capacity());
+        self.sample_rate = context.sample_rate;
         // A non-finite sample would stay in the ring for as long as it is
         // retained, and every gesture over it would replay it (MOO-176). One
         // pass over the block finds it, and it is stored, and passed, as
@@ -724,13 +732,11 @@ impl BufferDevice {
         }
     }
 
-    /// The crossfade length in frames at the sample rate the last head was
-    /// built with. Held rather than recomputed because `return_live` is
-    /// reachable from [`Self::release`], which has no `ProcessContext`.
+    /// The crossfade length in frames at the session's sample rate. Held
+    /// rather than passed in because `return_live` is reachable from
+    /// [`Self::release`], which has no `ProcessContext`.
     fn crossfade_frames_hint(&self) -> u32 {
-        // 48 kHz is the only rate the engine runs at; a wrong guess here
-        // costs a millisecond of fade length, never a click.
-        ms_to_frames(self.crossfade_ms, 48_000)
+        ms_to_frames(self.crossfade_ms, self.sample_rate)
     }
 
     // --- advancing ---------------------------------------------------------
@@ -1532,6 +1538,38 @@ mod tests {
             &hard(BUFFER_PARAM_JUMP, 1.0),
         );
         assert_eq!(bus.l[0], (now - BEAT) as f32, "still a quarter back");
+    }
+
+    /// `release` has no `ProcessContext`, so its fade back to live used to be
+    /// sized at a literal 48 kHz (MOO-352).
+    #[test]
+    fn the_release_fade_is_sized_at_the_session_rate() {
+        let mut device = BufferDevice::with_bars(96_000, 120.0, 1);
+        let mut bus = StereoBus::with_capacity(4_000);
+        let at_96k = |frames| ProcessContext {
+            sample_rate: 96_000,
+            ..context(frames)
+        };
+        fill_ramp(&mut bus, 0, 4_000);
+        device.process_with_params(
+            &at_96k(4_000),
+            &mut bus,
+            &[],
+            &[
+                param(0, BUFFER_PARAM_CROSSFADE_MS, 10.0),
+                param(0, BUFFER_PARAM_JUMP, 1.0),
+            ],
+        );
+        assert!(device.fade.is_none(), "the opening crossfade has finished");
+        fill_ramp(&mut bus, 4_000, 1);
+        device.process_with_params(
+            &at_96k(1),
+            &mut bus,
+            &[],
+            &[param(0, BUFFER_PARAM_JUMP, 0.0)],
+        );
+        let fade = device.fade.expect("a release fades back to live");
+        assert_eq!(fade.frames, 960, "10 ms at 96 kHz, not at 48 kHz");
     }
 
     /// Releasing hands the output back to the input and restarts the writer.

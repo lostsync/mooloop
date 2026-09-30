@@ -426,6 +426,71 @@ fn ctrl_drag_duplicates_once_and_continues_on_the_copy() {
     );
 }
 
+/// MOO-416: a Ctrl-click whose hand moves a pixel or two must stay a click.
+/// It used to duplicate on the first move event, stacking an invisible copy
+/// on the original and never toggling the note in the selection. The note is
+/// selected first, so the toggle is the deferred select the release runs.
+#[test]
+fn a_ctrl_click_with_jitter_selects_and_does_not_duplicate() {
+    let mut notes = one_note();
+    notes[0].selected = true;
+    let ui = harness(notes);
+    let duplications = Rc::new(std::cell::RefCell::new(Vec::<i32>::new()));
+    let sink = duplications.clone();
+    ui.on_piano_selection_duplicated(move |anchor| {
+        sink.borrow_mut().push(anchor);
+        99
+    });
+    let selections = Rc::new(std::cell::RefCell::new(Vec::<(i32, i32)>::new()));
+    let select_sink = selections.clone();
+    ui.on_piano_note_selected(move |id, mode| select_sink.borrow_mut().push((id, mode)));
+    let moves = Rc::new(std::cell::RefCell::new(Vec::<i32>::new()));
+    let move_sink = moves.clone();
+    ui.on_piano_note_moved(move |id, _, _| move_sink.borrow_mut().push(id));
+
+    let from = (tick_x(0) + STEP_WIDTH / 2.0, note_centre_y(60));
+    drag_with(
+        ui.window(),
+        from,
+        (from.0 + 2.0, from.1 + 1.0),
+        Some(slint::platform::Key::Control),
+    );
+
+    assert!(
+        duplications.borrow().is_empty(),
+        "a 2px jitter duplicated the note: {:?}",
+        duplications.borrow()
+    );
+    assert!(moves.borrow().is_empty(), "a 2px jitter moved the note");
+    assert_eq!(
+        *selections.borrow(),
+        vec![(7, 1)],
+        "the Ctrl-click's own meaning, adding to the selection, did not run"
+    );
+}
+
+/// The other side of the dead zone: past it, exactly one copy.
+#[test]
+fn a_ctrl_drag_past_the_dead_zone_makes_exactly_one_copy() {
+    let ui = harness(one_note());
+    let duplications = Rc::new(std::cell::RefCell::new(Vec::<i32>::new()));
+    let sink = duplications.clone();
+    ui.on_piano_selection_duplicated(move |anchor| {
+        sink.borrow_mut().push(anchor);
+        99
+    });
+
+    let from = (tick_x(0) + STEP_WIDTH / 2.0, note_centre_y(60));
+    drag_with(
+        ui.window(),
+        from,
+        (from.0 + 10.0, from.1),
+        Some(slint::platform::Key::Control),
+    );
+
+    assert_eq!(*duplications.borrow(), vec![7], "a 10px Ctrl-drag must copy once");
+}
+
 #[test]
 fn shift_drag_leaves_the_grid() {
     let ui = harness(one_note());

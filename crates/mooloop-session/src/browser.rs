@@ -12,23 +12,51 @@ pub fn is_playable_sample(path: &Path) -> bool {
     audio_file::is_supported_extension(path)
 }
 
+/// Whether the browser lists `path` at all: it has a UTF-8 name that does not
+/// start with a dot. The listing and the content walk both read this, so a
+/// folder is never counted for content the listing then hides.
+fn is_listed_entry(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| !name.starts_with('.'))
+}
+
+/// Most directory entries one `has_playable_descendant` call reads.
+pub const WALK_ENTRY_BUDGET: usize = 4096;
+/// Deepest folder level one `has_playable_descendant` call descends to.
+const WALK_MAX_DEPTH: usize = 16;
+
 /// Whether `path` contains a playable sample anywhere below it. Folders
-/// without one are dead weight in the tree, so the browser hides them;
-/// the recursion is bounded because symlink cycles terminate at `MAX_DEPTH`.
+/// without one are dead weight in the tree, so the browser hides them.
+///
+/// The walk is bounded by `WALK_MAX_DEPTH` and `WALK_ENTRY_BUDGET` (which
+/// also end symlink cycles). A folder it cannot settle within them counts as
+/// "may have content": it is shown, and expanding it resolves it.
 pub fn has_playable_descendant(path: &Path, depth: usize) -> bool {
-    const MAX_DEPTH: usize = 16;
-    if depth > MAX_DEPTH {
-        return false;
+    let mut budget = WALK_ENTRY_BUDGET;
+    walk_for_playable(path, depth, &mut budget)
+}
+
+fn walk_for_playable(path: &Path, depth: usize, budget: &mut usize) -> bool {
+    if depth > WALK_MAX_DEPTH {
+        return true;
     }
     let Ok(entries) = std::fs::read_dir(path) else {
         return false;
     };
     for entry in entries.flatten() {
+        if *budget == 0 {
+            return true;
+        }
+        *budget -= 1;
         let child = entry.path();
+        if !is_listed_entry(&child) {
+            continue;
+        }
         if is_playable_sample(&child) {
             return true;
         }
-        if child.is_dir() && has_playable_descendant(&child, depth + 1) {
+        if child.is_dir() && walk_for_playable(&child, depth + 1, budget) {
             return true;
         }
     }
@@ -46,10 +74,7 @@ pub fn scan_browser_dir(path: &Path) -> Vec<(bool, PathBuf)> {
     let mut files = Vec::new();
     for entry in entries.flatten() {
         let child = entry.path();
-        let Some(name) = child.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if name.starts_with('.') {
+        if !is_listed_entry(&child) {
             continue;
         }
         if child.is_dir() {
@@ -135,8 +160,47 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    use super::{has_playable_descendant, WALK_ENTRY_BUDGET};
     use crate::session::Session;
     use std::path::PathBuf;
+
+    /// A folder whose only audio is under a hidden folder is empty: the
+    /// listing skips dot-entries, so counting them shows a folder that opens
+    /// onto nothing.
+    #[test]
+    fn a_folder_whose_only_audio_is_hidden_has_no_playable_descendant() {
+        let dir = tempfile::tempdir().unwrap();
+        let hidden = dir.path().join(".hidden");
+        std::fs::create_dir(&hidden).unwrap();
+        std::fs::write(hidden.join("kick.wav"), b"").unwrap();
+        assert!(!has_playable_descendant(dir.path(), 0));
+
+        std::fs::write(dir.path().join("snare.wav"), b"").unwrap();
+        assert!(has_playable_descendant(dir.path(), 0));
+    }
+
+    /// A tree wider or deeper than the walk's budget is not walked to the
+    /// end: the folder it cannot settle counts as "may have content".
+    #[test]
+    fn a_walk_that_runs_out_of_budget_reports_may_have_content() {
+        let wide = tempfile::tempdir().unwrap();
+        for i in 0..WALK_ENTRY_BUDGET + 10 {
+            std::fs::write(wide.path().join(format!("{i}.txt")), b"").unwrap();
+        }
+        assert!(has_playable_descendant(wide.path(), 0));
+
+        let deep = tempfile::tempdir().unwrap();
+        let mut at = deep.path().to_path_buf();
+        for _ in 0..24 {
+            at.push("d");
+        }
+        std::fs::create_dir_all(&at).unwrap();
+        assert!(has_playable_descendant(deep.path(), 0));
+
+        let empty = tempfile::tempdir().unwrap();
+        std::fs::create_dir(empty.path().join("sub")).unwrap();
+        assert!(!has_playable_descendant(empty.path(), 0));
+    }
 
     /// **The arrows walk the folder the sample came from, not the folder it
     /// ended up in.**

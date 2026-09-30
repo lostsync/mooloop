@@ -332,6 +332,69 @@ fn flipping_a_tracks_polarity_is_continuous() {
     );
 }
 
+/// The sine through track 1, which sends to an empty track 2 (MOO-397). The
+/// master hears the direct path and the send together, so a send switched in
+/// one sample steps the master by the send's share of the sine.
+fn sent_sine_project() -> Project {
+    let mut project = tracked_sine_project();
+    project.ensure_tracks(3);
+    project.buses[usize::from(TRACK)]
+        .sends
+        .push(mooloop_core::AuxSend::new(2));
+    project
+}
+
+#[test]
+fn switching_a_send_off_is_continuous() {
+    let producer = EffectTarget::Bus(TRACK);
+    let off = EngineCommand::SetSendEnabled {
+        producer,
+        index: 0,
+        enabled: false,
+    };
+    assert_continuous(
+        "switching a send off",
+        across_command(&sent_sine_project(), off),
+    );
+    assert_continuous(
+        "switching it back on",
+        across_return(
+            &sent_sine_project(),
+            off,
+            EngineCommand::SetSendEnabled {
+                producer,
+                index: 0,
+                enabled: true,
+            },
+        ),
+    );
+}
+
+#[test]
+fn moving_a_send_between_taps_is_continuous() {
+    // The fader is down 12 dB, so the pre- and post-fader signals differ by
+    // a factor of four and a switch between them is a step.
+    let mut project = sent_sine_project();
+    project.buses[usize::from(TRACK)].bus.volume = 0.25;
+    let to = |tap| EngineCommand::SetSendTap {
+        producer: EffectTarget::Bus(TRACK),
+        index: 0,
+        tap,
+    };
+    assert_continuous(
+        "moving a send from post- to pre-fader",
+        across_command(&project, to(mooloop_core::SendTap::PreFader)),
+    );
+    // Back again, from a project that starts pre-fader: `across_return` would
+    // measure against the quieter state's steps, and the pre-fader send is
+    // four times louder.
+    project.buses[usize::from(TRACK)].sends[0].tap = mooloop_core::SendTap::PreFader;
+    assert_continuous(
+        "moving a send from pre- to post-fader",
+        across_command(&project, to(mooloop_core::SendTap::PostFader)),
+    );
+}
+
 #[test]
 fn muting_the_master_is_continuous() {
     let mute = EngineCommand::SetBusMuted {
