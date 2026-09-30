@@ -1182,6 +1182,92 @@ mod tests {
         assert_eq!(after, before, "a routing change freed on the callback");
     }
 
+    /// **A full reclaim ring holds a structural command back, and everything
+    /// behind it** (MOO-422).
+    ///
+    /// The ring has one slot and nothing drains it. Structural A fills it;
+    /// structural B has nowhere to send what it displaces, so it waits in
+    /// `pending_command`; and C, a plain engine command behind B, must not
+    /// overtake it. Once the ring drains B applies and then C, in the one
+    /// block, and neither the held blocks nor the release allocate or free.
+    #[test]
+    fn a_full_reclaim_ring_holds_the_commands_behind_it_in_order() {
+        use crate::render::{AudioInputRouting, MidiRouting};
+
+        let (mut cmd_tx, cmd_rx) = rtrb::RingBuffer::new(8);
+        let (evt_tx, _evt_rx) = rtrb::RingBuffer::new(8);
+        let (reclaim_tx, mut reclaim_rx) = rtrb::RingBuffer::new(1);
+        let mut executor = Executor::new(
+            ExecutorIo {
+                cmd_rx,
+                evt_tx,
+                reclaim_tx,
+            },
+            Box::new(RenderState::from_project(SAMPLE_RATE, &Project::default(), &[])),
+            Arc::new(AtomicU64::new(0)),
+            SAMPLE_RATE,
+            LoadMeters::new(),
+        );
+        let mut out_l = [0.0f32; BLOCK];
+        let mut out_r = [0.0f32; BLOCK];
+        for _ in 0..4 {
+            executor.process(std::iter::empty(), &mut out_l, &mut out_r);
+        }
+        assert_eq!(executor.render.transport().bpm, 120.0);
+
+        let routing = || {
+            RealtimeCommand::Structural(crate::StructuralCommand::SetMidiRouting(Box::new(
+                MidiRouting {
+                    routes: vec![mooloop_core::MidiInputRoute::default(); 4],
+                },
+            )))
+        };
+        let input = RealtimeCommand::Structural(crate::StructuralCommand::SetAudioInputRouting(
+            Box::new(AudioInputRouting {
+                taps: vec![Some(mooloop_core::AudioTap::Master); 4],
+            }),
+        ));
+        cmd_tx.push(routing()).expect("room in the ring");
+        cmd_tx.push(input).expect("room in the ring");
+        cmd_tx
+            .push(RealtimeCommand::Engine(EngineCommand::SetTempo(140.0)))
+            .expect("room in the ring");
+
+        // Held: A went out, B waits, C stays behind B.
+        let before = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+        for _ in 0..3 {
+            executor.process(std::iter::empty(), &mut out_l, &mut out_r);
+        }
+        let after = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+        assert_eq!(after, before, "the held path allocated or freed on the callback");
+        assert!(
+            executor.pending_command.is_some(),
+            "the second structural command was not held"
+        );
+        assert_eq!(
+            executor.render.transport().bpm,
+            120.0,
+            "a command overtook the held structural one"
+        );
+        assert_eq!(reclaim_rx.slots(), 1, "only the first command's reclaim is in the ring");
+
+        // Drained: B applies, then C, in the next block.
+        assert!(matches!(
+            reclaim_rx.pop(),
+            Ok(StructuralReclaim::MidiRouting(_))
+        ));
+        let before = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+        executor.process(std::iter::empty(), &mut out_l, &mut out_r);
+        let after = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+        assert_eq!(after, before, "releasing the held command allocated or freed");
+        assert!(executor.pending_command.is_none(), "the held command was never retried");
+        assert_eq!(executor.render.transport().bpm, 140.0, "the command behind it was lost");
+        assert!(matches!(
+            reclaim_rx.pop(),
+            Ok(StructuralReclaim::AudioInputRouting(_))
+        ));
+    }
+
     /// A channel-0 strip destination, and the same for a device.
     fn strip_lane(param: u32) -> mooloop_core::ParamAddr {
         mooloop_core::ParamAddr::strip(mooloop_core::EffectTarget::Channel(0), param)
