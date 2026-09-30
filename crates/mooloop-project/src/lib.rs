@@ -1592,7 +1592,13 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
         // minted from a throwaway counter and whoever lands the run mints its
         // real ones. A single-row effect document holds no branch to wrap.
         LoadedDocument::EffectRun(run) => {
-            mooloop_core::effect::normalize_layer_branches(&mut run.effects, &mut 0);
+            if mooloop_core::effect::normalize_layer_branches(&mut run.effects, &mut 0) > 0 {
+                // Back to no identity, as a run is on disk: the ids the
+                // wrap minted were only there to tell the rows apart.
+                for effect in &mut run.effects {
+                    effect.id = mooloop_core::DeviceId::UNASSIGNED;
+                }
+            }
             integrity::repair_effect_run(run)
         }
     };
@@ -5278,7 +5284,7 @@ id = "default_kick"
         use super::*;
         use mooloop_core::{ContainerParams, DeviceId, EffectParams};
 
-        fn row(kind: EffectKind, children: u32) -> EffectSlotState {
+        fn row(kind: EffectKind, children: u8) -> EffectSlotState {
             let mut row = EffectSlotState::of_kind(kind);
             row.params = match kind {
                 EffectKind::Layer => EffectParams::Layer(ContainerParams {
@@ -5402,6 +5408,7 @@ id = "default_kick"
             assert_eq!(kinds(&loaded.effects), WRAPPED);
             assert_eq!(loaded.effects[0].params.container_children(), Some(2));
             assert_eq!(mooloop_core::span_problem(&loaded.effects), None);
+            assert!(loaded.effects.iter().all(|effect| !effect.id.is_assigned()));
 
             save_effect_run_preset(&path, &loaded, effect_info("Layered"), AssetMode::Embedded)
                 .unwrap();
