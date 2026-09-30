@@ -270,6 +270,132 @@ mod tests {
         );
     }
 
+    /// IMA ADPCM step sizes and index deltas (the public IMA/DVI tables), for
+    /// the encoder below.
+    const IMA_STEPS: [i32; 89] = [
+        7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60,
+        66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371,
+        408, 449, 494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878,
+        2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845,
+        8630, 9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086,
+        29794, 32767,
+    ];
+    const IMA_INDEX: [i32; 8] = [-1, -1, -1, -1, 2, 4, 6, 8];
+
+    /// A mono 4-bit IMA ADPCM WAV (format tag 0x0011) of `samples`, in blocks
+    /// of 256 bytes: a 4-byte header (first sample, step index) and 504 more
+    /// samples as nibbles, low nibble first. `samples.len()` is a multiple of
+    /// 505.
+    fn ima_adpcm_wav(samples: &[i16], rate: u32) -> Vec<u8> {
+        const BLOCK: usize = 256;
+        const PER_BLOCK: usize = (BLOCK - 4) * 2 + 1;
+        assert_eq!(samples.len() % PER_BLOCK, 0);
+        let mut data = Vec::new();
+        for block in samples.chunks(PER_BLOCK) {
+            let mut predictor = i32::from(block[0]);
+            let mut index = 0i32;
+            data.extend_from_slice(&block[0].to_le_bytes());
+            data.extend_from_slice(&[index as u8, 0]);
+            let mut nibbles = Vec::new();
+            for &sample in &block[1..] {
+                let step = IMA_STEPS[index as usize];
+                let mut diff = i32::from(sample) - predictor;
+                let mut nibble = 0i32;
+                if diff < 0 {
+                    nibble = 8;
+                    diff = -diff;
+                }
+                if diff >= step {
+                    nibble |= 4;
+                    diff -= step;
+                }
+                if diff >= step >> 1 {
+                    nibble |= 2;
+                    diff -= step >> 1;
+                }
+                if diff >= step >> 2 {
+                    nibble |= 1;
+                }
+                let mut delta = step >> 3;
+                if nibble & 4 != 0 {
+                    delta += step;
+                }
+                if nibble & 2 != 0 {
+                    delta += step >> 1;
+                }
+                if nibble & 1 != 0 {
+                    delta += step >> 2;
+                }
+                predictor += if nibble & 8 != 0 { -delta } else { delta };
+                predictor = predictor.clamp(-32_768, 32_767);
+                index = (index + IMA_INDEX[(nibble & 7) as usize]).clamp(0, 88);
+                nibbles.push(nibble as u8);
+            }
+            for pair in nibbles.chunks(2) {
+                data.push(pair[0] | (pair[1] << 4));
+            }
+        }
+
+        let mut fmt = Vec::new();
+        fmt.extend_from_slice(&0x0011u16.to_le_bytes());
+        fmt.extend_from_slice(&1u16.to_le_bytes());
+        fmt.extend_from_slice(&rate.to_le_bytes());
+        fmt.extend_from_slice(&(rate * BLOCK as u32 / PER_BLOCK as u32).to_le_bytes());
+        fmt.extend_from_slice(&(BLOCK as u16).to_le_bytes());
+        fmt.extend_from_slice(&4u16.to_le_bytes());
+        fmt.extend_from_slice(&2u16.to_le_bytes());
+        fmt.extend_from_slice(&(PER_BLOCK as u16).to_le_bytes());
+
+        let mut body = b"WAVE".to_vec();
+        for (id, chunk) in [
+            (b"fmt ", fmt),
+            (b"fact", (samples.len() as u32).to_le_bytes().to_vec()),
+            (b"data", data),
+        ] {
+            body.extend_from_slice(id);
+            body.extend_from_slice(&(chunk.len() as u32).to_le_bytes());
+            body.extend_from_slice(&chunk);
+            if chunk.len() % 2 == 1 {
+                body.push(0);
+            }
+        }
+        let mut file = b"RIFF".to_vec();
+        file.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        file.extend_from_slice(&body);
+        file
+    }
+
+    /// IMA ADPCM WAVs, common in older sample packs, decode: symphonia's
+    /// `adpcm` feature is on (MOO-425). Without it the probe finds no codec
+    /// for format tag 0x0011 and `decode` fails.
+    #[test]
+    fn ima_adpcm_wav_decodes() {
+        let rate = 11_025u32;
+        let count = 20 * 505;
+        let sine: Vec<i16> = (0..count)
+            .map(|n| {
+                let phase = std::f64::consts::TAU * 440.0 * n as f64 / f64::from(rate);
+                (16_384.0 * phase.sin()) as i16
+            })
+            .collect();
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("ima.wav");
+        std::fs::write(&path, ima_adpcm_wav(&sine, rate)).unwrap();
+
+        let decoded = decode(&path).expect("IMA ADPCM should decode");
+        assert_eq!(decoded.source_channels, 1);
+        assert_eq!(decoded.sample.sample_rate, rate);
+        assert_eq!(decoded.sample.frames.len(), count);
+        let peak = decoded
+            .sample
+            .frames
+            .iter()
+            .flat_map(|frame| frame.iter())
+            .fold(0.0f32, |peak, value| peak.max(value.abs()));
+        let db = 20.0 * (f64::from(peak) / 0.5).log10();
+        assert!(db.abs() < 1.0, "peak {peak} is {db:.2} dB from the PCM original");
+    }
+
     /// Manual codec-matrix check. `ffmpeg` is only a test-fixture generator;
     /// production import has no native or process dependency.
     #[test]

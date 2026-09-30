@@ -25,7 +25,7 @@ rtrb = { workspace = true }
 symphonia = {
     version = "0.6.1",
     default-features = false,
-    features = ["aiff", "flac", "mp3", "ogg", "opt-simd", "pcm", "vorbis", "wav"]
+    features = ["adpcm", "aiff", "flac", "mp3", "ogg", "opt-simd", "pcm", "vorbis", "wav"]
 }
 # Moving an unused take to the desktop trash rather than deleting it
 # (`audio-recording/06`): the one case the scan cannot tell apart from an
