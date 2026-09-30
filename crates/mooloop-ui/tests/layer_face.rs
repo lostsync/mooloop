@@ -30,6 +30,7 @@ slint::slint! {
         callback soloed(int);
         callback added();
         callback removed(int);
+        callback leveled(int, float);
 
         LayerDeviceFace {
             x: 0px; y: 0px;
@@ -44,6 +45,7 @@ slint::slint! {
                 mute-toggled => { root.muted(branch.slot); }
                 solo-toggled => { root.soloed(branch.slot); }
                 remove-requested => { root.removed(branch.slot); }
+                level-changed(v) => { root.leveled(branch.slot, v); }
             }
         }
     }
@@ -51,12 +53,13 @@ slint::slint! {
 
 /// The face's list starts below the 28px header, inset 6px by the face and
 /// 3px by the list; rows are 22px on a 23px pitch. These are the middles of
-/// the two rows' names, and of the second row's S and M buttons, which sit
-/// at the row's right end before the 5px meter.
+/// the two rows' names, and of the second row's S and M buttons and Level
+/// knob, which sit at the row's right end before the 5px meter.
 const FIRST_ROW: (f32, f32) = (40.0, 48.0);
 const SECOND_ROW: (f32, f32) = (40.0, 71.0);
-const SECOND_SOLO: (f32, f32) = (111.0, 71.0);
-const SECOND_MUTE: (f32, f32) = (131.0, 71.0);
+const SECOND_SOLO: (f32, f32) = (93.0, 71.0);
+const SECOND_MUTE: (f32, f32) = (113.0, 71.0);
+const SECOND_LEVEL: (f32, f32) = (131.0, 71.0);
 /// The second row's menu opens under it: 4px inset, one 22px row.
 const SECOND_ROW_REMOVE: (f32, f32) = (60.0, 97.0);
 /// Under the two rows: 3px of padding above an 18px button.
@@ -148,4 +151,29 @@ fn a_rows_menu_removes_that_branch() {
     click(ui.window(), SECOND_ROW_REMOVE);
     assert_eq!(*removed.borrow(), [7], "the menu removed the wrong branch, or none");
     assert!(selected.borrow().is_empty(), "a right press selected the row");
+}
+
+/// **MOO-456.** A branch's Chain is not drawn, so its Level is the list's:
+/// the knob on a row reports the **branch head's rack index** with the value,
+/// which the rack sends as the Chain's own parameter 1, and a press on it
+/// does not select the row.
+#[test]
+fn a_rows_level_knob_names_the_branch_head() {
+    let ui = harness();
+    let leveled: Rc<RefCell<Vec<(i32, f32)>>> = Rc::default();
+    let selected: Rc<RefCell<Vec<i32>>> = Rc::default();
+    let (l, s) = (leveled.clone(), selected.clone());
+    ui.on_leveled(move |slot, v| l.borrow_mut().push((slot, v)));
+    ui.on_selected(move |slot| s.borrow_mut().push(slot));
+    let position = LogicalPosition::new(SECOND_LEVEL.0, SECOND_LEVEL.1);
+    ui.window().dispatch_event(WindowEvent::PointerMoved { position });
+    ui.window().dispatch_event(WindowEvent::PointerScrolled {
+        position,
+        delta_x: 0.0,
+        delta_y: 60.0,
+    });
+    let seen = leveled.borrow();
+    assert_eq!(seen.len(), 1, "the knob reported {seen:?}");
+    assert_eq!(seen[0].0, 7, "the level named the list position, not the branch");
+    assert!(selected.borrow().is_empty(), "a scroll on the knob selected the row");
 }
