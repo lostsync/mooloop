@@ -564,7 +564,7 @@ impl Executor {
         // blocks that already ran long, and never allocates or waits.
         if budget > 0 && work.saturating_mul(100) > budget.saturating_mul(self.hot_spot_percent) {
             self.load.publish_hot_spot(&crate::load::HotSpot {
-                tick: report.position_tick,
+                tick: report.start_tick,
                 frames: frames as u32,
                 work_nanos: work,
                 budget_nanos: budget,
@@ -765,6 +765,49 @@ mod tests {
             // The transport tests are about the clock, not the strips.
             carry: crate::CarryPlan::default(),
         }
+    }
+
+    /// **A hot spot names where its block started** (MOO-358).
+    ///
+    /// `HotSpot::tick` is documented as the block's start; it was read after
+    /// the block had advanced the transport (and folded any loop), so a slow
+    /// block that crossed a bar line was reported on the next bar. The blocks
+    /// are 2 048 frames, about eight ticks, so the start and the end are
+    /// never the same tick, and one of them crosses the bar line.
+    #[test]
+    fn a_hot_spot_names_the_tick_its_block_started_on() {
+        const FRAMES: usize = 2_048;
+        let (cmd_tx, cmd_rx) = rtrb::RingBuffer::new(8);
+        let (evt_tx, _evt_rx) = rtrb::RingBuffer::new(64);
+        let (reclaim_tx, _reclaim_rx) = rtrb::RingBuffer::new(8);
+        let load = LoadMeters::new();
+        let mut executor = Executor::new(
+            ExecutorIo {
+                cmd_rx,
+                evt_tx,
+                reclaim_tx,
+            },
+            Box::new(RenderState::from_project(SAMPLE_RATE, &Project::default(), &[])),
+            Arc::new(AtomicU64::new(0)),
+            SAMPLE_RATE,
+            load.clone(),
+        );
+        drop(cmd_tx);
+        executor.set_hot_spot_percent(0);
+        executor.render.play();
+        let bar = f64::from(mooloop_core::TICKS_PER_BAR);
+        let mut out_l = [0.0f32; FRAMES];
+        let mut out_r = [0.0f32; FRAMES];
+        let mut crossed = false;
+        for block in 0..60 {
+            let start = executor.render.transport().position_ticks;
+            executor.process(std::iter::empty(), &mut out_l, &mut out_r);
+            let end = executor.render.transport().position_ticks;
+            crossed |= (start / bar).floor() != (end / bar).floor();
+            let spot = load.take().hot_spot.expect("every block publishes a hot spot");
+            assert_eq!(spot.tick, start as u64, "block {block} ran {start} to {end}");
+        }
+        assert!(crossed, "no block crossed a bar line, so the test proved nothing");
     }
 
     /// **A structural edit must not stop the song.** `LOOSE_ENDS.md`, "Every

@@ -5162,7 +5162,11 @@ impl BufferCcState {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RenderReport {
+    /// The song position at the block's end, after any loop fold.
     pub position_tick: u64,
+    /// The song position at the block's start (MOO-358): where a slow block
+    /// was when it ran long.
+    pub start_tick: u64,
     pub beat_in_bar: u8,
     pub playing: bool,
     pub peak_l: f32,
@@ -9956,6 +9960,7 @@ impl RenderState {
         let (peak_l, peak_r) = master_peak;
         RenderReport {
             position_tick: self.transport.position_ticks as u64,
+            start_tick: start_tick as u64,
             beat_in_bar: self.transport.beat_in_bar(),
             playing: self.transport.playing,
             peak_l,
