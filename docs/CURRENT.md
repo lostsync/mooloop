@@ -2088,15 +2088,15 @@ land on its own when it starts to matter:
   refused, and a wrap the nesting cap leaves no room for both boxes of is
   refused rather than leaving a Layer straight round a device. **A song with
   a bare device directly in a layer gets that device wrapped in a fresh Chain
-  when it opens**: the file format is unchanged, every existing device keeps
+  when it opens** (once MOO-461 wires the call): the file format is unchanged, every existing device keeps
   its id, the new Chain is transparent (default Level, Mix, Mute and Solo),
   and it is part of loading rather than an undo step. This supersedes
   `containers/07`'s "a leaf direct child is a one-device branch" and
   `containers/09`'s "a device directly inside a layer is a branch with no S
   or M"; the engine still plays a bare device in a layer if one is ever
-  found. Session and model are done (`normalize_layer_branches` in
-  `core/src/effect.rs`); the rack's drawing of a branch's Chain is the rack
-  run's.
+  found. The gestures and the step itself (`normalize_layer_branches` in
+  `core/src/effect.rs`) are done; calling it from `load_bundle` is MOO-461
+  (Document), and the rack's drawing of a branch's Chain is the rack run's.
 - **Making and emptying a layer** (`containers/10`). The rail's wrap button
   opens a menu, **Chain** or **Layer**. Wrapping in a layer makes a layer of
   one branch, a Chain holding what was wrapped, so the branch has its S, M
