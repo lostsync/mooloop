@@ -491,24 +491,47 @@ a document to be corrected later is how it stops being trusted.
 ## Comments
 
 A code comment is one of three kinds, and each has one place (Adam,
-2026-09-30):
+2026-09-30, refined the same day from the `mooloop-plugin-host` pilot,
+MOO-445):
 
-1. **`///` and `//!` are the contract**: what the item does, what it
+1. **`///` and `//!` state the contract**: what the item does, what it
    guarantees, its units, which thread may call it. Write it for someone
    reading the rendered docs, who sees nothing but the signature beside it.
+   A still-true design reason may stay here as one sentence. A trait
+   impl's doc says only what the impl adds to or changes about the trait's
+   contract.
 2. **`//` in a body says why the code is this way**, and only where the code
-   cannot say it itself.
-3. **History goes elsewhere**: what the code used to do, which issue changed
-   it, what broke before. That belongs in the commit message, the Linear
-   issue or `docs/JOURNAL.md`. An issue id stays in a comment only while that
-   issue holds a decision that is still open.
+   cannot say it itself. Tests are never rendered, so everything in them is
+   this kind.
+3. **History goes elsewhere**: what the code used to do, which issue or plan
+   step changed it, what broke before. That belongs in the commit message,
+   the Linear issue or `docs/JOURNAL.md`.
+   - A link to a plan or design document is a reference, not history; keep
+     it. A bare "step 05" is history; drop it.
+   - An issue id stays only while its issue holds a decision that is still
+     open, and the sentence around it says what is *to come*, in the future
+     tense.
+   - Where a closed issue was the only path to evidence (a measurement, a
+     spec table), name the evidence in the comment, not the ticket.
+   - Who owns the code is `docs/TEAMS.md`'s to say; do not copy it into a
+     module doc, where it will drift.
 
-When you change a function, fold what you learned into its contract and
-delete what is no longer true; do not append a paragraph. A comment that
-grows by one paragraph and one issue id per fix is how `carry_strips_from`
-came to have 121 comment lines for 82 lines of code
-(`docs/workflows/accretion/`). This governs comments in code, not the prose
-documents under `docs/`, whose job is often the history.
+The work is stating contracts at least as much as cutting history: the pilot
+added more lines than it removed, and the useful find was seven docs that had
+stopped being true.
+
+**Keep the contract true as the code moves.** When you change a function,
+fold what you learned into its contract and delete what is no longer true;
+do not append a paragraph. When you change what a function is *used for*, a
+caller in another crate included, update that function's contract in the
+same change: two of the pilot's untrue docs went wrong that way. A comment
+that grows by one paragraph and one issue id per fix is how
+`carry_strips_from` came to have 121 comment lines for 82 lines of code
+(`docs/workflows/accretion/`).
+
+A crate that has been through a comment pass gets `#![warn(missing_docs)]`,
+so the contract cannot quietly go missing again. This governs comments in
+code, not the prose documents under `docs/`, whose job is often the history.
 
 ## Slint
 
