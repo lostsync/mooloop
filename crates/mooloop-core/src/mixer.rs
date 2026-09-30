@@ -352,6 +352,14 @@ impl BusSetup {
     pub fn assign_device_ids(&mut self) {
         crate::assign_device_ids(&mut self.effects, &mut self.next_device_id);
     }
+
+    /// Give every bare device in this chain's layers a Chain of its own, and
+    /// return how many it wrapped (MOO-456). Ids are kept; the new Chains
+    /// are minted from this bus's own counter. See
+    /// [`crate::effect::normalize_layer_branches`].
+    pub fn normalize_layer_branches(&mut self) -> usize {
+        crate::effect::normalize_layer_branches(&mut self.effects, &mut self.next_device_id)
+    }
 }
 
 /// The tracks a project starts with: the master, and nothing else.

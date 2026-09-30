@@ -506,6 +506,15 @@ impl ChannelSetup {
         self.modulation.identify_source_kinds(self.source.kind());
     }
 
+    /// Give every bare device in this channel's layers a Chain of its own,
+    /// and return how many it wrapped (MOO-456). Run it after
+    /// [`Self::assign_device_ids`]: existing ids are kept, and the new
+    /// Chains are minted from this setup's own counter. See
+    /// [`crate::effect::normalize_layer_branches`].
+    pub fn normalize_layer_branches(&mut self) -> usize {
+        crate::effect::normalize_layer_branches(&mut self.effects, &mut self.next_device_id)
+    }
+
     /// Give a plugin source with no identity one, and put the mint past
     /// whatever identity the source holds.
     ///
@@ -1238,6 +1247,22 @@ impl Project {
         for bus in &mut self.buses {
             bus.assign_device_ids();
         }
+    }
+
+    /// Give every bare device in any layer on any channel or bus a Chain of
+    /// its own, and return how many it wrapped (MOO-456): every branch of a
+    /// layer is a Chain. A load-time step, run after
+    /// [`Self::assign_device_ids`] and before the repair pass; it is not an
+    /// edit, so it is not an undo step.
+    pub fn normalize_layer_branches(&mut self) -> usize {
+        let mut wrapped = 0;
+        for channel in &mut self.channels {
+            wrapped += channel.setup.normalize_layer_branches();
+        }
+        for bus in &mut self.buses {
+            wrapped += bus.normalize_layer_branches();
+        }
+        wrapped
     }
 
     /// Give every channel its identity, and put the mint past them all.

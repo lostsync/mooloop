@@ -1529,6 +1529,13 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
             // and lane against the chain it names, and until this has run a
             // chain written by an older version holds no identities at all.
             project.assign_device_ids();
+            // After it, because it keeps every id and mints only the new
+            // Chains, and before the repair pass so that pass judges the
+            // shape the session will hold. Every branch of a layer is a
+            // Chain (MOO-456); a song written while a bare device could sit
+            // straight in a layer gets its Chain here. Not reported: the
+            // Chain is transparent, and the format does not change.
+            project.normalize_layer_branches();
             // Beside it, and for the same reason: until this has run a song
             // written before channels had identities holds none, and every
             // saved address that names another channel resolves to nothing.
@@ -1557,6 +1564,7 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
         LoadedDocument::Kit(kit) => {
             for (index, setup) in kit.channels.iter_mut().enumerate() {
                 setup.assign_device_ids();
+                setup.normalize_layer_branches();
                 forget_audio_input(setup);
                 resolve_setup_asset(path, index, &mut setup.source, &mut warnings)?;
             }
@@ -1564,6 +1572,7 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
         }
         LoadedDocument::Channel(setup) => {
             setup.assign_device_ids();
+            setup.normalize_layer_branches();
             forget_audio_input(setup);
             resolve_setup_asset(path, 0, &mut setup.source, &mut warnings)?;
             integrity::repair_setups(DocumentKind::Channel, std::slice::from_mut(setup.as_mut()))
@@ -1579,7 +1588,13 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
         LoadedDocument::PluginEffect { effect, .. } => {
             integrity::repair_effect(DocumentKind::Effect, effect)
         }
-        LoadedDocument::EffectRun(run) => integrity::repair_effect_run(run),
+        // A run carries no ids (a preset saves none), so the Chains are
+        // minted from a throwaway counter and whoever lands the run mints its
+        // real ones. A single-row effect document holds no branch to wrap.
+        LoadedDocument::EffectRun(run) => {
+            mooloop_core::effect::normalize_layer_branches(&mut run.effects, &mut 0);
+            integrity::repair_effect_run(run)
+        }
     };
     if !diagnosis.is_usable() {
         return Err(diagnosis.into());
@@ -5253,5 +5268,162 @@ id = "default_kick"
             panic!("not an effect");
         };
         assert_eq!(back.wet_dry, 1.0);
+    }
+
+    /// Every branch of a layer is a Chain (MOO-456 / MOO-461). An older song
+    /// can hold a bare device straight in a layer; opening it wraps each in a
+    /// Chain, keeps every id, mints the new Chains from the document's own
+    /// counter, and opening the result again changes nothing.
+    mod layer_branches {
+        use super::*;
+        use mooloop_core::{ContainerParams, DeviceId, EffectParams};
+
+        fn row(kind: EffectKind, children: u32) -> EffectSlotState {
+            let mut row = EffectSlotState::of_kind(kind);
+            row.params = match kind {
+                EffectKind::Layer => EffectParams::Layer(ContainerParams {
+                    children,
+                    ..Default::default()
+                }),
+                EffectKind::Chain => EffectParams::Chain(ContainerParams {
+                    children,
+                    ..Default::default()
+                }),
+                _ => row.params,
+            };
+            row
+        }
+
+        /// `[Layer, Drive]`, the shape an older version wrote.
+        fn bare() -> Vec<EffectSlotState> {
+            vec![row(EffectKind::Layer, 1), row(EffectKind::Drive, 0)]
+        }
+
+        fn kinds(effects: &[EffectSlotState]) -> Vec<EffectKind> {
+            effects.iter().map(EffectSlotState::kind).collect()
+        }
+
+        const WRAPPED: [EffectKind; 3] = [EffectKind::Layer, EffectKind::Chain, EffectKind::Drive];
+
+        /// A chain as loaded: the shape, the Drive's kept id, a Chain minted
+        /// past every id, and the counter moved past it.
+        fn check(effects: &[EffectSlotState], next: u32, drive: DeviceId) {
+            assert_eq!(kinds(effects), WRAPPED);
+            assert_eq!(effects[2].id, drive, "the drive keeps its identity");
+            assert_eq!(effects[0].id, DeviceId(0), "and so does the layer");
+            assert_eq!(effects[1].id, DeviceId(2), "the new chain is minted past them");
+            assert_eq!(next, 3, "from the document's own counter");
+            assert_eq!(mooloop_core::span_problem(effects), None);
+        }
+
+        fn setup_with_bare_layer(name: &str) -> ChannelSetup {
+            let mut setup = ChannelSetup::mono_synth(name);
+            setup.effects = bare();
+            setup.assign_device_ids();
+            setup
+        }
+
+        #[test]
+        fn a_song_wraps_channel_and_bus_layers_and_reopens_unchanged() {
+            let temp = tempdir().unwrap();
+            let path = temp.path().join("old.mooloop");
+            let mut project = Project::default();
+            project.channels[0].setup = setup_with_bare_layer("Bass");
+            project.buses[0].effects = bare();
+            project.assign_device_ids();
+            let drive = project.channels[0].setup.effects[1].id;
+            let bus_drive = project.buses[0].effects[1].id;
+            save_song(&path, &project, AssetMode::Referenced).unwrap();
+
+            let LoadedDocument::Song(song) = load_bundle(&path).unwrap().document else {
+                panic!("expected a song");
+            };
+            check(&song.channels[0].setup.effects, song.channels[0].setup.next_device_id, drive);
+            check(&song.buses[0].effects, song.buses[0].next_device_id, bus_drive);
+
+            // Saved as loaded, it opens as it was: nothing further to wrap.
+            let again = temp.path().join("again.mooloop");
+            save_song(&again, &song, AssetMode::Referenced).unwrap();
+            let LoadedDocument::Song(second) = load_bundle(&again).unwrap().document else {
+                panic!("expected a song");
+            };
+            assert_eq!(second, song);
+        }
+
+        #[test]
+        fn a_kit_wraps_every_channel() {
+            let temp = tempdir().unwrap();
+            let path = temp.path().join("old.mooloop-kit");
+            let kit = Kit {
+                channels: vec![setup_with_bare_layer("A"), setup_with_bare_layer("B")],
+            };
+            save_kit(&path, &kit, AssetMode::Embedded).unwrap();
+            let LoadedDocument::Kit(loaded) = load_bundle(&path).unwrap().document else {
+                panic!("expected a kit");
+            };
+            for setup in &loaded.channels {
+                check(&setup.effects, setup.next_device_id, DeviceId(1));
+            }
+            save_kit(&path, &loaded, AssetMode::Embedded).unwrap();
+            assert_eq!(
+                load_bundle(&path).unwrap().document,
+                LoadedDocument::Kit(loaded)
+            );
+        }
+
+        #[test]
+        fn a_channel_wraps_its_layer() {
+            let temp = tempdir().unwrap();
+            let path = temp.path().join("old.mooloop-channel");
+            save_channel(&path, &setup_with_bare_layer("Lead"), AssetMode::Embedded).unwrap();
+            let LoadedDocument::Channel(loaded) = load_bundle(&path).unwrap().document else {
+                panic!("expected a channel");
+            };
+            check(&loaded.effects, loaded.next_device_id, DeviceId(1));
+            save_channel(&path, &loaded, AssetMode::Embedded).unwrap();
+            assert_eq!(
+                load_bundle(&path).unwrap().document,
+                LoadedDocument::Channel(loaded)
+            );
+        }
+
+        /// A preset saves no ids; the run is wrapped with throwaway ones and
+        /// whoever lands it mints the real ones.
+        #[test]
+        fn an_effect_run_wraps_its_layer_and_reopens_unchanged() {
+            let temp = tempdir().unwrap();
+            let path = temp.path().join("old.mooloop-effect");
+            let run = EffectRun::of(bare());
+            save_effect_run_preset(&path, &run, effect_info("Layered"), AssetMode::Embedded)
+                .unwrap();
+            let LoadedDocument::EffectRun(loaded) = load_bundle(&path).unwrap().document else {
+                panic!("expected an effect run");
+            };
+            assert_eq!(kinds(&loaded.effects), WRAPPED);
+            assert_eq!(loaded.effects[0].params.container_children(), Some(2));
+            assert_eq!(mooloop_core::span_problem(&loaded.effects), None);
+
+            save_effect_run_preset(&path, &loaded, effect_info("Layered"), AssetMode::Embedded)
+                .unwrap();
+            let LoadedDocument::EffectRun(second) = load_bundle(&path).unwrap().document else {
+                panic!("expected an effect run");
+            };
+            assert_eq!(kinds(&second.effects), WRAPPED);
+            assert_eq!(second.effects, loaded.effects);
+        }
+
+        /// A single-row effect document holds no branch, so a Layer saved as
+        /// one opens as it was.
+        #[test]
+        fn a_single_effect_document_is_untouched() {
+            let temp = tempdir().unwrap();
+            let path = temp.path().join("layer.mooloop-effect");
+            let layer = EffectSlotState::of_kind(EffectKind::Layer);
+            save_effect_preset(&path, &layer, effect_info("Empty"), AssetMode::Embedded).unwrap();
+            let LoadedDocument::Effect(loaded) = load_bundle(&path).unwrap().document else {
+                panic!("expected an effect");
+            };
+            assert_eq!(loaded.kind(), EffectKind::Layer);
+        }
     }
 }
