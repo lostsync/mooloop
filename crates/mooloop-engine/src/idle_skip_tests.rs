@@ -483,3 +483,50 @@ fn a_channel_owed_compensation_finishes_its_note_before_it_sleeps() {
          {worst} at frame {at}"
     );
 }
+
+/// The track-side twin of the channel test above (MOO-402). Track A carries a
+/// sampler one-shot, feeds group track X (no latency, so A's own ring is
+/// empty), and sends to return R. Track B also sends to R and holds a
+/// Limiter, so R's inputs arrive 96 frames late and A's *send* is owed 96
+/// while A itself is owed none. `is_resting` weighs only the track's own
+/// ring, so A slept one silent block after the note and emptied a send ring
+/// still holding the end of what it sent.
+fn compensated_send_project() -> (Project, Arc<SampleData>) {
+    let (mut project, sample) = compensated_sampler_project();
+    project.channels.truncate(1);
+    project.channels[0].setup.channel.bus = 1;
+    project.buses[1].bus.output = 2;
+    project.buses[1].sends.push(mooloop_core::AuxSend::new(3));
+    project.buses[4].sends.push(mooloop_core::AuxSend::new(3));
+    project.buses[4].push_effect(EffectSlotState::of_kind(EffectKind::Limiter));
+    (project, sample)
+}
+
+/// A track's sends are not emptied while their rings still hold its last
+/// audio (MOO-402): the master with idle skipping on matches the master with
+/// it off, bit for bit.
+#[test]
+fn a_track_with_a_compensated_send_finishes_its_note_before_it_sleeps() {
+    let (project, sample) = compensated_send_project();
+    let render = |skip: bool| {
+        let mut render =
+            RenderState::from_project(SAMPLE_RATE, &project, &[Some(Arc::clone(&sample))]);
+        render.set_idle_skipping(skip);
+        render.play();
+        let mut out = Vec::new();
+        for _ in 0..(SAMPLE_RATE as usize / 4 / 64) {
+            render.process_once_block(64);
+            out.extend_from_slice(&render.master().l[..64]);
+        }
+        out
+    };
+    let slept = render(true);
+    let ran = render(false);
+    assert!(peak(&ran) > 0.05, "the comparison is against silence");
+    let (worst, at) = worst_difference_at(&slept, &ran);
+    assert!(
+        worst == 0.0,
+        "sleeping cut the end of a compensated send: the master differs by \
+         {worst} at frame {at}"
+    );
+}

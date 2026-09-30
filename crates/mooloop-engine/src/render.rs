@@ -284,6 +284,12 @@ struct CompiledSend {
     /// What this send waits before summing into `target`, from
     /// `mooloop_core::compile_latency`'s per-send answer.
     compensation: Option<Box<IntegerDelay>>,
+    /// Consecutive frames of silence fed into `compensation`, counted after
+    /// the send's level where the ring is fed (MOO-402): the send-ring twin
+    /// of `ChannelStrip::ring_silent_frames` (MOO-401). A ring that was just
+    /// emptied holds only silence and reads `u32::MAX`; a new send starts at
+    /// zero, which only delays its producer's sleep by the ring's length.
+    ring_silent_frames: u32,
 }
 
 /// Scratch buffers a block's sends work in.
@@ -436,6 +442,7 @@ impl SendBank {
                     // in the middle of a song is heard to ramp.
                     level: Smoothed::new(0.0, STRIP_GAIN_SMOOTH_S, sample_rate),
                     compensation: IntegerDelay::new(spec.delay).map(Box::new),
+                    ring_silent_frames: 0,
                 })
                 .collect(),
             starts,
@@ -573,7 +580,21 @@ impl SendBank {
             if let Some(delay) = send.compensation.as_mut() {
                 delay.reset();
             }
+            send.ring_silent_frames = u32::MAX;
         }
+    }
+
+    /// Whether every one of `producer`'s send rings holds only silence: each
+    /// has been fed silence for at least its own length (MOO-402).
+    ///
+    /// What a track weighs before it sleeps, beside its own ring, because
+    /// [`Self::reset`] on the way down empties these too -- and a send is
+    /// owed its own delay, which can be longer than the track's.
+    fn rings_are_silent(&self, producer: EffectTarget) -> bool {
+        self.is_empty()
+            || self.sends[self.range(producer)]
+                .iter()
+                .all(|send| send.ring_silent_frames as usize >= ring_frames(&send.compensation))
     }
 
     /// Whether every one of `producer`'s sends has faded all the way out, so
@@ -644,6 +665,7 @@ impl SendBank {
                 if let Some(delay) = send.compensation.as_mut() {
                     delay.reset();
                 }
+                send.ring_silent_frames = u32::MAX;
                 send.level.reset_to(0.0);
                 continue;
             }
@@ -662,6 +684,15 @@ impl SendBank {
             );
             apply_smoothed_gain(&mut send.level, work, frames);
             if let Some(delay) = send.compensation.as_mut() {
+                // What goes in, after the level: this is what the ring will
+                // hold, so this is what has to have gone quiet before the
+                // producer may sleep and empty it (MOO-402).
+                let (left, right) = work.peak(frames);
+                send.ring_silent_frames = if left.max(right) <= SILENCE_PEAK {
+                    send.ring_silent_frames.saturating_add(frames as u32)
+                } else {
+                    0
+                };
                 delay.process(&mut work.l[..frames], &mut work.r[..frames]);
             }
             // Always linear, for the reason a channel reaching a track is:
@@ -9828,7 +9859,14 @@ impl RenderState {
             // a song uses one or two, so this is most of what an empty block
             // was spending: sixteen buffers emptied, peaked twice, balanced
             // and metered to say nothing.
-            if skip_idle && !strip.dirty && strip.is_resting() {
+            //
+            // And so does every send ring it owns (MOO-402): a send is owed
+            // its own delay, which `is_resting` knows nothing about.
+            if skip_idle
+                && !strip.dirty
+                && strip.is_resting()
+                && self.sends.rings_are_silent(EffectTarget::Bus(index as u8))
+            {
                 strip.effects.sleep(&context);
                 if !strip.sleeping {
                     strip.sleeping = true;
