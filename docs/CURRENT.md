@@ -2096,7 +2096,15 @@ land on its own when it starts to matter:
   `containers/09`'s "a device directly inside a layer is a branch with no S
   or M"; the engine still plays a bare device in a layer if one is ever
   found. The gestures, the step itself (`normalize_layer_branches` in
-  `core/src/effect.rs`) and the load call are done, and the rack's drawing of a branch's Chain is the rack run's.
+  `core/src/effect.rs`) and the load call are done, and the rack's drawing of a branch's Chain was the rack run's, which has landed: **the rack
+  does not draw a layer's shown branch's Chain**. Its devices are drawn
+  straight under the layer's bracket, one box deep (`RowView.draw_depth`); the
+  layer's box holds the append join the Chain's would have, wired to that
+  Chain, and a layer showing an empty branch closes on its own row with the
+  join inside it wired to the branch. The branch's **Level** is a mini knob in
+  the layer's list, beside S, M and the meter, writing the Chain's parameter 1
+  as its face's knob did. Not reachable now: the Chain's Mix, bypass, trims,
+  fold, preset rail and selecting the Chain (MOO-456 comments).
 - **Making and emptying a layer** (`containers/10`). The rail's wrap button
   opens a menu, **Chain** or **Layer**. Wrapping in a layer makes a layer of
   one branch, a Chain holding what was wrapped, so the branch has its S, M
