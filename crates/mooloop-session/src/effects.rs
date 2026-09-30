@@ -2722,6 +2722,386 @@ mod tests {
         assert_eq!(depths(&session), [0, 1, 2, 2]);
     }
 
+    // ---- MOO-456: every branch of a layer is a Chain ----------------------
+
+    /// `[Layer, Chain, Drive, Chain, Filter]`: a layer of two branches, each
+    /// a Chain holding one device. Slots 0..=4.
+    fn layer_of_two() -> Session {
+        let mut session = Session::default();
+        session.insert_effect_at(EffectKind::Layer, 0).expect("room");
+        let first = session.add_layer_branch(0).expect("a branch").slot;
+        session
+            .insert_effect_into_container(EffectKind::Drive, first)
+            .expect("a drive");
+        let second = session.add_layer_branch(0).expect("a second branch").slot;
+        session
+            .insert_effect_into_container(EffectKind::Filter, second)
+            .expect("a filter");
+        assert_eq!(
+            kinds(&session),
+            [
+                EffectKind::Layer,
+                EffectKind::Chain,
+                EffectKind::Drive,
+                EffectKind::Chain,
+                EffectKind::Filter
+            ]
+        );
+        session
+    }
+
+    /// The song an older version wrote: a Drive sitting directly in a Layer.
+    fn song_with_a_bare_device_in_a_layer() -> Session {
+        let mut session = Session::default();
+        session.insert_effect_at(EffectKind::Layer, 0).expect("room");
+        session.insert_effect_at(EffectKind::Drive, 1).expect("room");
+        session.channels[0].effects[0].params.set_container_children(1);
+        session
+    }
+
+    /// The model, stated once: no Layer anywhere holds a direct child that is
+    /// not a Chain, and the spans are sound.
+    fn assert_every_branch_is_a_chain(session: &Session) {
+        let effects = &session.channels[0].effects;
+        assert_eq!(mooloop_core::span_problem(effects), None);
+        for (slot, effect) in effects.iter().enumerate() {
+            if effect.kind() != EffectKind::Layer {
+                continue;
+            }
+            for branch in mooloop_core::layer_branches(effects, slot) {
+                assert_eq!(
+                    effects[branch].kind(),
+                    EffectKind::Chain,
+                    "the layer in slot {slot} holds a bare {:?} in slot {branch}: {:?}",
+                    effects[branch].kind(),
+                    kinds(session)
+                );
+            }
+        }
+    }
+
+    /// An insert `Before` a branch's Chain lands inside that Chain: there is
+    /// no "between branches" for a bare device to sit in.
+    #[test]
+    fn an_insert_before_a_branch_lands_inside_its_chain() {
+        let mut session = layer_of_two();
+        let added = session.insert_effect_at(EffectKind::Delay, 3).expect("room");
+        assert_eq!(added.slot, 4, "first in the second branch's chain");
+        assert_eq!(
+            kinds(&session),
+            [
+                EffectKind::Layer,
+                EffectKind::Chain,
+                EffectKind::Drive,
+                EffectKind::Chain,
+                EffectKind::Delay,
+                EffectKind::Filter
+            ]
+        );
+        assert_every_branch_is_a_chain(&session);
+        assert_eq!(children(&session, 0), 5, "the layer grew by the one row");
+        assert_eq!(children(&session, 3), 2, "and so did the branch");
+        // The first branch, at the layer's first row.
+        session.insert_effect_at(EffectKind::Gate, 1).expect("room");
+        assert_eq!(depths(&session)[2], 2, "inside the first branch's chain");
+        assert_every_branch_is_a_chain(&session);
+    }
+
+    /// A drop on the layer itself goes into its first branch's chain. An
+    /// empty layer has no branch to take it: the layer's `+` is what makes
+    /// one.
+    #[test]
+    fn a_device_dropped_on_a_layer_goes_into_its_first_branch() {
+        let mut session = layer_of_two();
+        let added = session
+            .insert_effect_into_container(EffectKind::Delay, 0)
+            .expect("the first branch");
+        assert_eq!(added.slot, 2);
+        assert_eq!(depths(&session)[2], 2);
+        assert_every_branch_is_a_chain(&session);
+
+        let mut empty = Session::default();
+        empty.insert_effect_at(EffectKind::Layer, 0).expect("room");
+        assert!(empty.insert_effect_into_container(EffectKind::Delay, 0).is_none());
+        assert_eq!(kinds(&empty), [EffectKind::Layer], "refused, and nothing moved");
+    }
+
+    /// A container, inserted where a branch goes, is a branch's content too:
+    /// it goes in a chain rather than becoming a branch itself.
+    #[test]
+    fn a_layer_inserted_before_a_branch_lands_inside_the_branch() {
+        let mut session = layer_of_two();
+        session.insert_effect_at(EffectKind::Layer, 3).expect("room");
+        assert_every_branch_is_a_chain(&session);
+        assert_eq!(depths(&session)[4], 2, "the new layer is inside the second branch");
+    }
+
+    /// A Chain put where a branch goes *is* a branch, which is what the list's
+    /// `+` does, so it is let through.
+    #[test]
+    fn a_chain_inserted_before_a_branch_is_a_branch() {
+        let mut session = layer_of_two();
+        let added = session.insert_effect_at(EffectKind::Chain, 3).expect("room");
+        assert_eq!(added.slot, 3);
+        assert_eq!(depths(&session)[3], 1);
+        assert_every_branch_is_a_chain(&session);
+    }
+
+    #[test]
+    fn a_device_moved_to_a_branch_boundary_lands_inside_the_branch() {
+        let mut session = layer_of_two();
+        session.insert_effect_at(EffectKind::Delay, usize::MAX).expect("room");
+        // [Layer, Chain, Drive, Chain, Filter, Delay]; the Delay is dragged to
+        // where the second branch's Chain is.
+        let moved = session.move_effect_to(5, 3).expect("moved");
+        assert!(!moved.moves.is_empty());
+        assert_every_branch_is_a_chain(&session);
+        assert_eq!(
+            kinds(&session),
+            [
+                EffectKind::Layer,
+                EffectKind::Chain,
+                EffectKind::Drive,
+                EffectKind::Chain,
+                EffectKind::Delay,
+                EffectKind::Filter
+            ]
+        );
+        assert_eq!(children(&session, 0), 5);
+    }
+
+    #[test]
+    fn a_device_moved_out_of_a_branch_to_a_boundary_stays_in_a_chain() {
+        let mut session = layer_of_two();
+        // [Layer, Chain, Drive, Chain, Filter]: the Filter goes to the first
+        // branch's Chain row.
+        session.move_effect_to(4, 1).expect("moved");
+        assert_every_branch_is_a_chain(&session);
+        assert_eq!(depths(&session)[1], 2, "into the first branch's chain");
+    }
+
+    #[test]
+    fn a_device_moved_onto_an_empty_layer_is_refused() {
+        let mut session = Session::default();
+        session.insert_effect_at(EffectKind::Layer, 0).expect("room");
+        session.insert_effect_at(EffectKind::Delay, 1).expect("room");
+        let before = session.channels[0].effects.clone();
+        assert!(session.move_effect_to(1, 0).is_none());
+        assert_eq!(session.channels[0].effects, before);
+
+        // A Chain is a branch, so it is let in.
+        session.insert_effect_at(EffectKind::Chain, 2).expect("room");
+        session.move_effect_to(2, 0).expect("a branch");
+        assert_every_branch_is_a_chain(&session);
+    }
+
+    #[test]
+    fn a_layer_moved_between_branches_lands_inside_a_branch() {
+        let mut session = layer_of_two();
+        session.insert_effect_at(EffectKind::Layer, usize::MAX).expect("room");
+        session.move_effect_to(5, 3).expect("moved");
+        assert_every_branch_is_a_chain(&session);
+        assert_eq!(depths(&session)[4], 2);
+    }
+
+    #[test]
+    fn a_paste_beside_a_branchs_last_device_stays_in_the_branch() {
+        let mut session = layer_of_two();
+        session.insert_effect_at(EffectKind::Delay, usize::MAX).expect("room");
+        let run = session.copy_device(5).expect("the delay");
+        // After the Drive, the first branch's last device: the row after it
+        // is the second branch's Chain.
+        let landed = session.paste_device(&run, 2).expect("room");
+        assert_eq!(landed.slot, 3);
+        assert_every_branch_is_a_chain(&session);
+        assert_eq!(depths(&session)[3], 2, "inside the first branch");
+        assert_eq!(children(&session, 1), 2);
+        // After the last branch's last device the paste stays in the layer
+        // too, rather than leaving it.
+        let filter = session.channels[0].effects[5].id;
+        let filter = mooloop_core::device_slot(&session.channels[0].effects, filter)
+            .expect("the filter");
+        let landed = session.paste_device(&run, filter).expect("room");
+        assert_eq!(depths(&session)[landed.slot], 2);
+        assert_every_branch_is_a_chain(&session);
+    }
+
+    #[test]
+    fn a_paste_onto_a_branchs_chain_lands_inside_it() {
+        let mut session = layer_of_two();
+        session.insert_effect_at(EffectKind::Delay, usize::MAX).expect("room");
+        let run = session.copy_device(5).expect("the delay");
+        session.paste_device(&run, 3).expect("room");
+        assert_every_branch_is_a_chain(&session);
+        assert_eq!(children(&session, 3), 2);
+        // Onto an empty branch.
+        let mut session = layer_of_two();
+        let empty = session.add_layer_branch(0).expect("an empty branch").slot;
+        session.paste_device(&run, empty).expect("room");
+        assert_every_branch_is_a_chain(&session);
+        assert_eq!(children(&session, empty), 1);
+    }
+
+    /// A Chain pasted beside a branch's device is not changed: a Chain is
+    /// what a branch is.
+    #[test]
+    fn a_chain_pasted_beside_a_branchs_device_is_not_changed() {
+        let mut session = layer_of_two();
+        let run = session.copy_device(3).expect("the second branch");
+        session.paste_device(&run, 2).expect("room");
+        assert_every_branch_is_a_chain(&session);
+    }
+
+    /// A run saved by an older version can hold a bare device in a layer. It
+    /// lands wrapped, rather than letting the old shape back in.
+    #[test]
+    fn a_pasted_run_with_a_bare_device_in_its_layer_lands_wrapped() {
+        let mut session = Session::default();
+        session.insert_effect_at(EffectKind::Delay, 0).expect("room");
+        let old = song_with_a_bare_device_in_a_layer();
+        let run = old.copy_device(0).expect("the layer");
+        assert_eq!(run.effects.len(), 2, "the old shape: a Layer and its Drive");
+        let landed = session.paste_device(&run, 0).expect("room");
+        assert_eq!(landed.devices.len(), 3, "a Chain was added to the run");
+        assert_eq!(
+            kinds(&session),
+            [
+                EffectKind::Delay,
+                EffectKind::Layer,
+                EffectKind::Chain,
+                EffectKind::Drive
+            ]
+        );
+        assert_every_branch_is_a_chain(&session);
+    }
+
+    #[test]
+    fn duplicating_a_device_in_a_branch_stays_in_the_branch() {
+        let mut session = layer_of_two();
+        session.duplicate_device(2).expect("room");
+        assert_every_branch_is_a_chain(&session);
+        assert_eq!(depths(&session)[3], 2, "the copy is in the first branch");
+        // A whole branch duplicates as a branch.
+        session.duplicate_device(1).expect("room");
+        assert_every_branch_is_a_chain(&session);
+        assert_eq!(
+            mooloop_core::layer_branches(&session.channels[0].effects, 0).count(),
+            3
+        );
+    }
+
+    /// A container preset for a whole layer cannot replace one branch: it
+    /// would make that branch a Layer.
+    #[test]
+    fn a_layer_preset_cannot_replace_a_branch() {
+        let donor = layer_of_two();
+        let layer_run = donor.copy_device(0).expect("the layer");
+        let mut session = layer_of_two();
+        let before = session.channels[0].effects.clone();
+        assert!(session.load_effect_run(1, &layer_run, "Two").is_none());
+        assert_eq!(session.channels[0].effects, before, "refused, and nothing moved");
+        // A Chain preset can replace a branch, and a Layer preset can
+        // replace a layer.
+        let branch_run = donor.copy_device(3).expect("a branch");
+        session.load_effect_run(1, &branch_run, "Branch").expect("a branch");
+        session.load_effect_run(0, &layer_run, "Two").expect("a layer");
+        assert_every_branch_is_a_chain(&session);
+    }
+
+    /// A preset written before branches were Chains loads wrapped.
+    #[test]
+    fn a_preset_with_a_bare_device_in_its_layer_loads_wrapped() {
+        let old = song_with_a_bare_device_in_a_layer();
+        let run = old.copy_device(0).expect("the layer");
+        let mut session = Session::default();
+        session.insert_effect_at(EffectKind::Layer, 0).expect("room");
+        let loaded = session.load_effect_run(0, &run, "Old").expect("loaded");
+        assert_eq!(loaded.landed, 3);
+        assert_eq!(
+            kinds(&session),
+            [EffectKind::Layer, EffectKind::Chain, EffectKind::Drive]
+        );
+        assert_every_branch_is_a_chain(&session);
+    }
+
+    /// Wrapping a branch as a layer makes the new layer the content of a
+    /// branch of the old one, not a bare child of it.
+    #[test]
+    fn wrapping_a_branch_as_a_layer_nests_it_in_a_branch() {
+        let mut session = layer_of_two();
+        let run = mooloop_core::run_of(&session.channels[0].effects, 1);
+        let added = session.wrap_effects_in(run, EffectKind::Layer).expect("wrapped");
+        assert_eq!(
+            added.iter().map(|added| added.kind).collect::<Vec<_>>(),
+            [EffectKind::Layer, EffectKind::Chain]
+        );
+        assert_eq!(
+            kinds(&session),
+            [
+                EffectKind::Layer,
+                EffectKind::Chain,
+                EffectKind::Layer,
+                EffectKind::Chain,
+                EffectKind::Drive,
+                EffectKind::Chain,
+                EffectKind::Filter
+            ]
+        );
+        assert_every_branch_is_a_chain(&session);
+        // Wrapping the run of a whole branch's devices is the ordinary case.
+        let mut session = layer_of_two();
+        session.wrap_effects_in(2..3, EffectKind::Layer).expect("wrapped");
+        assert_every_branch_is_a_chain(&session);
+    }
+
+    /// Where the nesting cap leaves room for one box and not two, the wrap is
+    /// refused: a Layer straight round a device is no longer a shape.
+    #[test]
+    fn wrapping_in_a_layer_is_refused_where_only_one_box_fits() {
+        let mut session = Session::default();
+        session.insert_effect_at(EffectKind::Drive, 0).expect("room");
+        for end in 1..=3 {
+            session.wrap_effects_in_container(0..end).expect("a chain");
+        }
+        // [Chain, Chain, Chain, Drive]: the Drive is at the deepest level a
+        // box can still go.
+        let before = session.channels[0].effects.clone();
+        assert!(session.wrap_effects_in(3..4, EffectKind::Layer).is_none());
+        assert_eq!(session.channels[0].effects, before, "and nothing was added");
+    }
+
+    /// Unwrapping a branch's Chain would leave its devices bare in the layer,
+    /// so it is refused; a Layer unwraps as ever.
+    #[test]
+    fn a_branchs_chain_cannot_be_unwrapped_into_the_layer() {
+        let mut session = layer_of_two();
+        let before = session.channels[0].effects.clone();
+        assert!(session.unwrap_container_at(1).is_none());
+        assert_eq!(session.channels[0].effects, before);
+        // The layer itself unwraps, leaving its branches as top-level chains.
+        session.unwrap_container_at(0).expect("the layer");
+        assert_eq!(depths(&session), [0, 1, 0, 1]);
+    }
+
+    #[test]
+    fn an_empty_branch_unwraps_to_nothing_bare() {
+        let mut session = Session::default();
+        session.insert_effect_at(EffectKind::Layer, 0).expect("room");
+        session.add_layer_branch(0).expect("a branch");
+        session.unwrap_container_at(1).expect("an empty chain has nothing to leave bare");
+        assert_every_branch_is_a_chain(&session);
+    }
+
+    #[test]
+    fn the_rail_insert_in_a_branchs_chain_lands_inside_it() {
+        let mut session = layer_of_two();
+        let added = session
+            .append_effect_into_container(EffectKind::Delay, 3)
+            .expect("a branch chain takes one");
+        assert_eq!(added.slot, 5);
+        assert_every_branch_is_a_chain(&session);
+    }
+
     fn kinds(session: &Session) -> Vec<EffectKind> {
         session.channels[0]
             .effects
