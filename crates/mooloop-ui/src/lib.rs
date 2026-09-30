@@ -3126,12 +3126,11 @@ fn effect_face_param_id(effect: &EffectSlotState, control: u32) -> Option<u32> {
 /// Where a row sits in the chain it is being drawn into, as opposed to what
 /// device is in it.
 ///
-/// Four facts that travel together and are all about the *chain* rather than
+/// Three facts that travel together and are all about the *chain* rather than
 /// the slot, grouped when the sample rate made this function's argument list
 /// eight long: a row builder nobody can call correctly by eye is one that
 /// will eventually be called wrongly.
 struct RackPlacement {
-    depth: i32,
     /// What the rack draws of this row beyond the row itself: whether a
     /// layer is hiding it, which boxes close at it, and a layer's branch
     /// list (`docs/plans/archive/containers/09`).
@@ -3172,7 +3171,6 @@ fn effect_slot_row(
     sample_rate: u32,
 ) -> EffectSlotRow {
     let RackPlacement {
-        depth,
         view,
         selected,
         wrap_enabled,
@@ -3310,7 +3308,9 @@ fn effect_slot_row(
         is_container: slot.params.is_container(),
         // The kind's own name, for the one face that draws two kinds.
         label: kind.label().into(),
-        depth,
+        // The boxes the rack *draws* around the row, not every container
+        // holding it: a layer's branch Chain is not drawn (MOO-456).
+        depth: view.draw_depth,
         closing: ModelRc::from(Rc::new(VecModel::from(view.closing))),
         closing_joins: ModelRc::from(Rc::new(VecModel::from(view.closing_joins))),
         selected,
@@ -5209,7 +5209,6 @@ impl UiState {
             return;
         };
         if let Some(effect) = chain.get(slot) {
-            let depth = mooloop_core::depth_at(chain, slot) as i32;
             let view = self
                 .rack_view(self.session.effect_target, chain)
                 .swap_remove(slot);
@@ -5220,7 +5219,6 @@ impl UiState {
                 self.session
                     .effect_preset_name(self.session.effect_target, effect.id),
                 RackPlacement {
-                    depth,
                     view,
                     selected: self.session.selected_device_slot() == Some(slot),
                     wrap_enabled: wrap_enabled_at(chain, slot),
@@ -5504,7 +5502,6 @@ impl UiState {
                                     effect.id,
                                 ),
                                 RackPlacement {
-                                    depth: mooloop_core::depth_at(&state.effects, slot) as i32,
                                     view: views[slot].clone(),
                                     selected: selected == Some(slot),
                                     wrap_enabled: wrap_enabled_at(&state.effects, slot),
@@ -5583,7 +5580,6 @@ impl UiState {
                                     &self.session.plugins,
                                     self.session.effect_preset_name(target, effect.id),
                                     RackPlacement {
-                                        depth: mooloop_core::depth_at(effects, slot) as i32,
                                         view: views[slot].clone(),
                                         selected: selected == Some(slot),
                                         wrap_enabled: wrap_enabled_at(effects, slot),
@@ -21329,7 +21325,6 @@ mod tests {
                 &Default::default(),
                 None,
                 super::RackPlacement {
-                    depth: 0,
                     view: super::layer_view::RowView::default(),
                     selected: false,
                     wrap_enabled: true,

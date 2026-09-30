@@ -1,6 +1,6 @@
 import { Theme } from "theme.slint";
 import { GainMath } from "gain.slint";
-import { AudioOrientation, MuteButton, ParameterKnob, PeakMeter, SoloButton, ToolButton } from "controls.slint";
+import { AudioOrientation, MiniKnob, MuteButton, ParameterKnob, PeakMeter, SoloButton, ToolButton } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 
 // One branch of a layer, as the layer's face lists it. `slot` is the rack
@@ -17,10 +17,12 @@ export struct LayerBranchRow {
     controls: bool,
 }
 
-// One row of the branch list: the name, S, M and a level meter, in Bitwig's
-// FX Layer order. The state of S and M and the meter are the branch head's
-// own row, read by the caller from `effect-slots`, so nothing here is a copy
-// that has to be republished when the branch changes.
+// One row of the branch list: the name, S, M, the branch's Level and a level
+// meter, in Bitwig's FX Layer order. A branch's Chain is not drawn in the rack
+// (MOO-456), so this row is where its Level lives. The state of S, M and
+// Level and the meter are the branch head's own row, read by the caller from
+// `effect-slots`, so nothing here is a copy that has to be republished when
+// the branch changes.
 export component LayerBranchListRow inherits Rectangle {
     in property <string> name;
     in property <bool> controls;
@@ -28,7 +30,12 @@ export component LayerBranchListRow inherits Rectangle {
     in property <bool> muted;
     in property <bool> soloed;
     in property <float> level-db: GainMath.min-db;
+    // The branch's Level, normalized fader travel through the mixer's taper
+    // (`ParamCurve::Fader`, 0.75 is unity): the Chain's own parameter 1, the
+    // one its face's Level knob wrote.
+    in property <float> level: 0.75;
     callback select-requested();
+    callback level-changed(float);
     callback mute-toggled();
     callback solo-toggled();
     // The row's menu: take the branch and everything in it out of the layer.
@@ -135,6 +142,21 @@ export component LayerBranchListRow inherits Rectangle {
                 muted: root.muted;
                 tooltip: "Mute this branch";
                 clicked => { root.mute-toggled(); }
+            }
+        }
+        // A MiniKnob, the rack's own compact knob (the trims are the same
+        // widget) rather than a fader: a fader's track would take the width
+        // the name needs, and this is the one place the list has no room to
+        // spare. Double-click is unity; the readout is its tooltip.
+        if root.controls : VerticalLayout {
+            alignment: center;
+            MiniKnob {
+                diameter: 16px;
+                hint: "Level of this branch, before it is summed";
+                value: root.level;
+                default-value: 0.75;
+                value-text: GainMath.format-db(GainMath.fader-position-to-db(root.level));
+                changed(v) => { root.level-changed(v); }
             }
         }
         VerticalLayout {

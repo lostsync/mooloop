@@ -346,6 +346,11 @@ struct EffectSlotRow {
     // pair is really for is step 04 of `docs/plans/archive/containers/`; `depth` is
     // carried now so the row model and the face contract cross `main.slint`
     // once rather than twice.
+    //
+    // `depth` is how many boxes the rack *draws* around the row, which is
+    // not how many containers hold it: a layer's shown branch's Chain is not
+    // drawn (MOO-456), so a device in it is one box deep. Rust's
+    // (`RowView.draw_depth`).
     children: int,
     depth: int,
     // Whether this row holds a run of the rows after it.
@@ -389,8 +394,9 @@ struct EffectSlotRow {
     // the chain's face. A bool for `is-container`'s reason: the markup asks
     // what a row is, not what number its kind has this frame.
     is-layer: bool,
-    // The row lies in a branch its layer is not showing, so the rack draws
-    // nothing of it and it takes no width (`containers/09`).
+    // The row is not drawn and takes no width: it lies in a branch its layer
+    // is not showing (`containers/09`), or it is the Chain heading the branch
+    // it is showing, whose Level is in the layer's list (MOO-456).
     hidden: bool,
     // The depth of the next row that is drawn. The box's right cap asks it;
     // it was `effect-slots[index + 1].depth` until hidden rows meant the next
@@ -5460,8 +5466,21 @@ export component MainWindow inherits Window {
                                                     * DeviceRackMetrics.join-width;
                                             // An empty box draws a join inside it, between its
                                             // face and its own output rail (MOO-218).
-                                            property <bool> inner-join: self.is-container && slot.children == 0
+                                            // A box closing on its own row holds nothing drawn: an
+                                            // empty Chain or layer, or a layer whose shown branch is
+                                            // an empty Chain (its Chain is not drawn, MOO-456). The
+                                            // innermost box closing here is the row's own when the
+                                            // row is a container, because boxes nest.
+                                            property <bool> self-closing: self.is-container
+                                                && slot.closing.length > 0 && slot.closing[0] == index;
+                                            property <bool> inner-join: self.self-closing
                                                 && !slot.collapsed;
+                                            // Where a device added at that join goes: the box
+                                            // itself, or for a layer the Chain of the branch it is
+                                            // showing, which is not drawn to have a join of its own.
+                                            // A layer with no branch has nowhere (-1).
+                                            property <int> inner-into: slot.is-layer
+                                                ? slot.selected-branch : index;
                                             property <length> inner-width:
                                                 self.inner-join ? DeviceRackMetrics.join-width : 0px;
                                             // The level of the innermost box closing here.
@@ -5469,8 +5488,7 @@ export component MainWindow inherits Window {
                                             // from its own depth; everything else closes the
                                             // boxes it is the last row of.
                                             property <int> innermost-close:
-                                                self.is-container && slot.children == 0
-                                                    ? slot.depth + 1 : slot.depth;
+                                                self.self-closing ? slot.depth + 1 : slot.depth;
                                             // The row after this one, which is what says where a
                                             // container's box closes. A repeater item can index its
                                             // own model, so the box needs nothing from Rust that
@@ -5550,7 +5568,7 @@ export component MainWindow inherits Window {
                                                 if band.inside || (band.is-head && !slot.collapsed) : ContainerEnclosure {
                                                     level: level;
                                                     head: band.is-head;
-                                                    cap-right: (band.is-head && slot.children == 0)
+                                                    cap-right: (band.is-head && cell.self-closing)
                                                         || (band.inside && cell.next-depth < level);
                                                     x: cell.shift;
                                                     // A box that closes here ends after its own
@@ -6254,6 +6272,11 @@ export component MainWindow inherits Window {
                                                         soloed: branch.controls && root.effect-slots[branch.slot].p3 >= 0.5;
                                                         level-db: max(root.slot-meters(branch.slot).output-left-db,
                                                             root.slot-meters(branch.slot).output-right-db);
+                                                        // Id 1, `CONTAINER_PARAM_LEVEL`: what the Chain's
+                                                        // own Level knob wrote. The Chain is not drawn, so
+                                                        // the list carries it (MOO-456).
+                                                        level: root.effect-slots[branch.slot].p1;
+                                                        level-changed(v) => { root.effect-param-changed(branch.slot, 1, v); }
                                                         select-requested => { root.layer-branch-selected(index, branch.slot); }
                                                         // Ids 2 and 3, `CONTAINER_PARAM_MUTE` and
                                                         // `_SOLO`, on the branch head's own row.
@@ -6359,9 +6382,15 @@ export component MainWindow inherits Window {
                                             if cell.inner-join : DeviceJoin {
                                                 x: cell.shift + cell.frame-width;
                                                 y: 0px;
-                                                drop-into: slot.is-layer ? -1 : index;
-                                                kind-selected(kind) => { root.add-effect-into-container(kind, index); }
-                                                plugin-requested => { root.add-plugin-into-requested(index); }
+                                                drop-into: cell.inner-into;
+                                                kind-selected(kind) => {
+                                                    root.add-effect-into-container(kind,
+                                                        cell.inner-into >= 0 ? cell.inner-into : index);
+                                                }
+                                                plugin-requested => {
+                                                    root.add-plugin-into-requested(
+                                                        cell.inner-into >= 0 ? cell.inner-into : index);
+                                                }
                                             }
                                             // The append join of each Chain ending here: inside
                                             // the box, after its last device and before its rail,
@@ -6372,14 +6401,18 @@ export component MainWindow inherits Window {
                                             for container[tail] in slot.closing : append-holder := Rectangle {
                                                 property <int> joins-before:
                                                     tail == 0 ? 0 : slot.closing-joins[tail - 1];
+                                                // A layer's box appends to the Chain of the branch
+                                                // it shows: that Chain is not drawn (MOO-456).
+                                                property <int> into: root.effect-slots[container].is-layer
+                                                    ? root.effect-slots[container].selected-branch : container;
                                                 if slot.closing-joins[tail] > append-holder.joins-before : DeviceJoin {
                                                     x: cell.shift + cell.frame-width + cell.inner-width
                                                         + tail * DeviceRackMetrics.rail-width
                                                         + append-holder.joins-before * DeviceRackMetrics.join-width;
                                                     y: 0px;
-                                                    drop-into: container;
-                                                    kind-selected(kind) => { root.append-effect-into-container(kind, container); }
-                                                    plugin-requested => { root.add-plugin-into-requested(container); }
+                                                    drop-into: append-holder.into;
+                                                    kind-selected(kind) => { root.append-effect-into-container(kind, append-holder.into); }
+                                                    plugin-requested => { root.add-plugin-into-requested(append-holder.into); }
                                                 }
                                             }
                                             // The join leading out of this row, and past any

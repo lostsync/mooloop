@@ -29,16 +29,26 @@ pub(crate) struct BranchView {
 /// What the rack draws of one row, beyond what the row itself says.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct RowView {
-    /// The row lies in a branch its layer is not showing.
+    /// The row is not drawn: it lies in a branch its layer is not showing, or
+    /// it is the Chain heading the branch the layer *is* showing. A branch's
+    /// Chain is the layer's own business, not a device of the rack: its Level
+    /// is in the layer's list beside S, M and the meter, and its devices are
+    /// drawn straight under the layer's bracket (MOO-456).
     pub hidden: bool,
-    /// The depth of the next row that is drawn, or 0 past the last: what a
+    /// How many *drawn* boxes enclose the row. `mooloop_core::depth_at`
+    /// counts every enclosing container, and a shown branch's hidden Chain is
+    /// one of them: the box bands, rails and caps the rack draws are this
+    /// number's, so a device in a layer's branch sits one box deep, not two.
+    pub draw_depth: i32,
+    /// `draw_depth` of the next row that is drawn, or 0 past the last: what a
     /// box asks to know whether it ends here.
     pub next_depth: i32,
     /// The row the join after this one adds a device before: the next drawn
-    /// row, or the chain's length past the last. -1 on a layer's own row,
-    /// whose join leads into the branch it shows: a device added there would
-    /// be a new branch, which is the layer face's `+`, not the rack's
-    /// (MOO-218).
+    /// row, or the chain's length past the last. On a layer's own row that is
+    /// the first device of the branch it shows, which lands inside the
+    /// branch's Chain. -1 only where the next drawn row is a bare device
+    /// directly in the layer, which a device added there would make a new
+    /// branch -- the layer face's `+`, not the rack's (MOO-218).
     pub join_before: i32,
     /// The containers whose last *drawn* row this is, innermost first, as
     /// rack indices.
@@ -49,10 +59,13 @@ pub(crate) struct RowView {
     /// A Chain whose last drawn row this is draws a join inside its box,
     /// after that row and before its rail, which adds a device at the end of
     /// the box (`Session::append_effect_into_container`). The join past the
-    /// rails still adds after the box. A layer draws none -- a device at a
+    /// rails still adds after the box. A layer draws one when it is showing a
+    /// Chain branch, and the rack wires it to that branch's Chain: the Chain
+    /// is not drawn, so the layer's box holds the join its box would have
+    /// (MOO-456). A layer showing a bare device draws none -- a device at a
     /// layer's end would be a new branch, the layer face's `+` -- and nor
-    /// does an empty Chain closing on its own row, whose join inside it is
-    /// already there (`inner-join`).
+    /// does a box closing on its own row, empty or showing an empty branch,
+    /// whose join inside it is already there (`inner-join`).
     ///
     /// A running count rather than a flag per box, because the markup cannot
     /// sum a list and every rail after an append join moves along by one
@@ -124,6 +137,9 @@ pub(crate) fn rack_view(
     // still hides its own unselected branches -- which changes nothing, since
     // its whole run is hidden already.
     let mut shown: Vec<Option<(usize, usize)>> = vec![None; count];
+    // The Chains heading a branch a layer is showing. Not drawn, and not
+    // counted by `draw_depth`, nor closed by `closing` (MOO-456).
+    let mut branch_head = vec![false; count];
     for layer in 0..count {
         if effects[layer].params.container_flow() != Some(mooloop_core::ContainerFlow::Parallel) {
             continue;
@@ -144,6 +160,10 @@ pub(crate) fn rack_view(
         for head in heads {
             let run = mooloop_core::run_of(effects, head);
             if Some(head) == chosen {
+                if effects[head].params.is_container() {
+                    branch_head[head] = true;
+                    rows[head].hidden = true;
+                }
                 for row in run {
                     // The innermost layer wins: a later (deeper) layer
                     // overwrites what an outer one said.
@@ -187,18 +207,35 @@ pub(crate) fn rack_view(
     // A folded container shows only its own strip (MOO-219): everything it
     // holds is hidden, whatever its layers were showing, and it draws no box
     // -- so it closes nothing, below.
+    // A shown branch's Chain is never folded: nothing draws the strip that
+    // would unfold it.
     for container in 0..count {
-        if effects[container].collapsed && effects[container].params.is_container() {
+        if effects[container].collapsed
+            && effects[container].params.is_container()
+            && !branch_head[container]
+        {
             for row in mooloop_core::span_of(effects, container) {
                 rows[row].hidden = true;
             }
         }
     }
+    // How many drawn boxes enclose each row: every enclosing container but
+    // a shown branch's hidden Chain.
+    let draw_depth = |row: usize| -> i32 {
+        (0..row)
+            .filter(|outer| {
+                !branch_head[*outer] && mooloop_core::span_of(effects, *outer).contains(&row)
+            })
+            .count() as i32
+    };
+    for row in 0..count {
+        rows[row].draw_depth = draw_depth(row);
+    }
     // Where each drawn row's next drawn neighbour sits.
     for row in 0..count {
         rows[row].next_depth = (row + 1..count)
             .find(|later| visible(*later, &rows))
-            .map_or(0, |later| mooloop_core::depth_at(effects, later) as i32);
+            .map_or(0, |later| rows[later].draw_depth);
     }
     // Where a device added from each drawn row's join lands: before the next
     // drawn row, which is at the depth the join is drawn at -- a join past a
@@ -206,14 +243,18 @@ pub(crate) fn rack_view(
     // (`mooloop_core::insert_effect`: landing on a run's end is landing after
     // it).
     for row in 0..count {
-        rows[row].join_before = if effects[row].params.container_flow()
+        let next = (row + 1..count).find(|later| visible(*later, &rows));
+        // A layer's join leads into the branch it shows: into its Chain
+        // when that is a Chain, and that is the next drawn row's own place.
+        // A bare device straight in the layer is not -- a device put there
+        // would be a new branch.
+        let into_bare_branch = effects[row].params.container_flow()
             == Some(mooloop_core::ContainerFlow::Parallel)
-        {
+            && next.is_some_and(|next| mooloop_core::parent_of(effects, next) == Some(row));
+        rows[row].join_before = if into_bare_branch {
             -1
         } else {
-            (row + 1..count)
-                .find(|later| visible(*later, &rows))
-                .unwrap_or(count) as i32
+            next.unwrap_or(count) as i32
         };
     }
     // Which boxes end at each drawn row: every drawn container closes at the
@@ -229,6 +270,15 @@ pub(crate) fn rack_view(
         let last = span.rev().find(|row| visible(*row, &rows)).unwrap_or(container);
         rows[last].closing.push(container as i32);
     }
+    // Whether a layer is showing a Chain branch, which its box then appends
+    // into; read before the loop below borrows `rows` mutably.
+    let shows_chain: Vec<bool> = rows
+        .iter()
+        .map(|row| {
+            usize::try_from(row.selected_branch)
+                .is_ok_and(|head| effects[head].params.is_container())
+        })
+        .collect();
     for (index, row) in rows.iter_mut().enumerate() {
         // Innermost first is the greatest index first, because boxes nest.
         row.closing.sort_unstable_by(|a, b| b.cmp(a));
@@ -238,10 +288,12 @@ pub(crate) fn rack_view(
             .iter()
             .map(|&container| {
                 let container = container as usize;
-                if container != index
-                    && effects[container].params.container_flow()
-                        == Some(mooloop_core::ContainerFlow::Series)
-                {
+                let appends = match effects[container].params.container_flow() {
+                    Some(mooloop_core::ContainerFlow::Series) => true,
+                    Some(mooloop_core::ContainerFlow::Parallel) => shows_chain[container],
+                    None => false,
+                };
+                if container != index && appends {
                     joins += 1;
                 }
                 joins
@@ -291,7 +343,9 @@ mod tests {
     fn a_layer_shows_its_first_branch_until_told_otherwise() {
         let effects = two_branches();
         let view = rack_view(&effects, |_| None, |_| None);
-        assert_eq!(hidden(&view), [false, false, false, false, true, true, false]);
+        // The shown branch's Chain (row 1) is not drawn either: its devices
+        // sit straight under the layer (MOO-456).
+        assert_eq!(hidden(&view), [false, true, false, false, true, true, false]);
         assert_eq!(view[0].selected_branch, 1);
         assert_eq!(
             view[0].branches,
@@ -300,11 +354,12 @@ mod tests {
                 BranchView { slot: 4, name: "Filter".into(), controls: true },
             ]
         );
-        // The first branch's chain closes at its last row, and the layer
-        // closes there too, because the rest of its run is not drawn.
-        assert_eq!(view[3].closing, [1, 0]);
+        // The layer closes at the shown branch's last device, because the
+        // rest of its run is not drawn; the hidden Chain closes nothing.
+        assert_eq!(view[3].closing, [0]);
         assert_eq!(view[3].next_depth, 0, "the Delay after the layer is next");
-        assert!(view[1].bracket && view[1].bracket_start && !view[1].bracket_end);
+        assert!(!view[1].bracket, "the hidden Chain wears no bracket");
+        assert!(view[2].bracket && view[2].bracket_start && !view[2].bracket_end);
         assert!(view[3].bracket && view[3].bracket_end);
         assert!(!view[6].bracket, "the device after the layer is under no bracket");
     }
@@ -317,12 +372,13 @@ mod tests {
             |layer| (layer == DeviceId(0)).then_some(DeviceId(4)),
             |_| None,
         );
-        assert_eq!(hidden(&view), [false, true, true, true, false, false, false]);
+        assert_eq!(hidden(&view), [false, true, true, true, true, false, false]);
         assert_eq!(view[0].selected_branch, 4);
-        // The layer's head is followed, as drawn, by the second branch.
+        // The layer's head is followed, as drawn, by the second branch's
+        // first device, one box deep.
         assert_eq!(view[0].next_depth, 1);
-        assert_eq!(view[5].closing, [4, 0]);
-        assert!(view[4].bracket_start && view[5].bracket_end);
+        assert_eq!(view[5].closing, [0]);
+        assert!(view[5].bracket_start && view[5].bracket_end);
     }
 
     /// A join adds before the next *drawn* row (MOO-218): past a branch a
@@ -333,9 +389,8 @@ mod tests {
         let effects = two_branches();
         let view = rack_view(&effects, |_| None, |_| None);
         let joins: Vec<i32> = view.iter().map(|row| row.join_before).collect();
-        assert_eq!(joins[0], -1, "the layer's own join");
-        assert_eq!(joins[1], 2, "the shown branch's head leads into it");
-        assert_eq!(joins[2], 3);
+        assert_eq!(joins[0], 2, "the layer's own join leads into its shown branch");
+        assert_eq!(joins[2], 3, "between two devices of the branch");
         assert_eq!(joins[3], 6, "past the hidden branch, and out of the layer");
         assert_eq!(joins[6], 7, "the last row's join appends");
     }
@@ -419,16 +474,17 @@ mod tests {
         let view = rack_view(&effects, |_| None, |_| None);
         assert_eq!(
             hidden(&view),
-            [false, false, false, false, false, true, true, true, true]
+            [false, true, false, true, false, true, true, true, true]
         );
-        // The outer bracket: the chain and the inner layer's head.
-        assert!(view[1].bracket && view[1].bracket_start && !view[1].bracket_end);
-        assert!(view[2].bracket && !view[2].bracket_start && view[2].bracket_end);
-        // The inner one: its first branch.
-        assert!(view[3].bracket && view[3].bracket_start && !view[3].bracket_end);
-        assert!(view[4].bracket && view[4].bracket_end);
-        // Every box that ends here ends at the Drive, innermost first.
-        assert_eq!(view[4].closing, [3, 2, 1, 0]);
+        // The outer bracket: the inner layer's head, the branch's only
+        // drawn row (its Chain is not drawn).
+        assert!(view[2].bracket && view[2].bracket_start && view[2].bracket_end);
+        // The inner one: the Drive.
+        assert!(view[4].bracket && view[4].bracket_start && view[4].bracket_end);
+        // Every drawn box that ends here ends at the Drive, innermost first.
+        assert_eq!(view[4].closing, [2, 0]);
+        assert_eq!(view[4].draw_depth, 2, "two layers, and neither hidden Chain");
+        assert_eq!(view[4].closing_joins, [1, 2], "each layer appends to its branch's Chain");
     }
 
     /// **MOO-299.** A Chain holding devices draws an append join after its
@@ -465,8 +521,10 @@ mod tests {
     }
 
     /// An empty Chain's join inside it is its own (`inner-join`), so it draws
-    /// no append join as well; a layer draws none, because its end is a new
-    /// branch. A layer's shown Chain branch is an ordinary Chain and does.
+    /// no append join as well. A layer showing a Chain branch draws one, which
+    /// appends to that Chain, since the Chain is not drawn to have its own
+    /// (MOO-456); a layer showing a bare device draws none, because its end
+    /// would be a new branch.
     #[test]
     fn empty_chains_and_layers_draw_no_append_join() {
         let effects = chain(&[(EffectKind::Chain, 0), (EffectKind::Drive, 0)]);
@@ -475,11 +533,10 @@ mod tests {
         assert_eq!(view[0].closing_joins, [0]);
 
         // [Layer, [Chain, Drive, Bitcrush], [Chain, Filter]], Delay: the
-        // first branch is shown, and its Chain and the layer end at the
-        // Bitcrush.
+        // first branch is shown, and the layer ends at the Bitcrush.
         let view = rack_view(&two_branches(), |_| None, |_| None);
-        assert_eq!(view[3].closing, [1, 0]);
-        assert_eq!(view[3].closing_joins, [1, 1], "the branch's Chain appends; the layer does not");
+        assert_eq!(view[3].closing, [0]);
+        assert_eq!(view[3].closing_joins, [1], "the layer appends to the branch's Chain");
 
         // A leaf branch closes only its layer.
         let effects = chain(&[(EffectKind::Layer, 1), (EffectKind::Drive, 0)]);
@@ -503,5 +560,71 @@ mod tests {
                 BranchView { slot: 2, name: "Dry".into(), controls: true },
             ]
         );
+    }
+
+    /// **MOO-456.** A branch's Chain is not drawn, and the boxes that are
+    /// drawn are counted without it.
+    #[test]
+    fn a_shown_branch_chain_is_not_drawn_or_counted() {
+        let view = rack_view(&two_branches(), |_| None, |_| None);
+        assert!(view[1].hidden, "the shown branch's Chain is not a row of the rack");
+        assert_eq!(
+            view.iter().map(|row| row.draw_depth).collect::<Vec<_>>(),
+            [0, 1, 1, 1, 1, 1, 0],
+            "a device in a branch is one box deep: the layer's"
+        );
+        assert_eq!(view[3].join_before, 6, "the join past the layer leads out of it");
+        assert_eq!(view[3].closing_joins, [1], "the join before the layer's rail appends to the branch");
+        // A Chain that is not a layer's branch is drawn as before.
+        let effects = chain(&[(EffectKind::Chain, 1), (EffectKind::Drive, 0)]);
+        let view = rack_view(&effects, |_| None, |_| None);
+        assert!(!view[0].hidden);
+        assert_eq!(view[1].draw_depth, 1);
+    }
+
+    /// A branch's Chain that was folded when it was wrapped is shown open:
+    /// nothing would draw the strip that unfolds it.
+    #[test]
+    fn a_folded_branch_chain_still_shows_its_devices() {
+        let mut effects = two_branches();
+        effects[1].collapsed = true;
+        let view = rack_view(&effects, |_| None, |_| None);
+        assert_eq!(hidden(&view), [false, true, false, false, true, true, false]);
+        assert_eq!(view[3].closing, [0]);
+    }
+
+    /// A branch just made with `+` holds nothing, and its Chain is not drawn,
+    /// so the layer closes on its own row: the join inside it is where the
+    /// first device goes (`inner-join`, wired to the branch), and it draws no
+    /// append join besides.
+    #[test]
+    fn an_empty_branch_closes_the_layer_on_its_own_row() {
+        let effects = chain(&[
+            (EffectKind::Layer, 1),
+            (EffectKind::Chain, 0),
+            (EffectKind::Filter, 0),
+        ]);
+        let view = rack_view(&effects, |_| None, |_| None);
+        assert_eq!(hidden(&view), [false, true, false]);
+        assert_eq!(view[0].selected_branch, 1);
+        assert_eq!(view[0].closing, [0]);
+        assert_eq!(view[0].closing_joins, [0]);
+        assert_eq!(view[0].next_depth, 0);
+        assert_eq!(view[0].join_before, 2, "past the layer's rail, out of it");
+        assert!(view.iter().all(|row| !row.bracket), "nothing to bracket");
+    }
+
+    /// A bare device straight in a layer (a song the open could not wrap) is
+    /// drawn as before: its layer's join leads to a new branch, and adds none.
+    #[test]
+    fn a_bare_branch_is_drawn_as_before() {
+        let effects = chain(&[(EffectKind::Layer, 1), (EffectKind::Drive, 0)]);
+        let view = rack_view(&effects, |_| None, |_| None);
+        assert_eq!(hidden(&view), [false, false]);
+        assert_eq!(view[0].join_before, -1);
+        assert_eq!(view[1].draw_depth, 1);
+        assert_eq!(view[1].closing, [0]);
+        assert_eq!(view[1].closing_joins, [0]);
+        assert!(view[1].bracket && view[1].bracket_start && view[1].bracket_end);
     }
 }
