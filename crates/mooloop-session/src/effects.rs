@@ -326,6 +326,7 @@ impl Session {
         let target = self.effect_target;
         let (effects, next_id) = self.effect_chain_parts_mut()?;
         let tail = effects.len();
+        let place = into_branch_chain(effects, place, effect.kind())?;
         let slot = match place {
             EffectPlace::Before(before) => insert_effect(effects, next_id, before, effect)?,
             EffectPlace::FirstIn(container) => {
@@ -470,13 +471,14 @@ impl Session {
     /// inserted, in the order the engine has to mirror them.
     ///
     /// A Chain is one row, [`Self::wrap_effects_in_container`]. A **Layer**
-    /// is made with one branch that already has its controls: a branch's
-    /// Level, Mute and Solo are a container's (`containers/09`), so the run
-    /// goes into a Chain first and the Chain into the Layer -- two rows, one
-    /// gesture. When the run already *is* one Chain, it becomes the branch as
-    /// it stands. When the nesting cap leaves room for one box and not two,
-    /// the Layer goes straight round the run, whose devices are then branches
-    /// with no switches of their own -- legal, and still a layer.
+    /// is made with one branch, and **a branch is a Chain** (MOO-456): the
+    /// run goes into a Chain and the Chain into the Layer -- two rows, one
+    /// gesture. When the run already *is* one Chain, it becomes the branch
+    /// as it stands. When the run is a branch of a layer, the new Layer goes
+    /// into a Chain of its own, a third row, so that it is a branch's content
+    /// and not a branch. When the nesting cap leaves room for some of those
+    /// boxes and not all, the wrap is refused: a Layer straight round a
+    /// device is not a shape any more.
     pub fn wrap_effects_in(
         &mut self,
         run: std::ops::Range<usize>,
@@ -495,55 +497,25 @@ impl Session {
                 .get(run.start)
                 .is_some_and(|effect| effect.kind() == EffectKind::Chain)
             && mooloop_core::run_of(effects, run.start) == run;
-        // Rehearsed on a copy, so a refusal half way leaves the chain as it
-        // was rather than holding a Chain nobody asked for.
+        // The boxes to add, innermost first: a Chain round the run unless it
+        // is one already, the Layer, and -- when the run is itself a branch of
+        // a layer -- a Chain round that, so the new Layer is the content of a
+        // branch and not a bare branch of its own.
+        let mut boxes = Vec::new();
+        if !already_a_chain {
+            boxes.push(EffectKind::Chain);
+        }
+        boxes.push(EffectKind::Layer);
+        if layer_parent(effects, run.start).is_some() {
+            boxes.push(EffectKind::Chain);
+        }
+        // Rehearsed on a copy, so a refusal half way -- the nesting cap leaving
+        // room for one box and not all of them -- leaves the chain as it was
+        // rather than holding a box nobody asked for.
         let mut trial = effects.clone();
         let mut trial_next = *next_id;
-        let two_rows = !already_a_chain
-            && mooloop_core::wrap_in_container(
-                &mut trial,
-                &mut trial_next,
-                run.clone(),
-                EffectSlotState::of_kind(EffectKind::Chain),
-            )
-            .and_then(|chain| {
-                let branch = mooloop_core::run_of(&trial, chain);
-                mooloop_core::wrap_in_container(
-                    &mut trial,
-                    &mut trial_next,
-                    branch,
-                    EffectSlotState::of_kind(EffectKind::Layer),
-                )
-            })
-            .is_some();
-        let mut inserted = Vec::new();
-        let mut layer_run = run;
-        if two_rows {
-            let tail = effects.len();
-            let chain = EffectSlotState::of_kind(EffectKind::Chain);
-            let slot = mooloop_core::wrap_in_container(effects, next_id, layer_run.clone(), chain)?;
-            inserted.push(EffectInserted {
-                target,
-                slot,
-                tail,
-                device: effects[slot].id,
-                kind: EffectKind::Chain,
-                params: effects[slot].params,
-            });
-            layer_run = mooloop_core::run_of(effects, slot);
-        }
-        let tail = effects.len();
-        let layer = EffectSlotState::of_kind(EffectKind::Layer);
-        let slot = mooloop_core::wrap_in_container(effects, next_id, layer_run, layer)?;
-        inserted.push(EffectInserted {
-            target,
-            slot,
-            tail,
-            device: effects[slot].id,
-            kind: EffectKind::Layer,
-            params: effects[slot].params,
-        });
-        Some(inserted)
+        wrap_in_boxes(&mut trial, &mut trial_next, target, run.clone(), &boxes)?;
+        wrap_in_boxes(effects, next_id, target, run, &boxes)
     }
 
     /// Takes the container in `slot` out of the chain, leaving its children
@@ -551,11 +523,24 @@ impl Session {
     ///
     /// The escape hatch that makes "removing a box removes its contents" safe
     /// to have. Reported as an ordinary removal of one row.
+    ///
+    /// `None` for a branch's Chain that holds a device: the device would be
+    /// left as a branch with no Chain. Remove the branch, or move the device
+    /// out first.
     pub fn unwrap_container_at(&mut self, slot: usize) -> Option<EffectRemoved> {
         let target = self.effect_target;
         let effects = self.effect_chain_mut()?;
         let before = effects.len();
         let device = effects.get(slot)?.id;
+        // A branch's Chain holds its devices; taking it out would leave each
+        // one bare in the layer, a branch with no Chain (MOO-456). Emptied,
+        // or holding only Chains, it has nothing to leave bare.
+        if layer_parent(effects, slot).is_some()
+            && mooloop_core::layer_branches(effects, slot)
+                .any(|child| effects[child].kind() != EffectKind::Chain)
+        {
+            return None;
+        }
         if !unwrap_container(effects, slot) {
             return None;
         }
@@ -603,10 +588,20 @@ impl Session {
         if mooloop_core::span_problem(&run.effects).is_some() {
             return None;
         }
-        if !self.effect_chain()?.get(slot)?.kind().is_container() {
+        let chain = self.effect_chain()?;
+        if !chain.get(slot)?.kind().is_container() {
             return None;
         }
-        let (rows, minted) = self.land_run_plugins(run)?;
+        // A Layer where a branch is would make the branch a Layer, with no
+        // Chain of its own (MOO-456): only a Chain preset replaces one.
+        if layer_parent(chain, slot).is_some() && run.effects[0].kind() != EffectKind::Chain {
+            return None;
+        }
+        let (mut rows, minted) = self.land_run_plugins(run)?;
+        // A preset written while a bare device could sit in a layer loads
+        // wrapped; the ids its Chains take here are throwaway, because the
+        // landing mints every row's own.
+        mooloop_core::effect::normalize_layer_branches(&mut rows, &mut 0);
         let replaced = self.effect_chain_parts_mut().and_then(|(effects, next_id)| {
             let before = effects.len();
             // One call, because the boxes around this one lose the run that
@@ -735,14 +730,18 @@ impl Session {
     pub fn paste_device(&mut self, run: &EffectRun, after: usize) -> Option<EffectRunInserted> {
         let target = self.effect_target;
         self.effect_chain()?;
-        let (rows, minted) = self.land_run_plugins(run)?;
+        let (mut rows, minted) = self.land_run_plugins(run)?;
+        // A run saved while a bare device could sit in a layer lands wrapped.
+        // The ids the wrapping Chains take here are throwaway: landing mints
+        // every row's own.
+        mooloop_core::effect::normalize_layer_branches(&mut rows, &mut 0);
         let landed = self.effect_chain_parts_mut().and_then(|(effects, next_id)| {
-            let at = if effects.is_empty() {
-                0
+            let slot = if effects.is_empty() {
+                mooloop_core::insert_run(effects, next_id, 0, &rows)?
             } else {
-                mooloop_core::run_of(effects, after.min(effects.len() - 1)).end
+                let after = after.min(effects.len() - 1);
+                land_run_after(effects, next_id, after, &rows)?
             };
-            let slot = mooloop_core::insert_run(effects, next_id, at, &rows)?;
             let devices: Vec<DeviceId> = effects[slot..slot + rows.len()]
                 .iter()
                 .map(|effect| effect.id)
@@ -841,10 +840,17 @@ impl Session {
             .get(to)
             .and_then(|effect| effect.params.container_children())
             == Some(0);
+        let moved_kind = effects.get(from)?.kind();
+        // A layer with no branch has nowhere to put a device: a device is
+        // never a branch of its own, and the layer's `+` makes the branch.
+        // A Chain is one, and goes in.
+        if into_empty_box && moved_kind != EffectKind::Chain && is_layer(effects, to) {
+            return None;
+        }
         let moved = if into_empty_box {
             move_effect_into_container(effects, from, to)
         } else {
-            move_effect(effects, from, to)
+            move_effect_keeping_branches_chains(effects, from, to)
         };
         if !moved {
             return None;
@@ -1355,6 +1361,201 @@ impl Session {
 /// Whether two references name the same plugin, whatever version each was
 /// saved with: a preset made under 1.0 is still that plugin's preset under
 /// 1.1, and the plugin reads its own older state.
+/// Wraps `run` in one box of each kind in `boxes`, innermost first, and
+/// reports the rows it inserted in the order the engine has to mirror them.
+/// `None` as soon as one is refused, having changed what it had already
+/// done; the caller rehearses on a copy.
+fn wrap_in_boxes(
+    effects: &mut Vec<EffectSlotState>,
+    next_id: &mut u32,
+    target: EffectTarget,
+    run: std::ops::Range<usize>,
+    boxes: &[EffectKind],
+) -> Option<Vec<EffectInserted>> {
+    let mut inserted = Vec::new();
+    let mut run = run;
+    for kind in boxes {
+        let tail = effects.len();
+        let slot = mooloop_core::wrap_in_container(
+            effects,
+            next_id,
+            run,
+            EffectSlotState::of_kind(*kind),
+        )?;
+        inserted.push(EffectInserted {
+            target,
+            slot,
+            tail,
+            device: effects[slot].id,
+            kind: *kind,
+            params: effects[slot].params,
+        });
+        run = mooloop_core::run_of(effects, slot);
+    }
+    Some(inserted)
+}
+
+/// [`move_effect`], except that a device which would land as a branch of a
+/// layer -- at the boundary between two branches -- lands first in the next
+/// branch's Chain instead (MOO-456). A Chain is a branch and lands as one.
+///
+/// Rehearsed on the chain as it was, so a refusal leaves it alone.
+fn move_effect_keeping_branches_chains(
+    effects: &mut Vec<EffectSlotState>,
+    from: usize,
+    to: usize,
+) -> bool {
+    let original = effects.clone();
+    if !move_effect(effects, from, to) {
+        return false;
+    }
+    let head = original[from].id;
+    let Some(landed) = mooloop_core::device_slot(effects, head) else {
+        return true;
+    };
+    if effects[landed].kind() == EffectKind::Chain || layer_parent(effects, landed).is_none() {
+        return true;
+    }
+    // Between two branches: the row after the moved run is the next
+    // branch's Chain, because a run inside a layer is followed by a sibling
+    // or by the layer's own end, and the end is outside it.
+    let next = mooloop_core::run_of(effects, landed).end;
+    let branch = effects
+        .get(next)
+        .filter(|row| row.kind() == EffectKind::Chain)
+        .filter(|_| layer_parent(effects, next) == layer_parent(effects, landed))
+        .map(|row| row.id);
+    *effects = original;
+    let Some(branch) = branch.and_then(|id| mooloop_core::device_slot(effects, id)) else {
+        return false;
+    };
+    move_effect_into_container(effects, from, branch)
+}
+
+/// Lands `rows` after the run at `after`: the paste's placement.
+///
+/// Beside the row pasted onto, outside a box it ends. **Except** in a layer's
+/// branch: a branch is a Chain, the rack does not draw the Chain as a box of
+/// its own, and a device pasted beside another in a branch belongs to that
+/// branch -- whichever device of it is last -- rather than leaving it for the
+/// layer, where it would be a branch with no Chain (MOO-456). Pasted onto the
+/// branch's Chain itself, it goes first inside. A run that *is* a Chain is a
+/// branch, and lands as one, by the ordinary rule.
+fn land_run_after(
+    effects: &mut Vec<EffectSlotState>,
+    next_id: &mut u32,
+    after: usize,
+    rows: &[EffectSlotState],
+) -> Option<usize> {
+    let default_at = mooloop_core::run_of(effects, after).end;
+    let rows_are_a_branch = rows.first().is_some_and(|row| row.kind() == EffectKind::Chain);
+    let Some(branch) = branch_holding(effects, after).filter(|_| !rows_are_a_branch) else {
+        return mooloop_core::insert_run(effects, next_id, default_at, rows);
+    };
+    if branch == after {
+        return land_first_in(effects, next_id, branch, rows);
+    }
+    if default_at < mooloop_core::run_of(effects, branch).end {
+        return mooloop_core::insert_run(effects, next_id, default_at, rows);
+    }
+    // `after` ends the branch at every depth, so the ordinary rule would put
+    // the run past the Chain: beside the branch's own last child instead.
+    let mut child = after;
+    while mooloop_core::parent_of(effects, child) != Some(branch) {
+        child = mooloop_core::parent_of(effects, child)?;
+    }
+    mooloop_core::insert_run_beside(effects, next_id, child, rows)
+}
+
+/// The Chain that is a branch of a layer and either is, or holds, the row in
+/// `slot`; `None` when the row is not in a layer's branch.
+fn branch_holding(effects: &[EffectSlotState], slot: usize) -> Option<usize> {
+    let mut row = slot;
+    loop {
+        if effects[row].kind() == EffectKind::Chain && layer_parent(effects, row).is_some() {
+            return Some(row);
+        }
+        row = mooloop_core::parent_of(effects, row)?;
+    }
+}
+
+/// Lands `rows` as the first thing inside the container at `container`.
+///
+/// `insert_run` cannot say "into this box" for the reason `insert_effect`
+/// cannot, so the run is put beside the box and then moved in, which
+/// `move_effect_into_container` does exactly. On a copy, so that a refusal by
+/// the second step leaves the chain as it was.
+fn land_first_in(
+    effects: &mut Vec<EffectSlotState>,
+    next_id: &mut u32,
+    container: usize,
+    rows: &[EffectSlotState],
+) -> Option<usize> {
+    let mut trial = effects.clone();
+    let mut trial_next = *next_id;
+    let beside = mooloop_core::insert_run_beside(&mut trial, &mut trial_next, container, rows)?;
+    let head = trial[beside].id;
+    if !move_effect_into_container(&mut trial, beside, container) {
+        return None;
+    }
+    let landed = mooloop_core::device_slot(&trial, head)?;
+    *effects = trial;
+    *next_id = trial_next;
+    Some(landed)
+}
+
+/// Whether the row in `slot` is a layer: a container whose children run in
+/// parallel.
+fn is_layer(effects: &[EffectSlotState], slot: usize) -> bool {
+    effects
+        .get(slot)
+        .is_some_and(|row| row.params.container_flow() == Some(mooloop_core::ContainerFlow::Parallel))
+}
+
+/// The layer that the row in `slot` is a direct child of, or `None` when it
+/// sits anywhere else. A direct child of a layer is a branch.
+fn layer_parent(effects: &[EffectSlotState], slot: usize) -> Option<usize> {
+    mooloop_core::parent_of(effects, slot).filter(|parent| is_layer(effects, *parent))
+}
+
+/// Where a device of `kind` bound for `place` has to go, given that **every
+/// branch of a layer is a Chain** (MOO-456).
+///
+/// A device is never a branch of its own, so a place that would make one --
+/// the layer itself, or the boundary between two branches -- becomes the
+/// inside of a branch's Chain: the layer's own row means its first branch,
+/// and "before this branch's Chain" means first in it. A Chain is a branch,
+/// and lands as one. `None` for a device put into a layer with no branch yet:
+/// the layer's `+` makes the first one.
+///
+/// Anything else is returned as it came, and [`place_effect`] refuses what
+/// cannot go there.
+///
+/// [`place_effect`]: Session::place_effect
+fn into_branch_chain(
+    effects: &[EffectSlotState],
+    place: EffectPlace,
+    kind: EffectKind,
+) -> Option<EffectPlace> {
+    if kind == EffectKind::Chain {
+        return Some(place);
+    }
+    match place {
+        EffectPlace::Before(at) => {
+            let between_branches = layer_parent(effects, at).is_some()
+                && effects.get(at).is_some_and(|row| row.kind() == EffectKind::Chain);
+            Some(if between_branches { EffectPlace::FirstIn(at) } else { place })
+        }
+        EffectPlace::FirstIn(container) if is_layer(effects, container) => {
+            mooloop_core::layer_branches(effects, container)
+                .next()
+                .filter(|branch| effects[*branch].kind() == EffectKind::Chain)
+                .map(EffectPlace::FirstIn)
+        }
+        EffectPlace::FirstIn(_) | EffectPlace::LastIn(_) => Some(place),
+    }
+}
+
 fn same_plugin_id(a: &mooloop_core::PluginRef, b: &mooloop_core::PluginRef) -> bool {
     a.format == b.format && a.id == b.id
 }
@@ -2799,7 +3000,11 @@ mod tests {
             ]
         );
         assert_every_branch_is_a_chain(&session);
-        assert_eq!(children(&session, 0), 5, "the layer grew by the one row");
+        assert_eq!(
+            session.channels[0].effects[0].params.container_children(),
+            Some(5),
+            "the layer grew by the one row"
+        );
         assert_eq!(children(&session, 3), 2, "and so did the branch");
         // The first branch, at the layer's first row.
         session.insert_effect_at(EffectKind::Gate, 1).expect("room");
@@ -2867,7 +3072,7 @@ mod tests {
                 EffectKind::Filter
             ]
         );
-        assert_eq!(children(&session, 0), 5);
+        assert_eq!(session.channels[0].effects[0].params.container_children(), Some(5));
     }
 
     #[test]
@@ -2877,7 +3082,17 @@ mod tests {
         // branch's Chain row.
         session.move_effect_to(4, 1).expect("moved");
         assert_every_branch_is_a_chain(&session);
-        assert_eq!(depths(&session)[1], 2, "into the first branch's chain");
+        assert_eq!(
+            kinds(&session),
+            [
+                EffectKind::Layer,
+                EffectKind::Chain,
+                EffectKind::Filter,
+                EffectKind::Drive,
+                EffectKind::Chain
+            ]
+        );
+        assert_eq!(depths(&session)[2], 2, "into the first branch's chain");
     }
 
     #[test]

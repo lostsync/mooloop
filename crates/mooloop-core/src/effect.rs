@@ -4190,6 +4190,52 @@ impl EffectSlotState {
     }
 }
 
+/// Wraps every device sitting directly in a layer in a Chain of its own, so
+/// that **every branch of every layer is a Chain** (MOO-456). Returns how
+/// many it wrapped.
+///
+/// A layer is chains in parallel, and a branch's S, M and Level live on its
+/// Chain. A song written while a bare device could sit straight in a layer
+/// (`docs/plans/archive/containers/07`'s one-device branch) has branches with
+/// no such controls; this gives each one a Chain, and the file format does
+/// not change -- a Chain in a layer is what a layer has always been allowed
+/// to hold, and the engine already plays it.
+///
+/// **Identities are kept.** Every existing device keeps its id, so a route,
+/// a lane or a selection naming one still resolves; only the new Chains are
+/// minted, from `next_id`, which only ever rises. The new Chain has the
+/// default Level, Mix, Mute and Solo, so it is transparent: the branch sounds
+/// as it did. A chain with no ids yet (a preset) mints them from whatever
+/// `next_id` holds, and whoever lands the run mints its real ones.
+///
+/// Best effort, and idempotent. A wrap the nesting cap or the chain's length
+/// refuses leaves that device bare -- still a legal branch, which the engine
+/// plays -- and the next call tries again. For a loaded song this is a
+/// load-time step, not an edit: it runs before the document is the history's
+/// first snapshot, so there is nothing to undo back to.
+pub fn normalize_layer_branches(effects: &mut Vec<EffectSlotState>, next_id: &mut u32) -> usize {
+    let mut wrapped = 0;
+    let mut slot = 0;
+    // One forward pass: a wrap inserts its Chain at `slot` and leaves the
+    // original one row on, now inside it, so the scan carries on into the
+    // wrapped device's own children.
+    while slot < effects.len() {
+        let bare = effects[slot].kind() != EffectKind::Chain
+            && crate::structure::parent_of(effects, slot)
+                .and_then(|parent| effects[parent].params.container_flow())
+                == Some(ContainerFlow::Parallel);
+        if bare {
+            let run = crate::structure::run_of(effects, slot);
+            let chain = EffectSlotState::of_kind(EffectKind::Chain);
+            if crate::structure::wrap_in_container(effects, next_id, run, chain).is_some() {
+                wrapped += 1;
+            }
+        }
+        slot += 1;
+    }
+    wrapped
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4928,5 +4974,165 @@ width = 1.0
             let back: EffectSlotState = toml::from_str(&text).unwrap();
             assert_eq!(slot, back, "{} did not round-trip:\n{text}", kind.label());
         }
+    }
+}
+
+/// MOO-456: a song written while a bare device could sit directly in a layer.
+#[cfg(test)]
+mod layer_branch_tests {
+    use super::*;
+    use crate::structure::{assign_device_ids, span_problem};
+
+    fn row(kind: EffectKind, children: u8) -> EffectSlotState {
+        let mut row = EffectSlotState::of_kind(kind);
+        if children > 0 {
+            row.params.set_container_children(children);
+        }
+        row
+    }
+
+    fn kinds(effects: &[EffectSlotState]) -> Vec<EffectKind> {
+        effects.iter().map(EffectSlotState::kind).collect()
+    }
+
+    /// The document an older version wrote: a Layer holding a Drive directly.
+    #[test]
+    fn a_bare_device_in_a_layer_is_wrapped_in_a_chain_branch() {
+        let mut effects = vec![row(EffectKind::Layer, 1), row(EffectKind::Drive, 0)];
+        let mut next = 0;
+        assign_device_ids(&mut effects, &mut next);
+        let drive = effects[1].id;
+
+        assert_eq!(normalize_layer_branches(&mut effects, &mut next), 1);
+
+        assert_eq!(
+            kinds(&effects),
+            [EffectKind::Layer, EffectKind::Chain, EffectKind::Drive]
+        );
+        assert_eq!(effects[0].params.container_children(), Some(2), "the layer claims both");
+        assert_eq!(effects[1].params.container_children(), Some(1), "the chain holds the drive");
+        assert_eq!(span_problem(&effects), None);
+        assert_eq!(effects[2].id, drive, "the drive keeps its identity");
+        assert_eq!(effects[0].id, DeviceId(0), "and so does the layer");
+        assert_eq!(effects[1].id, DeviceId(2), "the new chain is minted past every id");
+        assert_eq!(next, 3);
+    }
+
+    /// Devices beside the layer, and a mix of branches, are untouched except
+    /// for the bare ones.
+    #[test]
+    fn only_the_bare_branches_are_wrapped() {
+        // Delay, Layer[ Drive, Chain[Gate], Filter ], Reverb
+        let mut effects = vec![
+            row(EffectKind::Delay, 0),
+            row(EffectKind::Layer, 4),
+            row(EffectKind::Drive, 0),
+            row(EffectKind::Chain, 1),
+            row(EffectKind::Gate, 0),
+            row(EffectKind::Filter, 0),
+            row(EffectKind::Reverb, 0),
+        ];
+        let mut next = 0;
+        assign_device_ids(&mut effects, &mut next);
+        let before: Vec<DeviceId> = effects.iter().map(|effect| effect.id).collect();
+
+        assert_eq!(normalize_layer_branches(&mut effects, &mut next), 2);
+
+        assert_eq!(
+            kinds(&effects),
+            [
+                EffectKind::Delay,
+                EffectKind::Layer,
+                EffectKind::Chain,
+                EffectKind::Drive,
+                EffectKind::Chain,
+                EffectKind::Gate,
+                EffectKind::Chain,
+                EffectKind::Filter,
+                EffectKind::Reverb,
+            ]
+        );
+        assert_eq!(span_problem(&effects), None);
+        assert_eq!(effects[1].params.container_children(), Some(6));
+        for id in before {
+            assert!(effects.iter().any(|effect| effect.id == id), "{id:?} was kept");
+        }
+        // The one that was already a Chain is the one it was.
+        assert_eq!(effects[4].id, DeviceId(3));
+    }
+
+    /// A Layer directly in a Layer is bare too: it goes in a Chain, and its own
+    /// bare children are wrapped in turn.
+    #[test]
+    fn a_layer_in_a_layer_is_wrapped_and_so_are_its_own_bare_children() {
+        let mut effects = vec![
+            row(EffectKind::Layer, 2),
+            row(EffectKind::Layer, 1),
+            row(EffectKind::Drive, 0),
+        ];
+        let mut next = 0;
+        assign_device_ids(&mut effects, &mut next);
+
+        assert_eq!(normalize_layer_branches(&mut effects, &mut next), 2);
+
+        assert_eq!(
+            kinds(&effects),
+            [
+                EffectKind::Layer,
+                EffectKind::Chain,
+                EffectKind::Layer,
+                EffectKind::Chain,
+                EffectKind::Drive,
+            ]
+        );
+        assert_eq!(span_problem(&effects), None);
+        assert_eq!(effects[0].params.container_children(), Some(4));
+        assert_eq!(effects[1].params.container_children(), Some(3));
+        assert_eq!(effects[2].params.container_children(), Some(2));
+    }
+
+    /// A normal chain, and an empty one, change nothing, and asking twice
+    /// changes nothing more.
+    #[test]
+    fn a_normal_chain_is_left_alone_and_the_step_is_idempotent() {
+        let mut effects = vec![
+            row(EffectKind::Chain, 4),
+            row(EffectKind::Drive, 0),
+            row(EffectKind::Layer, 2),
+            row(EffectKind::Chain, 1),
+            row(EffectKind::Gate, 0),
+        ];
+        let mut next = 0;
+        assign_device_ids(&mut effects, &mut next);
+        let before = effects.clone();
+        assert_eq!(normalize_layer_branches(&mut effects, &mut next), 0);
+        assert_eq!(effects, before);
+        assert_eq!(next, 5, "and minted nothing");
+
+        let mut empty: Vec<EffectSlotState> = Vec::new();
+        assert_eq!(normalize_layer_branches(&mut empty, &mut next), 0);
+
+        let mut bare = vec![row(EffectKind::Layer, 1), row(EffectKind::Drive, 0)];
+        let mut next = 0;
+        assign_device_ids(&mut bare, &mut next);
+        normalize_layer_branches(&mut bare, &mut next);
+        let once = bare.clone();
+        assert_eq!(normalize_layer_branches(&mut bare, &mut next), 0);
+        assert_eq!(bare, once);
+    }
+
+    /// A wrap the chain has no room for is skipped, not forced: the device
+    /// stays a legal bare branch and nothing is corrupted.
+    #[test]
+    fn a_full_chain_keeps_its_bare_branch() {
+        let mut effects = vec![row(EffectKind::Layer, 1), row(EffectKind::Drive, 0)];
+        while effects.len() < crate::MAX_EFFECTS_PER_CHANNEL {
+            effects.push(row(EffectKind::Delay, 0));
+        }
+        let mut next = 0;
+        assign_device_ids(&mut effects, &mut next);
+        let before = effects.clone();
+        assert_eq!(normalize_layer_branches(&mut effects, &mut next), 0);
+        assert_eq!(effects, before);
     }
 }
