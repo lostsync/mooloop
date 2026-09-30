@@ -729,17 +729,30 @@ mod tests {
 
     /// A reader racing the writer never sees half of one record and half of
     /// another: every record read is one that was written whole.
+    ///
+    /// The writer keeps publishing until the reader has caught a record, so
+    /// the test cannot fail on scheduling alone (MOO-432: on a loaded box the
+    /// reader thread was sometimes not run before a fixed-length writer
+    /// finished). The deadline only bounds a reader that truly never reads.
     #[test]
     fn a_hot_spot_is_never_torn() {
+        use std::sync::atomic::AtomicBool;
+        use std::time::{Duration, Instant};
+
         let meters = LoadMeters::new();
+        let caught = Arc::new(AtomicBool::new(false));
         let writer = {
             let meters = meters.clone();
+            let caught = Arc::clone(&caught);
             std::thread::spawn(move || {
-                for tick in 0..200_000u64 {
+                let deadline = Instant::now() + Duration::from_secs(30);
+                let mut tick = 0u64;
+                while tick < 200_000 || (!caught.load(Ordering::Relaxed) && Instant::now() < deadline) {
                     let mut record = spot(tick);
                     record.frames = tick as u32;
                     record.work_nanos = tick * 3;
                     meters.publish_hot_spot(&record);
+                    tick += 1;
                 }
             })
         };
@@ -749,6 +762,7 @@ mod tests {
                 assert_eq!(u64::from(record.frames), record.tick, "{record:?}");
                 assert_eq!(record.work_nanos, record.tick * 3, "{record:?}");
                 read += 1;
+                caught.store(true, Ordering::Relaxed);
             }
         }
         writer.join().unwrap();
