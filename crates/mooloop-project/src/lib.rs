@@ -752,6 +752,7 @@ fn save_song_file(path: &Path, project: &Project, mode: AssetMode) -> Result<Sav
     let staging_file = parent.join(format!(".{stem}.tmp-{}-{nonce}", std::process::id()));
 
     let mut added = Vec::<PathBuf>::new();
+    let mut placed = false;
     let result = (|| {
         let mut document = project.clone();
         let mut report = SaveReport::default();
@@ -786,16 +787,18 @@ fn save_song_file(path: &Path, project: &Project, mode: AssetMode) -> Result<Sav
         for directory in added.iter().filter_map(|file| file.parent()) {
             sync_dir(directory)?;
         }
-        replace_song_file(path, &staging_file, nonce)?;
+        replace_song_file(path, &staging_file, nonce, &mut placed)?;
         Ok(report)
     })();
 
     if staging_file.exists() {
         let _ = fs::remove_file(&staging_file);
     }
-    if result.is_err() {
+    if result.is_err() && !placed {
         // Only what this save added: the song file on disk still names
-        // everything else in the sidecar.
+        // everything else in the sidecar. Once the new song file is in place
+        // it names these too, so a later failure (the directory sync) must
+        // leave them (MOO-356).
         for file in &added {
             let _ = fs::remove_file(file);
         }
@@ -1090,7 +1093,15 @@ fn remove_path(path: &Path) -> Result<(), std::io::Error> {
 /// song, which a file cannot be renamed over; that one is moved to
 /// `<name>.bak` first, and its samples have already been copied into the
 /// sidecar by then.
-fn replace_song_file(target: &Path, staging_file: &Path, nonce: u128) -> Result<(), Error> {
+///
+/// `placed` is set as soon as the new song file is at `target`, so the caller
+/// can tell a failure before the rename from one after it (MOO-356).
+fn replace_song_file(
+    target: &Path,
+    staging_file: &Path,
+    nonce: u128,
+    placed: &mut bool,
+) -> Result<(), Error> {
     let parent = target.parent().expect("validated song parent");
     let name = target
         .file_name()
@@ -1103,12 +1114,13 @@ fn replace_song_file(target: &Path, staging_file: &Path, nonce: u128) -> Result<
             remove_path(&kept)?;
         }
         fs::rename(target, &kept)?;
-        let placed = injected_fault(Step::Place)
+        let renamed = injected_fault(Step::Place)
             .and_then(|()| fs::rename(staging_file, target).map_err(Error::Io));
-        if let Err(error) = placed {
+        if let Err(error) = renamed {
             let _ = fs::rename(&kept, target);
             return Err(error);
         }
+        *placed = true;
         sync_dir(parent)?;
         return Ok(());
     }
@@ -1136,6 +1148,7 @@ fn replace_song_file(target: &Path, staging_file: &Path, nonce: u128) -> Result<
     }
     injected_fault(Step::Place)?;
     fs::rename(staging_file, target)?;
+    *placed = true;
     injected_fault(Step::SyncDirectory)?;
     sync_dir(parent)?;
     Ok(())
@@ -3062,6 +3075,37 @@ mod tests {
             }
             assert_eq!(leftovers(temp.path()), Vec::<String>::new(), "{step:?}");
         }
+    }
+
+    /// **A directory sync that fails after the rename does not delete the
+    /// samples the placed song names** (MOO-356). The new song file is
+    /// already in place by then, and it names the file this save copied in.
+    #[test]
+    fn a_failed_directory_sync_keeps_the_samples_the_placed_song_names() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("song.mooloop");
+        save_song(&bundle, &song_at(97), AssetMode::Embedded).unwrap();
+        let kick = temp.path().join("kick.wav");
+        fs::write(&kick, b"wav bytes").unwrap();
+        let mut project = song_at(141);
+        project.channels[0].setup.sampler_state_mut().unwrap().sample =
+            SampleReference::File {
+                path: kick,
+                embedded: true,
+            };
+
+        FAIL_AT.with(|fail| fail.set(Some(Step::SyncDirectory)));
+        assert!(save_song(&bundle, &project, AssetMode::Embedded).is_err());
+
+        let LoadedDocument::Song(placed) = load_bundle(&bundle).unwrap().document else {
+            panic!("a song loads as a song");
+        };
+        assert_eq!(placed.bpm, 141);
+        assert_eq!(
+            fs::read(sample_of(&placed)).unwrap(),
+            b"wav bytes",
+            "the placed song names a sample the failed save deleted"
+        );
     }
 
     /// **The previous version is kept as `<name>.bak`, and a save leaves no
