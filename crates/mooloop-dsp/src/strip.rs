@@ -1483,6 +1483,36 @@ mod tests {
         assert!(strip.is_at_rest(), "a section that is out cannot hold rest");
     }
 
+    /// A strip with an engaged Iron preamp comes to rest once its input goes
+    /// silent (MOO-430, the strip-level half of MOO-378). The harmonic
+    /// shaper used to turn a zero sample into a constant of about -28 dBFS,
+    /// which held the preamp's shelves and DC blocker off zero for as long as
+    /// the silence ran, so `is_at_rest` stayed false and a bus carrying the
+    /// strip could never sleep.
+    #[test]
+    fn an_iron_preamp_comes_to_rest_on_silence() {
+        let frames = 256;
+        let params = tweak(|params| {
+            params.pre_in = true;
+            params.voicing = PreampVoicing::Iron;
+        });
+        let mut strip = Strip::new(params, SAMPLE_RATE);
+        assert!(strip.is_at_rest(), "an untouched strip is at rest");
+        let mut loud = sine(frames, 200.0, 0.5);
+        strip.process_block(&mut loud, frames);
+        assert!(!strip.is_at_rest(), "the preamp is still holding");
+
+        // Ten seconds: far past the shelves and the DC blocker settling.
+        for _ in 0..2_000 {
+            let mut silence = StereoBus::with_capacity(frames);
+            strip.process_block(&mut silence, frames);
+        }
+        assert!(
+            strip.is_at_rest(),
+            "an Iron preamp fed only silence never came to rest"
+        );
+    }
+
     /// `static_curve_db` converts makeup with the control policy and
     /// everything downstream of it with the detector policy, and its comment
     /// says the difference cannot matter because no reachable makeup is at
