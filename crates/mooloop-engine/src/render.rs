@@ -4740,6 +4740,36 @@ impl ChannelStrip {
         self.effects.on_discontinuity(kind);
     }
 
+    /// Feed this strip's chain a block of silence, for a channel that is
+    /// muted and has faded out while something in the chain is still ringing
+    /// (MOO-418). Nothing that comes out is used: the strip is not summed
+    /// anywhere. What matters is that a delay line or a reverb tank keeps
+    /// draining, so the tail is gone by the time the mute lifts and not
+    /// waiting to be played out late. Returns the faults the chain found, for
+    /// the caller to publish.
+    #[allow(clippy::too_many_arguments)]
+    fn ring_out_on_silence(
+        &mut self,
+        context: &ProcessContext,
+        scope: EffectTarget,
+        device_display: Option<(&DeviceMeters, &DeviceTelemetry, usize)>,
+        modulation: Option<&ModulationBlock<'_>>,
+        automation: Option<&AutomationBlock<'_>>,
+        skip_idle: bool,
+    ) -> u32 {
+        self.bus.clear(context.frames);
+        self.effects.process(
+            context,
+            &mut self.bus,
+            scope,
+            device_display,
+            modulation,
+            automation,
+            skip_idle,
+        );
+        std::mem::take(&mut self.effects.faults_unpublished)
+    }
+
     fn sleep(&mut self, context: &ProcessContext) {
         self.source_node_mut().skip_block(context);
         self.effects.sleep(context);
@@ -9452,6 +9482,16 @@ impl RenderState {
                 .iter()
                 .any(|event| matches!(event.event, Event::NoteOff { .. } | Event::Choke))
                 && !self.strips[index].source_node().is_at_rest();
+            // Built ahead of the skip below, which a chain still ringing out
+            // needs it for.
+            let performance = self.expression[index].performance;
+            let modulation = ModulationBlock {
+                rack: &self.modulation[index],
+                outputs: &self.control_outputs[index],
+                outlets: &outlets,
+                performance: &performance,
+                ticks,
+            };
             if faded && !self.audio.produces(index) && !owes_a_release {
                 // A muted channel renders nothing, so its compensation ring
                 // would still be holding the audio from before the mute and
@@ -9466,6 +9506,24 @@ impl RenderState {
                 // the channel is allowed to decide it is idle.
                 self.strips[index].source_silent_frames = 0;
                 self.strips[index].ring_silent_frames = 0;
+                // The generator is not called, but its chain still is while
+                // anything in it rings, exactly as a muted bus does: a delay
+                // or reverb tail decays under the mute instead of freezing
+                // and replaying on unmute (MOO-418). Once the chain is at
+                // rest this costs one check.
+                if !self.strips[index].effects.is_at_rest() {
+                    let faults = self.strips[index].ring_out_on_silence(
+                        &context,
+                        producer,
+                        Some((&self.device_meters, &self.device_telemetry, index)),
+                        Some(&modulation),
+                        automation.as_ref(),
+                        skip_idle,
+                    );
+                    if faults > 0 {
+                        self.meters.publish_effect_faults(faults);
+                    }
+                }
                 continue;
             }
             // A hosted instrument's knob edits, at the top of the block
@@ -9478,14 +9536,6 @@ impl RenderState {
                 self.refused_events += strip.source_pending.copy_to(&mut self.events[index]);
                 strip.source_pending.clear();
             }
-            let performance = self.expression[index].performance;
-            let modulation = ModulationBlock {
-                rack: &self.modulation[index],
-                outputs: &self.control_outputs[index],
-                outlets: &outlets,
-                performance: &performance,
-                ticks,
-            };
             // The generator's driven parameters go into their own curve
             // pool now (`source_curves[index]`); its internal route amounts
             // (`SourceRouteAmount`, just below) still go into the channel's
@@ -9802,6 +9852,22 @@ impl RenderState {
                 self.sends.reset(EffectTarget::Channel(index as u8));
                 self.strips[index].source_silent_frames = 0;
                 self.strips[index].ring_silent_frames = 0;
+                // Its chain rings out on silence, for the reason the skip
+                // above gives (MOO-418). What the generator made went to the
+                // tap and is not the chain's input any more.
+                if !self.strips[index].effects.is_at_rest() {
+                    let faults = self.strips[index].ring_out_on_silence(
+                        &context,
+                        producer,
+                        Some((&self.device_meters, &self.device_telemetry, index)),
+                        Some(&modulation),
+                        automation.as_ref(),
+                        skip_idle,
+                    );
+                    if faults > 0 {
+                        self.meters.publish_effect_faults(faults);
+                    }
+                }
                 continue;
             }
             let strip = &mut self.strips[index];

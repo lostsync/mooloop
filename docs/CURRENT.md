@@ -1779,7 +1779,11 @@ land on its own when it starts to matter:
   previous block, which is a deliberate feature rather than a fallback and
   needs a latency story this engine does not have.
 - A muted bus still processes, so effect tails on it decay rather than freeze,
-  but contributes no audio and meters as silent.
+  but contributes no audio and meters as silent. A muted channel does the same
+  once it has faded (MOO-418): its generator is left uncalled, but its effect
+  chain is fed silence until it reports at rest, so a delay or reverb tail
+  decays under the mute instead of replaying on unmute. A muted channel whose
+  chain is at rest costs nothing.
 - Per-bus peaks reach the GUI through a shared array of atomics rather than the
   event ring, which the ring's drain rate could not keep up with. The published
   value is a peak hold that only the GUI's read clears, so a transient landing
