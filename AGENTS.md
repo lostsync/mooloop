@@ -427,6 +427,19 @@ reports the four sites that carried those seven kinds. It is the macro
 lesson again from another side: a check's list of places to look is a claim
 about where edits come from, and this program has two front doors.
 
+`accreted-fn`, added 2026-09-30 with `docs/workflows/accretion/`, looks for a
+**history** rather than a copy: a function that grew one patch at a time and
+was never pruned. Its lesson is that the textbook shape was the wrong target.
+Written first to find one local overwritten again and again, it found nothing
+real, because no function here does that more than three times. What
+accretion looks like in *this* code was found by reading `carry_strips_from`:
+a field list that grew one fix at a time, a predicate restated weaker twenty
+lines later, and a paragraph and an issue id per fix. None of that has a
+textual signature, so the check ranks from git history (fix commits that keep
+returning, lines added against lines removed) and leaves the judging to the
+workflow. **Calibrate a check against a real case from the tree, not only the
+example that commissioned it.**
+
 There is a third limit, and it is the one to keep in mind when a check comes
 back clean. **`repeated-line` matches bytes, so a rename hides a copy from it
 completely.** On 2026-09-12 it reported the effect event-splitting loop in ten

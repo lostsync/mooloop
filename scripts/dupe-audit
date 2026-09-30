@@ -1367,6 +1367,430 @@ def icon_literal():
     return hits
 
 
+# --- accreted-fn --------------------------------------------------------
+# What a comment sounds like when it records a patch rather than a design.
+# Narrow on purpose: this codebase writes "used to", "unless" and
+# "compensates" as ordinary explanation, and the first draft of this list
+# took those as evidence and ranked the best-documented functions first.
+_HISTORY = re.compile(
+    r"(added later|was added later|workaround|work around|regression|"
+    r"do not remove|don'?t remove|no longer (be )?possible|should never happen|"
+    r"can'?t happen|apparently|\bhack\b|kludge|\bfor now\b|temporar|"
+    r"caused a (test )?failure|except when it)",
+    re.I,
+)
+_FN = re.compile(r"\bfn\s+([A-Za-z_]\w*)\s*(?:<[^{;]*?>)?\s*\(")
+_LOCAL = re.compile(r"\blet\s+mut\s+([a-z_]\w*)\b")
+# `let st = state.clone();`, `let mut st = st.borrow_mut();` and `let weak =
+# window.as_weak();` are how a closure is fed and entered in Rust, and
+# `AppUi::new` does it four hundred times; a re-binding that only clones,
+# downgrades or borrows is plumbing, not a later decision.
+_PLUMBING = re.compile(
+    r"=\s*(?:[\w:]+::clone\(|&?(?:mut\s+)?\*?\w+(?:\.\w+)*\."
+    r"(?:clone|as_weak|downgrade|upgrade|borrow|borrow_mut|lock|read|write)\(\))"
+)
+
+
+def _toplevel_ifs(body: str) -> int:
+    """`if` statements standing directly in the function body, one after
+    another -- not `else if`, not nested. A function that decides its result
+    in twenty separate top-level `if`s is deciding it twenty times."""
+    depth, count = 0, 0
+    for found in re.finditer(r"[{}]|\bif\b", body):
+        token = found.group(0)
+        if token == "{":
+            depth += 1
+        elif token == "}":
+            depth -= 1
+        elif depth == 1:
+            before = body[: found.start()].rstrip()
+            if before[-1:] in ";{}" and not before.endswith("else"):
+                count += 1
+    return count
+
+
+def _accretion_signals(code: str, text: str, start: int, stop: int) -> dict:
+    """The accretion signals inside one function body `code[start:stop]`.
+
+    `code` is the file with comments and literals blanked (`_code_only`),
+    `text` the file as written; the same offsets address both.
+    """
+    body = code[start : stop + 1]
+    locals_ = set(_LOCAL.findall(body))
+
+    # A plain `x = ...` to a `let mut` local: not `==`, `<=`, `+=`, a field
+    # (`.x =`) or the `let` itself. Compound assignment is accumulation,
+    # which is what loops are for; a *plain* overwrite of the same name,
+    # again and again, is a later block deciding over an earlier one.
+    overwrites = collections.Counter()
+    for name in locals_:
+        pattern = re.compile(r"(?<![\w.])" + re.escape(name) + r"\s*=(?![=>])")
+        for found in pattern.finditer(body):
+            before = body[max(0, found.start() - 12) : found.start()]
+            if re.search(r"\blet\s+(mut\s+)?$", before):
+                continue
+            overwrites[name] += 1
+
+    # The Rust spelling of the same thing: `let x = ...; let x = f(x);` again
+    # and again, minus the closure plumbing above.
+    # Only at the function's own top level: a `let channel` inside each of
+    # fifty closures is fifty scopes, not one name decided fifty times.
+    rebinds = collections.Counter()
+    for found in re.finditer(r"\blet\s+(?:mut\s+)?([a-z]\w*)\s*(?::[^=;]+)?=([^;]*)", body):
+        prefix = body[: found.start()]
+        if prefix.count("{") - prefix.count("}") != 1:
+            continue
+        if not _PLUMBING.match("=" + found.group(2)):
+            rebinds[found.group(1)] += 1
+
+    # The same overwritten local bounded, or cleaned of NaN, more than once:
+    # each guard was added by someone who did not trust the one above it.
+    # Only locals count -- an `apply_param` that clamps its argument once in
+    # each of eight match arms is eight decisions, not one decision retried.
+    guards = collections.Counter()
+    for match in re.finditer(r"if\s+([a-z_]\w*)\s*[<>]=?\s*[^{]+\{\s*\1\s*=", body):
+        guards[match.group(1)] += 1
+    for match in re.finditer(r"\b([a-z_]\w*)\.(clamp|is_nan|is_infinite|is_finite)\s*\(", body):
+        guards[match.group(1)] += 1
+    guards = collections.Counter({k: v for k, v in guards.items() if overwrites[k] >= 2})
+
+    comments = [
+        found.group(0).lstrip("/ ").strip()
+        for found in re.finditer(r"//[^\n]*", text[start:stop])
+        if _HISTORY.search(found.group(0))
+    ]
+
+    top = lambda counter: (counter.most_common(1) or [(None, 0)])[0]  # noqa: E731
+    return {
+        "overwrite": top(overwrites),
+        "rebind": top(rebinds),
+        "guard": top(guards),
+        "ifs": _toplevel_ifs(body),
+        "history": comments,
+    }
+
+
+def _strata(text: str, fn_at: int, close_at: int) -> int:
+    """Distinct `MOO-n` ids in a function's doc comment and body comments.
+
+    mooloop documents its reasons, and an issue id beside a reason is good
+    practice. Four or more in one function is a different thing: each fix
+    appended a paragraph ("Also one whose note-off the install moved out of
+    reach ... (MOO-383)") and nobody folded the paragraphs back into one
+    statement of what the function is for.
+    """
+    head = text.rfind("\n", 0, fn_at)
+    doc = []
+    for line in reversed(text[:head].split("\n")):
+        stripped = line.strip()
+        if stripped.startswith(("///", "#[")):
+            doc.append(stripped)
+        else:
+            break
+    comments = "\n".join(doc) + "\n".join(re.findall(r"//[^\n]*", text[fn_at:close_at]))
+    return len(set(re.findall(r"MOO-\d+", comments)))
+
+
+def _blame(path: pathlib.Path, first: int, last: int):
+    """(distinct commits, of which `fix` commits) behind the function's lines.
+
+    A body stitched from many commits, several of them fixes, is the git-side
+    signature of accretion -- Tornhill's hotspot, at function grain. In a
+    shallow clone every line older than the boundary is attributed to the
+    boundary commit, so this undercounts there; on a full clone it is exact.
+    """
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["git", "blame", "--line-porcelain", "-L", f"{first},{last}", "--", rel(path)],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0:
+        return None
+    summaries = dict(re.findall(r"^([0-9a-f]{40}) \d+ \d+.*?\nsummary (.*)$", out.stdout, re.M | re.S))
+    shas = set(re.findall(r"^([0-9a-f]{40}) \d+ \d+", out.stdout, re.M))
+    fixes = sum(1 for sha in shas if re.match(r"fix\b|fix\(", summaries.get(sha, "")))
+    return len(shas), fixes
+
+
+_CHURN: dict | None = None
+
+
+def _churn() -> dict:
+    """{(file, fn name): (commits, fix commits, lines added, lines removed)}.
+
+    Git names the function around each hunk in the hunk header when told the
+    file is Rust (`diff=rust`; the repository sets no attribute, so one is
+    supplied here). A hunk that *adds* an item is skipped: its header names
+    the function before the insertion, which is somebody else's history.
+    Keyed by the path at the time, so a moved file starts over, and by name
+    alone, so two `new`s in one file share a count -- both undercount or
+    blur, neither invents churn. A shallow clone sees only its own window;
+    `git fetch --deepen` first for a real answer.
+    """
+    global _CHURN
+    if _CHURN is not None:
+        return _CHURN
+    import subprocess
+    import tempfile
+
+    with tempfile.NamedTemporaryFile("w", suffix=".attrs", delete=False) as attrs:
+        attrs.write("*.rs diff=rust\n")
+    try:
+        out = subprocess.run(
+            [
+                "git", "-c", f"core.attributesFile={attrs.name}", "log", "--no-merges",
+                "-p", "-U0", "--format=@@@ %H %s", "--",
+                "crates/*/src/*.rs", "crates/*/src/**/*.rs",
+            ],
+            cwd=ROOT, capture_output=True, text=True, timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        _CHURN = {}
+        return _CHURN
+    finally:
+        pathlib.Path(attrs.name).unlink(missing_ok=True)
+
+    touched: dict = collections.defaultdict(set)
+    fixes: dict = collections.defaultdict(set)
+    grown: collections.Counter = collections.Counter()
+    shrunk: collections.Counter = collections.Counter()
+    sha, is_fix, path, header = "", False, None, None
+    lines = out.stdout.split("\n")
+    for at, line in enumerate(lines):
+        if line.startswith("@@@ "):
+            _, sha, subject = (line.split(" ", 2) + [""])[:3]
+            is_fix = re.match(r"fix\b|fix\(", subject) is not None
+        elif line.startswith("+++ "):
+            path = None if line.endswith("/dev/null") else line[6:]
+        elif line.startswith("@@ ") and path:
+            header = re.match(r"@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@ ?(.*)", line)
+            if not header:
+                continue
+            removed = header.group(1)
+            added = header.group(2)
+            name = _FN.search(header.group(3) or "")
+            if not name:
+                continue
+            following = lines[at + 1] if at + 1 < len(lines) else ""
+            if removed == "0" and re.match(
+                r"\+\s*(pub(\([^)]*\))?\s+)?(fn|impl|mod|struct|enum|#\[|///|//!)\b", following
+            ):
+                continue
+            key = (path, name.group(1))
+            touched[key].add(sha)
+            grown[key] += int(added if added is not None else 1)
+            shrunk[key] += int(removed if removed is not None else 1)
+            if is_fix:
+                fixes[key].add(sha)
+    _CHURN = {
+        key: (len(shas), len(fixes[key]), grown[key], shrunk[key])
+        for key, shas in touched.items()
+    }
+    return _CHURN
+
+
+
+# Thresholds, set on 2026-09-30 from the tree and the fixture together: the
+# fixture has 19 top-level `if`s and overwrites `gain` 29 times; the most any
+# function in the workspace managed was 9 and 3. A lead needs two kinds of
+# evidence, or one far outside what ordinary code here does.
+_STRONG = {"overwrite": 6, "ifs": 10}
+_WEAK = {"overwrite": 3, "rebind": 4, "guard": 3, "ifs": 6, "history": 2}
+_GOD_FUNCTION = 600
+# The history half: a function of ordinary size that fix commits keep
+# returning to. Six fixes is past what the tree's ordinary busy functions
+# collect over its first seven weeks; tune it when the history is longer.
+_HOT_FIXES = 3
+_HOT_SIZE = 400
+_HOT_BODY = 8
+# Grow-only: over its life the function gained at least this many lines for
+# every one it lost. Code that is kept is also pruned; code that only grows
+# is being patched.
+_HOT_GROWTH = 5
+# Issue ids stacked in one function's comments: each fix explained itself
+# in a new paragraph and none was folded back into the contract.
+_STRATA = 4
+
+
+def _accreted_in(paths, blame: bool = True):
+    hits = []
+    for path in paths:
+        if path.name.endswith("_tests.rs"):
+            continue
+        text = path.read_text()
+        code = _code_only(text)
+        blocks = _blocks(code)
+        by_open = {block[0]: index for index, block in enumerate(blocks)}
+        # A hunk header names a function, not its `impl`, so the history of
+        # a name defined twice in one file is two functions' history merged:
+        # every `new` in `render.rs` came back "edited by 91 commits". Such
+        # a name gets no churn at all -- dropped, not merged, as
+        # `unrecorded-edit` learned about resolving names.
+        defined = collections.Counter(found.group(1) for found in _FN.finditer(code))
+        for match in _FN.finditer(code):
+            open_at = code.find("{", match.end())
+            semi = code.find(";", match.end())
+            if open_at < 0 or (0 <= semi < open_at):
+                continue  # a declaration, not a definition
+            index = by_open.get(open_at)
+            if index is None or blocks[index][1] < 0:
+                continue
+            # Test bodies overwrite a scratch variable on purpose, step by
+            # step; they are not what this looks for.
+            parent, in_test = blocks[index][3], False
+            while parent >= 0:
+                if re.search(r"cfg\(test\)|\bmod\s+\w*tests?\b", blocks[parent][2]):
+                    in_test = True
+                    break
+                parent = blocks[parent][3]
+            if in_test:
+                continue
+
+            close_at = blocks[index][1]
+            s = _accretion_signals(code, text, open_at, close_at)
+            values = {
+                "overwrite": s["overwrite"][1],
+                "rebind": s["rebind"][1],
+                "guard": s["guard"][1],
+                "ifs": s["ifs"],
+                "history": len(s["history"]),
+            }
+            kinds = [k for k, floor in _WEAK.items() if values[k] >= floor]
+            strong = [k for k, floor in _STRONG.items() if values[k] >= floor]
+            first = text.count("\n", 0, match.start()) + 1
+            last = text.count("\n", 0, close_at) + 1
+            size = last - first + 1
+            edits, fixed, added, removed = (0, 0, 0, 0)
+            if blame and defined[match.group(1)] == 1:
+                edits, fixed, added, removed = _churn().get(
+                    (rel(path), match.group(1)), (0, 0, 0, 0)
+                )
+            growth = added / (removed + 1)
+            strata = _strata(text, match.start(), close_at)
+            # Fixes alone can be an old namesake's: the current body has to
+            # be stitched from many commits too, or it has been rewritten
+            # whole since and the history is somebody else's.
+            found = None
+            hot = False
+            if fixed >= _HOT_FIXES and growth >= _HOT_GROWTH and size <= _HOT_SIZE:
+                found = _blame(path, first, last)
+                hot = bool(found) and found[0] >= _HOT_BODY
+            if hot:
+                kinds.append("history")
+            if strata >= _STRATA and fixed >= 2:
+                kinds.append("strata")
+            if len(kinds) < 2 and not strong and not hot:
+                continue
+
+            detail = []
+            if values["overwrite"]:
+                detail.append(f"`{s['overwrite'][0]}` overwritten {values['overwrite']}x")
+            if values["rebind"] >= _WEAK["rebind"]:
+                detail.append(f"`{s['rebind'][0]}` re-bound {values['rebind']}x")
+            if values["guard"]:
+                detail.append(f"`{s['guard'][0]}` guarded {values['guard']}x")
+            if values["ifs"] >= _WEAK["ifs"]:
+                detail.append(f"{values['ifs']} top-level ifs")
+            if values["history"]:
+                quoted = "; ".join(f'"{c[:44]}"' for c in s["history"][:2])
+                detail.append(f"{values['history']} patch comment(s): {quoted}")
+            if edits:
+                detail.append(
+                    f"edited by {edits} commit(s), {fixed} of them fixes, "
+                    f"+{added}/-{removed} lines over its life"
+                )
+            if strata:
+                detail.append(f"{strata} issue ids in its comments")
+            if found is None and blame:
+                found = _blame(path, first, last)
+            if found:
+                detail.append(f"body from {found[0]} commit(s)")
+            detail.append(f"{size} lines" + (" -- size first, accretion second" if size > _GOD_FUNCTION else ""))
+            rank = (len(strong) + len(kinds), fixed + strata, sum(values.values()))
+            hits.append((rank, f"{rel(path)}:{first} fn {match.group(1)}", ", ".join(detail)))
+    hits.sort(key=lambda hit: hit[0], reverse=True)
+    return [(place, detail) for _, place, detail in hits]
+
+
+# Set by `--under PATH` on the command line: restricts `accreted-fn` to one
+# team's files without restricting the checks that need the whole tree.
+ONLY_UNDER: list[str] = []
+
+
+def accreted_fn():
+    """Functions that grew by patches and were never pruned.
+
+    Not a duplicate: a *history*. A function edited once per problem gains a
+    block, a field, a condition or a paragraph per edit, and nothing is ever
+    taken back out. Every line reads as reasonable and no single input
+    obviously fails, so a line-by-line review passes it -- which is why
+    nothing else here, and nothing in a finding-per-failure review, reports
+    it. The fault is what the function no longer says in one place.
+
+    **What it looks like here** (read on 2026-09-30, `carry_strips_from`):
+    not the textbook shape of one variable overwritten twenty times -- no
+    function in the workspace overwrites a local more than three times --
+    but these:
+
+    - a list of "and also carry this field" lines, one per fix, written out
+      again for tracks, while the rule for which fields must stay fresh
+      lives in two prose paragraphs instead of one method;
+    - a predicate restated weaker somewhere else ("same instrument" is kind
+      plus plugin slot in one loop and kind alone in the next);
+    - comment strata: "Also one whose note-off ... (MOO-383)" appended to a
+      paragraph that already had its own issue id;
+    - a doc comment left above the wrong function when another was inserted
+      between them (MOO-410, and `retune_effect` in `session.rs`).
+
+    None of that has a textual signature a search can trust, so this check
+    does not look for it. It ranks where to look, from the function's
+    history and its comments, and `docs/workflows/accretion/` is the reading:
+
+    - **history:** fix commits keep returning to it, it gained five lines for
+      every one it lost, and its current body is stitched from eight or
+      more commits (`git log` hunk headers with `diff=rust`, then `git
+      blame`; a shallow clone sees only its own window -- `git fetch
+      --deepen=3000 origin main` first);
+    - **strata:** four or more issue ids in its comments, with fixes;
+    - **shape:** a local overwritten again and again, a name re-bound again
+      and again, the same local clamped twice, a run of top-level `if`s, or
+      comments that say "workaround", "regression", "DO NOT REMOVE".
+
+    A lead needs two kinds of evidence, or history alone, or one shape far
+    outside the rest of the tree.
+
+    Calibrated against both halves on 2026-09-30: the synthetic example that
+    commissioned it (`scripts/fixtures/accreted_fn.rs`, which `--self-test`
+    must go on reporting) and `carry_strips_from`, the first real case read
+    by hand, which it ranks second behind `AppUi::new`. A check never shown
+    to find its target is decoration.
+    """
+    paths = [
+        path
+        for path in rust_sources()
+        if not ONLY_UNDER or any(rel(path).startswith(p.rstrip("/")) for p in ONLY_UNDER)
+    ]
+    return _accreted_in(paths)
+
+
+def _accreted_fn_self_test() -> str | None:
+    fixture = ROOT / "scripts" / "fixtures" / "accreted_fn.rs"
+    hits = _accreted_in([fixture], blame=False)
+    if not any("fn resolve_output_gain" in place for place, _ in hits):
+        return f"{rel(fixture)}: resolve_output_gain was not reported"
+    return None
+
+
+accreted_fn.self_test = _accreted_fn_self_test
+
+
 CHECKS = {
     "shared-constant": shared_constant,
     "repeated-line": repeated_line,
@@ -1379,6 +1803,7 @@ CHECKS = {
     "navigation-sends": navigation_sends,
     "unrecorded-edit": unrecorded_edit,
     "icon-literal": icon_literal,
+    "accreted-fn": accreted_fn,
 }
 
 
@@ -1389,12 +1814,33 @@ def main(argv):
             print(f"{name:<18}{summary}")
         return 0
 
-    wanted = [a for a in argv if not a.startswith("-")] or list(CHECKS)
+    args = list(argv)
+    while "--under" in args:
+        at = args.index("--under")
+        if at + 1 >= len(args):
+            print("--under needs a path", file=sys.stderr)
+            return 2
+        ONLY_UNDER.append(args.pop(at + 1))
+        args.pop(at)
+
+    wanted = [a for a in args if not a.startswith("-")] or list(CHECKS)
     unknown = [name for name in wanted if name not in CHECKS]
     if unknown:
         print(f"unknown check: {', '.join(unknown)}", file=sys.stderr)
         print(f"try one of: {', '.join(CHECKS)}", file=sys.stderr)
         return 2
+
+    if "--self-test" in args:
+        # A check that carries its own known target proves it still finds it.
+        failed = 0
+        for name in wanted:
+            test = getattr(CHECKS[name], "self_test", None)
+            if test is None:
+                continue
+            problem = test()
+            print(f"{name}: {'FAILED -- ' + problem if problem else 'ok'}")
+            failed += bool(problem)
+        return 1 if failed else 0
 
     total = 0
     for name in wanted:
