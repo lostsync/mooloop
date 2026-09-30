@@ -1,14 +1,14 @@
 //! The plugin scanner, out of process, with its cache
-//! (`docs/plans/plugin-hosting/05-the-scanner.md`, MOO-80).
+//! (`docs/plans/plugin-hosting/05-the-scanner.md`).
 //!
 //! **A plugin that crashes or hangs while it is being scanned must not crash
-//! or hang mooloop** (Adam's answer 4, 2026-09-16, not negotiable). So mooloop
-//! never loads a plugin library to find out what is in it. Each candidate file
-//! is handed to a child process -- mooloop's own binary, run as
-//! `mooloop --scan-plugin <path>` -- which loads it, lists what its factory
-//! holds, prints one JSON report between two marker lines, and exits. A child
-//! that crashes, exits non-zero, prints nothing usable or runs past the
-//! timeout is recorded as a failure of that one file, and the scan moves on.
+//! or hang mooloop.** So mooloop never loads a plugin library to find out
+//! what is in it. Each candidate file is handed to a child process --
+//! mooloop's own binary, run as `mooloop --scan-plugin <path>` -- which loads
+//! it, lists what its factory holds, prints one JSON report between two
+//! marker lines, and exits. A child that crashes, exits non-zero, prints
+//! nothing usable or runs past the timeout is recorded as a failure of that
+//! one file ([`FailureKind`]), and the scan moves on.
 //!
 //! The result is kept in [`PluginCache`], a TOML file under the config
 //! directory (`<config>/plugins.toml`, `mooloop_ui::plugin_cache_path`).
@@ -17,9 +17,12 @@
 //! **including one that failed**, so a plugin that crashes on load costs one
 //! child per change of the file rather than one per startup.
 //!
-//! Who owns what: this module is Platform & Release's (`docs/TEAMS.md`,
-//! "Plugin scanning, plugin paths"), inside the Engine's plugin-host crate.
-//! Nothing here runs on the audio thread.
+//! The same module holds the rules for where a scanned plugin may go
+//! ([`main_port_effect_refusal`], [`main_port_source_refusal`]), which the
+//! CLAP adapter applies again to a live instance.
+//!
+//! Nothing here runs on the audio thread. [`scan`] and [`run_child`] block
+//! for as long as their children run.
 
 use std::ffi::{CStr, OsString};
 use std::fs;
@@ -51,26 +54,31 @@ pub const DEADLINE_FLAG: &str = "--deadline-ms";
 /// otherwise.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// The child's own exit status when its deadline passes.
+/// The child's own exit status when its deadline passes (the one `timeout(1)`
+/// uses).
 pub const EXIT_DEADLINE: i32 = 124;
 
 /// The child's exit status when its arguments are wrong.
 pub const EXIT_USAGE: i32 = 2;
 
-/// The report sits between these two lines on the child's stdout. A plugin is
-/// free to print whatever it likes to stdout while it loads; the markers are
-/// what keep that from being read as the report.
+/// The line before the report on the child's stdout. A plugin is free to
+/// print whatever it likes to stdout while it loads; the markers are what
+/// keep that from being read as the report.
 const REPORT_BEGIN: &str = "@@mooloop-scan-report-begin@@";
+/// The line after the report on the child's stdout.
 const REPORT_END: &str = "@@mooloop-scan-report-end@@";
 
 /// The cache file's own version. A file with any other is ignored and the
 /// next scan rebuilds it.
 pub const CACHE_VERSION: u32 = 1;
 
-/// How much of a failed child's stderr is kept as the failure's reason.
+/// How much of a failed child's stderr is kept as the failure's reason, in
+/// characters from the end.
 const STDERR_TAIL: usize = 600;
 
-/// One plugin, as a scan found it in a file.
+/// One plugin, as a scan found it in a file. This is also its entry in the
+/// cache file, so a field added here needs `serde(default)` for the caches
+/// already written.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct ScannedPlugin {
@@ -80,6 +88,7 @@ pub struct ScannedPlugin {
     /// What a song saves about it.
     #[serde(flatten)]
     pub plugin: PluginRef,
+    /// The plugin's own one-line description, empty when it gives none.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
     /// The plugin's feature strings as it declared them (for CLAP,
@@ -93,16 +102,19 @@ pub struct ScannedPlugin {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub audio_outputs: Vec<u32>,
     /// Which of `audio_inputs` is the main input: the port the plugin flags
-    /// `CLAP_AUDIO_PORT_IS_MAIN`, or 0 when it flags none ([`main_port`],
-    /// MOO-307). It indexes past the end when there are no inputs. A cache
-    /// written before MOO-307 has no such key and reads 0 until a rescan.
+    /// `CLAP_AUDIO_PORT_IS_MAIN`, or 0 when it flags none ([`main_port`]).
+    /// It indexes past the end when there are no inputs; read it through
+    /// [`main_input_channels`](Self::main_input_channels). An entry without
+    /// the key reads 0, and 0 is never written.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub main_audio_input: u32,
     /// Which of `audio_outputs` is the main output, as `main_audio_input`.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub main_audio_output: u32,
+    /// How many note input ports it has.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub note_inputs: u32,
+    /// How many note output ports it has.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub note_outputs: u32,
     /// Whether it declares a GUI of its own.
@@ -116,9 +128,10 @@ pub struct ScannedPlugin {
 
 /// The index of a plugin's main audio port in one direction, from each
 /// port's `CLAP_AUDIO_PORT_IS_MAIN` flag in the plugin's order: the first
-/// flagged port, or 0 when none is flagged (MOO-307). The scan records it as
-/// [`ScannedPlugin::main_audio_input`] and `main_audio_output`;
-/// [`read_audio_ports`] is the same rule on a live plugin.
+/// flagged port, or 0 when none is flagged. The scan records it as
+/// [`ScannedPlugin::main_audio_input`] and `main_audio_output`, and the CLAP
+/// adapter finds a live instance's main ports by the same rule, so the two
+/// always agree.
 pub fn main_port(is_main: impl IntoIterator<Item = bool>) -> u32 {
     is_main
         .into_iter()
@@ -135,9 +148,10 @@ pub fn main_channels(channels: &[u32], main: u32) -> Option<u32> {
 /// One direction of a live plugin's audio ports, as the scan records them:
 /// the channel count of each port in the plugin's order (0 for a port it
 /// would not describe, so the indices stay the plugin's) and the index of
-/// the main one ([`main_port`]). The scan's `describe_ports` reads its
+/// the main one ([`main_port`]). The scan's [`describe_ports`] reads its
 /// ports through this, and so does the CLAP adapter's `check_ports`, so
-/// both find the same main port (MOO-307, MOO-308).
+/// both find the same main port. Main thread only, as every CLAP
+/// `audio-ports` call is.
 pub(crate) fn read_audio_ports(
     ports: &PluginAudioPorts,
     handle: &clack_host::prelude::PluginMainThreadHandle<'_>,
@@ -157,21 +171,23 @@ pub(crate) fn read_audio_ports(
 
 /// Why a plugin with these CLAP `features` and main audio ports (the
 /// channels of its main input and main output, `None` for no such port)
-/// cannot be a device on a chain, or `None` when it can (MOO-85, MOO-307).
+/// cannot be a device on a chain, or `None` when it can. The reason is a
+/// short clause for the browser to show.
 ///
 /// **The role is the plugin's own word, and the main ports only what the
 /// host can wire.** A plugin says what it is with its features
 /// (`audio-effect`, `instrument`); an effect is one that declares
 /// `audio-effect`, or declares neither role and has a main input. It needs
 /// a main input and a main output of one or two channels each. A mono input
-/// is fed the chain's `(L + R) / 2` and a mono output goes to both sides
-/// (MOO-266). Any other port -- a sidechain, a second bus -- is no reason to
-/// refuse it: the host feeds an extra input silence and throws an extra
-/// output away (MOO-306). A note input is allowed and gets no notes: a chain
-/// carries none. A plugin that declares both roles may go in either place.
+/// is fed the chain's `(L + R) / 2` and a mono output goes to both sides.
+/// Any other port -- a sidechain, a second bus -- is no reason to refuse
+/// it: the host feeds an extra input silence and throws an extra output
+/// away. A note input is allowed and gets no notes: a chain carries none. A
+/// plugin that declares both roles may go in either place.
 ///
-/// A refusal here is *unsupported* (the plugin loads, mooloop cannot wire
-/// it), never *failed*: MOO-298 hides the one and reports the other.
+/// A refusal here means *unsupported* (the plugin loads, mooloop cannot wire
+/// it), never *failed*. The two are one `String` today; MOO-298 is to split
+/// them so the browser can hide the one and always show the other.
 pub fn main_port_effect_refusal(
     features: &[String],
     main_input: Option<u32>,
@@ -192,7 +208,8 @@ pub fn main_port_effect_refusal(
 
 /// Why a plugin with these `features`, main audio output (its channels,
 /// `None` for none) and note inputs cannot be a channel's source, or `None`
-/// when it can (MOO-85, MOO-307). The role as [`main_port_effect_refusal`]
+/// when it can; *unsupported*, never *failed*, as for
+/// [`main_port_effect_refusal`]. The role as [`main_port_effect_refusal`]
 /// reads it: `instrument`, or a note input when it declares neither role. A
 /// source needs a note input and a main output of one or two channels (mono
 /// is copied to both sides). Every audio input it has, the main one
@@ -237,20 +254,20 @@ impl ScannedPlugin {
     }
 
     /// The main input's channel count, or `None` when it has no audio input
-    /// (MOO-307).
+    /// (or a cache names a main input it does not have).
     pub fn main_input_channels(&self) -> Option<u32> {
         main_channels(&self.audio_inputs, self.main_audio_input)
     }
 
     /// The main output's channel count, or `None` when it has no audio
-    /// output (MOO-307).
+    /// output, as [`main_input_channels`](Self::main_input_channels).
     pub fn main_output_channels(&self) -> Option<u32> {
         main_channels(&self.audio_outputs, self.main_audio_output)
     }
 
-    /// Why it cannot be a device on a chain, or `None` when it can
-    /// (MOO-85): [`main_port_effect_refusal`] on the main ports the scan
-    /// recorded (MOO-307), or the reason it failed to scan.
+    /// Why it cannot be a device on a chain, or `None` when it can: when it
+    /// could not be created, that ([`error`](Self::error)); otherwise
+    /// [`main_port_effect_refusal`] on the main ports the scan recorded.
     pub fn effect_refusal(&self) -> Option<String> {
         if let Some(error) = &self.error {
             return Some(format!("could not be created: {error}"));
@@ -258,10 +275,10 @@ impl ScannedPlugin {
         main_port_effect_refusal(&self.features, self.main_input_channels(), self.main_output_channels())
     }
 
-    /// Why it cannot be a channel's source, or `None` when it can (MOO-85):
+    /// Why it cannot be a channel's source, or `None` when it can: when it
+    /// could not be created, that ([`error`](Self::error)); otherwise
     /// [`main_port_source_refusal`] on the main output and note inputs the
-    /// scan recorded (MOO-307), or the reason it failed to scan. `None` is
-    /// what a browser offers as an instrument.
+    /// scan recorded. `None` is what a browser offers as an instrument.
     pub fn source_refusal(&self) -> Option<String> {
         if let Some(error) = &self.error {
             return Some(format!("could not be created: {error}"));
@@ -283,8 +300,10 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-/// Why a file yielded no plugins. The distinctions are #27's: a scan that
-/// failed, a plugin that is incompatible, and a library that would not load.
+/// Why a file yielded no plugins: the library would not load, it is not a
+/// plugin this host can use, or the child running it failed. Every kind,
+/// `Incompatible` included, is a *failure* of the file, not an *unsupported*
+/// plugin in the refusal rules' sense ([`main_port_effect_refusal`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum FailureKind {
@@ -295,7 +314,8 @@ pub enum FailureKind {
     /// It loaded, but is not something this host can use: another CLAP
     /// version, no plugin factory, or a factory that lists nothing.
     Incompatible,
-    /// The child died -- a signal, or a non-zero exit -- before it reported.
+    /// The child died -- a signal, or a non-zero exit -- or the parent lost
+    /// track of it.
     Crashed,
     /// The child ran past the timeout and was killed.
     TimedOut,
@@ -306,7 +326,10 @@ pub enum FailureKind {
 /// A file that yielded no plugins, and why.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScanFailure {
+    /// Which of the ways to fail it was.
     pub kind: FailureKind,
+    /// One line for a person: the child's own reason, or for a crash the
+    /// exit status and the end of its stderr.
     pub reason: String,
 }
 
@@ -319,11 +342,15 @@ impl ScanFailure {
     }
 }
 
-/// What the child prints, between the markers.
+/// What the child prints, as JSON between the markers ([`parse_report`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "kebab-case")]
 pub enum ChildReport {
+    /// The factory's plugins, at least one. A plugin that could not be
+    /// created is here too, with its `error` set.
     Scanned { plugins: Vec<ScannedPlugin> },
+    /// The file as a whole failed, as the child saw it: `Load` or
+    /// `Incompatible`. The other kinds are the parent's to judge.
     Failed { kind: FailureKind, reason: String },
 }
 
@@ -338,8 +365,10 @@ pub struct CachedFile {
     pub modified_ns: u64,
     /// Size in bytes. For a macOS bundle, the sum of what is inside it.
     pub size: u64,
+    /// Set when the file yielded nothing; `plugins` is then empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed: Option<ScanFailure>,
+    /// What the file holds, in its factory's order, usable or not.
     #[serde(default, rename = "plugin", skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<ScannedPlugin>,
 }
@@ -427,6 +456,7 @@ impl PluginCache {
         &self.files
     }
 
+    /// Whether it holds no files at all, failed ones included.
     pub fn is_empty(&self) -> bool {
         self.files.is_empty()
     }
@@ -444,14 +474,16 @@ impl PluginCache {
     }
 
     /// Forget everything, so the next scan launches a child for every file
-    /// rather than trusting a fingerprint (Rescan All, MOO-368): the one way
-    /// to pick up a plugin replaced by a build of the same size and mtime.
+    /// rather than trusting a fingerprint. This is Rescan All, and the one
+    /// way to pick up a plugin replaced by a build of the same size and
+    /// modification time.
     pub fn clear(&mut self) {
         self.files.clear();
     }
 
-    /// Forget every failure, so the next scan tries those files again (the
-    /// "rescan all" button, step 08).
+    /// Forget every failure and keep every success, so the next scan tries
+    /// only the files that failed again. Rescan All uses [`clear`](Self::clear),
+    /// not this.
     pub fn clear_failures(&mut self) {
         self.files.retain(|file| file.failed.is_none());
     }
@@ -542,7 +574,10 @@ pub fn default_search_paths() -> Vec<PathBuf> {
 /// The program a scan launches for each file, and what goes before the path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChildCommand {
+    /// The executable.
     pub program: PathBuf,
+    /// Its arguments before the path, ending in [`SCAN_FLAG`] for any binary
+    /// that dispatches through [`run_child_from_args`].
     pub args: Vec<OsString>,
 }
 
@@ -566,6 +601,7 @@ pub struct ScanConfig {
     pub search_paths: Vec<PathBuf>,
     /// How long one child gets.
     pub timeout: Duration,
+    /// What to launch for each file.
     pub child: ChildCommand,
 }
 
@@ -601,11 +637,14 @@ pub struct ScanSummary {
 }
 
 /// Scan every candidate on `config.search_paths` into `cache`, launching a
-/// child only for files that are new or have changed. Blocks until done, so
-/// run it on a thread of its own. `progress` is called before each file with
-/// its index, the total, and its path.
+/// child only for files that are new or have changed. Blocks until done, up
+/// to `config.timeout` per launched file, so run it on a thread of its own.
+/// `progress` is called before each file with its index, the total, and its
+/// path.
 ///
-/// Does not save the cache; the caller does, with [`PluginCache::save`].
+/// Afterwards `cache` holds exactly the candidates, in search-path order; an
+/// entry for a file that is gone is dropped. Does not save the cache; the
+/// caller does, with [`PluginCache::save`].
 pub fn scan(
     config: &ScanConfig,
     cache: &mut PluginCache,
@@ -712,8 +751,9 @@ pub fn find_candidates(roots: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 /// A file's modification time (ns since the epoch) and size. For a bundle
-/// directory, the newest time and the total size of what is inside it, so
-/// replacing the library inside a bundle counts as a change.
+/// directory, the newest time and the total size of what is inside it, down
+/// to six levels, so replacing the library inside a bundle counts as a
+/// change.
 fn fingerprint(path: &Path) -> io::Result<(u64, u64)> {
     fn modified_ns(meta: &fs::Metadata) -> u64 {
         meta.modified()
@@ -741,7 +781,11 @@ fn fingerprint(path: &Path) -> io::Result<(u64, u64)> {
     Ok(acc)
 }
 
-/// Launch one child on `path` and read its report.
+/// Launch one child on `path` and read its report: the plugins it holds, each
+/// with its `path` set to `path`, or why it yielded none. Blocks for as long
+/// as the child runs, at most `timeout` (then the child is killed and the
+/// failure is [`FailureKind::TimedOut`]), plus up to a second for each of
+/// its two pipes to close.
 pub fn run_child(
     command: &ChildCommand,
     path: &Path,
@@ -1045,9 +1089,9 @@ mod tests {
         }
     }
 
-    /// MOO-85: the role from the features, the ports only for what can be
-    /// wired, each place's reason, and a plugin that declares both roles
-    /// going in either place.
+    /// The role comes from the features, the ports only for what can be
+    /// wired, each place has its reason, and a plugin that declares both
+    /// roles goes in either place.
     #[test]
     fn a_plugins_places_come_from_its_features_and_what_its_ports_can_wire() {
         let plugin = |features: &[&str], ins: &[u32], outs: &[u32], notes: u32| ScannedPlugin {
@@ -1066,8 +1110,8 @@ mod tests {
         assert_eq!(places(&plugin(&["instrument"], &[], &[2], 1)), (false, true));
         assert_eq!(places(&plugin(&["instrument"], &[2], &[2], 1)), (false, true));
         assert_eq!(places(&plugin(&["instrument"], &[], &[1], 1)), (false, true));
-        // Mono effects (MOO-266): every mix of one and two channels, by
-        // feature or by an input and no role.
+        // Mono effects: every mix of one and two channels, by feature or by
+        // an input and no role.
         for (ins, outs) in [([1], [1]), ([1], [2]), ([2], [1])] {
             assert_eq!(places(&plugin(&["audio-effect"], &ins, &outs, 0)), (true, false));
             assert_eq!(places(&plugin(&[], &ins, &outs, 0)), (true, false));

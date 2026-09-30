@@ -1,12 +1,13 @@
-//! Step 05's scanner (`docs/plans/plugin-hosting/05-the-scanner.md`, MOO-80).
+//! The out-of-process scanner and its cache, end to end.
 //!
 //! **A plugin that crashes or hangs while it is being scanned must not crash
-//! or hang mooloop** (Adam's answer 4). These tests scan real misbehaving
-//! libraries: the in-repo test plugin copied under the names that make it
-//! abort or never return while its entry initialises
-//! (`mooloop_test_plugin::CRASHES_ON_SCAN`, `HANGS_ON_SCAN`). If the scanner
-//! loaded either in its own process, this test binary would die or never
-//! finish; instead each costs one child, recorded as a failure in the cache.
+//! or hang mooloop** (`docs/plans/plugin-hosting/05-the-scanner.md`). These
+//! tests scan real misbehaving libraries: the in-repo test plugin copied
+//! under the names that make it abort or never return while its entry
+//! initialises (`mooloop_test_plugin::CRASHES_ON_SCAN`, `HANGS_ON_SCAN`). If
+//! the scanner loaded either in its own process, this test binary would die
+//! or never finish; instead each costs one child, recorded as a failure in
+//! the cache.
 //!
 //! The children are `mooloop-scan-child`, this crate's test-only binary,
 //! which runs the same `scan::run_child_from_args` the app runs as
@@ -83,7 +84,7 @@ fn failure_of(cache: &PluginCache, path: &Path) -> Option<FailureKind> {
         .map(|(_, failure)| failure.kind)
 }
 
-/// The plan's directory, plus the two misbehaving copies: one good plugin
+/// One directory holding every way a candidate can go wrong: one good plugin
 /// file, a zero-byte `.clap`, a shell script that sleeps, a library that
 /// aborts while loading and one that never returns. The scan finishes, finds
 /// the four good plugins, and records each bad file with its own kind of
@@ -162,7 +163,8 @@ fn a_crashing_or_hanging_plugin_costs_one_child_and_is_never_relaunched() {
     assert_eq!(gone.removed, 1, "{gone:?}");
     assert_eq!(gone.launched, 0, "{gone:?}");
 
-    // "Rescan all" forgets the failures, so the next scan tries them again.
+    // Forgetting only the failures makes the next scan try those files, and
+    // no others, again.
     reloaded.clear_failures();
     let rescan = scan::scan(&config(dir.path()), &mut reloaded, |_, _, _| {});
     assert_eq!(rescan.launched, 3, "{rescan:?}");
@@ -170,8 +172,8 @@ fn a_crashing_or_hanging_plugin_costs_one_child_and_is_never_relaunched() {
 }
 
 /// The child's report on the test plugin parses back into the plugins it
-/// holds, with what a browser and step 06 need: the saved reference, the
-/// features, the ports and whether there is a GUI.
+/// holds, with what the browser and the CLAP adapter need: the saved
+/// reference, the features, the ports and whether there is a GUI.
 #[test]
 fn the_child_describes_every_plugin_in_the_file() {
     let path = test_plugin_path();
@@ -213,14 +215,14 @@ fn the_child_describes_every_plugin_in_the_file() {
     let found = cache.resolve(&gain.plugin).expect("the gain resolves");
     assert_eq!(found.path, canonical(&scan_dir.path().join("test.clap")));
 
-    // Each flags its one port main (MOO-307); the scan records which.
+    // Each flags its one port main; the scan records which.
     assert_eq!((gain.main_audio_input, gain.main_audio_output), (0, 0));
     assert_eq!((gain.main_input_channels(), gain.main_output_channels()), (Some(2), Some(2)));
     assert_eq!((sine.main_input_channels(), sine.main_output_channels()), (None, Some(2)));
 
     // A plugin whose main ports are not port 0, and not at the same index
-    // each way (MOO-308's test plugin): the scan records where they are,
-    // and the rules judge those, not the sidechain or the extra outputs.
+    // each way: the scan records where they are, and the rules judge those,
+    // not the sidechain or the extra outputs.
     let sidechain = find(test_plugin::SIDECHAIN_ID);
     assert_eq!(sidechain.audio_inputs, vec![1, 2]);
     assert_eq!(sidechain.audio_outputs, vec![2, 1, 2]);
@@ -253,12 +255,11 @@ fn cached_plugin(fields: &str) -> ScannedPlugin {
     plugins.remove(0)
 }
 
-/// MOO-307: a cache written before the scan recorded main ports has no
-/// `main-audio-input` or `main-audio-output`. Such an entry still loads,
-/// reads port 0 as main until a rescan, and is judged by it: the Surge XT
-/// layouts in Adam's cache (MOO-306), which the one-port rule refused, are
-/// offered. Port 0 is never written, so an old entry writes back as it was;
-/// any other main port is written and read back.
+/// A cache entry with no `main-audio-input` or `main-audio-output` (every
+/// entry written before the scan recorded them) loads, reads port 0 as main
+/// until a rescan, and is judged by it, so Surge XT's layouts, whose main
+/// port is port 0, are offered. Port 0 is never written, so such an entry
+/// writes back as it was; any other main port is written and read back.
 #[test]
 fn an_old_cache_entry_without_main_ports_loads_with_port_zero_as_main() {
     let surge = "features = [\"instrument\"]\naudio-outputs = [2, 2, 2]\nnote-inputs = 1";
@@ -286,12 +287,12 @@ fn an_old_cache_entry_without_main_ports_loads_with_port_zero_as_main() {
     assert_eq!(PluginCache::from_toml(&written).expect("parses"), cache);
 }
 
-/// MOO-307: the refusal rules look at the main ports only. Every layout
-/// Adam's cache refused (MOO-306) has a main port of one or two channels,
-/// and is now offered in its role: an effect with a sidechain or several
-/// buses, an instrument with extra outputs. What is still refused is a
-/// plugin with no usable main port, and it is refused as *unsupported*
-/// (a reason from the rule), not as *failed* (MOO-298's split).
+/// The refusal rules look at the main ports only. An effect with a
+/// sidechain or several buses, and an instrument with extra outputs, are
+/// offered in their role when the main port has one or two channels; the
+/// layouts here are real ones (Surge XT, LSP, a drum machine). A plugin with
+/// no usable main port is refused as *unsupported* (a reason from the rule),
+/// not as *failed*.
 #[test]
 fn the_refusal_rules_read_the_main_ports_only() {
     let effect = |ins: &str, outs: &str, more: &str| {
