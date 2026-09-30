@@ -65,8 +65,9 @@ every other effect, capturing whatever reaches its position in the chain.
   -- are counted and published as device telemetry. The count used to be of
   collisions, a head overtaken by its writer; every head wraps now, so that
   failure cannot happen and the number reports laps instead.
-- The device is built on the shared `mooloop_dsp::delayline` primitive rather
-  than a private ring, as this document required.
+- The device still keeps its own `Vec<f32>` ring rather than the shared
+  `mooloop_dsp::delayline` primitive this document required; moving it onto
+  `DelayLine`/`ReadHead` has not been done.
 
 Stage 1's acceptance list is complete except realtime-hygiene test 8: no
 allocations or locks in the callback is reasoned rather than measured, and
