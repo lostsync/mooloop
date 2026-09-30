@@ -1,5 +1,5 @@
-//! The CLAP adapter: a hosted CLAP effect as the rest of mooloop sees one
-//! (`docs/plans/plugin-hosting/06-a-headless-clap-effect.md`).
+//! The CLAP adapter: a hosted CLAP effect or instrument as the rest of
+//! mooloop sees one (`docs/plans/plugin-hosting/06-a-headless-clap-effect.md`).
 //!
 //! [`ClapInstance`] is the control-thread half ([`HostedInstance`]): it owns
 //! the loaded library and the plugin instance, reads the parameter list,
@@ -20,31 +20,27 @@
 //! the plugin's own parameter output are all sized at activation, and events
 //! arrive in order, so the event buffer is never sorted.
 //!
-//! **Every audio port runs, and only the main ones are wired** (MOO-306,
-//! MOO-308). CLAP wants a buffer for every port a plugin declares, so a
-//! sidechain or a second bus gets one: each extra input is fed silence and
-//! each extra output is scratch that nothing reads. The main ports are the
-//! ones the plugin flags `CLAP_AUDIO_PORT_IS_MAIN` (port 0 when it flags
-//! none), found the way the scan finds them ([`crate::scan::read_audio_ports`]),
-//! and they need not be port 0. What the plugin itself does
-//! inside its `process` is its own affair; mooloop cannot vouch for it.
+//! **Every audio port runs, and only the main ones are wired.** CLAP wants
+//! a buffer for every port a plugin declares, so a sidechain or a second
+//! bus gets one: each extra input is fed silence and each extra output is
+//! scratch that nothing reads. The main ports are the ones the plugin flags
+//! `CLAP_AUDIO_PORT_IS_MAIN` (port 0 when it flags none), by the scan's own
+//! rule ([`crate::scan::main_port`]), and they need not be port 0. What the
+//! plugin itself does inside its `process` is its own affair; mooloop
+//! cannot vouch for it.
 //!
-//! **A processor is stopped on its audio thread as it leaves** (MOO-311).
-//! CLAP says `stop_processing` is called on the audio thread, and a plugin
-//! built on `clap-helpers` in strict mode (Odin2) terminates the process
-//! when it is not. It used to be left to `deactivate`, on the main thread,
-//! which is what `clack-host` does for a processor dropped while started.
-//! Now the engine calls [`AudioNode::retire`] on the audio thread once a
-//! node is leaving it for good -- when a removal or a swap has faded it out
-//! and it goes to the reclaim ring, when a song close hands back the
-//! renderer holding it, when an export is done with its renderer, and when
-//! the engine closes or reconnects -- and [`ClapProcessor`] answers with
-//! `stop_processing`. A hook rather than the processor stopping itself on
-//! its last faded block: a song close, an export and a closing engine have
-//! no fade to announce a last block, and one hook the engine calls at the
-//! point a node leaves covers every path the same way. A processor that
-//! leaves still started all the same -- the engine's callback had died --
-//! is stopped by its [`Drop`], never by `deactivate` on the main thread.
+//! **A processor is stopped on its audio thread as it leaves.** CLAP makes
+//! `stop_processing` an audio-thread call, and a strict plugin (one built
+//! on `clap-helpers` set to terminate, such as Odin2) aborts the process
+//! when it is made anywhere else -- including by `deactivate` on the main
+//! thread, which is where `clack-host` would make it. So the engine calls
+//! [`AudioNode::retire`] on the audio thread wherever a node leaves it for
+//! good (a faded-out removal or swap, a song close, the end of an export,
+//! the engine closing or reconnecting), and [`ClapProcessor`] answers with
+//! `stop_processing`. It is one hook at the point of leaving, not a stop on
+//! the last faded block, because a song close, an export and a closing
+//! engine have no fade. A processor that leaves still started anyway (the
+//! engine's callback had died) is stopped by its [`Drop`].
 
 use std::cell::RefCell;
 use std::ffi::CString;
@@ -111,8 +107,8 @@ const EVENTS_IN: usize = 256;
 const MODULATED: usize = mooloop_core::MAX_MOD_ROUTES_PER_CHANNEL;
 
 /// How many of the plugin's own parameter changes and gestures wait for the
-/// control thread (step 07 reads them). A plugin that sends more between two
-/// pump ticks has the rest dropped and counted.
+/// control thread ([`HostedInstance::drain_param_events`]). A plugin that
+/// sends more between two pump ticks has the rest dropped and counted.
 const EVENTS_OUT: usize = 1024;
 
 /// The [`HostHandlers`] a hosted CLAP runs under.
@@ -130,7 +126,6 @@ impl HostHandlers for ClapHost {
             .register::<HostLatency>()
             .register::<HostState>()
             .register::<HostParams>()
-            // Step 11 (MOO-300): the GUI, and the event loop it runs on.
             .register::<HostGui>()
             .register::<HostTimer>();
         #[cfg(unix)]
@@ -256,7 +251,7 @@ impl HostGuiImpl for ClapShared {
 pub struct ClapMainThread {
     requests: Arc<RequestFlags>,
     main_thread: ThreadId,
-    /// The timers and fds the plugin registered (step 11). A `RefCell`
+    /// The timers and fds the plugin registered. A `RefCell`
     /// because the handlers take `&self`; it is borrowed only for a moment,
     /// never across a call into the plugin, which may register or
     /// unregister from inside its own callback.
@@ -347,14 +342,14 @@ struct ProcessorFlags {
     failed: AtomicBool,
     /// Parameter events from the plugin the ring had no room for.
     dropped_events: AtomicU64,
-    /// Note-ons and note-offs the plugin sent of its own (step 10: counted,
-    /// not routed).
+    /// Note-ons, note-offs and MIDI the plugin sent of its own: counted,
+    /// not routed.
     generated_notes: AtomicU64,
 }
 
 /// How a plugin takes notes, from its first note input port: CLAP's own
 /// note events where it supports them, MIDI bytes where it supports only
-/// those (step 10's order of preference), or not at all.
+/// those, or not at all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Notes {
     None,
@@ -362,10 +357,10 @@ enum Notes {
     Midi,
 }
 
-/// The ports a plugin was accepted with, and where it may go (MOO-85): the
-/// places are [`crate::scan::main_port_effect_refusal`] and
-/// `main_port_source_refusal` on its own features and main ports, the same
-/// rule the browser reads from the scan (MOO-307).
+/// The ports a plugin was accepted with, and where it may go:
+/// [`crate::scan::main_port_effect_refusal`] and
+/// [`crate::scan::main_port_source_refusal`] on its own features and main
+/// ports, the same rules the browser reads from the scan.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Layout {
     /// Channels of each audio input port, in the plugin's order (0 for a
@@ -375,14 +370,17 @@ struct Layout {
     /// Channels of each audio output port, as `inputs`.
     outputs: Box<[u32]>,
     /// Which input is main; past the end when there are none. As an effect
-    /// it is fed the chain's signal, a mono one `(L + R) / 2` (MOO-266); as
-    /// a source, and every other input always, silence.
+    /// it is fed the chain's signal, a mono one `(L + R) / 2`; as a source,
+    /// and every other input always, silence.
     main_input: u32,
     /// Which output is main: one or two channels, by the refusal rules. A
     /// mono one goes to both sides. Every other output is thrown away.
     main_output: u32,
+    /// How the plugin takes notes.
     notes: Notes,
+    /// It may be an effect on a chain.
     effect: bool,
+    /// It may be a channel's source.
     source: bool,
 }
 
@@ -455,7 +453,7 @@ impl ClapInstance {
     /// effect's (a main input and a main output of one or two channels each)
     /// or an instrument's (a main output of one or two channels and a note
     /// input). Any other port is run and not wired: a sidechain hears
-    /// silence, a second output is thrown away (MOO-308). Where each may go
+    /// silence, a second output is thrown away. Where each may go
     /// is the session's call.
     pub fn open(
         path: &Path,
@@ -563,8 +561,8 @@ impl ClapInstance {
     }
 
     /// How many log lines the plugin sent from a thread other than the main
-    /// one, all of which were counted and dropped rather than written
-    /// (MOO-324): a plugin logging from `process` costs the callback one
+    /// one, all of which were counted and dropped rather than written: a
+    /// plugin logging from `process` costs the callback one
     /// atomic add, and this is where the main thread finds out it happened.
     pub fn unlogged(&self) -> u64 {
         self.instance
@@ -585,8 +583,8 @@ impl ClapInstance {
 
 /// Accept an effect's main ports or an instrument's (see [`Layout`]), and
 /// refuse everything else. [`crate::scan::ScannedPlugin::effect_refusal`]
-/// and `source_refusal` say the same from the scan, without loading
-/// anything, and both find the main ports through
+/// and [`crate::scan::ScannedPlugin::source_refusal`] say the same from the
+/// scan, without loading anything, and both find the main ports through
 /// [`crate::scan::read_audio_ports`].
 fn check_ports(instance: &mut PluginInstance<ClapHost>, features: &[String]) -> Result<Layout, HostError> {
     let Some(ports) = instance
@@ -599,10 +597,9 @@ fn check_ports(instance: &mut PluginInstance<ClapHost>, features: &[String]) -> 
         .plugin_shared_handle()
         .get_extension::<PluginNotePorts>();
     let handle = instance.plugin_handle();
-    // Counted before the first is asked for (MOO-311): an effect that
-    // declares the extension with no ports (Surge XT Effects) reports an
-    // out-of-bounds `get` as host misbehaviour, and a strict plugin could
-    // terminate on it.
+    // Counted before the first is asked for: an effect that declares the
+    // extension with no ports (Surge XT Effects) reports an out-of-bounds
+    // `get` as host misbehaviour, and a strict plugin could terminate on it.
     let notes = note_ports
         .filter(|note_ports| note_ports.count(&handle, true) > 0)
         .and_then(|note_ports| {
@@ -648,8 +645,8 @@ fn check_ports(instance: &mut PluginInstance<ClapHost>, features: &[String]) -> 
 
 impl Drop for ClapInstance {
     fn drop(&mut self) {
-        // Step 04's order: the GUI, then the processor, then the instance.
-        // The rack destroys the GUI before it retires an instance; this is
+        // The GUI goes first, then the processor, then the instance. The
+        // rack destroys the GUI before it retires an instance; this is
         // the backstop for any other owner, and says so when it is needed.
         if self.gui_open.is_some() {
             mooloop_core::log_warn!("plugin", "{}: its GUI was still open when it was dropped", self.plugin.name);
@@ -976,7 +973,7 @@ impl HostedInstance for ClapInstance {
     }
 
     /// Every parameter event the running processor's plugin reported, oldest
-    /// first, off the bounded ring the processor fills (step 06).
+    /// first, off the bounded ring the processor fills.
     fn drain_param_events(&mut self, sink: &mut dyn FnMut(PluginParamEvent)) {
         if let Some(events) = self.events_out.as_mut() {
             while let Ok(event) = events.pop() {
@@ -1186,7 +1183,7 @@ pub struct ClapProcessor {
     /// The ports it was accepted with: every port to hand a buffer, which
     /// are main, how it takes notes.
     layout: Layout,
-    /// The notes it is holding, by mooloop's id and its own (MOO-85).
+    /// The notes it is holding, by mooloop's id and its own.
     notes: NoteTable,
     /// The longest block the buffers hold.
     max_frames: usize,
@@ -1206,7 +1203,10 @@ pub struct ClapProcessor {
     events: EventBuffer,
     events_out: rtrb::Producer<PluginParamEvent>,
     flags: Arc<ProcessorFlags>,
+    /// The plugin may sleep, as of the last block ([`AudioNode::is_at_rest`]).
     at_rest: bool,
+    /// CLAP's `steady_time`: frames since this processor was built, blocks
+    /// skipped while asleep included.
     steady_time: u64,
     /// The instance's main thread, where a processor dropped while still
     /// started cannot be stopped ([`Drop`]).
@@ -1315,7 +1315,7 @@ impl ClapProcessor {
     }
 }
 
-/// The backstop for a processor that leaves still started (MOO-311): one
+/// The backstop for a processor that leaves still started: one
 /// the engine did not retire because its callback had stopped running (a
 /// JACK server that died, then a reconnect or a quit), or one a caller
 /// dropped without retiring.
@@ -1464,7 +1464,7 @@ impl AudioNode for ClapProcessor {
     }
 
     /// CLAP's `stop_processing`, on the audio thread, as the processor
-    /// leaves it (MOO-311). One that never ran was never started and needs
+    /// leaves it. One that never ran was never started and needs
     /// none. Called again, it starts again on its next block, as it would
     /// waking from sleep.
     fn retire(&mut self) {
@@ -1515,7 +1515,7 @@ impl AudioNode for ClapProcessor {
         // nothing upstream of it.
         let input_peak = peak(&bus.l[..frames]).max(peak(&bus.r[..frames]));
         // Only an effect's main input hears the bus; a source's, and every
-        // extra input (a sidechain, a second bus), is silence (MOO-308).
+        // extra input (a sidechain, a second bus), is silence.
         // They are cleared every block, not once, in case a plugin wrote
         // into a buffer it was only meant to read.
         let (main_at, main_width) = self.main_in;
@@ -1526,9 +1526,9 @@ impl AudioNode for ClapProcessor {
             }
         }
         if fed == 1 {
-            // A mono input hears the sum at -6 dB (MOO-266): a centred
-            // signal (L = R) passes at unity and a hard-panned one 6 dB
-            // down. The -3 dB sum would raise a centred signal by 3 dB.
+            // A mono input hears the sum at -6 dB: a centred signal (L = R)
+            // passes at unity and a hard-panned one 6 dB down. The -3 dB sum
+            // would raise a centred signal by 3 dB.
             let (left, right) = (&bus.l[..frames], &bus.r[..frames]);
             for ((mono, &l), &r) in self.ins[main_at][..frames].iter_mut().zip(left).zip(right) {
                 *mono = (l + r) * 0.5;
@@ -1564,14 +1564,14 @@ impl AudioNode for ClapProcessor {
         self.modulated_count = still_count;
 
         // **The block is cut at every frame a parameter changes on, and at
-        // every note** (MOO-85), and each piece is its own process call. CLAP lets a plugin apply its
-        // events at their frames, and many read them once a call instead
-        // (LSP's do): cut this way, such a plugin hears each value from its
-        // own frame, so what it plays no longer depends on the callback's
-        // size, and an export at 512 frames matches playback at 64 (MOO-82).
-        // The engine's control ticks fall on a grid every block size shares,
-        // so the pieces are the same pieces whatever the block. A block with
-        // no changes past its first frame is one call, as before.
+        // every note,** and each piece is its own process call. CLAP lets a
+        // plugin apply its events at their frames, and many read them once a
+        // call instead (LSP's do): cut this way, such a plugin hears each
+        // value from its own frame, so what it plays does not depend on the
+        // callback's size, and an export at 512 frames matches playback at
+        // 64. The engine's control ticks fall on a grid every block size
+        // shares, so the pieces are the same pieces whatever the block. A
+        // block with no change past its first frame is one call.
         self.driven = reset_count > 0
             || events_in
                 .iter()
@@ -1606,7 +1606,8 @@ impl AudioNode for ClapProcessor {
         };
 
         let mut status = ProcessStatus::Continue;
-        // Events are in order, so each piece's start where the last ended.
+        // Events are in order, so each piece's events start where the last
+        // piece's ended.
         let mut next_event = 0;
         for piece in 0..cut_count {
             let start = cuts[piece] as usize;
@@ -1762,7 +1763,7 @@ impl AudioNode for ClapProcessor {
 }
 
 /// Opens a CLAP plugin by its [`PluginRef`] through the scanner's cache
-/// (`<config>/plugins.toml`, MOO-80), which it reads again whenever the file
+/// (`<config>/plugins.toml`), which it reads again whenever the file
 /// has changed: a song opened while the startup scan is still running finds
 /// its plugins once the scan writes the cache.
 pub struct ClapOpener {
@@ -1778,6 +1779,8 @@ impl ClapOpener {
     /// How often the cache file is checked for a newer copy.
     const RECHECK: Duration = Duration::from_secs(1);
 
+    /// An opener over the cache file at `cache_path`, read now. A file that
+    /// does not exist yet is an empty cache until the scan writes it.
     pub fn new(cache_path: PathBuf) -> Self {
         let mut opener = Self {
             cache_path,
