@@ -269,7 +269,14 @@ pub fn build_effect_at_tempo(
 ) -> Box<dyn AudioNode + Send> {
     match params {
         EffectParams::Eq(p) => Box::new(EqEffect::new(p, sample_rate)),
-        EffectParams::Modulation(p) => Box::new(ModulationEffect::new(p, sample_rate)),
+        EffectParams::Modulation(mut p) => {
+            // A preset or a pasted device carries the rate its own song's
+            // tempo resolved to (MOO-347).
+            if p.tempo_sync {
+                p.rate_hz = p.synced_rate_hz(bpm);
+            }
+            Box::new(ModulationEffect::new(p, sample_rate))
+        }
         EffectParams::Filter(p) => Box::new(FilterEffect::new(p, sample_rate)),
         EffectParams::Drive(p) => Box::new(DriveEffect::new(p, sample_rate)),
         EffectParams::Preamp(p) => Box::new(PreampEffect::new(p, sample_rate)),
@@ -590,6 +597,40 @@ mod tests {
     /// longer than the tail it declared.
     fn may_skip(node: &dyn AudioNode, silent_frames: u32) -> bool {
         silent_frames > 0 && (node.is_at_rest() || silent_frames > node.tail_frames())
+    }
+
+    /// A synced Modulation device built at a tempo other than the one its
+    /// `rate_hz` was resolved at runs at the rate its division gives *now*
+    /// (MOO-347), exactly as a synced Delay does.
+    #[test]
+    fn a_synced_modulation_is_built_at_the_current_tempo() {
+        let mut stale = mooloop_core::ModulationParams {
+            tempo_sync: true,
+            rate_hz: 0.02,
+            ..Default::default()
+        };
+        let resolved = stale.synced_rate_hz(140.0);
+        assert!((resolved - stale.rate_hz).abs() > 0.05, "the two rates must differ");
+        let mut reference = stale;
+        reference.rate_hz = resolved;
+        stale.rate_hz = 0.02;
+
+        let mut late = build_effect_at_tempo(EffectParams::Modulation(stale), SAMPLE_RATE, 140.0);
+        let mut right =
+            build_effect_at_tempo(EffectParams::Modulation(reference), SAMPLE_RATE, 140.0);
+        let events = EventList::empty();
+        let mut state = 0x1234_5678;
+        let mut a = StereoBus::with_capacity(BLOCK);
+        let mut b = StereoBus::with_capacity(BLOCK);
+        for _ in 0..(SAMPLE_RATE as usize / BLOCK) {
+            fill_burst(&mut a, BLOCK, &mut state);
+            b.l[..BLOCK].copy_from_slice(&a.l[..BLOCK]);
+            b.r[..BLOCK].copy_from_slice(&a.r[..BLOCK]);
+            late.process(&context(BLOCK), &mut a, &events, None);
+            right.process(&context(BLOCK), &mut b, &events, None);
+            assert_eq!(a.l[..BLOCK], b.l[..BLOCK]);
+            assert_eq!(a.r[..BLOCK], b.r[..BLOCK]);
+        }
     }
 
     /// The contract step 02 rests on, checked against each device rather than
