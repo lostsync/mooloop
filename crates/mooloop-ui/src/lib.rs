@@ -8757,19 +8757,12 @@ impl AppUi {
                     // the same chord: `ShortcutTable::resolve` would only ever
                     // reach one of them, so a silent second owner is worse than
                     // a visible unbind.
-                    let owners: Vec<&'static str> =
-                        table.borrow().owners_of(&chord, action_id.as_str());
                     let mut settings = settings.borrow_mut();
-                    for owner in &owners {
-                        settings
-                            .shortcuts
-                            .overrides
-                            .insert((*owner).to_string(), String::new());
-                    }
-                    settings
-                        .shortcuts
-                        .overrides
-                        .insert(action_id.to_string(), chord.to_string());
+                    let owners = actions::assign_chord(
+                        &mut settings.shortcuts.overrides,
+                        action_id.as_str(),
+                        &chord,
+                    );
                     let result = settings.save();
                     *table.borrow_mut() =
                         actions::ShortcutTable::build(&settings.shortcuts.overrides);
@@ -8778,10 +8771,7 @@ impl AppUi {
                     match result {
                         Ok(()) => {
                             if let Some(owner) = owners.first() {
-                                let label = actions::ACTIONS
-                                    .iter()
-                                    .find(|spec| spec.id == *owner)
-                                    .map_or(*owner, |spec| spec.label);
+                                let label = actions::label_of(*owner);
                                 window.set_status_message(format!("{label} is now unbound").into());
                             } else {
                                 window.set_status_message("Shortcut updated".into());
@@ -8803,13 +8793,17 @@ impl AppUi {
             window.on_preferences_shortcut_reset(move |action_id| {
                 let Some(window) = weak.upgrade() else { return };
                 let mut settings = settings.borrow_mut();
-                settings.shortcuts.overrides.remove(action_id.as_str());
+                let owners =
+                    actions::reset_chord(&mut settings.shortcuts.overrides, action_id.as_str());
                 let result = settings.save();
                 *table.borrow_mut() = actions::ShortcutTable::build(&settings.shortcuts.overrides);
                 drop(settings);
                 sync_shortcut_rows(&window, &table.borrow());
                 if let Err(error) = result {
                     window.set_status_message(format!("Could not save shortcut: {error}").into());
+                } else if let Some(owner) = owners.first() {
+                    let label = actions::label_of(*owner);
+                    window.set_status_message(format!("{label} is now unbound").into());
                 }
             });
         }
