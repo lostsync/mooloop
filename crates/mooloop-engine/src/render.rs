@@ -4798,10 +4798,12 @@ const MAX_AUDITIONS_PER_BLOCK: usize = 64;
 
 /// The most events one block hands back to the control layer. Control input is
 /// forwarded, not acted on here, and a desk sending a fader stream must not be
-/// able to make the audio thread grow a buffer -- so the surplus is dropped,
-/// which for a stream of positions means the control layer sees a slightly
-/// coarser sweep and nothing worse. A note-off is never in this list: notes
-/// sound on the audio thread and their release does not depend on it.
+/// able to make the audio thread grow a buffer -- so the surplus is dropped
+/// and counted in `refused_events`, which for a stream of positions means the
+/// control layer sees a slightly coarser sweep. A note-off is never in this
+/// list: notes sound on the audio thread and their release does not depend on
+/// it. A `RecordedNote` is, and losing one is a note missing from the take, so
+/// it takes a forwarded control message's slot rather than being dropped.
 const MAX_OUTGOING_EVENTS_PER_BLOCK: usize = 128;
 
 /// The sustain pedal's controller number (MOO-128).
@@ -8472,11 +8474,25 @@ impl RenderState {
         self.outgoing.iter_mut().find(|slot| slot.is_some())?.take()
     }
 
-    /// Queue one event for the control layer. Dropped past the cap; see
+    /// Queue one event for the control layer. Past the cap something is
+    /// dropped and counted in [`Self::refused_events`]: the event itself, or
+    /// -- for a recorded note, which is the take and cannot be recovered --
+    /// the oldest forwarded control message in its place. See
     /// [`MAX_OUTGOING_EVENTS_PER_BLOCK`].
     fn emit(&mut self, event: mooloop_core::EngineEvent) {
         if let Some(slot) = self.outgoing.iter_mut().find(|slot| slot.is_none()) {
             *slot = Some(event);
+            return;
+        }
+        self.refused_events += 1;
+        if matches!(event, mooloop_core::EngineEvent::RecordedNote { .. }) {
+            if let Some(slot) = self
+                .outgoing
+                .iter_mut()
+                .find(|slot| matches!(slot, Some(mooloop_core::EngineEvent::ControlInput(_))))
+            {
+                *slot = Some(event);
+            }
         }
     }
 
@@ -11368,6 +11384,63 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         incoming.process_block(256);
         assert!(!incoming.any_key_is_held(), "the note-off did not lift the key");
         assert_eq!(incoming.capturing(60), None, "the take note was left open");
+    }
+
+    /// A full outgoing buffer never costs a take its note (MOO-421): the
+    /// recorded note evicts a forwarded control message instead, and every
+    /// drop is counted.
+    #[test]
+    fn a_full_outgoing_buffer_keeps_the_recorded_note() {
+        use mooloop_core::{
+            EngineEvent, MidiChannelFilter, MidiInputRoute, MidiKind, MidiMessage, MidiPortId,
+            MidiRouteSource,
+        };
+
+        let mut render = two_channel_render();
+        render.set_midi_routing(Box::new(MidiRouting {
+            routes: vec![MidiInputRoute {
+                source: MidiRouteSource::AllPorts,
+                channel: MidiChannelFilter::Omni,
+            }],
+        }));
+        let message = |kind| MidiMessage {
+            offset: 0,
+            port: MidiPortId::FIRST,
+            channel: 0,
+            kind,
+        };
+        render.set_record_armed(true);
+        render.play();
+        render.apply_midi(&[message(MidiKind::NoteOn {
+            note: 60,
+            velocity: 90,
+        })]);
+        render.process_block(256);
+
+        // The control layer has stopped draining: nothing pops, and the
+        // buffer fills with forwarded controller messages.
+        let controllers: Vec<_> = (0..MAX_OUTGOING_EVENTS_PER_BLOCK)
+            .map(|index| {
+                message(MidiKind::ControlChange {
+                    controller: 74,
+                    value: index as u8,
+                })
+            })
+            .collect();
+        render.apply_midi(&controllers);
+        assert_eq!(render.refused_events(), 0, "the buffer was filled, not overrun");
+
+        render.apply_midi(&[message(MidiKind::NoteOff { note: 60 })]);
+        render.process_block(256);
+
+        let delivered: Vec<_> = std::iter::from_fn(|| render.pop_outgoing()).collect();
+        assert!(
+            delivered
+                .iter()
+                .any(|event| matches!(event, EngineEvent::RecordedNote { note: 60, .. })),
+            "the recorded note was dropped for a controller message"
+        );
+        assert!(render.refused_events() >= 1, "the eviction was not counted");
     }
 
     /// Recording reports a note when its key comes up, with the position it
