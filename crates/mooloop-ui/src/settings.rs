@@ -1388,21 +1388,39 @@ pub(crate) fn plugin_cache_path() -> PathBuf {
 /// `~/Library/Application Support/mooloop`, or
 /// `$XDG_CONFIG_HOME/mooloop`/`~/.config/mooloop`).
 pub(crate) fn config_dir() -> PathBuf {
-    if let Some(path) = std::env::var_os("MOOLOOP_CONFIG_DIR") {
+    config_dir_from(|name| std::env::var_os(name))
+}
+
+/// The value of an `XDG_*_HOME` variable, if the spec says to honour it: set
+/// and absolute. An empty or relative value is to be ignored, and following it
+/// puts settings and takes under whatever the working directory happens to be
+/// (MOO-362). Every XDG lookup goes through here;
+/// `mooloop_session::dialogs::music_dir` keeps its own copy of the rule across
+/// the crate boundary.
+fn xdg_home(var: &impl Fn(&str) -> Option<std::ffi::OsString>, name: &str) -> Option<PathBuf> {
+    var(name)
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+}
+
+/// [`config_dir`] against a given environment, so the rule can be tested
+/// without changing the process's own.
+fn config_dir_from(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> PathBuf {
+    if let Some(path) = var("MOOLOOP_CONFIG_DIR") {
         return PathBuf::from(path);
     }
     #[cfg(target_os = "windows")]
-    if let Some(path) = std::env::var_os("APPDATA") {
+    if let Some(path) = var("APPDATA") {
         return PathBuf::from(path).join("mooloop");
     }
     #[cfg(target_os = "macos")]
-    if let Some(home) = std::env::var_os("HOME") {
+    if let Some(home) = var("HOME") {
         return PathBuf::from(home).join("Library/Application Support/mooloop");
     }
-    if let Some(path) = std::env::var_os("XDG_CONFIG_HOME") {
-        return PathBuf::from(path).join("mooloop");
+    if let Some(path) = xdg_home(&var, "XDG_CONFIG_HOME") {
+        return path.join("mooloop");
     }
-    PathBuf::from(std::env::var_os("HOME").unwrap_or_else(|| ".".into())).join(".config/mooloop")
+    PathBuf::from(var("HOME").unwrap_or_else(|| ".".into())).join(".config/mooloop")
 }
 
 /// Directory holding one subdirectory of generator presets per
@@ -1463,9 +1481,8 @@ fn state_dir_from(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> PathBuf {
     if let Some(home) = var("HOME") {
         return PathBuf::from(home).join("Library/Logs/mooloop");
     }
-    // The spec says a relative path is to be ignored.
-    if let Some(path) = var("XDG_STATE_HOME").filter(|path| PathBuf::from(path).is_absolute()) {
-        return PathBuf::from(path).join("mooloop");
+    if let Some(path) = xdg_home(&var, "XDG_STATE_HOME") {
+        return path.join("mooloop");
     }
     PathBuf::from(var("HOME").unwrap_or_else(|| ".".into())).join(".local/state/mooloop")
 }
@@ -1504,19 +1521,23 @@ pub(crate) fn crash_dir() -> PathBuf {
 /// given, because that variable is how tests and a second instance keep to
 /// themselves, and data that escaped it into the real home would not be.
 pub(crate) fn data_dir() -> PathBuf {
-    if let Some(path) = std::env::var_os("MOOLOOP_DATA_DIR") {
+    data_dir_from(|name| std::env::var_os(name))
+}
+
+/// [`data_dir`] against a given environment (see [`config_dir_from`]).
+fn data_dir_from(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> PathBuf {
+    if let Some(path) = var("MOOLOOP_DATA_DIR") {
         return PathBuf::from(path);
     }
-    if std::env::var_os("MOOLOOP_CONFIG_DIR").is_some()
+    if var("MOOLOOP_CONFIG_DIR").is_some()
         || cfg!(any(target_os = "windows", target_os = "macos"))
     {
-        return config_dir();
+        return config_dir_from(var);
     }
-    if let Some(path) = std::env::var_os("XDG_DATA_HOME") {
-        return PathBuf::from(path).join("mooloop");
+    if let Some(path) = xdg_home(&var, "XDG_DATA_HOME") {
+        return path.join("mooloop");
     }
-    PathBuf::from(std::env::var_os("HOME").unwrap_or_else(|| ".".into()))
-        .join(".local/share/mooloop")
+    PathBuf::from(var("HOME").unwrap_or_else(|| ".".into())).join(".local/share/mooloop")
 }
 
 /// The shared recordings folder: every take is written here first, and a
@@ -2433,6 +2454,37 @@ mod tests {
             state_dir_from(env(&[("MOOLOOP_CONFIG_DIR", "/tmp/run"), ("MOOLOOP_STATE_DIR", "/tmp/s")])),
             PathBuf::from("/tmp/s")
         );
+    }
+
+    /// An empty or relative `XDG_*_HOME` is ignored, as the spec says: it must
+    /// not put settings or takes under the working directory (MOO-362).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_empty_or_relative_xdg_home_is_ignored() {
+        use std::ffi::OsString;
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| OsString::from(value))
+            }
+        };
+        let empty: &'static [(&str, &str)] =
+            &[("HOME", "/home/a"), ("XDG_CONFIG_HOME", ""), ("XDG_DATA_HOME", "")];
+        let relative: &'static [(&str, &str)] = &[
+            ("HOME", "/home/a"),
+            ("XDG_CONFIG_HOME", "relative"),
+            ("XDG_DATA_HOME", "relative"),
+        ];
+        for pairs in [empty, relative] {
+            assert_eq!(config_dir_from(env(pairs)), PathBuf::from("/home/a/.config/mooloop"));
+            assert_eq!(data_dir_from(env(pairs)), PathBuf::from("/home/a/.local/share/mooloop"));
+        }
+        let good: &'static [(&str, &str)] =
+            &[("HOME", "/home/a"), ("XDG_CONFIG_HOME", "/c"), ("XDG_DATA_HOME", "/d")];
+        assert_eq!(config_dir_from(env(good)), PathBuf::from("/c/mooloop"));
+        assert_eq!(data_dir_from(env(good)), PathBuf::from("/d/mooloop"));
     }
 
     /// A fresh install asks the driver for nothing: under JACK the buffer is
