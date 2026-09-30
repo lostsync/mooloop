@@ -881,7 +881,8 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   target instead of playing a note (a pad defaults to a toggle, or fires a
   transport gesture). Every other key still plays. A mapped control takes over on **pickup** by
   default, so a fader left at zero does not slam a filter shut the first time
-  it is touched, and a control that has taken over gives the parameter back
+  it is touched (a control resting within one step of the value takes over at
+  once), and a control that has taken over gives the parameter back
   the moment anything else moves it. A mapped fader on a channel or track
   volume follows the mixer fader's own taper, so unity sits at
   three-quarter travel and the top is +6 dB, as it is under the mouse; a

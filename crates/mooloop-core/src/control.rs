@@ -548,12 +548,16 @@ pub fn apply(
                         }
                         pickup.release();
                     }
-                    // Equality counts as caught, so a control already sitting
-                    // exactly on the value takes over on its first message
-                    // rather than on its second.
+                    // A control already resting on the value takes over on
+                    // its first message rather than after being turned back
+                    // across it. A 7-bit control only reaches k/127 of its
+                    // span, so "on the value" is within one such step (14-bit
+                    // sources are simply held to the same, looser, tolerance).
                     let below = wanted < current;
                     let crossed = pickup.below.is_some_and(|was| was != below);
-                    if crossed || (wanted - current).abs() < f32::EPSILON {
+                    let step = (binding.max - binding.min).abs() / 127.0;
+                    let resting = pickup.below.is_none() && (wanted - current).abs() <= step;
+                    if crossed || resting || (wanted - current).abs() < f32::EPSILON {
                         pickup.caught = true;
                         pickup.below = Some(below);
                         return Some(ControlOutcome::Set(wanted));
@@ -1108,6 +1112,29 @@ mod tests {
         state.release();
         assert_eq!(
             apply(&binding, ControlValue::Absolute(0.2), 0.9, &mut state),
+            None
+        );
+    }
+
+    /// A 7-bit knob resting one step above the value must take over when it
+    /// moves away from it, not wait to be turned back down across it
+    /// (MOO-357). CC 64 is 0.5039; the value is 0.5.
+    #[test]
+    fn pickup_catches_a_knob_resting_within_one_step_of_the_value() {
+        let binding = param_binding(74);
+        let mut state = PickupState::default();
+        let first = apply(&binding, ControlValue::Absolute(64.0 / 127.0), 0.5, &mut state);
+        let second = apply(&binding, ControlValue::Absolute(65.0 / 127.0), 0.5, &mut state);
+        assert!(
+            matches!(first, Some(ControlOutcome::Set(_)))
+                || matches!(second, Some(ControlOutcome::Set(_))),
+            "neither message caught: {first:?}, {second:?}"
+        );
+
+        // Two steps away is not resting on it: that still waits.
+        let mut state = PickupState::default();
+        assert_eq!(
+            apply(&binding, ControlValue::Absolute(66.0 / 127.0), 0.5, &mut state),
             None
         );
     }
