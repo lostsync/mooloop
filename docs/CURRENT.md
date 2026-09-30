@@ -540,7 +540,10 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   generator preset replaces its source device, which is why a generator
   preset is offered only on a channel already holding that kind and is drawn
   greyed otherwise. **An effect preset appends a device to the end of the
-  selected channel's chain rather than replacing one**, so it is always
+  chain the rack is showing -- a channel's or a mixer track's -- rather than
+  replacing one**, and the rack stays there with the new device selected
+  (MOO-457: until 2026-09-30 the install that carried the edit sent the rack
+  from a track back to the selected channel). So it is always
   loadable -- unless the selected device is that preset's kind, when it loads
   into that device instead, which is Adam's rule for the double-click; the
   rack row's own rail is still where a preset replaces what is already in
