@@ -70,9 +70,15 @@ pub const GENERATOR_OUTPUT_REFERENCE_DBFS: f32 = REFERENCE_PEAK_DBFS - CENTRE_PA
 
 /// The generator output reference as a linear gain. A stage that has to put
 /// an uncalibrated full-scale source level with the calibrated generators
-/// spends exactly this much: the sampler's default output trim and the
-/// browser's audition monitor both start here, which is what makes them
-/// agree with each other and with the rest of the rack.
+/// spends exactly this much: the sampler's default output trim and Aux In's
+/// default level both start here, which is what makes them agree with each
+/// other and with the rest of the rack.
+///
+/// The browser's audition monitor is the exception. It plays straight to the
+/// master with no channel strip, so it never pays the pan law and starts at
+/// `REFERENCE_PEAK_DBFS` instead (the same -12 dBFS at the master). Do not
+/// unify the two: that moves the audition 3 dB. See `docs/GAIN_STRUCTURE.md`,
+/// *The sampler's output trim*.
 pub fn reference_level_gain() -> f32 {
     db_to_linear(GENERATOR_OUTPUT_REFERENCE_DBFS)
 }
