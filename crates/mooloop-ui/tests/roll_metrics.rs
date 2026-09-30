@@ -149,3 +149,28 @@ fn the_transports_readout_is_still_padded_to_three_digits() {
     harness.set_tick(95);
     assert_eq!(harness.get_padded(), "137:1:095");
 }
+
+/// MOO-417: the playlist drew a clip's `x` from `playlist-bar-ticks` and its
+/// `width` from a bare `/ 16`. They agreed only while steps per bar was 16.
+/// This reads the markup that draws the clip, not a copy of it.
+#[test]
+fn the_playlist_clip_width_is_derived_from_the_bar_metric() {
+    let markup = include_str!("../ui/main.slint");
+    let start = markup
+        .find("for clip in root.playlist-clips : Rectangle {")
+        .expect("the playlist clip rectangle is still in main.slint");
+    let block = &markup[start..];
+    let width_at = block
+        .find("width: max(4px,")
+        .expect("the clip rectangle still has a width with a 4px floor");
+    let width_expr = &block[width_at..];
+    let width_expr = &width_expr[..width_expr.find(';').expect("the width ends in ;")];
+    assert!(
+        !width_expr.contains("/ 16"),
+        "the playlist clip width has a bare `/ 16`: {width_expr}"
+    );
+    assert!(
+        width_expr.contains("playlist-bar-ticks"),
+        "the playlist clip width must divide by `playlist-bar-ticks`, as its x does: {width_expr}"
+    );
+}

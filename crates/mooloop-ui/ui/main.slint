@@ -7648,7 +7648,8 @@ export component MainWindow inherits Window {
                                                         / root.playlist-bar-ticks;
                                                     y: 2px;
                                                     width: max(4px,
-                                                        clip.length-steps * root.playlist-bar-width / 16);
+                                                        (self.clip-end-tick - clip.start-tick)
+                                                        * root.playlist-bar-width / root.playlist-bar-ticks);
                                                     height: parent.height - 4px;
                                                     border-radius: Theme.radius-sm;
                                                     border-width: root.playing && root.song-mode
