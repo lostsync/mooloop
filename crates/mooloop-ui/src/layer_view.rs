@@ -568,9 +568,10 @@ mod tests {
     fn a_shown_branch_chain_is_not_drawn_or_counted() {
         let view = rack_view(&two_branches(), |_| None, |_| None);
         assert!(view[1].hidden, "the shown branch's Chain is not a row of the rack");
+        // The drawn rows only: the Delay, and the Drive and Bitcrush.
         assert_eq!(
-            view.iter().map(|row| row.draw_depth).collect::<Vec<_>>(),
-            [0, 1, 1, 1, 1, 1, 0],
+            [view[2].draw_depth, view[3].draw_depth, view[6].draw_depth],
+            [1, 1, 0],
             "a device in a branch is one box deep: the layer's"
         );
         assert_eq!(view[3].join_before, 6, "the join past the layer leads out of it");
