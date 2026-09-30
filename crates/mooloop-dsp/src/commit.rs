@@ -76,7 +76,11 @@ pub fn commit_stretch(
     // a tempo-fitted ratio that is rarely dyadic, the reload could come back
     // a frame longer or with a splice placed one frame over. Baking the
     // number the file will hold is what makes "re-render on load" exact.
-    let ratio = Sampler::effective_ratio(params, len, source.sample_rate, bpm, 1.0) as f32;
+    //
+    // Against the slice map too: a Slices loop grid snaps the loop to the
+    // markers, and the voice fits that loop, not the free one (MOO-367).
+    let ratio =
+        Sampler::effective_ratio_in(params, len, source.sample_rate, bpm, 1.0, Some(slices)) as f32;
 
     let render = render_stretched(
         &source.frames,
@@ -386,6 +390,39 @@ mod tests {
         // Half the tempo, twice the bar, twice the render.
         let slower = commit_stretch(&source, params, &SliceMap::new(), 60.0).unwrap();
         assert_eq!(slower.sample.frames.len(), 192_000);
+    }
+
+    /// The commit fits the loop the voice plays: with a Slices loop grid that
+    /// is the loop snapped to the slice markers, not the whole region
+    /// (MOO-367).
+    #[test]
+    fn a_slices_snapped_loop_commits_at_the_ratio_it_sounded() {
+        use mooloop_core::sampler::LoopQuantize;
+
+        let source = ramp(96_000);
+        let params = SamplerParams {
+            stretch_enabled: true,
+            stretch_sync: true,
+            stretch_bars: 1.0,
+            start: 0.0,
+            end: 1.0,
+            loop_mode: LoopMode::Forward,
+            loop_quantize: LoopQuantize::Slices,
+            loop_start: 0.26,
+            loop_end: 0.74,
+            ..SamplerParams::default()
+        };
+        let mut slices = SliceMap::new();
+        slices.add(24_000);
+        slices.add(72_000);
+
+        // The loop snaps to 24,000..72,000 (48,000 frames); one bar at 120
+        // BPM is 96,000, so it lasts one bar at ratio 2.
+        let live = Sampler::effective_ratio_in(params, 96_000, 48_000, 120.0, 1.0, Some(&slices));
+        assert!((live - 2.0).abs() < 1.0e-6, "the live fit moved: {live}");
+
+        let committed = commit_stretch(&source, params, &slices, 120.0).unwrap();
+        assert_eq!(committed.commit.ratio, live as f32);
     }
 
     /// Nothing to render is not an error.
