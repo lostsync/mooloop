@@ -99,6 +99,30 @@ impl Adsr {
         self.stage = AdsrStage::Release;
     }
 
+    /// A choke: reach silence within `seconds` of the first call, however
+    /// many times it is repeated (MOO-389).
+    ///
+    /// Idempotent and only ever shortens. From an ordinary stage it enters
+    /// release at `level / seconds`; from a release already running it keeps
+    /// the faster of that rate and the running one. So a caller that chokes on
+    /// every block (a stopped transport does) leaves a running choke alone,
+    /// where [`Self::release_with`] would restart the fade from the lower
+    /// level each time and never finish, and a choke on a slow natural
+    /// release speeds it up, where guarding on [`Self::is_releasing`] left it
+    /// ringing. Idle is left idle.
+    pub fn release_within(&mut self, seconds: f32) {
+        if self.stage == AdsrStage::Idle {
+            return;
+        }
+        let rate = self.level / (seconds.max(MIN_STAGE_S) * self.sample_rate as f32);
+        self.release_dec = if self.stage == AdsrStage::Release {
+            self.release_dec.max(rate)
+        } else {
+            rate
+        };
+        self.stage = AdsrStage::Release;
+    }
+
     pub fn advance(&mut self) {
         match self.stage {
             AdsrStage::Idle => self.level = 0.0,
@@ -576,6 +600,70 @@ impl Default for Ahd {
 mod tests {
     use super::*;
     use crate::testkit::{max_step, RATES};
+
+    /// MOO-389: a choke repeated on every block finishes a release that was
+    /// 8 s long, within its own time plus one block. `release_with` on every
+    /// block restarts from the lower level and never gets there; guarding on
+    /// `is_releasing` leaves the 8 s tail ringing.
+    #[test]
+    fn a_repeated_choke_shortens_a_slow_release_and_finishes() {
+        const BLOCK: usize = 128;
+        for rate in RATES {
+            let mut env = Adsr::new(rate);
+            env.configure(0.001, 0.01, 0.8, 8.0);
+            env.note_on();
+            for _ in 0..(0.1 * rate as f32) as usize {
+                env.advance();
+            }
+            env.release();
+            for _ in 0..rate {
+                env.advance();
+            }
+            assert!(env.is_releasing() && env.level() > 0.1, "{rate} Hz: not mid-release");
+
+            let limit = (0.005 * rate as f32) as usize + BLOCK;
+            let mut elapsed = 0;
+            while !env.is_idle() && elapsed <= limit {
+                env.release_within(0.005);
+                for _ in 0..BLOCK {
+                    env.advance();
+                }
+                elapsed += BLOCK;
+            }
+            assert!(env.is_idle(), "{rate} Hz: still at {} after {elapsed} frames", env.level());
+            assert!(elapsed <= limit, "{rate} Hz: took {elapsed} frames, limit {limit}");
+        }
+    }
+
+    /// MOO-389: a choke only ever shortens. Asked for a longer time than the
+    /// release already running, it leaves that release alone; from a held
+    /// note it starts one; and an idle envelope stays idle.
+    #[test]
+    fn a_choke_never_lengthens_a_release() {
+        let mut env = Adsr::new(SR);
+        env.configure(0.001, 0.01, 0.5, 10.0);
+        env.note_on();
+        for _ in 0..SR as usize / 10 {
+            env.advance();
+        }
+        env.release_with(0.01);
+        env.release_within(5.0);
+        for _ in 0..(0.02 * SR as f32) as usize {
+            env.advance();
+        }
+        assert!(env.is_idle(), "a longer choke slowed a running release");
+
+        env.note_on();
+        env.advance();
+        env.release_within(0.005);
+        assert!(env.is_releasing());
+        for _ in 0..(0.01 * SR as f32) as usize {
+            env.advance();
+        }
+        assert!(env.is_idle());
+        env.release_within(0.005);
+        assert!(env.is_idle(), "a choke woke an idle envelope");
+    }
 
     /// MOO-387: the Sustain stage followed nothing, so turning or automating
     /// Sustain on a held note did nothing until the next note-on.
