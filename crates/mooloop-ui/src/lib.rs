@@ -8800,7 +8800,7 @@ impl AppUi {
                     match result {
                         Ok(()) => {
                             if let Some(owner) = owners.first() {
-                                let label = actions::label_of(*owner);
+                                let label = actions::label_of(owner);
                                 window.set_status_message(format!("{label} is now unbound").into());
                             } else {
                                 window.set_status_message("Shortcut updated".into());
@@ -8831,7 +8831,7 @@ impl AppUi {
                 if let Err(error) = result {
                     window.set_status_message(format!("Could not save shortcut: {error}").into());
                 } else if let Some(owner) = owners.first() {
-                    let label = actions::label_of(*owner);
+                    let label = actions::label_of(owner);
                     window.set_status_message(format!("{label} is now unbound").into());
                 }
             });
