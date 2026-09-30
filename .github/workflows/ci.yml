@@ -12,7 +12,9 @@ env:
   # rather than editing that file — an explicit RUSTFLAGS env var takes
   # precedence over the config file's target.*.rustflags.
   RUSTFLAGS: ""
-  # Bypass the maintainer-local absolute target directory in .cargo/config.toml.
+  # Keep build output in the workspace-local target/ (Cargo's default), which
+  # the steps below read binaries from, whatever CARGO_TARGET_DIR the runner
+  # environment carries. .cargo/config.toml sets no target-dir.
   CARGO_TARGET_DIR: target
 
 jobs:
