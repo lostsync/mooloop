@@ -4527,6 +4527,30 @@ enum BrowserTab {
     Plugins,
 }
 
+impl BrowserTab {
+    /// Whether the tab's rows depend on the project (the selected channel's
+    /// device, for a preset's loadability), so an edit or an undo must
+    /// rebuild them. The SAMPLES tree does not: it is the disk, and
+    /// rebuilding it walks the disk (MOO-408).
+    fn follows_the_project(self) -> bool {
+        self != BrowserTab::Samples
+    }
+}
+
+#[cfg(test)]
+mod browser_tab_tests {
+    use super::*;
+
+    /// A project edit, undo or redo rebuilds PRESETS and PLUGINS rows, and
+    /// leaves the SAMPLES tree, which costs a filesystem walk, alone.
+    #[test]
+    fn a_project_edit_does_not_rebuild_the_samples_tree() {
+        assert!(!BrowserTab::Samples.follows_the_project());
+        assert!(BrowserTab::Presets.follows_the_project());
+        assert!(BrowserTab::Plugins.follows_the_project());
+    }
+}
+
 impl UiState {
     /// Build the rack state for a fresh, one-channel document and install
     /// every model on the window.
@@ -19386,10 +19410,16 @@ fn refresh_preset_menus(state: &Rc<RefCell<UiState>>, window: &MainWindow) {
     st.sync_effects();
     // Whether a generator preset is loadable depends on the selected
     // channel's device, so the browser's rows go stale on exactly the
-    // switches this function already exists to catch. Cheap: it rebuilds a
-    // row list from a catalogue that is already in memory, and does nothing
-    // at all while the SAMPLES tab is showing.
-    refresh_browser(&st);
+    // switches this function already exists to catch. Cheap on PRESETS and
+    // PLUGINS: it rebuilds a row list from a catalogue already in memory.
+    // Not run at all on SAMPLES (MOO-408): those rows come from the
+    // locations, the expansion set and the filter, none of which a project
+    // edit changes, and building them walks the disk on the UI thread
+    // (`has_playable_descendant`) -- on every edit, undo and redo. Each of
+    // those inputs has its own refresh.
+    if st.browser_tab.follows_the_project() {
+        refresh_browser(&st);
+    }
 }
 
 
