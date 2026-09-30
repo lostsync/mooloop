@@ -1,5 +1,5 @@
 //! The notes a hosted instrument is holding, by the ids each side uses
-//! (`docs/plans/plugin-hosting/10-clap-instruments.md`, MOO-85).
+//! (`docs/plans/plugin-hosting/10-clap-instruments.md`).
 //!
 //! mooloop names a note with a `u64` that the sequencer, a MIDI keyboard or
 //! an audition mints; CLAP names one with a non-negative `i32`. The table
@@ -22,8 +22,11 @@ pub const NOTE_ROWS: usize = 128;
 /// One held note: mooloop's id, the plugin's id, and the key it is on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HeldNote {
+    /// mooloop's id, as the sequencer, a keyboard or an audition minted it.
     pub id: u64,
+    /// The plugin's id: CLAP's non-negative `i32`, never above `i32::MAX`.
     pub note_id: u32,
+    /// The key the note is on.
     pub key: u8,
 }
 
@@ -34,7 +37,9 @@ struct Row {
     serial: u64,
 }
 
-/// See the module documentation.
+/// The notes a hosted instrument is holding, by mooloop's id and the
+/// plugin's, in [`NOTE_ROWS`] rows. Nothing allocates after [`Self::new`],
+/// so it is safe on the audio thread.
 pub struct NoteTable {
     rows: Box<[Option<Row>]>,
     held: usize,
@@ -43,6 +48,7 @@ pub struct NoteTable {
 }
 
 impl NoteTable {
+    /// An empty table. The one call here that allocates.
     pub fn new() -> Self {
         Self {
             rows: vec![None; NOTE_ROWS].into_boxed_slice(),
@@ -57,6 +63,7 @@ impl NoteTable {
         self.held
     }
 
+    /// Whether no note is held.
     pub fn is_empty(&self) -> bool {
         self.held == 0
     }
