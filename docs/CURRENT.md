@@ -1379,11 +1379,6 @@ land on its own when it starts to matter:
   The toggle now says which of the three it is, and to commit, in the status
   bar; `StatusHint` reaches it from any face without the threaded property
   this entry used to ask for.
-- **Auditions never fire a choke.** `inject_choke_events` is a pre-pass over
-  the block's sequenced notes and runs before auditions are dispatched, so a
-  slice auditioned from the face does not silence the rest of its choke group.
-  A sequenced note in the group does still choke the audition. Making the
-  pre-pass see auditions means queueing them before it rather than after.
 - **Markers outside the committed region collapse onto its edges.** A commit
   renders only the playback region; a marker before it maps to frame 0 and a
   marker past it to the render's end, and the map then drops the duplicates.

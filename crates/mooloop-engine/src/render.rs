@@ -8949,18 +8949,48 @@ impl RenderState {
         self.release_lifted_sustain(0);
         let last_frame = frames.saturating_sub(1) as u32;
         self.dispatch_expression(last_frame);
+        let choke_groups = self.choke_groups();
+        let live = self.live_channels();
         for slot in self.auditions.iter_mut() {
             let Some(audition) = slot.take() else {
                 continue;
             };
-            if let Some(events) = self.events.get_mut(audition.channel as usize) {
+            let offset = audition.offset.min(last_frame);
+            let channel = audition.channel as usize;
+            // The sequenced notes' choke pass ran before these joined the
+            // lists, so a note auditioned or played here chokes the rest of
+            // its group itself (MOO-392).
+            let group = choke_groups[..live].get(channel).copied().unwrap_or(0);
+            if group != 0 && matches!(audition.event, Event::NoteOn { .. }) {
+                for target in (0..live).filter(|&target| target != channel) {
+                    if choke_groups[target] == group {
+                        let _ = self.events[target].push_ordered(TimedEvent {
+                            offset,
+                            event: Event::Choke,
+                        });
+                    }
+                }
+            }
+            if let Some(events) = self.events.get_mut(channel) {
                 // A refusal is counted by the list itself.
                 let _ = events.push_ordered(TimedEvent {
-                    offset: audition.offset.min(last_frame),
+                    offset,
                     event: audition.event,
                 });
             }
         }
+    }
+
+    /// Each live channel's choke group, `0` for one that is muted or
+    /// silenced by a solo: it neither chokes nor is choked.
+    fn choke_groups(&self) -> [u8; MAX_CHANNELS] {
+        let mut choke_groups = [0; MAX_CHANNELS];
+        for (index, strip) in self.strips.iter().enumerate().take(self.live_channels()) {
+            if !strip.output.muted && !strip.solo_silenced {
+                choke_groups[index] = strip.choke_group();
+            }
+        }
+        choke_groups
     }
 
     pub fn process_block(&mut self, frames: usize) -> RenderReport {
@@ -9044,17 +9074,7 @@ impl RenderState {
                     &mut self.events,
                 );
             }
-            let mut choke_groups = [0; MAX_CHANNELS];
-            for (index, strip) in self
-                .strips
-                .iter()
-                .enumerate()
-                .take(self.live_channels())
-            {
-                if !strip.output.muted && !strip.solo_silenced {
-                    choke_groups[index] = strip.choke_group();
-                }
-            }
+            let choke_groups = self.choke_groups();
             inject_choke_events(
                 &choke_groups[..self.live_channels()],
                 &mut self.events,
@@ -10359,6 +10379,38 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         assert_eq!(events[0].len(), 1);
         assert_eq!(events[1].iter().next().unwrap().event, Event::Choke);
         assert!(events[2].is_empty());
+    }
+
+    /// A note auditioned from the face, or played on a keyboard, chokes the
+    /// rest of its group, as a sequenced note does (MOO-392). The starter
+    /// kit's closed and open hats share a group.
+    #[test]
+    fn an_auditioned_note_chokes_the_rest_of_its_choke_group() {
+        let mut render = RenderState::from_project(48_000, &Project::starter_kit(), &[]);
+        let (closed, open, kick) = (2u8, 3u8, 0u8);
+        assert_ne!(render.strips[usize::from(closed)].choke_group(), 0);
+        assert_eq!(
+            render.strips[usize::from(closed)].choke_group(),
+            render.strips[usize::from(open)].choke_group(),
+            "the premise: the hats share a group"
+        );
+
+        render.apply_command(EngineCommand::TriggerChannelNote {
+            channel: closed,
+            note: 60,
+            velocity: 100,
+        });
+        render.dispatch_auditions(128);
+
+        let chokes = |channel: u8| {
+            render.events[usize::from(channel)]
+                .iter()
+                .filter(|event| event.event == Event::Choke)
+                .count()
+        };
+        assert_eq!(chokes(open), 1, "the open hat was left ringing");
+        assert_eq!(chokes(closed), 0, "a note chokes the others in its group, not itself");
+        assert_eq!(chokes(kick), 0, "a channel outside the group was choked");
     }
 
     #[test]
