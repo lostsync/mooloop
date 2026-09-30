@@ -679,7 +679,10 @@ mechanism instead of two. Not a per-callback patch.
 **A chain nested past `MAX_CONTAINER_DEPTH` still loads unreported, and the
 integrity pass has no way to say so.** The gesture half was fixed 2026-09-14:
 `can_wrap`, `can_insert_into_container` and `can_move_into_container` refuse a
-wrap, an insert and a drag that would put a box past the cap, the rack's wrap
+wrap, an insert and a drag that would put a box past the cap; the index
+primitives `insert_effect`, `insert_run` (paste) and `move_effect` (a drop on
+a row) got the same check on 2026-09-30 (MOO-363), having asked nothing
+until then. The rack's wrap
 button asks the same function rather than comparing a depth of its own, and
 `the_rack_draws_a_band_for_every_level_the_engine_blends` holds `main.slint`'s
 four literal chrome levels to the constant. Before that, five clicks reached a
