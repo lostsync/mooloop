@@ -191,8 +191,8 @@ impl MonoSynth {
     }
 
     fn release_all(&mut self) {
-        if self.voice.active && !self.voice.env.is_releasing() {
-            self.voice.env.release_with(STOP_RELEASE_S);
+        if self.voice.active {
+            self.voice.env.release_within(STOP_RELEASE_S);
         }
     }
 
@@ -439,6 +439,48 @@ mod tests {
         let mut bus = StereoBus::with_capacity(256);
         synth.process(&ctx(256, sr), &mut bus, &EventList::empty(), None);
         assert_eq!(bus.peak(256), (0.0, 0.0));
+    }
+
+    /// A choke on a voice already 1 s into an 8 s release has to end it within
+    /// `STOP_RELEASE_S`, not leave the natural tail ringing (MOO-391).
+    #[test]
+    fn a_choke_shortens_a_release_already_running() {
+        let params = MonoSynthParams {
+            release: 8.0,
+            ..Default::default()
+        };
+        let mut synth = make_synth(48_000, params);
+        let sr = 48_000_usize;
+        let mut bus = StereoBus::with_capacity(sr);
+        let mut on = EventList::empty();
+        on.push(note_on(0, 1, 48));
+        synth.process(&ctx(4800, 48_000), &mut bus, &on, None);
+        let mut off = EventList::empty();
+        off.push(TimedEvent {
+            offset: 0,
+            event: Event::NoteOff { id: 1, note: 48 },
+        });
+        bus.clear(sr);
+        synth.process(&ctx(sr, 48_000), &mut bus, &off, None);
+        assert!(
+            synth.voice.active && synth.voice.env.is_releasing(),
+            "the note should be one second into its release"
+        );
+
+        let mut choke = EventList::empty();
+        choke.push(TimedEvent {
+            offset: 0,
+            event: Event::Choke,
+        });
+        bus.clear(480);
+        synth.process(&ctx(480, 48_000), &mut bus, &choke, None);
+        bus.clear(64);
+        synth.process(&ctx(64, 48_000), &mut bus, &EventList::empty(), None);
+        let (l, r) = bus.peak(64);
+        assert!(
+            l.max(r) < 1.0e-3,
+            "a choke left the release tail ringing ({l:.5}, {r:.5})"
+        );
     }
 
     #[test]
