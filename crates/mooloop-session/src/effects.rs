@@ -473,7 +473,7 @@ impl Session {
     /// is made with the run as its one branch. When the run is one row's run
     /// -- a device, or a box and what it holds, which is all the rail's wrap
     /// button ever offers -- the Layer goes straight round it and it is the
-    /// branch as it stands: one row, and no Chain nobody asked for (MOO-456).
+    /// branch as it stands: one row, and no Chain nobody asked for.
     /// A device directly inside a layer is a branch with no Level, Mute or
     /// Solo of its own (`containers/09`); wrapping it in a Chain later gives
     /// it them.
@@ -2781,7 +2781,10 @@ mod tests {
     fn a_layer_refuses_an_append_and_its_branch_chain_takes_one() {
         let mut session = Session::default();
         session.insert_effect_at(EffectKind::Drive, 0).expect("room");
-        session.wrap_effects_in(0..1, EffectKind::Layer).expect("wrapped");
+        // The branch's Chain is made explicitly: a wrap in a Layer puts one
+        // device straight in as its branch.
+        session.wrap_effects_in_container(0..1).expect("wrapped");
+        session.wrap_effects_in(0..2, EffectKind::Layer).expect("wrapped");
         // [Layer, [Chain, Drive]]
         let before = session.channels[0].effects.clone();
         assert!(session

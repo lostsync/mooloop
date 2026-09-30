@@ -2086,8 +2086,8 @@ land on its own when it starts to matter:
   one branch, and that branch is the wrapped device itself, with no Chain
   made around it (MOO-456, 2026-09-30; it used to add one, so the branch had
   S, M and Level from the start). A device sitting directly in a layer has no
-  S or M, as above; wrapping it in a Chain gives it them. A right-click on a branch in the list offers
-  **Remove branch**, which takes the branch and everything in it. The last
+  S or M, as above; wrapping it in a Chain gives it them. A right-click on a
+  branch in the list offers **Remove branch**, which takes the branch and everything in it. The last
   branch can go too, leaving an empty layer that passes its input. Each of
   these is one undo step.
 - **A layer saves as a preset**, the box and every branch in it, and lists
