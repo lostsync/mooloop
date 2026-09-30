@@ -814,8 +814,8 @@ fn render_pass(
         }
         Ok(())
     });
-    let tail_frames = match rendered {
-        Ok(tail_frames) => tail_frames,
+    let (tail_frames, refused_before) = match rendered {
+        Ok(rendered) => rendered,
         Err(error) => {
             drop(sinks);
             discard(0);
@@ -847,8 +847,9 @@ fn render_pass(
             );
             continue;
         }
-        // The master's counts are its output guard's; a stem has no guard,
-        // so its sink counted its own.
+        // The master's counts are its output guard's, which left the pre-roll
+        // out (`render_blocks`); a stem has no guard, so its sink counted
+        // its own.
         let (overs, non_finite) = match output.tap {
             RenderTap::Master => (state.output_overs(), state.output_non_finite()),
             RenderTap::Track(_) | RenderTap::Channel(_) => (overs, non_finite),
@@ -862,7 +863,7 @@ fn render_pass(
             base_frames,
             tail_frames,
             total_frames: base_frames.saturating_add(tail_frames),
-            refused_events: state.refused_events(),
+            refused_events: state.refused_events() - refused_before,
             overs,
             clipped_samples: clipped,
             non_finite_samples: non_finite,
@@ -982,12 +983,18 @@ const _: () = assert!(OFFLINE_BLOCK_FRAMES <= MAX_BLOCK_SIZE);
 /// Render the pre-roll and the bars, then the tail until the project falls
 /// silent or `tail_cap` runs out, handing the state to `sink` after each
 /// block with the part of the block to write. Returns how much tail it
-/// rendered.
+/// rendered, and the refused events counted before the first block written.
 ///
 /// The pre-roll is rendered on the same block grid as the bars, and the
 /// block the range starts inside is written from the range's first frame,
 /// so the frames written are the ones a render from the top computes, block
 /// for block (MOO-239).
+///
+/// The state's overs and non-finite counts leave the pre-roll out, to the
+/// frame, so the master's figures cover what the file holds as a stem's do
+/// (MOO-351). Refused events cannot be placed on a frame: `refused_before`
+/// is the state's total when the first block that writes began, so the
+/// block the range starts inside counts whole.
 ///
 /// Nothing on the master delays its output -- the safety limiter has no
 /// lookahead (MOO-217) -- so a file starts on the bar line as rendered.
@@ -996,7 +1003,7 @@ fn render_blocks(
     length: PassLength,
     progress: &ExportProgress,
     mut sink: impl FnMut(&RenderState, std::ops::Range<usize>) -> Result<(), ExportError>,
-) -> Result<u64, ExportError> {
+) -> Result<(u64, u64), ExportError> {
     let PassLength {
         preroll,
         base,
@@ -1005,12 +1012,17 @@ fn render_blocks(
     state.play();
     let end = preroll.saturating_add(base);
     let mut position = 0u64;
+    let mut refused_before = None;
     while position < end {
         let frames = (end - position).min(OFFLINE_BLOCK_FRAMES as u64) as usize;
-        state.process_once_block(frames);
         // Zero for every block of the bars; inside the block the range
         // starts in, how far in it starts; the whole block, before it.
         let skip = preroll.saturating_sub(position).min(frames as u64) as usize;
+        if skip < frames {
+            refused_before.get_or_insert_with(|| state.refused_events());
+        }
+        state.count_output_from(skip);
+        state.process_once_block(frames);
         if skip < frames {
             sink(state, skip..frames)?;
         }
@@ -1039,7 +1051,7 @@ fn render_blocks(
             break;
         }
     }
-    Ok(rendered)
+    Ok((rendered, refused_before.unwrap_or_else(|| state.refused_events())))
 }
 
 /// One output's encoder, fed a block at a time.
@@ -2151,6 +2163,46 @@ mod tests {
             .fold(0.0f32, f32::max);
         let opening = part[..2_400].iter().map(|s| s.abs()).fold(0.0f32, f32::max);
         (worst, opening)
+    }
+
+    /// **A range's counts are the file's, not the pre-roll's** (MOO-351).
+    ///
+    /// A hit over 0 dBFS (or a NaN) sits in the first 1 100 frames of the
+    /// song. A range starting at tick 5, frame 1 250, runs after it, and the
+    /// block it starts inside (frames 1 024 to 1 536) holds the end of the
+    /// hit, so the count has to be exact to the frame. Shaped against the tree
+    /// where the master's figures were the state's running totals.
+    #[test]
+    fn a_range_does_not_count_the_overs_and_nans_of_its_pre_roll() {
+        let hot_then_quiet = |index: usize| if index < 1_100 { full_scale(index) } else { 0.0 };
+        let broken_then_quiet = |index: usize| if index < 1_100 { f32::NAN } else { 0.0 };
+        let cases: [(&str, Project, Arc<SampleData>); 2] = [
+            (
+                "overs",
+                sampler_project(mooloop_core::MAX_LINEAR_GAIN),
+                long_sample(24_000, hot_then_quiet),
+            ),
+            ("non-finite", sampler_project(1.0), long_sample(24_000, broken_then_quiet)),
+        ];
+        for (what, mut project, sample) in cases {
+            for bar in [0, 3] {
+                project.playlist.push(PatternPlacement::new(0, bar * BAR));
+            }
+            let temp = tempdir().unwrap();
+            let counted = |summary: &RenderSummary| {
+                if what == "overs" { summary.overs } else { summary.non_finite_samples }
+            };
+            let render = |start_tick, end_tick| {
+                let range = RenderScope::Range { start_tick, end_tick };
+                render_float(&project, &sample, range, &temp.path().join("range.wav")).0
+            };
+            assert_ne!((5 * FRAMES_PER_TICK) % OFFLINE_BLOCK_FRAMES as u64, 0);
+            let after = render(5, BAR);
+            assert_eq!(counted(&after), 0, "{what}: the range after the hit counts the pre-roll's");
+            assert_eq!(after.refused_events, 0);
+            let covering = render(0, 5);
+            assert!(counted(&covering) > 0, "{what}: the range over the hit reports none");
+        }
     }
 
     /// **A range holds the reverb from before it** (MOO-239).

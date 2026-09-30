@@ -5434,6 +5434,10 @@ pub(crate) struct RenderState {
     /// Samples that reached the guard above 0 dBFS and were limited, since
     /// this state was built. See [`Self::output_overs`].
     output_overs: u64,
+    /// How many leading frames of the next block the two counts above leave
+    /// out; taken back to zero by that block. See
+    /// [`Self::count_output_from`].
+    output_count_from: usize,
     /// Which channels reached their output in the last block: what a take
     /// of a channel and an export's channel stem (MOO-183) may read. A
     /// muted, faded or sleeping channel's buffer holds stale or pre-fader
@@ -5599,6 +5603,7 @@ impl RenderState {
             output_guard: OutputGuard::new(sample_rate),
             output_non_finite: 0,
             output_overs: 0,
+            output_count_from: 0,
             channels_heard: [false; MAX_CHANNELS],
         };
         // The sequencer starts with one channel, so the graph starts with
@@ -9911,9 +9916,13 @@ impl RenderState {
         // preview, and the limiter has to follow it. So the scrub runs twice
         // on the master: here, and inside the guard below, which is what
         // catches a preview's. Only the master, and a pass of `is_finite`.
+        // The frames before `output_count_from` are scrubbed and limited like
+        // the rest but not counted (an export's pre-roll, MOO-351).
+        let count_from = std::mem::take(&mut self.output_count_from).min(frames);
         let scrubbed = {
             let master = &mut self.buses[MASTER_BUS as usize].bus;
-            OutputGuard::scrub(&mut master.l[..frames], &mut master.r[..frames])
+            OutputGuard::scrub(&mut master.l[..count_from], &mut master.r[..count_from]);
+            OutputGuard::scrub(&mut master.l[count_from..frames], &mut master.r[count_from..frames])
         };
         self.channels_heard = heard;
         self.advance_takes(&spans[..span_count], ticks_per_sample, &heard);
@@ -9925,8 +9934,14 @@ impl RenderState {
         // that the limiter is working, rather than the limiter hiding it.
         let mut guarded = {
             let master = &mut self.buses[MASTER_BUS as usize].bus;
+            // One pass per side of `count_from`, which runs the same frames
+            // in the same order as one pass over the block.
             self.output_guard
-                .process(&mut master.l[..frames], &mut master.r[..frames])
+                .process(&mut master.l[..count_from], &mut master.r[..count_from]);
+            self.output_guard.process(
+                &mut master.l[count_from..frames],
+                &mut master.r[count_from..frames],
+            )
         };
         guarded.non_finite = guarded.non_finite.saturating_add(scrubbed);
         if guarded.non_finite > 0 {
@@ -10161,6 +10176,17 @@ impl RenderState {
     /// an export reports it (`RenderSummary::non_finite_samples`).
     pub fn output_non_finite(&self) -> u64 {
         self.output_non_finite
+    }
+
+    /// Leave the first `frames` frames of the next block out of
+    /// [`Self::output_overs`] and [`Self::output_non_finite`]. They are still
+    /// scrubbed and limited, so the audio is the same; only the counts move.
+    ///
+    /// What a range export calls for its pre-roll, and for the block the
+    /// range starts inside, so the master's counts cover the frames the file
+    /// holds as a stem's do (MOO-351). Applies to one block.
+    pub fn count_output_from(&mut self, frames: usize) {
+        self.output_count_from = frames;
     }
 
     /// Samples that reached the output guard above 0 dBFS, since this state
