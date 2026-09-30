@@ -8824,9 +8824,24 @@ impl RenderState {
         let played = self.tick_at(message.offset);
         let latency = f64::from(self.capture_latency.load(Ordering::Relaxed))
             * self.transport.ticks_per_sample();
+        let mut heard = played - latency;
+        // Just after a Song-mode loop folds back, what the player heard
+        // was the end of the loop, not the bar before its start that this
+        // pass never played (MOO-388).
+        if self.sequencer.playback_mode() == PlaybackMode::Song {
+            if let Some((start, end)) = self
+                .loop_range
+                .active(self.sequencer.song_length_ticks())
+                .map(|(start, end)| (f64::from(start), f64::from(end)))
+            {
+                if played >= start && heard < start {
+                    heard += end - start;
+                }
+            }
+        }
         let Some((pattern, start_tick)) = self
             .sequencer
-            .recording_tick(played - latency)
+            .recording_tick(heard)
             .or_else(|| {
                 self.sequencer
                     .recording_tick(played)
@@ -11559,6 +11574,82 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         // tick 432 (108 000 frames: 421 blocks and 224) is heard at 422.4.
         let mut render = rig(true);
         assert_eq!(tap(&mut render, 421, 224), 38);
+    }
+
+    /// A note played just after a Song-mode loop folds back is stamped where
+    /// the player heard the song -- the end of the loop -- not a loop early,
+    /// in a bar the loop never plays (MOO-388).
+    #[test]
+    fn a_recorded_note_just_after_a_song_loop_folds_lands_at_the_loop_end() {
+        use mooloop_core::{
+            EngineEvent, LoopRange, MidiChannelFilter, MidiInputRoute, MidiKind, MidiMessage,
+            MidiPortId, MidiRouteSource, PlaybackMode,
+        };
+
+        let mut render = two_channel_render();
+        let _ = render.set_midi_routing(Box::new(MidiRouting {
+            routes: vec![MidiInputRoute {
+                source: MidiRouteSource::AllPorts,
+                channel: MidiChannelFilter::Omni,
+            }],
+        }));
+        // 2400 frames at 120 bpm and 48 kHz is 9.6 ticks.
+        render.attach_capture_latency(Arc::new(AtomicU32::new(2400)));
+        // Two bars placed at 0, looping over the second.
+        render.apply_command(EngineCommand::SetPatternLength {
+            pattern: 0,
+            length_steps: 32,
+        });
+        render.apply_command(EngineCommand::SetPlaylistPlacement {
+            pattern: 0,
+            start_tick: 0,
+            on: true,
+        });
+        render.apply_command(EngineCommand::SetPlaybackMode(PlaybackMode::Song));
+        render.apply_command(EngineCommand::SetLoopRange(LoopRange {
+            start_tick: 384,
+            end_tick: 768,
+            enabled: true,
+        }));
+        render.apply_command(EngineCommand::Seek { tick: 700.0 });
+        render.set_record_armed(true);
+        render.play();
+
+        // Run to the block whose end is about 5.6 ticks past the fold, then
+        // press at 390.1 ticks: heard at 380.5, which is 764.5 of the loop.
+        let mut folded = false;
+        loop {
+            let before = render.transport.position_ticks;
+            render.process_block(256);
+            folded |= render.transport.position_ticks < before;
+            if folded && render.transport.position_ticks > 389.1 {
+                break;
+            }
+        }
+        let offset = ((390.1 - render.transport.position_ticks) * 250.0).round() as u32;
+        assert!(offset < 256, "the press is not in the next block: {offset}");
+        let message = |offset, kind| MidiMessage {
+            offset,
+            port: MidiPortId::FIRST,
+            channel: 0,
+            kind,
+        };
+        render.apply_midi(&[message(
+            offset,
+            MidiKind::NoteOn {
+                note: 60,
+                velocity: 90,
+            },
+        )]);
+        render.process_block(256);
+        render.apply_midi(&[message(0, MidiKind::NoteOff { note: 60 })]);
+        render.process_block(256);
+
+        let recorded: Vec<_> = std::iter::from_fn(|| render.pop_outgoing()).collect();
+        let [EngineEvent::RecordedNote { start_tick, .. }] = recorded[..] else {
+            panic!("expected exactly one recorded note, got {recorded:?}");
+        };
+        assert_eq!(start_tick, 764, "the note landed outside the loop the player heard");
     }
 
     /// A key still down when the transport stops is reported at the length it
