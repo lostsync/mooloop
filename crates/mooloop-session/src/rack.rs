@@ -150,7 +150,13 @@ impl Session {
         if bus as usize >= MAX_BUSES {
             return None;
         }
-        self.channels.get_mut(channel)?.bus = bus;
+        let state = self.channels.get_mut(channel)?;
+        // Re-picking the lit row of the output picker is not an edit: no
+        // command, so no empty undo step and no dropped redo history.
+        if state.bus == bus {
+            return None;
+        }
+        state.bus = bus;
         Some(EngineCommand::SetChannelBus {
             channel: channel as u8,
             bus,
@@ -353,6 +359,17 @@ mod tests {
             Some(EngineCommand::SetChannelPan { pan, .. }) if pan == 1.0
         ));
         assert!(session.set_channel_volume(7, 0.5).is_none());
+    }
+
+    /// MOO-403: the picker reports the lit row too, and a command here is an
+    /// undo entry that drops the redo history.
+    #[test]
+    fn re_picking_a_channels_current_bus_is_not_an_edit() {
+        let mut session = Session::default();
+        let current = i32::from(session.channels[0].bus);
+        assert!(session.set_channel_bus(0, current).is_none());
+        assert!(session.set_channel_bus(0, current + 1).is_some());
+        assert!(session.set_channel_bus(0, current + 1).is_none());
     }
 
     #[test]
