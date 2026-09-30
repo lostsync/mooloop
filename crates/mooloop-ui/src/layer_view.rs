@@ -228,8 +228,8 @@ pub(crate) fn rack_view(
             })
             .count() as i32
     };
-    for row in 0..count {
-        rows[row].draw_depth = draw_depth(row);
+    for (row, view) in rows.iter_mut().enumerate() {
+        view.draw_depth = draw_depth(row);
     }
     // Where each drawn row's next drawn neighbour sits.
     for row in 0..count {
