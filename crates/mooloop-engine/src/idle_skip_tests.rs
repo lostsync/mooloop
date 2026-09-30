@@ -17,8 +17,10 @@ use mooloop_core::{
     mlp8, AudioSubscription, AuxInParams, EffectKind, EffectSlotState, LfoWave, NoteEvent,
     Project, ProjectChannel, ReverbParams, MASTER_BUS,
 };
+use std::sync::Arc;
+
 use mooloop_dsp::testkit::peak;
-use mooloop_dsp::SILENCE_PEAK;
+use mooloop_dsp::{SampleData, SILENCE_PEAK};
 
 use crate::render::RenderState;
 use crate::render_test_support::{SAMPLE_RATE};
@@ -422,3 +424,62 @@ fn a_bus_reverb_is_heard_out_after_the_channel_feeding_it_stops() {
     );
 }
 
+
+/// A sampler one-shot on channel 0, and a channel with a Limiter -- which
+/// reports latency -- on the same bus, so channel 0 is owed compensation
+/// (MOO-401). The sample is a sine at half scale, so the voice ends while the
+/// signal is audible.
+fn compensated_sampler_project() -> (Project, Arc<SampleData>) {
+    let step = std::f32::consts::TAU * 221.0 / SAMPLE_RATE as f32;
+    let sample = Arc::new(SampleData {
+        frames: (0..3_000)
+            .map(|frame| {
+                let value = 0.5 * (step * frame as f32).sin();
+                [value, value]
+            })
+            .collect(),
+        sample_rate: SAMPLE_RATE,
+        root_note: 60,
+    });
+    let mut player = ProjectChannel::sampler(0, 1);
+    player.setup.channel.volume = 1.0;
+    player.notes[0].push(NoteEvent::new(1, 0, 96, 60, 127));
+    let mut latent = ProjectChannel::sampler(1, 1);
+    latent
+        .setup
+        .push_effect(EffectSlotState::of_kind(EffectKind::Limiter));
+    let project = Project {
+        channels: vec![player, latent],
+        ..full_bank_project()
+    };
+    (project, sample)
+}
+
+/// A channel owed latency compensation is not put to sleep while its ring
+/// still holds the end of its last note (MOO-401). The sampler reports no
+/// tail, so it used to sleep one silent block after the voice ended, and the
+/// sleep emptied a ring holding up to a limiter's worth of unheard audio.
+#[test]
+fn a_channel_owed_compensation_finishes_its_note_before_it_sleeps() {
+    let (project, sample) = compensated_sampler_project();
+    let render = |skip: bool| {
+        let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[Some(Arc::clone(&sample))]);
+        render.set_idle_skipping(skip);
+        render.play();
+        let mut out = Vec::new();
+        for _ in 0..(SAMPLE_RATE as usize / 4 / 64) {
+            render.process_once_block(64);
+            out.extend_from_slice(&render.master().l[..64]);
+        }
+        out
+    };
+    let slept = render(true);
+    let ran = render(false);
+    assert!(peak(&ran) > 0.05, "the comparison is against silence");
+    let (worst, at) = worst_difference_at(&slept, &ran);
+    assert!(
+        worst == 0.0,
+        "sleeping cut the end of a compensated note: the master differs by \
+         {worst} at frame {at}"
+    );
+}

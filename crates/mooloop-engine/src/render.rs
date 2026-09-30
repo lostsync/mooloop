@@ -4328,6 +4328,11 @@ pub struct ChannelStrip {
     /// measurement that covers every reason a device might still be making
     /// sound, including the finishing stages that outlive its voices.
     source_silent_frames: u32,
+    /// Consecutive frames of silence fed into the compensation ring, counted
+    /// after the fader where the ring is fed (MOO-401). The source's silence
+    /// is not that: a chain with a tail keeps feeding the ring audio long
+    /// after the source has gone quiet. Only kept while a ring exists.
+    ring_silent_frames: u32,
     /// Whether the strip was left uncalled last block. Only used to do the
     /// once-off tidying that falling asleep needs -- emptying the bus and the
     /// compensation ring -- rather than repeating it every idle block.
@@ -4470,6 +4475,7 @@ impl ChannelStrip {
             destination: MASTER_BUS,
             compensation: None,
             source_silent_frames: 0,
+            ring_silent_frames: 0,
             sleeping: false,
             take: None,
             sequenced: SequencedVoices::new(),
@@ -4641,6 +4647,11 @@ impl ChannelStrip {
         source.is_at_rest()
             && self.source_silent_frames > source.tail_frames()
             && self.effects.is_at_rest()
+            // The ring has to have been fed silence for at least its own
+            // length: until then it still holds audio it has not emitted,
+            // and `sleep` empties it (MOO-401). `BusStrip::is_resting` has
+            // the same clause.
+            && self.ring_silent_frames as usize >= ring_frames(&self.compensation)
     }
 
     /// Spend a block asleep: move whatever runs on the clock, and the first
@@ -4655,6 +4666,7 @@ impl ChannelStrip {
         self.source_node_mut().skip_block(context);
         self.effects.sleep(context);
         self.source_silent_frames = self.source_silent_frames.saturating_add(context.frames as u32);
+        self.ring_silent_frames = self.ring_silent_frames.saturating_add(context.frames as u32);
         if self.sleeping {
             return;
         }
@@ -9359,6 +9371,7 @@ impl RenderState {
                 // from it: unmuting always renders at least one block before
                 // the channel is allowed to decide it is idle.
                 self.strips[index].source_silent_frames = 0;
+                self.strips[index].ring_silent_frames = 0;
                 continue;
             }
             // A hosted instrument's knob edits, at the top of the block
@@ -9694,6 +9707,7 @@ impl RenderState {
                 // authors a channel send, correct the day something does.
                 self.sends.reset(EffectTarget::Channel(index as u8));
                 self.strips[index].source_silent_frames = 0;
+                self.strips[index].ring_silent_frames = 0;
                 continue;
             }
             let strip = &mut self.strips[index];
@@ -9738,6 +9752,15 @@ impl RenderState {
             // same bus. Last, so what waits is the finished channel, and
             // immediately before the sum it is being aligned for.
             if let Some(delay) = strip.compensation.as_mut() {
+                // What goes in, not what the source made: this is what the
+                // ring will hold, so this is what has to have gone quiet
+                // before the strip may sleep and empty it (MOO-401).
+                let (left, right) = strip.bus.peak(frames);
+                strip.ring_silent_frames = if left.max(right) <= SILENCE_PEAK {
+                    strip.ring_silent_frames.saturating_add(frames as u32)
+                } else {
+                    0
+                };
                 delay.process(&mut strip.bus.l[..frames], &mut strip.bus.r[..frames]);
             }
             heard[index] = true;
@@ -18693,7 +18716,10 @@ mod footprint {
         // alignment. Paid by every strip rather than boxed on a plugin
         // source, because a knob edit lands on the audio thread and the
         // queue has to be there before the edit is.
-        assert_eq!(size_of::<ChannelStrip>(), 23_128);
+        //
+        // MOO-401 added eight: `ring_silent_frames`, four bytes and
+        // alignment padding.
+        assert_eq!(size_of::<ChannelStrip>(), 23_136);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -18786,7 +18812,9 @@ mod footprint {
         //
         // And by 320 with the strip for MOO-314: a plugin instrument's
         // `DeviceId` and its waiting knob edits.
-        assert_eq!(per_live, 143_736);
+        //
+        // And by 8 for MOO-401: the strip's `ring_silent_frames`.
+        assert_eq!(per_live, 143_744);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
@@ -18889,7 +18917,10 @@ mod footprint {
         //
         // MOO-314's plugin instrument id and knob queue: 320 bytes a live
         // channel, exactly 5 KiB across sixteen.
-        assert_eq!((fixed + per_live * 16) / 1024, 2_732);
+        //
+        // MOO-401's ring silence count: 8 bytes a live channel, which
+        // carried the total over one more KiB boundary.
+        assert_eq!((fixed + per_live * 16) / 1024, 2_733);
     }
 
 }
