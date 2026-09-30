@@ -5032,6 +5032,17 @@ pub struct AudioInputRouting {
     pub taps: Vec<Option<mooloop_core::AudioTap>>,
 }
 
+/// Whether editing a stored note from `old` to `new` moves its note-off
+/// somewhere the playhead will not reach: re-pitched (a note-off names its
+/// pitch), moved, or shortened. A note that only grows, or changes velocity,
+/// keeps its voice. The one rule a live edit and an install both apply
+/// (MOO-99, MOO-383).
+fn note_off_out_of_reach(old: &mooloop_core::NoteEvent, new: &mooloop_core::NoteEvent) -> bool {
+    old.note != new.note
+        || old.start_tick != new.start_tick
+        || new.duration_ticks < old.duration_ticks
+}
+
 /// One note being recorded, from its press until its release.
 #[derive(Clone, Copy)]
 struct RecordingNote {
@@ -6034,11 +6045,26 @@ impl RenderState {
             // The voices came across with the strip, and so did the table
             // naming them. One whose note the incoming song no longer has,
             // or has at another pitch, will never see its note-off (MOO-99).
+            //
+            // Also one whose note-off the install moved out of reach, by the
+            // rule a live `UpsertNote` uses, or that lost the placement it
+            // was scheduled through, as `SetPlaylistPlacement` does live
+            // (MOO-383). Undo and redo arrive here.
             let sequencer = &self.sequencer;
+            let before = &outgoing.sequencer;
             fresh.sequenced.release_where(|voice| {
-                sequencer
-                    .note(usize::from(voice.origin.pattern), to, voice.note_id())
-                    .is_none_or(|note| note.note != voice.note)
+                let pattern = usize::from(voice.origin.pattern);
+                let Some(note) = sequencer.note(pattern, to, voice.note_id()) else {
+                    return true;
+                };
+                note.note != voice.note
+                    || before
+                        .note(pattern, from, voice.note_id())
+                        .is_none_or(|old| note_off_out_of_reach(&old, &note))
+                    || voice
+                        .origin
+                        .placement
+                        .is_some_and(|start| !sequencer.has_placement(pattern, start))
             });
         }
         // A track's live strip, for a track whose id and setup survived: its
@@ -7943,10 +7969,7 @@ impl RenderState {
                 // that only grows, or changes velocity, keeps its voice: its
                 // note-off is still ahead (MOO-99).
                 if let Some(old) = self.sequencer.note(pattern as usize, channel as usize, note.id) {
-                    if old.note != note.note
-                        || old.start_tick != note.start_tick
-                        || note.duration_ticks < old.duration_ticks
-                    {
+                    if note_off_out_of_reach(&old, &note) {
                         self.release_edited_note(pattern, channel, note.id);
                     }
                 }
@@ -18083,6 +18106,90 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 );
             }
         }
+    }
+
+    /// **An install ends a carried voice whose note-off it has moved out of
+    /// reach** (MOO-383). Undo and redo are installs, and a notes-only change
+    /// carries the strip: the live rule for `UpsertNote` releases a voice
+    /// whose note was moved or shortened, and the install used to release it
+    /// only when the note was gone or re-pitched -- so undoing a move while
+    /// the note sounded left the pad droning until Stop.
+    #[test]
+    fn an_install_ends_a_carried_voice_whose_note_off_it_moved() {
+        use crate::render_test_support::SAMPLE_RATE;
+
+        const BLOCK: usize = 256;
+        // One bar of 16 steps; a note of `duration` ticks from `start`.
+        let project = |start: u32, duration: u32, steps: u16| {
+            let mut project = held_note_project();
+            project.channels[0].notes[0].clear();
+            project.channels[0].notes[0].push(NoteEvent::new(1, start, duration, 60, 127));
+            project.pattern_lengths = vec![steps, DEFAULT_STEPS];
+            project.assign_channel_ids();
+            project
+        };
+        // The voice sounding on the live renderer at tick 216, then the
+        // incoming project installed with the transport kept: does the
+        // incoming renderer end it within two laps?
+        let ended = |live: Project, incoming: Project| {
+            let mut live_render = RenderState::from_project(SAMPLE_RATE, &live, &[]);
+            live_render.play();
+            let mut sounding = None;
+            // 216 ticks is 54 000 frames at 120 bpm and 48 kHz.
+            for _ in 0..(54_000 / BLOCK) {
+                live_render.process_block(BLOCK);
+                for event in live_render.events[0].iter() {
+                    match event.event {
+                        Event::NoteOn { id, .. } => sounding = Some(id),
+                        Event::NoteOff { id, .. } if sounding == Some(id) => sounding = None,
+                        _ => {}
+                    }
+                }
+            }
+            let id = sounding.expect("the premise: a note is sounding");
+            let plan = crate::carry_plan(&live, &incoming);
+            let mut render = RenderState::from_project(SAMPLE_RATE, &incoming, &[]);
+            render.adopt_performance_state(&live_render);
+            render.carry_strips_from(&mut live_render, &plan);
+            for _ in 0..(2 * 2 * SAMPLE_RATE as usize / BLOCK) {
+                render.process_block(BLOCK);
+                for event in render.events[0].iter() {
+                    match event.event {
+                        Event::NoteOff { id: off, .. } if off == id => return true,
+                        Event::Choke => return true,
+                        _ => {}
+                    }
+                }
+            }
+            false
+        };
+
+        assert!(
+            ended(project(192, 96, 16), project(0, 96, 16)),
+            "undoing a move left the voice droning"
+        );
+        assert!(
+            ended(project(0, 300, 16), project(0, 96, 16)),
+            "undoing a lengthen left the voice droning"
+        );
+        // Song mode: the placement the voice was scheduled through is gone.
+        let song = |placed: bool| {
+            let mut project = project(0, 300, 16);
+            project.playback_mode = PlaybackMode::Song;
+            project.playlist = if placed {
+                vec![mooloop_core::PatternPlacement {
+                    pattern: 0,
+                    start_tick: 0,
+                }]
+            } else {
+                Vec::new()
+            };
+            project
+        };
+        assert!(
+            ended(song(true), song(false)),
+            "undoing an added placement left the voice droning"
+        );
     }
 }
 
