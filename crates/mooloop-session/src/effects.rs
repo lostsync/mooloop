@@ -470,13 +470,20 @@ impl Session {
     /// inserted, in the order the engine has to mirror them.
     ///
     /// A Chain is one row, [`Self::wrap_effects_in_container`]. A **Layer**
-    /// is made with one branch that already has its controls: a branch's
-    /// Level, Mute and Solo are a container's (`containers/09`), so the run
-    /// goes into a Chain first and the Chain into the Layer -- two rows, one
-    /// gesture. When the run already *is* one Chain, it becomes the branch as
-    /// it stands. When the nesting cap leaves room for one box and not two,
-    /// the Layer goes straight round the run, whose devices are then branches
-    /// with no switches of their own -- legal, and still a layer.
+    /// is made with the run as its one branch. When the run is one row's run
+    /// -- a device, or a box and what it holds, which is all the rail's wrap
+    /// button ever offers -- the Layer goes straight round it and it is the
+    /// branch as it stands: one row, and no Chain nobody asked for (MOO-456).
+    /// A device directly inside a layer is a branch with no Level, Mute or
+    /// Solo of its own (`containers/09`); wrapping it in a Chain later gives
+    /// it them.
+    ///
+    /// Only a run of *several* rows' runs goes into a Chain first and the
+    /// Chain into the Layer, two rows for one gesture: a layer straight round
+    /// it would make each of them a branch of its own and turn a series into
+    /// a parallel. When the nesting cap leaves room for one box and not two,
+    /// the Layer goes straight round even that run -- legal, and still a
+    /// layer.
     pub fn wrap_effects_in(
         &mut self,
         run: std::ops::Range<usize>,
@@ -490,16 +497,14 @@ impl Session {
         }
         let target = self.effect_target;
         let (effects, next_id) = self.effect_chain_parts_mut()?;
-        let already_a_chain = !run.is_empty()
-            && effects
-                .get(run.start)
-                .is_some_and(|effect| effect.kind() == EffectKind::Chain)
+        let one_branch = !run.is_empty()
+            && run.start < effects.len()
             && mooloop_core::run_of(effects, run.start) == run;
         // Rehearsed on a copy, so a refusal half way leaves the chain as it
         // was rather than holding a Chain nobody asked for.
         let mut trial = effects.clone();
         let mut trial_next = *next_id;
-        let two_rows = !already_a_chain
+        let two_rows = !one_branch
             && mooloop_core::wrap_in_container(
                 &mut trial,
                 &mut trial_next,
@@ -2404,6 +2409,61 @@ mod tests {
         assert_eq!(
             kinds(&session),
             [EffectKind::Layer, EffectKind::Chain, EffectKind::Drive]
+        );
+    }
+
+    /// **MOO-456.** Wrapping one device in a layer -- what the rail's wrap
+    /// menu does, since it wraps the clicked row's run -- puts the device
+    /// straight in as the layer's first branch, with no Chain made around it.
+    /// A box wrapped the same way is its branch as it stands, whatever kind
+    /// of box it is.
+    #[test]
+    fn wrapping_one_device_in_a_layer_makes_no_chain() {
+        let mut session = Session::default();
+        for kind in [EffectKind::Filter, EffectKind::Drive, EffectKind::Delay] {
+            session.insert_effect_at(kind, usize::MAX).expect("room");
+        }
+        let drive = session.channels[0].effects[1].id;
+        let run = mooloop_core::run_of(&session.channels[0].effects, 1);
+        let added = session.wrap_effects_in(run, EffectKind::Layer).expect("wrapped");
+        assert_eq!(
+            added.iter().map(|added| added.kind).collect::<Vec<_>>(),
+            [EffectKind::Layer],
+            "one row inserted, the layer"
+        );
+        assert_eq!(added[0].slot, 1);
+        assert_eq!(
+            kinds(&session),
+            [
+                EffectKind::Filter,
+                EffectKind::Layer,
+                EffectKind::Drive,
+                EffectKind::Delay
+            ]
+        );
+        assert_eq!(depths(&session), [0, 0, 1, 0]);
+        let effects = &session.channels[0].effects;
+        assert_eq!(
+            mooloop_core::layer_branches(effects, 1).collect::<Vec<_>>(),
+            [2],
+            "the Drive is the layer's one branch"
+        );
+        assert_eq!(effects[2].id, drive, "and it is the same device");
+        assert_eq!(mooloop_core::span_problem(effects), None);
+
+        // A Layer wrapped in a layer is a branch as it stands too.
+        let run = mooloop_core::run_of(&session.channels[0].effects, 1);
+        let added = session.wrap_effects_in(run, EffectKind::Layer).expect("wrapped");
+        assert_eq!(added.len(), 1);
+        assert_eq!(
+            kinds(&session),
+            [
+                EffectKind::Filter,
+                EffectKind::Layer,
+                EffectKind::Layer,
+                EffectKind::Drive,
+                EffectKind::Delay
+            ]
         );
     }
 

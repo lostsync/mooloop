@@ -12895,9 +12895,10 @@ impl AppUi {
                 let Ok(slot) = usize::try_from(slot) else {
                     return;
                 };
-                // The wrap menu's choice (`containers/10`): a Chain is one
-                // row, a Layer is two -- a layer round a chain round the run
-                // -- and both are one gesture and one undo step.
+                // The wrap menu's choice (`containers/10`): a Chain or a
+                // Layer, one row round the clicked row's run, which becomes
+                // the layer's first branch as it stands (MOO-456). Either is
+                // one gesture and one undo step.
                 let Some(kind) = effect_kind_from_index(kind_index) else {
                     return;
                 };
