@@ -380,15 +380,21 @@ impl Session {
             };
             if owner != device
                 || address.scope != scope
-                || saved.param(address.param).is_some()
+                || saved.param(address.param).is_some_and(|info| !info.hidden)
                 || rows.iter().any(|row| row.address == address)
             {
                 continue;
             }
+            // A hidden parameter is left out of the list above but a lane or
+            // route can still name it: it reads as missing under its own
+            // name, so it can be opened and removed (MOO-381).
+            let name = saved
+                .param(address.param)
+                .map_or_else(|| format!("Parameter {}", address.param), |info| info.name.clone());
             rows.push(PluginDestination {
                 address,
                 device: label.clone(),
-                name: format!("Parameter {}", address.param),
+                name,
                 missing: true,
                 lane_allowed: false,
             });
@@ -687,5 +693,33 @@ mod tests {
         );
         session.plugins.get_mut(&slot).unwrap().params = listed;
         assert!(names(&session).iter().all(|(_, _, missing)| !missing));
+    }
+
+    /// A parameter the plugin later marks hidden is left out of the menu, so
+    /// a lane that still names it must not vanish with it: it reads as
+    /// missing, under its own name, and can be opened and removed (MOO-381).
+    #[test]
+    fn a_lane_on_a_parameter_the_plugin_later_hid_is_still_listed() {
+        let (mut session, slot, device) = session_with(vec![gain(), nudge()]);
+        let nudge_address = ParamAddr::plugin_param(EffectTarget::Channel(0), device, 4_000_000_000);
+        session.open_automation_lane_at(nudge_address).expect("a lane");
+        session
+            .plugins
+            .get_mut(&slot)
+            .unwrap()
+            .params
+            .iter_mut()
+            .find(|info| info.id == 4_000_000_000)
+            .unwrap()
+            .hidden = true;
+        let rows = session.plugin_destinations();
+        let row = rows
+            .iter()
+            .find(|row| row.address == nudge_address)
+            .expect("the lane's parameter still has a row");
+        assert!(row.missing, "a hidden parameter is unavailable, like a missing one");
+        assert_eq!(row.name, "Nudge");
+        assert!(!row.lane_allowed);
+        assert_eq!(rows.len(), 2, "one row each, none doubled");
     }
 }
