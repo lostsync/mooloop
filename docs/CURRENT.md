@@ -1568,7 +1568,10 @@ land on its own when it starts to matter:
   whose control-rate staircase the lag rounds off. A mute is a fade: the
   channel or track goes on rendering, its output and its sends aimed at
   silence, and stops contributing only once both have arrived, about a
-  hundred milliseconds later. Polarity crossfades through zero. A document
+  hundred milliseconds later. Polarity crossfades through zero. So does a
+  send: switching one off fades it out and lets its delay drain before it is
+  held, and moving it between pre- and post-fader fades out, switches tap and
+  fades back in, all within about ten milliseconds (MOO-397). A document
   arriving starts at its own values rather than ramping into them, so a
   bounce's first milliseconds are at the levels the song holds.
   `continuity_tests.rs` holds each of these moves on a sustained sine to the

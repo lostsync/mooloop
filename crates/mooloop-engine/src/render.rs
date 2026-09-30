@@ -290,6 +290,20 @@ struct CompiledSend {
     /// emptied holds only silence and reads `u32::MAX`; a new send starts at
     /// zero, which only delays its producer's sleep by the ring's length.
     ring_silent_frames: u32,
+    /// A tap change waiting for the send to fade out (MOO-397).
+    pending_tap: Option<SendTap>,
+}
+
+impl CompiledSend {
+    /// Whether the level has arrived at silence.
+    fn is_dark(&self) -> bool {
+        self.level.is_settled() && self.level.value() == 0.0
+    }
+
+    /// Whether the last block fed it silence, or it was emptied since.
+    fn input_is_silent(&self) -> bool {
+        self.ring_silent_frames > 0
+    }
 }
 
 /// Scratch buffers a block's sends work in.
@@ -443,6 +457,7 @@ impl SendBank {
                     level: Smoothed::new(0.0, STRIP_GAIN_SMOOTH_S, sample_rate),
                     compensation: IntegerDelay::new(spec.delay).map(Box::new),
                     ring_silent_frames: 0,
+                    pending_tap: None,
                 })
                 .collect(),
             starts,
@@ -504,10 +519,16 @@ impl SendBank {
                 // the next block, so a rebuild never steps a send that
                 // survived it.
                 self.sends[matched].level = old.sends[index].level;
+                let same_ring = ring_frames(&self.sends[matched].compensation)
+                    == ring_frames(&old.sends[index].compensation);
                 keep_live_ring(
                     &mut self.sends[matched].compensation,
                     &mut old.sends[index].compensation,
                 );
+                if same_ring {
+                    // The live ring came with what it is known to hold.
+                    self.sends[matched].ring_silent_frames = old.sends[index].ring_silent_frames;
+                }
             }
         }
     }
@@ -528,7 +549,7 @@ impl SendBank {
     fn taps(&self, producer: EffectTarget, tap: SendTap) -> bool {
         self.sends[self.range(producer)]
             .iter()
-            .any(|send| send.tap == tap && send.enabled)
+            .any(|send| send.tap == tap && (send.enabled || !send.is_dark()))
     }
 
     /// Keep a copy of `bus` as `producer`'s `tap` signal.
@@ -635,16 +656,16 @@ impl SendBank {
 
     /// Sum `producer`'s captured sends into the tracks they feed.
     ///
-    /// Called once the strip's own borrow has ended. A disabled send resets
-    /// its ring rather than advancing it, so re-enabling one does not emit the
-    /// audio it was holding when it was switched off.
+    /// Called once the strip's own borrow has ended. A disabled send fades out
+    /// and drains its ring, and only then resets it and is skipped, so
+    /// re-enabling one does not emit the audio it was holding when it was
+    /// switched off.
     ///
     /// `silenced` is the producer's mute or solo verdict: while it holds,
     /// every send is aimed at silence rather than at its authored level, and
-    /// fades there with the producer's own output. A disabled send is held at
-    /// silence outright -- nothing of it is heard, so there is nothing to
-    /// fade -- which also means switching one on ramps it in from nothing
-    /// rather than stepping.
+    /// fades there with the producer's own output. A disabled send is aimed
+    /// at silence the same way, which also means switching one on ramps it in
+    /// from nothing rather than stepping.
     fn emit(
         &mut self,
         producer: EffectTarget,
@@ -661,16 +682,21 @@ impl SendBank {
             return;
         };
         for send in &mut sends[range] {
-            if !send.enabled {
+            // Off and a tap change fade the send out like a mute does
+            // (MOO-397); only a send that has faded to nothing *and* whose
+            // ring has drained is held and emptied.
+            let held = silenced || !send.enabled || send.pending_tap.is_some();
+            send.level.set_target(if held { 0.0 } else { send.authored });
+            if !send.enabled
+                && send.is_dark()
+                && send.ring_silent_frames as usize >= ring_frames(&send.compensation)
+            {
                 if let Some(delay) = send.compensation.as_mut() {
                     delay.reset();
                 }
                 send.ring_silent_frames = u32::MAX;
-                send.level.reset_to(0.0);
                 continue;
             }
-            send.level
-                .set_target(if silenced { 0.0 } else { send.authored });
             let Some(destination) = buses.get_mut(send.target as usize) else {
                 continue;
             };
@@ -683,16 +709,16 @@ impl SendBank {
                 frames,
             );
             apply_smoothed_gain(&mut send.level, work, frames);
+            // What goes in, after the level: this is what the ring will hold,
+            // so this is what has to have gone quiet before the producer may
+            // sleep and empty it (MOO-402), or a disabled send be held.
+            let (left, right) = work.peak(frames);
+            send.ring_silent_frames = if left.max(right) <= SILENCE_PEAK {
+                send.ring_silent_frames.saturating_add(frames as u32)
+            } else {
+                0
+            };
             if let Some(delay) = send.compensation.as_mut() {
-                // What goes in, after the level: this is what the ring will
-                // hold, so this is what has to have gone quiet before the
-                // producer may sleep and empty it (MOO-402).
-                let (left, right) = work.peak(frames);
-                send.ring_silent_frames = if left.max(right) <= SILENCE_PEAK {
-                    send.ring_silent_frames.saturating_add(frames as u32)
-                } else {
-                    0
-                };
                 delay.process(&mut work.l[..frames], &mut work.r[..frames]);
             }
             // Always linear, for the reason a channel reaching a track is:
@@ -701,6 +727,13 @@ impl SendBank {
             // switch or not at all.
             destination.bus.add_from(work, frames);
             destination.dirty = true;
+            // The new tap is read from the next block, whose capture has
+            // already been asked for it, and fades back in from nothing.
+            if send.is_dark() {
+                if let Some(tap) = send.pending_tap.take() {
+                    send.tap = tap;
+                }
+            }
         }
     }
 
@@ -724,14 +757,28 @@ impl SendBank {
     fn set_enabled(&mut self, producer: EffectTarget, index: usize, enabled: bool) {
         let range = self.range(producer);
         if let Some(send) = self.sends[range].get_mut(index) {
+            // Nothing is coming in (the producer is asleep, or silent), so
+            // there is nothing to fade -- and a fade would let the start of
+            // its next phrase leak through a send that is off.
+            if !enabled && send.input_is_silent() {
+                send.level.reset_to(0.0);
+            }
             send.enabled = enabled;
         }
     }
 
+    /// Fades out, switches tap, fades in (MOO-397): the two taps differ by
+    /// the producer's fader and balance, so switching in one sample steps the
+    /// return by the difference. The swap is in [`Self::emit`].
     fn set_tap(&mut self, producer: EffectTarget, index: usize, tap: SendTap) {
         let range = self.range(producer);
         if let Some(send) = self.sends[range].get_mut(index) {
-            send.tap = tap;
+            if send.input_is_silent() || send.is_dark() {
+                send.tap = tap;
+                send.pending_tap = None;
+            } else {
+                send.pending_tap = (tap != send.tap).then_some(tap);
+            }
         }
     }
 }
