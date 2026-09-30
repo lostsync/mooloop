@@ -865,14 +865,19 @@ impl PluginRack {
                 for entry in self.entries.values_mut() {
                     entry.instance.set_audio_config(config);
                     entry.rebuild = true;
+                    // A build that failed at the old rate may not at this one
+                    // (MOO-354).
+                    entry.attempts = 0;
                 }
             }
             self.config = Some(config);
         }
 
         // Open what the song names and nothing hosts.
+        let mut catalogue = None;
         if let Some(opener) = self.opener.as_mut() {
             let generation = opener.refresh();
+            catalogue = Some(generation);
             for &slot in named {
                 if self.entries.contains_key(&slot) {
                     continue;
@@ -941,6 +946,17 @@ impl PluginRack {
             }
             if requests.has(Requests::RESTART) {
                 entry.rebuild = true;
+                // A plugin that asks to be restarted is asking for a new
+                // build, whether or not the last one worked (MOO-354).
+                entry.attempts = 0;
+            }
+            // A rescan since the build failed: the plugin on disk may not be
+            // the one that failed (MOO-354). The problem is re-recorded at
+            // the new generation if the next build fails too.
+            if catalogue.is_some_and(|now| {
+                self.problems.get(&slot).is_some_and(|problem| problem.generation != now)
+            }) {
+                entry.attempts = 0;
             }
             if requests.has(Requests::LATENCY_CHANGED) {
                 events.push(RackEvent::LatencyChanged { slot });
@@ -986,6 +1002,8 @@ impl PluginRack {
             match entry.instance.build_processor(entry.lifeline.tie()) {
                 Ok(node) => {
                     entry.rebuild = false;
+                    // The error of an earlier build is over (MOO-354).
+                    self.problems.remove(&slot);
                     events.push(RackEvent::Install { slot, node });
                     // Activation is when a plugin's latency is known.
                     events.push(RackEvent::LatencyChanged { slot });
@@ -1733,6 +1751,8 @@ pub(crate) mod tests {
         pub generation: AtomicU64,
         /// The rate the last processor was built for.
         pub built_rate: AtomicU32,
+        /// A processor cannot be built above this rate; zero for no limit.
+        pub builds_fail_above: AtomicU32,
         /// It says it is an instrument (MOO-85): only a source may host it.
         pub instrument: AtomicBool,
         /// It has a GUI (step 11).
@@ -1953,6 +1973,10 @@ pub(crate) mod tests {
             lifeline: Lifeline,
         ) -> Result<Box<dyn AudioNode + Send>, HostError> {
             self.probe.builds.fetch_add(1, Ordering::SeqCst);
+            let limit = self.probe.builds_fail_above.load(Ordering::SeqCst);
+            if limit > 0 && self.config.sample_rate > limit {
+                return Err(HostError::Plugin(format!("it cannot activate above {limit} Hz")));
+            }
             self.probe.built_rate.store(self.config.sample_rate, Ordering::SeqCst);
             Ok(Box::new(FakeProcessor {
                 _lifeline: lifeline,
@@ -2106,6 +2130,67 @@ pub(crate) mod tests {
         }
         assert_eq!(probe.opens.load(Ordering::SeqCst), 1);
         assert_eq!(probe.builds.load(Ordering::SeqCst), usize::from(MAX_ATTEMPTS));
+    }
+
+    /// **A build that failed is tried again when something changed**
+    /// (MOO-354): a new sample rate, or a restart the plugin asks for.
+    ///
+    /// The plugin cannot activate above 96 kHz. It fails at 192 kHz until it
+    /// has used its attempts, and stays a placeholder; the interface then
+    /// drops to 48 kHz, and the plugin has to be built and its problem gone.
+    #[test]
+    fn a_processor_that_failed_to_build_is_tried_again_at_a_new_rate() {
+        let probe = Arc::new(FakeProbe::default());
+        probe.builds_fail_above.store(96_000, Ordering::SeqCst);
+        let mut rack = PluginRack::new();
+        rack.set_opener(Box::new(FakeOpener(Arc::clone(&probe))));
+        let slot = PluginSlotId(0);
+        let mut slots = PluginSlots::new();
+        slots.insert(slot, PluginSlotState::new(fake_ref()));
+        let named = BTreeSet::from([slot]);
+        let at = |sample_rate| AudioConfig {
+            sample_rate,
+            max_frames: PLUGIN_MAX_FRAMES,
+        };
+
+        let events = names(&rack.service(&slots, &named, at(192_000)));
+        assert!(events.iter().any(|event| event.starts_with("Failed")), "{events:?}");
+        for _ in 0..5 {
+            drop(rack.service(&slots, &named, at(192_000)));
+        }
+        assert!(rack.problem(slot).is_some());
+
+        let events = names(&rack.service(&slots, &named, at(48_000)));
+        assert_eq!(events, ["Install(0)", "LatencyChanged(0)"], "the new rate was not tried");
+        assert_eq!(rack.problem(slot), None, "the old error outlived the build that fixed it");
+        assert_eq!(probe.built_rate.load(Ordering::SeqCst), 48_000);
+    }
+
+    /// A restart the plugin asks for after a failed build is a reason to try
+    /// again (MOO-354).
+    #[test]
+    fn a_restart_request_tries_a_failed_build_again() {
+        let probe = Arc::new(FakeProbe::default());
+        probe.builds_fail_above.store(96_000, Ordering::SeqCst);
+        let mut rack = PluginRack::new();
+        rack.set_opener(Box::new(FakeOpener(Arc::clone(&probe))));
+        let slot = PluginSlotId(0);
+        let named = BTreeSet::from([slot]);
+        let mut slots = PluginSlots::new();
+        slots.insert(slot, PluginSlotState::new(fake_ref()));
+        let high = AudioConfig {
+            sample_rate: 192_000,
+            max_frames: PLUGIN_MAX_FRAMES,
+        };
+        // Every attempt refused, as a plugin capped at 96 kHz does.
+        for _ in 0..5 {
+            drop(rack.service(&slots, &named, high));
+        }
+        // Now it can be built, and asks for the restart that says so.
+        probe.builds_fail_above.store(0, Ordering::SeqCst);
+        probe.requests.raise(Requests::RESTART);
+        let events = names(&rack.service(&slots, &named, high));
+        assert!(events.iter().any(|event| event.starts_with("Install")), "{events:?}");
     }
 
     /// Records what the session sends, and takes everything.
