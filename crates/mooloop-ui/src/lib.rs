@@ -2613,7 +2613,7 @@ fn feeding_track_color(
 /// unsaved song's take is not the quit's to sweep. Those belong to File >
 /// Clean Up Takes, which lists them unticked and says why.
 fn unused_session_takes(st: &UiState, commands: &CommandState) -> Vec<recordings::UnusedTake> {
-    let referenced = recordings::referenced_by(&st.session, &commands.history);
+    let referenced = recordings::referenced_by(&st.session, commands);
     recordings::unused_takes(
         &settings::recordings_dir(),
         &referenced,
@@ -8209,7 +8209,7 @@ impl AppUi {
                 let lists = {
                     let st = st.borrow();
                     let mut referenced =
-                        recordings::referenced_by(&st.session, &commands.borrow().history);
+                        recordings::referenced_by(&st.session, &commands.borrow());
                     // A take an autosave plays -- this run's or a crashed
                     // one's not yet recovered -- is not unused (MOO-103).
                     referenced.extend(autosave::referenced_samples(&settings::autosave_dir()));

@@ -24,7 +24,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use mooloop_core::project::{ChannelSource, SampleReference};
+use mooloop_core::project::{ChannelSource, ProjectChannel, SampleReference};
 use mooloop_core::Project;
 
 /// Where a discarded take goes.
@@ -73,20 +73,25 @@ pub fn referenced_paths<'a>(projects: impl IntoIterator<Item = &'a Project>) -> 
     let mut paths = HashSet::new();
     for project in projects {
         for channel in &project.channels {
-            let ChannelSource::Sampler(sampler) = &channel.setup.source else {
-                continue;
-            };
-            // The key zones' files too (MOO-14): a take played by a zone is
-            // as much in use as one played by the base.
-            let zones = sampler.zones.iter().map(|zone| &zone.sample);
-            for reference in std::iter::once(&sampler.sample).chain(zones) {
-                if let SampleReference::File { path, .. } = reference {
-                    paths.insert(canonical(path));
-                }
-            }
+            insert_channel_files(&mut paths, channel);
         }
     }
     paths
+}
+
+/// The files one channel plays: its base sample and its key zones'.
+fn insert_channel_files(paths: &mut HashSet<PathBuf>, channel: &ProjectChannel) {
+    let ChannelSource::Sampler(sampler) = &channel.setup.source else {
+        return;
+    };
+    // The key zones' files too (MOO-14): a take played by a zone is
+    // as much in use as one played by the base.
+    let zones = sampler.zones.iter().map(|zone| &zone.sample);
+    for reference in std::iter::once(&sampler.sample).chain(zones) {
+        if let SampleReference::File { path, .. } = reference {
+            paths.insert(canonical(path));
+        }
+    }
 }
 
 /// Every take path the live session or anything in its history points at.
@@ -95,10 +100,15 @@ pub fn referenced_paths<'a>(projects: impl IntoIterator<Item = &'a Project>) -> 
 /// holds a decoded channel with a `sample_path`; the history holds whole
 /// project snapshots. Asking only the live session would offer a take that an
 /// undo is about to want back.
+///
+/// **The channel clipboard counts too** (MOO-359). It outlives New and Open
+/// (MOO-161) and names its take by path, so a paste after the take was
+/// trashed would save a channel pointing at the trash.
 pub fn referenced_by(
     session: &crate::session::Session,
-    history: &crate::history::History<crate::project::ProjectSnapshot>,
+    commands: &crate::command::CommandState,
 ) -> HashSet<PathBuf> {
+    let history = &commands.history;
     let mut paths: HashSet<PathBuf> = session
         .channels
         .iter()
@@ -118,6 +128,9 @@ pub fn referenced_by(
     // a `before` an undo will reach as surely as any recorded entry's.
     if let Some(before) = history.open_before() {
         paths.extend(referenced_paths([&before.project]));
+    }
+    if let Some(clipboard) = &commands.channel_clipboard {
+        insert_channel_files(&mut paths, &clipboard.channel);
     }
     paths
 }
@@ -439,6 +452,38 @@ mod tests {
         assert_eq!(unused[0].path, take);
         assert_eq!(unused[0].bytes, 2048);
         assert!(!unused[0].from_earlier_session);
+    }
+
+    /// **A take only the channel clipboard names is not offered** (MOO-359).
+    /// The clipboard outlives New and Open (MOO-161), and a paste after the
+    /// take was trashed would save a channel pointing at the trash.
+    #[test]
+    fn a_take_only_the_channel_clipboard_names_is_not_offered() {
+        let dir = tempfile::tempdir().unwrap();
+        let take = write_take(dir.path(), "20260920-120000-Sampler_1.wav");
+        let copied = project_playing(&take).channels[0].clone();
+        let commands = crate::command::CommandState {
+            channel_clipboard: Some(crate::channel::ChannelClipboard {
+                channel: copied,
+                sample: None,
+                zones: Vec::new(),
+                plugins: Default::default(),
+            }),
+            ..Default::default()
+        };
+        // File > New: the song and the history no longer reach the take.
+        let session = crate::session::Session::default();
+
+        let referenced = referenced_by(&session, &commands);
+        let lists = clean_up(
+            dir.path(),
+            None,
+            &referenced,
+            SystemTime::now() - Duration::from_secs(60),
+        );
+
+        assert!(lists.not_used.is_empty(), "{:?}", lists.not_used);
+        assert!(lists.earlier.is_empty(), "{:?}", lists.earlier);
     }
 
     /// A take the open project plays is never offered, however many other
