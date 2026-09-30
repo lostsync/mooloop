@@ -450,13 +450,13 @@ export component BusFaderRow inherits Rectangle {
                     : "R " + round(root.pan * 100);
                 changed(v) => { root.pan-changed(v); }
             }
-            MuteButton {
-                muted: root.muted;
-                clicked => { root.mute-toggled(); }
-            }
             if !root.is-master : SoloButton {
                 soloed: root.solo;
                 clicked => { root.solo-toggled(); }
+            }
+            MuteButton {
+                muted: root.muted;
+                clicked => { root.mute-toggled(); }
             }
         }
         HorizontalLayout {
