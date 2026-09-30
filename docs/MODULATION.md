@@ -728,9 +728,17 @@ view of the same routes, not a prerequisite for using them.
 
 ## Anti-aliasing policy
 
-Distortion and saturation are **2x oversampled**. A waveshaper run at base
-rate folds its harmonics back down as inharmonic fizz, which is the difference
-between a usable saturator and a bad one.
+Hard and folding curves are **2x oversampled** (`Oversampler2x`), and the
+Drive effect is the device that runs them. A waveshaper run at base rate folds
+its harmonics back down as inharmonic fizz, which is the difference between a
+usable saturator and a bad one.
+
+Smooth `tanh`-family curves run at the **base rate**, by policy, because their
+harmonics fall away fast enough that a voice's own filter and the 0.45 x sample
+rate ceiling keep folded content inaudible. That is `apply_drive` (the
+sampler, drum synth and both synths), `PreDrive`, the `tanh` and Tape shapers
+inside the Ladder and Acid filters, and the Filter effect's drive. The rule
+lives in `shaper.rs`.
 
 Bitcrush is **deliberately not oversampled**. Its aliasing is the effect.
 

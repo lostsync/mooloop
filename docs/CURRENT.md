@@ -1102,8 +1102,10 @@ boundary.
   decoded file, a blown-up upstream device -- is lost, but it no longer stays
   in any SVF, cascade, ladder, biquad or one-pole state, and a delay does not
   feed it back round its loop: the next finite sample is heard (MOO-174).
-  Other devices' internal state (reverb, plate, chorus) is not yet covered
-  (MOO-176).
+  The reverb, plate, modulation effect, dynamics, limiter and Buffer clear
+  their own state too (MOO-176, described under "Inside the graph" above;
+  `a_nan_in_the_input_is_gone_within_a_block_in_every_insert` holds them to
+  it).
 - The ML-M1's Ladder and Acid filters put their corner in the same place at
   every sample rate: their stages are cornered by solving the stage's own
   response rather than by the impulse-invariant pole, so one Cutoff is one

@@ -5,8 +5,15 @@
 //! A memoryless nonlinearity generates harmonics above the input's own
 //! spectrum. Run at base rate, everything above Nyquist folds back down as
 //! inharmonic content that does not move with pitch — the difference between
-//! a saturator and a fizz generator. Distortion and saturation therefore run
-//! through [`Oversampler2x`].
+//! a saturator and a fizz generator. The hard and folding curves, whose
+//! harmonics do not fall away, therefore run through [`Oversampler2x`]; the
+//! Drive effect is the one device that does.
+//!
+//! The smooth `tanh`-family stages run at the base rate by policy: the voice
+//! and filter saturation below ([`apply_drive`], [`PreDrive`], and the `tanh`
+//! and Tape shapers inside `Ladder` and `Acid` in `filter.rs`) and the Filter
+//! effect's drive. Their harmonics fall away fast enough that the voice's own
+//! filter and the 0.45 x sample rate ceiling keep folded content inaudible.
 //!
 //! Bitcrush deliberately does *not* oversample: its aliasing is the effect.
 //! See `docs/MODULATION.md` ("Anti-aliasing policy").

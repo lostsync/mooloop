@@ -16,8 +16,8 @@ use mooloop_core::{eq_effective_q, EqBandKind, EqQProfile};
 use crate::node::REST_EPSILON;
 use crate::scale::clamp_param;
 
-/// One RBJ-cookbook biquad section in Direct Form I, normalized so `a0` is
-/// always 1.
+/// One RBJ-cookbook biquad section in transposed direct form II (two state
+/// variables, `z1` and `z2`), normalized so `a0` is always 1.
 #[derive(Clone, Copy)]
 pub struct Biquad {
     b0: f32,
