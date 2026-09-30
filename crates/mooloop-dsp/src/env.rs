@@ -22,6 +22,12 @@
 /// Minimum stage time, to avoid divide-by-zero and infinite rates.
 const MIN_STAGE_S: f32 = 1.0e-4;
 
+/// Time a held [`Adsr`] takes to follow a changed Sustain across the whole
+/// 0..1 range (MOO-387): fast enough to feel immediate, slow enough not to
+/// click. A linear slew, computed where it is used, so `Adsr` gains no field
+/// (the engine's footprint test counts its bytes).
+const SUSTAIN_SLEW_S: f32 = 0.005;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum AdsrStage {
     Idle,
@@ -104,13 +110,32 @@ impl Adsr {
                 }
             }
             AdsrStage::Decay => {
-                self.level -= self.decay_dec;
-                if self.level <= self.sustain {
-                    self.level = self.sustain;
+                if self.level < self.sustain {
+                    // Sustain was raised above the level mid-decay. Hand over
+                    // to the Sustain slew, which carries the level up, rather
+                    // than assigning it (an upward step in one sample).
                     self.stage = AdsrStage::Sustain;
+                } else {
+                    self.level -= self.decay_dec;
+                    if self.level <= self.sustain {
+                        self.level = self.sustain;
+                        self.stage = AdsrStage::Sustain;
+                    }
                 }
             }
-            AdsrStage::Sustain => {}
+            AdsrStage::Sustain => {
+                // Follow a Sustain that changed while the note is held. At
+                // the target this is exactly a no-op.
+                let gap = self.sustain - self.level;
+                if gap != 0.0 {
+                    let step = 1.0 / (SUSTAIN_SLEW_S * self.sample_rate as f32);
+                    self.level = if gap.abs() <= step {
+                        self.sustain
+                    } else {
+                        self.level + step.copysign(gap)
+                    };
+                }
+            }
             AdsrStage::Release => {
                 self.level -= self.release_dec;
                 if self.level <= 0.0 {
@@ -550,6 +575,50 @@ impl Default for Ahd {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::{max_step, RATES};
+
+    /// MOO-387: the Sustain stage followed nothing, so turning or automating
+    /// Sustain on a held note did nothing until the next note-on.
+    #[test]
+    fn a_held_note_follows_a_changed_sustain() {
+        for rate in RATES {
+            let mut env = Adsr::new(rate);
+            env.configure(0.001, 0.01, 0.2, 0.1);
+            env.note_on();
+            for _ in 0..(0.1 * rate as f32) as usize {
+                env.advance();
+            }
+            assert!((env.level() - 0.2).abs() < 1.0e-4, "{rate} Hz: not at 0.2");
+            env.configure(0.001, 0.01, 0.8, 0.1);
+            for _ in 0..(0.2 * rate as f32) as usize {
+                env.advance();
+            }
+            assert!((env.level() - 0.8).abs() < 1.0e-4, "{rate} Hz: at {}", env.level());
+        }
+    }
+
+    /// MOO-387: raising Sustain above the level mid-decay stepped the level
+    /// to the new sustain on one sample (0.5 to 0.9, a click).
+    #[test]
+    fn raising_sustain_mid_decay_does_not_step() {
+        for rate in RATES {
+            let mut env = Adsr::new(rate);
+            env.configure(0.001, 2.0, 0.2, 0.1);
+            env.note_on();
+            while env.level() > 0.5 || env.stage != AdsrStage::Decay {
+                env.advance();
+            }
+            env.configure(0.001, 2.0, 0.9, 0.1);
+            let mut after = vec![env.level()];
+            for _ in 0..(0.05 * rate as f32) as usize {
+                env.advance();
+                after.push(env.level());
+            }
+            let step = max_step(&after);
+            assert!(step < 0.01, "{rate} Hz: stepped by {step}");
+            assert!(*after.last().unwrap() > 0.5, "{rate} Hz: never rose");
+        }
+    }
 
     #[test]
     fn adsr_runs_full_cycle() {
