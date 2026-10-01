@@ -6861,6 +6861,28 @@ impl RenderState {
         &*self.strips[channel] as *const ChannelStrip as usize
     }
 
+    /// What the device at `slot` of `target` holds as values -- its knob
+    /// values, bypass, wet/dry and trims, as its slot keeps them -- and its
+    /// node's address, which is the same while the node is.
+    #[cfg(test)]
+    pub(crate) fn effect_slot_values(
+        &self,
+        target: EffectTarget,
+        slot: usize,
+    ) -> Option<(Option<mooloop_core::EffectParams>, bool, f32, f32, f32, usize)> {
+        let chain = self.chain(target)?;
+        let state = chain.slot(slot)?;
+        let node = chain.nodes.get(slot)?.as_deref()?;
+        Some((
+            state.base_params,
+            state.bypassed,
+            state.wet_dry,
+            state.input_trim,
+            state.output_trim,
+            node as *const (dyn AudioNode + Send) as *const () as usize,
+        ))
+    }
+
     /// The slot each seat publishes its audio into.
     #[cfg(test)]
     pub(crate) fn audio_bank(&self) -> ChannelAudioBank {

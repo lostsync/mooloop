@@ -1066,6 +1066,54 @@ impl SharedCells {
     }
 }
 
+/// The commands that give the device at `slot` of `target` `effect`'s
+/// values as its controls would: every descriptor of its kind, its bypass,
+/// wet/dry and both trims. Its node, its identity and a container's span
+/// stay as they are, and each value ramps as it does from its control.
+///
+/// For a load that changes only values -- a single-row preset onto a
+/// container's own row -- where an install would rebuild what is already
+/// there.
+pub fn effect_value_commands(
+    target: EffectTarget,
+    slot: u8,
+    effect: &mooloop_core::EffectSlotState,
+) -> Vec<EngineCommand> {
+    let params = effect.kind().descriptors().iter().filter_map(|descriptor| {
+        let value = effect.params.get(descriptor.id)?;
+        Some(EngineCommand::SetEffectParam {
+            target,
+            slot,
+            id: descriptor.id,
+            value,
+        })
+    });
+    params
+        .chain([
+            EngineCommand::SetEffectBypassed {
+                target,
+                slot,
+                bypassed: effect.bypassed,
+            },
+            EngineCommand::SetEffectWetDry {
+                target,
+                slot,
+                wet_dry: effect.wet_dry,
+            },
+            EngineCommand::SetEffectInputTrim {
+                target,
+                slot,
+                input_trim: effect.input_trim,
+            },
+            EngineCommand::SetEffectOutputTrim {
+                target,
+                slot,
+                output_trim: effect.output_trim,
+            },
+        ])
+        .collect()
+}
+
 /// Performance state a project does not contain but a renderer holds, handed
 /// over with every install so the incoming renderer starts with it.
 ///

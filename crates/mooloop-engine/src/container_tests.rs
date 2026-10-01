@@ -1704,3 +1704,69 @@ fn a_layer_built_live_is_parallel_like_a_loaded_one() {
         );
     }
 }
+
+/// **A single-row preset loaded onto a container's row leaves the box as an
+/// install of the loaded song would**, through value commands alone: the
+/// box's Mix, Level, Mute and Solo, its bypass, wet/dry and trims read back
+/// as a fresh load of the preset, while the box's node and its child's node
+/// are the ones that were running.
+#[test]
+fn a_containers_preset_as_value_commands_reads_back_as_the_install() {
+    use mooloop_core::{
+        EffectKind, EffectSlotState, EffectTarget, Project, ProjectChannel, CONTAINER_PARAM_LEVEL,
+        CONTAINER_PARAM_MIX, CONTAINER_PARAM_MUTE, CONTAINER_PARAM_SOLO,
+    };
+
+    let target = EffectTarget::Channel(0);
+    let song = |container: EffectSlotState| {
+        let mut project = Project::default();
+        let mut channel = ProjectChannel::drum_synth(0, 1);
+        channel.setup.push_effect(container).expect("room");
+        channel.setup.push_effect(EffectSlotState::of_kind(EffectKind::Delay)).expect("room");
+        project.channels = vec![channel];
+        project.assign_channel_ids();
+        project
+    };
+    let mut boxed = EffectSlotState::of_kind(EffectKind::Chain);
+    boxed.params.set_container_children(1);
+
+    for bypassed in [false, true] {
+        let mut loaded = boxed;
+        for (id, value) in [
+            (CONTAINER_PARAM_MIX, 0.3),
+            (CONTAINER_PARAM_LEVEL, 0.5),
+            (CONTAINER_PARAM_MUTE, 1.0),
+            (CONTAINER_PARAM_SOLO, 1.0),
+        ] {
+            loaded.params.set(id, value).expect("a container value");
+        }
+        loaded.bypassed = bypassed;
+        loaded.wet_dry = 0.7;
+        loaded.input_trim = 0.8;
+        loaded.output_trim = 1.4;
+
+        let before = song(boxed);
+        let mut live = crate::render::RenderState::from_project(48_000, &before, &[]);
+        let (_, _, _, _, _, box_node) = live.effect_slot_values(target, 0).expect("the box");
+        let (_, _, _, _, _, child_node) = live.effect_slot_values(target, 1).expect("the child");
+        for command in crate::effect_value_commands(target, 0, &loaded) {
+            live.apply_command(command);
+        }
+        let installed = crate::render::RenderState::from_project(48_000, &song(loaded), &[]);
+
+        let (params, bypass, wet_dry, input_trim, output_trim, node) =
+            live.effect_slot_values(target, 0).expect("the box");
+        let (want_params, want_bypass, want_wet, want_in, want_out, _) =
+            installed.effect_slot_values(target, 0).expect("the box");
+        assert_eq!(params, want_params, "bypassed {bypassed}: the box's values");
+        assert_eq!(params.and_then(|params| params.container_children()), Some(1), "the span");
+        assert_eq!(
+            (bypass, wet_dry, input_trim, output_trim),
+            (want_bypass, want_wet, want_in, want_out),
+            "bypassed {bypassed}: the host controls"
+        );
+        assert_eq!(node, box_node, "the box's node was replaced");
+        let (_, _, _, _, _, child) = live.effect_slot_values(target, 1).expect("the child");
+        assert_eq!(child, child_node, "the child's node was replaced");
+    }
+}

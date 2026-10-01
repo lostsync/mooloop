@@ -5645,15 +5645,18 @@ impl UiState {
     /// identity, so every route and lane aimed at it still finds it; the
     /// preset's own bypass, wet/dry and trims arrive with it.
     ///
-    /// Returns `false`, having sent nothing, for a container's row, which
-    /// the caller installs as a project edit instead.
+    /// A container's row keeps its node and its children: a single-row
+    /// preset changes only the box's own values, so those go as the value
+    /// commands its controls send ([`mooloop_engine::effect_value_commands`]).
+    ///
+    /// Returns `false`, having sent nothing, when `slot` holds no device.
     fn install_loaded_preset(
         &self,
         target: EffectTarget,
         slot: usize,
         bpm: f64,
         sample_rate: u32,
-        stx: &StructuralCommandSender,
+        (tx, stx): (&EngineCommandSender, &StructuralCommandSender),
     ) -> bool {
         let Some(effect) = self.session.effect_chain().and_then(|chain| chain.get(slot)) else {
             return false;
@@ -5662,7 +5665,10 @@ impl UiState {
             return false;
         };
         if effect.kind().is_container() {
-            return false;
+            for command in mooloop_engine::effect_value_commands(target, slot, effect) {
+                let _ = tx.send(command);
+            }
+            return true;
         }
         let node = build_effect_at_tempo(effect.params, sample_rate, bpm);
         let align = IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
@@ -13255,7 +13261,6 @@ impl AppUi {
         // that matters here: that the row the click named is still the row
         // the edit lands on.
         {
-            let tx = project_edit_tx.clone();
             let ctx = cmd_tx.clone();
             let stx = structural_tx.clone();
             let st = state.clone();
@@ -13338,7 +13343,7 @@ impl AppUi {
                             .session
                             .load_effect_preset(slot, effect, &name)
                             .map(|target| {
-                                state.install_loaded_preset(target, slot, bpm, sample_rate, &stx)
+                                state.install_loaded_preset(target, slot, bpm, sample_rate, (&ctx, &stx))
                             }),
                         Err(run) => state.session.load_effect_run(slot, run, &name).map(|loaded| {
                             state.install_loaded_run(&loaded, bpm, sample_rate, &ctx, &stx);
@@ -13363,16 +13368,6 @@ impl AppUi {
                 };
                 if mirrored {
                     record_project_history(&commands, before, &st, &window, "Effect preset loaded");
-                    return;
-                }
-                // A single-row preset onto a container's row: its span is
-                // structure an in-place install would have to carry, and a
-                // box has no sound of its own to step, so it goes through the
-                // project install as it always has.
-                let after = project_snapshot(&st.borrow(), &window);
-                if queue_project_edit(&tx, before, after, "Effect preset loaded") {
-                    commands.borrow_mut().project_edit_pending = true;
-                    sync_command_availability(&window, &commands.borrow());
                 }
             });
         }
@@ -22028,6 +22023,93 @@ mod preset_browser_tests {
             commands.borrow().history.undo_target().map(|entry| entry.label),
             Some("Effect preset added")
         );
+    }
+
+    /// **A single-row preset loaded onto a container's row is its values,
+    /// not an install.** The box keeps its children; the engine is sent the
+    /// preset's Mix, Level, Mute and Solo, its bypass, wet/dry and trims as
+    /// the controls send them, and nothing structural; and the one undo step
+    /// the handler records holds the box as it was.
+    #[test]
+    fn a_preset_loaded_onto_a_containers_row_is_value_commands() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().expect("the testing backend builds a window");
+        let state = Rc::new(RefCell::new(UiState::new(None, 48_000, &window)));
+        let target = {
+            let mut st = state.borrow_mut();
+            st.session.insert_effect_at(EffectKind::Delay, 0).expect("room on the chain");
+            st.session.wrap_effects_in_container(0..1).expect("the delay wraps");
+            st.session.effect_target
+        };
+        let mut preset = EffectSlotState::of_kind(EffectKind::Chain);
+        for (id, value) in [
+            (mooloop_core::CONTAINER_PARAM_MIX, 0.3),
+            (mooloop_core::CONTAINER_PARAM_LEVEL, 0.5),
+            (mooloop_core::CONTAINER_PARAM_MUTE, 1.0),
+            (mooloop_core::CONTAINER_PARAM_SOLO, 1.0),
+        ] {
+            preset.params.set(id, value).expect("a container value");
+        }
+        preset.bypassed = true;
+        preset.wet_dry = 0.7;
+        preset.input_trim = 0.8;
+        preset.output_trim = 1.2;
+        let before = project_snapshot(&state.borrow(), &window);
+        let was = before.project.channels[0].setup.effects[0];
+        assert_eq!(
+            state.borrow_mut().session.load_effect_preset(0, &preset, "Box"),
+            Some(target)
+        );
+
+        let (sender, engine) = std::sync::mpsc::channel();
+        let (tx, stx) = (EngineCommandSender(sender.clone()), StructuralCommandSender(sender));
+        assert!(state.borrow().install_loaded_preset(target, 0, 120.0, 48_000, (&tx, &stx)));
+
+        let sent: Vec<PendingEngineMessage> = engine.try_iter().collect();
+        assert!(
+            sent.iter().all(|message| matches!(message, PendingEngineMessage::Command(_))),
+            "the load sent something structural or a project"
+        );
+        let commands: Vec<EngineCommand> = sent
+            .into_iter()
+            .filter_map(|message| match message {
+                PendingEngineMessage::Command(command) => Some(command),
+                _ => None,
+            })
+            .collect();
+        for (id, value) in [
+            (mooloop_core::CONTAINER_PARAM_MIX, 0.3),
+            (mooloop_core::CONTAINER_PARAM_LEVEL, 0.5),
+            (mooloop_core::CONTAINER_PARAM_MUTE, 1.0),
+            (mooloop_core::CONTAINER_PARAM_SOLO, 1.0),
+        ] {
+            assert!(
+                commands.contains(&EngineCommand::SetEffectParam { target, slot: 0, id, value }),
+                "parameter {id} was not sent at {value}: {commands:?}"
+            );
+        }
+        for expected in [
+            EngineCommand::SetEffectBypassed { target, slot: 0, bypassed: true },
+            EngineCommand::SetEffectWetDry { target, slot: 0, wet_dry: 0.7 },
+            EngineCommand::SetEffectInputTrim { target, slot: 0, input_trim: 0.8 },
+            EngineCommand::SetEffectOutputTrim { target, slot: 0, output_trim: 1.2 },
+        ] {
+            assert!(commands.contains(&expected), "{expected:?} was not sent: {commands:?}");
+        }
+        let children = state
+            .borrow()
+            .session
+            .effect_chain()
+            .and_then(|chain| chain.first())
+            .and_then(|effect| effect.params.container_children());
+        assert_eq!(children, Some(1), "the box lost its children");
+
+        let commands = Rc::new(RefCell::new(CommandState::default()));
+        record_project_history(&commands, before, &state, &window, "Effect preset loaded");
+        let entry = commands.borrow().history.undo_target().cloned().expect("an undo step");
+        assert_eq!(entry.label, "Effect preset loaded");
+        assert_eq!(entry.before.project.channels[0].setup.effects[0], was, "the undo restores another box");
+        assert_eq!(entry.after.project.channels[0].setup.effects[0].params.get(mooloop_core::CONTAINER_PARAM_MIX), Some(0.3));
     }
 
     /// **MOO-457.** Adam, 2026-09-30: *"Double-clicking a preset in the
