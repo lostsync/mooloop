@@ -682,6 +682,27 @@ mod paste_tests {
         }
     }
 
+    /// A copied channel's Buffer arrives unfrozen, as it would from a
+    /// saved song: the paste builds it anew, over an empty ring.
+    #[test]
+    fn a_copied_channel_carries_no_buffer_freeze() {
+        let mut session = Session::default();
+        session
+            .insert_effect_at(mooloop_core::EffectKind::Buffer, usize::MAX)
+            .expect("room");
+        let (effects, _) = session.effect_chain_parts_mut().expect("a chain");
+        let mooloop_core::EffectParams::Buffer(params) = &mut effects[0].params else {
+            panic!("not a Buffer");
+        };
+        params.freeze = 1.0;
+
+        let copy = session.channel_clipboard(0, 120, 0).expect("a channel to copy");
+        let buffer = copy.channel.setup.effects[0].params.buffer().expect("the Buffer");
+        assert_eq!(buffer.freeze, 0.0, "the copy carries the freeze");
+        let live = session.effect_chain().unwrap()[0].params.buffer().unwrap();
+        assert_eq!(live.freeze, 1.0, "copying thawed the original");
+    }
+
     /// **A sampler channel copied in one song and pasted into a song opened
     /// since plays both of its key zones** (MOO-242). The copy is taken, the
     /// session opens a fresh song -- which empties the zone table, as New and

@@ -256,8 +256,8 @@ It must also pass these engineering tests:
   change, and project reload. *Tempo change and reload are defined as of
   2026-09-23 (MOO-137). A resized ring takes over the retained history, and
   an undo or any other install keeps an unchanged Buffer with its ring. A
-  reloaded freeze records until the ring is full and then latches, because
-  the frozen audio is not saved (MOO-196).*
+  reloaded Buffer arrives unfrozen, because neither the freeze nor the
+  frozen audio is saved (MOO-196, 2026-09-30).*
 - Buffer history and head states are always visible.
 
 Reject or revise the thesis if the normal Follow state cannot behave like a

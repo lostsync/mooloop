@@ -17595,33 +17595,15 @@ impl AppUi {
                                 });
                                 let records = steps.iter().any(|(_, history)| history.is_some());
                                 let mut state = st.borrow_mut();
-                                // The song's own addresses were renumbered
-                                // before this was queued; the session's --
-                                // the selected device, the open lane, the
-                                // preset labels -- are not in the snapshot
-                                // and are renumbered here.
-                                for (list_edit, _) in &steps {
-                                    match *list_edit {
-                                        Some(ListEdit::Channel(edit)) => {
-                                            state.session.rescope_after(edit);
-                                        }
-                                        Some(ListEdit::Track(edit)) => {
-                                            state.session.rescope_after_track(edit, rack_was);
-                                            // The install left the rack on a
-                                            // channel, so a track here is the
-                                            // rescope putting it back.
-                                            if matches!(
-                                                state.session.effect_target,
-                                                EffectTarget::Bus(_)
-                                            ) {
-                                                state.sync_mixer_selection();
-                                                state.sync_effects();
-                                                state.sync_bus_editor(&window);
-                                            }
-                                        }
-                                        None => {}
-                                    }
-                                }
+                                let list_edits: Vec<Option<ListEdit>> =
+                                    steps.iter().map(|(list_edit, _)| *list_edit).collect();
+                                follow_installed_edit(
+                                    &mut state,
+                                    &window,
+                                    &list_edits,
+                                    restores,
+                                    rack_was,
+                                );
                                 // An undo carries no `edit`, so
                                 // nothing above renumbered the label maps --
                                 // and the snapshot does not restore them
@@ -19101,6 +19083,58 @@ fn wear_starter_kit_presets(state: &mut UiState, window: &MainWindow) {
     let label = state.session.source_preset_name(selected).unwrap_or_default();
     window.set_source_preset_name(label.into());
     state.sync_effects();
+}
+
+/// What the pump does to the session's own view once a `ProjectEdit` has
+/// installed (`install_project_in_ui`), for the edits it stands for in order.
+///
+/// The song's own addresses were renumbered before the edit was queued; the
+/// session's -- the selected device, the open lane, the preset labels -- are
+/// not in the snapshot and are renumbered here.
+///
+/// `rack_was` is where the rack pointed before the install, which sent it
+/// back to a channel; `restores` is whether any step was an undo or a redo.
+fn follow_installed_edit(
+    state: &mut UiState,
+    window: &MainWindow,
+    list_edits: &[Option<ListEdit>],
+    restores: bool,
+    rack_was: EffectTarget,
+) {
+    // **An edit made on a track leaves the rack on that track.**
+    // `replace_project` sends the rack back to the selected channel on every
+    // install, which is right for an open but not for adding, pasting or
+    // loading a device on a track. Only an edit that moved no list, because
+    // a track edit is `rescope_after_track`'s below and a channel edit
+    // renumbers only channels; and not an undo or a redo, which restores a
+    // whole document whose tracks may not be the ones `rack_was` named.
+    let moved_a_list = list_edits.iter().any(Option::is_some);
+    if let EffectTarget::Bus(bus) = rack_was {
+        if !moved_a_list && !restores && (bus as usize) < state.session.buses.len() {
+            state.session.effect_target = rack_was;
+            state.sync_mixer_selection();
+            state.sync_effects();
+            state.sync_bus_editor(window);
+        }
+    }
+    for list_edit in list_edits {
+        match *list_edit {
+            Some(ListEdit::Channel(edit)) => {
+                state.session.rescope_after(edit);
+            }
+            Some(ListEdit::Track(edit)) => {
+                state.session.rescope_after_track(edit, rack_was);
+                // The install left the rack on a channel, so a track here is
+                // the rescope putting it back.
+                if matches!(state.session.effect_target, EffectTarget::Bus(_)) {
+                    state.sync_mixer_selection();
+                    state.sync_effects();
+                    state.sync_bus_editor(window);
+                }
+            }
+            None => {}
+        }
+    }
 }
 
 fn install_project_in_ui(
@@ -20877,8 +20911,13 @@ fn place_effect_preset(
             window.set_status_message("That preset is for a different kind of device".into());
             return None;
         }
+        // The device just added is the selection, so the next double-click
+        // on a preset of its kind loads into it, by Adam's rule. The
+        // selection is an identity and survives the install.
+        state.session.select_device(Some(tail));
         state.sync_effects();
     }
+    window.set_source_selected(false);
     let after = project_snapshot(&st.borrow(), window);
     window.set_status_message(format!("Added {name}").into());
     Some((before, after))
@@ -21288,6 +21327,91 @@ mod preset_browser_tests {
         let rows = build_preset_rows(&groups, &expanded, None, "");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].detail, "0");
+    }
+
+    /// A Delay preset saved to disk, as the browser would list it.
+    fn saved_delay_preset(dir: &Path) -> PathBuf {
+        let path = dir.join("Slapback.mooloop-effect");
+        mooloop_project::save_effect_preset(
+            &path,
+            &EffectSlotState::of_kind(EffectKind::Delay),
+            PresetInfo {
+                name: "Slapback".into(),
+                ..PresetInfo::default()
+            },
+            AssetMode::Embedded,
+        )
+        .expect("the preset saves");
+        path
+    }
+
+    /// Double-clicks `path` as a new device on whatever the rack shows, then
+    /// does what the pump does with the edit that queues: install the
+    /// snapshot (`UiState::replace_project`, which is the part of
+    /// `install_project_in_ui` that touches the session) and follow it.
+    fn add_as_new_device_and_install(state: &Rc<RefCell<UiState>>, window: &MainWindow, path: &Path) {
+        let (_, after) = append_effect_preset(state, window, path, EffectKind::Delay, "Slapback")
+            .expect("the preset lands");
+        let rack_was = state.borrow().session.effect_target;
+        let mut st = state.borrow_mut();
+        st.replace_project(&after.project, &after.seated(), window);
+        follow_installed_edit(&mut st, window, &[None], false, rack_was);
+    }
+
+    /// **MOO-457.** Adam, 2026-09-30: *"Double-clicking a preset in the
+    /// sidebar to add a new instance of a device works as far as adding the
+    /// device, but, at least if you're looking at a mixer track, it jumps you
+    /// over to a sequencer channel's devices."* The device went to the track;
+    /// the install that carries the edit sent the rack back to the selected
+    /// channel. The rack stays on the track, with the new device selected.
+    #[test]
+    fn a_preset_added_to_a_track_leaves_the_rack_on_that_track() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().expect("the testing backend builds a window");
+        let state = Rc::new(RefCell::new(UiState::new(None, 48_000, &window)));
+        let track = {
+            let mut st = state.borrow_mut();
+            let track = st.session.add_track().expect("a track fits");
+            st.session.select_bus(track as i32).expect("the track exists");
+            track as u8
+        };
+        let dir = tempfile::tempdir().unwrap();
+        add_as_new_device_and_install(&state, &window, &saved_delay_preset(dir.path()));
+
+        let st = state.borrow();
+        assert_eq!(
+            st.session.effect_target,
+            EffectTarget::Bus(track),
+            "the rack jumped off the track the preset was added to"
+        );
+        let chain = st.session.effect_chain().expect("the track has a chain");
+        assert_eq!(chain.len(), 1, "the device landed on the track");
+        assert_eq!(chain[0].kind(), EffectKind::Delay);
+        assert!(
+            st.session.channels.iter().all(|channel| channel.effects.is_empty()),
+            "and on no channel"
+        );
+        assert_eq!(st.session.selected_device_slot(), Some(0), "the new device is selected");
+    }
+
+    /// The channel half of the same rule, which already held for the view:
+    /// the rack stays on the channel and the new device is selected.
+    #[test]
+    fn a_preset_added_to_a_channel_leaves_the_rack_on_that_channel() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().expect("the testing backend builds a window");
+        let state = Rc::new(RefCell::new(UiState::new(None, 48_000, &window)));
+        let shown = state.borrow().session.effect_target;
+        assert!(matches!(shown, EffectTarget::Channel(_)));
+        let dir = tempfile::tempdir().unwrap();
+        add_as_new_device_and_install(&state, &window, &saved_delay_preset(dir.path()));
+
+        let st = state.borrow();
+        assert_eq!(st.session.effect_target, shown);
+        let chain = st.session.effect_chain().expect("the channel has a chain");
+        let last = chain.len() - 1;
+        assert_eq!(chain[last].kind(), EffectKind::Delay);
+        assert_eq!(st.session.selected_device_slot(), Some(last), "the new device is selected");
     }
 }
 

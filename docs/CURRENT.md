@@ -540,7 +540,10 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   generator preset replaces its source device, which is why a generator
   preset is offered only on a channel already holding that kind and is drawn
   greyed otherwise. **An effect preset appends a device to the end of the
-  selected channel's chain rather than replacing one**, so it is always
+  chain the rack is showing -- a channel's or a mixer track's -- rather than
+  replacing one**, and the rack stays there with the new device selected
+  (MOO-457: until 2026-09-30 the install that carried the edit sent the rack
+  from a track back to the selected channel). So it is always
   loadable -- unless the selected device is that preset's kind, when it loads
   into that device instead, which is Adam's rule for the double-click; the
   rack row's own rail is still where a preset replaces what is already in
@@ -2210,13 +2213,13 @@ land on its own when it starts to matter:
   ring** until it thaws and something resizes it again. An undo, a redo or
   any other whole-project install keeps a Buffer whose own settings did not
   change, with its ring, and keeps the channel it sits on sounding.
-  `Freeze` persists, but the frozen audio itself is not saved (MOO-196 asks
-  whether it should be). So a Buffer that arrives with Freeze on and an empty
-  ring -- a reopened song, a preset, a paste -- records, with the freeze
-  armed (the face shows ARMED), and the freeze lands once the ring holds a
-  full history. It used to latch the empty ring and play silence under a
-  face reading FROZEN. A document saved with a gesture held reopens holding
-  it.
+  **A freeze is not saved** (MOO-196, Adam: *"freeze is temporary"*), and
+  neither is the ring's audio. A reopened song, a preset, a pasted device or
+  a pasted channel arrives unfrozen and recording; an undo keeps a freeze and
+  its ring. A Buffer that is rebuilt with Freeze on and an empty ring anyway
+  -- a Freeze lane, say -- records with the freeze armed (the face shows
+  ARMED), and the freeze lands once the ring holds a full history. A
+  document saved with a gesture held reopens holding it.
   The face's SEAMS readout counts wraps and cuts — a stutter's repeats, a
   reverse head lapping the ring — which is the number that says whether the
   head is doing what the picture claims. It replaced RETURNS, a count of

@@ -1483,3 +1483,224 @@ fn a_hosted_plugins_latency_sizes_the_container_around_it() {
         drop(instance);
     }
 }
+
+// --- MOO-455: a layer's branches are parallel ------------------------------
+
+/// A Drive whose Out is `out`: 0 silences it, which is the knob Adam turned.
+fn drive_at(out: f32) -> EffectSlotState {
+    let mut drive = EffectSlotState::of_kind(EffectKind::Drive);
+    drive
+        .params
+        .set(mooloop_core::DRIVE_PARAM_OUTPUT, out)
+        .expect("a drive has an output");
+    drive
+}
+
+/// The drum through `[Layer, Chain, Drive, Chain, Drive]` -- two layers,
+/// each holding one Drive, as the layer face's `+` and each branch's own `+`
+/// build them -- with each Drive's Out given.
+fn two_drive_layers(first_out: f32, second_out: f32) -> Project {
+    let mut project = drum_through(&[], &[]);
+    let setup = &mut project.channels[0].setup;
+    for drive in [drive_at(first_out), drive_at(second_out)] {
+        setup.push_effect(drive).expect("room");
+    }
+    wrap_as(&mut project, EffectKind::Chain, 1..2, 1.0);
+    wrap_as(&mut project, EffectKind::Chain, 0..1, 1.0);
+    wrap_as(&mut project, EffectKind::Layer, 0..4, 1.0);
+    project
+}
+
+/// The drum through one Drive at `out`, boxed as the one layer of a Layer:
+/// what one of [`two_drive_layers`]' branches is on its own.
+fn one_drive_layer(out: f32) -> Project {
+    let mut project = drum_through(&[], &[]);
+    project.channels[0].setup.push_effect(drive_at(out)).expect("room");
+    wrap_as(&mut project, EffectKind::Chain, 0..1, 1.0);
+    wrap_as(&mut project, EffectKind::Layer, 0..2, 1.0);
+    project
+}
+
+/// **MOO-455.** A Layer feeds every layer its own input and sums what they
+/// give: silencing one layer's Drive leaves the other audible, and the Layer
+/// is the two layers rendered separately and added.
+///
+/// Adam's report was the series symptom -- turning either Drive down all the
+/// way silenced the channel -- so it is asked both ways round.
+#[test]
+fn silencing_one_layer_leaves_the_other_audible() {
+    for block in [64, 512] {
+        let alone = render_blocks(&one_drive_layer(1.0), 0.5, block);
+        assert!(
+            peak_of(&alone) > 1.0e-3,
+            "one layer on its own was silent, so this proves nothing"
+        );
+        for (silenced, heard) in [(0usize, 1usize), (1, 0)] {
+            let out = |which: usize| if which == silenced { 0.0 } else { 1.0 };
+            let rendered = render_blocks(&two_drive_layers(out(0), out(1)), 0.5, block);
+            assert!(
+                peak_of(&rendered) > 1.0e-3,
+                "silencing layer {silenced} silenced the channel: layer {heard} \
+                 was not heard (block {block})"
+            );
+            assert!(
+                worst_difference(&rendered, &alone) <= peak_of(&alone) * 1.0e-6,
+                "with layer {silenced} silenced the Layer was not layer {heard} alone \
+                 (block {block}, worst {})",
+                worst_difference(&rendered, &alone)
+            );
+        }
+        let both = render_blocks(&two_drive_layers(1.0, 0.5), 0.5, block);
+        let half = render_blocks(&one_drive_layer(0.5), 0.5, block);
+        let sum = summed(&alone, &half);
+        assert!(
+            worst_difference(&both, &sum) <= peak_of(&sum) * 1.0e-5,
+            "the Layer was not its two layers summed (block {block}, worst {})",
+            worst_difference(&both, &sum)
+        );
+    }
+}
+
+/// Mirror one row the session just inserted onto `render`, the way the
+/// window's `install_added_effect` does: installed at the old tail, moved
+/// into place, then every container's span and ring republished, the
+/// chain's scratch riding the first.
+fn mirror_insert(
+    render: &mut RenderState,
+    effects: &[EffectSlotState],
+    slot: usize,
+    tail: usize,
+) {
+    use crate::{ContainerScratch, EffectSlot, StructuralCommand};
+    let target = mooloop_core::EffectTarget::Channel(0);
+    let effect = effects[slot];
+    let node = mooloop_dsp::build_effect_at_tempo(effect.params, SAMPLE_RATE, 120.0);
+    let align = mooloop_dsp::IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
+    assert!(render
+        .apply_structural(StructuralCommand::InstallEffect {
+            target,
+            slot: tail as u8,
+            kind: effect.kind(),
+            resource_key: None,
+            node,
+            align,
+            analyzer: Box::new(mooloop_dsp::SpectrumAnalyzer::new()),
+            state: Box::new(EffectSlot::for_device(effect.id)),
+        })
+        .is_none());
+    if slot != tail {
+        render.apply_command(mooloop_core::EngineCommand::MoveEffect {
+            target,
+            from: tail as u8,
+            to: slot as u8,
+        });
+    }
+    let mut scratch = ContainerScratch::for_chain(effects).map(Box::new);
+    let own = |effect: &EffectSlotState| effect.kind().latency_frames();
+    for ring in mooloop_core::container_rings_with(effects, &own) {
+        let command = match ring {
+            mooloop_core::ContainerRing::Span { slot, children, frames } => {
+                StructuralCommand::SetContainerSpan {
+                    target,
+                    slot: slot as u8,
+                    children,
+                    align: mooloop_dsp::IntegerDelay::new(frames).map(Box::new),
+                    scratch: scratch.take(),
+                }
+            }
+            mooloop_core::ContainerRing::Branch { slot, frames } => {
+                StructuralCommand::SetBranchAlign {
+                    target,
+                    slot: slot as u8,
+                    align: mooloop_dsp::IntegerDelay::new(frames).map(Box::new),
+                }
+            }
+        };
+        drop(render.apply_structural(command));
+    }
+}
+
+/// `project`'s master after a stopped lead-in long enough for every install
+/// to have faded in, then half a second of playing.
+fn render_after_lead_in(mut render: RenderState) -> Vec<f32> {
+    crate::render_test_support::render_frames(&mut render, 9_600);
+    render.play();
+    crate::render_test_support::render_frames(&mut render, SAMPLE_RATE as usize / 2).0
+}
+
+/// **MOO-455, as it was built.** The same two layers made the way the rack
+/// makes them while the song is open -- an empty Layer, its `+` twice, a
+/// Drive into each branch through the branch's own `+` -- mirrored onto a
+/// running engine command by command, sounds as the song loaded from disk
+/// does: in parallel.
+#[test]
+fn a_layer_built_live_is_parallel_like_a_loaded_one() {
+    for (first_out, second_out) in [(0.0, 1.0), (1.0, 0.0), (1.0, 0.5)] {
+        let project = drum_through(&[], &[]);
+        let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        let mut effects: Vec<EffectSlotState> = Vec::new();
+        let mut next_id = project.channels[0].setup.next_device_id.max(1);
+
+        let tail = effects.len();
+        let layer = mooloop_core::insert_effect(
+            &mut effects,
+            &mut next_id,
+            tail,
+            EffectSlotState::of_kind(EffectKind::Layer),
+        )
+        .expect("a layer");
+        mirror_insert(&mut render, &effects, layer, tail);
+        for _ in 0..2 {
+            let tail = effects.len();
+            let branch = mooloop_core::append_into_container(
+                &mut effects,
+                &mut next_id,
+                layer,
+                EffectSlotState::of_kind(EffectKind::Chain),
+            )
+            .expect("a branch");
+            mirror_insert(&mut render, &effects, branch, tail);
+        }
+        let heads: Vec<usize> = mooloop_core::layer_branches(&effects, layer).collect();
+        let tail = effects.len();
+        let first =
+            mooloop_core::insert_into_container(&mut effects, &mut next_id, heads[0], drive_at(first_out))
+                .expect("a drive in the first layer");
+        mirror_insert(&mut render, &effects, first, tail);
+        let heads: Vec<usize> = mooloop_core::layer_branches(&effects, layer).collect();
+        let tail = effects.len();
+        let second =
+            mooloop_core::insert_into_container(&mut effects, &mut next_id, heads[1], drive_at(second_out))
+                .expect("a drive in the second layer");
+        mirror_insert(&mut render, &effects, second, tail);
+        assert_eq!(
+            effects.iter().map(|effect| effect.kind()).collect::<Vec<_>>(),
+            [
+                EffectKind::Layer,
+                EffectKind::Chain,
+                EffectKind::Drive,
+                EffectKind::Chain,
+                EffectKind::Drive
+            ]
+        );
+
+        let live = render_after_lead_in(render);
+        let loaded = render_after_lead_in(RenderState::from_project(
+            SAMPLE_RATE,
+            &two_drive_layers(first_out, second_out),
+            &[],
+        ));
+        assert!(
+            peak_of(&loaded) > 1.0e-3,
+            "the loaded layers were silent at outs {first_out}/{second_out}"
+        );
+        assert!(
+            worst_difference(&live, &loaded) <= peak_of(&loaded) * 1.0e-5,
+            "the layers built live at outs {first_out}/{second_out} did not sound as \
+             the loaded ones (worst {}, live peak {}, loaded peak {})",
+            worst_difference(&live, &loaded),
+            peak_of(&live),
+            peak_of(&loaded)
+        );
+    }
+}

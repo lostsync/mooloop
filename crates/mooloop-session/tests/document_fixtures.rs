@@ -149,6 +149,9 @@ fn maximal_project() -> Project {
         for descriptor in kind.descriptors() {
             slot.params.set(descriptor.id, off_default(descriptor));
         }
+        // A Buffer's freeze is a performance gesture that a file never keeps,
+        // so it is not one of the fields a save has to carry.
+        slot.params.thaw();
         slot.bypassed = index % 2 == 0;
         slot.wet_dry = 0.8;
         slot.input_trim = 0.9;
