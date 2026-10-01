@@ -31,6 +31,11 @@
 //! refuses to build a second event loop even after the first one failed. So
 //! the plan forces X11 only when `DISPLAY` is set, and the UI probes the X
 //! server ([`crate::x11::probe`]) before asking for it.
+//!
+//! **macOS** has one display backend, AppKit, and no X server worth running
+//! under, so there the setting is inert ([`XWAYLAND_SETTING_APPLIES`]):
+//! [`plan_backend`] forces nothing whatever it says, and Preferences has no
+//! reason to show it.
 
 use std::ffi::OsString;
 use std::fmt;
@@ -46,16 +51,20 @@ pub enum DisplayBackend {
     X11,
     /// A native Wayland client.
     Wayland,
+    /// AppKit: macOS's own windows.
+    Cocoa,
 }
 
 impl DisplayBackend {
-    /// Whether a plugin's X11 window can be made transient for the main
-    /// window (`WM_TRANSIENT_FOR`, and the plugin's `set_transient`). Only
-    /// when both are X11 windows: Wayland has no protocol for one client's
-    /// surface to belong to another's, so under Wayland the plugin windows
-    /// are hidden while mooloop is not focused instead (policy 2).
+    /// Whether a plugin window can be kept above the main window (the
+    /// plugin's `set_transient`, and `PluginWindows::set_transient_for`):
+    /// under X11, where both are X11 windows (`WM_TRANSIENT_FOR`), and under
+    /// Cocoa, where the plugin's panel floats above mooloop's windows and
+    /// hides with the application. Not under Wayland, which has no protocol
+    /// for one client's surface to belong to another's, so there the plugin
+    /// windows are hidden while mooloop is not focused instead (policy 2).
     pub fn can_set_transient(self) -> bool {
-        matches!(self, Self::X11)
+        matches!(self, Self::X11 | Self::Cocoa)
     }
 
     /// What the log calls it.
@@ -63,16 +72,18 @@ impl DisplayBackend {
         match self {
             Self::X11 => "X11",
             Self::Wayland => "Wayland",
+            Self::Cocoa => "Cocoa",
         }
     }
 
     /// The backend a Slint window's display handle belongs to, or `None` for
-    /// one that is neither (another platform, or the headless testing
+    /// one that is none of them (another platform, or the headless testing
     /// backend).
     pub fn of_display(handle: RawDisplayHandle) -> Option<Self> {
         match handle {
             RawDisplayHandle::Xlib(_) | RawDisplayHandle::Xcb(_) => Some(Self::X11),
             RawDisplayHandle::Wayland(_) => Some(Self::Wayland),
+            RawDisplayHandle::AppKit(_) => Some(Self::Cocoa),
             _ => None,
         }
     }
@@ -84,18 +95,25 @@ impl fmt::Display for DisplayBackend {
     }
 }
 
-/// A window's X11 id, as a parent a plugin window can be transient for, or
-/// `None` when the window is not an X11 one.
+/// A window as a parent a plugin window can be kept above: its X11 id, or
+/// its `NSView*` under AppKit. `None` for a window of any other kind
+/// (Wayland's, which no plugin window can belong to).
 // `c_ulong` is 64 bits here and 32 on some targets, so the conversion that
 // is a no-op on this one is not on every one.
 #[allow(clippy::useless_conversion)]
-pub fn x11_window_of(handle: RawWindowHandle) -> Option<NativeWindow> {
+pub fn native_window_of(handle: RawWindowHandle) -> Option<NativeWindow> {
     match handle {
         RawWindowHandle::Xlib(window) => Some(NativeWindow::x11(u64::from(window.window))),
         RawWindowHandle::Xcb(window) => Some(NativeWindow::x11(u64::from(window.window.get()))),
+        RawWindowHandle::AppKit(window) => Some(NativeWindow::cocoa(window.ns_view.as_ptr())),
         _ => None,
     }
 }
+
+/// Whether the "Run under XWayland" setting can change anything here: on
+/// Linux and the BSDs. On macOS (and anywhere else) it is inert, and
+/// [`plan_backend`] ignores it.
+pub const XWAYLAND_SETTING_APPLIES: bool = cfg!(all(unix, not(target_vendor = "apple")));
 
 /// What the process asks winit for, decided before the first window.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,8 +146,17 @@ impl BackendPlan {
     }
 }
 
-/// The plan for this process's own environment.
+/// The plan for this process's own environment. Where the setting does
+/// not apply ([`XWAYLAND_SETTING_APPLIES`]) it forces nothing, and on macOS
+/// expects Cocoa.
 pub fn plan_backend(run_under_xwayland: bool) -> BackendPlan {
+    if !XWAYLAND_SETTING_APPLIES {
+        return BackendPlan {
+            force_x11: false,
+            expected: cfg!(target_os = "macos").then_some(DisplayBackend::Cocoa),
+            note: None,
+        };
+    }
     plan_backend_in(run_under_xwayland, |name| std::env::var_os(name))
 }
 
@@ -535,9 +562,23 @@ mod tests {
     }
 
     #[test]
-    fn only_x11_can_set_transient() {
+    fn x11_and_cocoa_can_set_transient_and_wayland_cannot() {
         assert!(DisplayBackend::X11.can_set_transient());
+        assert!(DisplayBackend::Cocoa.can_set_transient());
         assert!(!DisplayBackend::Wayland.can_set_transient());
+    }
+
+    #[test]
+    fn the_xwayland_setting_is_inert_on_macos() {
+        assert_eq!(XWAYLAND_SETTING_APPLIES, !cfg!(target_os = "macos"));
+        if cfg!(target_os = "macos") {
+            for setting in [false, true] {
+                let plan = plan_backend(setting);
+                assert!(!plan.force_x11);
+                assert_eq!(plan.expected, Some(DisplayBackend::Cocoa));
+                assert_eq!(plan.note, None);
+            }
+        }
     }
 
     #[test]
@@ -567,18 +608,32 @@ mod tests {
     #[test]
     fn an_x11_window_handle_gives_its_id() {
         assert_eq!(
-            x11_window_of(XlibWindowHandle::new(0x0120_0007).into()),
+            native_window_of(XlibWindowHandle::new(0x0120_0007).into()),
             Some(NativeWindow::x11(0x0120_0007))
         );
         assert_eq!(
-            x11_window_of(XcbWindowHandle::new(NonZeroU32::new(0x0340_0002).unwrap()).into()),
+            native_window_of(XcbWindowHandle::new(NonZeroU32::new(0x0340_0002).unwrap()).into()),
             Some(NativeWindow::x11(0x0340_0002))
         );
         let mut marker = 0u8;
         let surface = NonNull::from(&mut marker).cast();
         assert_eq!(
-            x11_window_of(raw_window_handle::WaylandWindowHandle::new(surface).into()),
+            native_window_of(raw_window_handle::WaylandWindowHandle::new(surface).into()),
             None
+        );
+    }
+
+    #[test]
+    fn an_appkit_window_handle_gives_its_view() {
+        let mut marker = 0u8;
+        let view = NonNull::from(&mut marker).cast();
+        let parent = native_window_of(raw_window_handle::AppKitWindowHandle::new(view).into())
+            .expect("an AppKit window is a parent");
+        assert_eq!(parent.api, mooloop_plugin_host::GuiApi::Cocoa);
+        assert_eq!(parent.as_ns_view(), Some(view.as_ptr()));
+        assert_eq!(
+            DisplayBackend::of_display(raw_window_handle::AppKitDisplayHandle::new().into()),
+            Some(DisplayBackend::Cocoa)
         );
     }
 }
