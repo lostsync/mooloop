@@ -1255,6 +1255,85 @@ fn a_container_preset_holding_a_plugin_lets_its_processor_in() {
     );
 }
 
+/// **A container preset holding a plugin, added as a new device, lets the
+/// plugin's processor in too** (MOO-466). The add mirrors the run one slot
+/// at a time instead of installing a project, and the placeholder it
+/// installs for the plugin row carries the slot's key, as the load over a
+/// Chain above does.
+#[test]
+fn a_container_preset_holding_a_plugin_added_as_a_new_device_lets_its_processor_in() {
+    let mut h = harness_with(&drum_loop());
+    h.state.borrow_mut().enter_browser_tab(BrowserTab::Plugins);
+    let queues = plugin_ui::Queues {
+        tx: h.tx.clone(),
+        stx: h.stx.clone(),
+        reset_tx: mpsc::channel().0,
+    };
+    assert!(plugin_ui::add_plugin(&h.state, &h.commands, &h.window, test_plugin::GAIN_ID, Some(0), &queues));
+    for _ in 0..3 {
+        h.tick();
+    }
+    let original = h.plugin_slot();
+
+    let path = h.dir.path().join("boxed.mooloop-effect");
+    {
+        let mut st = h.state.borrow_mut();
+        st.session.wrap_effects_in_container(0..1).expect("wrapped");
+        let device = st.session.effect_chain().expect("a chain")[0].id;
+        st.session.pending_preset_save = st
+            .session
+            .chain_key(st.session.effect_target)
+            .map(|target| PresetSaveTarget::Effect { target, device });
+        let source = st.session.take_preset_save(120, 0).expect("a save was pending");
+        let run = source.run.expect("a container saves its run");
+        mooloop_project::save_effect_run_preset(
+            &path,
+            &run,
+            PresetInfo {
+                name: "Boxed".into(),
+                category: String::new(),
+                tags: Vec::new(),
+            },
+            AssetMode::Embedded,
+        )
+        .expect("saved");
+    }
+
+    h.engine.drain();
+    let (installs, replaces) = (h.engine.install_keys.len(), h.engine.replace_keys.len());
+    let rows = h.state.borrow().session.effect_chain().expect("a chain").len();
+    assert!(crate::append_effect_preset(
+        &h.state,
+        &h.window,
+        &h.commands,
+        (&h.tx, &h.stx),
+        &path,
+        EffectKind::Chain,
+        "Boxed",
+    ));
+    let landed = h.state.borrow().session.effect_chain().expect("a chain")[rows..]
+        .iter()
+        .find_map(|effect| match effect.params {
+            EffectParams::Plugin(slot) => Some(slot),
+            _ => None,
+        })
+        .expect("the preset's gain is in the added run");
+    assert_ne!(landed, original, "test premise: the add mints a slot of its own");
+    for _ in 0..3 {
+        h.tick();
+    }
+    assert!(h.state.borrow().session.plugin_problem(landed).is_none(), "the gain opened");
+
+    let key = u64::from(landed.0);
+    let replaced = &h.engine.replace_keys[replaces..];
+    assert!(replaced.contains(&key), "the rack sent the gain's processor: {replaced:?}");
+    let installed = &h.engine.install_keys[installs..];
+    assert!(
+        installed.contains(&Some(key)),
+        "the placeholder the add installed carries the slot's key: installed {installed:?}, key {key}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // A plugin's own GUI in a window of its own (step 11, MOO-302). No test here
 // opens a window: the window side is `plugin_gui::fake`, which records what

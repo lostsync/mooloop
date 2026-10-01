@@ -237,8 +237,10 @@ requires the same samples as the install, and as a song never edited (with
 a removed channel muted, or a moved one on a track of its own so every track
 sums in the same order). The session keeps what its reconcilers had sent,
 renumbered (`Session::send_channel_edit`), so the next tick sends only what
-the edit changed. Paste, track edits, pattern edits, some preset loads and
-undo still install.
+the edit changed. Paste, track edits, pattern edits, a single-row preset
+loaded onto a container, and undo still install; an effect preset, loaded
+into a device or added as a new one, goes through the per-slot
+`InstallEffect` path like any insert.
 
 **A project install carries effect devices by `DeviceId`** (MOO-137, agreed
 with Realtime Engine on 2026-09-23). `carry_plan` still carries a channel or

@@ -545,7 +545,9 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   and tags shown when they say something its group does not. **A click
   selects a preset; a double-click, Enter or a drop onto the rack loads it**
   (MOO-9, 2026-09-24), and a right-click offers Load and, for an effect
-  preset, Add as New Device. The click also **auditions an instrument or
+  preset, Add as New Device. An effect preset added as a new device fades in
+  where it lands like any inserted device, and nothing else on the song
+  stops or is rebuilt for it. The click also **auditions an instrument or
   channel preset** (MOO-227): the preset is rendered offline, off the UI
   thread, into a short phrase (a bar of hits for the drum devices, an
   arpeggio into a chord for the pitched ones, root and fifth for a sampler)

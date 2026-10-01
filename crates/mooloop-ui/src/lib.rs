@@ -5551,24 +5551,58 @@ impl UiState {
         tx: &EngineCommandSender,
         stx: &StructuralCommandSender,
     ) {
+        // Allocated here with the node: an empty addressable slot costs a
+        // pointer rather than its full host state. It carries the identity
+        // the model just minted, which is what lets a route find this device
+        // again.
+        let state = Box::new(EffectSlot::for_device(added.device));
+        self.install_inserted_effect(added, added.params, state, bpm, sample_rate, tx, stx);
+    }
+
+    /// [`Self::install_added_effect`] for a device that arrives as `effect`,
+    /// its whole state -- the parameters, bypass, wet/dry and trims a preset
+    /// loaded over the inserted row gave it -- rather than at its kind's
+    /// defaults. `effect` is the row `added` names, as it now stands.
+    fn install_added_effect_as(
+        &self,
+        added: &mooloop_session::effects::EffectInserted,
+        effect: &mooloop_core::EffectSlotState,
+        bpm: f64,
+        sample_rate: u32,
+        tx: &EngineCommandSender,
+        stx: &StructuralCommandSender,
+    ) {
+        let state = Box::new(EffectSlot::for_effect(effect));
+        self.install_inserted_effect(added, effect.params, state, bpm, sample_rate, tx, stx);
+    }
+
+    /// The body both of those share: `params` built at the chain's tail
+    /// into a slot holding `state`, then moved into place.
+    #[allow(clippy::too_many_arguments)]
+    fn install_inserted_effect(
+        &self,
+        added: &mooloop_session::effects::EffectInserted,
+        params: mooloop_core::EffectParams,
+        state: Box<EffectSlot>,
+        bpm: f64,
+        sample_rate: u32,
+        tx: &EngineCommandSender,
+        stx: &StructuralCommandSender,
+    ) {
         // The node and its dry-align ring are built here because construction
         // allocates: off the audio thread, riding the same structural command
         // as the slot they belong to.
-        let node = build_effect_at_tempo(added.params, sample_rate, bpm);
+        let node = build_effect_at_tempo(params, sample_rate, bpm);
         let align = IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
         stx.send(StructuralCommand::InstallEffect {
             target: added.target,
             slot: added.tail as u8,
-            kind: added.kind,
-            resource_key: Self::effect_resource_key(added.params),
+            kind: params.kind(),
+            resource_key: Self::effect_resource_key(params),
             node,
             align,
             analyzer: Box::new(SpectrumAnalyzer::new()),
-            // Allocated here with the node: an empty addressable slot costs a
-            // pointer rather than its full host state. It carries the identity
-            // the model just minted, which is what lets a route find this
-            // device again.
-            state: Box::new(EffectSlot::for_device(added.device)),
+            state,
         });
         if added.slot != added.tail {
             let _ = tx.send(EngineCommand::MoveEffect {
@@ -16474,14 +16508,14 @@ impl AppUi {
         }
         {
             let st = state.clone();
-            // Two senders, because the two halves of "load a preset" are two
+            // Two paths, because the two halves of "load a preset" are two
             // different mechanisms. A generator or channel preset is a whole
             // document and goes down the asynchronous document path; an
-            // effect preset is a rack edit and goes down the project-edit
-            // path, which reinstalls the project and so carries the inserted
-            // row's structure without a separate engine command.
+            // effect preset is a rack edit, mirrored onto the engine one slot
+            // at a time like any other insert.
             let doc_tx = document_tx.clone();
-            let edit_tx = project_edit_tx.clone();
+            let tx = cmd_tx.clone();
+            let stx = structural_tx.clone();
             let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_browser_preset_loaded(move |path| {
@@ -16557,18 +16591,15 @@ impl AppUi {
                             window.invoke_effect_preset_selected(slot as i32, index as i32);
                             return;
                         }
-                        let landed = append_effect_preset(&st, &window, &path, kind, &name);
-                        if let Some((before, after)) = landed {
-                            if queue_project_edit(
-                                &edit_tx,
-                                before,
-                                after,
-                                "Effect preset added",
-                            ) {
-                                commands.borrow_mut().project_edit_pending = true;
-                                sync_command_availability(&window, &commands.borrow());
-                            }
-                        }
+                        append_effect_preset(
+                            &st,
+                            &window,
+                            &commands,
+                            (&tx, &stx),
+                            &path,
+                            kind,
+                            &name,
+                        );
                     }
                 }
             });
@@ -16577,7 +16608,8 @@ impl AppUi {
             // The preset row's "Add as New Device": the append half of the
             // rule above, asked for by name, whatever is selected.
             let st = state.clone();
-            let edit_tx = project_edit_tx.clone();
+            let tx = cmd_tx.clone();
+            let stx = structural_tx.clone();
             let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_browser_preset_appended(move |path| {
@@ -16595,12 +16627,7 @@ impl AppUi {
                 }) else {
                     return;
                 };
-                if let Some((before, after)) = append_effect_preset(&st, &window, &path, kind, &name) {
-                    if queue_project_edit(&edit_tx, before, after, "Effect preset added") {
-                        commands.borrow_mut().project_edit_pending = true;
-                        sync_command_availability(&window, &commands.borrow());
-                    }
-                }
+                append_effect_preset(&st, &window, &commands, (&tx, &stx), &path, kind, &name);
             });
         }
         {
@@ -16608,27 +16635,29 @@ impl AppUi {
             // a new device before that row. Any other preset has no place in
             // a chain to land at, so it loads the way a double-click does.
             let st = state.clone();
-            let edit_tx = project_edit_tx.clone();
+            let tx = cmd_tx.clone();
+            let stx = structural_tx.clone();
             let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_browser_preset_dropped(move |path, before| {
                 let Some(window) = weak.upgrade() else { return };
                 let place = usize::try_from(before).ok().map(EffectPlace::Before);
-                drop_browser_preset(&st, &window, &edit_tx, &commands, path, place);
+                drop_browser_preset(&st, &window, &commands, (&tx, &stx), path, place);
             });
         }
         {
             // A preset dropped on the join inside a Chain after its last
             // device (MOO-340): a new device at the end of that box.
             let st = state.clone();
-            let edit_tx = project_edit_tx.clone();
+            let tx = cmd_tx.clone();
+            let stx = structural_tx.clone();
             let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_browser_preset_dropped_into(move |path, container| {
                 let Some(window) = weak.upgrade() else { return };
                 let Ok(container) = usize::try_from(container) else { return };
                 let place = Some(EffectPlace::LastIn(container));
-                drop_browser_preset(&st, &window, &edit_tx, &commands, path, place);
+                drop_browser_preset(&st, &window, &commands, (&tx, &stx), path, place);
             });
         }
         {
@@ -21159,36 +21188,37 @@ fn load_preset_document(
     });
 }
 
-/// Adds the effect preset at `path` to the end of the selected channel's
-/// chain, and returns the before/after snapshots that make it one undoable
-/// edit.
+/// Adds the effect preset at `path` to the end of the chain the rack shows,
+/// mirrored onto the engine and recorded as one undo step.
 ///
 /// Two steps, because a preset carries what a device *sounds like* and not
 /// which device it is: insert a row of the right kind to mint an identity,
 /// then load the preset over it. A run preset does the same through a
 /// container, since `load_effect_run` will only replace a `Chain`.
 ///
-/// `None` when the bundle will not open, is not an effect preset, or does not
-/// fit -- each of which has already been reported to the status bar.
+/// `false` when the bundle will not open, is not an effect preset, or does
+/// not fit -- each of which has already been reported to the status bar.
 fn append_effect_preset(
     st: &Rc<RefCell<UiState>>,
     window: &MainWindow,
+    commands: &Rc<RefCell<CommandState>>,
+    senders: (&EngineCommandSender, &StructuralCommandSender),
     path: &Path,
     kind: EffectKind,
     name: &str,
-) -> Option<(ProjectSnapshot, ProjectSnapshot)> {
-    place_effect_preset(st, window, path, kind, name, None)
+) -> bool {
+    place_effect_preset(st, window, commands, senders, path, kind, name, None)
 }
 
 /// A preset from the browser dropped on a join: an effect preset becomes a
-/// new device at `place` (MOO-218, MOO-340), as one queued project edit. Any
-/// other preset has no place in a chain to land at, so it loads the way a
+/// new device at `place` (MOO-218, MOO-340), as one undo step. Any other
+/// preset has no place in a chain to land at, so it loads the way a
 /// double-click does.
 fn drop_browser_preset(
     st: &Rc<RefCell<UiState>>,
     window: &MainWindow,
-    edit_tx: &ProjectEditSender,
     commands: &Rc<RefCell<CommandState>>,
+    senders: (&EngineCommandSender, &StructuralCommandSender),
     path: SharedString,
     place: Option<EffectPlace>,
 ) {
@@ -21207,25 +21237,30 @@ fn drop_browser_preset(
         window.invoke_browser_preset_loaded(path);
         return;
     };
-    if let Some((snapshot_before, after)) = place_effect_preset(st, window, &path_buf, kind, &name, place) {
-        if queue_project_edit(edit_tx, snapshot_before, after, "Effect preset added") {
-            commands.borrow_mut().project_edit_pending = true;
-            sync_command_availability(window, &commands.borrow());
-        }
-    }
+    place_effect_preset(st, window, commands, senders, &path_buf, kind, &name, place);
 }
 
 /// `append_effect_preset`, landing at `place` rather than at the end: before
 /// the row a join leads into (MOO-218), or at the end of the container a
 /// join inside a Chain belongs to (MOO-340). `None` is the end of the chain.
+///
+/// The engine is told per slot, as an insert is: one preset's device is
+/// installed at the chain's tail already carrying the preset -- parameters,
+/// bypass, wet/dry and trims, so its first block is the preset's -- and
+/// moved into place; a run's container is added empty that way and the run
+/// then lands over it as a run preset loads onto a container. Nothing is
+/// installed as a project.
+#[allow(clippy::too_many_arguments)]
 fn place_effect_preset(
     st: &Rc<RefCell<UiState>>,
     window: &MainWindow,
+    commands: &Rc<RefCell<CommandState>>,
+    (tx, stx): (&EngineCommandSender, &StructuralCommandSender),
     path: &Path,
     kind: EffectKind,
     name: &str,
     place: Option<EffectPlace>,
-) -> Option<(ProjectSnapshot, ProjectSnapshot)> {
+) -> bool {
     let loaded = match mooloop_project::load_bundle(path) {
         Ok(report) => match report.document {
             LoadedDocument::Effect(effect) => Ok(*effect),
@@ -21233,20 +21268,22 @@ fn place_effect_preset(
             _ => {
                 log_warn!("project", "{} is not an effect preset", path.display());
                 window.set_status_message("That bundle is not an effect preset".into());
-                return None;
+                return false;
             }
         },
         Err(error) => {
             log_warn!("project", "could not open {}: {error}", path.display());
             window.set_status_message(format!("Could not open this preset: {error}").into());
-            return None;
+            return false;
         }
     };
 
     let before = project_snapshot(&st.borrow(), window);
     {
         let mut state = st.borrow_mut();
-        let len = state.session.effect_chain().map(Vec::len)?;
+        let Some(len) = state.session.effect_chain().map(Vec::len) else {
+            return false;
+        };
         let place = match place {
             None => EffectPlace::Before(len),
             Some(EffectPlace::Before(at)) => EffectPlace::Before(at.min(len)),
@@ -21263,32 +21300,54 @@ fn place_effect_preset(
         else {
             drop(state);
             window.set_status_message("This chain is full".into());
-            return None;
+            return false;
         };
         let tail = inserted.slot;
+        let (bpm, sample_rate) = (window.get_bpm() as f64, state.audio_sample_rate);
         let landed = match &loaded {
-            Ok(effect) => state.session.load_effect_preset(tail, effect, name).is_some(),
-            Err(run) => state.session.load_effect_run(tail, run, name).is_some(),
+            Ok(effect) => match state.session.load_effect_preset(tail, effect, name) {
+                Some(_) => {
+                    let effect = state.session.effect_chain().and_then(|chain| chain.get(tail)).cloned();
+                    if let Some(effect) = effect {
+                        state.install_added_effect_as(&inserted, &effect, bpm, sample_rate, tx, stx);
+                    }
+                    true
+                }
+                None => false,
+            },
+            Err(run) => match state.session.load_effect_run(tail, run, name) {
+                Some(run_loaded) => {
+                    // The empty box first, so the engine's chain is the
+                    // model's as it stood before the run replaced it, which
+                    // is what the run's mirror is written against.
+                    state.install_added_effect(&inserted, bpm, sample_rate, tx, stx);
+                    state.install_loaded_run(&run_loaded, bpm, sample_rate, tx, stx);
+                    true
+                }
+                None => false,
+            },
         };
         if !landed {
             // Take the row back out rather than leaving an empty device the
-            // musician did not ask for.
+            // musician did not ask for. Nothing has reached the engine yet.
             let _ = state.session.remove_effect_at(tail);
             drop(state);
             log_warn!("project", "{name} does not fit the end of this chain");
             window.set_status_message("That preset is for a different kind of device".into());
-            return None;
+            return false;
         }
         // The device just added is the selection, so the next double-click
         // on a preset of its kind loads into it, by Adam's rule. The
         // selection is an identity and survives the install.
         state.session.select_device(Some(tail));
         state.sync_effects();
+        state.refresh_automation(window);
+        state.refresh_modulation(window);
     }
     window.set_source_selected(false);
-    let after = project_snapshot(&st.borrow(), window);
+    record_project_history(commands, before, st, window, "Effect preset added");
     window.set_status_message(format!("Added {name}").into());
-    Some((before, after))
+    true
 }
 
 /// The four things the device clipboard can do.
@@ -21717,17 +21776,118 @@ mod preset_browser_tests {
         path
     }
 
-    /// Double-clicks `path` as a new device on whatever the rack shows, then
-    /// does what the pump does with the edit that queues: install the
-    /// snapshot (`UiState::replace_project`, which is the part of
-    /// `install_project_in_ui` that touches the session) and follow it.
-    fn add_as_new_device_and_install(state: &Rc<RefCell<UiState>>, window: &MainWindow, path: &Path) {
-        let (_, after) = append_effect_preset(state, window, path, EffectKind::Delay, "Slapback")
-            .expect("the preset lands");
-        let rack_was = state.borrow().session.effect_target;
-        let mut st = state.borrow_mut();
-        st.replace_project(&after.project, &after.seated(), window);
-        follow_installed_edit(&mut st, window, &[None], false, rack_was);
+    /// Double-clicks `path` as a new device on whatever the rack shows, and
+    /// hands back what reached the engine and the history.
+    fn add_as_new_device(
+        state: &Rc<RefCell<UiState>>,
+        window: &MainWindow,
+        path: &Path,
+        kind: EffectKind,
+    ) -> (Vec<PendingEngineMessage>, Rc<RefCell<CommandState>>) {
+        let commands = Rc::new(RefCell::new(CommandState::default()));
+        let (sender, engine) = std::sync::mpsc::channel();
+        let (tx, stx) = (EngineCommandSender(sender.clone()), StructuralCommandSender(sender));
+        assert!(
+            append_effect_preset(state, window, &commands, (&tx, &stx), path, kind, "Slapback"),
+            "the preset lands"
+        );
+        (engine.try_iter().collect(), commands)
+    }
+
+    /// **A preset added as a new device installs no project.** It reaches
+    /// the engine as the one device it is, built with the preset's values,
+    /// and the history holds one step that takes it back out.
+    #[test]
+    fn a_preset_added_as_a_new_device_is_one_install_not_a_project() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().expect("the testing backend builds a window");
+        let state = Rc::new(RefCell::new(UiState::new(None, 48_000, &window)));
+        let dir = tempfile::tempdir().unwrap();
+        let before = state.borrow().session.effect_chain().map(Vec::len).expect("a chain");
+
+        let (sent, commands) =
+            add_as_new_device(&state, &window, &saved_delay_preset(dir.path()), EffectKind::Delay);
+
+        assert!(
+            !sent.iter().any(|message| matches!(message, PendingEngineMessage::ProjectEdit(_))),
+            "the preset queued a project install"
+        );
+        let installs: Vec<EffectKind> = sent
+            .iter()
+            .filter_map(|message| match message {
+                PendingEngineMessage::Structural(StructuralCommand::InstallEffect { kind, .. }) => {
+                    Some(*kind)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(installs, [EffectKind::Delay], "one device, the preset's own kind");
+        let entry = commands.borrow().history.undo_target().cloned().expect("an undo step");
+        assert_eq!(entry.label, "Effect preset added");
+        let chain_before = entry.before.project.channels[0].setup.effects.len();
+        assert_eq!(chain_before, before, "the undo step takes the device back out");
+    }
+
+    /// **A run preset added as a new device lands as a run**, with no
+    /// project install: its box and every device in it reach the engine one
+    /// slot at a time.
+    #[test]
+    fn a_run_preset_added_as_a_new_device_is_installed_per_slot() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().expect("the testing backend builds a window");
+        let state = Rc::new(RefCell::new(UiState::new(None, 48_000, &window)));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Space.mooloop-effect");
+        let mut chain = EffectSlotState::of_kind(EffectKind::Chain);
+        chain.params.set_container_children(2);
+        let run = mooloop_core::EffectRun::of(vec![
+            chain,
+            EffectSlotState::of_kind(EffectKind::Delay),
+            EffectSlotState::of_kind(EffectKind::Reverb),
+        ]);
+        mooloop_project::save_effect_run_preset(
+            &path,
+            &run,
+            PresetInfo {
+                name: "Space".into(),
+                ..PresetInfo::default()
+            },
+            AssetMode::Embedded,
+        )
+        .expect("the run preset saves");
+
+        let (sent, commands) = add_as_new_device(&state, &window, &path, EffectKind::Chain);
+
+        assert!(
+            !sent.iter().any(|message| matches!(message, PendingEngineMessage::ProjectEdit(_))),
+            "the run queued a project install"
+        );
+        let kinds: Vec<EffectKind> = state
+            .borrow()
+            .session
+            .effect_chain()
+            .expect("a chain")
+            .iter()
+            .map(|effect| effect.kind())
+            .collect();
+        assert!(
+            kinds.ends_with(&[EffectKind::Chain, EffectKind::Delay, EffectKind::Reverb]),
+            "{kinds:?}"
+        );
+        let installs = sent
+            .iter()
+            .filter(|message| {
+                matches!(
+                    message,
+                    PendingEngineMessage::Structural(StructuralCommand::InstallEffect { .. })
+                )
+            })
+            .count();
+        assert!(installs >= 3, "the box and both devices reach the engine ({installs})");
+        assert_eq!(
+            commands.borrow().history.undo_target().map(|entry| entry.label),
+            Some("Effect preset added")
+        );
     }
 
     /// **MOO-457.** Adam, 2026-09-30: *"Double-clicking a preset in the
@@ -21748,7 +21908,7 @@ mod preset_browser_tests {
             track as u8
         };
         let dir = tempfile::tempdir().unwrap();
-        add_as_new_device_and_install(&state, &window, &saved_delay_preset(dir.path()));
+        add_as_new_device(&state, &window, &saved_delay_preset(dir.path()), EffectKind::Delay);
 
         let st = state.borrow();
         assert_eq!(
@@ -21776,7 +21936,7 @@ mod preset_browser_tests {
         let shown = state.borrow().session.effect_target;
         assert!(matches!(shown, EffectTarget::Channel(_)));
         let dir = tempfile::tempdir().unwrap();
-        add_as_new_device_and_install(&state, &window, &saved_delay_preset(dir.path()));
+        add_as_new_device(&state, &window, &saved_delay_preset(dir.path()), EffectKind::Delay);
 
         let st = state.borrow();
         assert_eq!(st.session.effect_target, shown);
