@@ -245,7 +245,8 @@ Answered 2026-09-27:
 
 Answered 2026-09-26:
 - **MOO-153:** *"the themes look pretty good to me incl the bevels"*. The
-  1px bevel stays, and the rest of the adopters are unblocked (Todo).
+  1px bevel stays, and the rest of the adopters landed 2026-10-01 (the
+  look is item 33 below).
 - **MOO-159:** the tracker is an interest, not a decision. It's recorded in
   `IDEAS.md` and is no longer a question.
 
@@ -274,8 +275,7 @@ way `coreaudio-driver/` was: asked for directly, and worked when asked.
   (pattern renders, wrap tail, sample rate, name templates, presets,
   normalize, and settings saved in the song) follow MOO-180.
 - **Theming's remainder**: MOO-154 (accessibility), MOO-205 (the type scale
-  grows glyphs but not boxes), MOO-157 (face paddings), and relief (MOO-153,
-  above).
+  grows glyphs but not boxes) and MOO-157 (face paddings).
 - **The polish backlog's remainder** (Linear project Polish backlog, about
   seventeen issues). The ones that matter to a player: the control menu and
   typed entry stopping at `ParameterKnob` (MOO-202), and keyboard reach in
@@ -826,3 +826,15 @@ In the order worth playing:
     lane on Start: every zone should move by the same amount. The session
     test `three_chords_cut_from_two_files_each_play_their_own_region` pins
     the levels; whether it feels right to work with is the question.
+33. **The bevel on everything it was meant for** (MOO-153). A look, not a
+    listen. Pick **Platinum**, then **Impulse**, in Preferences > Appearance,
+    with a song whose rack has a few devices. Besides the buttons, these are
+    now lit blocks: every knob's cap (a lit crescent at the top-left, a
+    shaded one at the bottom-right, swapped while you drag it), each
+    device's plate and its header strip, a folded device, every pane
+    (the dock included), the toolbar, the status bar and both sidebars.
+    Dividers, rails and the inside of device faces stay flat on purpose.
+    Whether that is the Mac OS 8 / Impulse Tracker read, or a bevel too
+    many (the pane edges and the sidebars are the likeliest), is the look.
+    Mooloop's own theme and every other flat one should look exactly as
+    before.

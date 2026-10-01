@@ -201,6 +201,19 @@ export global NoteFormat {
     }
 }
 
+// A bevel's two edge colours, from the surface they sit on. Mixed toward
+// white and black rather than `brighter()`/`darker()`, which scale lightness
+// and so leave a near-black surface's edges near-black: invisible on exactly
+// the dark themes mooloop ships.
+export global BevelShade {
+    public pure function light(base: color, depth: float) -> color {
+        return base.mix(#ffffff, 1 - 0.3 * depth);
+    }
+    public pure function dark(base: color, depth: float) -> color {
+        return base.mix(#000000, 1 - 0.5 * depth);
+    }
+}
+
 // A lit block's edges, drawn over a surface when `Theme.relief` asks for
 // one (`docs/plans/theming/02-relief.md`). Light from the top-left: the top
 // and left edges are the fill lightened, the bottom and right darkened, and
@@ -218,11 +231,8 @@ export component Bevel inherits Rectangle {
     in property <bool> inset;
     in property <float> depth: Theme.relief-depth;
     private property <length> edge: max(1px, Theme.hairline);
-    // Mixed toward white and black rather than `brighter()`/`darker()`,
-    // which scale lightness and so leave a near-black surface's edges
-    // near-black: invisible on exactly the dark themes mooloop ships.
-    private property <color> light: root.base.mix(#ffffff, 1 - 0.3 * root.depth);
-    private property <color> dark: root.base.mix(#000000, 1 - 0.5 * root.depth);
+    private property <color> light: BevelShade.light(root.base, root.depth);
+    private property <color> dark: BevelShade.dark(root.base, root.depth);
     private property <color> lit: root.inset ? root.dark : root.light;
     private property <color> shade: root.inset ? root.light : root.dark;
 
@@ -241,6 +251,38 @@ export component Bevel inherits Rectangle {
         width: root.edge;
         height: parent.height;
         background: root.shade;
+    }
+}
+
+// `Bevel` for a round surface: a knob's cap. Two discs, one edge up-left and
+// one edge down-right of the cap and drawn *under* it, so what shows is a lit
+// crescent at the top-left and a shaded one at the bottom-right, thinning to
+// nothing at the other diagonal: light on a dome. Two plain rounded
+// rectangles, where a stroked arc would be two tessellated paths. Fills the
+// cap's own rectangle; the caller draws the cap over it.
+export component RoundBevel inherits Rectangle {
+    in property <color> base;
+    in property <bool> inset;
+    in property <float> depth: Theme.relief-depth;
+    private property <length> edge: max(1px, Theme.hairline);
+    private property <color> light: BevelShade.light(root.base, root.depth);
+    private property <color> dark: BevelShade.dark(root.base, root.depth);
+
+    Rectangle {
+        x: -root.edge;
+        y: -root.edge;
+        width: parent.width;
+        height: parent.height;
+        border-radius: self.width / 2;
+        background: root.inset ? root.dark : root.light;
+    }
+    Rectangle {
+        x: root.edge;
+        y: root.edge;
+        width: parent.width;
+        height: parent.height;
+        border-radius: self.width / 2;
+        background: root.inset ? root.light : root.dark;
     }
 }
 
@@ -832,6 +874,8 @@ component KnobFace inherits Rectangle {
     in property <bool> enabled: true;
     in property <bool> focused;
     in property <bool> hovered;
+    // Held in a drag: a bevelled cap is lit from the other side.
+    in property <bool> pressed;
     in property <color> fill: Theme.accent;
     in property <length> diameter: 44px;
     // Assign mode for this control: an assignable source is armed and this
@@ -966,7 +1010,20 @@ component KnobFace inherits Rectangle {
         fill: transparent;
     }
 
-    // Raised cap.
+    // The cap's light, under it, only while the theme draws relief: a flat
+    // theme builds nothing here (see the value arc on why hiding is not
+    // enough). Held in a drag, the cap is lit from the other side.
+    if Theme.relief != 0 : RoundBevel {
+        x: parent.width * 0.16;
+        y: parent.height * 0.16;
+        width: parent.width * 0.68;
+        height: parent.height * 0.68;
+        base: Theme.surface-raised;
+        inset: (Theme.relief == 2) != root.pressed;
+    }
+
+    // Raised cap. Bevelled, the crescents are its outline and only focus
+    // draws a ring, as on `ToolButton`.
     Rectangle {
         x: parent.width * 0.16;
         y: parent.height * 0.16;
@@ -974,7 +1031,9 @@ component KnobFace inherits Rectangle {
         height: parent.height * 0.68;
         border-radius: self.width / 2;
         background: Theme.surface-raised;
-        border-width: root.focused || root.hovered ? Theme.stroke-emphasis : Theme.hairline;
+        border-width: Theme.relief != 0
+            ? (root.focused ? Theme.stroke-emphasis : 0px)
+            : root.focused || root.hovered ? Theme.stroke-emphasis : Theme.hairline;
         border-color: root.focused ? Theme.focus : root.hovered ? Theme.text-faint : Theme.border;
     }
 
@@ -1302,6 +1361,7 @@ export component ParameterKnob inherits Rectangle {
                 learn-armed: ControlAssign.midi-learn && root.enabled;
                 focused: keyboard.has-focus;
                 hovered: knob-touch.has-hover;
+                pressed: knob-touch.pressed;
             }
         }
 
@@ -2427,6 +2487,7 @@ export component MiniKnob inherits Rectangle {
         learn-armed: ControlAssign.midi-learn && root.enabled;
         focused: mini-keyboard.has-focus;
         hovered: mini-touch.has-hover;
+        pressed: mini-touch.pressed;
 
         mini-touch := TouchArea {
             enabled: root.enabled;

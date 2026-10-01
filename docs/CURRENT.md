@@ -602,8 +602,12 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   Beside the colours: roundness, contrast, **text size** (65-200%; 100% is
   what read as 115% before 0.1.6, and a stored size is read against the new
   base rather than migrated, MOO-286), **border and emphasis widths**, **relief** (flat, bevel or inset, with a
-  depth; so far drawn by the buttons, the toggles, the segmented selectors and
-  the tabs, and taken away again by a theme that doesn't state one), and
+  depth, and taken away again by a theme that doesn't state one). A bevel
+  draws on the buttons, toggles, segmented selectors and tabs, the knobs'
+  caps (lit from the other side while dragged), each device's plate and
+  header and a folded device, every pane including the dock, the toolbar,
+  the status bar and both sidebars, as of 2026-10-01 (MOO-153); dividers,
+  rails and the inside of faces stay flat. And
   **two font families** -- one for the
   interface and one for readouts. A font that is not installed falls back to
   the platform default, because mooloop registers no fonts at runtime (Slint

@@ -1,9 +1,9 @@
 # theming — status
 
 Linear: project [Theming](https://linear.app/mooloop/project/theming-beb2299b6232).
-What is left is MOO-153 (02), MOO-154 (the rest of 04), MOO-155 (05's
-homages) and MOO-157 (the padding literals). MOO-156 (following the
-desktop live) is done.
+What is left is MOO-154 (the rest of 04), MOO-157 (the padding literals)
+and MOO-205 (boxes that don't grow with the type). 02 (MOO-153), 05's
+homages (MOO-155) and following the desktop live (MOO-156) are done.
 
 Unparked 2026-09-15 by Adam, with a brief that is wider than the plan this
 directory was written to:
@@ -168,40 +168,68 @@ shaped for.
 - **Not done:** screen-reader coverage is untouched. The plan already says the
   second is its own work and no amount of theming touches it.
 
-### 02 — relief — **the drawing landed, and Adam approved the look** (MOO-153)
+### 02 — relief — **landed** (MOO-153)
 
 Adam, 2026-09-26: *"the themes look pretty good to me incl the bevels."*
-The 1px derived bevel stays. The remaining adopters (knob caps, device
-header, rack row, panel and pane edges, the dock) are unblocked, and MOO-153
-is Todo for them.
+The 1px derived bevel stays as built, and the remaining adopters went in on
+2026-10-01.
 
 `Theme.relief` (0 flat, 1 bevel, 2 inset) and `Theme.relief-depth`, a
 `Bevel` component in `controls.slint`, and `ToolButton` as the first adopter,
-which brings `ToggleButton`, `SegmentedControl`, the pane tabs and the mute
-buttons with it. A theme file's `[shape]` takes `relief` and `relief-depth`;
-the Appearance page has a Relief selector and a Depth fader, and says when a
-bevel is sitting on rounded corners rather than refusing it.
+which brings `ToggleButton`, `SegmentedControl` and the mute buttons with it.
+A theme file's `[shape]` takes `relief` and `relief-depth`; the Appearance
+page has a Relief selector and a Depth fader, and says when a bevel is
+sitting on rounded corners rather than refusing it.
 
-Three things the doing decided:
+**The adopters**, each the thing you press or the plate something sits on:
+
+| | Where | Drawing |
+| --- | --- | --- |
+| Knob caps | `KnobFace`, so every `ParameterKnob`, `MiniKnob`, `TrimKnob` and what is built on them | `RoundBevel`: two discs under the cap, one edge up-left and one down-right, so a lit crescent and a shaded one; swapped while the knob is held |
+| The rack row | `DeviceFrame`'s perimeter, rails and face together; `CollapsedDevice` | `Bevel` at the frame's z 200, under the selection's accent ring |
+| Device header | `DeviceHeader`, so every face's strip | `Bevel` over the hairline it already had |
+| Panes and the dock | `ViewSlot`, every slot a view is shown in | `Bevel` over the view, only for a slot on screen |
+| Panels | the toolbar, the status bar, the channel and browser sidebars | `Bevel`; a sidebar's goes under its grip line, so hover still lights the edge it drags |
+
+Dividers (the split and dock grips), the rails' inner dividers, the pane
+toolbars inside a pane's edge, the pane tab strip and everything inside a
+device face stay flat, by the step's own rule. The faces' contents belong to
+the device teams; a face that wants a bevel adopts it through these shared
+components.
+
+**A flat theme pays nothing.** Every adopter is an `if Theme.relief != 0`
+element, so a flat theme builds no new item; the only addition is the
+conditional's repeater, which the renderer never visits. Counted, not
+measured: a bevelled theme adds three items per knob (the bevel and its two
+discs), five per device plate, header, pane and panel. Rendered with
+`scripts/slint-sketch`, `ui/main.slint` and a probe of a full device frame
+with header, knobs, mini and trim knobs and buttons are byte-identical
+before and after under the default theme. `ui/tests/relief.rs` holds the
+look: flat draws no bevel edge; a bevel lights each adopter from the
+top-left; a held knob and an inset theme from the bottom-right.
+
+Things the doing decided:
 
 - **The edges are mixed toward white and black, not `brighter()`/`darker()`.**
   Those scale lightness, so on mooloop's near-black surfaces they gave edges
-  within a few levels of the fill: a bevel that vanished on every dark theme
-  shipped. Measured on the sketch before choosing: top edge 106 on a fill of
-  42, bottom 21.
+  within a few levels of the fill. Measured on the sketch before choosing:
+  top edge 106 on a fill of 42, bottom 21. Both shapes read the mix from one
+  place, `BevelShade`.
+- **A round cap is lit by offset discs, not stroked arcs.** Two rounded
+  rectangles where a stroked half-circle each would be two tessellated
+  paths per knob per frame, and the crescent thinning to nothing at the
+  other diagonal is how light falls on a dome anyway.
 - **Relief belongs to the theme.** Every other shape scalar is left alone by a
   theme that doesn't state it, which keeps a type scale somebody set for their
   eyes. A bevel is the look, not the reader's, so a theme that states no
   relief goes back to flat. Without that, Nord drew Platinum's slabs.
 - **A latched button reads as pushed in**, the way a Platinum toggle stays
   down, so `active` inverts the bevel as a press does.
+- **The bevel replaces the hairline it would sit on**, where there was one
+  (a knob's cap, the device plate, a folded device), and a focus or
+  selection ring still draws over it.
 
-**Stopped here on purpose, per the step's own order:** "Do `ToolButton` alone,
-sketch it, and look at it before touching the other 27." The step's risk is
-whether a derived 1px bevel looks right at mooloop's sizes, and that is Adam's
-eye, not a pass. MOO-153 carries the question. The remaining adopters are the
-knobs' caps, the device header, the rack row, the panel and pane edges and
-the dock.
+Adam's look at the adopters is item 33 on `docs/FOCUS.md`'s list.
 
 ### 05 — the homages — **landed as built-ins** (MOO-155)
 
@@ -247,7 +275,6 @@ one step out**:
 
 ## What is still ahead
 
-- **Relief's remaining adopters**, after Adam has looked at the bevel (MOO-153).
 - **`05-authoring-a-theme.md`'s guide landed as `docs/THEMES.md`**, and its two
   homages as built-ins.
 - ~~**The desktop is asked, not watched.**~~ Done 2026-09-23 (MOO-156), and

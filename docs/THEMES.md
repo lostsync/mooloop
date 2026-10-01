@@ -151,9 +151,11 @@ rather than refuses when the two disagree.
 **Relief belongs to the theme; the other shape values do not.** Selecting a
 theme that states no `relief` goes back to flat, where a theme that states no
 `roundness` leaves the reader's roundness alone. The built-in homages,
-Platinum and Impulse, carry one. So far `ToolButton`, and everything built on
-it, draws the bevel; the rest of the controls are still flat
-(`docs/plans/theming/00-status.md`).
+Platinum and Impulse, carry one. The bevel is drawn by `ToolButton` and
+everything built on it, the knobs' caps, the device plate and header, the
+folded device, the panes, the toolbar, the status bar and the sidebars;
+dividers, rails and the inside of device faces stay flat, because a bevel on
+every container is a parody of the look (`docs/plans/theming/02-relief.md`).
 
 `density` multiplies control heights and the padding-and-spacing ramp. It is
 the control to reach for if the interface is too tight to hit rather than too

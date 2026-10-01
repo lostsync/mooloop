@@ -4,7 +4,7 @@ import { GainMath } from "gain.slint";
 import { ReorderMath } from "reorder.slint";
 export { DisplayPrefs, Motion } from "theme.slint";
 import {
-    AudioOrientation, Gesture, IconButton, InstrumentModule, MiniKnob, NoteFormat, ParameterFader,
+    AudioOrientation, Bevel, Gesture, IconButton, InstrumentModule, MiniKnob, NoteFormat, ParameterFader,
     ParameterKnob, PeakMeter,
     PickerChip, SegmentedControl, SelectorBank, ZoomScrollBar,
     ToggleButton, ToolButton, TransportButton, ValueScale, ChannelMuteSolo, TrimKnob
@@ -792,6 +792,16 @@ component ViewSlot inherits Rectangle {
             if (e.kind == PointerEventKind.down) { root.pressed(); }
         }
         @children
+    }
+
+    // The pane's edge under a relief theme: every pane, the dock's included,
+    // is a plate its view sits on (`02-relief.md`). Over the view, so no
+    // view's own background hides it, and built only for a pane on screen.
+    if Theme.relief != 0 && root.shown : Bevel {
+        width: 100%;
+        height: 100%;
+        base: Theme.surface;
+        inset: Theme.relief == 2;
     }
 }
 
@@ -3625,6 +3635,14 @@ export component MainWindow inherits Window {
                     Rectangle { height: 1px; background: Theme.border; opacity: 0.6; }
 
                 }
+
+                // The toolbar is a panel: a plate under a relief theme.
+                if Theme.relief != 0 : Bevel {
+                    width: 100%;
+                    height: 100%;
+                    base: Theme.surface;
+                    inset: Theme.relief == 2;
+                }
             }
 
 
@@ -3791,6 +3809,16 @@ export component MainWindow inherits Window {
                                     root.channel-pan-changed(root.selected-channel, v);
                                 }
                             }
+                        }
+
+                        // Under a relief theme the panel is a plate, and its
+                        // bevel goes under the grip's line so a hover still
+                        // lights the edge it drags.
+                        if Theme.relief != 0 && root.channel-sidebar-visible : Bevel {
+                            width: parent.width;
+                            height: parent.height;
+                            base: Theme.panel;
+                            inset: Theme.relief == 2;
                         }
 
                         // The panel's own right edge, drawn inside the clip so
@@ -8492,6 +8520,14 @@ export component MainWindow inherits Window {
                         }
                     }
 
+                    // A plate under a relief theme, under the grip's line as
+                    // on the channel sidebar.
+                    if Theme.relief != 0 && root.sidebar-visible : Bevel {
+                        width: parent.width;
+                        height: parent.height;
+                        base: Theme.panel;
+                        inset: Theme.relief == 2;
+                    }
                     Rectangle {
                         x: 0;
                         y: 0;
@@ -8779,6 +8815,14 @@ export component MainWindow inherits Window {
                     accessible-role: button;
                     accessible-label: chip.label;
                     accessible-checked: chip.on;
+                }
+
+                // The status bar is a panel: a plate under a relief theme.
+                if Theme.relief != 0 : Bevel {
+                    width: 100%;
+                    height: 100%;
+                    base: Theme.surface-raised;
+                    inset: Theme.relief == 2;
                 }
             }
 

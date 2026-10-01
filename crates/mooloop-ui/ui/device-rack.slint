@@ -1,6 +1,6 @@
 import { StatusHint, Theme } from "theme.slint";
 import { GainMath } from "gain.slint";
-import { IconButton, MiniKnob, ToolButton, TrimKnob } from "controls.slint";
+import { Bevel, IconButton, MiniKnob, ToolButton, TrimKnob } from "controls.slint";
 import { ChannelMeter } from "meters.slint";
 import { Icon } from "icons.slint";
 
@@ -568,12 +568,24 @@ export component DeviceFrame inherits Rectangle {
     // and no perimeter at all, which is why the rack read as a field of parts
     // rather than a row of unified chunks. `z` is a literal because Slint
     // requires one, and 200 clears the bypass and wet/dry controls at 100.
+    //
+    // Under a relief theme the perimeter is the bevel instead: the device
+    // is a lit plate, rails and face together (`02-relief.md`), and the
+    // selection's accent ring still draws over it.
+    if Theme.relief != 0 : Bevel {
+        z: 200;
+        width: 100%;
+        height: 100%;
+        base: Theme.surface;
+        inset: Theme.relief == 2;
+    }
     Rectangle {
         z: 200;
         width: 100%;
         height: 100%;
         background: transparent;
-        border-width: root.selected ? Theme.stroke-emphasis : Theme.hairline;
+        border-width: root.selected ? Theme.stroke-emphasis
+            : Theme.relief != 0 ? 0px : Theme.hairline;
         border-color: root.selected ? Theme.accent : Theme.border;
         border-radius: Theme.radius-md;
     }
@@ -717,6 +729,14 @@ export component DeviceHeader inherits Rectangle {
         width: 100%;
         height: 1px;
         background: Theme.border;
+    }
+    // A lit strip on the device's plate (`02-relief.md`); its shaded bottom
+    // edge lands on the hairline above. Built only for a relief theme.
+    if Theme.relief != 0 : Bevel {
+        width: 100%;
+        height: 100%;
+        base: root.background;
+        inset: Theme.relief == 2;
     }
     // A plain layout, not a `HorizontalBox`: the box added the style's 8px
     // above and below, which left the name 12px of a 28px header for an 18px
@@ -937,10 +957,19 @@ export component CollapsedDevice inherits Rectangle {
     height: DeviceRackMetrics.face-height;
     background: root.contained ? transparent : Theme.surface-raised;
     border-radius: Theme.radius-md;
-    border-width: root.selected ? Theme.stroke-emphasis : Theme.hairline;
+    // A relief theme's bevel is the edge instead, as on `DeviceFrame`.
+    border-width: root.selected ? Theme.stroke-emphasis
+        : Theme.relief != 0 ? 0px : Theme.hairline;
     border-color: root.selected ? Theme.accent : Theme.border;
     accessible-role: groupbox;
     accessible-label: root.name + (root.kind == "" ? "" : ", " + root.kind) + ", collapsed";
+
+    if Theme.relief != 0 && !root.selected : Bevel {
+        width: 100%;
+        height: 100%;
+        base: Theme.surface-raised;
+        inset: Theme.relief == 2;
+    }
 
     VerticalLayout {
         x: 1px;
