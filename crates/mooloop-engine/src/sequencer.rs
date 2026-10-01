@@ -7,7 +7,7 @@
 use std::ops::Range;
 
 use mooloop_core::{
-    AutomationLane, AutomationPoint, EffectTarget, LanePool, NoteEvent, NoteId, ParamAddr, Pattern,
+    AutomationLane, AutomationPoint, ChannelPattern, EffectTarget, LanePool, NoteEvent, NoteId, ParamAddr, Pattern,
     DeviceId, PatternPlacement, PlaybackMode, PointId, Ppq, Project,
     DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MAX_CHANNELS,
     MAX_NOTES_PER_CHANNEL_PATTERN, MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS,
@@ -101,6 +101,21 @@ pub struct Sequencer {
     /// Point storage for lanes opened on the audio thread. Filled here and
     /// topped up at every project install, both off the thread.
     lane_pool: LanePool,
+}
+
+/// Fill `lane`, empty, with `channel`'s notes and automation lanes in
+/// pattern `pattern`, as a load holds them. Control thread: lanes allocate.
+fn load_channel_pattern(
+    lane: &mut ChannelPattern,
+    channel: &mooloop_core::ProjectChannel,
+    pattern: usize,
+) {
+    for note in channel.notes.get(pattern).into_iter().flatten().copied() {
+        let _ = lane.upsert_note(note);
+    }
+    if let Some(lanes) = channel.automation.get(pattern) {
+        lane.set_lanes(lanes.clone());
+    }
 }
 
 impl Sequencer {
@@ -409,23 +424,63 @@ impl Sequencer {
             self.patterns[pattern_index].set_length_steps(*length as usize);
         }
         for (channel_index, channel) in project.channels.iter().enumerate().take(MAX_CHANNELS) {
-            for (pattern_index, notes) in
-                channel.notes.iter().enumerate().take(self.active_patterns)
-            {
-                let lane = &mut self.patterns[pattern_index].channels[channel_index];
-                for note in notes.iter().copied() {
-                    let _ = lane.upsert_note(note);
-                }
-            }
-            for (pattern_index, lanes) in channel
-                .automation
-                .iter()
-                .enumerate()
-                .take(self.active_patterns)
-            {
-                self.patterns[pattern_index].channels[channel_index].set_lanes(lanes.clone());
+            for pattern_index in 0..self.active_patterns {
+                load_channel_pattern(
+                    &mut self.patterns[pattern_index].channels[channel_index],
+                    channel,
+                    pattern_index,
+                );
             }
         }
+    }
+
+    /// `project`'s channel `index` as [`Self::load_project`] would hold it,
+    /// one lane per pattern the project has, for [`Self::insert_channel`] to
+    /// take in. Empty when there is no such channel.
+    ///
+    /// Allocates; control thread only.
+    pub fn channel_patterns(project: &Project, index: usize) -> Vec<ChannelPattern> {
+        let Some(channel) = project.channels.get(index) else {
+            return Vec::new();
+        };
+        (0..project.pattern_lengths.len().clamp(1, mooloop_core::MAX_PATTERNS))
+            .map(|pattern_index| {
+                let mut lane = ChannelPattern::new(MAX_PATTERN_STEPS as usize);
+                load_channel_pattern(&mut lane, channel, pattern_index);
+                lane
+            })
+            .collect()
+    }
+
+    /// Seat a channel at `at` whose notes and lanes are `incoming`, one per
+    /// pattern the song holds ([`Self::channel_patterns`]): the channels
+    /// from `at` on move up one seat, every lane already here follows the
+    /// edit, and `incoming` leaves holding the empty lanes the vacant seat
+    /// had. The result is what [`Self::load_project`] builds from the
+    /// project the insertion produced.
+    ///
+    /// Realtime-safe: swaps and rotates, allocating and freeing nothing.
+    /// Refused, changing nothing, when `at` is past the active channels, the
+    /// song is full, or `incoming` is not one lane per active pattern.
+    #[must_use]
+    pub fn insert_channel(&mut self, at: usize, incoming: &mut [ChannelPattern]) -> bool {
+        let active = self.active_channels;
+        if at > active || active >= MAX_CHANNELS || incoming.len() != self.active_patterns {
+            return false;
+        }
+        let Ok(seat) = u8::try_from(at) else {
+            return false;
+        };
+        let edit = mooloop_core::ChannelEdit::Inserted(seat);
+        for (pattern, arriving) in self.patterns.iter_mut().zip(incoming.iter_mut()) {
+            for lanes in &mut pattern.channels[..active] {
+                lanes.rescope_lanes(edit);
+            }
+            std::mem::swap(&mut pattern.channels[active], arriving);
+            pattern.channels[at..=active].rotate_right(1);
+        }
+        self.active_channels = active + 1;
+        true
     }
 
     /// Whether `pattern` is placed at `start_tick` in the playlist.

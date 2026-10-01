@@ -1,6 +1,6 @@
-//! A channel removal or move sent as one engine command keeps what the
-//! reconcilers had sent, renumbered, so the tick after it resends nothing the
-//! edit did not change (MOO-466).
+//! A channel removal, move or paste sent as one engine command keeps what
+//! the reconcilers had sent, renumbered, so the tick after it resends nothing
+//! the edit did not change (MOO-466).
 
 use std::sync::Arc;
 
@@ -8,10 +8,12 @@ use mooloop_core::{ChannelEdit, DeviceKind, EffectKind, EffectTarget, EngineComm
 use mooloop_engine::{CommandSink, EngineHandle, InputState, StructuralCommand};
 use mooloop_session::session::Session;
 
-/// A command sink that takes everything and counts it.
+/// A command sink that takes everything and counts it, and which channels
+/// were sent a compensation ring.
 #[derive(Default)]
 struct Counting {
     sent: usize,
+    compensated: Vec<EffectTarget>,
 }
 
 impl CommandSink for Counting {
@@ -20,8 +22,11 @@ impl CommandSink for Counting {
         true
     }
 
-    fn send_structural(&mut self, _cmd: StructuralCommand) -> bool {
+    fn send_structural(&mut self, cmd: StructuralCommand) -> bool {
         self.sent += 1;
+        if let StructuralCommand::SetCompensation { target, .. } = cmd {
+            self.compensated.push(target);
+        }
         true
     }
 
@@ -126,4 +131,44 @@ fn a_command_move_leaves_the_reconcilers_nothing_to_resend() {
     let mut after = Counting::default();
     sync_all(&mut session, &mut after);
     assert_eq!(after.sent, 0, "the tick after the move resent what the engine kept");
+}
+
+/// **The tick after a command paste sends only what the arrival is owed.**
+/// A copy of the latent channel owes nothing and nothing is sent; a copy of
+/// a channel that waits for it owes that wait, and its compensation is the
+/// one thing sent -- where an install would resend the plan.
+#[test]
+fn a_command_paste_leaves_the_reconcilers_only_the_arrivals_compensation() {
+    for (copied, at, owed) in [(3, 0, false), (3, 2, false), (1, 0, true), (0, 4, true)] {
+        let mut session = session_owing_compensation();
+        let mut handle = EngineHandle::without_device("channel paste test");
+        sync_all(&mut session, &mut handle);
+        let mut edited = session.project_snapshot(120, 0);
+        let copy = edited.channels[copied].clone();
+        assert_eq!(edited.insert_channel(at, copy), Some(at));
+
+        let mut installed = session_owing_compensation();
+        sync_all(&mut installed, &mut Counting::default());
+        installed.replace_project(&edited, &[]);
+        let mut resent = Counting::default();
+        sync_all(&mut installed, &mut resent);
+        assert!(resent.sent > 1, "the install would resend nothing, so nothing is measured");
+
+        let installs = handle.installs_queued();
+        let sent = session.engine_mirrors();
+        session.replace_project(&edited, &[]);
+        assert!(session.send_channel_edit(
+            &mut handle,
+            ChannelEdit::Inserted(at as u8),
+            Arc::new(edited),
+            no_input(),
+            sent
+        ));
+        assert_eq!(handle.installs_queued(), installs, "the paste installed a project");
+        let mut after = Counting::default();
+        sync_all(&mut session, &mut after);
+        let expected = if owed { vec![EffectTarget::Channel(at as u8)] } else { Vec::new() };
+        assert_eq!(after.compensated, expected, "pasting {copied} at {at}");
+        assert_eq!(after.sent, expected.len(), "pasting {copied} at {at}: resent what the engine kept");
+    }
 }

@@ -1,6 +1,6 @@
-//! Channel edits as incremental commands: a removal or a move reaches the
-//! graph as one `StructuralCommand` and leaves it as an install of the edited
-//! project would (MOO-466).
+//! Channel edits as incremental commands: a removal, a move or an insertion
+//! (a paste) reaches the graph as one `StructuralCommand` and leaves it as an
+//! install of the edited project would (MOO-466).
 //!
 //! The acceptance case is parity, in-process: the same live state, edited
 //! once by the command and once by the install path the executor runs
@@ -15,7 +15,7 @@ use mooloop_core::{
     ModLfoParams, ModPolarity, ModRoute, ModulatorParams, NoteEvent, ParamAddr, Project,
     ProjectChannel,
 };
-use mooloop_dsp::SampleData;
+use mooloop_dsp::{ChannelAudioSnapshot, SampleData};
 
 use crate::render::{bank_after, ChannelReseat, RenderState};
 use crate::render_test_support::SAMPLE_RATE;
@@ -152,11 +152,27 @@ fn input() -> InputState {
     }
 }
 
+/// What channel `index` of `project` plays, as [`samples`] and the install
+/// give it.
+fn channel_audio(project: &Project, index: usize) -> ChannelAudioSnapshot {
+    let channel = &project.channels[index];
+    match channel.setup.source.sampler_state() {
+        Some(state) => ChannelAudioSnapshot::for_sampler(Some(tone()), &state.slices, state.keys, Vec::new()),
+        None => ChannelAudioSnapshot::default(),
+    }
+}
+
 /// Apply `edit` to `live` the way the handle does, `incoming` being the
-/// project it produced.
+/// project it produced: an inserted channel's fresh slot holds its audio.
 fn reseat(live: &mut RenderState, edit: ChannelEdit, incoming: &Project) -> Box<ChannelReseat> {
     let bank = bank_after(&live.audio_bank(), edit).expect("seats in the bank");
-    let reseat = ChannelReseat::new(edit, incoming, bank, input());
+    if let ChannelEdit::Inserted(at) = edit {
+        if usize::from(at) < incoming.channels.len() {
+            let audio = channel_audio(incoming, usize::from(at));
+            bank[usize::from(at)].store((!audio.is_empty()).then(|| Arc::new(audio)));
+        }
+    }
+    let reseat = ChannelReseat::new(edit, incoming, bank, input(), SAMPLE_RATE);
     match live.apply_structural(StructuralCommand::ReseatChannels { reseat }) {
         Some(StructuralReclaim::ChannelsReseated(reseat)) => reseat,
         _ => panic!("a channel edit comes back as ChannelsReseated"),
@@ -292,7 +308,7 @@ fn a_removal_allocates_nothing_on_the_callback() {
     incoming.remove_channel(3).unwrap();
     let edit = ChannelEdit::Removed(3);
     let bank = bank_after(&live.audio_bank(), edit).unwrap();
-    let reseat = ChannelReseat::new(edit, &incoming, bank, input());
+    let reseat = ChannelReseat::new(edit, &incoming, bank, input(), SAMPLE_RATE);
     let command = StructuralCommand::ReseatChannels { reseat };
 
     let locks = mooloop_core::lock_check::locks_taken();
@@ -484,7 +500,7 @@ fn a_move_allocates_nothing_on_the_callback() {
     let mut incoming = project.clone();
     let edit = incoming.move_channel(5, 0).unwrap();
     let bank = bank_after(&live.audio_bank(), edit).unwrap();
-    let reseat = ChannelReseat::new(edit, &incoming, bank, input());
+    let reseat = ChannelReseat::new(edit, &incoming, bank, input(), SAMPLE_RATE);
     let command = StructuralCommand::ReseatChannels { reseat };
 
     let locks = mooloop_core::lock_check::locks_taken();
@@ -515,5 +531,277 @@ fn a_refused_move_changes_nothing() {
         assert!(!moved.applied(), "{from} -> {to} landed");
         let after: Vec<usize> = (0..live.strip_count()).map(|seat| live.strip_identity(seat)).collect();
         assert_eq!(after, before, "{from} -> {to} moved a strip");
+    }
+}
+
+
+/// The pastes the tests below make: a copy of `copied` landing at `at`, at
+/// the top, in the middle, onto the routed channel's seat (4) and at the end.
+const PASTES: [(usize, usize); 5] = [(0, 0), (3, 2), (4, 4), (5, 4), (2, 6)];
+
+/// `project` with a copy of channel `copied` pasted at `at`, as the session's
+/// paste builds it.
+fn pasted(project: &Project, copied: usize, at: usize, change: impl FnOnce(&mut ProjectChannel)) -> Project {
+    let mut incoming = project.clone();
+    let mut copy = project.channels[copied].clone();
+    change(&mut copy);
+    assert_eq!(incoming.insert_channel(at, copy), Some(at));
+    incoming
+}
+
+/// Paste into `live` the way the handle does.
+fn paste(live: &mut RenderState, at: usize, incoming: &Project) -> Box<ChannelReseat> {
+    reseat(live, ChannelEdit::Inserted(at as u8), incoming)
+}
+
+/// **A paste sounds exactly like the install it replaces**, solo or not,
+/// the pasted channel included: it arrives built as the install builds it,
+/// with its notes, lane, chain and audio, and plays from the same place.
+/// Without routes, for the reason the removal's twin gives.
+#[test]
+fn pasting_a_channel_renders_what_installing_the_result_renders() {
+    for solo in [false, true] {
+        for (copied, at) in PASTES {
+            let project = song(solo, false);
+            let samples = samples(&project);
+            let incoming = pasted(&project, copied, at, |_| {});
+
+            let mut by_command = playing(&project, &samples);
+            let inserted = paste(&mut by_command, at, &incoming);
+            assert!(inserted.applied(), "pasting {copied} at {at} was refused");
+            assert!(!inserted.carries_departed(), "the paste kept its storage");
+            let mut by_install = install(playing(&project, &samples), &project, &incoming);
+
+            let blocks = (2 * SAMPLE_RATE as usize) / BLOCK;
+            assert_same(
+                &render(&mut by_command, blocks),
+                &render(&mut by_install, blocks),
+                &format!("pasting {copied} at {at} (solo {solo}): the command against the install"),
+            );
+        }
+    }
+}
+
+/// **A paste is inaudible beyond the pasted channel**, the routed one
+/// included. The song with everything a seat names -- the LFO routed on
+/// channel 4, a lane on channel 5, a send, channel 4 soloed or not, a note
+/// held on every channel across the edit -- plays the same after the
+/// command as a copy that was never edited, the pasted channel muted and on
+/// a track of its own.
+#[test]
+fn a_paste_changes_nothing_but_the_pasted_channel() {
+    for solo in [false, true] {
+        for (copied, at) in PASTES {
+            let mut project = song(solo, true);
+            project.ensure_tracks(4);
+            let samples = samples(&project);
+            let incoming = pasted(&project, copied, at, |copy| {
+                copy.setup.channel.muted = true;
+                copy.setup.channel.solo = false;
+                copy.setup.channel.bus = 3;
+            });
+
+            let mut by_command = playing(&project, &samples);
+            assert!(paste(&mut by_command, at, &incoming).applied());
+            let mut untouched = playing(&project, &samples);
+
+            let blocks = (2 * SAMPLE_RATE as usize) / BLOCK;
+            assert_same(
+                &render(&mut by_command, blocks),
+                &render(&mut untouched, blocks),
+                &format!("pasting {copied} at {at} (solo {solo}): the command against no edit"),
+            );
+        }
+    }
+}
+
+/// **Every channel keeps its strip across a paste**, the routed one
+/// included with its note still held -- the case an install gets wrong --
+/// and the pasted channel has one of its own.
+#[test]
+fn a_paste_keeps_every_strip() {
+    for (copied, at) in PASTES {
+        let project = song(false, true);
+        let samples = samples(&project);
+        let mut live = playing(&project, &samples);
+        let before: Vec<usize> =
+            (0..project.channels.len()).map(|seat| live.strip_identity(seat)).collect();
+        let incoming = pasted(&project, copied, at, |_| {});
+
+        let inserted = paste(&mut live, at, &incoming);
+
+        assert!(inserted.applied());
+        assert_eq!(live.strip_count(), project.channels.len() + 1);
+        let mut after: Vec<usize> = (0..live.strip_count()).map(|seat| live.strip_identity(seat)).collect();
+        let arrived = after.remove(at);
+        assert_eq!(after, before, "pasting at {at}: a strip was replaced or misplaced");
+        assert!(!before.contains(&arrived), "pasting at {at}: the paste took another channel's strip");
+        assert_eq!(
+            live.channel_source(at).kind(),
+            incoming.channels[at].setup.source.kind(),
+            "pasting {copied} at {at}: the arrival plays another instrument"
+        );
+    }
+}
+
+/// **The callback allocates nothing, frees nothing and takes no lock**
+/// applying a paste: the arrival was built on the control thread, and the
+/// empty lanes it displaced go back in the payload.
+#[test]
+fn a_paste_allocates_nothing_on_the_callback() {
+    let project = song(false, true);
+    let samples = samples(&project);
+    let mut live = playing(&project, &samples);
+    let incoming = pasted(&project, 4, 1, |_| {});
+    let edit = ChannelEdit::Inserted(1);
+    let bank = bank_after(&live.audio_bank(), edit).unwrap();
+    let audio = channel_audio(&incoming, 1);
+    bank[1].store((!audio.is_empty()).then(|| Arc::new(audio)));
+    let reseat = ChannelReseat::new(edit, &incoming, bank, input(), SAMPLE_RATE);
+    let command = StructuralCommand::ReseatChannels { reseat };
+
+    let locks = mooloop_core::lock_check::locks_taken();
+    let before = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+    let reclaimed = live.apply_structural(command);
+    live.process_once_block(BLOCK);
+    let after = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+    let locked = mooloop_core::lock_check::locks_taken() - locks;
+
+    assert_eq!(after, before, "the paste allocated or freed on the callback");
+    assert_eq!(locked, 0, "the paste took a lock on the callback");
+    match reclaimed {
+        Some(StructuralReclaim::ChannelsReseated(reseat)) => {
+            assert!(reseat.applied() && !reseat.carries_departed());
+        }
+        _ => panic!("the paste's payload did not come back"),
+    }
+}
+
+/// **A paste that cannot land changes nothing** and its storage comes back
+/// unused: a seat past the end, a song already full, or a payload built
+/// from a song with another number of patterns.
+#[test]
+fn a_refused_paste_changes_nothing() {
+    let project = song(false, true);
+    let samples = samples(&project);
+    let mut live = playing(&project, &samples);
+    let before: Vec<usize> = (0..live.strip_count()).map(|seat| live.strip_identity(seat)).collect();
+    let unchanged = |live: &RenderState, what: &str| {
+        let after: Vec<usize> = (0..live.strip_count()).map(|seat| live.strip_identity(seat)).collect();
+        assert_eq!(after, before, "{what} moved a strip");
+    };
+
+    // Past the end: the live song has six channels, so seat 7 is no seat.
+    let mut beyond = pasted(&project, 0, 6, |_| {});
+    beyond.insert_channel(7, project.channels[1].clone()).unwrap();
+    let refused = paste(&mut live, 7, &beyond);
+    assert!(!refused.applied(), "a paste past the end landed");
+    assert!(refused.carries_departed(), "the refused paste lost its storage");
+    unchanged(&live, "a paste past the end");
+
+    // Another number of patterns than the song holds.
+    let mut longer = pasted(&project, 0, 2, |_| {});
+    longer.pattern_lengths.push(16);
+    for channel in &mut longer.channels {
+        channel.notes.push(Vec::new());
+        channel.automation.push(Vec::new());
+    }
+    let refused = paste(&mut live, 2, &longer);
+    assert!(!refused.applied(), "a paste built for two patterns landed in a song of one");
+    assert!(refused.carries_departed());
+    unchanged(&live, "a mismatched paste");
+}
+
+/// **A full song refuses a paste**, and the bank has no slot to give it.
+#[test]
+fn a_full_song_refuses_a_paste() {
+    let mut full = Project::default();
+    full.channels.clear();
+    for index in 0..mooloop_core::MAX_CHANNELS {
+        full.channels.push(ProjectChannel::drum_synth(index, 1));
+    }
+    full.assign_channel_ids();
+    let mut live = playing(&full, &[]);
+    assert_eq!(live.strip_count(), mooloop_core::MAX_CHANNELS);
+    let identity = live.strip_identity(0);
+
+    let mut incoming = full.clone();
+    incoming.channels.pop();
+    incoming.insert_channel(0, full.channels[0].clone()).unwrap();
+    let edit = ChannelEdit::Inserted(0);
+    let reseat = ChannelReseat::new(edit, &incoming, live.audio_bank(), input(), SAMPLE_RATE);
+    match live.apply_structural(StructuralCommand::ReseatChannels { reseat }) {
+        Some(StructuralReclaim::ChannelsReseated(reseat)) => {
+            assert!(!reseat.applied(), "a full song took a paste");
+            assert!(reseat.carries_departed());
+        }
+        _ => panic!("the paste's payload did not come back"),
+    }
+    assert_eq!(live.strip_count(), mooloop_core::MAX_CHANNELS);
+    assert_eq!(live.strip_identity(0), identity);
+}
+
+/// **A pasted plugin instrument takes its own processor in its new seat**,
+/// and only its own: the arrival is a placeholder keyed by the slot the
+/// paste minted, as an install builds it, so the processor the session's
+/// rack opens for that slot goes in, and one for the original's slot does
+/// not. The original, moved up a seat, still answers to its own.
+#[test]
+fn a_pasted_plugin_channel_takes_its_own_processor_in_its_new_seat() {
+    use mooloop_core::{ChannelSource, PluginSlotState};
+
+    let mut project = song(false, false);
+    let original = project.add_plugin_slot(PluginSlotState::new(crate::plugin_source_tests::fake_ref()));
+    project.channels[2].setup.source = ChannelSource::Plugin(original);
+    project.channels[2].setup.channel.kind = DeviceKind::Plugin;
+    let samples = samples(&project);
+    let mut live = playing(&project, &samples);
+
+    let mut incoming = project.clone();
+    let minted = incoming.add_plugin_slot(PluginSlotState::new(crate::plugin_source_tests::fake_ref()));
+    let mut copy = project.channels[2].clone();
+    copy.setup.source = ChannelSource::Plugin(minted);
+    assert_eq!(incoming.insert_channel(0, copy), Some(0));
+    assert!(paste(&mut live, 0, &incoming).applied());
+
+    let host = |live: &mut RenderState, channel: u8, slot| {
+        live.apply_structural(StructuralCommand::HostSourceProcessor {
+            channel,
+            slot,
+            node: Some(crate::plugin_source_tests::fake()),
+        })
+    };
+    assert!(
+        matches!(host(&mut live, 0, original), Some(StructuralReclaim::HostedProcessor(_))),
+        "the paste took the original's processor"
+    );
+    assert!(host(&mut live, 0, minted).is_none(), "the paste refused its own processor");
+    assert!(host(&mut live, 3, original).is_none(), "the original refused its own processor");
+}
+
+/// **A pasted channel's own routes and lanes play as the install's do.** A
+/// copy of the routed channel (4) or of the one with a lane (5), pasted where
+/// no routed channel is renumbered -- so the install rebuilds nothing it
+/// would otherwise carry -- arrives with its LFO driving its own effect and
+/// strip, and its lane its own effect, at its new seat, solo or not.
+#[test]
+fn a_pasted_channels_routes_and_lanes_render_what_the_install_renders() {
+    for solo in [false, true] {
+        for (copied, at) in [(4, 5), (4, 6), (5, 6)] {
+            let project = song(solo, true);
+            let samples = samples(&project);
+            let incoming = pasted(&project, copied, at, |_| {});
+
+            let mut by_command = playing(&project, &samples);
+            assert!(paste(&mut by_command, at, &incoming).applied());
+            let mut by_install = install(playing(&project, &samples), &project, &incoming);
+
+            let blocks = (2 * SAMPLE_RATE as usize) / BLOCK;
+            assert_same(
+                &render(&mut by_command, blocks),
+                &render(&mut by_install, blocks),
+                &format!("pasting routed {copied} at {at} (solo {solo}): the command against the install"),
+            );
+        }
     }
 }

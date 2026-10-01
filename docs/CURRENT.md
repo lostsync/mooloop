@@ -2922,6 +2922,9 @@ with a commit loads and plays the render it played then.
   (MOO-317, MOO-331): its instrument and every plugin on its chain, inside
   containers too, each in a slot of its own, with the state the plugin held
   when the channel was copied (MOO-332).
+  **Pasting or cloning a channel stops nothing**: every other channel keeps
+  its sounding notes, tails and modulators, and the pasted one arrives with
+  its notes, lanes, chain and modulation as an opened song would have it.
   **A pasted channel arrives with its MIDI and AUDIO inputs off**: the picks
   name something in the document the channel was copied from, and the
   clipboard outlives New Song and Open Song.

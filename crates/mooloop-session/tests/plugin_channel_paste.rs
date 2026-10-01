@@ -517,3 +517,45 @@ fn a_channel_copy_carries_its_plugins_live_state() {
         "the pasted gain opened with it"
     );
 }
+
+/// **A paste that reaches the engine as one command, not an install, still
+/// opens its plugin** (MOO-466): the session takes the pasted song in, the
+/// engine is sent the paste with no install, and the pump's upkeep opens the
+/// minted slot from the copied state and sends its processor to the pasted
+/// channel's new seat, as it does after an install.
+#[test]
+fn a_plugin_channel_pasted_without_an_install_opens_its_own_instance() {
+    let mut session = session_with(cache_listing(&test_plugin_path()), &melody());
+    let mut engine = Engine::default();
+    let original = session
+        .set_plugin_source(0, sine_ref(), &mut engine)
+        .expect("channel 0 exists");
+    session.capture_plugin_states();
+    let before = snapshot(&session);
+    let copy = session.channel_clipboard(0, 120, 0).expect("a channel to copy");
+    let (pasted, index) = session.paste_channel(&before, 0, copy).expect("room to paste");
+    let minted = source_slot(&pasted.project, index);
+    assert_ne!(minted, original);
+
+    let mut handle = mooloop_engine::EngineHandle::without_device("plugin paste test");
+    let installs = handle.installs_queued();
+    let sent = session.engine_mirrors();
+    session.replace_project(&pasted.project, &pasted.seated());
+    assert!(session.send_channel_edit(
+        &mut handle,
+        mooloop_core::ChannelEdit::Inserted(index as u8),
+        std::sync::Arc::new(pasted.project.clone()),
+        mooloop_engine::InputState::default(),
+        sent,
+    ));
+    assert_eq!(handle.installs_queued(), installs, "the paste installed a project");
+
+    session.service_plugins(&mut engine);
+    assert!(session.plugin_problem(minted).is_none(), "{:?}", session.plugin_problem(minted));
+    let hosted: Vec<(u8, PluginSlotId)> =
+        engine.hosted.iter().map(|(channel, slot, _)| (*channel, *slot)).collect();
+    assert!(
+        hosted.contains(&(index as u8, minted)),
+        "the pasted channel's own processor was not sent to its seat: {hosted:?}"
+    );
+}

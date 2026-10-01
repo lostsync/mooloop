@@ -317,8 +317,13 @@ impl Transport {
     }
 
     pub fn set_tempo(&mut self, bpm: f64) {
-        self.bpm = bpm.clamp(1.0, 999.0);
+        self.bpm = playable_tempo(bpm);
     }
+}
+
+/// `bpm` as a transport plays it: clamped to 1..=999.
+pub(crate) fn playable_tempo(bpm: f64) -> f64 {
+    bpm.clamp(1.0, 999.0)
 }
 
 #[cfg(test)]

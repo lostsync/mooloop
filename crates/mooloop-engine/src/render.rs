@@ -162,9 +162,10 @@ pub fn channel_audio_bank(audio: Vec<ChannelAudioSnapshot>) -> ChannelAudioBank 
 
 /// `bank` reordered by a channel edit: the slot each seat publishes into
 /// afterwards, so every channel keeps the slot its strip reads wherever it
-/// now sits. A removed channel's slot goes to the end of the bank. `None`
-/// when the edit names a seat outside the bank, or is an insertion, which
-/// no command carries yet.
+/// now sits. A removed channel's slot goes to the end of the bank; an
+/// inserted channel gets a fresh, empty slot at its seat for the caller to
+/// fill, and the bank's last slot leaves it. `None` when the edit names a
+/// seat outside the bank, or inserts into a bank with no spare slot.
 pub(crate) fn bank_after(bank: &ChannelAudioBank, edit: ChannelEdit) -> Option<ChannelAudioBank> {
     let len = bank.len();
     let mut slots: Vec<ChannelAudioSlot> = bank.iter().cloned().collect();
@@ -183,7 +184,16 @@ pub(crate) fn bank_after(bank: &ChannelAudioBank, edit: ChannelEdit) -> Option<C
             }
             rotate_seat(&mut slots, from, to);
         }
-        ChannelEdit::Inserted(_) => return None,
+        ChannelEdit::Inserted(channel) => {
+            let channel = usize::from(channel);
+            // The last slot is the one pushed out, and only a spare -- one
+            // no strip reads -- may go.
+            if channel >= len || slots.last().is_some_and(|slot| slot.load().is_some()) {
+                return None;
+            }
+            slots.pop();
+            slots.insert(channel, Arc::new(ArcSwapOption::empty()));
+        }
     }
     Some(Arc::new(slots))
 }
@@ -4496,13 +4506,15 @@ impl BusStrip {
 }
 
 /// What [`crate::StructuralCommand::ReseatChannels`] hands the audio thread:
-/// the channel edit, and everything the project it produced derives across
-/// the whole bank, built on the control thread so the callback only moves,
-/// rotates and swaps.
+/// the channel edit, everything the project it produced derives across the
+/// whole bank, and for an insertion the arriving channel itself -- its
+/// storage, its notes and lanes and its modulation rack -- all built on the
+/// control thread so the callback only moves, rotates and swaps.
 ///
 /// The same box comes back as [`crate::StructuralReclaim::ChannelsReseated`],
-/// holding what it displaced -- a removed channel's storage and the tables it
-/// replaced -- to be dropped on the control thread.
+/// holding what it displaced -- a removed channel's storage, the empty lanes
+/// an inserted one took the place of, and the tables it replaced -- to be
+/// dropped on the control thread.
 pub struct ChannelReseat {
     edit: ChannelEdit,
     applied: bool,
@@ -4512,29 +4524,75 @@ pub struct ChannelReseat {
     audio: Box<AudioTapBank>,
     solo_silenced: [bool; MAX_CHANNELS],
     monitor: [bool; MAX_CHANNELS],
+    /// The channel's storage: an inserted one's on the way in, a removed
+    /// one's on the way out.
     strip: Option<Box<ChannelStrip>>,
     events: Option<Box<EventList>>,
     control_outputs: Option<Box<ControlOutputs>>,
     source_curves: Option<Box<SourceCurvePool>>,
+    /// An inserted channel's notes and lanes, one per pattern; afterwards
+    /// the empty ones its seat had.
+    patterns: Vec<mooloop_core::ChannelPattern>,
+    /// An inserted channel's modulation rack, already in its new seat's
+    /// terms.
+    rack: ModRack,
 }
 
 impl ChannelReseat {
     /// Build the payload for `edit`, from `project`, the document the edit
     /// produced: `input` is its input state as an install takes it, and
     /// `audio_slots` the slot each seat publishes into, in the incoming
-    /// order ([`bank_after`]). The track graph and the sends name tracks
-    /// only, so a channel edit leaves them as they are. Allocates; control
-    /// thread only.
+    /// order ([`bank_after`]). An inserted channel is built here as an
+    /// install of `project` would build it, at `sample_rate`, reading its
+    /// seat's slot. The track graph and the sends name tracks only, so a
+    /// channel edit leaves them as they are. Allocates; control thread only.
     pub(crate) fn new(
         edit: ChannelEdit,
         project: &Project,
         audio_slots: ChannelAudioBank,
         input: crate::InputState,
+        sample_rate: u32,
     ) -> Box<Self> {
         let mut monitor = [false; MAX_CHANNELS];
         for (seat, on) in input.monitor.iter().take(MAX_CHANNELS).enumerate() {
             monitor[seat] = *on;
         }
+        let solo_silenced = mooloop_core::channel::solo_silenced(
+            project.channels.iter().map(|channel| channel.setup.channel.solo),
+        );
+        let (storage, patterns, rack) = match edit {
+            ChannelEdit::Inserted(at) => {
+                let at = usize::from(at);
+                let storage = audio_slots.get(at).and_then(|slot| {
+                    ChannelStorage::from_setup(
+                        project,
+                        at,
+                        slot.clone(),
+                        sample_rate,
+                        solo_silenced.get(at).copied().unwrap_or(false),
+                    )
+                });
+                let rack = project
+                    .channels
+                    .get(at)
+                    .map(|channel| channel.setup.modulation)
+                    .unwrap_or_default();
+                (storage, crate::sequencer::Sequencer::channel_patterns(project, at), rack)
+            }
+            _ => (None, Vec::new(), ModRack::default()),
+        };
+        let (strip, events, control_outputs, source_curves) = match storage {
+            Some(storage) => {
+                let ChannelStorage {
+                    strip,
+                    events,
+                    control_outputs,
+                    source_curves,
+                } = *storage;
+                (Some(strip), Some(events), Some(control_outputs), Some(source_curves))
+            }
+            None => (None, None, None, None),
+        };
         Box::new(Self {
             edit,
             applied: false,
@@ -4546,14 +4604,14 @@ impl ChannelReseat {
                 taps: input.audio_input,
             }),
             audio: Box::new(AudioTapBank::new(project.audio_graph())),
-            solo_silenced: mooloop_core::channel::solo_silenced(
-                project.channels.iter().map(|channel| channel.setup.channel.solo),
-            ),
+            solo_silenced,
             monitor,
-            strip: None,
-            events: None,
-            control_outputs: None,
-            source_curves: None,
+            strip,
+            events,
+            control_outputs,
+            source_curves,
+            patterns,
+            rack,
         })
     }
 
@@ -4572,7 +4630,8 @@ impl ChannelReseat {
         self.applied
     }
 
-    /// Whether the payload carries a removed channel's storage back.
+    /// Whether the payload carries a channel's storage: a removed one's
+    /// back, or an inserted one's that never landed.
     #[cfg(test)]
     pub(crate) fn carries_departed(&self) -> bool {
         self.strip.is_some()
@@ -4588,6 +4647,42 @@ pub struct ChannelStorage {
     events: Box<EventList>,
     control_outputs: Box<ControlOutputs>,
     source_curves: Box<SourceCurvePool>,
+}
+
+impl ChannelStorage {
+    /// The storage `project`'s channel `index` gets when the project is
+    /// installed, reading `audio_slot`: its strip set up by the same
+    /// [`ChannelStrip::load_setup`] at the song's tempo, `solo_silenced`
+    /// being the song's verdict on it, and settled where it is aimed. A
+    /// hosted plugin, source or device, is a placeholder keyed by its slot
+    /// until its processor arrives, as on an install. The compensation ring
+    /// is not built: that is the whole song's to derive, and it arrives by
+    /// command. `None` when the project has no channel `index`.
+    ///
+    /// Allocates; control thread only.
+    pub(crate) fn from_setup(
+        project: &Project,
+        index: usize,
+        audio_slot: ChannelAudioSlot,
+        sample_rate: u32,
+        solo_silenced: bool,
+    ) -> Option<Box<Self>> {
+        let channel = project.channels.get(index)?;
+        let mut storage =
+            RenderState::build_channel(audio_slot.clone(), DeviceKind::Sampler, sample_rate);
+        let mut reclaim = Reclaim::new();
+        storage.strip.load_setup(
+            channel,
+            project.buses.len(),
+            audio_slot,
+            sample_rate,
+            crate::transport::playable_tempo(project.bpm.into()),
+            &mut reclaim,
+        );
+        storage.strip.solo_silenced = solo_silenced;
+        storage.strip.settle();
+        Some(storage)
+    }
 }
 
 pub struct ChannelStrip {
@@ -4906,6 +5001,55 @@ impl ChannelStrip {
         if self.source.set_generator_params(&params) {
             self.source_base = params;
         }
+    }
+
+    /// Jump the output stage and the chain's ramps to where they are aimed,
+    /// as a document arriving does ([`RenderState::settle_mixer`]). Returns
+    /// whether the strip is silenced, muted or soloed out.
+    fn settle(&mut self) -> bool {
+        let silenced = self.output.muted || self.solo_silenced;
+        self.output.aim(silenced);
+        self.output.settle();
+        self.effects.settle_ramps();
+        silenced
+    }
+
+    /// Set this strip up as `channel` from a song with `buses` tracks: its
+    /// source (with its stretch pool), the instrument's identity, the output
+    /// stage's mute, volume and pan, its destination and its chain at `bpm`.
+    /// What a project install does to each channel's strip, and what a
+    /// pasted channel's strip is built with ([`ChannelStorage::from_setup`]).
+    ///
+    /// Control thread only: it builds nodes. What it displaces is dropped
+    /// here or pushed into `reclaim`.
+    fn load_setup(
+        &mut self,
+        channel: &mooloop_core::ProjectChannel,
+        buses: usize,
+        audio_slot: ChannelAudioSlot,
+        sample_rate: u32,
+        bpm: f64,
+        reclaim: &mut Reclaim,
+    ) {
+        drop(self.load_source(&channel.setup.source, &channel.automation, audio_slot, sample_rate));
+        // The instrument's identity comes with it, and any knob edit still
+        // waiting was for the one it displaced (MOO-314).
+        self.source_device = channel.setup.source_device;
+        self.source_pending.clear();
+        self.output.muted = channel.setup.channel.muted;
+        self.output.set_volume(channel.setup.channel.volume);
+        self.output.set_pan(channel.setup.channel.pan);
+        // A channel naming a track that is not in the bank feeds the master
+        // rather than nothing: `clamp_bus` bounds by the address space, which
+        // is not the same as the bank being that long, and a silently unheard
+        // channel is the worst of the available answers.
+        let destination = clamp_bus(channel.setup.channel.bus);
+        self.destination = if (destination as usize) < buses.max(1) {
+            destination
+        } else {
+            MASTER_BUS
+        };
+        self.effects.load(&channel.setup.effects, sample_rate, bpm, reclaim);
     }
 
     /// Install a channel's saved source, returning the node it displaces.
@@ -6284,16 +6428,18 @@ impl RenderState {
 
     /// Apply a channel edit to the graph without rebuilding it: a removed
     /// channel's storage is taken out and the gap closed, a moved channel's
-    /// is lifted to its new seat and the ones it passed shift by one. Every
-    /// other channel keeps its strip -- its voices, tails, rings and
-    /// modulator phases -- in its new seat. Afterwards the graph is what an
-    /// install of the project the edit produced would build, with every
-    /// surviving strip carried; `reseat` supplies that project's whole-bank
-    /// tables and leaves holding what they displaced.
+    /// is lifted to its new seat and the ones it passed shift by one, an
+    /// inserted channel's arrives built and the ones from its seat on shift
+    /// up by one. Every other channel keeps its strip -- its voices, tails,
+    /// rings and modulator phases -- in its new seat. Afterwards the graph is
+    /// what an install of the project the edit produced would build, with
+    /// every other strip carried; `reseat` supplies that project's
+    /// whole-bank tables and leaves holding what they displaced.
     ///
     /// Audio thread: moves, rotates and swaps, allocating and freeing
-    /// nothing. Refuses an insertion, a seat that does not exist, a move to
-    /// where the channel already is and the removal of the last channel, and
+    /// nothing. Refuses a seat that does not exist, a move to where the
+    /// channel already is, the removal of the last channel, an insertion
+    /// into a full song or one whose payload does not fit the song, and
     /// `reseat` then comes back as it arrived ([`ChannelReseat::applied`] is
     /// false).
     fn reseat_channels(&mut self, reseat: &mut ChannelReseat) {
@@ -6343,17 +6489,59 @@ impl RenderState {
                 self.sequencer.move_channel(from, to);
                 live
             }
-            ChannelEdit::Inserted(_) => return,
+            ChannelEdit::Inserted(at) => {
+                let at = usize::from(at);
+                // `live` is the vacant seat the arrival is rotated in from,
+                // and `strips` was reserved for every seat, so the inserts
+                // below move and never grow.
+                if at > live
+                    || live >= MAX_CHANNELS
+                    || reseat.strip.is_none()
+                    || reseat.events.is_none()
+                    || reseat.control_outputs.is_none()
+                    || reseat.source_curves.is_none()
+                    || !self.sequencer.insert_channel(at, &mut reseat.patterns)
+                {
+                    return;
+                }
+                let (Some(strip), Some(events), Some(control_outputs), Some(source_curves)) = (
+                    reseat.strip.take(),
+                    reseat.events.take(),
+                    reseat.control_outputs.take(),
+                    reseat.source_curves.take(),
+                ) else {
+                    return;
+                };
+                self.strips.insert(at, strip);
+                self.events.insert(at, events);
+                self.control_outputs.insert(at, control_outputs);
+                self.source_curves.insert(at, source_curves);
+                self.modulation[at..=live].rotate_right(1);
+                self.modulators[at..=live].rotate_right(1);
+                self.expression[at..=live].rotate_right(1);
+                self.channels_heard[at..=live].rotate_right(1);
+                self.expression[at] = ChannelExpression::REST;
+                self.channels_heard[at] = false;
+                live + 1
+            }
         };
         reseat.applied = true;
         // The racks' own addresses -- a route's destination, an envelope's
         // gated channel -- follow the edit. A route into a removed channel
-        // has nothing left to restore.
-        for seat in 0..seats {
+        // has nothing left to restore. An inserted channel's rack arrives in
+        // its new seat's terms and is written over the vacant seat's.
+        let arrived = match edit {
+            ChannelEdit::Inserted(at) => Some(usize::from(at)),
+            _ => None,
+        };
+        for seat in (0..seats).filter(|&seat| Some(seat) != arrived) {
             let mut rack = self.modulation[seat];
             if rack.rescope_channels(edit) {
                 self.write_mod_rack(seat, rack);
             }
+        }
+        if let Some(at) = arrived {
+            self.write_mod_rack(at, reseat.rack);
         }
         for note in self.recording.iter_mut() {
             if let Some(held) = note {
@@ -6372,8 +6560,9 @@ impl RenderState {
             }
         }
         // A removal can lift a solo (the soloed channel left) and a move only
-        // reorders the verdicts, so neither silences a channel that was
-        // heard and no voice needs releasing here.
+        // reorders the verdicts. An insertion can silence every channel
+        // (the arrival is soloed), and then their stages fade out as a solo
+        // pressed mid-song does; the voices go on and are not heard.
         for (strip, &silenced) in self.strips.iter_mut().zip(&reseat.solo_silenced) {
             strip.solo_silenced = silenced;
         }
@@ -6807,46 +6996,12 @@ impl RenderState {
         self.transport.set_tempo(project.bpm.into());
         self.loop_range = project.loop_range;
         self.sequencer.load_project(project);
+        let bpm = self.transport.bpm;
+        let buses = project.buses.len();
         for (index, strip) in self.strips.iter_mut().enumerate() {
             let audio_slot = self.audio_slots[index].clone();
             if let Some(channel) = project.channels.get(index) {
-                // Dropped here, on the control thread, like everything else
-                // this function displaces.
-                drop(strip.load_source(
-                    &channel.setup.source,
-                    &channel.automation,
-                    audio_slot,
-                    self.sample_rate,
-                ));
-                // The instrument's identity comes with it, and any knob edit
-                // still waiting was for the one it displaced (MOO-314).
-                strip.source_device = channel.setup.source_device;
-                strip.source_pending.clear();
-                strip.output.muted = channel.setup.channel.muted;
-                strip.output.set_volume(channel.setup.channel.volume);
-                strip.output.set_pan(channel.setup.channel.pan);
-                // A channel naming a track that is not in the bank feeds the
-                // master rather than nothing: `clamp_bus` bounds by the
-                // address space, which is not the same as the bank being that
-                // long, and a silently unheard channel is the worst of the
-                // available answers.
-                let destination = clamp_bus(channel.setup.channel.bus);
-                strip.destination = if (destination as usize) < project.buses.len().max(1) {
-                    destination
-                } else {
-                    MASTER_BUS
-                };
-                // `load_project` runs while a complete RenderState is prepared
-                // on the control thread (or for offline export), never from the
-                // JACK callback, so constructing boxed nodes is acceptable.
-                // Displaced nodes still collect in `reclaim` for callers that
-                // deliberately reuse a state off-thread.
-                strip.effects.load(
-                    &channel.setup.effects,
-                    self.sample_rate,
-                    self.transport.bpm,
-                    &mut self.reclaim,
-                );
+                strip.load_setup(channel, buses, audio_slot, self.sample_rate, bpm, &mut self.reclaim);
             } else {
                 // A strip past the end of the project is a spare, and goes
                 // back to a fresh sampler channel.
@@ -7046,10 +7201,7 @@ impl RenderState {
     /// and the one it configured.
     pub(crate) fn settle_mixer(&mut self) {
         for (index, strip) in self.strips.iter_mut().enumerate() {
-            let silenced = strip.output.muted || strip.solo_silenced;
-            strip.output.aim(silenced);
-            strip.output.settle();
-            strip.effects.settle_ramps();
+            let silenced = strip.settle();
             self.sends
                 .settle(EffectTarget::Channel(index as u8), silenced);
         }

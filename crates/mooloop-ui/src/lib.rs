@@ -17908,10 +17908,10 @@ impl AppUi {
                             // Read before the install, which sends the rack
                             // back to a channel; a track move puts it back.
                             let rack_was = st.borrow().session.effect_target;
-                            // A channel deleted or moved, on its own,
-                            // reaches the engine as one command. An install
-                            // that stands for older edits merged into it
-                            // still installs.
+                            // A channel deleted, moved or pasted, on its
+                            // own, reaches the engine as one command. An
+                            // install that stands for older edits merged
+                            // into it still installs.
                             let channel_edit =
                                 lone_channel_edit(&edit, engine_backlog.has_superseded());
                             let installed = if let Some(channel_edit) = channel_edit {
@@ -19595,23 +19595,21 @@ fn install_input(state: &UiState, project: &Project) -> mooloop_engine::InputSta
 }
 
 /// The channel edit a queued edit is, when that is all it is and it can
-/// reach the engine as one command: a recorded channel deletion or move that
-/// no older install was merged into (`merged`). Everything else installs.
+/// reach the engine as one command: a recorded channel deletion, move or
+/// insertion (a paste or a clone) that no older install was merged into
+/// (`merged`). Everything else installs.
 fn lone_channel_edit(edit: &ProjectEdit, merged: bool) -> Option<ChannelEdit> {
     match (edit.edit, &edit.history) {
-        (
-            Some(ListEdit::Channel(
-                channel_edit @ (ChannelEdit::Removed(_) | ChannelEdit::Moved { .. }),
-            )),
-            Some((HistoryMove::Record, _)),
-        ) if !merged => Some(channel_edit),
+        (Some(ListEdit::Channel(channel_edit)), Some((HistoryMove::Record, _))) if !merged => {
+            Some(channel_edit)
+        }
         _ => None,
     }
 }
 
-/// Apply a channel removal or move to the engine as one command, with no
-/// install, for an edit whose result is `project`: the window takes the
-/// edited document in as an install's does, and every channel the edit
+/// Apply a channel removal, move or insertion to the engine as one command,
+/// with no install, for an edit whose result is `project`: the window takes
+/// the edited document in as an install's does, and every channel the edit
 /// keeps goes on sounding. `false` when the engine refused even the install
 /// this falls back to, as [`install_project_in_ui`] answers.
 fn edit_channels_in_ui(

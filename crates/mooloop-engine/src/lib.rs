@@ -339,18 +339,21 @@ pub enum StructuralCommand {
     /// The storage's strip is already running the channel's instrument, so
     /// there is no separate kind to disagree with it.
     AddChannel { storage: Box<ChannelStorage> },
-    /// Apply a channel edit -- a removal or a move -- to the graph in place.
-    /// Every channel keeps its strip -- voices, tails, rings, modulator
-    /// phases -- in its new seat, a removed one's storage is taken out, and
-    /// the graph ends up as an install of the project the edit produced
-    /// would leave it, without building one.
+    /// Apply a channel edit -- a removal, a move or an insertion -- to the
+    /// graph in place. Every other channel keeps its strip -- voices, tails,
+    /// rings, modulator phases -- in its new seat, a removed one's storage
+    /// is taken out, an inserted one's arrives built, and the graph ends up
+    /// as an install of the project the edit produced would leave it,
+    /// without building one.
     ///
-    /// `reseat` carries the edit and that project's whole-bank tables, built
-    /// on this thread by [`EngineHandle::edit_channels`]; it comes back as
-    /// [`StructuralReclaim::ChannelsReseated`] holding a removed channel's
-    /// storage and what the tables replaced. An insertion, a seat that does
-    /// not exist, a move onto itself or the removal of the last channel is
-    /// refused, and the box comes back untouched.
+    /// `reseat` carries the edit, that project's whole-bank tables and an
+    /// inserted channel's storage, notes and lanes, built on this thread by
+    /// [`EngineHandle::edit_channels`] or [`EngineHandle::insert_channel`];
+    /// it comes back as [`StructuralReclaim::ChannelsReseated`] holding a
+    /// removed channel's storage, an inserted one's displaced empty lanes and
+    /// what the tables replaced. A seat that does not exist, a move onto
+    /// itself, the removal of the last channel or an insertion into a full
+    /// song is refused, and the box comes back untouched.
     ReseatChannels { reseat: Box<render::ChannelReseat> },
     /// Replace what `channel` plays with `node`, built on this thread at its
     /// kind's defaults; the patch follows as parameter commands.
@@ -553,8 +556,9 @@ pub(crate) enum StructuralReclaim {
     AudioGraph(Box<AudioTapBank>),
     /// The previous generation's sends, with their compensation rings.
     TrackGraph(Box<SendBank>),
-    /// A channel edit's payload, holding a removed channel's storage and the
-    /// tables it replaced.
+    /// A channel edit's payload, holding what it displaced: a removed
+    /// channel's storage, an inserted one's empty lanes, the tables it
+    /// replaced -- or, refused, everything it arrived with.
     ChannelsReseated(Box<render::ChannelReseat>),
     /// A take displaced by a new one on the same channel, or one with no
     /// channel to record on.
@@ -1847,9 +1851,9 @@ impl EngineHandle {
     /// derives them. From here on the handle publishes audio by the incoming
     /// seats, and the next install carries strips against `project`.
     ///
-    /// `false` means nothing was sent -- an insertion, which no command
-    /// carries yet, a seat out of range, or a refusing ring -- and the handle
-    /// is unchanged.
+    /// `false` means nothing was sent -- an insertion, which takes its audio
+    /// through [`Self::insert_channel`], a seat out of range, or a refusing
+    /// ring -- and the handle is unchanged.
     #[must_use]
     pub fn edit_channels(
         &mut self,
@@ -1857,10 +1861,60 @@ impl EngineHandle {
         project: Arc<mooloop_core::Project>,
         input: InputState,
     ) -> bool {
+        if let mooloop_core::ChannelEdit::Inserted(_) = edit {
+            return false;
+        }
+        self.reseat_channels(edit, project, input, ChannelAudioSnapshot::default())
+    }
+
+    /// Insert `project`'s channel `at` -- a paste or a clone -- as one
+    /// command and without an install: the channel arrives built as an
+    /// install would build it, playing `audio`, and every other channel keeps
+    /// sounding in its new seat. A hosted plugin on it, source or device, is
+    /// a placeholder keyed by its slot until the processor is sent, as after
+    /// an install. `project` and `input` as [`Self::edit_channels`] takes
+    /// them, and the handle afterwards likewise.
+    ///
+    /// `false` means nothing was sent -- the song is full, `at` is out of
+    /// range, or the ring refused -- and the handle is unchanged.
+    #[must_use]
+    pub fn insert_channel(
+        &mut self,
+        at: usize,
+        project: Arc<mooloop_core::Project>,
+        input: InputState,
+        audio: ChannelAudioSnapshot,
+    ) -> bool {
+        let Ok(seat) = u8::try_from(at) else {
+            return false;
+        };
+        if at >= project.channels.len() {
+            return false;
+        }
+        self.reseat_channels(mooloop_core::ChannelEdit::Inserted(seat), project, input, audio)
+    }
+
+    /// The body of [`Self::edit_channels`] and [`Self::insert_channel`]:
+    /// `audio` is what an inserted channel's fresh slot holds.
+    fn reseat_channels(
+        &mut self,
+        edit: mooloop_core::ChannelEdit,
+        project: Arc<mooloop_core::Project>,
+        input: InputState,
+        audio: ChannelAudioSnapshot,
+    ) -> bool {
         let Some(bank) = render::bank_after(&self.audio_slots, edit) else {
             return false;
         };
-        let reseat = render::ChannelReseat::new(edit, &project, bank.clone(), input);
+        if let mooloop_core::ChannelEdit::Inserted(at) = edit {
+            // The slot is fresh and nothing reads it until the command lands,
+            // so the arrival's first note already finds its audio.
+            if let Some(slot) = bank.get(usize::from(at)) {
+                slot.store((!audio.is_empty()).then(|| Arc::new(audio)));
+            }
+        }
+        let reseat =
+            render::ChannelReseat::new(edit, &project, bank.clone(), input, self.sample_rate);
         if !self.send_structural(StructuralCommand::ReseatChannels { reseat }) {
             return false;
         }

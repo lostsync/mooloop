@@ -582,16 +582,20 @@ impl Session {
         }
     }
 
-    /// Apply a channel edit -- a removal or a move -- to the engine as one
-    /// command ([`EngineHandle::edit_channels`]), with no install.
+    /// Apply a channel edit -- a removal, a move or an insertion (a paste or
+    /// a clone) -- to the engine as one command
+    /// ([`EngineHandle::edit_channels`], [`EngineHandle::insert_channel`]),
+    /// with no install.
     ///
     /// For a session that has just taken in `project`, the document the
     /// edit produced, through [`Self::replace_project`]; `sent` is
-    /// [`Self::engine_mirrors`] read before it did. The mirrors come back
+    /// [`Self::engine_mirrors`] read before it did. An inserted channel
+    /// plays the audio this session now holds for it. The mirrors come back
     /// renumbered to the incoming seats, and the ones the command itself
-    /// settled -- the audio edges, the channel solo -- at what it carried, so
-    /// the next reconcile sends only what the edit changed (a compensation
-    /// delay a removed channel was setting, say).
+    /// settled -- the audio edges, the channel solo -- at what it carried, so the next reconcile sends only
+    /// what the edit changed (a compensation delay a removed channel was
+    /// setting, or an inserted one needs, say). An inserted channel's hosted
+    /// plugins open on the next tick, as after an install.
     ///
     /// `false` means nothing reached the engine and the mirrors are as
     /// `replace_project` left them; the caller installs `project` instead.
@@ -603,7 +607,18 @@ impl Session {
         input: mooloop_engine::InputState,
         sent: EngineMirrors,
     ) -> bool {
-        if !handle.edit_channels(edit, project, input) {
+        let sent_edit = match edit {
+            ChannelEdit::Inserted(at) => {
+                let at = usize::from(at);
+                let Some(channel) = self.channels.get(at) else {
+                    return false;
+                };
+                let audio = crate::sampler::channel_audio(channel);
+                handle.insert_channel(at, project, input, audio)
+            }
+            _ => handle.edit_channels(edit, project, input),
+        };
+        if !sent_edit {
             return false;
         }
         let EngineMirrors {
@@ -633,9 +648,21 @@ impl Session {
                     move_seat(&mut sampler_stretch, from, to);
                 }
             }
-            // The engine refuses an insertion, so `edit_channels` returned
-            // above.
-            ChannelEdit::Inserted(_) => {}
+            ChannelEdit::Inserted(at) => {
+                let at = usize::from(at);
+                if at < MAX_CHANNELS {
+                    compensation.channels[at..].rotate_right(1);
+                    // Owed by the arrival and not yet sent: the next
+                    // reconcile sends it.
+                    compensation.channels[at] = 0;
+                }
+                if at <= sampler_stretch.len() {
+                    // Unknown, as after an install: the arrival's pool was
+                    // built with it, and a stretching sampler is sent its
+                    // pool once more, which changes nothing that sounds.
+                    sampler_stretch.insert(at, None);
+                }
+            }
         }
         self.compensation_sent = compensation;
         self.console_sums_sent = console_sums;

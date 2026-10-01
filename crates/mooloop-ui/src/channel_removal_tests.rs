@@ -1,6 +1,6 @@
-//! A channel deleted or moved from the window reaches the engine as one
-//! command, not an install (MOO-466), and its undo entry still restores the
-//! document.
+//! A channel deleted, moved or pasted from the window reaches the engine as
+//! one command, not an install (MOO-466), and its undo entry still restores
+//! the document.
 
 use super::*;
 
@@ -99,10 +99,11 @@ fn undoing_a_command_delete_restores_the_channel() {
     assert_eq!(channel_ids(&state), expected, "the undo did not bring the channel back");
 }
 
-/// **Only a lone, recorded delete or move is a command.** A paste, an undo
-/// and an edit merged behind a full ring all still install.
+/// **Only a lone, recorded channel edit is a command.** A track edit, an
+/// untagged edit, an undo and an edit merged behind a full ring all still
+/// install.
 #[test]
-fn only_a_lone_recorded_delete_or_move_skips_the_install() {
+fn only_a_lone_recorded_channel_edit_skips_the_install() {
     let (window, state, _handle, _project) = opened();
     let edit = delete(&state, &window, 0);
     assert_eq!(lone_channel_edit(&edit, false), Some(ChannelEdit::Removed(0)));
@@ -115,16 +116,13 @@ fn only_a_lone_recorded_delete_or_move_skips_the_install() {
         history: edit.history.clone(),
         edit: list,
     };
-    let moved = ChannelEdit::Moved { from: 0, to: 2 };
-    assert_eq!(
-        lone_channel_edit(&retagged(Some(ListEdit::Channel(moved))), false),
-        Some(moved)
-    );
-    for other in [
-        Some(ListEdit::Channel(ChannelEdit::Inserted(1))),
-        Some(ListEdit::Track(mooloop_core::TrackEdit::Removed(1))),
-        None,
-    ] {
+    for channel_edit in [ChannelEdit::Moved { from: 0, to: 2 }, ChannelEdit::Inserted(1)] {
+        assert_eq!(
+            lone_channel_edit(&retagged(Some(ListEdit::Channel(channel_edit))), false),
+            Some(channel_edit)
+        );
+    }
+    for other in [Some(ListEdit::Track(mooloop_core::TrackEdit::Removed(1))), None] {
         assert_eq!(lone_channel_edit(&retagged(other), false), None, "{other:?}");
     }
     let mut undo = retagged(edit.edit);
@@ -200,4 +198,76 @@ fn a_channel_move_reaches_the_engine_without_an_install() {
         true
     ));
     assert_eq!(channel_ids(&state), original, "the undo did not put the order back");
+}
+
+/// Paste a copy of `copied` after `after` the way the channel rack's menu
+/// does (a clone is a copy pasted straight after itself), and hand back what
+/// the pump receives.
+fn paste(state: &Rc<RefCell<UiState>>, window: &MainWindow, copied: usize, after: usize) -> ProjectEdit {
+    let copy = state
+        .borrow_mut()
+        .session
+        .channel_clipboard(copied, window.get_bpm(), window.get_swing_percent())
+        .expect("a channel to copy");
+    let (tx, rx) = std::sync::mpsc::channel();
+    assert!(queue_channel_insert(
+        &ProjectEditSender(tx),
+        state,
+        window,
+        after,
+        copy,
+        "Channel pasted"
+    ));
+    match rx.try_recv() {
+        Ok(PendingEngineMessage::ProjectEdit(edit)) => edit,
+        _ => panic!("a paste queues a project edit"),
+    }
+}
+
+/// **A paste installs nothing either.** The pasted channel lands after the
+/// one it was pasted after, the window and session hold it with everyone
+/// else in order, and undoing it (which still installs) takes it out again.
+#[test]
+fn a_channel_paste_reaches_the_engine_without_an_install() {
+    let (window, state, mut handle, project) = opened();
+    let installs = handle.installs_queued();
+    let edit = paste(&state, &window, 0, 1);
+
+    let channel_edit = lone_channel_edit(&edit, false).expect("a lone paste is a command");
+    assert_eq!(channel_edit, ChannelEdit::Inserted(2));
+    assert!(edit_channels_in_ui(
+        &mut handle,
+        None,
+        &state,
+        &window,
+        &edit.project,
+        &edit.samples,
+        channel_edit
+    ));
+
+    assert_eq!(handle.installs_queued(), installs, "the paste installed a project");
+    let original: Vec<mooloop_core::ChannelId> =
+        project.channels.iter().map(|channel| channel.id).collect();
+    let ids = channel_ids(&state);
+    assert_eq!(ids.len(), original.len() + 1);
+    let mut others = ids.clone();
+    let pasted = others.remove(2);
+    assert_eq!(others, original, "a channel other than the paste moved");
+    assert!(!original.contains(&pasted), "the paste wears another channel's identity");
+    assert_eq!(state.borrow().rows.row_count(), ids.len());
+
+    let Some((HistoryMove::Record, entry)) = edit.history.clone() else {
+        panic!("a paste records an undo entry")
+    };
+    let restored = entry.before.clone();
+    assert!(install_project_in_ui(
+        &mut handle,
+        None,
+        &state,
+        &window,
+        &restored.project,
+        &restored.seated(),
+        true
+    ));
+    assert_eq!(channel_ids(&state), original, "the undo did not take the paste out");
 }
