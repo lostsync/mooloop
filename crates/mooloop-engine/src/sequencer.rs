@@ -303,6 +303,33 @@ impl Sequencer {
         }
     }
 
+    /// Close the gap `channel` leaves: every later channel's notes and lanes
+    /// move down one seat across the patterns the song holds, every lane's
+    /// address follows the edit (a lane naming the departed channel closes),
+    /// and the vacated last seat is cleared. The result is what
+    /// [`Self::load_project`] builds from the project the edit produced.
+    ///
+    /// Realtime-safe: rotates and clears preallocated lanes, allocating and
+    /// freeing nothing. A `channel` past the active channels is ignored.
+    pub fn remove_channel(&mut self, channel: usize) {
+        let active = self.active_channels;
+        if channel >= active {
+            return;
+        }
+        let Ok(seat) = u8::try_from(channel) else {
+            return;
+        };
+        let edit = mooloop_core::ChannelEdit::Removed(seat);
+        for pattern in self.patterns.iter_mut().take(self.active_patterns) {
+            pattern.channels[channel..active].rotate_left(1);
+            pattern.channels[active - 1].clear();
+            for lanes in &mut pattern.channels[..active - 1] {
+                lanes.rescope_lanes(edit);
+            }
+        }
+        self.active_channels = active - 1;
+    }
+
     /// Replace musical state without growing any realtime-owned allocation.
     ///
     /// Runs off the audio thread (the executor installs a `RenderState` that

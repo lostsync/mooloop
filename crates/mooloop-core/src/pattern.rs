@@ -376,6 +376,24 @@ impl ChannelPattern {
         self.open_lanes != before
     }
 
+    /// Follow a channel edit through every lane's address, closing the lanes
+    /// whose channel is gone: [`crate::structure::rescope_lanes`] for the
+    /// preallocated bank, with the same result in the same order. In place
+    /// and without allocating, so the engine can run it where the edit
+    /// arrives.
+    pub fn rescope_lanes(&mut self, edit: crate::ChannelEdit) {
+        let mut index = 0;
+        while index < self.open_lanes {
+            match edit.address(self.lanes[index].target) {
+                Some(target) => {
+                    self.lanes[index].target = target;
+                    index += 1;
+                }
+                None => self.close_slot(index),
+            }
+        }
+    }
+
     /// Replace the whole lane set. Used by project load, which is the only
     /// caller allowed to allocate.
     pub fn set_lanes(&mut self, lanes: Vec<AutomationLane>) {

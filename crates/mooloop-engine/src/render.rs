@@ -146,6 +146,18 @@ pub fn empty_channel_audio_bank() -> ChannelAudioBank {
 /// current one. `audio` is by value for the same reason -- there is no way to
 /// hand this the live generation's slots, so the install path cannot
 /// accidentally share them.
+/// `bank` with `channel`'s slot rotated to the end: the slot each seat
+/// publishes into once that channel is removed, so every surviving seat keeps
+/// the slot its strip reads. `None` when `channel` is not in the bank.
+pub(crate) fn bank_without(bank: &ChannelAudioBank, channel: usize) -> Option<ChannelAudioBank> {
+    if channel >= bank.len() {
+        return None;
+    }
+    let mut slots: Vec<ChannelAudioSlot> = bank.iter().cloned().collect();
+    slots[channel..].rotate_left(1);
+    Some(Arc::new(slots))
+}
+
 pub fn channel_audio_bank(audio: Vec<ChannelAudioSnapshot>) -> ChannelAudioBank {
     let mut audio = audio.into_iter();
     Arc::new(
@@ -4321,6 +4333,77 @@ impl BusStrip {
     }
 }
 
+/// What [`crate::StructuralCommand::RemoveChannel`] hands the audio thread:
+/// everything the project the removal produced derives across the whole bank,
+/// built on the control thread so the callback only rotates and swaps.
+///
+/// The same box comes back as [`crate::StructuralReclaim::ChannelRemoved`],
+/// holding what it displaced -- the departed channel's storage and the tables
+/// it replaced -- to be dropped on the control thread.
+pub struct ChannelRemoval {
+    audio_slots: ChannelAudioBank,
+    midi_routing: Box<MidiRouting>,
+    audio_input_routing: Box<AudioInputRouting>,
+    audio: Box<AudioTapBank>,
+    solo_silenced: [bool; MAX_CHANNELS],
+    monitor: [bool; MAX_CHANNELS],
+    strip: Option<Box<ChannelStrip>>,
+    events: Option<Box<EventList>>,
+    control_outputs: Option<Box<ControlOutputs>>,
+    source_curves: Option<Box<SourceCurvePool>>,
+}
+
+impl ChannelRemoval {
+    /// Build the payload for removing a channel, from `project`, the
+    /// document the removal produced: `input` is its input state as an
+    /// install takes it, and `audio_slots` the slot each surviving seat
+    /// publishes into, in the incoming order. The track graph and the sends
+    /// name tracks only, so a channel removal leaves them as they are.
+    /// Allocates; control thread only.
+    pub(crate) fn new(
+        project: &Project,
+        audio_slots: ChannelAudioBank,
+        input: crate::InputState,
+    ) -> Box<Self> {
+        let mut monitor = [false; MAX_CHANNELS];
+        for (seat, on) in input.monitor.iter().take(MAX_CHANNELS).enumerate() {
+            monitor[seat] = *on;
+        }
+        Box::new(Self {
+            audio_slots,
+            midi_routing: Box::new(MidiRouting {
+                routes: input.midi_routing,
+            }),
+            audio_input_routing: Box::new(AudioInputRouting {
+                taps: input.audio_input,
+            }),
+            audio: Box::new(AudioTapBank::new(project.audio_graph())),
+            solo_silenced: mooloop_core::channel::solo_silenced(
+                project.channels.iter().map(|channel| channel.setup.channel.solo),
+            ),
+            monitor,
+            strip: None,
+            events: None,
+            control_outputs: None,
+            source_curves: None,
+        })
+    }
+
+    /// Retire the departed channel's nodes on the thread that ran them; see
+    /// [`crate::StructuralReclaim::retire_nodes`].
+    pub(crate) fn retire_nodes(&mut self) {
+        if let Some(strip) = self.strip.as_mut() {
+            strip.retire_nodes();
+        }
+    }
+
+    /// Whether the removal reached the graph: it carries the channel it took.
+    #[cfg(test)]
+    pub(crate) fn removed(&self) -> bool {
+        self.strip.is_some()
+    }
+}
+
 /// One channel's storage, moved as a unit between the control thread and the
 /// graph. The graph unpacks it into its parallel vectors immediately: those
 /// stay separate because the block loop borrows them with different
@@ -6007,6 +6090,89 @@ impl RenderState {
         self.source_curves.push(source_curves);
     }
 
+    /// Take the channel at `channel` out of the graph and close the gap,
+    /// leaving every other channel's strip -- its voices, tails, rings and
+    /// modulator phases -- running in its new seat. Afterwards the graph is
+    /// what an install of the project the removal produced would build, with
+    /// every surviving strip carried; `removal` supplies that project's
+    /// whole-bank tables and leaves holding what they displaced.
+    ///
+    /// Audio thread: moves, rotates and swaps, allocating and freeing
+    /// nothing. Does nothing to a channel that does not exist or to the last
+    /// one, and `removal` then comes back as it arrived
+    /// ([`ChannelRemoval::removed`] is false).
+    fn remove_channel(&mut self, channel: usize, removal: &mut ChannelRemoval) {
+        let live = self.live_channels();
+        if channel >= live || live <= 1 || self.strips.len() != live {
+            return;
+        }
+        let Ok(seat) = u8::try_from(channel) else {
+            return;
+        };
+        let edit = mooloop_core::ChannelEdit::Removed(seat);
+        removal.strip = Some(self.strips.remove(channel));
+        removal.events = Some(self.events.remove(channel));
+        removal.control_outputs = Some(self.control_outputs.remove(channel));
+        removal.source_curves = Some(self.source_curves.remove(channel));
+        // Every per-seat array moves down with the strips, so the departed
+        // channel's entry lands on the vacated last seat and is reset there.
+        let vacated = live - 1;
+        self.modulation[channel..live].rotate_left(1);
+        self.modulators[channel..live].rotate_left(1);
+        self.expression[channel..live].rotate_left(1);
+        self.expression[vacated] = ChannelExpression::REST;
+        // Written directly rather than through `edit_modulation`, whose
+        // destination diff would restore base values at seats that now hold
+        // other channels. A route into the departed channel has nothing left
+        // to restore.
+        for seat in 0..=vacated {
+            let mut rack = if seat == vacated {
+                ModRack::default()
+            } else {
+                self.modulation[seat]
+            };
+            if seat != vacated && !rack.rescope_channels(edit) {
+                continue;
+            }
+            let previous = std::mem::replace(&mut self.modulation[seat], rack);
+            if let Some(runtime) = self.modulators.get_mut(seat) {
+                for (slot, entry) in rack.slots.iter().enumerate() {
+                    let params = entry.map(|entry| entry.params);
+                    if previous.slots[slot].map(|entry| entry.params) != params {
+                        runtime.set_slot(slot, params);
+                    }
+                }
+            }
+        }
+        self.sequencer.remove_channel(channel);
+        for note in self.recording.iter_mut() {
+            if let Some(held) = note {
+                match edit.channel(held.channel) {
+                    Some(moved) => held.channel = moved,
+                    None => *note = None,
+                }
+            }
+        }
+        for audition in self.auditions.iter_mut() {
+            if let Some(pending) = audition {
+                match edit.channel(pending.channel) {
+                    Some(moved) => pending.channel = moved,
+                    None => *audition = None,
+                }
+            }
+        }
+        // A removal can lift a solo (the soloed channel left) but never add
+        // one, so no voice needs releasing here.
+        for (strip, &silenced) in self.strips.iter_mut().zip(&removal.solo_silenced) {
+            strip.solo_silenced = silenced;
+        }
+        self.monitor = removal.monitor;
+        std::mem::swap(&mut self.audio_slots, &mut removal.audio_slots);
+        std::mem::swap(&mut self.midi_routing, &mut removal.midi_routing);
+        std::mem::swap(&mut self.audio_input_routing, &mut removal.audio_input_routing);
+        std::mem::swap(&mut self.audio, &mut removal.audio);
+    }
+
     /// Channels that both exist to the sequencer and have storage behind
     /// them. Those two can disagree for one block — a project can declare
     /// more channels than the graph has been handed storage for — and a
@@ -6273,6 +6439,24 @@ impl RenderState {
     }
 
     /// The node `channel` is running, for tests that ask what it holds.
+    /// Which strip sits at `channel`, as an address: the same strip is the
+    /// same address wherever it moves.
+    #[cfg(test)]
+    pub(crate) fn strip_identity(&self, channel: usize) -> usize {
+        &*self.strips[channel] as *const ChannelStrip as usize
+    }
+
+    /// How many channels have storage behind them.
+    #[cfg(test)]
+    pub(crate) fn audio_bank(&self) -> ChannelAudioBank {
+        self.audio_slots.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn strip_count(&self) -> usize {
+        self.strips.len()
+    }
+
     #[cfg(test)]
     pub(crate) fn channel_source(&self, channel: usize) -> &dyn SourceNode {
         self.strips[channel].source_node()
@@ -7460,6 +7644,13 @@ impl RenderState {
                         channel: Some(storage),
                     })
                     .map(StructuralReclaim::Effect)
+            }
+            StructuralCommand::RemoveChannel {
+                channel,
+                mut removal,
+            } => {
+                self.remove_channel(usize::from(channel), &mut removal);
+                Some(StructuralReclaim::ChannelRemoved(removal))
             }
             StructuralCommand::SetContainerSpan {
                 target,

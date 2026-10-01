@@ -343,6 +343,12 @@ impl EngineBacklog {
     /// The older edits a delivered install stands for, oldest first. The
     /// pump applies their history steps and list edits before the delivered
     /// edit's own, once the install has gone through.
+    /// Whether an install waiting here stands for older edits merged into
+    /// it, which [`Self::take_superseded`] would hand back.
+    pub fn has_superseded(&self) -> bool {
+        !self.superseded.is_empty()
+    }
+
     pub fn take_superseded(&mut self) -> Vec<SupersededEdit> {
         std::mem::take(&mut self.superseded)
     }
@@ -548,7 +554,82 @@ pub struct TransportPosition {
     pub tick: i32,
 }
 
+/// What the session has told the engine, as its reconcilers record it.
+///
+/// Read before a channel removal installs the edited document in the session
+/// ([`Session::replace_project`] forgets it, as an install should), and
+/// handed to [`Session::send_channel_removal`], which keeps it renumbered: the
+/// engine kept every surviving channel's state, so nothing it was told needs
+/// telling again.
+#[derive(Debug, Clone)]
+pub struct EngineMirrors {
+    compensation: CompensationSent,
+    console_sums: [bool; MAX_BUSES],
+    solo_silenced: [bool; MAX_BUSES],
+    track_graph: (mooloop_core::CompiledBusGraph, Vec<SendRoute>),
+    sampler_stretch: Vec<Option<usize>>,
+}
+
 impl Session {
+    /// What the reconcilers have sent; see [`EngineMirrors`].
+    pub fn engine_mirrors(&self) -> EngineMirrors {
+        EngineMirrors {
+            compensation: self.compensation_sent.clone(),
+            console_sums: self.console_sums_sent,
+            solo_silenced: self.solo_silenced_sent,
+            track_graph: self.track_graph_sent.clone(),
+            sampler_stretch: self.sampler_stretch_sent.clone(),
+        }
+    }
+
+    /// Remove the channel at `channel` from the engine as one command
+    /// ([`EngineHandle::remove_channel`]), with no install.
+    ///
+    /// For a session that has just taken in `project`, the document the
+    /// removal produced, through [`Self::replace_project`]; `sent` is
+    /// [`Self::engine_mirrors`] read before it did. The mirrors come back
+    /// renumbered to the incoming seats, and the ones the command itself
+    /// settled -- the audio edges, the channel solo -- at what it carried, so
+    /// the next reconcile sends only what the removal changed (a
+    /// compensation delay the departed channel was setting, say).
+    ///
+    /// `false` means nothing reached the engine and the mirrors are as
+    /// `replace_project` left them; the caller installs `project` instead.
+    pub fn send_channel_removal(
+        &mut self,
+        handle: &mut EngineHandle,
+        channel: usize,
+        project: std::sync::Arc<mooloop_core::Project>,
+        input: mooloop_engine::InputState,
+        sent: EngineMirrors,
+    ) -> bool {
+        if !handle.remove_channel(channel, project, input) {
+            return false;
+        }
+        let EngineMirrors {
+            mut compensation,
+            console_sums,
+            solo_silenced,
+            track_graph,
+            mut sampler_stretch,
+        } = sent;
+        if channel < MAX_CHANNELS {
+            compensation.channels[channel..].rotate_left(1);
+            compensation.channels[MAX_CHANNELS - 1] = 0;
+        }
+        if channel < sampler_stretch.len() {
+            sampler_stretch.remove(channel);
+        }
+        self.compensation_sent = compensation;
+        self.console_sums_sent = console_sums;
+        self.solo_silenced_sent = solo_silenced;
+        self.track_graph_sent = track_graph;
+        self.sampler_stretch_sent = sampler_stretch;
+        self.channel_solo_silenced_sent = self.channel_solo_silenced();
+        self.audio_graph_sent = self.audio_graph_plan();
+        true
+    }
+
     /// What each producer must wait, from the project as it stands.
     ///
     /// Derived rather than tracked, because latency is a consequence of five

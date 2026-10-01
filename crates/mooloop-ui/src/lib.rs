@@ -45,6 +45,8 @@ mod plugin_ui_tests;
 #[cfg(test)]
 mod window_probe;
 mod meter;
+#[cfg(test)]
+mod channel_removal_tests;
 #[cfg(feature = "mockup")]
 mod mockup;
 mod settings;
@@ -17754,35 +17756,53 @@ impl AppUi {
                             // Read before the install, which sends the rack
                             // back to a channel; a track move puts it back.
                             let rack_was = st.borrow().session.effect_target;
-                            if install_project_in_ui(
-                                &mut handle,
-                                default_sample_for_pump.as_ref(),
-                                &st,
-                                &window,
-                                &edit.project,
-                                &edit.samples,
-                                // **Every project edit keeps the song
-                                // running.** `LOOSE_ENDS.md`, "Every
-                                // structural edit stops the song": a paste, a
-                                // delete, a move, a track added, a preset
-                                // loaded -- all of them stopped and rewound
-                                // the transport, including for the channels
-                                // the edit never touched.
-                                //
-                                // The plan proposed testing `edit.edit` for a
-                                // `ListEdit`, which would have covered the
-                                // three channel edits and left a track add or
-                                // a preset load still stopping the song. The
-                                // distinction that matters is edit versus
-                                // open, and every `ProjectEdit` is an edit:
-                                // the three install sites that are opens are
-                                // the other callers of this function.
-                                //
-                                // Undo and redo are included, and should be.
-                                // Undoing a channel delete mid-song is an
-                                // edit to the song you are listening to.
-                                true,
-                            ) {
+                            // A channel deleted, on its own, reaches the
+                            // engine as one command. An install that stands
+                            // for older edits merged into it still installs.
+                            let removed_channel =
+                                lone_channel_removal(&edit, engine_backlog.has_superseded());
+                            let installed = if let Some(channel) = removed_channel {
+                                remove_channel_in_ui(
+                                    &mut handle,
+                                    default_sample_for_pump.as_ref(),
+                                    &st,
+                                    &window,
+                                    &edit.project,
+                                    &edit.samples,
+                                    channel,
+                                )
+                            } else {
+                                install_project_in_ui(
+                                    &mut handle,
+                                    default_sample_for_pump.as_ref(),
+                                    &st,
+                                    &window,
+                                    &edit.project,
+                                    &edit.samples,
+                                    // **Every project edit keeps the song
+                                    // running.** `LOOSE_ENDS.md`, "Every
+                                    // structural edit stops the song": a paste, a
+                                    // delete, a move, a track added, a preset
+                                    // loaded -- all of them stopped and rewound
+                                    // the transport, including for the channels
+                                    // the edit never touched.
+                                    //
+                                    // The plan proposed testing `edit.edit` for a
+                                    // `ListEdit`, which would have covered the
+                                    // three channel edits and left a track add or
+                                    // a preset load still stopping the song. The
+                                    // distinction that matters is edit versus
+                                    // open, and every `ProjectEdit` is an edit:
+                                    // the three install sites that are opens are
+                                    // the other callers of this function.
+                                    //
+                                    // Undo and redo are included, and should be.
+                                    // Undoing a channel delete mid-song is an
+                                    // edit to the song you are listening to.
+                                    true,
+                                )
+                            };
+                            if installed {
                                 // An install that waited behind a full ring
                                 // may stand for older edits merged into it
                                 // (`EngineBacklog`): their list edits and
@@ -19394,18 +19414,7 @@ fn install_project_in_ui(
     // routing is resolved from the *incoming* project: every structural edit,
     // paste, undo and load comes through here, and any of them can renumber
     // the channels the routing is indexed by.
-    let input = {
-        let state = state.borrow();
-        mooloop_engine::InputState {
-            record_armed: state.session.record_armed(),
-            midi_routing: Session::project_midi_routing(
-                &project,
-                &state.midi_ports,
-            ),
-            audio_input: Session::project_audio_input_taps(&project),
-            monitor: state.session.monitor_seats(&project),
-        }
-    };
+    let input = install_input(&state.borrow(), &project);
     if !handle.install_project(Arc::new(project.clone()), audio, input, keep_transport) {
         return false;
     }
@@ -19416,6 +19425,76 @@ fn install_project_in_ui(
     // reading. The pump resets them on its next tick.
     state.borrow_mut().bus_meters_stale = true;
     state.borrow_mut().replace_project(&project, samples, window);
+    finish_project_in_ui(handle, state, window, keep_transport);
+    true
+}
+
+/// What the engine is told about `project`'s inputs when it takes the
+/// project in: resolved from the *incoming* project, because an edit can
+/// renumber the channels the routing is indexed by.
+fn install_input(state: &UiState, project: &Project) -> mooloop_engine::InputState {
+    mooloop_engine::InputState {
+        record_armed: state.session.record_armed(),
+        midi_routing: Session::project_midi_routing(project, &state.midi_ports),
+        audio_input: Session::project_audio_input_taps(project),
+        monitor: state.session.monitor_seats(project),
+    }
+}
+
+/// The channel a queued edit removes, when that is all it does and it can
+/// reach the engine as one command: a recorded channel deletion that no older
+/// install was merged into (`merged`). Everything else installs.
+fn lone_channel_removal(edit: &ProjectEdit, merged: bool) -> Option<usize> {
+    match (edit.edit, &edit.history) {
+        (Some(ListEdit::Channel(ChannelEdit::Removed(channel))), Some((HistoryMove::Record, _)))
+            if !merged =>
+        {
+            Some(usize::from(channel))
+        }
+        _ => None,
+    }
+}
+
+/// Remove the channel at `channel` from the engine as one command, with no
+/// install, for an edit whose result is `project`: the window takes the
+/// edited document in as an install's does, and every other channel keeps
+/// sounding. `false` when the engine refused even the install this falls
+/// back to, as [`install_project_in_ui`] answers.
+fn remove_channel_in_ui(
+    handle: &mut EngineHandle,
+    default_sample: Option<&Arc<SampleData>>,
+    state: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    project: &Project,
+    samples: &[Option<Arc<SampleData>>],
+    channel: usize,
+) -> bool {
+    let mut incoming = project.clone();
+    normalize_project_pattern_banks(&mut incoming);
+    let sent = state.borrow().session.engine_mirrors();
+    state.borrow_mut().replace_project(&incoming, samples, window);
+    let removed = {
+        let mut st = state.borrow_mut();
+        let input = install_input(&st, &incoming);
+        st.session
+            .send_channel_removal(handle, channel, Arc::new(incoming), input, sent)
+    };
+    if !removed {
+        return install_project_in_ui(handle, default_sample, state, window, project, samples, true);
+    }
+    finish_project_in_ui(handle, state, window, true);
+    true
+}
+
+/// The window's half of taking a document in, after the session holds it:
+/// everything [`install_project_in_ui`] and [`remove_channel_in_ui`] do alike.
+/// `keep_transport` is false only for an open.
+fn finish_project_in_ui(
+    handle: &mut EngineHandle,
+    state: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    keep_transport: bool,
+) {
     if !keep_transport {
         // `input_monitor`'s own doc comment promises "off for every channel
         // of a song that has just opened" -- `replace_project` only prunes
@@ -19478,7 +19557,6 @@ fn install_project_in_ui(
     set_midi_learn_armed(window, false);
     state.borrow().refresh_midi_mappings(window);
     refresh_preset_menus(state, window);
-    true
 }
 
 /// Tell the engine exactly which stages should be publishing a spectrum.

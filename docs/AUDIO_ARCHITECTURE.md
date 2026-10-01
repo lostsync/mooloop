@@ -222,6 +222,21 @@ be arriving around rows that are already playing. `ReplaceEffect` (a
 prepared resource swapped under the same device) and a whole-project
 install are unchanged: a document load settles every ramp at its control.
 
+**Deleting a channel is a command, not an install** (MOO-466).
+`StructuralCommand::RemoveChannel` takes the channel's storage out and closes
+the gap on the audio thread by moving and rotating what is already there --
+strips, event lists, modulation, sequencer lanes (re-addressed in place),
+audio slots -- and swapping in the incoming project's routing tables, audio
+edges and solo verdicts, built on the control thread. What it displaces
+leaves in the same box through the reclaim ring. The result is what an
+install of the edited project with every surviving strip carried would leave,
+and better where an install would rebuild a channel whose modulation routes
+were renumbered: `channel_edit_tests.rs` requires the same samples as the
+install, and as a song never edited with the removed channel muted. The session keeps what its reconcilers had sent, renumbered
+(`Session::send_channel_removal`), so the next tick sends only what the
+removal changed. Paste, move, track edits, pattern edits, preset loads and
+undo still install.
+
 **A project install carries effect devices by `DeviceId`** (MOO-137, agreed
 with Realtime Engine on 2026-09-23). `carry_plan` still carries a channel or
 track strip whole when its setup is identical. A strip whose setup differs

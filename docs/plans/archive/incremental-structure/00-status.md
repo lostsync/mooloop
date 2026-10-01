@@ -197,3 +197,38 @@ Not for its own sake. `LOOSE_ENDS.md` has the cost written out: a structural
 edit stops and empties things it has no business touching, and the reason has
 always been that channel and track identity was positional. That reason is now
 mostly gone. The remaining work is finishing the job rather than starting one.
+
+## Reopened 2026-10-01: MOO-466
+
+Adam, 2026-09-30, on hearing that a channel delete installs a new copy of
+the song: *"this 'new copy of the song' thing feels like it should not even
+be a thing."* His ruling on MOO-466 is option 1: the channel and track edits
+of steps 03 and 04 become commands, then pattern clone/clear/remove and an
+effect-preset load; undo stays a swap until MOO-469.
+
+**`RemoveChannel` is the first** (step 04's half). What it found:
+
+- **The ordering question answered itself.** The command carries the
+  incoming project's whole-bank tables (routing, audio edges, solo), so
+  every value command queued after it already names the incoming seats, as
+  after an install; nothing queued before it can name a later seat, because
+  the pump sends the delete in its place in the one ordered stream.
+- **Fewer index-keyed structures than the list above feared.** Strips,
+  event lists, control outputs, source curves, modulation and modulator
+  racks, expression, monitor flags and the sequencer's lanes move; the
+  sends and the track graph name tracks only and do not; meters, gate ticks
+  and `channels_heard` are rebuilt every block. Held keys and deferred
+  commands are carried unrenumbered, as an install's
+  `adopt_performance_state` already carries them.
+- **The session's reconcilers had to keep their mirrors.** An install
+  forgets what was sent and resends the plan; the command path keeps it,
+  renumbered (`Session::send_channel_removal`), or the tick after would
+  replace every carried ring.
+- **Parity is the acceptance test**, in-process, against two references
+  (`channel_edit_tests.rs`): the install of the edited song, sample for
+  sample; and, for a song whose channels hold modulation routes, a copy
+  never edited with the removed channel muted throughout. The second is
+  needed because **the install is not the gold standard**: a route names
+  its channel's seat, so after a removal `carry_plan` sees every later
+  channel with a route as a changed setup and rebuilds it, cutting its
+  voices. The command keeps it sounding.
