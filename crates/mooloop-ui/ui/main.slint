@@ -2596,6 +2596,8 @@ export component MainWindow inherits Window {
     callback sampler-glide-changed(float);
     callback sampler-zone-base-keys-changed(int, int);
     callback sampler-zone-add-clicked();
+    callback sampler-zone-duplicate-clicked();
+    callback sampler-zones-from-slices-clicked(int);
     callback sampler-zone-keys-changed(int, int, int);
     callback sampler-zone-root-changed(int, int);
     callback sampler-zone-remove-clicked(int);
@@ -4992,6 +4994,8 @@ export component MainWindow inherits Window {
                                                 zones: root.sampler-zones;
                                                 zone-base-keys-changed(low, high) => { root.sampler-zone-base-keys-changed(low, high); }
                                                 zone-add-clicked() => { root.sampler-zone-add-clicked(); }
+                                                zone-duplicate-clicked() => { root.sampler-zone-duplicate-clicked(); }
+                                                zones-from-slices-clicked(key) => { root.sampler-zones-from-slices-clicked(key); }
                                                 zone-keys-changed(index, low, high) => { root.sampler-zone-keys-changed(index, low, high); }
                                                 zone-root-changed(index, note) => { root.sampler-zone-root-changed(index, note); }
                                                 zone-remove-clicked(index) => { root.sampler-zone-remove-clicked(index); }

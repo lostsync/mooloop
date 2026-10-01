@@ -14244,22 +14244,26 @@ impl AppUi {
             let st = state.clone();
             window.on_play_mode_changed(move |value| {
                 let Some(window) = weak.upgrade() else { return };
+                // A zoned patch refuses Slice; the face's selector is
+                // uncontrolled, so it is told what the patch kept.
                 with_gesture_history(&st, &commands, &window, "Play mode", || {
                     let mut st = st.borrow_mut();
                     let ch = st.session.selected;
-                    let Some(channel) = st.session.channels.get_mut(ch) else {
-                        return false;
-                    };
-                    if let Some(p) = channel.sampler_params_mut() {
-                        p.play_mode = PlayMode::from_index(value);
+                    match st.session.set_play_mode(ch, PlayMode::from_index(value)) {
+                        Some(params) => {
+                            let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                                channel: ch as u8,
+                                params,
+                            });
+                            true
+                        }
+                        None => false,
                     }
-                    let p = channel.sampler_params();
-                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                        channel: ch as u8,
-                        params: p,
-                    });
-                    true
                 });
+                let st = st.borrow();
+                if let Some(channel) = st.session.channels.get(st.session.selected) {
+                    window.set_play_mode(channel.sampler_params().play_mode.to_index());
+                }
             });
         }
         {
@@ -16820,6 +16824,67 @@ impl AppUi {
         zone_edit!(on_sampler_zone_remove_clicked, "Remove zone", |session, channel, index| {
             usize::try_from(index).is_ok_and(|index| session.remove_zone(channel, index))
         });
+        // DUPE and ZONES FROM SLICES (MOO-464): more zones from a file the
+        // sampler already plays, sharing its buffer. Each is one undo step.
+        {
+            let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            let audio_out = channel_audio_tx.clone();
+            window.on_sampler_zone_duplicate_clicked(move || {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                {
+                    let mut state = st.borrow_mut();
+                    let channel = state.session.selected;
+                    let zone = state.sampler_zone();
+                    let copy = match state.session.duplicate_zone(channel, zone) {
+                        Ok(copy) => copy,
+                        Err(refusal) => {
+                            window.set_status_message(refusal.message().into());
+                            return;
+                        }
+                    };
+                    state.publish_selected_audio(&audio_out);
+                    state.sync_sampler_zones(&window);
+                    state.select_sampler_zone(&window, copy);
+                }
+                record_project_history(&commands, before, &st, &window, "Duplicate zone");
+            });
+        }
+        {
+            let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            let tx = cmd_tx.clone();
+            let audio_out = channel_audio_tx.clone();
+            window.on_sampler_zones_from_slices_clicked(move |key| {
+                let Some(window) = weak.upgrade() else { return };
+                let before = project_snapshot(&st.borrow(), &window);
+                {
+                    let mut state = st.borrow_mut();
+                    let channel = state.session.selected;
+                    let params = match state.session.zones_from_slices(channel, midi_key(key)) {
+                        Ok(params) => params,
+                        Err(refusal) => {
+                            window.set_status_message(refusal.message().into());
+                            return;
+                        }
+                    };
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: channel as u8,
+                        params,
+                    });
+                    state.publish_selected_audio(&audio_out);
+                    state.refresh_editor(&window);
+                    state.sync_sampler_zones(&window);
+                    state.select_sampler_zone(&window, 0);
+                    let count = state.session.channels[channel].zones.len() + 1;
+                    window.set_status_message(format!("Made {count} zones from the slices").into());
+                }
+                record_project_history(&commands, before, &st, &window, "Zones from slices");
+            });
+        }
         {
             let st = state.clone();
             let load_tx = load_tx.clone();

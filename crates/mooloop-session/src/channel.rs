@@ -191,8 +191,13 @@ impl ChannelState {
 
     /// Write one of the current generator's parameters by descriptor id,
     /// returning the value that was actually stored -- the descriptor's own
-    /// clamp, not the one asked for.
+    /// clamp, not the one asked for. A sampler with key zones keeps its play
+    /// mode rather than take Slice ([`crate::sampler::refuses_param`]), and
+    /// returns the value it kept.
     pub fn set_generator_param(&mut self, id: u32, value: f32) -> Option<f32> {
+        if crate::sampler::refuses_param(self, id, value) {
+            return self.generator.get(id);
+        }
         self.generator.set(id, value)
     }
 

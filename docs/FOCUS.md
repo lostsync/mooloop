@@ -849,3 +849,15 @@ In the order worth playing:
     should play exactly as before (`tests/stretch_commit.rs` pins the
     frames). Whether a second stretch of a stretch sounds acceptable at
     ordinary tempo moves is the listen.
+35. **Many zones from one file** (MOO-464). Load a file of hits (twelve
+    xylophone notes, a drum run) into a sampler, switch to Slice, DETECT
+    and accept, then on ZONES set FROM to a key and press ZONES FROM
+    SLICES: every hit should become its own zone, one key each, and play
+    at its recorded pitch on its key, with the sampler back in Pitch. The
+    Pitch/Slice switch is greyed out while there are zones. Then select a
+    zone and press DUPE: the copy lands on the next free key and should
+    play the same hit until you move its start and end. Save, reopen: all
+    the zones are there and the song's folder holds the file once.
+    `tests/zones_from_one_file.rs` pins the levels against Slice mode;
+    whether the workflow feels right, and whether a hit's tail is cut where
+    you'd expect, is the question.

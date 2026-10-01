@@ -41,17 +41,27 @@ component ZoneName inherits Rectangle {
 
 /// The sampler's minimal key-zone editor (MOO-14): the base sample's key
 /// range, and a list of extra zones, each a file with its low and high key
-/// and its root, added from a file and removed. Clicking a zone's name
-/// selects it for the SAMPLE page (`selected`: 0 is the sampler's own
+/// and its root, added from a file, copied and removed. Clicking a zone's
+/// name selects it for the SAMPLE page (`selected`: 0 is the sampler's own
 /// sample, `n` the extra zone `n - 1`). The mapping workspace is MOO-40.
+///
+/// Slices and zones never both apply: in Slice mode (`sliced`) a key picks
+/// a slice, so no zone is added or copied; an unzoned patch with slice
+/// markers (`slice-count`) offers one zone per slice instead, one key each
+/// from `slice-from`.
 export component SamplerZonesPage inherits VerticalLayout {
     in property <int> base-low: 0;
     in property <int> base-high: 127;
     in property <string> base-name;
     in property <[SamplerZoneRow]> zones;
     in property <int> selected;
+    in property <bool> sliced;
+    in property <int> slice-count;
+    in-out property <int> slice-from: 36;
     callback base-keys-changed(int, int);
     callback zone-add-clicked();
+    callback zone-duplicate-clicked();
+    callback zones-from-slices-clicked(int);
     callback zone-keys-changed(int, int, int);
     callback zone-root-changed(int, int);
     callback zone-remove-clicked(int);
@@ -129,12 +139,37 @@ export component SamplerZonesPage inherits VerticalLayout {
         }
     }
     HorizontalLayout {
+        spacing: 6px;
         ToolButton {
-            text: "+ ZONE"; tooltip: "Add zone"; hint: "Add a key zone from an audio file";
+            text: "+ ZONE"; tooltip: "Add zone";
+            hint: root.sliced ? "Slice mode plays slices: switch to Pitch to add zones" : "Add a key zone from an audio file";
+            enabled: !root.sliced;
             min-width: 64px; max-width: 64px; min-height: 22px; max-height: 22px;
             clicked => { root.zone-add-clicked(); }
         }
+        ToolButton {
+            text: "DUPE"; tooltip: "Duplicate zone";
+            hint: root.sliced ? "Slice mode plays slices: switch to Pitch to copy zones" : "Copy the selected zone, its file and region, onto the next free key";
+            enabled: !root.sliced;
+            min-width: 48px; max-width: 48px; min-height: 22px; max-height: 22px;
+            clicked => { root.zone-duplicate-clicked(); }
+        }
         Rectangle { horizontal-stretch: 1; }
+        if root.zones.length == 0 && root.slice-count > 0 : HorizontalLayout {
+            spacing: 6px;
+            StepperField {
+                label: "FROM"; value: root.slice-from; minimum: 0; maximum: max(0, 128 - root.slice-count);
+                display-text: NoteFormat.midi-name(self.value); value-width: 30px;
+                tooltip: "First key"; hint: "The key the first slice's zone goes on; each next slice steps up one key";
+                changed(v) => { root.slice-from = v; }
+            }
+            ToolButton {
+                text: "ZONES FROM SLICES"; tooltip: "Zones from slices";
+                hint: "Make one zone per slice, one key each, each playing at its recorded pitch; the patch leaves Slice mode";
+                min-width: 132px; max-width: 132px; min-height: 22px; max-height: 22px;
+                clicked => { root.zones-from-slices-clicked(root.slice-from); }
+            }
+        }
     }
 }
 
@@ -546,6 +581,8 @@ export component SamplerDeviceFace inherits Rectangle {
     in property <[SamplerZoneRow]> zones;
     callback zone-base-keys-changed(int, int);
     callback zone-add-clicked();
+    callback zone-duplicate-clicked();
+    callback zones-from-slices-clicked(int);
     callback zone-keys-changed(int, int, int);
     callback zone-root-changed(int, int);
     callback zone-remove-clicked(int);
@@ -706,7 +743,13 @@ export component SamplerDeviceFace inherits Rectangle {
                     options: ["Pitch", "Slice"];
                     selected-index <=> root.play-mode;
                     segment-width: 40px;
-                    tooltip: "Pitched plays the region transposed; Slice plays one slice per note at its own pitch";
+                    // A key cannot pick both a slice and a zone, so a zoned
+                    // patch stays pitched. One already in Slice mode (saved
+                    // since 0.1.5 with both) can still leave it.
+                    enabled: root.zones.length == 0 || root.play-mode == 1;
+                    tooltip: self.enabled
+                        ? "Pitched plays the region transposed; Slice plays one slice per note at its own pitch"
+                        : "A sampler with key zones plays pitched; remove its zones to slice it";
                     selected(i) => { root.play-mode-changed(i); }
                 }
                 SelectorBank {
@@ -1653,9 +1696,14 @@ export component SamplerDeviceFace inherits Rectangle {
             base-high: root.zone-base-high;
             zones: root.zones;
             selected: root.zone-selected;
+            sliced: root.play-mode == 1;
+            slice-count: root.slice-markers.length;
+            slice-from: root.slice-base-note;
             zone-selected(zone) => { root.zone-select(zone); }
             base-keys-changed(low, high) => { root.zone-base-keys-changed(low, high); }
             zone-add-clicked => { root.zone-add-clicked(); }
+            zone-duplicate-clicked => { root.zone-duplicate-clicked(); }
+            zones-from-slices-clicked(key) => { root.zones-from-slices-clicked(key); }
             zone-keys-changed(index, low, high) => { root.zone-keys-changed(index, low, high); }
             zone-root-changed(index, note) => { root.zone-root-changed(index, note); }
             zone-remove-clicked(index) => { root.zone-remove-clicked(index); }

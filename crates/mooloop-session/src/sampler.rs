@@ -17,7 +17,7 @@ use mooloop_core::sampler::stretch_pool_voices;
 use mooloop_core::GeneratorParams;
 use mooloop_dsp::sampler::ZoneAudio;
 use mooloop_dsp::{ChannelAudioSnapshot, SampleData, StretchPool};
-use mooloop_core::{KeyRange, SampleReference, SampleZone, SamplerState, ZoneRegion};
+use mooloop_core::{KeyRange, PlayMode, SampleReference, SampleZone, SamplerState, ZoneRegion};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -35,6 +35,33 @@ pub enum SliceAccept {
     Replace,
     /// Keep every marker, and add the detected ones that aren't beside one.
     Merge,
+}
+
+/// Whether `channel` plays slices: a sampler in Slice mode, where a key
+/// picks a slice of zone 1 and so cannot also pick a zone.
+pub fn in_slice_mode(channel: &ChannelState) -> bool {
+    channel.kind() == mooloop_core::DeviceKind::Sampler
+        && channel.sampler_params().play_mode == PlayMode::Slice
+}
+
+/// Whether `channel`'s slice markers can be edited and detected: slices and
+/// key zones never both apply (Adam, 2026-09-30), so a sampler with zones
+/// has none, unless it is already in Slice mode -- a song saved since 0.1.5
+/// with both, which plays its slices until it is edited out of Slice mode.
+pub fn slices_available(channel: &ChannelState) -> bool {
+    channel.zones.is_empty() || in_slice_mode(channel)
+}
+
+/// Whether a descriptor write of `value` to parameter `id` is refused on
+/// `channel`: Slice mode on a sampler with key zones, whatever writes it
+/// (the face, a MIDI mapping, a pad). Lanes and routes are held to the same
+/// rule by the sampler node itself.
+pub fn refuses_param(channel: &ChannelState, id: u32, value: f32) -> bool {
+    id == mooloop_core::generator::SAMPLER_PARAM_PLAY_MODE
+        && channel.kind() == mooloop_core::DeviceKind::Sampler
+        && !channel.zones.is_empty()
+        && PlayMode::from_index(value.round() as i32) == PlayMode::Slice
+        && !in_slice_mode(channel)
 }
 
 /// Source frames as fractions of the published buffer, for a preview.
@@ -672,10 +699,13 @@ pub enum RevertRefusal {
 }
 
 impl Session {
-    /// The slice map a marker edit acts on, plus the channel it belongs to.
+    /// The slice map a marker edit acts on, plus the channel it belongs to;
+    /// `None` where the selected channel's slices are not available
+    /// ([`slices_available`]).
     fn sliced_channel(&mut self) -> Option<(usize, &mut ChannelState)> {
         let selected = self.selected;
-        Some((selected, self.channels.get_mut(selected)?))
+        let channel = self.channels.get_mut(selected)?;
+        slices_available(channel).then_some((selected, channel))
     }
 
     /// Adds a marker at a normalized editor position.
@@ -801,7 +831,10 @@ impl Session {
     /// Runs on the calling thread: a two-bar break is a few milliseconds of
     /// arithmetic, and nothing here is near the audio thread.
     pub fn detect_slices(&self, settings: OnsetSettings) -> Option<Vec<u32>> {
-        let channel = self.channels.get(self.selected)?;
+        let channel = self
+            .channels
+            .get(self.selected)
+            .filter(|channel| slices_available(channel))?;
         let sample = channel.published_sample()?;
         let len = sample.frames.len();
         let params = channel.sampler_params();
@@ -1316,12 +1349,13 @@ impl Session {
     /// (MOO-14). It takes the keys [`keys_for_new_zone`] finds, rooted at its
     /// lowest key so that key plays the file at its own pitch; its buffer
     /// joins the zone table so an undo past its removal finds it again.
-    /// `false` for a channel that is not a sampler.
+    /// `false` for a channel that is not a sampler, or one in Slice mode,
+    /// where a key picks a slice and so cannot also pick a zone.
     pub fn add_zone(&mut self, channel: usize, path: PathBuf, sample: Arc<SampleData>) -> bool {
         let Some(state) = self.channels.get_mut(channel) else {
             return false;
         };
-        if state.kind() != mooloop_core::DeviceKind::Sampler {
+        if state.kind() != mooloop_core::DeviceKind::Sampler || in_slice_mode(state) {
             return false;
         }
         let (keys, split) = keys_for_new_zone(state.keys, &state.zones);
@@ -1467,6 +1501,233 @@ impl Session {
         let params = *params;
         self.mark_dirty();
         Some(RegionEdit::Params(params))
+    }
+}
+
+/// Why a zone could not be made from a file already on the sampler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZoneRefusal {
+    /// No such channel or zone, or the channel is not a sampler.
+    NoZone,
+    /// The patch is in Slice mode, where a key picks a slice, not a zone.
+    SliceMode,
+    /// Zones from slices needs a patch with no zones yet.
+    Zoned,
+    /// Zones from slices needs slice markers.
+    NoSlices,
+    /// Zone 1 plays no file a zone could name: a built-in or empty sample,
+    /// or a stretch commit whose render was never written to disk.
+    NoFile,
+    /// Every key is taken and the zone is one key wide.
+    NoFreeKey,
+}
+
+impl ZoneRefusal {
+    /// What the status bar says.
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::NoZone => "No zone to copy",
+            Self::SliceMode => "Slice mode plays slices: switch to Pitch to use zones",
+            Self::Zoned => "Zones from slices needs a sampler with no zones",
+            Self::NoSlices => "No slices to make zones from",
+            Self::NoFile => "Zone 1 has no file on disk to share",
+            Self::NoFreeKey => "No free key for the copy",
+        }
+    }
+}
+
+/// The lowest key above `from` that no zone plays, else the highest below
+/// it, else `None`.
+fn free_key_near(from: KeyRange, base: KeyRange, zones: &[ZoneState]) -> Option<u8> {
+    let taken = |key: u8| {
+        base.contains(key) || zones.iter().any(|zone| zone.zone.keys.contains(key))
+    };
+    (from.high.saturating_add(1)..=127)
+        .find(|key| !taken(*key))
+        .or_else(|| (0..from.low).rev().find(|key| !taken(*key)))
+}
+
+/// Zone 1's file and buffer, as an extra zone would share them: `None` for
+/// a built-in or empty sample, and for an unstored stretch commit, whose
+/// render plays from memory and has no file a zone could name.
+fn base_file(channel: &ChannelState) -> Option<(SampleReference, Arc<SampleData>)> {
+    if channel.committed_sample.is_some() {
+        return None;
+    }
+    let reference = sample_reference(channel);
+    matches!(reference, SampleReference::File { .. })
+        .then(|| Some((reference, channel.sample_data.clone()?)))
+        .flatten()
+}
+
+impl Session {
+    /// Set the play mode of `channel`'s sampler, returning the parameters
+    /// to send, or `None` when nothing changed. Slice is refused on a patch
+    /// with key zones ([`refuses_param`]).
+    pub fn set_play_mode(&mut self, channel: usize, mode: PlayMode) -> Option<SamplerParams> {
+        let state = self.channels.get_mut(channel)?;
+        let id = mooloop_core::generator::SAMPLER_PARAM_PLAY_MODE;
+        if refuses_param(state, id, mode.to_index() as f32) {
+            return None;
+        }
+        let params = state.sampler_params_mut()?;
+        if params.play_mode == mode {
+            return None;
+        }
+        params.play_mode = mode;
+        let params = *params;
+        self.mark_dirty();
+        Some(params)
+    }
+
+    /// Copy `zone` of `channel` (0 zone 1, `n` the extra zone `n - 1`) onto
+    /// the next free key: the same file, sharing its buffer, and the same
+    /// region. The copy is one key wide on the nearest key no zone plays,
+    /// above the original first, with its root moved as far as its key so it
+    /// plays what the original's lowest key does. With no key free it takes
+    /// the upper half of the original's range, which the original gives up,
+    /// with the original's root, so those keys sound as they did. Refused in
+    /// Slice mode. Returns the copy's zone number for the caller to select.
+    pub fn duplicate_zone(&mut self, channel: usize, zone: usize) -> Result<usize, ZoneRefusal> {
+        let state = self.channels.get_mut(channel).ok_or(ZoneRefusal::NoZone)?;
+        if state.kind() != mooloop_core::DeviceKind::Sampler {
+            return Err(ZoneRefusal::NoZone);
+        }
+        if in_slice_mode(state) {
+            return Err(ZoneRefusal::SliceMode);
+        }
+        let base = state.sampler_params();
+        let (original, sample) = match zone.checked_sub(1) {
+            None => {
+                let (reference, audio) = base_file(state).ok_or(ZoneRefusal::NoFile)?;
+                let copy = SampleZone {
+                    keys: state.keys,
+                    root_note: base.root_note,
+                    sample: reference,
+                    region: Some(ZoneRegion::of_base(&base)),
+                    ..SampleZone::default()
+                };
+                (copy, Some(audio))
+            }
+            Some(index) => {
+                let held = state.zones.get(index).ok_or(ZoneRefusal::NoZone)?;
+                let mut copy = held.zone.clone();
+                copy.region = Some(copy.region_or(&base));
+                (copy, held.sample.clone())
+            }
+        };
+        let from = original.keys;
+        let (keys, root_note) = match free_key_near(from, state.keys, &state.zones) {
+            Some(key) => {
+                let shift = i16::from(key) - i16::from(from.low);
+                let root = (i16::from(original.root_note) + shift).clamp(0, 127) as u8;
+                (KeyRange::new(key, key), root)
+            }
+            None if from.low < from.high => {
+                let middle = from.low + (from.high - from.low).div_ceil(2);
+                let kept = KeyRange::new(from.low, middle - 1);
+                match zone.checked_sub(1) {
+                    None => state.keys = kept,
+                    Some(index) => state.zones[index].zone.keys = kept,
+                }
+                (KeyRange::new(middle, from.high), original.root_note)
+            }
+            None => return Err(ZoneRefusal::NoFreeKey),
+        };
+        if let (SampleReference::File { path, .. }, Some(audio)) = (&original.sample, &sample) {
+            self.zone_audio.insert(path.clone(), audio.clone());
+        }
+        let state = &mut self.channels[channel];
+        state.zones.push(ZoneState {
+            zone: SampleZone {
+                keys,
+                root_note,
+                ..original
+            },
+            sample,
+        });
+        let copy = state.zones.len();
+        self.mark_dirty();
+        Ok(copy)
+    }
+
+    /// Turn `channel`'s slices into key zones on the file they cut: one
+    /// zone per slice, one key each, stepping up from `first_key`, each
+    /// rooted on its own key so every slice plays at its recorded pitch, and
+    /// the patch leaves Slice mode. Zone 1 becomes the first slice; the
+    /// others share its file and buffer. Each zone's region is its slice as
+    /// Slice mode plays it (inside zone 1's start and end), looping over
+    /// itself in the patch's loop mode. Live stretch, which Slice mode never
+    /// ran, is switched off, so no hit is stretched that was not. `first_key`
+    /// is lowered as far as it must be for the last slice to fit under the
+    /// top key. The slice map is kept, unused while there are zones. Returns
+    /// the parameters to send.
+    pub fn zones_from_slices(
+        &mut self,
+        channel: usize,
+        first_key: u8,
+    ) -> Result<SamplerParams, ZoneRefusal> {
+        let state = self.channels.get_mut(channel).ok_or(ZoneRefusal::NoZone)?;
+        if state.kind() != mooloop_core::DeviceKind::Sampler {
+            return Err(ZoneRefusal::NoZone);
+        }
+        if !state.zones.is_empty() {
+            return Err(ZoneRefusal::Zoned);
+        }
+        if state.slices.is_empty() {
+            return Err(ZoneRefusal::NoSlices);
+        }
+        let (reference, audio) = base_file(state).ok_or(ZoneRefusal::NoFile)?;
+        let base = state.sampler_params();
+        let len = audio.frames.len();
+        let (_, end) = mooloop_dsp::sampler::Sampler::resolve_playback_bounds(base, len, None);
+        let count = state.slices.len();
+        let first = first_key.min((128 - count) as u8);
+        let regions: Vec<ZoneRegion> = (0..count)
+            .filter_map(|index| state.slices.span(index, end))
+            .map(|span| {
+                let (from, to) =
+                    mooloop_dsp::sampler::Sampler::resolve_playback_bounds(base, len, Some(span));
+                let (from, to) = (from / len as f64, to / len as f64);
+                ZoneRegion {
+                    start: from as f32,
+                    end: to as f32,
+                    loop_start: from as f32,
+                    loop_end: to as f32,
+                    ..ZoneRegion::of_base(&base)
+                }
+            })
+            .collect();
+        let mut regions = regions.into_iter();
+        let first_region = regions.next().ok_or(ZoneRefusal::NoSlices)?;
+        let params = state.sampler_params_mut().ok_or(ZoneRefusal::NoZone)?;
+        first_region.store_in_base(params);
+        params.root_note = first;
+        params.play_mode = PlayMode::Pitched;
+        params.stretch_enabled = false;
+        let params = *params;
+        state.keys = KeyRange::new(first, first);
+        state.zones = regions
+            .enumerate()
+            .map(|(index, region)| {
+                let key = first + index as u8 + 1;
+                ZoneState {
+                    zone: SampleZone {
+                        keys: KeyRange::new(key, key),
+                        root_note: key,
+                        sample: reference.clone(),
+                        region: Some(region),
+                        ..SampleZone::default()
+                    },
+                    sample: Some(audio.clone()),
+                }
+            })
+            .collect();
+        if let SampleReference::File { path, .. } = reference {
+            self.zone_audio.insert(path, audio);
+        }
+        self.mark_dirty();
+        Ok(params)
     }
 }
 
@@ -2405,5 +2666,109 @@ mod zone_tests {
         );
         assert_eq!(session.channels[0].zones[0].path(), Some(saved.as_path()));
         assert!(Arc::ptr_eq(session.zone_audio.get(&saved).unwrap(), &zone));
+    }
+
+    /// **Slices and zones never both apply (MOO-464, Adam 2026-09-30).** A
+    /// zoned patch refuses Slice mode by every writer -- the face's verb and
+    /// a descriptor write, which is what a MIDI mapping or a pad sends -- and
+    /// its slices cannot be edited or detected. An unzoned patch slices; in
+    /// Slice mode nothing adds a zone.
+    #[test]
+    fn a_zoned_patch_refuses_slice_mode_and_a_sliced_one_refuses_zones() {
+        use mooloop_core::generator::SAMPLER_PARAM_PLAY_MODE;
+        let (base, zone) = (tone(261.63, 0.5, 1.0), tone(523.25, 0.25, 1.0));
+        let mut session = split_session(&base, &zone);
+        session.selected = 0;
+        assert_eq!(session.set_play_mode(0, PlayMode::Slice), None);
+        assert_eq!(session.channels[0].set_generator_param(SAMPLER_PARAM_PLAY_MODE, 1.0), Some(0.0));
+        assert_eq!(session.channels[0].sampler_params().play_mode, PlayMode::Pitched);
+        assert!(!slices_available(&session.channels[0]));
+        assert!(matches!(session.add_slice(0.5, false), SliceEdit::Ignored));
+        assert!(session.detect_slices(OnsetSettings::default()).is_none());
+
+        session.remove_zone(0, 0);
+        assert!(session.set_play_mode(0, PlayMode::Slice).is_some());
+        assert!(matches!(session.add_slice(0.5, false), SliceEdit::Changed(_)));
+        assert!(!session.add_zone(0, PathBuf::from("/nonexistent/moo-14/zone.wav"), zone));
+        assert_eq!(session.duplicate_zone(0, 0), Err(ZoneRefusal::SliceMode));
+    }
+
+    /// A song saved since 0.1.5 with both keeps Slice mode until it is
+    /// edited out of it, and then cannot go back.
+    #[test]
+    fn a_patch_saved_with_both_leaves_slice_mode_once() {
+        let (base, zone) = (tone(261.63, 0.5, 1.0), tone(523.25, 0.25, 1.0));
+        let mut song = split_song();
+        let state = song.channels[0].setup.sampler_state_mut().unwrap();
+        state.params.play_mode = PlayMode::Slice;
+        state.slices.add(1_000);
+        let mut session = Session::default();
+        session.admit_zone_audio(vec![(PathBuf::from("/nonexistent/moo-14/zone.wav"), zone)], true);
+        session.replace_project(&song, &[Some(base)]);
+        session.selected = 0;
+        assert!(in_slice_mode(&session.channels[0]));
+        assert!(slices_available(&session.channels[0]), "its slices are what it plays");
+        assert!(session.set_play_mode(0, PlayMode::Pitched).is_some());
+        assert_eq!(session.set_play_mode(0, PlayMode::Slice), None);
+    }
+
+    /// **DUPE (MOO-464).** A copy lands on the next free key above the
+    /// original, sharing its file and buffer and its region, rooted to play
+    /// what the original's key does. Zone 1's copy names zone 1's file.
+    #[test]
+    fn a_duplicate_takes_the_next_free_key_and_shares_the_buffer() {
+        let (base, zone) = (tone(261.63, 0.5, 1.0), tone(523.25, 0.25, 1.0));
+        let mut session = split_session(&base, &zone);
+        session.set_base_keys(0, 48, 48);
+        session.set_zone_keys(0, 0, 60, 60);
+        session.edit_zone_region(0, 1, |region| region.start = 0.25);
+
+        assert_eq!(session.duplicate_zone(0, 1), Ok(2));
+        let copy = &session.channels[0].zones[1];
+        assert_eq!(copy.zone.keys, KeyRange::new(61, 61));
+        assert_eq!(copy.zone.root_note, 73);
+        assert_eq!(copy.zone.region.unwrap().start, 0.25);
+        assert_eq!(copy.path(), session.channels[0].zones[0].path());
+        assert!(Arc::ptr_eq(copy.sample.as_ref().unwrap(), &zone));
+
+        assert_eq!(session.duplicate_zone(0, 0), Ok(3));
+        let copy = &session.channels[0].zones[2];
+        assert_eq!(copy.zone.keys, KeyRange::new(49, 49));
+        assert_eq!(copy.zone.root_note, 61);
+        assert_eq!(copy.path(), session.channels[0].sample_path.as_deref());
+        assert!(Arc::ptr_eq(copy.sample.as_ref().unwrap(), &base));
+        assert!(Arc::ptr_eq(session.zone_audio.get(copy.path().unwrap()).unwrap(), &base));
+    }
+
+    /// With every key taken, a copy splits its original's range and keeps
+    /// its root, so the keys it takes sound as they did.
+    #[test]
+    fn a_duplicate_with_no_free_key_splits_its_original() {
+        let (base, zone) = (tone(261.63, 0.5, 1.0), tone(523.25, 0.25, 1.0));
+        let mut session = split_session(&base, &zone);
+        session.set_base_keys(0, 0, 59);
+        session.set_zone_keys(0, 0, 60, 127);
+        assert_eq!(session.duplicate_zone(0, 1), Ok(2));
+        assert_eq!(session.channels[0].zones[0].zone.keys, KeyRange::new(60, 93));
+        assert_eq!(session.channels[0].zones[1].zone.keys, KeyRange::new(94, 127));
+        assert_eq!(session.channels[0].zones[1].zone.root_note, 72);
+        // A one-key zone with every key taken has nowhere to go.
+        session.set_zone_keys(0, 0, 60, 60);
+        session.set_zone_keys(0, 1, 61, 127);
+        assert_eq!(session.duplicate_zone(0, 1), Err(ZoneRefusal::NoFreeKey));
+    }
+
+    /// Zones from slices refuses what it cannot do: a zoned patch, a patch
+    /// without markers, and a zone 1 with no file.
+    #[test]
+    fn zones_from_slices_needs_an_unzoned_sliced_file() {
+        let (base, zone) = (tone(261.63, 0.5, 1.0), tone(523.25, 0.25, 1.0));
+        let mut session = split_session(&base, &zone);
+        assert_eq!(session.zones_from_slices(0, 36), Err(ZoneRefusal::Zoned));
+        session.remove_zone(0, 0);
+        assert_eq!(session.zones_from_slices(0, 36), Err(ZoneRefusal::NoSlices));
+        session.channels[0].slices.add(100);
+        session.channels[0].sample_path = None;
+        assert_eq!(session.zones_from_slices(0, 36), Err(ZoneRefusal::NoFile));
     }
 }

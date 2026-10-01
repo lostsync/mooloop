@@ -511,7 +511,7 @@ pub fn resolve_document(path: &Path) -> Result<ResolvedDocument, DocumentProblem
         | LoadedDocument::PluginEffect { .. } => Vec::new(),
     };
     let mut zone_warnings = Vec::new();
-    let zone_audio = crate::sample::decode_zone_files(samplers, &mut zone_warnings);
+    let zone_audio = crate::sample::decode_zone_files(samplers, &samples, &mut zone_warnings);
     report.warnings.extend(zone_warnings);
     Ok(ResolvedDocument {
         report,

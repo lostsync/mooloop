@@ -317,9 +317,23 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   and play mode are shared by every zone. A new zone plays its whole file. A
   lane or modulation route on start, end, loop or tune moves every zone by
   the same amount from its own setting. Slices and the stretch commit belong
-  to zone 1, and in Slice mode the zones are ignored and the strip is
-  hidden. A zone saved by 0.1.5 keeps the shared region it played, as its
-  own. Zones embed with the song like its sample. A copied sampler
+  to zone 1. Slices and zones never both apply (MOO-464): a sampler with
+  zones is greyed out of Slice mode (a MIDI mapping or lane on Play mode
+  cannot put it there either), its markers and DETECT are unavailable, and
+  in Slice mode + ZONE and DUPE are greyed out. A song saved since 0.1.5
+  with both plays its slices, its zones unheard, until it is switched to
+  Pitch. Many zones can share one file (MOO-464): DUPE copies the selected
+  zone, its file and region, onto the next free key (rooted to play what the
+  original's lowest key did; with no key free it takes the upper half of the
+  original's range), and selects it. On an unzoned sampler with slice
+  markers, ZONES FROM SLICES makes one zone per slice, one key each from the
+  FROM key (the slice base note to start), each rooted on its own key so
+  every hit plays at its recorded pitch, with zone 1 the first slice; the
+  sampler leaves Slice mode and live stretch is switched off. Each is one
+  undo step, and no file is edited. Zones on one file share its decoded
+  audio, in the session and on load. A zone saved by 0.1.5 keeps the shared
+  region it played, as its own. Zones embed with the song like its sample,
+  and a file several zones share is embedded once. A copied sampler
   channel carries its zones' audio, so it pastes with every zone playing
   into a song opened or created since the copy (MOO-242). A zone whose file is
   missing says so on the page and plays nothing. Zones store a velocity range

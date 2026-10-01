@@ -12,11 +12,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Decode every key-zone file the given samplers name (MOO-14), once per
-/// path. Runs on a document worker, beside the base samples' decode. A file
+/// path. Runs on a document worker, beside the base samples' decode.
+/// `bases` is that decode, by channel: a zone that names its own sampler's
+/// file shares that buffer rather than decoding the file again. A file
 /// that is missing was already warned about by the load; one that fails to
 /// decode is warned about here, and neither is returned.
 pub fn decode_zone_files<'a>(
     samplers: impl IntoIterator<Item = (usize, &'a mooloop_core::SamplerState)>,
+    bases: &[Option<Arc<SampleData>>],
     warnings: &mut Vec<mooloop_project::AssetWarning>,
 ) -> Vec<(PathBuf, Arc<SampleData>)> {
     let mut decoded: Vec<(PathBuf, Arc<SampleData>)> = Vec::new();
@@ -25,7 +28,20 @@ pub fn decode_zone_files<'a>(
             let mooloop_core::SampleReference::File { path, .. } = &zone.sample else {
                 continue;
             };
-            if !path.is_file() || decoded.iter().any(|(held, _)| held == path) {
+            if decoded.iter().any(|(held, _)| held == path) {
+                continue;
+            }
+            let own = match &state.sample {
+                mooloop_core::SampleReference::File { path: base, .. } if base == path => {
+                    bases.get(channel).cloned().flatten()
+                }
+                _ => None,
+            };
+            if let Some(sample) = own {
+                decoded.push((path.clone(), sample));
+                continue;
+            }
+            if !path.is_file() {
                 continue;
             }
             match audio_file::decode(path) {
@@ -315,7 +331,7 @@ pub fn audition_preset(path: &Path, sample_rate: u32) -> Result<SampleInspection
     // render refuses a song whose zone audio it was not given.
     let zones = match &channel.setup.source {
         ChannelSource::Sampler(state) => {
-            let decoded = decode_zone_files([(0, state)], &mut Vec::new());
+            let decoded = decode_zone_files([(0, state)], &[], &mut Vec::new());
             vec![zone_buffers(state, &decoded)]
         }
         _ => Vec::new(),

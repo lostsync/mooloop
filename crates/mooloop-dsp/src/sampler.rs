@@ -819,6 +819,7 @@ impl Sampler {
     fn set_resolved(&mut self, mut params: SamplerParams) {
         params.polyphony = params.polyphony.clamp(1, MAX_SAMPLER_VOICES);
         params.choke_group = params.choke_group.min(MAX_CHOKE_GROUP);
+        params.play_mode = self.drivable_play_mode(params.play_mode);
         self.params = params;
         let trim = clamp_output_gain(params.output_gain);
         if self.voices.iter().any(|voice| voice.active) {
@@ -844,6 +845,24 @@ impl Sampler {
                 voice.env.fade_within(fade);
                 voice.filter_env.fade_within(fade);
             }
+        }
+    }
+
+    /// The play mode `resolved` may play: itself on a patch with no extra
+    /// zones, and the knob's on a zoned one, so no lane, route or mapping
+    /// drives a zoned patch into Slice mode, where a key would have to pick
+    /// a slice and a zone at once. A zoned patch whose knob is Slice -- a
+    /// song saved since 0.1.5 with both -- plays its slices as it always
+    /// did, its zones unheard.
+    fn drivable_play_mode(&self, resolved: PlayMode) -> PlayMode {
+        let zoned = self
+            .last_audio
+            .as_ref()
+            .is_some_and(|audio| !audio.zones.is_empty());
+        if zoned && resolved == PlayMode::Slice {
+            self.knob.play_mode
+        } else {
+            resolved
         }
     }
 
@@ -1113,6 +1132,8 @@ impl Sampler {
                 (_, None) => return None,
                 (_, Some(fresh)) => {
                     self.retired.snapshot = self.last_audio.replace(fresh);
+                    // Zones arriving under a driven Slice take it back.
+                    self.params.play_mode = self.drivable_play_mode(self.params.play_mode);
                 }
             }
         }
@@ -1248,6 +1269,15 @@ impl Sampler {
     }
 
     fn trigger(&mut self, event_id: u64, note: u8, velocity: u8) {
+        // One load, every field. The buffer and the map that indexes it are
+        // one fact; reading them separately let a note-on land between two
+        // stores and play new audio against old markers. Read first, because
+        // a snapshot that brings zones can change the play mode everything
+        // below asks about.
+        //
+        // Every `Arc` this function leaves behind has another holder --
+        // `last_audio`, and the voice -- so none of their drops can free.
+        let audio = self.current_audio();
         // One voice, pitched: the held stack decides what an overlap means
         // (MOO-45). Slot 0 is the sounding voice, because a single voice
         // always starts there and a steal moves the old one elsewhere.
@@ -1261,13 +1291,7 @@ impl Sampler {
             });
         }
         let sounding = mono && self.voices[0].active;
-        // One load, every field. The buffer and the map that indexes it are
-        // one fact; reading them separately let a note-on land between two
-        // stores and play new audio against old markers.
-        //
-        // Every `Arc` this function leaves behind has another holder --
-        // `last_audio`, and the voice -- so none of their drops can free.
-        let Some(audio) = self.current_audio() else {
+        let Some(audio) = audio else {
             return;
         };
         // Which zone's buffer the note plays, and the key that plays it at
@@ -5215,5 +5239,42 @@ mod tests {
             render_note(&mut sampler, 48_000, note, 16);
             assert_eq!(sampler.active_voice_count(), 1, "key {note}");
         }
+    }
+
+    /// **No lane drives a zoned patch into Slice mode (MOO-464).** A lane
+    /// on PLAY MODE slices an unzoned patch as it always did; on a zoned
+    /// one the knob's Pitched plays, so the zone above the split still
+    /// sounds. A zoned patch whose knob is Slice -- saved since 0.1.5 with
+    /// both -- plays its slices.
+    #[test]
+    fn a_lane_cannot_slice_a_zoned_patch() {
+        const LEN: usize = 4_800;
+        let slice = [Event::ParamValue { id: mooloop_core::generator::SAMPLER_PARAM_PLAY_MODE, value: 1.0 }];
+        let mut slices = SliceMap::new();
+        slices.add(0);
+        let with_slices = |zones: Vec<ZoneAudio>| {
+            ChannelAudioSnapshot::for_sampler(Some(ramp(LEN)), &slices, KeyRange::new(0, 59), zones)
+        };
+        let zone = ZoneAudio {
+            keys: KeyRange::new(60, 127),
+            root_note: 60,
+            sample: Some(ramp(LEN)),
+            region: Some(ZoneRegion::default()),
+        };
+
+        let mut unzoned = Sampler::new(slot(with_slices(Vec::new())), zone_params(), 48_000);
+        strike(&mut unzoned, 36, 64, &slice);
+        assert_eq!(unzoned.params().play_mode, PlayMode::Slice);
+
+        let mut zoned = Sampler::new(slot(with_slices(vec![zone.clone()])), zone_params(), 48_000);
+        strike(&mut zoned, 60, 64, &slice);
+        assert_eq!(zoned.params().play_mode, PlayMode::Pitched);
+        assert_eq!(zoned.active_voice_count(), 1, "the zone above the split still plays");
+
+        let legacy = SamplerParams { play_mode: PlayMode::Slice, ..zone_params() };
+        let mut legacy = Sampler::new(slot(with_slices(vec![zone])), legacy, 48_000);
+        strike(&mut legacy, 36, 64, &[]);
+        assert_eq!(legacy.params().play_mode, PlayMode::Slice);
+        assert_eq!(legacy.active_voice_count(), 1, "the first slice plays");
     }
 }
