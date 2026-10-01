@@ -17,7 +17,7 @@ use mooloop_core::sampler::stretch_pool_voices;
 use mooloop_core::GeneratorParams;
 use mooloop_dsp::sampler::ZoneAudio;
 use mooloop_dsp::{ChannelAudioSnapshot, SampleData, StretchPool};
-use mooloop_core::{KeyRange, SampleReference, SampleZone, SamplerState};
+use mooloop_core::{KeyRange, SampleReference, SampleZone, SamplerState, ZoneRegion};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -482,6 +482,16 @@ impl SampleMarker {
             Self::LoopEnd => params.loop_end = value,
         }
     }
+
+    /// [`Self::set`] on a zone's region.
+    pub fn set_region(self, region: &mut ZoneRegion, value: f32) {
+        match self {
+            Self::Start => region.start = value,
+            Self::End => region.end = value,
+            Self::LoopStart => region.loop_start = value,
+            Self::LoopEnd => region.loop_end = value,
+        }
+    }
 }
 
 /// The nearest zero crossing to a marker, within its neighbours.
@@ -536,7 +546,8 @@ pub struct SnapAll {
     pub resolved: Vec<(SampleMarker, f32)>,
     pub moved: usize,
     pub searched: usize,
-    pub command: EngineCommand,
+    /// What the snap changed, for the caller to send on.
+    pub edit: RegionEdit,
 }
 
 /// A stretch that was baked into the audio.
@@ -789,37 +800,39 @@ impl Session {
         ))
     }
 
-    /// Snaps all four markers to zero crossings at once.
-    pub fn snap_all_markers(&mut self) -> Option<SnapAll> {
+    /// Snaps all four of `zone`'s markers (0 the base zone, as
+    /// [`zone_view`]) to zero crossings in its own sample at once.
+    pub fn snap_all_markers(&mut self, zone: usize) -> Option<SnapAll> {
         let selected = self.selected;
-        let channel = self.channels.get_mut(selected)?;
-        let sample = channel.published_sample().cloned()?;
+        let channel = self.channels.get(selected)?;
+        let view = zone_view(channel, zone);
+        let sample = view.sample?;
+        let mut params = view.params;
         let mut resolved = Vec::with_capacity(SampleMarker::ALL.len());
         let (mut moved, mut searched) = (0usize, 0usize);
         for marker in SampleMarker::ALL {
-            let requested = marker.get(&channel.sampler_params());
-            let Some((value, result)) = snap_marker(&channel.sampler_params(), &sample, marker, requested)
-            else {
+            let requested = marker.get(&params);
+            let Some((value, result)) = snap_marker(&params, &sample, marker, requested) else {
                 continue;
             };
             searched += 1;
             if result.moved() {
                 moved += 1;
             }
-            if let Some(params) = channel.sampler_params_mut() {
-                marker.set(params, value);
-            }
+            marker.set(&mut params, value);
             resolved.push((marker, value));
         }
-        let params = channel.sampler_params();
+        let snapped = ZoneRegion::of_base(&params);
+        // An unchanged region is still an answer: the status bar reports
+        // what was searched.
+        let edit = self
+            .edit_zone_region(selected, view.zone, |region| *region = snapped)
+            .unwrap_or(RegionEdit::Unchanged);
         Some(SnapAll {
             resolved,
             moved,
             searched,
-            command: EngineCommand::SetChannelSamplerParams {
-                channel: selected as u8,
-                params,
-            },
+            edit,
         })
     }
 
@@ -1193,6 +1206,131 @@ impl Session {
 
     fn zone_mut(&mut self, channel: usize, index: usize) -> Option<&mut ZoneState> {
         self.channels.get_mut(channel)?.zones.get_mut(index)
+    }
+
+    /// Edit `zone`'s region on `channel` (0 the base zone, `n` the extra
+    /// zone `n - 1`): the knob edit of every SAMPLE page control that
+    /// belongs to a zone (MOO-463). The base zone's region is its
+    /// parameters, so its edit is a [`RegionEdit::Params`] for the caller to
+    /// send; an extra zone's lives in the zone, so its edit is a
+    /// [`RegionEdit::Zone`] for the caller to republish the channel's audio.
+    /// `None` for a zone or channel that is not there, or a sampler that is
+    /// not one.
+    pub fn edit_zone_region(
+        &mut self,
+        channel: usize,
+        zone: usize,
+        edit: impl FnOnce(&mut ZoneRegion),
+    ) -> Option<RegionEdit> {
+        let state = self.channels.get_mut(channel)?;
+        if state.kind() != mooloop_core::DeviceKind::Sampler {
+            return None;
+        }
+        let base = state.sampler_params();
+        let changed = if zone == 0 {
+            let was = ZoneRegion::of_base(&base);
+            let mut region = was;
+            edit(&mut region);
+            if region == was {
+                return Some(RegionEdit::Unchanged);
+            }
+            let params = state.sampler_params_mut()?;
+            region.store_in_base(params);
+            RegionEdit::Params(*params)
+        } else {
+            let zone = &mut state.zones.get_mut(zone - 1)?.zone;
+            let was = zone.region_or(&base);
+            let region = zone.region_mut(&base);
+            edit(region);
+            if *region == was {
+                return Some(RegionEdit::Unchanged);
+            }
+            RegionEdit::Zone
+        };
+        self.mark_dirty();
+        Some(changed)
+    }
+
+    /// Set `zone`'s root key (0 the base zone, whose root is a parameter).
+    pub fn set_zone_root_at(&mut self, channel: usize, zone: usize, root: u8) -> Option<RegionEdit> {
+        if zone > 0 {
+            return self
+                .set_zone_root(channel, zone - 1, root)
+                .then_some(RegionEdit::Zone)
+                .or(Some(RegionEdit::Unchanged));
+        }
+        let params = self.channels.get_mut(channel)?.sampler_params_mut()?;
+        let root = root.min(127);
+        if params.root_note == root {
+            return Some(RegionEdit::Unchanged);
+        }
+        params.root_note = root;
+        let params = *params;
+        self.mark_dirty();
+        Some(RegionEdit::Params(params))
+    }
+}
+
+/// What a zone edit changed, and so what the caller sends on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RegionEdit {
+    /// Nothing.
+    Unchanged,
+    /// The base zone's region, which is the sampler's parameters: send them.
+    Params(SamplerParams),
+    /// An extra zone: republish the channel's audio, which carries it.
+    Zone,
+}
+
+/// One zone as the SAMPLE page shows and edits it (MOO-463): the
+/// parameters with the zone's region in place, its sample, its root, and
+/// the slice map when it is the base zone's.
+pub struct ZoneView<'a> {
+    /// The zone shown: the one asked for, or 0 when that is not there.
+    pub zone: usize,
+    pub params: SamplerParams,
+    pub sample: Option<Arc<SampleData>>,
+    pub root_note: u8,
+    pub slices: Option<&'a SliceMap>,
+    /// The file the zone plays, for an extra zone; the base zone's name is
+    /// the channel's.
+    pub path: Option<&'a Path>,
+}
+
+/// The zone `zone` of `channel` (0 the base zone, `n` the extra zone
+/// `n - 1`), falling back to the base zone for a zone that is not there.
+pub fn zone_view(channel: &ChannelState, zone: usize) -> ZoneView<'_> {
+    let base = channel.sampler_params();
+    match zone.checked_sub(1).and_then(|index| channel.zones.get(index)) {
+        Some(state) => ZoneView {
+            zone,
+            params: state.zone.region_or(&base).apply(base, &base),
+            sample: state.sample.clone(),
+            root_note: state.zone.root_note,
+            slices: None,
+            path: state.path(),
+        },
+        None => ZoneView {
+            zone: 0,
+            params: base,
+            sample: channel.published_sample().cloned(),
+            root_note: base.root_note,
+            slices: Some(&channel.slices),
+            path: None,
+        },
+    }
+}
+
+/// The zone a key plays on `channel`, numbered as [`zone_view`] numbers
+/// them, for FOLLOW: `None` for a key no zone holds, or in Slice mode,
+/// where a key picks a slice of the base zone.
+pub fn zone_for_key(channel: &ChannelState, note: u8) -> Option<usize> {
+    if channel.sampler_params().play_mode == mooloop_core::PlayMode::Slice {
+        return Some(0);
+    }
+    match mooloop_core::zone_for_note(note, channel.keys, channel.zones.iter().map(|zone| zone.zone.keys))? {
+        mooloop_core::ZoneChoice::Base => Some(0),
+        mooloop_core::ZoneChoice::Extra(index) => Some(index + 1),
     }
 }
 
@@ -1887,6 +2025,181 @@ mod zone_tests {
         };
         assert!(loudest(0, half / 2) > 0.1, "the base zone is silent");
         assert!(loudest(half, half + half / 2) > 0.05, "the upper zone is silent");
+    }
+
+    /// A file of one-second steps, each at its own level, so where a voice
+    /// reads is what it plays.
+    fn steps(levels: &[f32]) -> Arc<SampleData> {
+        Arc::new(SampleData {
+            frames: levels
+                .iter()
+                .flat_map(|level| std::iter::repeat_n([*level, *level], RATE as usize))
+                .collect(),
+            sample_rate: RATE,
+            root_note: 60,
+        })
+    }
+
+    /// **Adam's case (MOO-463): three chords cut from two files, in one
+    /// sampler.** File A holds three one-second chords and file B two. Zone
+    /// 1 is A's first chord, zone 2 B's second, zone 3 A's third, each set
+    /// with the SAMPLE page's own verbs. Each key plays its own region and
+    /// nothing else, in the export and in playback alike.
+    #[test]
+    fn three_chords_cut_from_two_files_each_play_their_own_region() {
+        use mooloop_engine::{
+            ExportFormat, ExportProgress, ExportSpec, RenderJob, RenderScope, WavEncoding,
+        };
+        let (a, b) = (steps(&[0.2, 0.4, 0.6]), steps(&[0.3, 0.7]));
+        let (a_path, b_path) = (PathBuf::from("/riffs/a.wav"), PathBuf::from("/riffs/b.wav"));
+        let mut song = split_song();
+        let state = song.channels[0].setup.sampler_state_mut().unwrap();
+        state.sample = SampleReference::File { path: a_path.clone(), embedded: false };
+        state.keys = KeyRange::FULL;
+        state.zones.clear();
+        state.params.root_note = 48;
+        state.params.release = 0.005;
+        let step = mooloop_core::TICKS_PER_STEP;
+        song.channels[0].notes[0] = [48, 60, 72]
+            .iter()
+            .enumerate()
+            .map(|(index, note)| NoteEvent::new(index as u32 + 1, index as u32 * 8 * step, 4 * step, *note, 127))
+            .collect();
+        song.pattern_lengths = vec![32];
+        let mut session = Session::default();
+        session.replace_project(&song, &[Some(a.clone())]);
+
+        assert!(session.add_zone(0, b_path, b));
+        assert!(session.add_zone(0, a_path, a.clone()));
+        session.set_base_keys(0, 0, 59);
+        session.set_zone_keys(0, 0, 60, 71);
+        session.set_zone_keys(0, 1, 72, 127);
+        session.set_zone_root(0, 0, 60);
+        session.set_zone_root(0, 1, 72);
+        let third = 1.0 / 3.0;
+        let cut = |session: &mut Session, zone, start: f32, end: f32| {
+            session.edit_zone_region(0, zone, |region| {
+                region.start = start;
+                region.end = end;
+            })
+        };
+        assert!(matches!(cut(&mut session, 0, 0.0, third), Some(RegionEdit::Params(_))));
+        assert_eq!(cut(&mut session, 1, 0.5, 1.0), Some(RegionEdit::Zone));
+        assert_eq!(cut(&mut session, 2, 2.0 * third, 1.0), Some(RegionEdit::Zone));
+        assert_eq!(zone_view(&session.channels[0], 2).params.start, 2.0 * third);
+        assert_eq!(zone_view(&session.channels[0], 0).params.end, third);
+
+        let project = session.project_snapshot(120, 0);
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("chords.wav");
+        let request = crate::document::ExportRequest {
+            project: project.clone(),
+            samples: session.sample_snapshots(),
+            zones: session.zone_sample_snapshots(),
+            job: RenderJob::single(&ExportSpec {
+                path: path.clone(),
+                scope: RenderScope::Pattern { index: 0 },
+                tail_seconds: 0.0,
+                format: ExportFormat::Wav(WavEncoding::Float32),
+            }),
+        };
+        let result = crate::document::run_export(
+            request,
+            RATE,
+            &ExportProgress::new(),
+            std::collections::BTreeMap::new(),
+        );
+        assert!(matches!(result, crate::document::DocumentResult::Exported { .. }));
+        let exported: Vec<f32> = hound::WavReader::open(&path)
+            .unwrap()
+            .samples::<f32>()
+            .map(Result::unwrap)
+            .step_by(2)
+            .collect();
+        let played: Vec<f32> = mooloop_engine::live_check::play_audio_through_executor(
+            &project,
+            vec![channel_audio(&session.channels[0])],
+            RATE,
+            3 * RATE as usize,
+            256,
+        )
+        .into_iter()
+        .step_by(2)
+        .collect();
+
+        // Each note lasts half a second, at its root, from its region's
+        // start: its middle is that region's level and nothing else's.
+        // Measured against the first note, since the channel's pan and
+        // trim scale them all alike.
+        for render in [&exported, &played] {
+            let window = |note: usize| {
+                let start = note * RATE as usize + RATE as usize / 10;
+                &render[start..start + RATE as usize / 4]
+            };
+            let level = |note: usize| {
+                let w = window(note);
+                let (low, high) = w.iter().fold((f32::MAX, f32::MIN), |(l, h), v| (l.min(*v), h.max(*v)));
+                assert!(high - low < 1e-4, "note {note} reads more than one chord: {low}..{high}");
+                high
+            };
+            let unit = level(0) / 0.2;
+            assert!(unit > 0.1, "the first chord is silent");
+            assert!((level(1) / unit - 0.7).abs() < 1e-3, "zone 2 played {}", level(1) / unit);
+            assert!((level(2) / unit - 0.6).abs() < 1e-3, "zone 3 played {}", level(2) / unit);
+        }
+    }
+
+    /// **Undo, a copy and a reinstall keep every zone's region**: the
+    /// project snapshot an undo restores carries it, and the audio the
+    /// install builds from that snapshot plays it.
+    #[test]
+    fn undo_and_reinstall_keep_each_zones_region() {
+        let (base, zone) = (tone(261.63, 0.5, 1.0), tone(523.25, 0.25, 1.0));
+        let mut session = split_session(&base, &zone);
+        let before = session.project_snapshot(120, 0);
+        session.edit_zone_region(0, 1, |region| region.start = 0.5);
+        let edited = session.project_snapshot(120, 0);
+        let region = |project: &Project| project.channels[0].setup.sampler_state().unwrap().zones[0].region;
+        assert_eq!(region(&edited).unwrap().start, 0.5);
+        // Undo.
+        session.replace_project(&before, &[Some(base.clone())]);
+        assert_eq!(session.channels[0].zones[0].zone.region, region(&before));
+        // Redo, and the install's audio carries the region.
+        session.replace_project(&edited, &[Some(base.clone())]);
+        let state = edited.channels[0].setup.sampler_state().unwrap();
+        let audio = session.sampler_install_audio(Some(base.clone()), state);
+        assert_eq!(audio.zones[0].region.unwrap().start, 0.5);
+        // And a copied channel carries it.
+        let copy = session.channel_clipboard(0, 120, 0).expect("a channel to copy");
+        assert_eq!(copy.channel.setup.sampler_state().unwrap().zones[0].region.unwrap().start, 0.5);
+    }
+
+    /// An edit to an extra zone moves that zone alone, and zone 1's edit is
+    /// the sampler's parameters; FOLLOW's lookup numbers the zones as the
+    /// strip does.
+    #[test]
+    fn a_zone_edit_moves_only_its_zone() {
+        let (base, zone) = (tone(261.63, 0.5, 1.0), tone(523.25, 0.25, 1.0));
+        let mut session = split_session(&base, &zone);
+        let params = session.channels[0].sampler_params();
+        assert_eq!(
+            session.edit_zone_region(0, 1, |region| region.tune_semitones = 7.0),
+            Some(RegionEdit::Zone)
+        );
+        assert_eq!(session.channels[0].sampler_params(), params, "zone 2's tune moved the sampler");
+        let Some(RegionEdit::Params(sent)) =
+            session.edit_zone_region(0, 0, |region| region.level_db = -6.0)
+        else {
+            panic!("zone 1's edit is the sampler's parameters");
+        };
+        assert_eq!(sent.zone_level_db, -6.0);
+        assert_eq!(session.channels[0].zones[0].zone.region.unwrap().level_db, 0.0);
+        assert_eq!(session.edit_zone_region(0, 1, |_| {}), Some(RegionEdit::Unchanged));
+        assert_eq!(session.edit_zone_region(0, 9, |_| {}), None);
+        assert_eq!(zone_for_key(&session.channels[0], 40), Some(0));
+        assert_eq!(zone_for_key(&session.channels[0], 90), Some(1));
+        assert_eq!(zone_view(&session.channels[0], 1).root_note, 72);
+        assert_eq!(zone_view(&session.channels[0], 5).zone, 0, "a zone not there shows zone 1");
     }
 
     /// A save's zone paths come back to the session, and the table learns
