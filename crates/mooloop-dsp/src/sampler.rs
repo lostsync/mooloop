@@ -4979,6 +4979,38 @@ mod tests {
         assert!((sampler.voices[0].play_pos / LEN as f64 - 0.2).abs() < 1e-3);
     }
 
+    /// **A lane cannot push a zone out of its own sample.** Lanes move a
+    /// zone's start and loop start past its end and its loop end below its
+    /// start; the voice still reads only inside the buffer, start before
+    /// end and the loop inside the region, and stays finite.
+    #[test]
+    fn a_lane_that_overshoots_a_zone_stays_inside_its_sample() {
+        const LEN: usize = 4_800;
+        let region = ZoneRegion {
+            start: 0.6,
+            end: 0.9,
+            loop_mode: LoopMode::Forward,
+            loop_start: 0.7,
+            loop_end: 0.85,
+            ..ZoneRegion::default()
+        };
+        let lanes = [
+            Event::ParamValue { id: mooloop_core::generator::SAMPLER_PARAM_START, value: 0.5 },
+            Event::ParamValue { id: mooloop_core::generator::SAMPLER_PARAM_LOOP_START, value: 0.4 },
+            Event::ParamValue { id: mooloop_core::generator::SAMPLER_PARAM_LOOP_END, value: 0.3 },
+        ];
+        let mut sampler = Sampler::new(slot(region_audio(LEN, Some(region))), zone_params(), 48_000);
+        let out = strike(&mut sampler, 60, 2 * LEN, &lanes);
+        assert!(out.l.iter().chain(&out.r).all(|value| value.is_finite()));
+        for voice in sampler.voices.iter().filter(|voice| voice.active) {
+            assert!((0.0..=LEN as f64).contains(&voice.play_pos), "{}", voice.play_pos);
+        }
+        for (zone, at) in sampler.voice_positions().iter().filter(|p| !p.is_nan()).map(|p| decode_playhead(*p)) {
+            assert_eq!(zone, 1);
+            assert!((0.0..=1.0).contains(&at));
+        }
+    }
+
     /// **A zone saved before regions sounds as it did.** One that plays
     /// the base zone's region (`None`, the old behaviour) and one given a
     /// copy of it on load render bit for bit alike, under a lane too.
