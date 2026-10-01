@@ -340,7 +340,11 @@ fn a_channel_added_after_a_removal_plays_in_the_vacated_seat() {
     let mut incoming = project.clone();
     incoming.remove_channel(0).unwrap();
     let departed = live.strip_identity(0);
-    let _ = remove(&mut live, 0, &incoming);
+    // Held until the comparison: freed, the departed strip's address is the
+    // allocator's to hand straight to the arriving one, and the identity
+    // check would compare addresses rather than strips.
+    let removal = remove(&mut live, 0, &incoming);
+    assert!(removal.carries_departed());
 
     let seat = live.strip_count();
     let storage = RenderState::build_channel(live.audio_bank()[seat].clone(), DeviceKind::PolySynth, SAMPLE_RATE);
@@ -350,6 +354,7 @@ fn a_channel_added_after_a_removal_plays_in_the_vacated_seat() {
     assert_eq!(live.strip_count(), seat + 1);
     assert_ne!(live.strip_identity(seat), departed);
     assert_eq!(live.channel_source(seat).kind(), DeviceKind::PolySynth);
+    drop(removal);
 }
 
 
