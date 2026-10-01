@@ -24,7 +24,7 @@ use std::sync::Arc;
 use mooloop_engine::StructuralCommand;
 use mooloop_core::{
     EngineCommand, NoteEvent, NoteId, SampleCommit, SamplerParams, SliceMap, SliceMarker,
-    StretchMode, MAX_PATTERN_STEPS, MAX_SLICES, TICKS_PER_BAR, TICKS_PER_STEP,
+    MAX_PATTERN_STEPS, MAX_SLICES, TICKS_PER_BAR, TICKS_PER_STEP,
     MAX_STRETCH_BARS, MAX_STRETCH_RATIO, MIN_STRETCH_BARS, MIN_STRETCH_RATIO,
 };
 
@@ -123,42 +123,120 @@ pub fn slice_fractions(channel: &ChannelState) -> Vec<f32> {
         .collect()
 }
 
-/// Whether a committed render no longer matches the parameters it was baked
-/// from, so the editor's stale badge should show.
+/// Whether the editor's stale badge shows for `channel`, whose commit is
+/// `commit`: committing again would stretch the committed audio, because
+/// the tempo, the fitted span (a marker the loop snaps to, say) or the free
+/// ratio has moved since. A change of stretch mode or grain alone is not
+/// stale: the audio is already baked, and only REVERT hears the original in
+/// another mode.
 pub fn commit_is_stale(channel: &ChannelState, commit: &SampleCommit, bpm: f64) -> bool {
-    let params = channel.sampler_params();
-    if commit.mode != params.stretch_mode {
-        return true;
-    }
-    if params.stretch_mode == StretchMode::Grain && commit.grain != params.stretch_grain {
-        return true;
-    }
-    if !params.stretch_sync {
-        return (commit.ratio - params.stretch_ratio).abs() > 1.0e-3;
-    }
-    let Some(source) = channel.sample_data.as_ref() else {
-        return false;
+    debug_assert!(channel.commit.as_deref() == Some(commit));
+    let params = mooloop_dsp::commit::params_on_screen(channel.sampler_params(), commit);
+    channel
+        .published_sample()
+        .is_some_and(|sample| mooloop_dsp::commit::is_stale(params, sample, &channel.slices, bpm))
+}
+
+/// What the commit label reads: how many times longer the sample on screen
+/// is than the original.
+pub fn commit_label(commit: &SampleCommit) -> String {
+    format!("baked {:.2}x", commit.total_ratio())
+}
+
+/// Write `sample` as a 32-bit float WAV into `folder`, named after `stem` and
+/// the ratio it was baked at, under a name nothing there has.
+fn write_render(folder: &Path, stem: &str, ratio: f64, sample: &SampleData) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(folder).map_err(|error| format!("{}: {error}", folder.display()))?;
+    let stem: String = stem
+        .chars()
+        .map(|ch| if ch.is_alphanumeric() || matches!(ch, '-' | '_' | '.') { ch } else { '_' })
+        .collect();
+    let stem = if stem.is_empty() { "sample".to_string() } else { stem };
+    let wanted = format!("{stem}-x{ratio:.2}.wav");
+    let (path, file) = mooloop_core::file_names::create_unclaimed(folder, &wanted)
+        .map_err(|error| format!("{}: {error}", folder.display()))?;
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate: sample.sample_rate,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
     };
-    let params = SamplerParams {
-        start: commit.source_start,
-        end: commit.source_end,
-        loop_start: commit.source_loop_start,
-        loop_end: commit.source_loop_end,
-        ..channel.sampler_params()
-    };
-    // The markers the commit was baked against: a Slices loop grid snaps the
-    // loop to them (MOO-367).
-    let mut slices = SliceMap::new();
-    slices.rebuild(commit.source_markers.iter().copied());
-    let now = mooloop_dsp::Sampler::effective_ratio_in(
-        params,
-        source.frames.len(),
-        source.sample_rate,
-        bpm,
-        1.0,
-        Some(&slices),
-    );
-    (now - f64::from(commit.ratio)).abs() > 1.0e-3
+    let written = (|| {
+        let mut writer = hound::WavWriter::new(std::io::BufWriter::new(file), spec)?;
+        for [left, right] in &sample.frames {
+            writer.write_sample(*left)?;
+            writer.write_sample(*right)?;
+        }
+        writer.finalize()
+    })();
+    match written {
+        Ok(()) => Ok(path),
+        Err(error) => {
+            let _ = std::fs::remove_file(&path);
+            Err(format!("{}: {error}", path.display()))
+        }
+    }
+}
+
+/// The channel's sample as a reference, the way a save would write it.
+fn sample_reference(channel: &ChannelState) -> SampleReference {
+    channel
+        .sample_path
+        .as_ref()
+        .map(|path| SampleReference::File {
+            path: path.clone(),
+            embedded: channel.sample_embedded,
+        })
+        .unwrap_or_default()
+}
+
+/// Decode a commit's original from disk.
+fn read_original(original: &SampleReference) -> Result<Arc<SampleData>, String> {
+    match original {
+        SampleReference::File { path, .. } => crate::audio_file::decode(path)
+            .map(|decoded| decoded.sample)
+            .map_err(|error| format!("{}: {error}", path.display())),
+        SampleReference::Builtin { .. } | SampleReference::Empty => {
+            Err("the original was never a file".into())
+        }
+    }
+}
+
+/// Make `reference` the channel's sample, with `audio` behind it.
+fn adopt_sample(channel: &mut ChannelState, reference: SampleReference, audio: Arc<SampleData>) {
+    match reference {
+        SampleReference::File { path, embedded } => {
+            channel.sample_name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_string();
+            channel.sample_path = Some(path);
+            channel.sample_embedded = embedded;
+        }
+        SampleReference::Builtin { .. } | SampleReference::Empty => {
+            channel.sample_path = None;
+            channel.sample_embedded = false;
+        }
+    }
+    channel.sample_data = Some(audio);
+}
+
+/// The write-back half of a song save for commits: each stored commit's
+/// original is wherever the save put it, so the next save finds it there
+/// rather than copying it in again. `originals` is each channel's
+/// `commit.original` as the saved song holds it.
+pub fn apply_commit_originals(
+    channels: &mut [ChannelState],
+    originals: impl IntoIterator<Item = Option<SampleReference>>,
+) {
+    for (channel, original) in channels.iter_mut().zip(originals) {
+        if let (Some(commit), Some(original)) = (channel.commit.as_deref_mut(), original) {
+            if commit.original.is_some() {
+                commit.original = Some(original);
+            }
+        }
+    }
 }
 
 /// What fit-to-tempo is doing, in words for the face (MOO-39): the fitted
@@ -552,9 +630,45 @@ pub struct SnapAll {
 
 /// A stretch that was baked into the audio.
 pub struct Committed {
-    /// The ratio that was baked, for the status bar to report.
+    /// The ratio this commit baked, for the status bar to report.
     pub ratio: f32,
     pub command: EngineCommand,
+    /// Where the render was written, or why it could not be. A render that
+    /// could not be written is still the channel's audio: the commit holds
+    /// it unstored, and a save keeps the original and the steps that re-make
+    /// it.
+    pub stored: Result<PathBuf, String>,
+}
+
+/// Why a commit did nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitRefusal {
+    /// The channel has no sample.
+    NoSample,
+    /// Committing would change nothing: the sample is committed and not
+    /// stale.
+    NothingToCommit,
+    /// The render could not be written, and the original it would fall back
+    /// to could not be read either.
+    Unwritable(String),
+}
+
+/// What a revert did.
+pub struct RevertedStretch {
+    pub params: SamplerParams,
+    pub command: EngineCommand,
+    /// The original no longer renders to the length on screen (it changed on
+    /// disk since the commit), so the markers were placed by proportion.
+    pub original_changed: bool,
+}
+
+/// Why a revert did nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RevertRefusal {
+    /// The channel is not committed.
+    NotCommitted,
+    /// The original could not be read, so the commit stays.
+    Original(String),
 }
 
 impl Session {
@@ -732,72 +846,157 @@ impl Session {
         Some(Vec::new())
     }
 
-    /// Bakes the pending stretch into the channel's audio.
+    /// Bakes the pending stretch into the selected channel's sample: the
+    /// whole of the sample on screen is rendered, and the render replaces it
+    /// (`mooloop_dsp::commit::commit_stretch`). After a commit that is the
+    /// committed audio, so commits stack.
     ///
-    /// Always rendered from the *source*, never from a buffer that has
-    /// already been baked: re-committing at a new tempo has to be a fresh
-    /// render, or repeated tempo changes accumulate stretch on stretch.
-    ///
-    /// `Err(true)` means there is no sample at all; `Err(false)` means there
-    /// is nothing the current parameters would change.
-    pub fn commit_stretch(&mut self, bpm: f64) -> Result<Committed, bool> {
+    /// The render is written into `renders` (`<data dir>/renders/`) and
+    /// becomes the channel's sample, owned by the song the way a take is, so
+    /// a save copies it in and a reload plays it. If it cannot be written the
+    /// commit still happens, unstored: the channel's sample goes back to the
+    /// original, and the steps re-make the render from it on install.
+    /// [`Committed::stored`] says which.
+    pub fn commit_stretch(&mut self, bpm: f64, renders: &Path) -> Result<Committed, CommitRefusal> {
         let selected = self.selected;
-        let Some(channel) = self.channels.get_mut(selected) else {
-            return Err(true);
+        let channel = self.channels.get_mut(selected).ok_or(CommitRefusal::NoSample)?;
+        let input = channel.published_sample().cloned().ok_or(CommitRefusal::NoSample)?;
+        let params = match channel.commit.as_deref() {
+            Some(commit) => {
+                let params = mooloop_dsp::commit::params_on_screen(channel.sampler_params(), commit);
+                if !mooloop_dsp::commit::is_stale(params, &input, &channel.slices, bpm) {
+                    return Err(CommitRefusal::NothingToCommit);
+                }
+                params
+            }
+            None => channel.sampler_params(),
         };
-        let Some(source) = channel.sample_data.clone() else {
-            return Err(true);
+        let committed = mooloop_dsp::commit::commit_stretch(&input, params, &channel.slices, bpm)
+            .ok_or(CommitRefusal::NothingToCommit)?;
+
+        // The original is the sample before the first commit: the channel's
+        // own sample unless a stored commit already moved it aside.
+        let (original, mut steps) = match channel.commit.as_deref() {
+            Some(commit) if !commit.is_unstored() => {
+                (commit.original.clone().unwrap_or_default(), commit.steps.clone())
+            }
+            Some(commit) => (sample_reference(channel), commit.steps.clone()),
+            None => (sample_reference(channel), Vec::new()),
         };
-        let (params, slices) = match channel.commit.as_ref() {
-            Some(commit) => mooloop_dsp::commit::revert_commit(channel.sampler_params(), commit),
-            None => (channel.sampler_params(), channel.slices.clone()),
-        };
-        let Some(committed) = mooloop_dsp::commit::commit_stretch(&source, params, &slices, bpm)
-        else {
-            return Err(false);
-        };
-        let ratio = committed.commit.ratio;
+        steps.push(committed.step);
+        let stem = Path::new(&channel.sample_name)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("sample")
+            .to_string();
+        let total: f64 = steps.iter().map(|step| f64::from(step.ratio)).product();
+        let stored = write_render(renders, &stem, total, &committed.sample);
+        match &stored {
+            Ok(path) => {
+                adopt_sample(
+                    channel,
+                    SampleReference::File {
+                        path: path.clone(),
+                        embedded: true,
+                    },
+                    committed.sample,
+                );
+                channel.committed_sample = None;
+                channel.commit = Some(Box::new(SampleCommit {
+                    original: Some(original),
+                    steps,
+                }));
+            }
+            Err(error) => {
+                // Unstored, so the channel's sample has to be the original
+                // the steps start from: in hand unless a stored commit moved
+                // it aside, in which case it is read back.
+                let original_audio = match channel.commit.as_deref() {
+                    Some(commit) if !commit.is_unstored() => {
+                        read_original(&original).map_err(|why| {
+                            CommitRefusal::Unwritable(format!("{error}; and the original: {why}"))
+                        })?
+                    }
+                    _ => channel.sample_data.clone().ok_or(CommitRefusal::NoSample)?,
+                };
+                adopt_sample(channel, original, original_audio);
+                channel.committed_sample = Some(committed.sample);
+                channel.commit = Some(Box::new(SampleCommit {
+                    original: None,
+                    steps,
+                }));
+            }
+        }
         if let Some(p) = channel.sampler_params_mut() {
             *p = committed.params;
         }
         channel.slices = committed.slices;
-        channel.commit = Some(Box::new(committed.commit));
-        channel.committed_sample = Some(committed.sample);
         refresh_sample_view(channel);
         let params = channel.sampler_params();
         self.mark_dirty();
         Ok(Committed {
-            ratio,
+            ratio: committed.step.ratio,
             command: EngineCommand::SetChannelSamplerParams {
                 channel: selected as u8,
                 params,
             },
+            stored,
         })
     }
 
-    /// Throws away a committed render and goes back to the source.
+    /// Goes back from every commit to the original sample in one step, with
+    /// the markers on screen mapped onto it: slices and trims made since a
+    /// commit come along (`mooloop_dsp::commit::revert_commit`).
     ///
     /// Returns the restored parameters, which the caller needs to build the
-    /// live stretcher the patch is asking for again.
-    pub fn revert_stretch(&mut self) -> Option<(SamplerParams, EngineCommand)> {
+    /// live stretcher the patch is asking for again. An original that cannot
+    /// be read leaves the commit as it is.
+    pub fn revert_stretch(&mut self) -> Result<RevertedStretch, RevertRefusal> {
         let selected = self.selected;
-        let channel = self.channels.get_mut(selected)?;
-        let commit = channel.commit.take()?;
-        let (params, slices) = mooloop_dsp::commit::revert_commit(channel.sampler_params(), &commit);
-        if let Some(p) = channel.sampler_params_mut() {
-            *p = params;
-        }
-        channel.slices = slices;
+        let channel = self
+            .channels
+            .get_mut(selected)
+            .ok_or(RevertRefusal::NotCommitted)?;
+        let commit = channel.commit.clone().ok_or(RevertRefusal::NotCommitted)?;
+        let published_len = channel
+            .published_sample()
+            .map_or(0, |sample| sample.frames.len());
+        let (original, audio) = if commit.is_unstored() {
+            let audio = channel
+                .sample_data
+                .clone()
+                .ok_or_else(|| RevertRefusal::Original("the original is not loaded".into()))?;
+            (sample_reference(channel), audio)
+        } else {
+            let original = commit.original.clone().unwrap_or_default();
+            let audio = read_original(&original).map_err(RevertRefusal::Original)?;
+            (original, audio)
+        };
+        let reverted = mooloop_dsp::commit::revert_commit(
+            &audio,
+            &commit,
+            published_len,
+            channel.sampler_params(),
+            &channel.slices,
+        )
+        .ok_or_else(|| RevertRefusal::Original("the original is empty".into()))?;
+        adopt_sample(channel, original, audio);
         channel.committed_sample = None;
+        channel.commit = None;
+        if let Some(p) = channel.sampler_params_mut() {
+            *p = reverted.params;
+        }
+        channel.slices = reverted.slices;
         refresh_sample_view(channel);
         self.mark_dirty();
-        Some((
-            params,
-            EngineCommand::SetChannelSamplerParams {
+        Ok(RevertedStretch {
+            params: reverted.params,
+            command: EngineCommand::SetChannelSamplerParams {
                 channel: selected as u8,
-                params,
+                params: reverted.params,
             },
-        ))
+            original_changed: reverted.original_changed,
+        })
     }
 
     /// Snaps all four of `zone`'s markers (0 the base zone, as
@@ -1541,7 +1740,8 @@ mod tests {
         // The loop snaps to 12,000..36,000 (half a second), which one bar at
         // 120 BPM (two seconds) stretches by 4. Fitting the free loop would
         // say 2.
-        let committed = session.commit_stretch(120.0).expect("a commit");
+        let renders = tempfile::tempdir().unwrap();
+        let committed = session.commit_stretch(120.0, renders.path()).expect("a commit");
         assert!((committed.ratio - 4.0).abs() < 1.0e-4, "{}", committed.ratio);
 
         let channel = &session.channels[0];

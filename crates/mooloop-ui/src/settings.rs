@@ -1551,6 +1551,13 @@ pub(crate) fn recordings_dir() -> PathBuf {
     data_dir().join("recordings")
 }
 
+/// The shared renders folder, beside [`recordings_dir`]: every stretch
+/// commit's render is written here when it is made, and a save copies the
+/// one a song uses into the song's own `samples/` (MOO-375).
+pub(crate) fn renders_dir() -> PathBuf {
+    data_dir().join("renders")
+}
+
 /// Where takes were written until 2026-09-23, under the config directory.
 /// Startup moves them to [`recordings_dir`] and leaves a link here.
 pub(crate) fn legacy_recordings_dir() -> PathBuf {

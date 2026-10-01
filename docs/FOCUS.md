@@ -838,3 +838,14 @@ In the order worth playing:
     many (the pane edges and the sidebars are the likeliest), is the look.
     Mooloop's own theme and every other flat one should look exactly as
     before.
+34. **A stretch commit as a render** (MOO-375, MOO-370, MOO-394). Load a
+    break in Slice mode, detect slices over the whole of it, then drag Start
+    in past a few markers, fit it to a bar and COMMIT: every slice should
+    keep its key (the ones outside Start/End included) and land on the same
+    hit. Add a slice at a hit the detector missed and drag End in a little,
+    change the tempo and press REBAKE: the new slice and the trim should
+    still be there, on the same hits. Then REVERT: the original comes back
+    with that slice on its hit. Save, quit, reopen: the committed sample
+    should play exactly as before (`tests/stretch_commit.rs` pins the
+    frames). Whether a second stretch of a stretch sounds acceptable at
+    ordinary tempo moves is the listen.

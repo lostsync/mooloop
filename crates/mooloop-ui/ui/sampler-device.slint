@@ -396,10 +396,11 @@ export component SamplerDeviceFace inherits Rectangle {
     // whether they replace this channel's notes or join them.
     in-out property <bool> slice-pattern-open;
     in-out property <bool> slice-pattern-grid;
-    // Whether the published buffer is a committed render, what it was baked
-    // at, and whether the project has since moved off the tempo it was fitted
-    // to. Stale is shown, never acted on: re-baking a loop underneath someone
-    // is not a thing to do without being asked.
+    // Whether the sample is a committed render, how much longer than the
+    // original it is, and whether committing again would stretch it (the
+    // tempo, the fitted span or the free ratio moved). Stale is shown, never
+    // acted on: re-baking a loop underneath someone is not a thing to do
+    // without being asked.
     in-out property <bool> committed;
     in-out property <string> commit-label;
     in-out property <bool> commit-stale;
@@ -1413,22 +1414,21 @@ export component SamplerDeviceFace inherits Rectangle {
                             overflow: elide;
                             horizontal-stretch: 1;
                         }
-                        // A stale bake is re-rendered in place. The handler
-                        // already commits from the source rather than from
-                        // the baked buffer, so this is one click where it
-                        // used to take REVERT and then COMMIT -- and the
-                        // only route to a re-bake at all once the row had
-                        // hidden COMMIT behind `committed`.
+                        // A stale commit is committed again: the committed
+                        // audio is stretched by what is still missing, and
+                        // markers and trims made since come along. The only
+                        // route to it once the row has hidden COMMIT behind
+                        // `committed`.
                         if root.committed && root.commit-stale : ToolButton {
                             text: "REBAKE";
                             min-width: 50px; max-width: 50px; min-height: 18px;
-                            tooltip: "Re-bake"; hint: "Re-bake the stretch";
+                            tooltip: "Re-bake"; hint: "Stretch the committed audio again to fit";
                             clicked => { root.commit-clicked(); }
                         }
                         if root.committed : ToolButton {
                             text: "REVERT";
                             min-width: 52px; max-width: 52px; min-height: 18px;
-                            tooltip: "Revert"; hint: "Put the source buffer and its markers back";
+                            tooltip: "Revert"; hint: "Put the original sample back, with the markers mapped onto it";
                             clicked => { root.revert-clicked(); }
                         }
                         if !root.committed : Rectangle { horizontal-stretch: 1; }

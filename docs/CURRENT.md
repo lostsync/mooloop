@@ -1357,8 +1357,13 @@ sampler does (`docs/plans/archive/audio-recording/`, steps 02-05, 2026-09-18):
   the song as saved on disk plays. *Left from earlier sessions*, unticked and
   saying why: shared-folder takes older than this run, which a crash (or a
   quit while only the undo history used them) leaves behind and which may be
-  the only copy of a take from a song that was never saved. Nothing moves
-  until **Move to Trash**, and then only to the trash.
+  the only copy of a take from a song that was never saved. Stretch renders
+  in the shared `renders/` folder (MOO-375) are listed on exactly the same
+  terms as takes in the shared recordings folder: one the open song, its undo
+  history, the clipboard or an autosave uses -- as its sample or as a
+  commit's original, which REVERT goes back to -- is never offered. Nothing
+  moves until **Move to Trash**, and then only to the trash. The quit offer
+  lists takes only.
 - **The hardware input is an AUDIO source** under both drivers. Under JACK,
   since 2026-09-19, it is "Audio In": `mooloop:in_l`/`in_r` wired to the first
   physical capture pair. Under Core Audio, since 2026-09-20, it is the
@@ -1397,22 +1402,39 @@ land on its own when it starts to matter:
   The toggle now says which of the three it is, and to commit, in the status
   bar; `StatusHint` reaches it from any face without the threaded property
   this entry used to ask for.
-- **Markers outside the committed region collapse onto its edges.** A commit
-  renders only the playback region; a marker before it maps to frame 0 and a
-  marker past it to the render's end, and the map then drops the duplicates.
-  Revert restores every source marker exactly, but the published map after a
-  commit holds fewer slices than the source had, so every later slice plays a
-  key lower. Adam ruled on 2026-09-30 that every marker maps through the
-  stretch and none is dropped (MOO-370). That means the commit renders the
-  whole sample, which lands with the commit's rework as a render (MOO-375,
-  below).
-- **A commit's spec is the whole render.** Nothing about the source file is
-  checked on reload: a project whose referenced sample was replaced on disk
-  re-renders the new audio under the old spec and lays the old markers over
-  it (MOO-394). Adam ruled on 2026-09-30 that a committed sample is treated
-  like a rendered one: the render replaces the sample and is written to disk
-  when it is made (MOO-375). After that rework, a reload plays the stored
-  render and re-renders nothing.
+- **A REVERT onto an original that changed on disk places markers by
+  proportion.** The traces a revert maps markers through are re-made from the
+  original, so an original replaced since the commit cannot reproduce them;
+  the revert still happens, maps the markers by the share of the length they
+  sat at, and says so in the status bar.
+
+**COMMIT renders the sample and loads the render in its place** (MOO-375,
+MOO-370, MOO-394; Adam, 2026-09-30: a committed sample is treated like a
+rendered one). It renders the whole sample, not just the playback region, so
+every marker has somewhere to go: slices, Start/End and the loop points all
+move to where the stretch put them, and none is dropped, so a slice keeps its
+key and a slice pattern keeps playing the same hits. The render is written
+when it is made to a shared `renders/` folder in the data directory, beside
+`recordings/` (`~/.local/share/mooloop/renders/`), and becomes the channel's
+sample: the song owns it the way it owns a take, a save copies it into the
+song's `samples/`, and a reload plays the stored file rather than re-rendering
+anything. If it cannot be written the commit still happens and the status bar
+says why; the song then keeps the original and re-makes the render from it on
+load, as 0.1.5 did. The live stretch is switched off and a free ratio set
+back to 1, since the stretch is in the audio. Edits after a commit are
+ordinary edits of the sample on screen.
+
+**The badge after a commit reads stale when committing again would stretch
+the committed audio**: the tempo moved under a fitted loop, a marker a
+Slices-snapped loop sits on moved, or the free ratio was turned. A change of
+stretch mode or grain alone is not stale, because the audio is already baked.
+**REBAKE** then commits again: it stretches the committed audio by what is
+missing, so commits stack and nothing made since is thrown away; there is no
+re-render from the original. **REVERT** goes back to the original sample (from
+before the first commit) in one click, with the markers on screen mapped back
+through every commit, so slices and trims made since come too; the live
+stretch goes back on at the ratio the commits baked. A song saved by 0.1.5
+with a commit loads and plays the render it played then.
 
 ### Transport And Arrangement
 
@@ -2736,9 +2758,9 @@ land on its own when it starts to matter:
 ### Buffers And Rendering
 
 - A loaded sample is immutable in the audio path. The only audio the
-  application generates for itself is a sampler stretch commit, which
-  re-renders the decoded source off-thread under a stored spec, and the
-  Buffer insert's rolling ring. Neither writes a channel's own output back
+  application generates for itself is a sampler stretch commit, rendered on
+  the UI thread and written to the data directory's `renders/` as a sample of
+  its own, and the Buffer insert's rolling ring. Neither writes a channel's own output back
   into a project asset: there is still no capture-to-sample gesture.
 - The render graph is independent of the audio driver and supports finite
   offline passes at the engine's sample rate, for WAV and MP3 alike; MP3 goes

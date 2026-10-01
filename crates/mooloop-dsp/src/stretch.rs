@@ -1088,8 +1088,8 @@ pub struct StretchRender {
     /// This is what carries slice markers and region fractions across the
     /// commit. Mapping them by the nominal ratio instead would be out by up
     /// to one search window -- about 10.7 ms, an audible flam on a break.
-    /// The trace is used at commit time and thrown away; a project stores the
-    /// render *spec*, never the trace and never the audio.
+    /// It is never stored: a revert re-makes it from the original and the
+    /// commit's spec, which reproduce the render exactly.
     pub trace: Vec<(u32, u32)>,
 }
 
@@ -1129,6 +1129,33 @@ impl StretchRender {
         }
         let fraction = (source_frame - f64::from(low_source)) / span;
         f64::from(low_output) + fraction * (f64::from(high_output) - f64::from(low_output))
+    }
+
+    /// Where an output frame came from, in source frames: the inverse of
+    /// [`Self::output_frame_of`], linear inside a trace span and clamped to
+    /// the traced source range at both ends.
+    pub fn source_frame_of(&self, output_frame: f64) -> f64 {
+        let Some(first) = self.trace.first() else {
+            return 0.0;
+        };
+        if output_frame <= f64::from(first.1) {
+            return f64::from(first.0);
+        }
+        let last = self.trace.last().copied().unwrap_or(*first);
+        if output_frame >= f64::from(last.1) {
+            return f64::from(last.0);
+        }
+        let at = self
+            .trace
+            .partition_point(|(_, output)| f64::from(*output) <= output_frame);
+        let (low_source, low_output) = self.trace[at - 1];
+        let (high_source, high_output) = self.trace[at];
+        let span = f64::from(high_output) - f64::from(low_output);
+        if span <= 0.0 {
+            return f64::from(low_source);
+        }
+        let fraction = (output_frame - f64::from(low_output)) / span;
+        f64::from(low_source) + fraction * (f64::from(high_source) - f64::from(low_source))
     }
 }
 
@@ -1989,6 +2016,16 @@ mod render_tests {
             assert!(
                 (mapped - expected).abs() < millisecond,
                 "a marker at {fraction} mapped to {mapped}, expected {expected}"
+            );
+        }
+
+        // And back: a revert carries the marker home to where it started.
+        for fraction in [0.0, 0.1, 0.25, 0.5, 0.75, 0.9] {
+            let source_frame = 40_000.0 * fraction;
+            let home = render.source_frame_of(render.output_frame_of(source_frame));
+            assert!(
+                (home - source_frame).abs() < 1.0,
+                "a marker at {fraction} came back at {home}, from {source_frame}"
             );
         }
 

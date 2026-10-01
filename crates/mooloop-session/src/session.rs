@@ -1465,10 +1465,12 @@ impl Session {
                 } else {
                     String::new()
                 };
-                // A committed stretch is re-rendered rather than reloaded:
-                // the spec is length-determined, so the buffer that comes
-                // back is the one that was baked, and the project never had
-                // to carry the audio.
+                // A commit whose render is not stored (0.1.5's, or one whose
+                // write failed) is re-made from the original, which is then
+                // the channel's sample: the spec is length-determined, so the
+                // buffer that comes back is the one that was baked. A stored
+                // render is the sample itself, and `rerender_commit` leaves
+                // it alone.
                 //
                 // Only when it has to, though. Undo and every other project
                 // edit reinstall the whole document through here, and a
@@ -2061,16 +2063,11 @@ mod commit_reuse_tests {
         for index in 0..channels {
             let mut channel = ProjectChannel::sampler(index, 1);
             if let Some(state) = channel.setup.source.sampler_state_mut() {
-                state.commit = Some(Box::new(SampleCommit {
-                    mode: StretchMode::Music,
-                    ratio: 1.5,
-                    grain: 40,
-                    source_markers: Vec::new(),
-                    source_start: 0.0,
-                    source_end: 1.0,
-                    source_loop_start: 0.0,
-                    source_loop_end: 1.0,
-                }));
+                state.commit = Some(Box::new(SampleCommit::unstored(
+                    StretchMode::Music,
+                    1.5,
+                    40,
+                )));
             }
             project.channels.push(channel);
             samples.push(Some(sample(index as f32)));

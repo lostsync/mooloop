@@ -446,16 +446,11 @@ fn committed_project(
         let sample = loaded_sample(seconds + index as f32 * 0.01);
         let mut channel = ProjectChannel::sampler(index, 1);
         if let Some(state) = channel.setup.source.sampler_state_mut() {
-            state.commit = Some(Box::new(mooloop_core::SampleCommit {
-                mode: mooloop_core::StretchMode::Music,
-                ratio: 1.5,
-                grain: 40,
-                source_markers: Vec::new(),
-                source_start: 0.0,
-                source_end: 1.0,
-                source_loop_start: 0.0,
-                source_loop_end: 1.0,
-            }));
+            state.commit = Some(Box::new(mooloop_core::SampleCommit::unstored(
+                mooloop_core::StretchMode::Music,
+                1.5,
+                40,
+            )));
         }
         project.channels.push(channel);
         samples.push(Some(sample));

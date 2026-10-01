@@ -165,8 +165,9 @@ use mooloop_session::project::{
 };
 use mooloop_dsp::sample_analysis::OnsetSettings;
 use mooloop_session::sampler::{
-    commit_is_stale, fit_readout, frame_fractions, slice_fractions, snap_marker, snap_status,
-    typed_bars, zone_view, RegionEdit, SampleMarker, SliceAccept, SliceEdit,
+    commit_is_stale, commit_label, fit_readout, frame_fractions, slice_fractions, snap_marker,
+    snap_status, typed_bars, zone_view, CommitRefusal, RegionEdit, RevertRefusal, SampleMarker,
+    SliceAccept, SliceEdit,
 };
 use mooloop_core::ZoneRegion;
 use mooloop_dsp::sampler::decode_playhead;
@@ -7311,13 +7312,14 @@ impl UiState {
         window.set_commit_label(
             ch.commit
                 .as_ref()
-                .map(|commit| format!("baked {:.2}x", commit.ratio))
+                .map(|commit| commit_label(commit))
                 .unwrap_or_default()
                 .into(),
         );
-        // Stale is a bar-synced commit whose project has since changed tempo.
-        // Reported, never acted on: re-baking a loop under someone without
-        // being asked is worse than telling them it no longer fits.
+        // Stale: committing again would stretch the committed audio, because
+        // the tempo, the fitted span or the free ratio moved. Reported, never
+        // acted on: re-baking a loop under someone without being asked is
+        // worse than telling them it no longer fits.
         window.set_commit_stale(
             ch.commit
                 .as_ref()
@@ -7826,6 +7828,18 @@ impl AppUi {
                                                     .collect()
                                             },
                                         )
+                                    })
+                                    .collect(),
+                                commit_originals: saved
+                                    .channels
+                                    .iter()
+                                    .map(|channel| {
+                                        channel
+                                            .setup
+                                            .source
+                                            .sampler_state()
+                                            .and_then(|sampler| sampler.commit.as_deref())
+                                            .and_then(|commit| commit.original.clone())
                                     })
                                     .collect(),
                             })
@@ -8413,12 +8427,25 @@ impl AppUi {
                             .join(mooloop_project::RECORDINGS_DIR);
                         Some((folder, recordings::saved_song_references(song)?))
                     });
-                    recordings::clean_up(
+                    let mut lists = recordings::clean_up(
                         &settings::recordings_dir(),
                         song.as_ref().map(|(folder, saved)| (folder.as_path(), saved)),
                         &referenced,
                         st.session_start,
-                    )
+                    );
+                    // Stretch renders (MOO-375) on the same terms as takes in
+                    // the shared recordings folder: a save copies the one a
+                    // song uses into it, so the shared one is unused once
+                    // nothing here reaches it.
+                    let renders = recordings::clean_up(
+                        &settings::renders_dir(),
+                        None,
+                        &referenced,
+                        st.session_start,
+                    );
+                    lists.not_used.extend(renders.not_used);
+                    lists.earlier.extend(renders.earlier);
+                    lists
                 };
                 if lists.not_used.is_empty() && lists.earlier.is_empty() {
                     window.set_status_message(
@@ -14518,13 +14545,19 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 {
                     let mut st = st.borrow_mut();
-                    let committed = match st.session.commit_stretch(window.get_bpm() as f64) {
+                    let committed = match st
+                        .session
+                        .commit_stretch(window.get_bpm() as f64, &settings::renders_dir())
+                    {
                         Ok(committed) => committed,
-                        Err(no_sample) => {
-                            window.set_status_message(if no_sample {
-                                "No sample to commit".into()
-                            } else {
-                                "Nothing to commit".into()
+                        Err(refusal) => {
+                            window.set_status_message(match refusal {
+                                CommitRefusal::NoSample => "No sample to commit".into(),
+                                CommitRefusal::NothingToCommit => "Nothing to commit".into(),
+                                CommitRefusal::Unwritable(why) => {
+                                    log_warn!("sampler", "commit refused: {why}");
+                                    format!("Could not commit: {why}").into()
+                                }
                             });
                             return;
                         }
@@ -14537,9 +14570,18 @@ impl AppUi {
                     // would do it next tick; doing it here keeps it beside the edit.
                     st.session
                         .sync_sampler_stretch(sample_rate, |command| stx.send(command));
-                    window.set_status_message(
-                        format!("Committed the stretch at {:.2}x", committed.ratio).into(),
-                    );
+                    window.set_status_message(match &committed.stored {
+                        Ok(_) => format!("Committed the stretch at {:.2}x", committed.ratio).into(),
+                        Err(why) => {
+                            log_warn!("sampler", "a stretch render was not written: {why}");
+                            format!(
+                                "Committed at {:.2}x, but the render could not be written ({why}); \
+                                 the song will re-make it from the original",
+                                committed.ratio
+                            )
+                            .into()
+                        }
+                    });
                 }
                 st.borrow().refresh_editor(&window);
                 record_project_history(&commands, before, &history_state, &window, "Stretch committed");
@@ -14558,11 +14600,19 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 {
                     let mut st = st.borrow_mut();
-                    let Some((_params, command)) = st.session.revert_stretch() else {
-                        return;
+                    let reverted = match st.session.revert_stretch() {
+                        Ok(reverted) => reverted,
+                        Err(RevertRefusal::NotCommitted) => return,
+                        Err(RevertRefusal::Original(why)) => {
+                            window.set_status_message(
+                                format!("Could not revert, the original sample did not load: {why}")
+                                    .into(),
+                            );
+                            return;
+                        }
                     };
                     st.publish_selected_audio(&audio_out);
-                    let _ = tx.send(command);
+                    let _ = tx.send(reverted.command);
                     // The patch is stretching live again, and the state to do it cannot
                     // be assumed: a project saved committed and reloaded never
                     // provisioned a pool, because its patch did not ask for one.
@@ -14571,7 +14621,13 @@ impl AppUi {
                     // Sized from Voices by the one rule (MOO-7).
                     st.session
                         .sync_sampler_stretch(sample_rate, |command| stx.send(command));
-                    window.set_status_message("Reverted to the source sample".into());
+                    window.set_status_message(if reverted.original_changed {
+                        "Reverted to the original sample, which changed since the commit: \
+                         markers placed by proportion"
+                            .into()
+                    } else {
+                        "Reverted to the original sample".into()
+                    });
                 }
                 st.borrow().refresh_editor(&window);
                 record_project_history(&commands, before, &history_state, &window, "Stretch reverted");
@@ -17186,6 +17242,7 @@ impl AppUi {
                             report,
                             sample_references,
                             zone_references,
+                            commit_originals,
                         } => {
                             let mut state = st.borrow_mut();
                             if !apply_saved_song(
@@ -17196,6 +17253,7 @@ impl AppUi {
                                 &path,
                                 sample_references,
                                 zone_references,
+                                commit_originals,
                             ) {
                                 log_info!(
                                     "project",
@@ -21039,6 +21097,7 @@ fn defer_quit_while_busy(window: &MainWindow, pending: &Cell<bool>) -> bool {
 /// after New or Open has replaced the song would otherwise make the next
 /// Ctrl+S write the new song over the old one's file. `dirty` was already
 /// guarded by the revision, which a new song also bumps.
+#[allow(clippy::too_many_arguments)]
 fn apply_saved_song(
     state: &mut UiState,
     window: &MainWindow,
@@ -21047,6 +21106,7 @@ fn apply_saved_song(
     path: &Path,
     sample_references: Vec<Option<SampleReference>>,
     zone_references: Vec<Vec<SampleReference>>,
+    commit_originals: Vec<Option<SampleReference>>,
 ) -> bool {
     if state.session.document_generation != generation {
         return false;
@@ -21061,6 +21121,7 @@ fn apply_saved_song(
             &mut session.zone_audio,
             zone_references,
         );
+        mooloop_session::sampler::apply_commit_originals(&mut session.channels, commit_originals);
     }
     state.update_document_title(window);
     true
@@ -22813,6 +22874,7 @@ mod tests {
             Path::new("/tmp/slow.mooloop"),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
         );
 
         assert!(!applied);
@@ -22831,6 +22893,7 @@ mod tests {
             generation,
             revision,
             Path::new("/tmp/slow.mooloop"),
+            Vec::new(),
             Vec::new(),
             Vec::new(),
         ));

@@ -44,12 +44,10 @@ pub struct SamplerState {
     /// the defaulted `Pitched` play mode is exactly the old behaviour.
     #[serde(default)]
     pub slices: SliceMap,
-    /// The stretch render this sampler's published buffer was baked from, if
-    /// it has one. Absent means the published buffer is the source.
-    ///
-    /// The rendered audio is deliberately not persisted: a commit is
-    /// reproducible from this spec, so loading decodes the source as usual
-    /// and re-renders.
+    /// How `sample` came to be a stretch render, if it is one: the original
+    /// a revert goes back to, and every commit since. Absent means the
+    /// sample was never committed. See [`SampleCommit`] for the one shape
+    /// whose render is not stored and is re-made from `sample` on install.
     ///
     /// Boxed because most samplers have no commit and this type is embedded
     /// in every channel of every project, kit, and preset: out of line it is

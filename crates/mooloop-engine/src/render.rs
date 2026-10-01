@@ -5984,11 +5984,12 @@ impl RenderState {
                             }
                         })
                     });
-                    // A committed stretch is baked here too, from the same
-                    // spec the editor uses. `samples` carries sources -- that
-                    // is what a project's assets are -- so without this an
-                    // export would play the unstretched original while the
-                    // app plays the render.
+                    // A commit whose render is not stored (0.1.5's) is
+                    // re-made here too, from the same spec the editor uses:
+                    // `samples` carries that channel's original, so without
+                    // this an export would play it unstretched while the app
+                    // plays the render. A stored render is the sample itself,
+                    // and `rerender_commit` leaves it alone.
                     let sample = sample.map(|sample| {
                         match project
                             .channels
@@ -13418,16 +13419,11 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         {
             let sampler = committed.channels[0].setup.sampler_state_mut().unwrap();
             sampler.params.play_mode = mooloop_core::PlayMode::Pitched;
-            sampler.commit = Some(Box::new(mooloop_core::SampleCommit {
-                mode: mooloop_core::StretchMode::Music,
-                ratio: 2.0,
-                grain: 1024,
-                source_markers: Vec::new(),
-                source_start: 0.0,
-                source_end: 1.0,
-                source_loop_start: 0.0,
-                source_loop_end: 1.0,
-            }));
+            sampler.commit = Some(Box::new(mooloop_core::SampleCommit::unstored(
+                mooloop_core::StretchMode::Music,
+                2.0,
+                1024,
+            )));
             sampler.slices = mooloop_core::SliceMap::default();
         }
         let render = RenderState::from_project(48_000, &committed, &samples);

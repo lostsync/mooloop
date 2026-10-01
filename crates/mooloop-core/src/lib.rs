@@ -238,7 +238,7 @@ pub use project::{
     STRIP_VOLUME_TAPER_LINEAR,
 };
 pub use sampler::{
-    clamp01, frames_per_bar, snap_bars_to_power_of_two, zone_for_note, EnvTimes, KeyRange,
+    clamp01, frames_per_bar, snap_bars_to_power_of_two, zone_for_note, CommitStep, EnvTimes, KeyRange,
     LoopMode, PlayMode, RetriggerMode, SampleCommit, SampleZone, SamplerParams, VelocityRange,
     ZoneChoice, ZoneRegion, SliceMap, SliceMarker, StretchMode, VoiceMode,
     materialize_zone_regions, zone_level_gain, ZONE_LEVEL_DB_RANGE,

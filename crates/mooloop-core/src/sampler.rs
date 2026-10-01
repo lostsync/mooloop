@@ -548,39 +548,145 @@ pub const MAX_STRETCH_RATIO: f32 = 16.0;
 pub const MIN_STRETCH_GRAIN: u16 = 64;
 pub const MAX_STRETCH_GRAIN: u16 = 4096;
 
-/// What a committed stretch baked, and what the editor looked like before it.
-///
-/// A commit renders the stretched region and makes the *rendered* buffer what
-/// is published, displayed, and edited, so the waveform, the markers, and the
-/// start/end fractions all live in one coordinate system rather than two. The
-/// source stays authoritative on the UI thread, which is what makes revert
-/// and re-commit exact.
-///
-/// Re-committing at a new ratio always renders from the source using
-/// `source_markers`, so repeated tempo changes cannot accumulate drift, and
-/// re-rendering on load from this spec is why the audio is never persisted.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SampleCommit {
-    // What was baked.
+/// One stretch commit: what it rendered, and from how much of what.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CommitStep {
     pub mode: StretchMode,
-    /// The *resolved* ratio, so a bar-synced commit reproduces at the tempo
-    /// it was baked at rather than at whatever the project is set to now.
+    /// The *resolved* ratio, output frames per input frame, so a bar-synced
+    /// commit reproduces at the tempo it was baked at rather than at whatever
+    /// the project is set to now.
     pub ratio: f32,
     pub grain: u16,
-    // Pre-commit editor state, so revert and re-commit are exact rather than
-    // round-tripped through the trace twice.
-    /// The markers as they stood before the commit, ids included.
-    ///
-    /// Ids and not just frames, so a revert hands back the same slices rather
-    /// than fresh ones wearing their frames. Nothing references a slice by id
-    /// across a save yet -- per-slice parameters are deferred by #15 -- but
-    /// the type's whole reason to carry ids is that this stays true before
-    /// something does.
-    pub source_markers: Vec<SliceMarker>,
-    pub source_start: f32,
-    pub source_end: f32,
-    pub source_loop_start: f32,
-    pub source_loop_end: f32,
+    /// The span of the step's input that was rendered, as fractions of it.
+    /// A commit renders the whole sample (0 to 1); only a commit saved by
+    /// 0.1.5 rendered its playback region alone.
+    #[serde(default)]
+    pub start: f32,
+    #[serde(default = "whole_end")]
+    pub end: f32,
+    /// The step's input length in frames, 0 when not known (a 0.1.5
+    /// commit).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub frames: u32,
+}
+
+fn whole_end() -> f32 {
+    1.0
+}
+
+fn is_zero(frames: &u32) -> bool {
+    *frames == 0
+}
+
+/// How a sampler's sample came to be a stretch render. A committed sample is
+/// treated like a rendered one (Adam, 2026-09-30).
+///
+/// Each COMMIT renders the sample on screen, all of it, and the render
+/// replaces it, so commits stack: one after a tempo change stretches the
+/// committed audio again. The markers on screen are always the render's own,
+/// and nothing restores an older record over them. REVERT goes back to the
+/// original in one step, mapping the markers on screen back through every
+/// step.
+///
+/// Persisted as `{ original, steps }`. The render is normally a file of its
+/// own, which the channel's `sample` names. A commit with no `original` has
+/// no stored render ([`Self::unstored`]): the channel's `sample` is the
+/// original, and the render is re-made from it through every step when the
+/// project is installed. That is how 0.1.5 saved a commit (one step, its
+/// table read by `CommitFile`), and what a commit whose render could not be
+/// written falls back to.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(from = "CommitFile", into = "CommitFile")]
+pub struct SampleCommit {
+    /// The sample before the first commit, when the render is stored. `None`
+    /// when it is not: the channel's `sample` is then the original.
+    pub original: Option<crate::project::SampleReference>,
+    /// Every commit since the original, oldest first. Never empty.
+    pub steps: Vec<CommitStep>,
+}
+
+impl SampleCommit {
+    /// A one-step commit of the whole sample whose render is not stored, so
+    /// it is re-made from the channel's sample on install.
+    pub fn unstored(mode: StretchMode, ratio: f32, grain: u16) -> Self {
+        Self {
+            original: None,
+            steps: vec![CommitStep {
+                mode,
+                ratio,
+                grain,
+                start: 0.0,
+                end: 1.0,
+                frames: 0,
+            }],
+        }
+    }
+
+    /// Whether the render is re-made from the channel's sample rather than
+    /// stored (see [`Self::unstored`]).
+    pub fn is_unstored(&self) -> bool {
+        self.original.is_none()
+    }
+
+    /// How many times longer the render is than the original, across every
+    /// step.
+    pub fn total_ratio(&self) -> f64 {
+        self.steps.iter().map(|step| f64::from(step.ratio)).product()
+    }
+}
+
+/// [`SampleCommit`] as a file holds it: the current shape, or 0.1.5's single
+/// commit table (`mode`, `ratio`, `grain`, `source_*`), which is read and
+/// never written.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+struct CommitFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    original: Option<crate::project::SampleReference>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    steps: Vec<CommitStep>,
+    #[serde(default, skip_serializing)]
+    mode: Option<StretchMode>,
+    #[serde(default, skip_serializing)]
+    ratio: Option<f32>,
+    #[serde(default, skip_serializing)]
+    grain: Option<u16>,
+    #[serde(default, skip_serializing)]
+    source_start: Option<f32>,
+    #[serde(default, skip_serializing)]
+    source_end: Option<f32>,
+}
+
+impl From<CommitFile> for SampleCommit {
+    fn from(file: CommitFile) -> Self {
+        let mut steps = file.steps;
+        if steps.is_empty() {
+            // 0.1.5 also kept the markers and loop points from before the
+            // commit. A revert maps the ones on screen back instead, so they
+            // are not read.
+            steps.push(CommitStep {
+                mode: file.mode.unwrap_or_default(),
+                ratio: file.ratio.unwrap_or(1.0),
+                grain: file.grain.unwrap_or(1024),
+                start: file.source_start.unwrap_or(0.0),
+                end: file.source_end.unwrap_or(1.0),
+                frames: 0,
+            });
+        }
+        Self {
+            original: file.original,
+            steps,
+        }
+    }
+}
+
+impl From<SampleCommit> for CommitFile {
+    fn from(commit: SampleCommit) -> Self {
+        Self {
+            original: commit.original,
+            steps: commit.steps,
+            ..Self::default()
+        }
+    }
 }
 
 /// How note-off events affect sample playback.
@@ -1473,6 +1579,62 @@ mod stretch_pool_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 0.1.5's commit table reads as one unstored step over the region it
+    /// rendered, and the current shape round-trips without writing any of
+    /// 0.1.5's fields back.
+    #[test]
+    fn a_0_1_5_commit_table_reads_as_one_unstored_step() {
+        let old: SampleCommit = toml::from_str(
+            r#"
+            mode = "drums"
+            ratio = 2.5
+            grain = 512
+            source_markers = [{ id = 1, frame = 0, hand = true }]
+            source_start = 0.1
+            source_end = 0.9
+            source_loop_start = 0.0
+            source_loop_end = 1.0
+            "#,
+        )
+        .unwrap();
+        assert!(old.is_unstored());
+        assert_eq!(
+            old.steps,
+            vec![CommitStep {
+                mode: StretchMode::Drums,
+                ratio: 2.5,
+                grain: 512,
+                start: 0.1,
+                end: 0.9,
+                frames: 0,
+            }]
+        );
+
+        let stored = SampleCommit {
+            original: Some(crate::project::SampleReference::File {
+                path: "break.wav".into(),
+                embedded: false,
+            }),
+            steps: vec![
+                CommitStep {
+                    frames: 48_000,
+                    ..old.steps[0]
+                },
+                CommitStep {
+                    ratio: 1.2,
+                    start: 0.0,
+                    end: 1.0,
+                    frames: 120_000,
+                    ..old.steps[0]
+                },
+            ],
+        };
+        let text = toml::to_string(&stored).unwrap();
+        assert!(!text.contains("source_"), "{text}");
+        assert_eq!(toml::from_str::<SampleCommit>(&text).unwrap(), stored);
+        assert!((stored.total_ratio() - 3.0).abs() < 1.0e-6);
+    }
 
     /// A patch saved before mono glide existed (MOO-45) loads with no glide
     /// and every note retriggering, which is how it played; one saved with

@@ -221,6 +221,9 @@ pub enum DocumentResult {
         /// Each channel's key-zone references as the save left them
         /// (MOO-14), for `apply_zone_references`.
         zone_references: Vec<Vec<SampleReference>>,
+        /// Each channel's stretch commit's original as the save left it
+        /// (MOO-375), for `sampler::apply_commit_originals`.
+        commit_originals: Vec<Option<SampleReference>>,
     },
     SavedOther {
         label: &'static str,

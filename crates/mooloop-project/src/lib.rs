@@ -832,14 +832,21 @@ fn prepare_song_asset(
     Ok(())
 }
 
-/// Every sample reference a source holds: a sampler's own, then each of its
-/// key zones' (MOO-14). The asset walkers take them all the same way, so a
-/// zone's file is embedded, referenced and resolved by exactly the base's
+/// Every sample reference a source holds: a sampler's own, each of its key
+/// zones' (MOO-14), and its stretch commit's original (MOO-375), which a
+/// revert goes back to. The asset walkers take them all the same way, so
+/// each file is embedded, referenced and resolved by exactly the base's
 /// rules.
 fn sample_references_mut(source: &mut ChannelSource) -> Vec<&mut SampleReference> {
     match source {
         ChannelSource::Sampler(sampler) => std::iter::once(&mut sampler.sample)
             .chain(sampler.zones.iter_mut().map(|zone| &mut zone.sample))
+            .chain(
+                sampler
+                    .commit
+                    .as_deref_mut()
+                    .and_then(|commit| commit.original.as_mut()),
+            )
             .collect(),
         _ => Vec::new(),
     }
@@ -2504,22 +2511,11 @@ mod tests {
             state.params.play_mode = mooloop_core::PlayMode::Slice;
             state.params.slice_base_note = 48;
             state.slices.divide_evenly(4, 0, 4_000);
-            state.commit = Some(Box::new(mooloop_core::SampleCommit {
-                mode: mooloop_core::StretchMode::Drums,
-                ratio: 2.5,
-                grain: 512,
-                source_markers: (0..4)
-                    .map(|index| mooloop_core::SliceMarker {
-                        id: index + 1,
-                        frame: index as u32 * 1_000,
-                        hand: true,
-                    })
-                    .collect(),
-                source_start: 0.0,
-                source_end: 1.0,
-                source_loop_start: 0.0,
-                source_loop_end: 1.0,
-            }));
+            state.commit = Some(Box::new(mooloop_core::SampleCommit::unstored(
+                mooloop_core::StretchMode::Drums,
+                2.5,
+                512,
+            )));
         }
 
         save_song(&bundle, &project, AssetMode::Embedded).unwrap();

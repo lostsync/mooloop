@@ -79,15 +79,21 @@ pub fn referenced_paths<'a>(projects: impl IntoIterator<Item = &'a Project>) -> 
     paths
 }
 
-/// The files one channel plays: its base sample and its key zones'.
+/// The files one channel plays or can go back to: its base sample, its key
+/// zones', and its stretch commit's original.
 fn insert_channel_files(paths: &mut HashSet<PathBuf>, channel: &ProjectChannel) {
     let ChannelSource::Sampler(sampler) = &channel.setup.source else {
         return;
     };
     // The key zones' files too (MOO-14): a take played by a zone is
-    // as much in use as one played by the base.
+    // as much in use as one played by the base. And a commit's original
+    // (MOO-375): a REVERT reads it back.
     let zones = sampler.zones.iter().map(|zone| &zone.sample);
-    for reference in std::iter::once(&sampler.sample).chain(zones) {
+    let original = sampler
+        .commit
+        .as_deref()
+        .and_then(|commit| commit.original.as_ref());
+    for reference in std::iter::once(&sampler.sample).chain(zones).chain(original) {
         if let SampleReference::File { path, .. } = reference {
             paths.insert(canonical(path));
         }
@@ -113,11 +119,19 @@ pub fn referenced_by(
         .channels
         .iter()
         .flat_map(|channel| {
+            let original = channel
+                .commit
+                .as_deref()
+                .and_then(|commit| match &commit.original {
+                    Some(SampleReference::File { path, .. }) => Some(path.as_path()),
+                    _ => None,
+                });
             channel
                 .sample_path
                 .as_deref()
                 .into_iter()
                 .chain(channel.zones.iter().filter_map(|zone| zone.path()))
+                .chain(original)
                 .map(canonical)
         })
         .collect();
@@ -499,6 +513,44 @@ mod tests {
 
         assert_eq!(unused.len(), 1, "{unused:?}");
         assert_eq!(unused[0].path, spare);
+    }
+
+    /// **A stretch render the song plays, and the original its commit goes
+    /// back to, are never offered** (MOO-375): the renders folder is swept
+    /// on the same terms as the shared recordings folder, and a REVERT reads
+    /// the original back, so it is in use too -- in a saved project and in
+    /// the live session alike.
+    #[test]
+    fn a_render_and_its_commits_original_are_never_offered() {
+        let dir = tempfile::tempdir().unwrap();
+        let renders = dir.path().join("renders");
+        let takes = dir.path().join("recordings");
+        let render = write_take(&renders, "break-x2.00.wav");
+        let spare = write_take(&renders, "break-x1.50.wav");
+        let original = write_take(&takes, "20260920-120000-Sampler_1.wav");
+        let commit = mooloop_core::SampleCommit {
+            original: Some(SampleReference::File {
+                path: original.clone(),
+                embedded: false,
+            }),
+            ..mooloop_core::SampleCommit::unstored(mooloop_core::StretchMode::Music, 2.0, 1024)
+        };
+        let mut project = project_playing(&render);
+        project.channels[0].setup.sampler_state_mut().unwrap().commit =
+            Some(Box::new(commit.clone()));
+
+        let referenced = referenced_paths([&project]);
+        let unused = unused_takes(&renders, &referenced, SystemTime::UNIX_EPOCH);
+        assert_eq!(unused.len(), 1, "{unused:?}");
+        assert_eq!(unused[0].path, spare);
+        assert!(unused_takes(&takes, &referenced, SystemTime::UNIX_EPOCH).is_empty());
+
+        let mut session = crate::session::Session::default();
+        session.channels[0].sample_path = Some(render.clone());
+        session.channels[0].commit = Some(Box::new(commit));
+        let live = referenced_by(&session, &crate::command::CommandState::default());
+        assert!(unused_takes(&takes, &live, SystemTime::UNIX_EPOCH).is_empty());
+        assert_eq!(unused_takes(&renders, &live, SystemTime::UNIX_EPOCH).len(), 1);
     }
 
     /// **A file older than this run is a crash leftover**, and is marked so

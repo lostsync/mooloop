@@ -274,13 +274,45 @@ Detection's Replace keeps hand-placed markers. A marker saved without the
 field loads as hand-placed, so accepting a detection never drops a marker
 from an older song.
 
-A committed time stretch stores a `commit` table: the stretch mode, resolved
-ratio and grain that were baked, plus the start/end/loop fractions and the
-`{ id, frame }` markers the editor held before the commit. The rendered audio
-is deliberately not stored -- the render is length-determined by this spec, so
-loading decodes the source as usual and re-renders. `slices` is expressed in
-the *published* buffer's frames, so a committed song's markers come back
-without remapping.
+**A committed time stretch is a render that replaces the sample** (MOO-375,
+2026-10-01; Adam, 2026-09-30: *"a committed sample should be treated pretty
+much like a rendered one"*). The render is a WAV file of its own: `sample`
+names it, owned (`embedded = true`) the way a recorded take is, so a save
+copies it into the sidecar's `samples/` by the ordinary rule and a reload
+plays it as stored. The `commit` table says how it came to be (shown inline;
+a save writes `steps` as an array of tables):
+
+```toml
+[document.channels.setup.source.state.commit]
+original = { kind = "file", path = "beat.mooloop-assets/samples/00-break.wav", embedded = true }
+steps = [
+  { mode = "music", ratio = 2.0, grain = 1024, start = 0.0, end = 1.0, frames = 48000 },
+  { mode = "music", ratio = 1.2, grain = 1024, start = 0.0, end = 1.0, frames = 96000 },
+]
+```
+
+`original` is the sample before the first commit, a sample reference like
+`sample` and embedded, referenced and resolved by the same rules, so a REVERT
+can find it in the bundle. `steps` is every commit since, oldest first: each
+rendered the whole of the one before at the stored ratio, which is how
+commits stack. `start` and `end` default to the whole input and `frames` (the
+input's length, for noticing an original that changed on disk) to unknown.
+`slices`, the start/end/loop fractions and the stretch parameters are the
+render's own, so a committed song's markers come back without remapping.
+
+A commit with **no `original`** has no stored render: `sample` is the
+original, and the render is re-made from it through `steps` when the song is
+installed (`render_stretched` is length-determined by its spec). That is how
+a commit whose render could not be written is saved, and it is how 0.1.5
+saved every commit -- a table of `mode`, `ratio`, `grain`, `source_start`,
+`source_end`, `source_loop_start`, `source_loop_end` and `source_markers`,
+which still loads, as one such step over `source_start`..`source_end`, and
+plays exactly the render 0.1.5 made; its free `stretch_ratio`, which 0.1.5
+left at the ratio it baked rather than resetting to 1, is read as already
+baked (a step with no `frames` is 0.1.5's). Its other `source_*` fields are not
+read, because a REVERT now maps the markers on screen back instead of
+restoring a record. Every new field is defaulted, so the defaulted-field rule
+covers the old table; a build before this change cannot read the new one.
 
 A hand-edited `slices` table is normalised on load rather than refused:
 markers are sorted by frame, duplicate frames dropped, and the list capped,
