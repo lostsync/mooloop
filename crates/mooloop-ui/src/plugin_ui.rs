@@ -1676,6 +1676,7 @@ pub(crate) fn show_plugin_preferences(window: &MainWindow, settings: &PluginSett
     window.set_preferences_plugin_scan_timeout_s(settings.scan_timeout_s as i32);
     window.set_preferences_plugin_scan_on_startup(settings.scan_on_startup);
     window.set_preferences_plugin_run_under_xwayland(settings.run_under_xwayland);
+    window.set_preferences_plugin_xwayland_applies(mooloop_plugin_window::display::XWAYLAND_SETTING_APPLIES);
     window.set_preferences_plugin_hide_unsupported(settings.hide_unsupported);
     show_plugin_catalog_on_page(window, &PluginCatalog::load(cache_path), settings.hide_unsupported);
 }

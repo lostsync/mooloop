@@ -2683,8 +2683,9 @@ with a commit loads and plays the render it played then.
   **On macOS** the window is a panel of mooloop's own that the plugin's
   Cocoa GUI is placed in, titled the same way, sized in points as the
   plugin asks; it floats above mooloop's windows and hides while mooloop is
-  not the active application, and its close button closes the GUI as on
-  Linux (MOO-480). Not yet tried on a real Mac (MOO-452).
+  not the active application, so mooloop never hides it itself; its close
+  button closes the GUI as on Linux (MOO-480, MOO-481). Not yet tried on a
+  real Mac with a real plugin: open: MOO-490.
 - **A hosted plugin's parameters take lanes and routes** (MOO-82,
   plugin-hosting 07). The face's knobs set them (above), but a lane or route
   reaches a plugin parameter only from a song that names one, or through the
@@ -2762,7 +2763,8 @@ with a commit loads and plays the render it played then.
   `Xft.dpi`, else a whole `GDK_SCALE`, else 1 -- never one worked out from
   the screen's reported millimetres, which drew it 1.5 times too large on a
   ~144 dpi laptop panel (MOO-343). The log says which. On macOS the setting
-  does nothing: mooloop always runs on AppKit there (MOO-480).
+  does nothing: mooloop always runs on AppKit there (MOO-480), and
+  Preferences > Plugins does not show it (MOO-481).
   The log
   says what the scan found. A song's plugins are found through it, and the
   browser's PLUGINS tab lists it (above). **Preferences > Plugins** (MOO-229)

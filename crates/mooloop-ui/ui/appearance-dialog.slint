@@ -1241,6 +1241,9 @@ component PluginsPage inherits VerticalLayout {
     // Run the whole application under XWayland (step 11, MOO-301/302): the
     // saved setting, which the next start reads before the first window.
     in property <bool> run-under-xwayland;
+    // Whether that setting can change anything on this platform: false on
+    // macOS, where the section is not shown.
+    in property <bool> xwayland-applies: true;
     // Leave the plugins mooloop can't use yet out of the browser, and how
     // many that is, in words; a plugin that failed is never left out.
     in property <bool> hide-unsupported;
@@ -1353,8 +1356,8 @@ component PluginsPage inherits VerticalLayout {
     // instead, where a plugin's window can stay above the main one. The
     // backend is chosen before the first window, so it waits for a restart,
     // and the note beside it says so.
-    SectionLabel { text: "PLUGIN WINDOWS"; }
-    HorizontalLayout {
+    if root.xwayland-applies : SectionLabel { text: "PLUGIN WINDOWS"; }
+    if root.xwayland-applies : HorizontalLayout {
         alignment: start;
         height: 24px;
         spacing: 8px;
@@ -1501,6 +1504,7 @@ export component PreferencesDialog inherits Rectangle {
     callback plugin-scan-on-startup-toggled(bool);
     callback plugin-rescan-requested();
     in property <bool> plugin-run-under-xwayland;
+    in property <bool> plugin-xwayland-applies: true;
     callback plugin-run-under-xwayland-toggled(bool);
     in property <bool> plugin-hide-unsupported;
     in property <string> plugin-hidden-status;
@@ -1844,6 +1848,7 @@ export component PreferencesDialog inherits Rectangle {
                                 scan-on-startup-toggled(v) => { root.plugin-scan-on-startup-toggled(v); }
                                 rescan-requested => { root.plugin-rescan-requested(); }
                                 run-under-xwayland: root.plugin-run-under-xwayland;
+                                xwayland-applies: root.plugin-xwayland-applies;
                                 run-under-xwayland-toggled(v) => { root.plugin-run-under-xwayland-toggled(v); }
                                 hide-unsupported: root.plugin-hide-unsupported;
                                 hidden-status: root.plugin-hidden-status;

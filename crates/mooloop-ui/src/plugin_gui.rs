@@ -8,11 +8,14 @@
 //!   `close_plugin_gui`, `resize_plugin_gui`, `set_plugin_gui_scale`,
 //!   `service_plugin_io` and `drain_plugin_gui_events`. The plugin's GUI is
 //!   only ever reached through them.
-//! - **The bare X11 window** a GUI embeds into (Platform's, MOO-301):
-//!   `mooloop_plugin_window::PluginWindows`, reached here through the
-//!   [`GuiWindows`] seam so the pump's logic runs in a test with no display.
-//! - **The main window**: which display server it is on, its X11 id, its
-//!   focus and its scale ([`MainWindowState`]).
+//! - **The bare window** a GUI embeds into (Platform's): an X11 window, or
+//!   an `NSPanel` on macOS, both `mooloop_plugin_window::PluginWindows`,
+//!   reached here through the [`GuiWindows`] seam so the pump's logic runs
+//!   in a test with no display. The windowing API the plugin is asked for is
+//!   the platform's, chosen in the session (`GuiConfig::native_order`), so
+//!   nothing here names one.
+//! - **The main window**: which display server it is on, its native window,
+//!   its focus and its scale ([`MainWindowState`]).
 //!
 //! **The order that matters**: a plugin's GUI is always destroyed before the
 //! window it lives in. The window goes when the session says the GUI is gone
@@ -26,7 +29,8 @@
 //! main window nor any plugin window has focus, and mapped again when focus
 //! comes back ([`FOCUS_GRACE`] explains the wait). On X11, or with "Run under
 //! XWayland" on, each window is made transient for the main window and
-//! nothing hides.
+//! nothing hides. On macOS the same: a transient panel floats above mooloop,
+//! and AppKit hides it while mooloop is not the active application.
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -105,8 +109,9 @@ pub(crate) struct MainWindowState {
     /// The display server it is on; `None` before it is shown, and under
     /// the testing backend.
     pub backend: Option<DisplayBackend>,
-    /// Its X11 id, on X11 and under XWayland.
-    pub x11_parent: Option<NativeWindow>,
+    /// Itself in the platform's windowing API: its X11 id on X11 and under
+    /// XWayland, its `NSView*` on macOS; `None` on native Wayland.
+    pub native_parent: Option<NativeWindow>,
     /// Whether it has keyboard focus.
     pub focused: bool,
     /// Its scale factor, which every plugin GUI is given.
@@ -121,7 +126,7 @@ impl MainWindowState {
         use slint::winit_030::WinitWindowAccessor;
         Self {
             backend: crate::display_backend::window_display_backend(window),
-            x11_parent: crate::display_backend::window_x11_parent(window),
+            native_parent: crate::display_backend::window_native_parent(window),
             focused: window.with_winit_window(|winit| winit.has_focus()).unwrap_or(true),
             scale: f64::from(window.scale_factor()),
             now: Instant::now(),
@@ -132,25 +137,26 @@ impl MainWindowState {
     pub(crate) fn idle() -> Self {
         Self {
             backend: None,
-            x11_parent: None,
+            native_parent: None,
             focused: true,
             scale: 1.0,
             now: Instant::now(),
         }
     }
 
-    /// The main window's X11 id, when a plugin window can be made
-    /// transient for it (an X11 session, or "Run under XWayland").
+    /// The main window, when a plugin window can be made transient for it
+    /// ([`DisplayBackend::can_set_transient`]: X11, "Run under XWayland",
+    /// and macOS).
     fn transient_parent(&self) -> Option<NativeWindow> {
         if self.backend.is_some_and(DisplayBackend::can_set_transient) {
-            self.x11_parent
+            self.native_parent
         } else {
             None
         }
     }
 
     /// Whether plugin windows hide while mooloop is not focused: a native
-    /// Wayland session only.
+    /// Wayland session only, the one backend that cannot set transient.
     fn hides_on_focus_loss(&self) -> bool {
         self.backend == Some(DisplayBackend::Wayland)
     }
@@ -504,7 +510,8 @@ impl PluginGuis {
 
     /// Native Wayland: hide every plugin window once neither the main window
     /// nor any plugin window has had focus for [`FOCUS_GRACE`], and show them
-    /// again when focus comes back. Anywhere else, nothing hides.
+    /// again when focus comes back. Anywhere else (X11, XWayland, macOS),
+    /// nothing hides.
     ///
     /// A floating GUI is left alone: its window is the plugin's, whose focus
     /// mooloop cannot see, so hiding it would hide it from under the click.
@@ -689,7 +696,11 @@ pub(crate) mod fake {
     pub(crate) fn main_on(backend: Option<DisplayBackend>, focused: bool, now: Instant) -> MainWindowState {
         MainWindowState {
             backend,
-            x11_parent: (backend == Some(DisplayBackend::X11)).then_some(NativeWindow::x11(0x42)),
+            native_parent: match backend {
+                Some(DisplayBackend::X11) => Some(NativeWindow::x11(0x42)),
+                Some(DisplayBackend::Cocoa) => Some(NativeWindow::cocoa(std::ptr::without_provenance_mut(0x7f00_4200))),
+                Some(DisplayBackend::Wayland) | None => None,
+            },
             focused,
             scale: 1.0,
             now,
@@ -754,24 +765,32 @@ mod tests {
         guis.focused.clear();
 
         // X11, or "Run under XWayland": the window manager keeps it above
-        // its parent, and nothing hides however long focus is away.
-        let x11 = |after| main_on(Some(DisplayBackend::X11), false, start + after);
-        guis.follow_focus(&x11(FOCUS_GRACE * 20));
-        guis.follow_focus(&x11(FOCUS_GRACE * 30));
-        assert!(calls(&log).is_empty());
+        // its parent, and nothing hides however long focus is away. macOS
+        // the same: AppKit hides the panels with the application, not us.
+        for backend in [DisplayBackend::X11, DisplayBackend::Cocoa] {
+            let away = |after| main_on(Some(backend), false, start + after);
+            guis.follow_focus(&away(FOCUS_GRACE * 20));
+            guis.follow_focus(&away(FOCUS_GRACE * 30));
+            assert!(calls(&log).is_empty(), "{backend:?}: nothing hides");
+        }
     }
 
-    /// The transient parent is offered only where the backend allows it.
+    /// The transient parent is offered only where the backend allows it:
+    /// X11 and macOS, not native Wayland, which is the one that hides.
     #[test]
-    fn only_x11_is_transient() {
+    fn x11_and_cocoa_are_transient_and_only_wayland_hides() {
         let now = Instant::now();
         assert_eq!(
             main_on(Some(DisplayBackend::X11), true, now).transient_parent(),
             Some(NativeWindow::x11(0x42))
         );
+        let cocoa = main_on(Some(DisplayBackend::Cocoa), true, now);
+        assert_eq!(cocoa.transient_parent(), cocoa.native_parent);
+        assert!(cocoa.transient_parent().is_some());
         assert_eq!(main_on(Some(DisplayBackend::Wayland), true, now).transient_parent(), None);
         assert_eq!(main_on(None, true, now).transient_parent(), None);
         assert!(main_on(Some(DisplayBackend::Wayland), true, now).hides_on_focus_loss());
         assert!(!main_on(Some(DisplayBackend::X11), true, now).hides_on_focus_loss());
+        assert!(!cocoa.hides_on_focus_loss());
     }
 }
