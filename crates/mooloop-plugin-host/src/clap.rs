@@ -80,7 +80,9 @@ use clack_host::prelude::*;
 use clack_host::utils::{BeatTime, SecondsTime};
 use mooloop_core::{PluginParamInfo, PluginRef, PluginState, PluginStateChunk};
 use mooloop_dsp::node::{Discontinuity, SILENCE_PEAK};
-use mooloop_dsp::{AudioNode, Event, EventList, HostedParam, ProcessContext, StereoBus, MAX_BLOCK_SIZE};
+use mooloop_dsp::{
+    AudioNode, Event, EventList, HostedParam, ProcessContext, StereoBus, TimedEvent, MAX_BLOCK_SIZE,
+};
 
 use crate::gui::{
     GuiApi, GuiConfig, GuiError, GuiRequest, GuiSize, HostedGui, IoActivity, IoRegistrations,
@@ -1138,6 +1140,10 @@ impl HostedInstance for ClapInstance {
             .instance
             .plugin_shared_handle()
             .get_extension::<PluginTail>();
+        let params_ext = self
+            .instance
+            .plugin_shared_handle()
+            .get_extension::<PluginParams>();
         let flags = Arc::new(ProcessorFlags::default());
         self.flags = flags.clone();
         let (producer, consumer) = rtrb::RingBuffer::new(EVENTS_OUT);
@@ -1177,6 +1183,7 @@ impl HostedInstance for ClapInstance {
             modulated_count: 0,
             driven: false,
             processor: Some(PluginAudioProcessor::from(stopped)),
+            params_ext,
             tail,
             tail_frames: 0,
             latency: self.latency,
@@ -1219,6 +1226,9 @@ pub struct ClapProcessor {
     /// depends on how long it slept, which depends on the callback's size.
     driven: bool,
     processor: Option<PluginAudioProcessor<ClapHost>>,
+    /// The plugin's parameter extension, for [`AudioNode::flush_params`];
+    /// `None` for a plugin with no parameters.
+    params_ext: Option<PluginParams>,
     tail: Option<PluginTail>,
     tail_frames: u32,
     latency: u32,
@@ -1497,6 +1507,56 @@ impl AudioNode for ClapProcessor {
             .binary_search_by_key(&id, |&(id, _)| id)
             .ok()
             .map(|index| self.params[index].1)
+    }
+
+    /// CLAP's `params.flush`, on the audio thread, which CLAP allows for an
+    /// active plugin outside `process` (and this is never called inside
+    /// it). Started or stopped, the plugin takes the values; what it says
+    /// back goes on the same ring a block's output events do. `false` for a
+    /// failed plugin, one with no parameters, and one that panics.
+    fn flush_params(&mut self, events: &[TimedEvent]) -> bool {
+        if self.flags.failed.load(Ordering::Relaxed) {
+            return false;
+        }
+        let (Some(params), Some(processor)) = (self.params_ext, self.processor.as_mut()) else {
+            return false;
+        };
+        self.events.clear();
+        let mut pushed = 0;
+        for timed in events {
+            if let Event::ParamValue { id, value } = timed.event {
+                if pushed == EVENTS_IN {
+                    break;
+                }
+                self.events.push(&ParamValueEvent::new(
+                    0,
+                    ClapId::new(id),
+                    Pckn::match_all(),
+                    f64::from(value),
+                ));
+                pushed += 1;
+            }
+        }
+        let mut out = ParamOut {
+            ring: &mut self.events_out,
+            dropped: &self.flags.dropped_events,
+            notes: &mut self.notes,
+            generated: &self.flags.generated_notes,
+        };
+        let events = &self.events;
+        let flushed = catch_unwind(AssertUnwindSafe(|| {
+            params.flush_active(
+                &mut processor.plugin_handle(),
+                &events.as_input(),
+                &mut OutputEvents::from_buffer(&mut out),
+            );
+        }));
+        self.events.clear();
+        if flushed.is_err() {
+            self.fail();
+            return false;
+        }
+        true
     }
 
     /// A block the host skipped because the plugin was asleep still passes:

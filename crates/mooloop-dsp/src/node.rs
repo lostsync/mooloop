@@ -363,6 +363,25 @@ pub trait AudioNode {
         None
     }
 
+    /// Take the `ParamValue`s in `events`, in order, now, outside `process`,
+    /// and return
+    /// whether this node did. For a node that keeps its own parameter values
+    /// (a hosted plugin, through CLAP's `params.flush`): the host calls it
+    /// when the knob moves queued for the node have outgrown their box while
+    /// the node was not being processed -- bypassed, asleep, on a muted
+    /// channel -- since nothing else holds those values to deliver later.
+    /// Never called during `process`. Offsets are ignored, and every other
+    /// kind of event is too.
+    ///
+    /// The default takes nothing and returns `false`, which is right for
+    /// every native node: its values live in the host's base, which the
+    /// host restates instead. Called on the audio thread, so it must not
+    /// allocate or lock. A node that holds another passes it on.
+    fn flush_params(&mut self, events: &[TimedEvent]) -> bool {
+        let _ = events;
+        false
+    }
+
     /// Number of times a retained-audio read head has been overtaken by its
     /// writer and force-returned to live. Only the buffer device reports a
     /// nonzero value; the host publishes it as display telemetry so forced

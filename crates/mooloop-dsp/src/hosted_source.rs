@@ -140,6 +140,11 @@ impl AudioNode for HostedSource {
         self.node.as_ref().and_then(|node| node.hosted_param(id))
     }
 
+    /// The processor's, and `false` with none: there is nothing to hold them.
+    fn flush_params(&mut self, events: &[crate::event::TimedEvent]) -> bool {
+        self.node.as_mut().is_some_and(|node| node.flush_params(events))
+    }
+
     fn on_discontinuity(&mut self, kind: Discontinuity) {
         if let Some(node) = self.node.as_mut() {
             node.on_discontinuity(kind);

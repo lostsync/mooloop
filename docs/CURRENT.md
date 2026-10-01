@@ -429,7 +429,14 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   bypassed container fades its Mix to dry the same way before its run stops
   being called. A device coming back from bypass is told its held audio is
   stale (`Discontinuity::Seek`), so an un-bypassed delay starts empty rather
-  than playing the repeats it held when it went out. Removing a device fades
+  than playing the repeats it held when it went out. Knobs turned while a
+  device is not being processed (bypassed, asleep, or on a muted channel)
+  all land when it runs again, however many were turned (MOO-344,
+  2026-10-01): past eight distinct knobs a native device is handed its
+  whole base, and a hosted plugin, effect or instrument, takes them at once
+  through CLAP's `params.flush`. Before, the ninth overwrote the first,
+  which then played its old value while the face and the file showed the
+  new one. Removing a device fades
   it out of the path first: the executor holds the removal, and the edits
   queued behind it, until the fade has run, or 100 ms at most for a chain
   that is not being processed. Installing is the same in reverse (MOO-172):

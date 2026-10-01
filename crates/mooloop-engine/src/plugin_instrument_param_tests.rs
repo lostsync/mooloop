@@ -443,3 +443,36 @@ fn a_replaced_plugin_instruments_lanes_do_not_drive_the_new_one() {
         "a lane naming the instrument's id did not drive it"
     );
 }
+
+/// **Nine knob edits on a muted plugin instrument all reach it** (MOO-344).
+///
+/// A muted channel is not rendered, so its instrument's edits wait in an
+/// eight-entry box. The level and eight more ids (ones the sine does not
+/// have, which it ignores) arrive in one gap between blocks: the ninth
+/// used to overwrite the level. The full box is flushed to the plugin
+/// instead, on the audio thread, through CLAP's `params.flush` -- with no
+/// allocation, no lock and no call on the wrong thread, which `play`
+/// checks -- and the plugin holds the level.
+#[test]
+fn nine_knob_edits_on_a_muted_plugin_instrument_all_reach_it() {
+    let (mut project, slot, _) = sine_song();
+    project.channels[0].setup.channel.muted = true;
+    let edit = |id: u32, value: f32| {
+        RealtimeCommand::Engine(EngineCommand::SetChannelGeneratorParam {
+            channel: 0,
+            id,
+            value,
+        })
+    };
+    let block = 256;
+    let mut script = vec![(4, edit(test_plugin::PARAM_LEVEL, -12.0))];
+    script.extend((0..8u32).map(|index| (4, edit(9_000 + index, 0.5))));
+    let mut instance = open_sine();
+    let lifeline = Lifeline::new();
+    play(&project, slot, &mut instance, &lifeline, script, 12 * block, block);
+    assert_eq!(
+        instance.param_value(test_plugin::PARAM_LEVEL),
+        Some(-12.0),
+        "the plugin lost the first of nine edits made while muted"
+    );
+}

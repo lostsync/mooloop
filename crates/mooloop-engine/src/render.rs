@@ -866,6 +866,8 @@ type Reclaim = Vec<ReclaimedEffect>;
 /// parameter ID; retaining every intermediate mouse position is neither
 /// audible nor necessary, while allocating a full `EventList` for every one
 /// of 256 possible slots would make empty chains prohibitively expensive.
+/// Eight distinct knobs fill it; the ninth is restated from the base or
+/// flushed to a plugin (`EffectChain::queue_event`), never dropped.
 const MAX_PENDING_EFFECT_PARAMS: usize = 8;
 
 /// `MAX_BLOCK_SIZE` is the executor's explicit block-size boundary. Capturing
@@ -1346,27 +1348,61 @@ impl PendingEffectParams {
         self.events.fill(None);
     }
 
-    fn queue(&mut self, event: TimedEvent) {
-        let Event::ParamValue { id, .. } = event.event else {
-            if let Some(empty) = self.events.iter_mut().find(|entry| entry.is_none()) {
-                *empty = Some(event);
+    /// Queue `event` for the next block the device runs. A `ParamValue`
+    /// replaces any value already queued for its id. A full box queues
+    /// nothing and hands the event back, unchanged: what becomes of it --
+    /// restated from the base, flushed to a plugin, or counted -- is the
+    /// caller's to say, because a move dropped here is a device playing a
+    /// value the face and the file no longer show.
+    fn queue(&mut self, event: TimedEvent) -> Result<(), TimedEvent> {
+        if let Event::ParamValue { id, .. } = event.event {
+            if let Some(existing) = self.events.iter_mut().find(|existing| {
+                matches!(existing, Some(TimedEvent { event: Event::ParamValue { id: existing_id, .. }, .. }) if *existing_id == id)
+            }) {
+                *existing = Some(event);
+                return Ok(());
             }
-            return;
+        }
+        match self.events.iter_mut().find(|entry| entry.is_none()) {
+            Some(empty) => {
+                *empty = Some(event);
+                Ok(())
+            }
+            None => Err(event),
+        }
+    }
+
+    /// Put `event`, a non-`ParamValue`, in place of a queued `ParamValue`,
+    /// returning whether there was one to displace. For a box whose values
+    /// the slot can restate from its base, so a gesture is never the thing
+    /// that is lost.
+    fn displace_a_value(&mut self, event: TimedEvent) -> bool {
+        let Some(entry) = self.events.iter_mut().find(|entry| {
+            matches!(entry, Some(TimedEvent { event: Event::ParamValue { .. }, .. }))
+        }) else {
+            return false;
         };
-        if let Some(existing) = self.events.iter_mut().find(|existing| {
-            matches!(existing, Some(TimedEvent { event: Event::ParamValue { id: existing_id, .. }, .. }) if *existing_id == id)
-        }) {
-            *existing = Some(event);
-            return;
+        *entry = Some(event);
+        true
+    }
+
+    /// Hand everything queued, then `last`, to `node` now
+    /// ([`AudioNode::flush_params`]), and empty the box if it took them.
+    /// For a box that is full and whose node keeps its own values. Returns
+    /// whether it took them; a box it refused is left as it was.
+    fn flush_into<N: AudioNode + ?Sized>(&mut self, node: &mut N, last: TimedEvent) -> bool {
+        let mut events = [last; MAX_PENDING_EFFECT_PARAMS + 1];
+        let mut len = 0;
+        for event in self.events.iter().flatten() {
+            events[len] = *event;
+            len += 1;
         }
-        if let Some(empty) = self.events.iter_mut().find(|entry| entry.is_none()) {
-            *empty = Some(event);
-        } else {
-            // The command queue is already bounded. Under pathological
-            // automation traffic, keep the newest value rather than retaining
-            // a stale one indefinitely.
-            self.events[0] = Some(event);
+        events[len] = last;
+        let flushed = node.flush_params(&events[..=len]);
+        if flushed {
+            self.clear();
         }
+        flushed
     }
 
     /// Returns how many of the queued events `destination` had no room for.
@@ -1414,8 +1450,13 @@ pub struct EffectSlot {
     /// Control-side identity of an asynchronously prepared device resource.
     resource_key: Option<u64>,
     /// Parameter events queued between blocks by `EngineCommand::SetEffectParam`
-    /// and consumed by the next block.
+    /// and consumed by the next block the device runs in.
     events: PendingEffectParams,
+    /// `events` overflowed since the device last ran, so the next block it
+    /// runs in hands it every parameter's base value
+    /// ([`EffectChain::restate_base`]). Only a native kind sets it: a hosted
+    /// plugin keeps its own values and is flushed instead.
+    restate: bool,
     /// Host controls. These belong to the slot rather than to the device in
     /// it, so replacing an effect keeps the wet/dry and trims dialled there.
     bypassed: bool,
@@ -1511,6 +1552,7 @@ impl EffectSlot {
             base_params: None,
             resource_key: None,
             events: PendingEffectParams::empty(),
+            restate: false,
             bypassed: false,
             wet_dry: 1.0,
             input_trim: 1.0,
@@ -2474,15 +2516,94 @@ impl EffectChain {
     }
 
     fn queue_param(&mut self, slot: usize, id: u32, value: f32) {
-        if let Some(state) = self.slot_mut(slot) {
-            // Queued between blocks, so it lands at the next block's first
-            // frame. Repeated writes to a parameter coalesce to its newest
-            // value, matching the command ring's latest-state semantics.
-            state.events.queue(TimedEvent {
+        // Queued between blocks, so it lands at the next block's first
+        // frame. Repeated writes to a parameter coalesce to its newest
+        // value, matching the command ring's latest-state semantics.
+        self.queue_event(
+            slot,
+            TimedEvent {
                 offset: 0,
                 event: Event::ParamValue { id, value },
-            });
+            },
+        );
+    }
+
+    /// Queue `event` for the device in `slot`, losing nothing when the box is
+    /// full. The box is held across every block the device does not run in
+    /// -- bypassed, asleep, on a muted channel -- so it fills with nine
+    /// distinct knobs turned in the meantime, and then:
+    ///
+    /// - a native device's knob already sits in `base_params` (every caller
+    ///   sets the base first), so the slot is marked to restate its whole
+    ///   base the next block it runs, and a gesture takes the place of a
+    ///   queued value, which the restate brings back;
+    /// - a hosted plugin keeps its own values and has no base here, so the
+    ///   box and the event are flushed to it at once
+    ///   ([`AudioNode::flush_params`]) and the box empties.
+    ///
+    /// Whatever still finds no home (a plugin that cannot flush, a box full
+    /// of gestures) is counted in `refused_events`.
+    fn queue_event(&mut self, slot: usize, event: TimedEvent) {
+        let Some(state) = self.slots.get_mut(slot).and_then(|state| state.as_deref_mut()) else {
+            return;
+        };
+        let Err(event) = state.events.queue(event) else {
+            return;
+        };
+        if state.kind == Some(mooloop_core::EffectKind::Plugin) {
+            let node = self.nodes[slot].as_deref_mut();
+            if !node.is_some_and(|node| state.events.flush_into(node, event)) {
+                self.refused_events += 1;
+            }
+            return;
         }
+        if state.base_params.is_none() {
+            self.refused_events += 1;
+            return;
+        }
+        let restated = match event.event {
+            Event::ParamValue { .. } => true,
+            _ => state.events.displace_a_value(event),
+        };
+        if restated {
+            state.restate = true;
+        } else {
+            self.refused_events += 1;
+        }
+    }
+
+    /// Push every parameter of the device in `slot` at its base value onto
+    /// `event_scratch`, at the block's first frame, but for those a lane or a
+    /// route resolves this block (`curve_scratch`, already filled), which
+    /// would only be overwritten. Returns how many found no room.
+    fn restate_base(&mut self, slot: usize) -> u64 {
+        let Some(state) = self.slot(slot) else {
+            return 0;
+        };
+        let (Some(kind), Some(params)) = (state.kind, state.base_params) else {
+            return 0;
+        };
+        let driven = &self.curve_scratch.ids[..self.curve_scratch.count];
+        let mut refused = 0;
+        for descriptor in kind.descriptors() {
+            if driven.contains(&descriptor.id) {
+                continue;
+            }
+            let Some(value) = params.get(descriptor.id) else {
+                continue;
+            };
+            let event = TimedEvent {
+                offset: 0,
+                event: Event::ParamValue {
+                    id: descriptor.id,
+                    value,
+                },
+            };
+            if !self.event_scratch.push_ordered(event) {
+                refused += 1;
+            }
+        }
+        refused
     }
 
     /// Update a knob's base value through the descriptor table. This is the
@@ -2696,30 +2817,33 @@ impl EffectChain {
     }
 
     fn queue_buffer(&mut self, slot: usize, event: mooloop_core::BufferEvent) {
-        if let Some(state) = self.slot_mut(slot) {
-            state.events.queue(TimedEvent {
+        self.queue_event(
+            slot,
+            TimedEvent {
                 offset: 0,
                 event: Event::Buffer(event),
-            });
-        }
+            },
+        );
     }
 
     fn queue_buffer_scrub(&mut self, slot: usize, delta_frames: f32) {
-        if let Some(state) = self.slot_mut(slot) {
-            state.events.queue(TimedEvent {
+        self.queue_event(
+            slot,
+            TimedEvent {
                 offset: 0,
                 event: Event::BufferScrub { delta_frames },
-            });
-        }
+            },
+        );
     }
 
     fn queue_buffer_release(&mut self, slot: usize) {
-        if let Some(state) = self.slot_mut(slot) {
-            state.events.queue(TimedEvent {
+        self.queue_event(
+            slot,
+            TimedEvent {
                 offset: 0,
                 event: Event::BufferRelease,
-            });
-        }
+            },
+        );
     }
 
     /// Size every container's dry ring and every layer branch's ring on this
@@ -3048,8 +3172,11 @@ impl EffectChain {
                 // through the equal-power crossfade, not even bit-exact -- a
                 // transparent node blended at unity still leaks a cos(pi/2)
                 // of the dry.
+                // Its parameters are read from its base, never queued to a
+                // node, so there is nothing to restate either.
                 if let Some(state) = self.slots[slot].as_mut() {
                     state.events.clear();
+                    state.restate = false;
                     state.settle_container_wet();
                 }
                 let children = self.container_children(slot);
@@ -3348,6 +3475,14 @@ impl EffectChain {
                     self.refused_events += state.events.copy_to(&mut self.event_scratch);
                 }
                 self.control_events_for_slot(slot, scope, modulation, automation);
+                // After the curves are resolved, so a restate leaves what
+                // they drive to them.
+                let restate = self.slots[slot]
+                    .as_deref_mut()
+                    .is_some_and(|state| std::mem::take(&mut state.restate));
+                if restate {
+                    self.refused_events += self.restate_base(slot);
+                }
                 // `control_events_for_slot` mutates the shared scratch
                 // pools, so take the node borrow only after that work.
                 let node = self.nodes[slot].as_mut().expect("checked above");
@@ -4457,9 +4592,9 @@ pub struct ChannelStrip {
     /// A hosted instrument's knob edits waiting for the next block, as
     /// `ParamValue`s in its own units (MOO-314). A plugin keeps its values
     /// itself, so there is no base here to write, and its edits go to it the
-    /// way a hosted effect's do (`EffectSlot::events`), bounded and
-    /// newest-wins per id. Moved onto the channel's list at the top of the
-    /// block it is heard in.
+    /// way a hosted effect's do (`EffectSlot::events`), newest-wins per id,
+    /// and flushed to the plugin when full ([`Self::queue_source_param`]).
+    /// Moved onto the channel's list at the top of the block it is heard in.
     source_pending: PendingEffectParams,
     effects: EffectChain,
     bus: StereoBus,
@@ -4641,6 +4776,22 @@ impl ChannelStrip {
             take: None,
             sequenced: SequencedVoices::new(),
         }
+    }
+
+    /// Queue a hosted instrument's knob edit for the next block the strip
+    /// renders, returning how many edits were lost (0 or 1). A muted
+    /// channel is not rendered, so the box is held across blocks there; when
+    /// it is full, it and the edit are flushed to the plugin at once
+    /// ([`AudioNode::flush_params`]) rather than any of them dropped.
+    fn queue_source_param(&mut self, id: u32, value: f32) -> u64 {
+        let event = TimedEvent {
+            offset: 0,
+            event: Event::ParamValue { id, value },
+        };
+        let Err(event) = self.source_pending.queue(event) else {
+            return 0;
+        };
+        u64::from(!self.source_pending.flush_into(&mut *self.source, event))
     }
 
     /// Put `source` in the slot and hand back the one it displaces, which
@@ -8459,10 +8610,7 @@ impl RenderState {
                         .flatten();
                     if lane.is_none() {
                         if let Some(strip) = self.strips.get_mut(channel as usize) {
-                            strip.source_pending.queue(TimedEvent {
-                                offset: 0,
-                                event: Event::ParamValue { id, value },
-                            });
+                            self.refused_events += strip.queue_source_param(id, value);
                         }
                     }
                     return;
@@ -18834,7 +18982,13 @@ mod footprint {
         // And by eight for MOO-213: the frames a slot that has just had a
         // latent hosted plugin swapped in holds at its dry path before
         // fading in, so the incoming node has caught up with the dry ring.
-        assert_eq!(size_of::<EffectSlot>(), 624);
+        //
+        // And by eight for MOO-344: the flag that a native device's queued
+        // knob moves outgrew their box and its base is restated when it next
+        // runs. A bool, rounded up to the struct's alignment; per occupied
+        // slot only, where the alternative -- a box sized for the largest
+        // descriptor table -- was about 2 KB on every slot and every strip.
+        assert_eq!(size_of::<EffectSlot>(), 632);
         assert_eq!(size_of::<Option<Box<EffectSlot>>>(), 8);
         // Eight of this is the pointer to the per-depth dry buffers a chain
         // needs while it is *inside* containers. One pointer, not four
@@ -19514,3 +19668,338 @@ mod kept_rings {
     }
 }
 
+
+/// MOO-344: a knob turned while its device is not being processed --
+/// bypassed, asleep, on a muted channel, or a plugin instrument on a muted
+/// channel -- reaches the device, however many distinct knobs were turned.
+/// The box that holds them has eight entries; each test turns nine, which
+/// before the fix overwrote the first.
+#[cfg(test)]
+mod pending_params {
+    use super::*;
+    use crate::render_test_support::SAMPLE_RATE;
+    use mooloop_core::{EffectKind, EffectSlotState, PluginSlotId, ProjectChannel};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    const BLOCK: usize = 256;
+
+    /// Every `ParamValue` a probe was handed, in order, by `process` or by
+    /// `flush_params`.
+    type Heard = Arc<Mutex<Vec<(u32, f32)>>>;
+
+    /// A device that records the values it is handed, at rest (and so
+    /// allowed to sleep) while `rest` says so. `keeps_values` makes it a
+    /// stand-in for a hosted plugin, which takes a flush.
+    struct Probe {
+        heard: Heard,
+        rest: Arc<AtomicBool>,
+        keeps_values: bool,
+    }
+
+    impl Probe {
+        fn record<'a>(&self, events: impl Iterator<Item = &'a TimedEvent>) {
+            let mut heard = self.heard.lock().expect("probe lock");
+            for event in events {
+                if let Event::ParamValue { id, value } = event.event {
+                    heard.push((id, value));
+                }
+            }
+        }
+    }
+
+    impl AudioNode for Probe {
+        fn is_at_rest(&self) -> bool {
+            self.rest.load(Ordering::Relaxed)
+        }
+
+        fn tail_frames(&self) -> u32 {
+            if self.rest.load(Ordering::Relaxed) {
+                0
+            } else {
+                u32::MAX
+            }
+        }
+
+        fn flush_params(&mut self, events: &[TimedEvent]) -> bool {
+            if self.keeps_values {
+                self.record(events.iter());
+            }
+            self.keeps_values
+        }
+
+        fn process(
+            &mut self,
+            _context: &ProcessContext,
+            _bus: &mut StereoBus,
+            events_in: &EventList,
+            _events_out: Option<&mut EventList>,
+        ) {
+            self.record(events_in.iter());
+        }
+    }
+
+    struct Rig {
+        render: RenderState,
+        heard: Heard,
+        rest: Arc<AtomicBool>,
+    }
+
+    impl Rig {
+        fn blocks(&mut self, count: usize) {
+            for _ in 0..count {
+                self.render.process_block(BLOCK);
+            }
+        }
+
+        /// The last value the probe was handed for `id`.
+        fn last_heard(&self, id: u32) -> Option<f32> {
+            let heard = self.heard.lock().expect("probe lock");
+            heard
+                .iter()
+                .rev()
+                .find(|(heard, _)| *heard == id)
+                .map(|&(_, value)| value)
+        }
+
+        fn forget(&self) {
+            self.heard.lock().expect("probe lock").clear();
+        }
+
+        fn heard_nothing(&self) -> bool {
+            self.heard.lock().expect("probe lock").is_empty()
+        }
+
+        fn mute(&mut self, muted: bool) {
+            self.render
+                .apply_command(EngineCommand::SetChannelMuted { channel: 0, muted });
+        }
+
+        fn bypass(&mut self, bypassed: bool) {
+            self.render.apply_command(EngineCommand::SetEffectBypassed {
+                target: EffectTarget::Channel(0),
+                slot: 0,
+                bypassed,
+            });
+        }
+
+        fn assert_all_heard(&self, turned: &[(u32, f32)], case: &str) {
+            for &(id, value) in turned {
+                assert_eq!(
+                    self.last_heard(id),
+                    Some(value),
+                    "{case}: the device never got knob {id} at {value}"
+                );
+            }
+            assert_eq!(self.render.refused_events(), 0, "{case}: something was refused");
+        }
+    }
+
+    /// One silent channel (a drum synth with no notes) with `device` in
+    /// its first insert, and a probe running in that insert's place.
+    fn rig(device: EffectSlotState, keeps_values: bool) -> Rig {
+        let mut project = Project::default();
+        let mut channel = ProjectChannel::drum_synth(0, 1);
+        channel.setup.push_effect(device).expect("room in the chain");
+        project.channels = vec![channel];
+        project.assign_channel_ids();
+        project.assign_device_ids();
+        let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        let heard = Heard::default();
+        let rest = Arc::new(AtomicBool::new(false));
+        render.strips[0].effects.nodes[0] = Some(Box::new(Probe {
+            heard: Arc::clone(&heard),
+            rest: Arc::clone(&rest),
+            keeps_values,
+        }));
+        Rig { render, heard, rest }
+    }
+
+    fn eq_rig() -> Rig {
+        rig(EffectSlotState::of_kind(EffectKind::Eq), false)
+    }
+
+    /// A hosted plugin effect, with a probe that takes a flush or not.
+    fn plugin_rig(keeps_values: bool) -> Rig {
+        let mut device = EffectSlotState::of_kind(EffectKind::Plugin);
+        device.params = mooloop_core::EffectParams::Plugin(PluginSlotId(1));
+        rig(device, keeps_values)
+    }
+
+    /// Turn the EQ's first nine knobs, and return each id with the base
+    /// value the engine stored for it.
+    fn turn_nine_eq_knobs(render: &mut RenderState) -> Vec<(u32, f32)> {
+        let nine = &EffectKind::Eq.descriptors()[..9];
+        nine.iter()
+            .map(|descriptor| {
+                let value = descriptor.min + (descriptor.max - descriptor.min) * 0.3;
+                render.apply_command(EngineCommand::SetEffectParam {
+                    target: EffectTarget::Channel(0),
+                    slot: 0,
+                    id: descriptor.id,
+                    value,
+                });
+                let stored = render.strips[0]
+                    .effects
+                    .base_param(0, descriptor.id)
+                    .expect("an EQ descriptor has a base");
+                (descriptor.id, stored)
+            })
+            .collect()
+    }
+
+    /// Nine distinct ids on a plugin, which has no descriptor table.
+    fn turn_nine_plugin_knobs(render: &mut RenderState) -> Vec<(u32, f32)> {
+        (0..9u32)
+            .map(|index| {
+                let (id, value) = (1_000 + index, index as f32 + 0.5);
+                render.apply_command(EngineCommand::SetEffectParam {
+                    target: EffectTarget::Channel(0),
+                    slot: 0,
+                    id,
+                    value,
+                });
+                (id, value)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn nine_knobs_turned_on_a_bypassed_eq_all_land_when_it_returns() {
+        let mut rig = eq_rig();
+        rig.bypass(true);
+        rig.blocks(40);
+        rig.forget();
+        let turned = turn_nine_eq_knobs(&mut rig.render);
+        rig.blocks(4);
+        assert!(rig.heard_nothing(), "a bypassed device was handed its knobs");
+        rig.bypass(false);
+        rig.blocks(2);
+        rig.assert_all_heard(&turned, "bypass");
+    }
+
+    #[test]
+    fn nine_knobs_turned_on_a_sleeping_eq_all_land_when_it_wakes() {
+        let mut rig = eq_rig();
+        rig.rest.store(true, Ordering::Relaxed);
+        rig.blocks(40);
+        rig.forget();
+        let turned = turn_nine_eq_knobs(&mut rig.render);
+        rig.blocks(4);
+        assert!(rig.heard_nothing(), "a sleeping device was handed its knobs");
+        rig.rest.store(false, Ordering::Relaxed);
+        rig.blocks(2);
+        rig.assert_all_heard(&turned, "sleep");
+    }
+
+    #[test]
+    fn nine_knobs_turned_on_a_muted_channels_eq_all_land_on_unmute() {
+        let mut rig = eq_rig();
+        // At rest, so the muted chain is skipped whole rather than rung out.
+        rig.rest.store(true, Ordering::Relaxed);
+        rig.mute(true);
+        rig.blocks(100);
+        rig.forget();
+        let turned = turn_nine_eq_knobs(&mut rig.render);
+        rig.blocks(4);
+        assert!(rig.heard_nothing(), "a muted channel's device was handed its knobs");
+        rig.rest.store(false, Ordering::Relaxed);
+        rig.mute(false);
+        rig.blocks(2);
+        rig.assert_all_heard(&turned, "mute");
+    }
+
+    /// A gesture that finds the box full of values takes one's place, which
+    /// the restate brings back, rather than being lost.
+    #[test]
+    fn a_gesture_into_a_full_box_displaces_a_value() {
+        let mut queue = PendingEffectParams::empty();
+        for id in 0..MAX_PENDING_EFFECT_PARAMS as u32 {
+            let value = TimedEvent {
+                offset: 0,
+                event: Event::ParamValue { id, value: 1.0 },
+            };
+            assert!(queue.queue(value).is_ok());
+        }
+        let release = TimedEvent {
+            offset: 0,
+            event: Event::BufferRelease,
+        };
+        let refused = queue.queue(release).expect_err("the box is full");
+        assert!(queue.displace_a_value(refused));
+        assert!(queue
+            .events
+            .iter()
+            .flatten()
+            .any(|event| matches!(event.event, Event::BufferRelease)));
+    }
+
+    #[test]
+    fn nine_knobs_turned_on_a_bypassed_plugin_are_flushed_to_it() {
+        let mut rig = plugin_rig(true);
+        rig.bypass(true);
+        rig.blocks(40);
+        rig.forget();
+        let turned = turn_nine_plugin_knobs(&mut rig.render);
+        rig.assert_all_heard(&turned, "bypassed plugin, at the ninth");
+        rig.bypass(false);
+        rig.blocks(2);
+        rig.assert_all_heard(&turned, "bypassed plugin, back in the path");
+    }
+
+    #[test]
+    fn nine_knobs_turned_on_a_muted_channels_plugin_are_flushed_to_it() {
+        let mut rig = plugin_rig(true);
+        rig.rest.store(true, Ordering::Relaxed);
+        rig.mute(true);
+        rig.blocks(100);
+        rig.forget();
+        let turned = turn_nine_plugin_knobs(&mut rig.render);
+        rig.assert_all_heard(&turned, "muted plugin");
+    }
+
+    /// A plugin that cannot take a flush (no processor yet, a failed one)
+    /// loses the ninth, and it is counted.
+    #[test]
+    fn a_plugin_that_cannot_take_a_flush_counts_the_knob_it_lost() {
+        let mut rig = plugin_rig(false);
+        rig.bypass(true);
+        rig.blocks(40);
+        turn_nine_plugin_knobs(&mut rig.render);
+        assert_eq!(rig.render.refused_events(), 1);
+    }
+
+    #[test]
+    fn nine_knobs_turned_on_a_muted_plugin_instrument_are_flushed_to_it() {
+        let mut rig = eq_rig();
+        rig.rest.store(true, Ordering::Relaxed);
+        let probe = Probe {
+            heard: Arc::clone(&rig.heard),
+            rest: Arc::clone(&rig.rest),
+            keeps_values: true,
+        };
+        let previous = rig.render.strips[0].install_source(
+            Box::new(mooloop_dsp::HostedSource::with_processor(
+                PluginSlotId(1),
+                Box::new(probe),
+            )),
+            mooloop_core::DeviceId(77),
+        );
+        drop(previous);
+        rig.mute(true);
+        rig.blocks(100);
+        rig.forget();
+        let turned: Vec<(u32, f32)> = (0..9u32)
+            .map(|index| {
+                let (id, value) = (2_000 + index, index as f32 - 4.0);
+                rig.render.apply_command(EngineCommand::SetChannelGeneratorParam {
+                    channel: 0,
+                    id,
+                    value,
+                });
+                (id, value)
+            })
+            .collect();
+        rig.assert_all_heard(&turned, "muted plugin instrument");
+    }
+}

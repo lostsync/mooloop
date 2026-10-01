@@ -610,3 +610,71 @@ fn the_chatty_gain_costs_the_callback_nothing(on_audio_thread: impl FnOnce(Box<d
         "the plugin logged from process in at most every block, and the count says so: {unlogged}"
     );
 }
+
+/// **Nine knob edits on a bypassed plugin effect all reach it** (MOO-344).
+///
+/// A bypassed device is not processed, so its edits wait in an eight-entry
+/// box. The test gain's own gain and eight more ids (ones it does not
+/// have, which it ignores) arrive in one gap between blocks: the ninth used
+/// to overwrite the gain. The full box is flushed to the plugin instead, on
+/// the executor's thread through CLAP's `params.flush`, allocating and
+/// freeing nothing there and calling nothing on the wrong thread, and the
+/// plugin holds the gain.
+#[test]
+fn nine_knob_edits_on_a_bypassed_plugin_effect_all_reach_it() {
+    let (mut project, slots) = drum_loop(1, &[0]);
+    project.channels[0].setup.effects[0].bypassed = true;
+    let slot = slots[0];
+    let mut instance = open_gain(0.0, 0);
+    let lifeline = Lifeline::new();
+    let node = instance.build_processor(lifeline.tie()).expect("a processor");
+    let mut live = live(RenderState::from_project(SAMPLE_RATE, &project, &[]));
+    assert!(live.commands.push(replace(EffectTarget::Channel(0), 0, slot, node)).is_ok());
+    assert!(live.commands.push(RealtimeCommand::Engine(EngineCommand::Play)).is_ok());
+    let edit = |id: u32, value: f32| {
+        RealtimeCommand::Engine(EngineCommand::SetEffectParam {
+            target: EffectTarget::Channel(0),
+            slot: 0,
+            id,
+            value,
+        })
+    };
+    let mut edits = vec![edit(test_plugin::PARAM_GAIN, -12.0)];
+    edits.extend((0..8u32).map(|index| edit(9_000 + index, 0.5)));
+    let block = 256;
+    std::thread::scope(|scope| {
+        scope
+            .spawn(move || {
+                crate::executor::prepare_audio_thread();
+                let silence = vec![0.0f32; block];
+                let (mut l, mut r) = (vec![0.0f32; block], vec![0.0f32; block]);
+                let mut edits = Some(edits);
+                for index in 0..12 {
+                    if index == 4 {
+                        for command in edits.take().into_iter().flatten() {
+                            assert!(live.commands.push(command).is_ok(), "the command ring has room");
+                        }
+                    }
+                    let before = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+                    live.executor
+                        .process_with_input(std::iter::empty(), &silence, &silence, &mut l, &mut r);
+                    let after = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+                    assert_eq!(after, before, "block {index} allocated or freed");
+                    while live.events.pop().is_ok() {}
+                    while let Ok(reclaimed) = live.reclaim.pop() {
+                        drop(reclaimed);
+                    }
+                }
+                drop(live);
+            })
+            .join()
+            .expect("the audio thread did not panic");
+    });
+    assert!(lifeline.is_alone(), "the executor dropped its processor");
+    assert_eq!(instance.misbehaviour(), 0, "no call on the wrong thread");
+    assert_eq!(
+        instance.param_value(test_plugin::PARAM_GAIN),
+        Some(-12.0),
+        "the plugin lost the first of nine edits made while bypassed"
+    );
+}
