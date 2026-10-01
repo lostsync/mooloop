@@ -2700,7 +2700,11 @@ land on its own when it starts to matter:
   under XWayland (full plugin window behaviour)", MOO-302) runs the whole
   application on X11 through XWayland under a Wayland session, from the next
   start, so plugin windows are kept above the main window; with no X server
-  it stays on Wayland and logs why (MOO-301).
+  it stays on Wayland and logs why (MOO-301). Under it the window is drawn
+  at the scale `WINIT_X11_SCALE_FACTOR` names, else the X server's
+  `Xft.dpi`, else a whole `GDK_SCALE`, else 1 -- never one worked out from
+  the screen's reported millimetres, which drew it 1.5 times too large on a
+  ~144 dpi laptop panel (MOO-343). The log says which.
   The log
   says what the scan found. A song's plugins are found through it, and the
   browser's PLUGINS tab lists it (above). **Preferences > Plugins** (MOO-229)

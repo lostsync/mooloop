@@ -18,7 +18,9 @@ fn main() {
     // Before any window, and before the audio engine starts any thread:
     // winit fixes the display backend once per process, and the "Run under
     // XWayland" setting has to reach it first (MOO-301). It chooses the
-    // display server only; audio and MIDI never see it.
+    // display server only; audio and MIDI never see it. Nothing above it may
+    // start a thread: under the setting it may set winit's X11 scale
+    // variable, and does only while the process has one (MOO-343).
     let display = mooloop_ui::select_display_backend();
     match display.expected {
         Some(backend) => log_info!("display", "display backend: {backend}"),

@@ -5,7 +5,8 @@
 //!
 //! The decision is `mooloop_plugin_window::display`'s, which tests it
 //! without a display; this is only where it meets Slint. Nothing here
-//! touches the environment, audio or MIDI.
+//! touches audio or MIDI, and the environment only as
+//! `mooloop_plugin_window::display::apply_x11_scale` allows (MOO-343).
 
 use mooloop_core::log_warn;
 use mooloop_plugin_window::NativeWindow;
@@ -45,10 +46,22 @@ fn force_x11(plan: BackendPlan) -> BackendPlan {
     use slint::winit_030::{winit, SlintEvent};
     use winit::platform::x11::EventLoopBuilderExtX11;
 
-    if let Err(error) = mooloop_plugin_window::x11::probe() {
-        return plan.without_x11(format!(
-            "Run under XWayland is on, but {error}, so mooloop runs on Wayland"
-        ));
+    use mooloop_plugin_window::display::{apply_x11_scale, x11_scale_in};
+
+    let server = match mooloop_plugin_window::x11::probe() {
+        Ok(server) => server,
+        Err(error) => {
+            return plan.without_x11(format!(
+                "Run under XWayland is on, but {error}, so mooloop runs on Wayland"
+            ))
+        }
+    };
+    // Before the event loop exists: winit reads the scale when it first
+    // asks for the monitors.
+    let scale = x11_scale_in(|name| std::env::var_os(name), server.xft_dpi);
+    match apply_x11_scale(scale) {
+        Ok(()) => log_info!("display", "the X11 window is drawn at {scale}"),
+        Err(why) => log_warn!("display", "{why}"),
     }
     let mut builder = winit::event_loop::EventLoop::<SlintEvent>::with_user_event();
     builder.with_x11();

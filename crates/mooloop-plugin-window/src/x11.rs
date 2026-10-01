@@ -430,14 +430,125 @@ pub fn display_name_in(env: impl Fn(&str) -> Option<OsString>) -> Result<String,
         .ok_or(WindowError::NoDisplay)
 }
 
-/// Whether the X server `DISPLAY` names can be reached: connect, and hang
-/// up. Opens no window. What the "Run under XWayland" setting asks before it
-/// commits the process to X11, which cannot be undone once asked.
-pub fn probe() -> Result<(), WindowError> {
+/// What [`probe`] learned from the X server it reached.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ProbedServer {
+    /// The server's `Xft.dpi`, looked for where winit's X11 backend looks
+    /// and in the same order: XSETTINGS' `Xft/DPI` (stored as dpi × 1024),
+    /// then the resource database's `Xft.dpi`. `None` when neither has one
+    /// winit could read, which is when winit works a scale out from the
+    /// output's millimetres instead.
+    pub xft_dpi: Option<f64>,
+}
+
+/// Whether the X server `DISPLAY` names can be reached, and what it says
+/// about scale: connect, read, hang up. Opens no window and starts no
+/// thread. What the "Run under XWayland" setting asks before it commits the
+/// process to X11, which cannot be undone once asked.
+pub fn probe() -> Result<ProbedServer, WindowError> {
     let display = display_name_in(|name| std::env::var_os(name))?;
-    let (connection, _) = x11rb::connect(Some(&display))?;
-    drop(connection);
-    Ok(())
+    let (connection, screen) = x11rb::connect(Some(&display))?;
+    Ok(ProbedServer {
+        xft_dpi: xft_dpi(&connection, screen),
+    })
+}
+
+/// `Xft.dpi` as winit 0.30 reads it (`XConnection::get_xft_dpi`): an
+/// XSETTINGS value that cannot be read falls through to the resource
+/// database, and a database value that does not parse counts as unset.
+fn xft_dpi(connection: &RustConnection, screen: usize) -> Option<f64> {
+    xsettings_dpi(connection, screen).or_else(|| {
+        let database = x11rb::resource_manager::new_from_default(connection).ok()?;
+        database.get_string("Xft.dpi", "")?.parse().ok()
+    })
+}
+
+/// The `Xft/DPI` that the XSETTINGS manager of `screen` publishes, if one
+/// runs and publishes it.
+fn xsettings_dpi(connection: &RustConnection, screen: usize) -> Option<f64> {
+    let intern = |name: &str| -> Option<u32> {
+        let reply = connection.intern_atom(false, name.as_bytes()).ok()?.reply().ok()?;
+        Some(reply.atom)
+    };
+    let selection = intern(&format!("_XSETTINGS_S{screen}"))?;
+    let settings = intern("_XSETTINGS_SETTINGS")?;
+    let owner = connection.get_selection_owner(selection).ok()?.reply().ok()?.owner;
+    if owner == x11rb::NONE {
+        return None;
+    }
+    let property = connection
+        .get_property(false, owner, settings, settings, 0, u32::MAX / 4)
+        .ok()?
+        .reply()
+        .ok()?;
+    xsettings_integer(&property.value, b"Xft/DPI").map(|dpi| f64::from(dpi) / 1024.0)
+}
+
+/// The integer setting `name` in an `_XSETTINGS_SETTINGS` property's data,
+/// or `None` when it is absent, is not an integer, or the data is malformed.
+///
+/// The format (XSETTINGS 0.5): a byte order (`l` or `B`), three bytes of
+/// padding, a serial and a setting count (four bytes each), then each
+/// setting: a type byte (0 integer, 1 string, 2 colour), a pad byte, a
+/// 16-bit name length, the name padded to four bytes, a 32-bit serial, and
+/// the value -- an `i32`, a 32-bit length and the string padded to four
+/// bytes, or four 16-bit channels.
+pub fn xsettings_integer(data: &[u8], name: &[u8]) -> Option<i32> {
+    struct Reader<'a> {
+        data: &'a [u8],
+        at: usize,
+        big: bool,
+    }
+    impl<'a> Reader<'a> {
+        fn take(&mut self, len: usize) -> Option<&'a [u8]> {
+            let bytes = self.data.get(self.at..self.at.checked_add(len)?)?;
+            self.at += len;
+            Some(bytes)
+        }
+        fn padded(&mut self, len: usize) -> Option<&'a [u8]> {
+            Some(&self.take(len.div_ceil(4) * 4)?[..len])
+        }
+        fn u16(&mut self) -> Option<u16> {
+            let b: [u8; 2] = self.take(2)?.try_into().ok()?;
+            Some(if self.big { u16::from_be_bytes(b) } else { u16::from_le_bytes(b) })
+        }
+        fn i32(&mut self) -> Option<i32> {
+            let b: [u8; 4] = self.take(4)?.try_into().ok()?;
+            Some(if self.big { i32::from_be_bytes(b) } else { i32::from_le_bytes(b) })
+        }
+    }
+
+    let big = match *data.first()? {
+        b'B' => true,
+        b'l' => false,
+        _ => cfg!(target_endian = "big"),
+    };
+    // Past the byte order, its padding and the serial.
+    let mut reader = Reader { data, at: 8, big };
+    let count = reader.i32()?;
+    for _ in 0..count.max(0) {
+        let kind = reader.take(2)?[0];
+        let name_len = usize::from(reader.u16()?);
+        let this = reader.padded(name_len)?;
+        reader.take(4)?; // the setting's serial
+        match kind {
+            0 => {
+                let value = reader.i32()?;
+                if this == name {
+                    return Some(value);
+                }
+            }
+            1 => {
+                let len = usize::try_from(reader.i32()?).ok()?;
+                reader.padded(len)?;
+            }
+            2 => {
+                reader.take(8)?;
+            }
+            _ => return None,
+        }
+    }
+    None
 }
 
 /// One connection to the X server, and the plugin windows made on it.
@@ -692,6 +803,91 @@ mod tests {
 
     const fn size(width: u32, height: u32) -> GuiSize {
         GuiSize { width, height }
+    }
+
+    /// One XSETTINGS setting, as a manager writes it.
+    enum Setting<'a> {
+        Integer(&'a str, i32),
+        String(&'a str, &'a str),
+        Color(&'a str),
+    }
+
+    /// An `_XSETTINGS_SETTINGS` property's data holding `settings`, in the
+    /// byte order `big` names.
+    fn xsettings(big: bool, settings: &[Setting<'_>]) -> Vec<u8> {
+        let u16b = |v: u16| if big { v.to_be_bytes() } else { v.to_le_bytes() };
+        let i32b = |v: i32| if big { v.to_be_bytes() } else { v.to_le_bytes() };
+        let pad = |out: &mut Vec<u8>| out.resize(out.len().div_ceil(4) * 4, 0);
+        let mut out = vec![if big { b'B' } else { b'l' }, 0, 0, 0];
+        out.extend(i32b(7)); // serial
+        out.extend(i32b(settings.len() as i32));
+        for setting in settings {
+            let (kind, name) = match setting {
+                Setting::Integer(name, _) => (0, name),
+                Setting::String(name, _) => (1, name),
+                Setting::Color(name) => (2, name),
+            };
+            out.extend([kind, 0]);
+            out.extend(u16b(name.len() as u16));
+            out.extend(name.as_bytes());
+            pad(&mut out);
+            out.extend(i32b(3)); // the setting's serial
+            match setting {
+                Setting::Integer(_, value) => out.extend(i32b(*value)),
+                Setting::String(_, value) => {
+                    out.extend(i32b(value.len() as i32));
+                    out.extend(value.as_bytes());
+                    pad(&mut out);
+                }
+                Setting::Color(_) => out.extend([0x12; 8]),
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn xsettings_finds_xft_dpi_past_other_settings_in_either_byte_order() {
+        for big in [false, true] {
+            let data = xsettings(
+                big,
+                &[
+                    Setting::String("Xft/RGBA", "rgb"),
+                    Setting::Color("Gtk/Colour"),
+                    Setting::Integer("Xft/Hinting", 1),
+                    Setting::String("Net/ThemeName", "Adwaita"),
+                    Setting::Integer("Xft/DPI", 144 * 1024),
+                ],
+            );
+            assert_eq!(xsettings_integer(&data, b"Xft/DPI"), Some(144 * 1024), "big: {big}");
+            assert_eq!(xsettings_integer(&data, b"Xft/Hinting"), Some(1), "big: {big}");
+        }
+    }
+
+    #[test]
+    fn xsettings_without_xft_dpi_has_none() {
+        let data = xsettings(false, &[Setting::Integer("Xft/Hinting", 1)]);
+        assert_eq!(xsettings_integer(&data, b"Xft/DPI"), None);
+        assert_eq!(xsettings_integer(&xsettings(true, &[]), b"Xft/DPI"), None);
+    }
+
+    #[test]
+    fn xsettings_that_names_dpi_as_a_string_is_not_an_integer() {
+        let data = xsettings(false, &[Setting::String("Xft/DPI", "96")]);
+        assert_eq!(xsettings_integer(&data, b"Xft/DPI"), None);
+    }
+
+    #[test]
+    fn malformed_xsettings_are_none_not_a_panic() {
+        let whole = xsettings(false, &[Setting::Integer("Xft/DPI", 96 * 1024)]);
+        for len in 0..whole.len() {
+            assert_eq!(xsettings_integer(&whole[..len], b"Xft/DPI"), None, "cut at {len}");
+        }
+        let mut unknown_type = whole.clone();
+        unknown_type[12] = 9;
+        assert_eq!(xsettings_integer(&unknown_type, b"Xft/DPI"), None);
+        let mut huge_count = xsettings(false, &[]);
+        huge_count[8..12].copy_from_slice(&i32::MAX.to_le_bytes());
+        assert_eq!(xsettings_integer(&huge_count, b"Xft/DPI"), None);
     }
 
     fn find(properties: &[Property], name: impl Into<u32>) -> &Property {
@@ -1027,6 +1223,7 @@ mod tests {
     #[test]
     #[ignore = "needs an X server"]
     fn the_probe_reaches_a_real_x_server() {
-        probe().expect("an X server");
+        let server = probe().expect("an X server");
+        println!("Xft.dpi: {:?}", server.xft_dpi);
     }
 }

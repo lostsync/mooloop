@@ -1919,6 +1919,37 @@ windows under a fractional scale are drawn at 1x and stretched unless
 Hyprland's `xwayland { force_zero_scaling = true }` is set, and Slint then
 reads its scale from `Xft.dpi`.
 
+**The scale under the setting, recorded 2026-10-01 (MOO-343).** Adam saw
+the whole UI 1.5 times too large under the setting on the laptop panel.
+With no `Xft.dpi`, winit 0.30's X11 backend works a scale out from the
+output's reported millimetres (`randr.rs`, `get_output_info`), and
+XWayland reports the 1920×1080 panel as 340×190 mm. What was found and
+chosen:
+
+- **Slint 1.18.1 takes a scale only from the environment**
+  (`SLINT_SCALE_FACTOR`, read when each window is made, and it also stops
+  Slint following winit's scale changes). Dispatching a
+  `ScaleFactorChanged` into the window afterwards loses to winit's next
+  one. So the scale goes through winit's own `WINIT_X11_SCALE_FACTOR`,
+  the one variable that changes only an X11 window's scale.
+- **It is set only while the process provably has one thread**:
+  `display::apply_x11_scale` counts `/proc/self/task` and refuses (logging
+  why, and leaving winit's guess) at anything but 1, or where it cannot
+  count. `main` calls `select_display_backend` before anything that starts
+  a thread, and says so. This is the one place the environment is changed.
+- **The order** (`display::x11_scale_in`, tested): the user's own
+  `WINIT_X11_SCALE_FACTOR`; else the X server's `Xft.dpi`, read where
+  winit reads it (XSETTINGS `Xft/DPI`, then the resource database;
+  `x11::probe` now returns it), and left for winit to apply; else a whole
+  `GDK_SCALE` in 1..=20; else 1.
+- **The Wayland scale itself is not asked for.** It is per output, the
+  output is not known until the window exists, and the variable is one
+  number for every monitor. `GDK_SCALE` is the session's declared scale
+  for X11 clients (what Hyprland's documentation sets beside
+  `force_zero_scaling` on a scaled output), and 1 is right with
+  `force_zero_scaling` off (the compositor scales X11 clients) and on an
+  unscaled output.
+
 ## Step 11's pump and face, recorded 2026-09-28 (MOO-302)
 
 The third leg: the two halves joined, in `ui/src/plugin_gui.rs`
