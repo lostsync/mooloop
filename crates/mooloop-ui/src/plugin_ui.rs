@@ -29,7 +29,7 @@ use mooloop_core::{
     ParamOwner, PluginParamInfo, PluginSlotId, PluginSlotState,
 };
 use mooloop_engine::{CommandSink, StructuralCommand};
-use mooloop_plugin_host::scan::{PluginCache, ScannedPlugin};
+use mooloop_plugin_host::scan::{PluginCache, Refusal, ScannedPlugin};
 use mooloop_plugin_host::HostError;
 use mooloop_session::command::CommandState;
 use mooloop_session::effects::EffectPlace;
@@ -271,7 +271,15 @@ pub(crate) struct CatalogEntry {
     /// `Session::set_plugin_source`) rather than a device in a chain.
     pub instrument: bool,
     /// Why it cannot be used, or `None` when it can.
-    pub refusal: Option<String>,
+    pub refusal: Option<Refusal>,
+}
+
+impl CatalogEntry {
+    /// Whether the browser leaves it out while "Hide plugins mooloop can't
+    /// use yet" is on: refused as unsupported. A failed plugin never is.
+    pub(crate) fn hideable(&self) -> bool {
+        matches!(self.refusal, Some(Refusal::Unsupported(_)))
+    }
 }
 
 /// What the scanner's cache lists, one row per plugin, and the files that
@@ -280,8 +288,9 @@ pub(crate) struct CatalogEntry {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PluginCatalog {
     pub entries: Vec<CatalogEntry>,
-    /// A file that yielded nothing: its name and the scanner's reason.
-    pub failures: Vec<(String, String)>,
+    /// A file that yielded nothing: its name and the scanner's reason, as a
+    /// refusal (always [`Refusal::Failed`], `ScanFailure::refusal`).
+    pub failures: Vec<(String, Refusal)>,
 }
 
 /// Whether the browser offers `plugin` as an instrument (a new channel's
@@ -304,8 +313,8 @@ pub(crate) fn is_instrument(plugin: &ScannedPlugin) -> bool {
 }
 
 /// Why `plugin` cannot be used in the role [`is_instrument`] gives it, or
-/// `None` when it can: the host's own reason from the scan.
-pub(crate) fn refusal(plugin: &ScannedPlugin) -> Option<String> {
+/// `None` when it can: the host's own reason from the scan, of its kind.
+pub(crate) fn refusal(plugin: &ScannedPlugin) -> Option<Refusal> {
     if is_instrument(plugin) {
         plugin.source_refusal()
     } else {
@@ -344,10 +353,33 @@ impl PluginCatalog {
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| path.display().to_string());
-                (name, failure.reason.clone())
+                (name, failure.refusal())
             })
             .collect();
         Self { entries, failures }
+    }
+
+    /// How many plugins "Hide plugins mooloop can't use yet" leaves out of
+    /// the browser ([`CatalogEntry::hideable`]).
+    pub(crate) fn hideable_count(&self) -> usize {
+        self.entries.iter().filter(|entry| entry.hideable()).count()
+    }
+
+    /// What failed to load, for the Plugins page: each plugin that could not
+    /// be created, by name, then each file that yielded nothing.
+    pub(crate) fn failure_rows(&self) -> Vec<PluginFailureRow> {
+        let plugins = self.entries.iter().filter_map(|entry| match &entry.refusal {
+            Some(refusal @ Refusal::Failed(_)) => Some((entry.plugin.plugin.name.as_str(), refusal)),
+            _ => None,
+        });
+        let files = self.failures.iter().map(|(name, refusal)| (name.as_str(), refusal));
+        plugins
+            .chain(files)
+            .map(|(name, refusal)| PluginFailureRow {
+                name: name.into(),
+                reason: refusal.reason().into(),
+            })
+            .collect()
     }
 
     /// The plugin a browser row's `path` names: its id.
@@ -365,17 +397,23 @@ fn matches(filter: &str, text: &str) -> bool {
         .all(|word| text.contains(&word.to_lowercase()))
 }
 
-/// The PLUGINS tab's rows: every plugin, those that cannot go in a chain
-/// greyed with the reason, then the files that yielded none.
-pub(crate) fn plugin_rows(catalog: &PluginCatalog, filter: &str) -> Vec<BrowserRow> {
+/// The PLUGINS tab's rows: every plugin, those that cannot be used greyed
+/// with the reason, then the files that yielded none. With
+/// `hide_unsupported` (the Plugins page's "Hide plugins mooloop can't use
+/// yet") a plugin refused as unsupported is left out; a failed plugin and a
+/// file that failed are shown either way.
+pub(crate) fn plugin_rows(catalog: &PluginCatalog, filter: &str, hide_unsupported: bool) -> Vec<BrowserRow> {
     let mut rows = Vec::new();
     for entry in &catalog.entries {
+        if hide_unsupported && entry.hideable() {
+            continue;
+        }
         let plugin = &entry.plugin.plugin;
         // An instrument plays no notes until step 10 (MOO-85); the row says
         // so rather than let a silent channel be the first anyone hears of it.
         let role = if entry.instrument { "Instrument" } else { "FX" };
         let detail = match &entry.refusal {
-            Some(reason) => reason.clone(),
+            Some(refusal) => refusal.reason().to_owned(),
             None if plugin.vendor.is_empty() => role.to_string(),
             None => format!("{} · {role}", plugin.vendor),
         };
@@ -394,7 +432,11 @@ pub(crate) fn plugin_rows(catalog: &PluginCatalog, filter: &str) -> Vec<BrowserR
             effect: entry.refusal.is_none() && !entry.instrument,
         });
     }
-    for (name, reason) in &catalog.failures {
+    for (name, refusal) in &catalog.failures {
+        if hide_unsupported && !refusal.is_failed() {
+            continue;
+        }
+        let reason = refusal.reason();
         if !matches(filter, &format!("{name} {reason}")) {
             continue;
         }
@@ -1634,15 +1676,27 @@ pub(crate) fn show_plugin_preferences(window: &MainWindow, settings: &PluginSett
     window.set_preferences_plugin_scan_timeout_s(settings.scan_timeout_s as i32);
     window.set_preferences_plugin_scan_on_startup(settings.scan_on_startup);
     window.set_preferences_plugin_run_under_xwayland(settings.run_under_xwayland);
-    let failures: Vec<PluginFailureRow> = PluginCatalog::load(cache_path)
-        .failures
-        .into_iter()
-        .map(|(name, reason)| PluginFailureRow {
-            name: name.into(),
-            reason: reason.into(),
-        })
-        .collect();
+    window.set_preferences_plugin_hide_unsupported(settings.hide_unsupported);
+    show_plugin_catalog_on_page(window, &PluginCatalog::load(cache_path), settings.hide_unsupported);
+}
+
+/// The Plugins page's half that comes from the scan: what failed to load,
+/// and how many plugins the hide switch leaves out, in words.
+fn show_plugin_catalog_on_page(window: &MainWindow, catalog: &PluginCatalog, hide_unsupported: bool) {
+    let failures = catalog.failure_rows();
     window.set_preferences_plugin_failures(ModelRc::from(failures.as_slice()));
+    window.set_preferences_plugin_hidden_status(hidden_status(catalog.hideable_count(), hide_unsupported).into());
+}
+
+/// Beside the hide switch: how many plugins mooloop can't use yet, and
+/// whether the browser is leaving them out, so a hidden one can be found.
+pub(crate) fn hidden_status(unsupported: usize, hide_unsupported: bool) -> String {
+    let plugins = if unsupported == 1 { "plugin" } else { "plugins" };
+    match (unsupported, hide_unsupported) {
+        (0, _) => String::new(),
+        (n, true) => format!("{n} {plugins} hidden"),
+        (n, false) => format!("{n} {plugins} shown greyed"),
+    }
 }
 
 impl UiState {
@@ -1668,16 +1722,7 @@ impl UiState {
         if matches!(now, ScanState::Done { .. }) {
             self.plugin_catalog = PluginCatalog::load(&self.plugin_cache_path);
             crate::refresh_browser(self);
-            let failures: Vec<PluginFailureRow> = self
-                .plugin_catalog
-                .failures
-                .iter()
-                .map(|(name, reason)| PluginFailureRow {
-                    name: name.as_str().into(),
-                    reason: reason.as_str().into(),
-                })
-                .collect();
-            window.set_preferences_plugin_failures(ModelRc::from(failures.as_slice()));
+            show_plugin_catalog_on_page(window, &self.plugin_catalog, self.hide_unsupported_plugins);
         }
     }
 }
@@ -1771,6 +1816,7 @@ pub(crate) fn wire_plugin_preferences(
             edit_settings(&window, &st, &settings, |plugins| plugins.scan_on_startup = on);
         });
     }
+    wire_hide_unsupported_toggle(window, state, settings, Rc::new(|settings: &UiSettings| settings.save()));
     wire_xwayland_toggle(window, settings, Rc::new(|settings: &UiSettings| settings.save()));
     {
         // Rescan All: the failures forgotten and every file scanned again,
@@ -1783,9 +1829,62 @@ pub(crate) fn wire_plugin_preferences(
     }
 }
 
-/// How the XWayland toggle saves: `UiSettings::save` in the app, a scratch
-/// file in the tests, which must not write the settings of whoever runs them.
+/// How the page's saved switches save: `UiSettings::save` in the app, a
+/// scratch file in the tests, which must not write the settings of whoever
+/// runs them.
 pub(crate) type SettingsSaver = Rc<dyn Fn(&UiSettings) -> Result<(), crate::settings::SettingsError>>;
+
+/// Set the switch `field` of the saved plugin settings to `on` and save
+/// them; a save that fails puts the old value back and says why. Returns
+/// the value the switch now holds.
+fn flip_saved_switch(
+    window: &MainWindow,
+    settings: &mut UiSettings,
+    save: &SettingsSaver,
+    field: fn(&mut PluginSettings) -> &mut bool,
+    on: bool,
+) -> bool {
+    let previous = *field(&mut settings.plugins);
+    if previous != on {
+        *field(&mut settings.plugins) = on;
+        if let Err(error) = save(settings) {
+            *field(&mut settings.plugins) = previous;
+            window.set_preferences_error(format!("Could not save settings: {error}").into());
+        }
+    }
+    *field(&mut settings.plugins)
+}
+
+/// Wire Preferences > Plugins' "Hide plugins mooloop can't use yet" to
+/// `PluginSettings::hide_unsupported`, and the PLUGINS tab to it: from the
+/// saved value now, and at once when it is flipped. Saved as it is flipped;
+/// a save that fails leaves the switch and the browser as they were. The
+/// page's count of hidden plugins follows it.
+pub(crate) fn wire_hide_unsupported_toggle(
+    window: &MainWindow,
+    state: &Rc<RefCell<UiState>>,
+    settings: &Rc<RefCell<UiSettings>>,
+    save: SettingsSaver,
+) {
+    state.borrow_mut().hide_unsupported_plugins = settings.borrow().plugins.hide_unsupported;
+    let (st, settings, weak) = (state.clone(), settings.clone(), window.as_weak());
+    window.on_preferences_plugin_hide_unsupported_toggled(move |on| {
+        let Some(window) = weak.upgrade() else { return };
+        let hide = flip_saved_switch(
+            &window,
+            &mut settings.borrow_mut(),
+            &save,
+            |plugins| &mut plugins.hide_unsupported,
+            on,
+        );
+        window.set_preferences_plugin_hide_unsupported(hide);
+        let mut st = st.borrow_mut();
+        st.hide_unsupported_plugins = hide;
+        st.plugin_catalog = PluginCatalog::load(&st.plugin_cache_path);
+        crate::refresh_browser(&st);
+        show_plugin_catalog_on_page(&window, &st.plugin_catalog, hide);
+    });
+}
 
 /// Wire Preferences > Plugins' "Run under XWayland (full plugin window
 /// behaviour)" (step 11, MOO-302) to `PluginSettings::run_under_xwayland`.
@@ -1797,16 +1896,14 @@ pub(crate) fn wire_xwayland_toggle(window: &MainWindow, settings: &Rc<RefCell<Ui
     let (settings, weak) = (settings.clone(), window.as_weak());
     window.on_preferences_plugin_run_under_xwayland_toggled(move |on| {
         let Some(window) = weak.upgrade() else { return };
-        let mut settings = settings.borrow_mut();
-        let previous = settings.plugins.run_under_xwayland;
-        if previous != on {
-            settings.plugins.run_under_xwayland = on;
-            if let Err(error) = save(&settings) {
-                settings.plugins.run_under_xwayland = previous;
-                window.set_preferences_error(format!("Could not save settings: {error}").into());
-            }
-        }
-        window.set_preferences_plugin_run_under_xwayland(settings.plugins.run_under_xwayland);
+        let run = flip_saved_switch(
+            &window,
+            &mut settings.borrow_mut(),
+            &save,
+            |plugins| &mut plugins.run_under_xwayland,
+            on,
+        );
+        window.set_preferences_plugin_run_under_xwayland(run);
     });
 }
 

@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use mooloop_core::plugin::PluginFormat;
 use mooloop_plugin_host::scan::{
-    self, ChildCommand, FailureKind, PluginCache, ScanConfig, ScannedPlugin, SCAN_FLAG,
+    self, ChildCommand, FailureKind, PluginCache, Refusal, ScanConfig, ScannedPlugin, SCAN_FLAG,
 };
 use mooloop_test_plugin as test_plugin;
 
@@ -295,15 +295,26 @@ fn an_old_cache_entry_without_main_ports_loads_with_port_zero_as_main() {
 /// not as *failed*.
 #[test]
 fn the_refusal_rules_read_the_main_ports_only() {
+    // Every refusal below is a rule's, so unsupported: the reason it gives.
+    let unsupported = |refusal: Option<Refusal>| {
+        refusal.map(|why| match why {
+            Refusal::Unsupported(reason) => reason,
+            Refusal::Failed(reason) => panic!("a port rule's refusal is unsupported, not failed: {reason}"),
+        })
+    };
     let effect = |ins: &str, outs: &str, more: &str| {
-        cached_plugin(&format!("features = [\"audio-effect\"]\naudio-inputs = {ins}\naudio-outputs = {outs}\n{more}"))
-            .effect_refusal()
+        unsupported(
+            cached_plugin(&format!("features = [\"audio-effect\"]\naudio-inputs = {ins}\naudio-outputs = {outs}\n{more}"))
+                .effect_refusal(),
+        )
     };
     let instrument = |ins: &str, outs: &str, more: &str| {
-        cached_plugin(&format!(
-            "features = [\"instrument\"]\naudio-inputs = {ins}\naudio-outputs = {outs}\nnote-inputs = 1\n{more}"
-        ))
-        .source_refusal()
+        unsupported(
+            cached_plugin(&format!(
+                "features = [\"instrument\"]\naudio-inputs = {ins}\naudio-outputs = {outs}\nnote-inputs = 1\n{more}"
+            ))
+            .source_refusal(),
+        )
     };
 
     // Effects with a sidechain (Surge XT Effects; LSP's sidechain dynamics)
@@ -349,7 +360,7 @@ fn the_refusal_rules_read_the_main_ports_only() {
     // nowhere from its ports, never "could not be created".
     let unwired = cached_plugin("features = [\"audio-effect\"]\naudio-inputs = [6]\naudio-outputs = [2]");
     assert!(unwired.is_usable());
-    assert!(unwired.effect_refusal().is_some_and(|why| !why.contains("could not be created")));
+    assert!(matches!(unwired.effect_refusal(), Some(Refusal::Unsupported(why)) if !why.contains("could not be created")));
 
     // A plugin that declares no role: an input makes it an effect, and it
     // is judged by its main input whatever else it has.

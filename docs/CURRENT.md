@@ -2549,7 +2549,14 @@ with a commit loads and plays the render it played then.
   what the row says. A plugin that cannot go in a chain is greyed with the
   reason: an effect whose ports are not one input and one output of one or
   two channels, or one the factory could not create; so is each
-  file that failed to scan, with why. A double-click, Enter or a drop puts
+  file that failed to scan, with why. **Preferences > Plugins' "Hide
+  plugins mooloop can't use yet"** (off by default, saved) leaves out the
+  plugins refused as *unsupported* -- they loaded, but a main port is not
+  one or two channels, an instrument takes no notes, or it is the other
+  role's -- and never one that *failed*: a plugin that could not be created
+  and a file that failed to scan stay listed, greyed with the reason, so a
+  plugin that breaks after an update never quietly disappears (MOO-298).
+  A double-click, Enter or a drop puts
   the plugin in the chain: a drop before the join it lands on, otherwise
   before the join the menu was opened from, otherwise after the selected
   device (and the run a selected container holds), otherwise at the end.
@@ -2760,8 +2767,10 @@ with a commit loads and plays the render it played then.
   says what the scan found. A song's plugins are found through it, and the
   browser's PLUGINS tab lists it (above). **Preferences > Plugins** (MOO-229)
   shows the standard folders, the added ones (Add Folder…, and a × to
-  remove one), the timeout, the startup switch, and every file that could
-  not be read with the reason; each edit is saved as it is made. **Rescan
+  remove one), the timeout, the startup switch, the hide switch with how
+  many plugins it hides (or shows greyed), and under FAILED TO LOAD every
+  plugin that could not be created and every file that could not be read,
+  with the reason; each edit is saved as it is made. **Rescan
   All** forgets the failures and scans every file again on the scan's own
   thread, with its progress on the page and in the status bar; when it ends
   the PLUGINS tab and the failure list are read again. Only one scan runs at

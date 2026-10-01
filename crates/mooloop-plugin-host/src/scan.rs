@@ -169,6 +169,42 @@ pub(crate) fn read_audio_ports(
     (channels, main_port(main))
 }
 
+/// Why a scanned plugin cannot go where it was asked to, of one of two kinds
+/// a browser treats differently: an unsupported plugin may be hidden, a
+/// failed one is always shown, so a plugin that breaks after an update
+/// never quietly disappears.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Refusal {
+    /// It was created, but has something mooloop does not handle yet: a
+    /// main port that is not one or two channels, an instrument that takes
+    /// no notes, the other role's plugin ([`main_port_effect_refusal`],
+    /// [`main_port_source_refusal`]). The reason, in words.
+    Unsupported(String),
+    /// It could not be created when it was scanned
+    /// ([`ScannedPlugin::error`]). The reason, in words.
+    Failed(String),
+}
+
+impl Refusal {
+    /// The reason, in words, whichever kind it is.
+    pub fn reason(&self) -> &str {
+        match self {
+            Self::Unsupported(reason) | Self::Failed(reason) => reason,
+        }
+    }
+
+    /// Whether something went wrong, rather than mooloop not supporting it.
+    pub fn is_failed(&self) -> bool {
+        matches!(self, Self::Failed(_))
+    }
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.reason())
+    }
+}
+
 /// Why a plugin with these CLAP `features` and main audio ports (the
 /// channels of its main input and main output, `None` for no such port)
 /// cannot be a device on a chain, or `None` when it can. The reason is a
@@ -185,9 +221,8 @@ pub(crate) fn read_audio_ports(
 /// away. A note input is allowed and gets no notes: a chain carries none. A
 /// plugin that declares both roles may go in either place.
 ///
-/// A refusal here means *unsupported* (the plugin loads, mooloop cannot wire
-/// it), never *failed*. The two are one `String` today; MOO-298 is to split
-/// them so the browser can hide the one and always show the other.
+/// A refusal here is [`Refusal::Unsupported`]'s reason (the plugin loads,
+/// mooloop cannot wire it), never [`Refusal::Failed`]'s.
 pub fn main_port_effect_refusal(
     features: &[String],
     main_input: Option<u32>,
@@ -266,24 +301,32 @@ impl ScannedPlugin {
     }
 
     /// Why it cannot be a device on a chain, or `None` when it can: when it
-    /// could not be created, that ([`error`](Self::error)); otherwise
-    /// [`main_port_effect_refusal`] on the main ports the scan recorded.
-    pub fn effect_refusal(&self) -> Option<String> {
-        if let Some(error) = &self.error {
-            return Some(format!("could not be created: {error}"));
-        }
-        main_port_effect_refusal(&self.features, self.main_input_channels(), self.main_output_channels())
+    /// could not be created, that ([`error`](Self::error)) as
+    /// [`Refusal::Failed`]; otherwise [`main_port_effect_refusal`] on the
+    /// main ports the scan recorded, as [`Refusal::Unsupported`].
+    pub fn effect_refusal(&self) -> Option<Refusal> {
+        self.creation_refusal().or_else(|| {
+            main_port_effect_refusal(&self.features, self.main_input_channels(), self.main_output_channels())
+                .map(Refusal::Unsupported)
+        })
     }
 
-    /// Why it cannot be a channel's source, or `None` when it can: when it
-    /// could not be created, that ([`error`](Self::error)); otherwise
-    /// [`main_port_source_refusal`] on the main output and note inputs the
-    /// scan recorded. `None` is what a browser offers as an instrument.
-    pub fn source_refusal(&self) -> Option<String> {
-        if let Some(error) = &self.error {
-            return Some(format!("could not be created: {error}"));
-        }
-        main_port_source_refusal(&self.features, self.main_output_channels(), self.note_inputs)
+    /// Why it cannot be a channel's source, or `None` when it can, of the
+    /// kinds [`effect_refusal`](Self::effect_refusal) gives: the creation
+    /// error first, then [`main_port_source_refusal`] on the main output and
+    /// note inputs the scan recorded. `None` is what a browser offers as an
+    /// instrument.
+    pub fn source_refusal(&self) -> Option<Refusal> {
+        self.creation_refusal().or_else(|| {
+            main_port_source_refusal(&self.features, self.main_output_channels(), self.note_inputs)
+                .map(Refusal::Unsupported)
+        })
+    }
+
+    fn creation_refusal(&self) -> Option<Refusal> {
+        self.error
+            .as_ref()
+            .map(|error| Refusal::Failed(format!("could not be created: {error}")))
     }
 
     /// Whether it could be created when it was scanned.
@@ -302,8 +345,8 @@ fn is_false(value: &bool) -> bool {
 
 /// Why a file yielded no plugins: the library would not load, it is not a
 /// plugin this host can use, or the child running it failed. Every kind,
-/// `Incompatible` included, is a *failure* of the file, not an *unsupported*
-/// plugin in the refusal rules' sense ([`main_port_effect_refusal`]).
+/// `Incompatible` included, is [`Refusal::Failed`]
+/// ([`ScanFailure::refusal`]), never [`Refusal::Unsupported`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum FailureKind {
@@ -338,6 +381,21 @@ impl ScanFailure {
         Self {
             kind,
             reason: reason.into(),
+        }
+    }
+
+    /// What the file's failure is as a refusal: [`Refusal::Failed`] with
+    /// its reason, for every kind. `Incompatible` too: a plugin that an
+    /// update left the wrong CLAP version is one that broke, not one mooloop
+    /// chose not to host, and a browser must keep showing it.
+    pub fn refusal(&self) -> Refusal {
+        match self.kind {
+            FailureKind::Launch
+            | FailureKind::Load
+            | FailureKind::Incompatible
+            | FailureKind::Crashed
+            | FailureKind::TimedOut
+            | FailureKind::BadOutput => Refusal::Failed(self.reason.clone()),
         }
     }
 }
@@ -1131,23 +1189,41 @@ mod tests {
         assert_eq!(places(&plugin(&[], &[2], &[2], 0)), (true, false));
         // What the host cannot wire, with the reason.
         let no_notes = plugin(&["instrument"], &[], &[2], 0);
-        assert_eq!(no_notes.source_refusal().as_deref(), Some("it takes no notes"));
+        let unsupported = |why: &str| Some(Refusal::Unsupported(why.into()));
+        assert_eq!(no_notes.source_refusal(), unsupported("it takes no notes"));
         let surround = plugin(&["audio-effect"], &[2], &[6], 0);
         assert_eq!(
-            surround.effect_refusal().as_deref(),
-            Some("its main output has 6 channels; 1 or 2 are hosted")
+            surround.effect_refusal(),
+            unsupported("its main output has 6 channels; 1 or 2 are hosted")
         );
         let generator = plugin(&["audio-effect"], &[], &[2], 0);
-        assert_eq!(generator.effect_refusal().as_deref(), Some("it has no audio input"));
+        assert_eq!(generator.effect_refusal(), unsupported("it has no audio input"));
         let silent = plugin(&["instrument"], &[], &[], 1);
-        assert_eq!(silent.source_refusal().as_deref(), Some("it has no audio output"));
+        assert_eq!(silent.source_refusal(), unsupported("it has no audio output"));
         let synth = plugin(&["instrument"], &[], &[2], 1);
-        assert_eq!(synth.effect_refusal().as_deref(), Some("an instrument: it plays as a channel's source"));
+        assert_eq!(synth.effect_refusal(), unsupported("an instrument: it plays as a channel's source"));
         let failed = ScannedPlugin {
             error: Some("boom".into()),
             ..synth
         };
-        assert!(failed.source_refusal().is_some_and(|why| why.contains("boom")));
+        // A plugin that could not be created has failed in either place,
+        // whatever its ports would have allowed, and says so in the words
+        // the browser always showed.
+        for refusal in [failed.source_refusal(), failed.effect_refusal()] {
+            assert_eq!(refusal, Some(Refusal::Failed("could not be created: boom".into())));
+        }
+    }
+
+    /// Every way a whole file can fail is a failure a browser always shows,
+    /// `Incompatible` (an update to another CLAP version) as much as a crash,
+    /// with the scanner's reason as it was.
+    #[test]
+    fn every_file_failure_is_failed_never_unsupported() {
+        use FailureKind::*;
+        for kind in [Launch, Load, Incompatible, Crashed, TimedOut, BadOutput] {
+            let failure = ScanFailure::new(kind, "no clap_entry");
+            assert_eq!(failure.refusal(), Refusal::Failed("no clap_entry".into()), "{kind:?}");
+        }
     }
 
     #[test]

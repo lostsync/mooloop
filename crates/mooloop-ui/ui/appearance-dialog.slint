@@ -1213,7 +1213,8 @@ export component MidiPage inherits VerticalLayout {
 }
 
 
-// A file the scanner could not read, and why (MOO-229).
+// A file the scanner could not read, or a plugin in one that could not be
+// created, and why.
 export struct PluginFailureRow {
     name: string,
     reason: string,
@@ -1221,7 +1222,8 @@ export struct PluginFailureRow {
 
 // Preferences > Plugins (plugin-hosting 08, MOO-229): where the scanner
 // looks, how long one file may take, whether it looks at startup, Rescan
-// All, and the files it could not read. Every edit is saved as it is made,
+// All, whether the browser hides what mooloop can't use yet, and what failed
+// to load. Every edit is saved as it is made,
 // like the MIDI page's switch; a changed folder or timeout is used by the
 // next scan, which Rescan All starts.
 component PluginsPage inherits VerticalLayout {
@@ -1239,12 +1241,17 @@ component PluginsPage inherits VerticalLayout {
     // Run the whole application under XWayland (step 11, MOO-301/302): the
     // saved setting, which the next start reads before the first window.
     in property <bool> run-under-xwayland;
+    // Leave the plugins mooloop can't use yet out of the browser, and how
+    // many that is, in words; a plugin that failed is never left out.
+    in property <bool> hide-unsupported;
+    in property <string> hidden-status;
     callback path-added();
     callback path-removed(int);
     callback scan-timeout-changed(int);
     callback scan-on-startup-toggled(bool);
     callback rescan-requested();
     callback run-under-xwayland-toggled(bool);
+    callback hide-unsupported-toggled(bool);
 
     spacing: 8px;
     alignment: start;
@@ -1367,9 +1374,30 @@ component PluginsPage inherits VerticalLayout {
         }
     }
 
-    SectionLabel { text: "COULD NOT BE READ"; }
+    SectionLabel { text: "IN THE BROWSER"; }
+    HorizontalLayout {
+        alignment: start;
+        height: 24px;
+        spacing: 8px;
+        ToggleButton {
+            width: 260px;
+            text: "Hide plugins mooloop can't use yet";
+            tooltip: "Hide plugins mooloop can't use yet";
+            hint: "Leave out plugins whose ports or notes mooloop does not support yet; one that fails to load is always shown";
+            checked: root.hide-unsupported;
+            toggled(value) => { root.hide-unsupported-toggled(value); }
+        }
+        Text {
+            text: root.hidden-status;
+            color: Theme.text-muted;
+            font-size: Theme.text-lg;
+            vertical-alignment: center;
+        }
+    }
+
+    SectionLabel { text: "FAILED TO LOAD"; }
     if root.failures.length == 0 : Text {
-        text: "Every file was read.";
+        text: "Every plugin loaded.";
         color: Theme.text-faint;
         font-size: Theme.text-xl;
     }
@@ -1474,6 +1502,9 @@ export component PreferencesDialog inherits Rectangle {
     callback plugin-rescan-requested();
     in property <bool> plugin-run-under-xwayland;
     callback plugin-run-under-xwayland-toggled(bool);
+    in property <bool> plugin-hide-unsupported;
+    in property <string> plugin-hidden-status;
+    callback plugin-hide-unsupported-toggled(bool);
     // No arguments. Every value either callback needs is one of the two-way
     // bound properties above, and Rust reads them back through
     // `window_appearance`; passing fourteen of them positionally would be
@@ -1814,6 +1845,9 @@ export component PreferencesDialog inherits Rectangle {
                                 rescan-requested => { root.plugin-rescan-requested(); }
                                 run-under-xwayland: root.plugin-run-under-xwayland;
                                 run-under-xwayland-toggled(v) => { root.plugin-run-under-xwayland-toggled(v); }
+                                hide-unsupported: root.plugin-hide-unsupported;
+                                hidden-status: root.plugin-hidden-status;
+                                hide-unsupported-toggled(v) => { root.plugin-hide-unsupported-toggled(v); }
                             }
                         }
                         if root.page == 5 && root.developer-mode : VerticalBox {

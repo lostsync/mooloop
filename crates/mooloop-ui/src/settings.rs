@@ -1048,6 +1048,12 @@ pub struct PluginSettings {
     /// restart. The Preferences toggle is Interface's (MOO-302).
     #[serde(default)]
     pub run_under_xwayland: bool,
+    /// "Hide plugins mooloop can't use yet": the browser leaves out a
+    /// plugin refused as unsupported (`scan::Refusal::Unsupported`). A
+    /// failed one is shown whatever this says. Off by default, so nothing
+    /// disappears from the list on upgrade.
+    #[serde(default)]
+    pub hide_unsupported: bool,
 }
 
 fn default_scan_timeout_s() -> u32 {
@@ -1061,6 +1067,7 @@ impl Default for PluginSettings {
             scan_timeout_s: default_scan_timeout_s(),
             scan_on_startup: true,
             run_under_xwayland: false,
+            hide_unsupported: false,
         }
     }
 }
@@ -2238,6 +2245,7 @@ mod tests {
                 scan_timeout_s: 30,
                 scan_on_startup: false,
                 run_under_xwayland: true,
+                hide_unsupported: true,
             },
             // Deliberately not the default arrangement, and deliberately one
             // that `sanitized()` must leave alone: the mixer in the dock and
@@ -2300,6 +2308,7 @@ mod tests {
         .unwrap();
         let plugins = UiSettings::load_from(&path).unwrap().plugins;
         assert!(!plugins.run_under_xwayland);
+        assert!(!plugins.hide_unsupported);
         // The rest of the section is still read.
         assert_eq!(plugins.scan_timeout_s, 20);
     }

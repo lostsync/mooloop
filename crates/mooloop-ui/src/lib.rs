@@ -4499,6 +4499,9 @@ struct UiState {
     /// (MOO-83). Read from the cache file when the tab is opened, which is
     /// how a scan that finished after startup reaches the window.
     plugin_catalog: plugin_ui::PluginCatalog,
+    /// Preferences > Plugins' "Hide plugins mooloop can't use yet"
+    /// (`PluginSettings::hide_unsupported`), which the PLUGINS tab follows.
+    hide_unsupported_plugins: bool,
     /// The cache file the PLUGINS tab reads: the scanner's, except in a test.
     plugin_cache_path: PathBuf,
     /// Where the insert menu's "Plugin…" aimed the next plugin picked in the
@@ -4728,6 +4731,7 @@ impl UiState {
             browser_filter: String::new(),
             preset_catalog: Vec::new(),
             plugin_catalog: plugin_ui::PluginCatalog::default(),
+            hide_unsupported_plugins: false,
             plugin_cache_path: plugin_cache_path(),
             plugin_place: None,
             plugin_faces: plugin_ui::PluginFaces::default(),
@@ -21416,7 +21420,11 @@ fn copied_message(rows: usize) -> String {
 fn refresh_browser(st: &UiState) {
     if st.browser_tab == BrowserTab::Plugins {
         st.browser_rows
-            .set_vec(plugin_ui::plugin_rows(&st.plugin_catalog, &st.browser_filter));
+            .set_vec(plugin_ui::plugin_rows(
+                &st.plugin_catalog,
+                &st.browser_filter,
+                st.hide_unsupported_plugins,
+            ));
         return;
     }
     if st.browser_tab == BrowserTab::Presets {

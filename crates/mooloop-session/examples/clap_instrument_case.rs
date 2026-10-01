@@ -158,7 +158,7 @@ fn real(id: &str, out: &Path) {
         found.audio_inputs,
         found.audio_outputs,
         found.note_inputs,
-        found.source_refusal().unwrap_or_else(|| "accepted".into())
+        found.source_refusal().map_or_else(|| "accepted".into(), |why| why.to_string())
     );
     let plugin = found.plugin.clone();
     let song = melody();

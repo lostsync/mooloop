@@ -1948,7 +1948,7 @@ impl PluginOpener for ClapOpener {
         };
         // Where it may go is the session's call; here it must fit one.
         if let (Some(_), Some(as_source)) = (found.effect_refusal(), found.source_refusal()) {
-            return Err(HostError::Incompatible(as_source));
+            return Err(HostError::Incompatible(as_source.to_string()));
         }
         let path = found.path.clone();
         Ok(Box::new(ClapInstance::open(&path, plugin, state, config)?))

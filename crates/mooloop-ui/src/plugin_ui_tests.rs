@@ -483,7 +483,7 @@ fn the_plugin_filter_matches_names_vendors_and_reasons() {
     let cache = PluginCache::from_toml(&cache_text(Path::new("/x/test.clap"))).expect("a cache");
     let catalog = PluginCatalog::from_cache(&cache);
     let names = |filter: &str| -> Vec<String> {
-        plugin_rows(&catalog, filter).iter().map(|row| row.name.to_string()).collect()
+        plugin_rows(&catalog, filter, false).iter().map(|row| row.name.to_string()).collect()
     };
     assert_eq!(names(""), ["Test Gain", "Test Sine", "broken.clap"]);
     assert_eq!(names("gain"), ["Test Gain"]);
@@ -491,6 +491,139 @@ fn the_plugin_filter_matches_names_vendors_and_reasons() {
     assert_eq!(names("instrument"), ["Test Sine"]);
     assert_eq!(names("signal"), ["broken.clap"]);
     assert!(names("nothing like it").is_empty());
+}
+
+/// [`cache_text`]'s file and broken file, and beside them a plugin mooloop
+/// can't use yet (a four-channel effect: it loads, the host does not wire
+/// it) and one that could not be created (its `instantiate` failed).
+fn unusable_cache_text(library: &Path) -> String {
+    format!(
+        "{}\n\
+         [[file]]\npath = \"/usr/lib/clap/odd.clap\"\nmodified-ns = 0\nsize = 0\n\n\
+         [[file.plugin]]\npath = \"/usr/lib/clap/odd.clap\"\nformat = \"clap\"\nid = \"com.example.quad\"\n\
+         name = \"Quad Bus\"\nvendor = \"Odd\"\nfeatures = [\"audio-effect\"]\naudio-inputs = [4]\naudio-outputs = [4]\n\n\
+         [[file.plugin]]\npath = \"/usr/lib/clap/odd.clap\"\nformat = \"clap\"\nid = \"com.example.crashy\"\n\
+         name = \"Crashy Verb\"\nvendor = \"Odd\"\nfeatures = [\"audio-effect\"]\naudio-inputs = [2]\naudio-outputs = [2]\n\
+         error = \"instantiate returned null\"\n",
+        cache_text(library),
+    )
+}
+
+/// **"Hide plugins mooloop can't use yet" leaves out the unsupported, and
+/// never what failed** (MOO-298): a usable plugin, one refused as
+/// unsupported, one that could not be created and a file that failed to
+/// scan, with the switch off and on. Off, everything is listed and the
+/// unusable greyed with their reasons, as before the switch existed.
+#[test]
+fn hiding_unsupported_plugins_never_hides_a_failed_one() {
+    let cache = PluginCache::from_toml(&unusable_cache_text(Path::new("/x/test.clap"))).expect("a cache");
+    let catalog = PluginCatalog::from_cache(&cache);
+    let rows = |hide: bool| -> Vec<(String, bool, String)> {
+        plugin_rows(&catalog, "", hide)
+            .iter()
+            .map(|row| (row.name.to_string(), row.loadable, row.detail.to_string()))
+            .collect()
+    };
+    let crashy = (
+        "Crashy Verb".to_owned(),
+        false,
+        "could not be created: instantiate returned null".to_owned(),
+    );
+    let quad = (
+        "Quad Bus".to_owned(),
+        false,
+        "its main input has 4 channels; 1 or 2 are hosted".to_owned(),
+    );
+    let broken = ("broken.clap".to_owned(), false, "failed to scan: killed by signal 11".to_owned());
+    let usable = |all: &[(String, bool, String)]| -> Vec<String> {
+        all.iter().filter(|row| row.1).map(|row| row.0.clone()).collect()
+    };
+
+    let shown = rows(false);
+    assert_eq!(usable(&shown), ["Test Gain", "Test Sine"]);
+    for unusable in [&crashy, &quad, &broken] {
+        assert!(shown.contains(unusable), "off: {unusable:?} is listed greyed, in {shown:?}");
+    }
+
+    let hidden = rows(true);
+    assert_eq!(usable(&hidden), ["Test Gain", "Test Sine"], "a usable plugin is never hidden");
+    assert!(hidden.contains(&crashy), "a plugin that failed stays, with its reason: {hidden:?}");
+    assert!(hidden.contains(&broken), "and so does a file that failed: {hidden:?}");
+    assert!(!hidden.iter().any(|row| row.0 == "Quad Bus"), "the unsupported one is gone: {hidden:?}");
+    assert_eq!(hidden.len(), shown.len() - 1);
+
+    // The page: what failed to load, plugin and file, and how many are hidden.
+    let failed: Vec<(String, String)> = catalog
+        .failure_rows()
+        .iter()
+        .map(|row| (row.name.to_string(), row.reason.to_string()))
+        .collect();
+    assert_eq!(
+        failed,
+        [
+            ("Crashy Verb".to_owned(), "could not be created: instantiate returned null".to_owned()),
+            ("broken.clap".to_owned(), "killed by signal 11".to_owned()),
+        ]
+    );
+    assert_eq!(catalog.hideable_count(), 1);
+    assert_eq!(plugin_ui::hidden_status(1, true), "1 plugin hidden");
+    assert_eq!(plugin_ui::hidden_status(3, false), "3 plugins shown greyed");
+    assert_eq!(plugin_ui::hidden_status(0, true), "");
+}
+
+/// **The hide switch on Preferences > Plugins is saved, read back at the
+/// next start, and the PLUGINS tab follows it at once**; a save that fails
+/// keeps the browser as it was. Saved to a scratch file: a test must not
+/// write the settings of whoever runs it.
+#[test]
+fn the_hide_switch_is_saved_and_the_browser_follows_it() {
+    use crate::settings::{SettingsError, UiSettings};
+    let h = harness_with(&drum_loop());
+    let cache = h.state.borrow().plugin_cache_path.clone();
+    std::fs::write(&cache, unusable_cache_text(&test_plugin_path())).expect("the cache is written");
+    h.state.borrow_mut().enter_browser_tab(BrowserTab::Plugins);
+    let file = h.dir.path().join("settings.toml");
+    let saver: plugin_ui::SettingsSaver = {
+        let file = file.clone();
+        Rc::new(move |settings: &UiSettings| settings.save_to(&file))
+    };
+    let listed = |h: &Harness| -> Vec<String> {
+        let st = h.state.borrow();
+        crate::refresh_browser(&st);
+        st.browser_rows.iter().map(|row| row.name.to_string()).collect()
+    };
+    let settings = Rc::new(RefCell::new(UiSettings::default()));
+    plugin_ui::wire_hide_unsupported_toggle(&h.window, &h.state, &settings, saver.clone());
+    plugin_ui::show_plugin_preferences(&h.window, &settings.borrow().plugins, &cache);
+    assert!(!h.window.get_preferences_plugin_hide_unsupported(), "off by default");
+    assert!(listed(&h).contains(&"Quad Bus".to_owned()));
+    assert_eq!(h.window.get_preferences_plugin_hidden_status(), "1 plugin shown greyed");
+    assert_eq!(h.window.get_preferences_plugin_failures().row_count(), 2, "a plugin and a file failed");
+
+    h.window.invoke_preferences_plugin_hide_unsupported_toggled(true);
+    assert!(h.window.get_preferences_plugin_hide_unsupported());
+    let shown = listed(&h);
+    assert!(!shown.contains(&"Quad Bus".to_owned()), "{shown:?}");
+    assert!(shown.contains(&"Crashy Verb".to_owned()) && shown.contains(&"broken.clap".to_owned()));
+    assert_eq!(h.window.get_preferences_plugin_hidden_status(), "1 plugin hidden");
+
+    // The next start: the saved file read, the switch wired again, the
+    // browser hiding from the first time it lists.
+    let restarted = Rc::new(RefCell::new(UiSettings::load_or_default_from(&file)));
+    assert!(restarted.borrow().plugins.hide_unsupported, "saved, for the next start to read");
+    h.state.borrow_mut().hide_unsupported_plugins = false;
+    plugin_ui::wire_hide_unsupported_toggle(&h.window, &h.state, &restarted, saver);
+    assert!(!listed(&h).contains(&"Quad Bus".to_owned()), "hidden again after the restart");
+
+    // A save that fails keeps the switch, and the browser, as they were.
+    let failing: plugin_ui::SettingsSaver =
+        Rc::new(|_: &UiSettings| Err(SettingsError::Io(std::io::Error::other("read-only"))));
+    plugin_ui::wire_hide_unsupported_toggle(&h.window, &h.state, &restarted, failing);
+    h.window.invoke_preferences_plugin_hide_unsupported_toggled(false);
+    assert!(restarted.borrow().plugins.hide_unsupported);
+    assert!(h.window.get_preferences_plugin_hide_unsupported());
+    assert!(!listed(&h).contains(&"Quad Bus".to_owned()));
+    assert!(h.window.get_preferences_error().contains("read-only"));
 }
 
 /// A song naming a plugin this machine does not have, with the list of

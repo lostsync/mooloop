@@ -1089,6 +1089,11 @@ export component MainWindow inherits Window {
     // saved setting, which applies at the next start.
     in property <bool> preferences-plugin-run-under-xwayland;
     callback preferences-plugin-run-under-xwayland-toggled(bool);
+    // "Hide plugins mooloop can't use yet": the saved setting, and how
+    // many plugins it leaves out of the browser, in words.
+    in property <bool> preferences-plugin-hide-unsupported;
+    in property <string> preferences-plugin-hidden-status;
+    callback preferences-plugin-hide-unsupported-toggled(bool);
     // The folder chooser answers on a thread of its own; its answer comes
     // back to the window through this, never from the markup.
     callback preferences-plugin-folder-chosen(string);
@@ -8923,6 +8928,9 @@ export component MainWindow inherits Window {
         plugin-rescan-requested => { root.preferences-plugin-rescan-requested(); }
         plugin-run-under-xwayland: root.preferences-plugin-run-under-xwayland;
         plugin-run-under-xwayland-toggled(v) => { root.preferences-plugin-run-under-xwayland-toggled(v); }
+        plugin-hide-unsupported: root.preferences-plugin-hide-unsupported;
+        plugin-hidden-status: root.preferences-plugin-hidden-status;
+        plugin-hide-unsupported-toggled(v) => { root.preferences-plugin-hide-unsupported-toggled(v); }
         appearance-preview() => { root.preferences-appearance-preview(); }
         appearance-mode-changed(m) => { root.preferences-appearance-mode-changed(m); }
         appearance-select-theme(name) => { root.preferences-appearance-select-theme(name); }
