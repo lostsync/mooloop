@@ -1015,8 +1015,10 @@ fn every_effect_face_knob_agrees_with_its_table() {
 /// fifteen and the automatic pass covers thirteen. Leaving the other two to a
 /// sentence is how the effect faces came to be uncovered while the generators
 /// were checked. `containers/09` gave the layer its own face and both kinds a
-/// Level (the layer captions it Gain), so each kind has two rows.
-const UNROUTED_KNOBS: [(&str, &str, EffectKind, &str, u32); 4] = [
+/// Level (the layer captions it Gain), so each kind has two rows. The layer
+/// face also shows the selected branch's Level and Mix, which are that
+/// branch's Chain head's, so they are held to `EffectKind::Chain`.
+const UNROUTED_KNOBS: [(&str, &str, EffectKind, &str, u32); 6] = [
     (
         "container-device.slint",
         CONTAINER_SLINT,
@@ -1044,6 +1046,20 @@ const UNROUTED_KNOBS: [(&str, &str, EffectKind, &str, u32); 4] = [
         EffectKind::Layer,
         "gain",
         mooloop_core::CONTAINER_PARAM_LEVEL,
+    ),
+    (
+        "layer-device.slint",
+        LAYER_SLINT,
+        EffectKind::Chain,
+        "branch-level",
+        mooloop_core::CONTAINER_PARAM_LEVEL,
+    ),
+    (
+        "layer-device.slint",
+        LAYER_SLINT,
+        EffectKind::Chain,
+        "branch-mix",
+        mooloop_core::CONTAINER_PARAM_MIX,
     ),
 ];
 
