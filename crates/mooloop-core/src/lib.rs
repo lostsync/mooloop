@@ -221,9 +221,9 @@ pub use mixer::{
     INSERT_BUSES, MASTER_BUS, MAX_BUSES,
 };
 pub use pattern::{
-    ChannelPattern, NoteEvent, NoteId, Pattern, Step, DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS,
-    MAX_NOTES_PER_CHANNEL_PATTERN, MAX_PATTERN_STEPS, STEPS_PER_BEAT, TICKS_PER_64TH,
-    TICKS_PER_STEP,
+    ChannelPattern, NoteEvent, NoteId, Pattern, PatternEdit, Step, DEFAULT_NOTE_DURATION_TICKS,
+    DEFAULT_STEPS, MAX_NOTES_PER_CHANNEL_PATTERN, MAX_PATTERN_STEPS, STEPS_PER_BEAT,
+    TICKS_PER_64TH, TICKS_PER_STEP,
 };
 pub use playlist::{
     LoopRange, PatternPlacement, PlaybackMode, MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS,

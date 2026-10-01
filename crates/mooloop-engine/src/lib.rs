@@ -201,6 +201,8 @@ mod idle_skip_tests;
 #[cfg(test)]
 mod output_guard_tests;
 #[cfg(test)]
+mod pattern_edit_tests;
+#[cfg(test)]
 mod plugin_host_tests;
 #[cfg(test)]
 mod plugin_mono_tests;
@@ -492,6 +494,17 @@ pub enum StructuralCommand {
         graph: CompiledBusGraph,
         sends: Box<SendBank>,
     },
+    /// Apply a pattern clone, clear or removal to the sequencer in place
+    /// (`RenderState::edit_pattern`): the graph ends up as an install of the
+    /// project the edit produced would leave it, without building one.
+    ///
+    /// `change` carries the pattern the edit puts into the bank, built on
+    /// this thread by [`EngineHandle::edit_pattern`]; it comes back as
+    /// [`StructuralReclaim::PatternEdited`] holding the pattern it
+    /// displaced. An edit the bank cannot take comes back unapplied.
+    EditPattern {
+        change: Box<sequencer::PatternChange>,
+    },
 }
 
 /// GUI -> audio for the sample browser's audition voice. Owned here rather
@@ -579,6 +592,10 @@ pub(crate) enum StructuralReclaim {
     /// `Executor::process_contained` had caught it. Allocated by the unwind,
     /// and freed here like everything else that reaches the audio thread.
     PanicPayload(Box<dyn std::any::Any + Send>),
+    /// A pattern edit's payload, holding the pattern it took out of the
+    /// bank: notes and lane points that must not be freed on the audio
+    /// thread.
+    PatternEdited(Box<sequencer::PatternChange>),
 }
 
 impl StructuralReclaim {
@@ -607,7 +624,8 @@ impl StructuralReclaim {
             | Self::BufferMidi(_)
             | Self::ClaimedNotes(_)
             | Self::Container { .. }
-            | Self::PanicPayload(_) => {}
+            | Self::PanicPayload(_)
+            | Self::PatternEdited(_) => {}
         }
     }
 }
@@ -1772,6 +1790,7 @@ impl EngineHandle {
                     drop(scratch);
                 }
                 StructuralReclaim::PanicPayload(payload) => drop(payload),
+                StructuralReclaim::PatternEdited(change) => drop(change),
             }
         }
         loop {
@@ -1929,6 +1948,46 @@ impl EngineHandle {
         // own after the edit, as it does after an install.
         self.shared.device_telemetry.clear_spectra();
         self.audio_slots = bank;
+        self.last_installed = Some(project);
+        true
+    }
+
+    /// Apply a pattern clone, clear or removal to the engine as one command
+    /// ([`StructuralCommand::EditPattern`]), with no install, for an edit
+    /// whose result is `project`. Every channel, voice and lane the edit does
+    /// not touch goes on sounding; the transport goes on running.
+    ///
+    /// `false` means nothing was sent -- `project` is not what the edit
+    /// makes of the last project the engine took in (no such pattern, a
+    /// clone past the bank, the last pattern removed, or no project taken in
+    /// since the driver opened), or the ring refused it -- and the handle is
+    /// unchanged; the caller installs `project` instead.
+    #[must_use]
+    pub fn edit_pattern(
+        &mut self,
+        edit: mooloop_core::PatternEdit,
+        project: Arc<mooloop_core::Project>,
+    ) -> bool {
+        use mooloop_core::PatternEdit;
+        let Some(live) = self.last_installed.as_ref() else {
+            return false;
+        };
+        let (at, before) = (usize::from(edit.at()), live.pattern_lengths.len());
+        let after = match edit {
+            PatternEdit::Cloned(_) => before + 1,
+            PatternEdit::Cleared(_) => before,
+            PatternEdit::Removed(_) => before.wrapping_sub(1),
+        };
+        let fits = at < before
+            && (1..=mooloop_core::MAX_PATTERNS).contains(&after)
+            && project.pattern_lengths.len() == after;
+        if !fits {
+            return false;
+        }
+        let change = sequencer::PatternChange::new(edit, &project);
+        if !self.send_structural(StructuralCommand::EditPattern { change }) {
+            return false;
+        }
         self.last_installed = Some(project);
         true
     }

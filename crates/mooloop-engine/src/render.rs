@@ -8233,6 +8233,10 @@ impl RenderState {
                     bank,
                 )))
             }
+            StructuralCommand::EditPattern { mut change } => {
+                self.edit_pattern(&mut change);
+                Some(StructuralReclaim::PatternEdited(change))
+            }
         }
     }
 
@@ -8399,6 +8403,113 @@ impl RenderState {
             strip
                 .sequenced
                 .release_where(|voice| voice.note_id() == id && voice.origin.pattern == pattern);
+        }
+    }
+
+    /// Apply a pattern clone, clear or removal in place: the bank
+    /// edited by [`crate::sequencer::Sequencer::edit_pattern`], and what the
+    /// edit took from under the playhead let go.
+    ///
+    /// - **Voices.** Song mode releases the voices of the cleared or removed
+    ///   pattern, and of every pattern the edit renumbered: a voice's id
+    ///   carries its pattern's index, so the note-off the renumbered pattern
+    ///   schedules would name another voice. Pattern mode releases every
+    ///   sequenced voice when the pattern now scheduled no longer holds the
+    ///   content that started them, and otherwise relabels them to it (a
+    ///   clone made current plays the same notes). The install this replaces
+    ///   releases the same voices, by looking each one's note up again.
+    /// - **Lanes.** A destination a cleared or removed pattern was driving
+    ///   under the playhead, and nothing drives now, goes back to its knob,
+    ///   as a pattern switch hands it back (`restore_lanes_left_behind`).
+    ///
+    /// Allocates and frees nothing; a refused edit changes nothing.
+    pub(crate) fn edit_pattern(&mut self, change: &mut crate::sequencer::PatternChange) {
+        use mooloop_core::PatternEdit;
+        let edit = change.edit();
+        let at = edit.at();
+        let mode = self.sequencer.playback_mode();
+        let was = self.sequencer.current_pattern();
+        let tick = self.transport.position_ticks;
+        let mut covered = false;
+        let mut ordinal = 0;
+        while let Some(pattern) = self.sequencer.covering_pattern_at(mode, was, tick, ordinal) {
+            covered |= pattern == usize::from(at);
+            ordinal += 1;
+        }
+        if !self.sequencer.edit_pattern(change) {
+            return;
+        }
+        let emptied = !matches!(edit, PatternEdit::Cloned(_));
+        match mode {
+            PlaybackMode::Song => {
+                self.release_sequenced_where(|voice| {
+                    let pattern = voice.origin.pattern;
+                    edit.pattern(pattern) != Some(pattern) || (emptied && pattern == at)
+                });
+                if covered && emptied {
+                    self.restore_lanes_of_displaced(change);
+                }
+            }
+            PlaybackMode::Pattern => {
+                let now = self.sequencer.current_pattern();
+                // `was` and `now` are bank seats under 256, as `at` is.
+                let (was8, now8) = (was as u8, now as u8);
+                let kept = match edit {
+                    PatternEdit::Cloned(_) => {
+                        edit.pattern(was8) == Some(now8) || (was8 == at && now == was + 1)
+                    }
+                    PatternEdit::Cleared(_) | PatternEdit::Removed(_) => {
+                        was8 != at && edit.pattern(was8) == Some(now8)
+                    }
+                };
+                if kept {
+                    for strip in &mut self.strips {
+                        strip.sequenced.relabel_pattern(now8);
+                    }
+                    return;
+                }
+                self.release_all_sequenced();
+                if was8 == at && emptied {
+                    self.restore_lanes_of_displaced(change);
+                } else if let Some(left) = edit.pattern(was8) {
+                    for channel in 0..self.sequencer.active_channels() {
+                        for lane in 0..MAX_AUTOMATION_LANES_PER_CHANNEL {
+                            if let Some(target) = self.sequencer.pattern_lane_destination(
+                                usize::from(left),
+                                channel,
+                                lane,
+                            ) {
+                                self.restore_if_undriven(target);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// [`Self::edit_pattern`]'s lane hand-back for the pattern the edit took
+    /// out of the bank, which only `change` still holds.
+    fn restore_lanes_of_displaced(&mut self, change: &crate::sequencer::PatternChange) {
+        let channels = self.sequencer.active_channels();
+        for lanes in change.displaced().channels.iter().take(channels) {
+            for lane in lanes.lanes() {
+                if !lane.is_empty() {
+                    self.restore_if_undriven(lane.target);
+                }
+            }
+        }
+    }
+
+    /// Put `target` back at its knob unless a lane under the playhead still
+    /// drives it.
+    fn restore_if_undriven(&mut self, target: ParamAddr) {
+        if self
+            .sequencer
+            .automation_lane_at(target, self.transport.position_ticks)
+            .is_none()
+        {
+            self.restore_base_param(target);
         }
     }
 

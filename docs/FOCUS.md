@@ -861,3 +861,11 @@ In the order worth playing:
     `tests/zones_from_one_file.rs` pins the levels against Slice mode;
     whether the workflow feels right, and whether a hit's tail is cut where
     you'd expect, is the question.
+36. **Pattern clone, clear and delete under a playing song** (MOO-466). In
+    Song mode with a pad held across a bar and a lane sweeping a filter,
+    clone, clear and delete patterns while it plays: nothing but the edited
+    pattern (and, in Song mode, the patterns after a clone or delete) should
+    lose a note, nothing should click or drop out, and a filter a cleared
+    pattern's lane was sweeping should go back to its knob. Then undo each.
+    `engine/src/pattern_edit_tests.rs` holds the samples to the old rebuild
+    and to a song made that way; whether it feels instant is the question.

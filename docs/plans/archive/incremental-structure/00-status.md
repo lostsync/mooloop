@@ -250,3 +250,25 @@ found:
   pins that, so the day `carry_plan` learns to map routes the routed song
   can join the install parity test. Undo of a move still goes through that
   install (MOO-469).
+
+**Pattern clone, clear and removal are the next** (Sequencing & Time),
+as `StructuralCommand::EditPattern`, a command of their own rather than
+an arm of `ReseatChannels`, because they move no seat. What they found:
+
+- **The bank is a rotation too.** `Sequencer::edit_pattern` swaps a
+  pattern built on the control thread (the clone, or an empty one) into
+  the preallocated bank and rotates; both playlist views renumber in place
+  and stay sorted, because every pattern keeps its order relative to the
+  others. The pattern it displaces leaves in the payload, notes and lane
+  points with it.
+- **A renumbered pattern's voices cannot be kept in Song mode**: a
+  sequenced voice's id carries `pattern * MAX_PLAYLIST_TICKS`, so the
+  note-off the renumbered pattern schedules names a different voice. The
+  install ends them too (their placement no longer matches), so parity
+  holds; a Pattern-mode id carries no pattern, so a clone made current
+  plays on.
+- **The install does not hand a knob back** when the edit took a lane from
+  under the playhead (MOO-494); the command does, as a pattern switch
+  does, so a clear of a lane under the playhead is held to a live lane
+  clear instead of to the install.
+

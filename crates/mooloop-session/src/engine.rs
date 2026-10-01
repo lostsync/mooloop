@@ -664,14 +664,52 @@ impl Session {
                 }
             }
         }
-        self.compensation_sent = compensation;
-        self.console_sums_sent = console_sums;
-        self.solo_silenced_sent = solo_silenced;
-        self.track_graph_sent = track_graph;
-        self.sampler_stretch_sent = sampler_stretch;
+        self.keep_mirrors(EngineMirrors {
+            compensation,
+            console_sums,
+            solo_silenced,
+            track_graph,
+            sampler_stretch,
+        });
+        true
+    }
+
+    /// Apply a pattern clone, clear or removal to the engine as one command
+    /// ([`EngineHandle::edit_pattern`]), with no install.
+    ///
+    /// For a session that has just taken in `project`, the document the
+    /// edit produced, through [`Self::replace_project`]; `sent` is
+    /// [`Self::engine_mirrors`] read before it did. A pattern edit moves no
+    /// channel, track or edge, so the mirrors come back as they were and the
+    /// next reconcile sends nothing.
+    ///
+    /// `false` means nothing reached the engine and the mirrors are as
+    /// `replace_project` left them; the caller installs `project` instead.
+    pub fn send_pattern_edit(
+        &mut self,
+        handle: &mut EngineHandle,
+        edit: mooloop_core::PatternEdit,
+        project: std::sync::Arc<mooloop_core::Project>,
+        sent: EngineMirrors,
+    ) -> bool {
+        if !handle.edit_pattern(edit, project) {
+            return false;
+        }
+        self.keep_mirrors(sent);
+        true
+    }
+
+    /// Take `mirrors` back as what the reconcilers have sent, after a command
+    /// that left the engine holding them, and settle the two the session
+    /// derives from the document it now holds.
+    fn keep_mirrors(&mut self, mirrors: EngineMirrors) {
+        self.compensation_sent = mirrors.compensation;
+        self.console_sums_sent = mirrors.console_sums;
+        self.solo_silenced_sent = mirrors.solo_silenced;
+        self.track_graph_sent = mirrors.track_graph;
+        self.sampler_stretch_sent = mirrors.sampler_stretch;
         self.channel_solo_silenced_sent = self.channel_solo_silenced();
         self.audio_graph_sent = self.audio_graph_plan();
-        true
     }
 
     /// What each producer must wait, from the project as it stands.

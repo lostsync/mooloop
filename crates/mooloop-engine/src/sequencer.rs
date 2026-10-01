@@ -8,7 +8,7 @@ use std::ops::Range;
 
 use mooloop_core::{
     AutomationLane, AutomationPoint, ChannelPattern, EffectTarget, LanePool, NoteEvent, NoteId, ParamAddr, Pattern,
-    DeviceId, PatternPlacement, PlaybackMode, PointId, Ppq, Project,
+    DeviceId, PatternEdit, PatternPlacement, PlaybackMode, PointId, Ppq, Project,
     DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MAX_CHANNELS,
     MAX_NOTES_PER_CHANNEL_PATTERN, MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS,
     MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_BAR, TICKS_PER_STEP,
@@ -1566,6 +1566,127 @@ impl Sequencer {
     }
 }
 
+/// A pattern-bank edit made ready for the audio thread: whatever pattern the
+/// edit puts into the bank, built on the control thread from the project the
+/// edit produced, and room for whatever pattern it takes out.
+///
+/// [`Sequencer::edit_pattern`] swaps the carried pattern into the bank and
+/// the bank's out, so the callback allocates and frees nothing: what it
+/// displaced -- the cleared or removed pattern with its notes and lane
+/// points, or the vacant seat a clone filled -- is dropped wherever the box
+/// goes back to.
+pub struct PatternChange {
+    edit: PatternEdit,
+    /// In: the clone, or an empty pattern for the seat a clear or a removal
+    /// leaves. Out, once applied: the pattern the edit displaced.
+    pattern: Pattern,
+    /// The incoming project's current pattern.
+    current: usize,
+    applied: bool,
+}
+
+impl PatternChange {
+    /// Build `edit`'s change for `project`, the document the edit produced:
+    /// the clone as [`Sequencer::load_project`] would load it, or an empty
+    /// pattern at the length the bank seat will have.
+    ///
+    /// Allocates; call it on the control thread.
+    pub fn new(edit: PatternEdit, project: &Project) -> Box<Self> {
+        let at = usize::from(edit.at());
+        let mut pattern = Pattern::with_steps(MAX_CHANNELS, MAX_PATTERN_STEPS as usize);
+        let length = match edit {
+            PatternEdit::Cloned(_) => project.pattern_lengths.get(at + 1),
+            PatternEdit::Cleared(_) => project.pattern_lengths.get(at),
+            // The seat a removal vacates is past the song, where every
+            // pattern sits at the default `load_project` gives it.
+            PatternEdit::Removed(_) => None,
+        };
+        pattern.set_length_steps(usize::from(length.copied().unwrap_or(DEFAULT_STEPS)));
+        if let PatternEdit::Cloned(_) = edit {
+            for (lane, channel) in pattern.channels.iter_mut().zip(&project.channels) {
+                load_channel_pattern(lane, channel, at + 1);
+            }
+        }
+        Box::new(Self {
+            edit,
+            pattern,
+            current: usize::from(project.current_pattern),
+            applied: false,
+        })
+    }
+
+    pub fn edit(&self) -> PatternEdit {
+        self.edit
+    }
+
+    /// Whether the edit reached the bank. A refused one comes back with the
+    /// pattern it went out with.
+    pub fn applied(&self) -> bool {
+        self.applied
+    }
+
+    /// The pattern the edit took out of the bank, once applied.
+    pub(crate) fn displaced(&self) -> &Pattern {
+        &self.pattern
+    }
+}
+
+impl Sequencer {
+    /// Apply a pattern clone, clear or removal to the bank in place, leaving
+    /// what [`Self::load_project`] builds from the project the edit produced:
+    /// the patterns past a clone move up a seat and the ones past a removal
+    /// down, every placement follows its pattern (a removed pattern's go),
+    /// and the current pattern is the project's.
+    ///
+    /// Realtime-safe: swaps `change`'s pattern for the bank's, rotates the
+    /// preallocated bank and renumbers the playlists in place. Answers
+    /// whether the edit landed; a clone into a full bank, a removal of the
+    /// only pattern or an index past the song changes nothing.
+    pub fn edit_pattern(&mut self, change: &mut PatternChange) -> bool {
+        let at = usize::from(change.edit.at());
+        let active = self.active_patterns;
+        if at >= active {
+            return false;
+        }
+        match change.edit {
+            PatternEdit::Cloned(_) => {
+                if active >= self.patterns.len() {
+                    return false;
+                }
+                std::mem::swap(&mut self.patterns[active], &mut change.pattern);
+                self.patterns[at + 1..=active].rotate_right(1);
+                self.active_patterns = active + 1;
+            }
+            PatternEdit::Cleared(_) => {
+                std::mem::swap(&mut self.patterns[at], &mut change.pattern);
+            }
+            PatternEdit::Removed(_) => {
+                if active <= 1 {
+                    return false;
+                }
+                std::mem::swap(&mut self.patterns[at], &mut change.pattern);
+                self.patterns[at..active].rotate_left(1);
+                self.active_patterns = active - 1;
+                self.playlist
+                    .retain(|placement| usize::from(placement.pattern) != at);
+                self.playlist_by_start
+                    .retain(|placement| usize::from(placement.pattern) != at);
+            }
+        }
+        // Every pattern keeps its order relative to the others, so both views
+        // stay sorted.
+        let edit = change.edit;
+        for placement in self.playlist.iter_mut().chain(&mut self.playlist_by_start) {
+            if let Some(pattern) = edit.pattern(placement.pattern) {
+                placement.pattern = pattern;
+            }
+        }
+        self.current = change.current.min(self.active_patterns - 1);
+        change.applied = true;
+        true
+    }
+}
+
 
 fn swing_offset_ticks(note_start_tick: u32, percent: u8) -> u32 {
     if (note_start_tick / TICKS_PER_STEP).is_multiple_of(2) {
@@ -1649,6 +1770,123 @@ mod tests {
         let mut events = [Box::new(EventList::empty())];
         sequencer.schedule_once(start_tick, end_tick, frames, ticks_per_sample, &mut events);
         events[0].iter().copied().collect()
+    }
+
+    /// Three channels, four patterns of different notes and lengths, a lane
+    /// on pattern 1, and placements that share start ticks across patterns.
+    fn pattern_bank_song() -> Project {
+        let mut project = Project {
+            channels: (0..3)
+                .map(|index| mooloop_core::ProjectChannel::poly_synth(index, 4))
+                .collect(),
+            pattern_lengths: vec![16, 32, 8, 16],
+            ..Project::default()
+        };
+        project.assign_channel_ids();
+        for (index, channel) in project.channels.iter_mut().enumerate() {
+            for pattern in 0..4 {
+                let id = pattern as u32 * 10 + index as u32;
+                channel.notes[pattern]
+                    .push(NoteEvent::new(id + 1, 24 * pattern as u32, 48, 50 + id as u8, 100));
+            }
+        }
+        let target = ParamAddr::strip(EffectTarget::Channel(2), 0);
+        let mut lane = AutomationLane::new(target);
+        lane.reset_points([AutomationPoint::new(1, 0, 0.2), AutomationPoint::new(2, 96, 0.8)]);
+        project.channels[2].automation[1].push(lane);
+        project.playlist = [(0, 0), (1, 0), (2, 0), (3, 1), (1, 2), (2, 3), (0, 3)]
+            .into_iter()
+            .map(|(pattern, bar)| PatternPlacement::new(pattern, bar * TICKS_PER_BAR))
+            .collect();
+        project.current_pattern = 2;
+        project
+    }
+
+    /// Everything [`Sequencer::load_project`] decides, seat by seat across
+    /// the whole bank, so a vacant seat left dirty shows too.
+    fn bank_state(sequencer: &Sequencer) -> String {
+        use std::fmt::Write;
+        let mut out = format!(
+            "active={} current={} playlist={:?} by_start={:?}\n",
+            sequencer.active_patterns,
+            sequencer.current,
+            sequencer.playlist,
+            sequencer.playlist_by_start
+        );
+        for (seat, pattern) in sequencer.patterns.iter().enumerate() {
+            let _ = write!(out, "{seat}: {}", pattern.length_ticks());
+            for channel in &pattern.channels {
+                if !channel.notes().is_empty() || !channel.lanes().is_empty() {
+                    let _ = write!(out, " {:?} {:?}", channel.notes(), channel.lanes());
+                }
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    fn loaded(project: &Project) -> Sequencer {
+        let mut sequencer = Sequencer::new(MAX_CHANNELS, 1, 16, Ppq::DEFAULT);
+        sequencer.load_project(project);
+        sequencer
+    }
+
+    /// **A pattern edit leaves the bank exactly as loading the edited song
+    /// does**: the patterns, their lengths and lanes, the vacant seats, both
+    /// playlist views and the current pattern -- for every clone, clear and
+    /// removal of a four-pattern song, applied twice in a row so a seat the
+    /// first edit vacated is a seat the second reads.
+    #[test]
+    fn a_pattern_edit_leaves_what_loading_the_result_leaves() {
+        let edits = |at| [PatternEdit::Cloned(at), PatternEdit::Cleared(at), PatternEdit::Removed(at)];
+        for first in (0..4).flat_map(edits) {
+            for second in (0..3).flat_map(edits) {
+                let mut project = pattern_bank_song();
+                let mut live = loaded(&project);
+                for edit in [first, second] {
+                    let at = usize::from(edit.at());
+                    match edit {
+                        PatternEdit::Cloned(_) => assert!(project.clone_pattern(at)),
+                        PatternEdit::Removed(_) => assert!(project.remove_pattern(at)),
+                        PatternEdit::Cleared(_) => {
+                            for channel in &mut project.channels {
+                                channel.notes[at].clear();
+                                channel.automation[at].clear();
+                            }
+                        }
+                    }
+                    let mut change = PatternChange::new(edit, &project);
+                    assert!(live.edit_pattern(&mut change), "{first:?} then {edit:?} refused");
+                    assert!(change.applied());
+                }
+                assert_eq!(
+                    bank_state(&live),
+                    bank_state(&loaded(&project)),
+                    "{first:?} then {second:?}"
+                );
+            }
+        }
+    }
+
+    /// **A refused edit changes nothing**, and comes back unapplied.
+    #[test]
+    fn a_refused_pattern_edit_leaves_the_bank_alone() {
+        let project = pattern_bank_song();
+        let mut live = loaded(&project);
+        let before = bank_state(&live);
+        let mut one = project.clone();
+        while one.remove_pattern(0) {}
+        let mut single = loaded(&one);
+        let single_before = bank_state(&single);
+        for edit in [PatternEdit::Cloned(4), PatternEdit::Cleared(4), PatternEdit::Removed(9)] {
+            let mut change = PatternChange::new(edit, &project);
+            assert!(!live.edit_pattern(&mut change), "{edit:?}");
+            assert!(!change.applied());
+        }
+        let mut change = PatternChange::new(PatternEdit::Removed(0), &one);
+        assert!(!single.edit_pattern(&mut change));
+        assert_eq!(bank_state(&live), before);
+        assert_eq!(bank_state(&single), single_before);
     }
 
     #[test]

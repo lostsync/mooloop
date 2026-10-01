@@ -969,10 +969,14 @@ impl TrackEdit {
 /// both lists, rather than by two hand-written copies of which one later
 /// misses a field. No single edit moves a channel and a track at once, so
 /// this cannot say "both".
+///
+/// A pattern edit is here too, so the one tag a queued edit carries can say
+/// it; it moves no seat, so every target and address stays where it was.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListEdit {
     Channel(ChannelEdit),
     Track(TrackEdit),
+    Pattern(crate::PatternEdit),
 }
 
 impl ListEdit {
@@ -981,7 +985,14 @@ impl ListEdit {
         match self {
             Self::Channel(edit) => edit.target(target),
             Self::Track(edit) => edit.target(target),
+            Self::Pattern(_) => Some(target),
         }
+    }
+
+    /// Whether the edit renumbered the channel or the track list, which is
+    /// what everything keyed by a seat has to follow.
+    pub fn moves_a_seat(self) -> bool {
+        !matches!(self, Self::Pattern(_))
     }
 
     /// Where `address` points after the edit. Only its scope names a seat;

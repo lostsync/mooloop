@@ -150,6 +150,16 @@ impl SequencedVoices {
         }
     }
 
+    /// Say that every voice in the table came from `pattern`: the pattern
+    /// mode's current pattern, after an edit gave the content it plays a new
+    /// index (a clone made current). A later edit to that pattern's notes
+    /// then finds the voices it owes a release.
+    pub fn relabel_pattern(&mut self, pattern: u8) {
+        for voice in self.voices[..self.len].iter_mut() {
+            voice.origin.pattern = pattern;
+        }
+    }
+
     /// Mark every voice, and owe a `Choke` too if one was never recorded.
     pub fn release_all(&mut self) {
         self.release_where(|_| true);

@@ -47,6 +47,8 @@ mod window_probe;
 mod meter;
 #[cfg(test)]
 mod channel_removal_tests;
+#[cfg(test)]
+mod pattern_edit_tests;
 #[cfg(feature = "mockup")]
 mod mockup;
 mod settings;
@@ -84,7 +86,7 @@ use mooloop_core::strip::{
 use mooloop_core::{log_debug, log_error, log_info, log_warn};
 use mooloop_core::{
     snap_bars_to_power_of_two,
-    BusSetup, ChannelEdit, ListEdit, TrackEdit, ENV_MAX_SECONDS, ENV_MIN_SECONDS,
+    BusSetup, ChannelEdit, ListEdit, PatternEdit, TrackEdit, ENV_MAX_SECONDS, ENV_MIN_SECONDS,
     DeviceKind, DrumMode, DrumSynthParams, EffectKind,
     EffectSlotState, EffectTarget, EngineCommand, EngineEvent, EnvTrigger, EqFaceControl,
     EqParams, EQ_FACE_CONTROLS, FilterModel,
@@ -2578,7 +2580,13 @@ fn queue_pattern_clone(
     if !project.clone_pattern(index) {
         return false;
     }
-    queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
+    queue_structural_edit(
+        tx,
+        before,
+        ProjectSnapshot { project, samples },
+        status,
+        Some(ListEdit::Pattern(PatternEdit::Cloned(index as u8))),
+    )
 }
 
 /// Removes pattern `index` -- see `Project::remove_pattern`. Playlist
@@ -2601,7 +2609,13 @@ fn queue_pattern_remove(
     if !project.remove_pattern(index) {
         return false;
     }
-    queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
+    queue_structural_edit(
+        tx,
+        before,
+        ProjectSnapshot { project, samples },
+        status,
+        Some(ListEdit::Pattern(PatternEdit::Removed(index as u8))),
+    )
 }
 
 /// Empties pattern `index`'s notes and automation on every channel. The
@@ -2627,7 +2641,13 @@ fn queue_pattern_clear(
         channel.notes[index].clear();
         channel.automation[index].clear();
     }
-    queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
+    queue_structural_edit(
+        tx,
+        before,
+        ProjectSnapshot { project, samples },
+        status,
+        Some(ListEdit::Pattern(PatternEdit::Cleared(index as u8))),
+    )
 }
 
 /// The colour of the track a channel feeds, which is what that channel's rack
@@ -10978,10 +10998,9 @@ impl AppUi {
             });
         }
 
-        // Pattern clone/remove reuse the same whole-project undo pipeline
-        // channel cut/copy/paste/clone/delete use above: mutate a `Project`
-        // snapshot's pattern-indexed vectors and queue it as one undoable
-        // edit, rather than a bespoke realtime engine command.
+        // Pattern clone, remove and clear queue the edited document with its
+        // undo entry, as the channel edits above do; the pump hands a lone
+        // one to the engine as one command (`edit_pattern_in_ui`).
         {
             let st = state.clone();
             let commands = command_state.clone();
@@ -17914,6 +17933,10 @@ impl AppUi {
                             // into it still installs.
                             let channel_edit =
                                 lone_channel_edit(&edit, engine_backlog.has_superseded());
+                            // A pattern cloned, cleared or removed on its own
+                            // is one command too.
+                            let pattern_edit =
+                                lone_pattern_edit(&edit, engine_backlog.has_superseded());
                             let installed = if let Some(channel_edit) = channel_edit {
                                 edit_channels_in_ui(
                                     &mut handle,
@@ -17923,6 +17946,16 @@ impl AppUi {
                                     &edit.project,
                                     &edit.samples,
                                     channel_edit,
+                                )
+                            } else if let Some(pattern_edit) = pattern_edit {
+                                edit_pattern_in_ui(
+                                    &mut handle,
+                                    default_sample_for_pump.as_ref(),
+                                    &st,
+                                    &window,
+                                    &edit.project,
+                                    &edit.samples,
+                                    pattern_edit,
                                 )
                             } else {
                                 install_project_in_ui(
@@ -19477,7 +19510,7 @@ fn follow_installed_edit(
     // a track edit is `rescope_after_track`'s below and a channel edit
     // renumbers only channels; and not an undo or a redo, which restores a
     // whole document whose tracks may not be the ones `rack_was` named.
-    let moved_a_list = list_edits.iter().any(Option::is_some);
+    let moved_a_list = list_edits.iter().flatten().any(|edit| edit.moves_a_seat());
     if let EffectTarget::Bus(bus) = rack_was {
         if !moved_a_list && !restores && (bus as usize) < state.session.buses.len() {
             state.session.effect_target = rack_was;
@@ -19501,7 +19534,9 @@ fn follow_installed_edit(
                     state.sync_bus_editor(window);
                 }
             }
-            None => {}
+            // A pattern edit renumbers no seat; the session took the
+            // pattern bank in with the document.
+            Some(ListEdit::Pattern(_)) | None => {}
         }
     }
 }
@@ -19605,6 +19640,48 @@ fn lone_channel_edit(edit: &ProjectEdit, merged: bool) -> Option<ChannelEdit> {
         }
         _ => None,
     }
+}
+
+/// The pattern edit a queued edit is, when that is all it is and it can
+/// reach the engine as one command: a recorded clone, clear or removal that
+/// no older install was merged into (`merged`). Everything else installs.
+fn lone_pattern_edit(edit: &ProjectEdit, merged: bool) -> Option<PatternEdit> {
+    match (edit.edit, &edit.history) {
+        (Some(ListEdit::Pattern(pattern_edit)), Some((HistoryMove::Record, _))) if !merged => {
+            Some(pattern_edit)
+        }
+        _ => None,
+    }
+}
+
+/// Apply a pattern clone, clear or removal to the engine as one command,
+/// with no install, for an edit whose result is `project`: the window takes
+/// the edited document in as an install's does, and every voice and lane the
+/// edit does not touch goes on sounding. `false` when the engine refused
+/// even the install this falls back to, as [`install_project_in_ui`]
+/// answers.
+fn edit_pattern_in_ui(
+    handle: &mut EngineHandle,
+    default_sample: Option<&Arc<SampleData>>,
+    state: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    project: &Project,
+    samples: &[Option<Arc<SampleData>>],
+    edit: PatternEdit,
+) -> bool {
+    let mut incoming = project.clone();
+    normalize_project_pattern_banks(&mut incoming);
+    let sent = state.borrow().session.engine_mirrors();
+    state.borrow_mut().replace_project(&incoming, samples, window);
+    let sent_edit = state
+        .borrow_mut()
+        .session
+        .send_pattern_edit(handle, edit, Arc::new(incoming), sent);
+    if !sent_edit {
+        return install_project_in_ui(handle, default_sample, state, window, project, samples, true);
+    }
+    finish_project_in_ui(handle, state, window, true);
+    true
 }
 
 /// Apply a channel removal, move or insertion to the engine as one command,

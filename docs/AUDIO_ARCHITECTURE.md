@@ -237,10 +237,27 @@ requires the same samples as the install, and as a song never edited (with
 a removed channel muted, or a moved one on a track of its own so every track
 sums in the same order). The session keeps what its reconcilers had sent,
 renumbered (`Session::send_channel_edit`), so the next tick sends only what
-the edit changed. Paste, track edits, pattern edits, a single-row preset
-loaded onto a container, and undo still install; an effect preset, loaded
+the edit changed. Track edits, a single-row preset loaded onto a
+container, and undo still install; an effect preset, loaded
 into a device or added as a new one, goes through the per-slot
 `InstallEffect` path like any insert.
+
+**A pattern clone, clear or removal is a command too**
+(`StructuralCommand::EditPattern`). The control thread builds the pattern
+the edit puts into the bank -- the clone as a load would fill it, or an
+empty one -- and the audio thread swaps it into the preallocated bank,
+rotates the patterns after it, renumbers both playlist views in place and
+takes the incoming project's current pattern; the pattern it displaces
+leaves in the same box. In Song mode the voices of the cleared or removed
+pattern end, and so do those of every renumbered pattern, because a
+sequenced voice's id carries its pattern's index; in Pattern mode the
+voices end when the pattern now scheduled is not the content that started
+them (a clone made current plays on). A lane the edit took from under the
+playhead hands its knob back, as a pattern switch does, which the install
+did not (MOO-494). `pattern_edit_tests.rs` holds the command to the
+install's samples, to a song made with the edit from the start, and to a
+live lane clear. A pattern edit moves no seat, so the session keeps its
+mirrors as they were (`Session::send_pattern_edit`).
 
 **A project install carries effect devices by `DeviceId`** (MOO-137, agreed
 with Realtime Engine on 2026-09-23). `carry_plan` still carries a channel or

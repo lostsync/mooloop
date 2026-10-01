@@ -1224,6 +1224,14 @@ boundary.
   and a pad's release tail rings over it. **Panic (All Notes Off)** is a
   bindable action with no default chord: it ends every voice and every held
   key, pedal included, without stopping the song.
+- **Cloning, clearing or deleting a pattern under a playing song** reaches
+  the engine as one edit rather than a rebuild of the song, as of
+  2026-10-01 (MOO-466). The cleared or deleted pattern's sounding notes end;
+  in Song mode so do those of every pattern the edit renumbers (the ones
+  after a clone or a deletion), and in Pattern mode a clone made current
+  plays on from where the original was. A knob a cleared or deleted
+  pattern's lane was driving under the playhead returns to its own value, as
+  it does when you switch away from that pattern. Undo still rebuilds.
 - One channel holds at most 1,024 notes in one pattern (the engine's
   preallocated store; `docs/CAPACITY_POLICY.md`). As of 2026-09-23 (MOO-133)
   every way of adding a note -- drawing, painting, a step, a step slice, a

@@ -488,6 +488,44 @@ impl Pattern {
     }
 }
 
+/// One edit to the pattern bank, and where every pattern index lands after
+/// it: [`crate::ChannelEdit`]'s counterpart for the list a placement, a
+/// voice's origin and the current pattern are indexed by.
+///
+/// The document side is [`crate::Project::clone_pattern`],
+/// [`crate::Project::remove_pattern`] and a clear of every channel's notes
+/// and lanes for one pattern; the engine applies the same edit in place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PatternEdit {
+    /// Pattern `at` was copied to `at + 1`; every later pattern moved up one.
+    Cloned(u8),
+    /// Pattern `at` lost every note and lane; its length and placements stay.
+    Cleared(u8),
+    /// Pattern `at` went, with its placements; every later pattern moved
+    /// down one.
+    Removed(u8),
+}
+
+impl PatternEdit {
+    /// The pattern the edit is about.
+    pub fn at(self) -> u8 {
+        match self {
+            Self::Cloned(at) | Self::Cleared(at) | Self::Removed(at) => at,
+        }
+    }
+
+    /// Where the pattern that was at `old` now sits, or `None` when it is the
+    /// one removed. A cleared pattern keeps its index.
+    pub fn pattern(self, old: u8) -> Option<u8> {
+        match self {
+            Self::Cloned(at) if old > at => old.checked_add(1),
+            Self::Removed(at) if old == at => None,
+            Self::Removed(at) if old > at => Some(old - 1),
+            _ => Some(old),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
