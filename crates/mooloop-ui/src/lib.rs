@@ -3691,7 +3691,7 @@ pub use plugin_scan::start_startup_plugin_scan;
 /// The "Run under XWayland" setting applied before the first window, and
 /// which display server the window ended up on (MOO-301, Platform's).
 pub use display_backend::{
-    select_display_backend, window_display_backend, window_x11_parent, BackendPlan,
+    select_display_backend, window_display_backend, window_native_parent, BackendPlan,
     DisplayBackend,
 };
 

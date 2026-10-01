@@ -1340,17 +1340,11 @@ fn a_container_preset_holding_a_plugin_added_as_a_new_device_lets_its_processor_
 // it was asked, and the plugin is the test double's GUI variant, which draws
 // nothing.
 //
-// **The tests that expect a GUI to open run only where the host can open
-// one** (MOO-337). The host asks a plugin for its GUI through `GuiApi::X11`
-// alone (`mooloop-plugin-host/src/gui.rs`: Cocoa and Win32 arrive with the
-// platforms that need them), and the window side is a bare X11 window, so a
-// plugin GUI is a feature of the targets with X11: the same `cfg` as
-// `display_backend.rs`'s `force_x11`. On macOS the test double truthfully
-// refuses X11, and those tests fail by testing a feature macOS does not
-// have. That is a scope, not a quarantine: what a macOS user gets instead --
-// the face, its control, and a badge saying why no window opened -- is
-// `a_window_that_cannot_open_is_the_badge`, which runs everywhere. When the
-// host learns Cocoa, the gate moves with it.
+// Every test here runs on Linux and macOS alike: the host asks the plugin
+// for the platform's API (X11 or Cocoa), which the test double offers, and
+// the fake stands in for the X11 window or the `NSPanel`. On macOS a fake's
+// window id names no panel, so the plugin is parented to a null view, which
+// the test double, drawing nothing, never reads.
 
 /// The scanner's cache with the test gain's and the test sine's GUI variants
 /// beside the rest.
@@ -1407,7 +1401,6 @@ fn window_buttons(h: &Harness) -> Vec<Control> {
         .collect()
 }
 
-#[cfg(all(unix, not(target_vendor = "apple")))] // X11 only: MOO-337, above.
 fn gui_slot(h: &Harness) -> PluginSlotId {
     match h.state.borrow().session.effect_chain().expect("a chain")[1].params {
         EffectParams::Plugin(slot) => slot,
@@ -1415,12 +1408,10 @@ fn gui_slot(h: &Harness) -> PluginSlotId {
     }
 }
 
-#[cfg(all(unix, not(target_vendor = "apple")))] // X11 only: MOO-337, above.
 fn calls(log: &FakeLog) -> Vec<String> {
     log.borrow().calls.clone()
 }
 
-#[cfg(all(unix, not(target_vendor = "apple")))] // X11 only: MOO-337, above.
 fn open_gui(h: &Harness) {
     let main = crate::plugin_gui::MainWindowState::of(h.window.window());
     h.state.borrow_mut().open_plugin_gui_at(1, &main).expect("it opens");
@@ -1431,7 +1422,6 @@ fn open_gui(h: &Harness) {
 /// sized to the plugin and shown; pressed again, it brings that window to
 /// the front rather than opening a second.
 #[test]
-#[cfg(all(unix, not(target_vendor = "apple")))] // X11 only: MOO-337, above.
 fn only_a_plugin_with_a_gui_has_the_control_and_it_opens_or_raises() {
     let (mut h, log) = gui_harness();
     let rows: Vec<EffectSlotRow> = h.state.borrow().effect_slot_model.iter().collect();
@@ -1447,7 +1437,7 @@ fn only_a_plugin_with_a_gui_has_the_control_and_it_opens_or_raises() {
     let made = calls(&log);
     assert!(made[0].starts_with("create ") && made[0].contains("Test Gain (GUI)"), "{made:?}");
     assert_eq!(made.last().map(String::as_str), Some("show 0x101"), "shown once placed: {made:?}");
-    assert!(!made.iter().any(|call| call.starts_with("transient")), "no X11 main window to belong to");
+    assert!(!made.iter().any(|call| call.starts_with("transient")), "no native main window to belong to");
     h.tick();
     assert!(h.state.borrow().effect_slot_model.row_data(1).expect("the row").plugin_gui_open);
     assert!(window_buttons(&h)[0].label.ends_with("window to the front"));
@@ -1469,7 +1459,6 @@ fn only_a_plugin_with_a_gui_has_the_control_and_it_opens_or_raises() {
 /// removed with its GUI open has the GUI closed by the session, and its
 /// window destroyed on the tick that reports it. Quit does the same for all.
 #[test]
-#[cfg(all(unix, not(target_vendor = "apple")))] // X11 only: MOO-337, above.
 fn a_window_goes_only_after_its_plugin_gui() {
     use mooloop_plugin_window::{GuiSize, PluginWindowEvent, PluginWindowId};
     let destroyed = |log: &FakeLog| calls(log).iter().filter(|call| call.starts_with("destroy ")).count();
@@ -1525,6 +1514,47 @@ fn a_window_goes_only_after_its_plugin_gui() {
     assert_eq!(calls(&log).last().map(String::as_str), Some("destroy 0x101"));
 }
 
+/// **Where the main window can hold a plugin window above it, the pump
+/// makes it transient and never hides it for focus**: X11 and macOS
+/// (`DisplayBackend::can_set_transient`). On macOS the panel floats above
+/// mooloop and AppKit hides it with the application, so the pump's
+/// hide-on-focus-loss, native Wayland's workaround, must not run there; a
+/// native Wayland session, which cannot, is the contrast.
+#[test]
+fn a_transient_capable_main_window_keeps_its_plugin_window_above_it() {
+    use crate::plugin_gui::fake::main_on;
+    use crate::plugin_gui::FOCUS_GRACE;
+    use mooloop_plugin_window::DisplayBackend;
+    for backend in [DisplayBackend::Cocoa, DisplayBackend::X11, DisplayBackend::Wayland] {
+        let (h, log) = gui_harness();
+        let start = std::time::Instant::now();
+        let opened = main_on(Some(backend), true, start);
+        h.state.borrow_mut().open_plugin_gui_at(1, &opened).expect("it opens");
+        let made = calls(&log);
+        let transient = made.iter().find(|call| call.starts_with("transient "));
+        if backend.can_set_transient() {
+            let parent = opened.native_parent.expect("a main window to belong to");
+            assert_eq!(
+                transient.map(String::as_str),
+                Some(format!("transient 0x101 Some({})", parent.id).as_str()),
+                "{backend:?}: {made:?}"
+            );
+            let at = |position: &str| made.iter().position(|call| call == position);
+            assert!(at("transient 0x101") < at("show 0x101"), "placed before it is shown: {made:?}");
+        } else {
+            assert_eq!(transient, None, "{backend:?}: nothing to belong to");
+        }
+
+        // Focus is away from mooloop for far longer than the grace period.
+        let before = calls(&log).len();
+        for after in [FOCUS_GRACE * 2, FOCUS_GRACE * 20] {
+            h.state.borrow_mut().pump_plugin_guis(&main_on(Some(backend), false, start + after));
+        }
+        let hidden = calls(&log)[before..].contains(&"hide 0x101".to_string());
+        assert_eq!(hidden, backend == DisplayBackend::Wayland, "{backend:?}: {:?}", &calls(&log)[before..]);
+    }
+}
+
 /// **A window that cannot open is the face's badge, and the face stays.**
 /// The plugin accepts the platform's GUI API (X11 on Linux, Cocoa on macOS),
 /// so the failure is the window side's: its fake has no display, and the
@@ -1546,7 +1576,8 @@ fn a_window_that_cannot_open_is_the_badge() {
 }
 
 /// **Preferences → Plugins' "Run under XWayland" round-trips to the saved
-/// setting**, off by default, and a save that fails puts it back. Saved to a
+/// setting**, off by default, and a save that fails puts it back. The
+/// section is shown only where the setting applies: not on macOS. Saved to a
 /// scratch file: a test must not write the settings of whoever runs it.
 #[test]
 fn the_xwayland_toggle_round_trips_to_the_setting() {
@@ -1562,6 +1593,11 @@ fn the_xwayland_toggle_round_trips_to_the_setting() {
     let cache = h.state.borrow().plugin_cache_path.clone();
     plugin_ui::show_plugin_preferences(&h.window, &settings.borrow().plugins, &cache);
     assert!(!h.window.get_preferences_plugin_run_under_xwayland(), "off by default");
+    assert_eq!(
+        h.window.get_preferences_plugin_xwayland_applies(),
+        !cfg!(target_os = "macos"),
+        "shown on Linux, hidden on macOS, where the setting changes nothing"
+    );
 
     h.window.invoke_preferences_plugin_run_under_xwayland_toggled(true);
     assert!(settings.borrow().plugins.run_under_xwayland);
@@ -1626,7 +1662,6 @@ fn instrument(h: &Harness) -> (mooloop_core::DeviceId, PluginSlotId) {
 /// effect's does** (MOO-304), through `PluginGuis::open_or_raise` with the
 /// source's slot.
 #[test]
-#[cfg(all(unix, not(target_vendor = "apple")))] // X11 only: MOO-337, above.
 fn a_plugin_instrument_with_a_gui_opens_it_from_its_face() {
     let (mut h, log) = instrument_harness(test_plugin::SINE_GUI_ID);
     let (_, slot) = instrument(&h);

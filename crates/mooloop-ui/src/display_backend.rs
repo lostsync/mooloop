@@ -98,9 +98,10 @@ pub fn window_display_backend(window: &slint::Window) -> Option<DisplayBackend> 
 
 /// `window` as the parent a plugin window is kept above
 /// (`PluginWindows::set_transient_for`) and a floating plugin GUI's
-/// `set_transient`, in the platform's windowing API: its X11 id on X11, its
-/// `NSView*` on macOS. `None` on Wayland, and before the window is shown.
-pub fn window_x11_parent(window: &slint::Window) -> Option<NativeWindow> {
+/// `set_transient`, in the platform's windowing API: its X11 window id on
+/// Linux (X11, or XWayland), the address of its `NSView` on macOS. `None` on
+/// native Wayland, and before the window is shown.
+pub fn window_native_parent(window: &slint::Window) -> Option<NativeWindow> {
     let handle = window.window_handle();
     let raw = handle.window_handle().ok()?;
     mooloop_plugin_window::display::native_window_of(raw.as_raw())

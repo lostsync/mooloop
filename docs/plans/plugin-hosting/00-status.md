@@ -1866,7 +1866,7 @@ yet called by anything. The pump that joins the two is MOO-302 (Interface).
   or any window.
 - **Which backend the process is on**: `window_display_backend(&slint::Window)`
   reads the window's display handle (Xlib or Xcb is X11, Wayland is Wayland;
-  `None` before the window is shown), and `window_x11_parent` its X11 id, as
+  `None` before the window is shown), and `window_x11_parent` (now `window_native_parent`) its X11 id, as
   the parent for `set_transient_for` and a floating GUI's `set_transient`.
   `DisplayBackend::can_set_transient` is the pump's question. Both need
   Slint's `raw-window-handle-06` feature, now on in the root `Cargo.toml`.
@@ -2052,7 +2052,7 @@ Platform) and the pump (MOO-481, Interface) follow.
   `each_api_opens_where_the_plugin_offers_it_and_is_refused_where_it_does_not`
   opens both configs of the native API and is refused both of the other.
   The test plugin already offered its platform's API (`NATIVE_API`).
-  `mooloop-session`'s `tests/plugin_gui.rs` stays Linux-only.
+  `mooloop-session`'s `tests/plugin_gui.rs` stays Linux-only (open: MOO-491).
 
 Nothing here opens a real window. The build box has no macOS target; macOS
 CI on the leg's draft PR is what compiled and ran it.
@@ -2102,6 +2102,40 @@ in `crates/mooloop-plugin-window`.
   `a_window_on_a_real_x_server`.
 
 A real Mac check with a real plugin is Adam's, asked once MOO-481 lands.
+
+## Step 11 on macOS: the pump, recorded 2026-10-01 (MOO-481)
+
+The third leg, Interface's, in `ui/src/plugin_gui.rs`: mostly a check that
+the first two legs left the pump nothing to do.
+
+- **The config is already the platform's.** The pump never names an API:
+  `PluginGuis::open` asks the session for `plugin_gui_kind` and hands
+  `PluginWindowId::native()` as the embedded parent, and the session chooses
+  from `GuiConfig::native_order()` (MOO-479). Nothing changed here.
+- **Transient, never hidden for focus.** `MainWindowState::transient_parent`
+  asks `DisplayBackend::can_set_transient`, true for Cocoa, so a panel is
+  made transient for the main window's `NSView`; `hides_on_focus_loss` is
+  native Wayland's alone, so the pump's hide-on-focus-loss never runs on
+  macOS (AppKit hides the panels with the application instead).
+  `a_transient_capable_main_window_keeps_its_plugin_window_above_it`
+  (`plugin_ui_tests.rs`) pins both for Cocoa, X11 and, as the contrast,
+  Wayland, through the `GuiWindows` fake on every platform.
+- **Names.** `MainWindowState::x11_parent` is now `native_parent`, and
+  Platform's `display_backend::window_x11_parent` is `window_native_parent`.
+- **Preferences > Plugins hides PLUGIN WINDOWS** ("Run under XWayland")
+  where `display::XWAYLAND_SETTING_APPLIES` is false, i.e. on macOS
+  (`preferences-plugin-xwayland-applies`).
+- **Tests back on macOS.** The three `plugin_ui_tests.rs` tests MOO-337
+  gated to X11 (`only_a_plugin_with_a_gui_has_the_control_and_it_opens_or_raises`,
+  `a_window_goes_only_after_its_plugin_gui`,
+  `a_plugin_instrument_with_a_gui_opens_it_from_its_face`) run everywhere:
+  they use the fake window side, and the test plugin offers Cocoa. On macOS
+  a fake's window id names no panel, so the plugin is parented to a null
+  view, which the test double never reads. None stays skipped.
+  `mooloop-session`'s `tests/plugin_gui.rs` is still Linux-only for two
+  X11 asserts and a scale step Cocoa never takes (open: MOO-491).
+
+The real-plugin check on a real Mac is Adam's (open: MOO-490).
 
 ## The test plugins
 

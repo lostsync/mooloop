@@ -1088,6 +1088,8 @@ export component MainWindow inherits Window {
     // "Run under XWayland (full plugin window behaviour)" (MOO-302): the
     // saved setting, which applies at the next start.
     in property <bool> preferences-plugin-run-under-xwayland;
+    // False where "Run under XWayland" is inert (macOS): Preferences hides it.
+    in property <bool> preferences-plugin-xwayland-applies: true;
     callback preferences-plugin-run-under-xwayland-toggled(bool);
     // "Hide plugins mooloop can't use yet": the saved setting, and how
     // many plugins it leaves out of the browser, in words.
@@ -8931,6 +8933,7 @@ export component MainWindow inherits Window {
         plugin-scan-on-startup-toggled(v) => { root.preferences-plugin-scan-on-startup-toggled(v); }
         plugin-rescan-requested => { root.preferences-plugin-rescan-requested(); }
         plugin-run-under-xwayland: root.preferences-plugin-run-under-xwayland;
+        plugin-xwayland-applies: root.preferences-plugin-xwayland-applies;
         plugin-run-under-xwayland-toggled(v) => { root.preferences-plugin-run-under-xwayland-toggled(v); }
         plugin-hide-unsupported: root.preferences-plugin-hide-unsupported;
         plugin-hidden-status: root.preferences-plugin-hidden-status;
