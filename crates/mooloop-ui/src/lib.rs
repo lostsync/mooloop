@@ -1742,6 +1742,42 @@ fn append_effect_into_container(
     record_project_history(commands, before, st, window, "Effect added");
 }
 
+/// Reorders the rack by `verb` and mirrors it to the engine as one undo step
+/// named `label`: a row dragged along the rack, or a branch dragged along its
+/// layer's list. Nothing happens where `verb` refuses.
+fn move_effects(
+    st: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    commands: &Rc<RefCell<CommandState>>,
+    (tx, stx): (&EngineCommandSender, &StructuralCommandSender),
+    label: &'static str,
+    verb: impl FnOnce(&mut Session) -> Option<mooloop_session::effects::EffectMoved>,
+) {
+    let before = project_snapshot(&st.borrow(), window);
+    {
+        let mut state = st.borrow_mut();
+        let Some(moved) = verb(&mut state.session) else {
+            return;
+        };
+        state.sync_effects();
+        state.refresh_automation(window);
+        state.refresh_modulation(window);
+        // One command per row, because a container takes its run with it
+        // and the engine's chain moves one row at a time.
+        for (from, to) in &moved.moves {
+            let _ = tx.send(EngineCommand::MoveEffect {
+                target: moved.target,
+                from: *from,
+                to: *to,
+            });
+        }
+        // A run that moved may have landed inside a different box, or taken
+        // its own devices out of one.
+        state.publish_container_spans(moved.target, stx);
+    }
+    record_project_history(commands, before, st, window, label);
+}
+
 /// [`record_project_history`] under a gesture token the caller chose, rather
 /// than the piano roll's pointer gesture. An entry carrying the same token as
 /// the one below it is folded into it by `History::record`.
@@ -2906,9 +2942,9 @@ pub fn effect_kind_units(kind: EffectKind) -> i32 {
         EffectKind::Modulation => 2,
         EffectKind::Eq => 2,
         // One unit: a name, a mix, and a collapse. The devices it holds are
-        // rows of their own and carry their own width. A layer is the same
-        // head -- what differs is how its branches are drawn, which is
-        // `containers/09` and may yet want more height rather than more width.
+        // rows of their own and carry their own width. The rack draws a
+        // layer's face at the width of what it holds instead
+        // (`LayerMetrics.face-width`), so this is only its folded strip's tag.
         EffectKind::Chain | EffectKind::Layer => 1,
         // Step 08 of `docs/plans/plugin-hosting/` sizes the plugin face.
         EffectKind::Plugin => 2,
@@ -3313,6 +3349,7 @@ fn effect_slot_row(
         depth: view.draw_depth,
         closing: ModelRc::from(Rc::new(VecModel::from(view.closing))),
         closing_joins: ModelRc::from(Rc::new(VecModel::from(view.closing_joins))),
+        closing_ends: ModelRc::from(Rc::new(VecModel::from(view.closing_ends))),
         selected,
         wrap_enabled,
         is_layer: slot.params.container_flow() == Some(mooloop_core::ContainerFlow::Parallel),
@@ -12766,14 +12803,20 @@ impl AppUi {
 
         // A layer's list (`docs/plans/archive/containers/09`). Choosing the branch
         // the rack shows is looking, not editing: it redraws the rack and
-        // sends the engine nothing, and it is not in undo.
+        // sends the engine nothing, and it is not in undo. It also makes the
+        // branch's Chain the rack's selected device, since nothing else draws
+        // it to be clicked: copy, duplicate, delete and the sidebar's
+        // parameter list then act on the branch.
         {
             let st = state.clone();
+            let weak = window.as_weak();
             window.on_layer_branch_selected(move |layer, branch| {
                 let (Ok(layer), Ok(branch)) = (usize::try_from(layer), usize::try_from(branch))
                 else {
                     return;
                 };
+                let Some(window) = weak.upgrade() else { return };
+                set_focused_surface(&window, actions::Surface::Rack);
                 let mut st = st.borrow_mut();
                 let target = st.session.effect_target;
                 let Some((layer_id, branch_id)) = st
@@ -12784,7 +12827,9 @@ impl AppUi {
                     return;
                 };
                 st.layer_selection.insert((target, layer_id), branch_id);
+                st.session.select_device(Some(branch));
                 st.sync_effects();
+                window.set_source_selected(st.session.source_is_selected());
             });
         }
 
@@ -13437,30 +13482,31 @@ impl AppUi {
                 let (Ok(from), Ok(to)) = (usize::try_from(from), usize::try_from(to)) else {
                     return;
                 };
-                let before = project_snapshot(&st.borrow(), &window);
-                {
-                    let mut st = st.borrow_mut();
-                    let Some(moved) = st.session.move_effect_to(from, to) else {
-                        return;
-                    };
-                    st.sync_effects();
-                    st.refresh_automation(&window);
-                    st.refresh_modulation(&window);
-                    // One command per row, because a container takes its run
-                    // with it and the engine's chain moves one row at a time.
-                    // For a leaf this is the single move it always was.
-                    for (from, to) in &moved.moves {
-                        let _ = tx.send(EngineCommand::MoveEffect {
-                            target: moved.target,
-                            from: *from,
-                            to: *to,
-                        });
-                    }
-                    // A run that moved may have landed inside a different box,
-                    // or taken its own devices out of one.
-                    st.publish_container_spans(moved.target, &stx);
-                }
-                record_project_history(&commands, before, &st, &window, "Effect moved");
+                move_effects(&st, &window, &commands, (&tx, &stx), "Effect moved", |session| {
+                    session.move_effect_to(from, to)
+                });
+            });
+        }
+        // A row of a layer's list dragged to another place in the list: the
+        // whole branch moves among its siblings.
+        {
+            let tx = cmd_tx.clone();
+            let stx = structural_tx.clone();
+            let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_layer_branch_moved(move |layer, branch, position| {
+                let Some(window) = weak.upgrade() else { return };
+                let (Ok(layer), Ok(branch), Ok(position)) = (
+                    usize::try_from(layer),
+                    usize::try_from(branch),
+                    usize::try_from(position),
+                ) else {
+                    return;
+                };
+                move_effects(&st, &window, &commands, (&tx, &stx), "Branch moved", |session| {
+                    session.move_layer_branch(layer, branch, position)
+                });
             });
         }
 

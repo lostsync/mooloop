@@ -1,7 +1,39 @@
 import { Theme } from "theme.slint";
 import { GainMath } from "gain.slint";
-import { AudioOrientation, MiniKnob, MuteButton, ParameterKnob, PeakMeter, SoloButton, ToolButton } from "controls.slint";
+import { Icons } from "icons.slint";
+import { AudioOrientation, MuteButton, ParameterKnob, PeakMeter, SoloButton, ToolButton, TrimKnob } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
+import { ReorderMath } from "reorder.slint";
+
+// The layer's sizes. The face is as wide as what it holds -- the branch list
+// beside the selected branch's controls -- and not a count of rack units
+// (Adam, 2026-09-30); the rack sizes a layer's cell from `face-width`.
+export global LayerMetrics {
+    out property <length> padding: 6px;
+    out property <length> list-width: 150px;
+    out property <length> controls-width: 124px;
+    out property <length> face-width:
+        root.list-width + root.controls-width + root.padding * 3;
+    // The layer's own Gain and Mix, at the far end of its box: after the
+    // devices of the branch it shows, before its output rail.
+    out property <length> end-width: 64px;
+    // One branch row: 22px at 100%, growing with the text above it (MOO-333,
+    // the rule MOO-278 gave menu rows). The list is a layout of these with
+    // `row-spacing` between, so its pitch, which a drag steps by, follows.
+    out property <length> row-height: 22px * Theme.row-growth;
+    out property <length> row-spacing: 1px;
+}
+
+// Live state of a branch row being dragged along its layer's list. A global
+// for `RackDrag`'s reason (`reorder.slint`): the rows that slide aside are
+// not inside the one being carried. `layer` scopes it, since two layers'
+// lists can be on screen at once and must not slide each other's rows.
+export global BranchDrag {
+    in-out property <int> layer: -1;
+    in-out property <int> source: -1;
+    in-out property <int> target: -1;
+    in-out property <length> dy;
+}
 
 // One branch of a layer, as the layer's face lists it. `slot` is the rack
 // index of the branch's head -- the number every callback about the branch
@@ -17,55 +49,87 @@ export struct LayerBranchRow {
     controls: bool,
 }
 
-// One row of the branch list: the name, S, M, the branch's Level and a level
-// meter, in Bitwig's FX Layer order. A branch's Chain is not drawn in the rack
-// (MOO-456), so this row is where its Level lives. The state of S, M and
-// Level and the meter are the branch head's own row, read by the caller from
-// `effect-slots`, so nothing here is a copy that has to be republished when
-// the branch changes.
+// One row of the branch list: the name, a badge when the branch is
+// bypassed, S, M and a level meter, in Bitwig's FX Layer order. The row's
+// state is the branch head's own row, read by the caller from `effect-slots`,
+// so nothing here is a copy that has to be republished when the branch
+// changes. Dragging the row along the list moves the branch.
 export component LayerBranchListRow inherits Rectangle {
     in property <string> name;
     in property <bool> controls;
     in property <bool> selected;
     in property <bool> muted;
     in property <bool> soloed;
+    // The branch head is bypassed: it passes its input on dry, so it is not
+    // silent, and a badge says so rather than the dimming that means muted.
+    in property <bool> bypassed;
     in property <float> level-db: GainMath.min-db;
-    // The branch's Level, normalized fader travel through the mixer's taper
-    // (`ParamCurve::Fader`, 0.75 is unity): the Chain's own parameter 1, the
-    // one its face's Level knob wrote.
-    in property <float> level: 0.75;
+    // The layer's rack index, which scopes the drag to this list, and the
+    // row's place in it and the list's length, which bound where it lands.
+    in property <int> layer: -1;
+    in property <int> index;
+    in property <int> count;
     callback select-requested();
-    callback level-changed(float);
     callback mute-toggled();
     callback solo-toggled();
+    // The row was dropped at this place in the list, counting from 0.
+    callback move-requested(int);
     // The row's menu: take the branch and everything in it out of the layer.
     callback remove-requested();
 
-    // 22px at 100%, growing with the text above it (MOO-333, the rule
-    // MOO-278 gave menu rows), so at 200% a name no longer touches the rows
-    // either side. The list is a layout of these, so its pitch follows; at
-    // 100% nothing moves, and `layer_face.rs` aims at 100% pixels.
-    height: 22px * Theme.row-growth;
-    border-radius: Theme.radius-sm;
-    background: root.selected ? Theme.surface-raised : transparent;
+    property <bool> dragging: BranchDrag.layer == root.layer && BranchDrag.source == root.index;
+    property <length> pitch: LayerMetrics.row-height + LayerMetrics.row-spacing;
+    // Remove-then-insert, as every list here reorders: the rows the carried
+    // one passes close up behind it, and the gap is where it will land.
+    property <length> offset: root.dragging
+        ? BranchDrag.dy
+        : BranchDrag.layer == root.layer
+            ? ReorderMath.shift(root.index, BranchDrag.source, BranchDrag.target, root.pitch)
+            : 0px;
 
-    // The selected row wears the bracket's colour on its left edge: it is
-    // the branch the rack is showing to the right.
-    if root.selected : Rectangle {
-        x: 0px;
-        width: 2px;
-        height: parent.height;
-        background: Theme.accent;
-    }
+    height: LayerMetrics.row-height;
 
+    // The press, the drag and the menu. Not inside `body`, which moves with
+    // the drag: an area that moved under its own pointer would measure the
+    // drag against itself.
     pick := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.select-requested(); }
-        // A right press opens the row's menu: the branch's own commands,
-        // beside the row that owns them.
+        // Whether this press has turned into a drag, so its release is a
+        // drop and not a click.
+        property <bool> carried;
+        mouse-cursor: root.dragging ? MouseCursor.grabbing : MouseCursor.pointer;
         pointer-event(e) => {
-            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.right) {
+            if (e.button == PointerEventButton.right && e.kind == PointerEventKind.down) {
                 branch-menu.show();
+            }
+            if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
+                self.carried = false;
+            }
+            if (e.button == PointerEventButton.left && e.kind == PointerEventKind.up && self.carried) {
+                if (BranchDrag.target >= 0 && BranchDrag.target != root.index) {
+                    root.move-requested(BranchDrag.target);
+                }
+                BranchDrag.source = -1;
+                BranchDrag.target = -1;
+                BranchDrag.layer = -1;
+                BranchDrag.dy = 0px;
+            }
+        }
+        moved => {
+            if (self.pressed && !self.carried && abs(self.mouse-y - self.pressed-y) > 4px) {
+                self.carried = true;
+                BranchDrag.layer = root.layer;
+                BranchDrag.source = root.index;
+                BranchDrag.target = root.index;
+            }
+            if (self.carried) {
+                BranchDrag.dy = self.mouse-y - self.pressed-y;
+                BranchDrag.target = max(0, min(root.count - 1,
+                    root.index + round(BranchDrag.dy / root.pitch)));
+            }
+        }
+        clicked => {
+            if (!self.carried) {
+                root.select-requested();
             }
         }
     }
@@ -115,98 +179,332 @@ export component LayerBranchListRow inherits Rectangle {
         }
     }
 
-    HorizontalLayout {
-        padding-left: 6px;
-        padding-right: 2px;
-        spacing: 2px;
-        alignment: stretch;
-        Text {
-            horizontal-stretch: 1;
-            vertical-alignment: center;
-            overflow: elide;
-            text: root.name;
-            color: root.muted ? Theme.text-faint : root.selected ? Theme.text : Theme.text-muted;
-            font-size: Theme.text-md;
+    body := Rectangle {
+        y: root.offset;
+        height: root.height;
+        border-radius: Theme.radius-sm;
+        background: root.dragging || root.selected ? Theme.surface-raised : transparent;
+        drop-shadow-blur: root.dragging ? 8px : 0px;
+        drop-shadow-color: #000000aa;
+
+        // The selected row wears the bracket's colour on its left edge: it is
+        // the branch the rack is showing to the right.
+        if root.selected : Rectangle {
+            x: 0px;
+            width: 2px;
+            height: parent.height;
+            background: Theme.accent;
         }
-        if root.controls : VerticalLayout {
-            alignment: center;
-            SoloButton {
-                soloed: root.soloed;
-                tooltip: "Solo this branch within the layer";
-                clicked => { root.solo-toggled(); }
+
+        HorizontalLayout {
+            padding-left: 6px;
+            padding-right: 2px;
+            spacing: 2px;
+            alignment: stretch;
+            Text {
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                overflow: elide;
+                text: root.name;
+                color: root.muted ? Theme.text-faint : root.selected ? Theme.text : Theme.text-muted;
+                font-size: Theme.text-md;
+            }
+            if root.bypassed : VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: byp.preferred-width + 6px;
+                    height: byp.preferred-height + 2px;
+                    border-radius: Theme.radius-sm;
+                    border-width: Theme.hairline;
+                    border-color: Theme.warning;
+                    byp := Text {
+                        text: "BYP";
+                        color: Theme.warning;
+                        font-size: Theme.text-xs;
+                        letter-spacing: 0.5px;
+                    }
+                }
+            }
+            if root.controls : VerticalLayout {
+                alignment: center;
+                SoloButton {
+                    soloed: root.soloed;
+                    tooltip: "Solo this branch within the layer";
+                    clicked => { root.solo-toggled(); }
+                }
+            }
+            if root.controls : VerticalLayout {
+                alignment: center;
+                MuteButton {
+                    muted: root.muted;
+                    tooltip: "Mute this branch";
+                    clicked => { root.mute-toggled(); }
+                }
+            }
+            VerticalLayout {
+                padding-top: 3px;
+                padding-bottom: 3px;
+                PeakMeter {
+                    width: 5px;
+                    min-height: 0px;
+                    orientation: AudioOrientation.vertical;
+                    level-db: root.level-db;
+                    held-db: root.level-db;
+                }
             }
         }
-        if root.controls : VerticalLayout {
-            alignment: center;
-            MuteButton {
-                muted: root.muted;
-                tooltip: "Mute this branch";
-                clicked => { root.mute-toggled(); }
+    }
+}
+
+// The selected branch's controls, beside the list: what its Chain's face and
+// rails offered before a branch stopped being drawn as a device -- Level and
+// Mix, bypass, input and output trim, and its presets. Every value is the
+// branch head's own row; every callback is the caller's to send to it.
+export component LayerBranchControls inherits Rectangle {
+    // A Chain branch is selected. A bare device straight in the layer has
+    // none of these: its own face is in the rack.
+    in property <bool> available;
+    in property <string> name;
+    // Normalized fader travel through the mixer's taper (`ParamCurve::Fader`,
+    // 0.75 is unity), and Mix a ratio: the Chain's own parameters 1 and 0.
+    in-out property <float> branch-level: 0.75;
+    in-out property <float> branch-mix: 1.0;
+    in property <bool> bypassed;
+    // dB from unity, as every trim in the rack.
+    in-out property <float> input-trim-db;
+    in-out property <float> output-trim-db;
+    in property <[string]> preset-options;
+    in property <string> preset-name;
+    callback level-changed(float);
+    callback mix-changed(float);
+    callback bypass-toggled();
+    callback input-trim-changed(float);
+    callback output-trim-changed(float);
+    // An index into `preset-options`.
+    callback preset-selected(int);
+    callback save-preset-requested();
+
+    background: Theme.panel;
+    border-radius: Theme.radius-sm;
+
+    if !root.available : Text {
+        x: 6px;
+        width: parent.width - 12px;
+        height: parent.height;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+        text: "No branch to set";
+        color: Theme.text-faint;
+        font-size: Theme.text-md;
+    }
+
+    if root.available : VerticalLayout {
+        padding: 6px;
+        spacing: 6px;
+        alignment: start;
+
+        HorizontalLayout {
+            spacing: 4px;
+            Text {
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                overflow: elide;
+                text: root.name;
+                color: Theme.text;
+                font-size: Theme.text-md;
+            }
+            ToolButton {
+                width: 22px;
+                height: 18px;
+                icon: Icons.on;
+                active: !root.bypassed;
+                tooltip: root.bypassed ? "Enable" : "Bypass";
+                hint: root.bypassed ? "Enable this branch" : "Bypass this branch: its input passes on dry";
+                clicked => { root.bypass-toggled(); }
             }
         }
-        // A MiniKnob, the rack's own compact knob (the trims are the same
-        // widget) rather than a fader: a fader's track would take the width
-        // the name needs, and this is the one place the list has no room to
-        // spare. Double-click is unity; the readout is its tooltip.
-        if root.controls : VerticalLayout {
-            alignment: center;
-            MiniKnob {
-                diameter: 16px;
-                hint: "Level of this branch, before it is summed";
-                value: root.level;
+
+        HorizontalLayout {
+            spacing: 0px;
+            ParameterKnob {
+                width: 56px;
+                diameter: 34px;
+                label: "Level";
+                tooltip: "Level of this branch, before it is summed";
+                value <=> root.branch-level;
                 default-value: 0.75;
-                value-text: GainMath.format-db(GainMath.fader-position-to-db(root.level));
+                value-text: GainMath.format-db(GainMath.fader-position-to-db(root.branch-level));
                 changed(v) => { root.level-changed(v); }
             }
+            ParameterKnob {
+                width: 56px;
+                diameter: 34px;
+                label: "Mix";
+                tooltip: "Dry/wet across this branch";
+                value <=> root.branch-mix;
+                default-value: 1.0;
+                value-text: round(root.branch-mix * 100) + "%";
+                changed(v) => { root.mix-changed(v); }
+            }
         }
-        VerticalLayout {
-            padding-top: 3px;
-            padding-bottom: 3px;
-            PeakMeter {
-                width: 5px;
-                min-height: 0px;
-                orientation: AudioOrientation.vertical;
-                level-db: root.level-db;
-                held-db: root.level-db;
+
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: center;
+            VerticalLayout {
+                spacing: 2px;
+                Text { text: "IN"; color: Theme.text-faint; font-size: Theme.text-xs; horizontal-alignment: center; }
+                TrimKnob {
+                    width: 22px;
+                    height: 22px;
+                    diameter: 22px;
+                    label: "Input trim";
+                    value <=> root.input-trim-db;
+                    changed(v) => { root.input-trim-changed(v); }
+                }
+            }
+            VerticalLayout {
+                spacing: 2px;
+                Text { text: "OUT"; color: Theme.text-faint; font-size: Theme.text-xs; horizontal-alignment: center; }
+                TrimKnob {
+                    width: 22px;
+                    height: 22px;
+                    diameter: 22px;
+                    label: "Output trim";
+                    value <=> root.output-trim-db;
+                    changed(v) => { root.output-trim-changed(v); }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 4px;
+            ToolButton {
+                height: 18px;
+                horizontal-stretch: 1;
+                text: "Save";
+                tooltip: "Save preset";
+                hint: "Save this branch as a Chain preset";
+                clicked => { root.save-preset-requested(); }
+            }
+            ToolButton {
+                height: 18px;
+                horizontal-stretch: 1;
+                text: "Load";
+                enabled: root.preset-options.length > 0;
+                tooltip: root.preset-options.length > 0
+                    ? "Load a Chain preset into this branch"
+                    : "No Chain presets saved yet";
+                clicked => { preset-menu.show(); }
+            }
+        }
+        if root.preset-name != "" : Text {
+            text: root.preset-name;
+            overflow: elide;
+            color: Theme.text-muted;
+            font-size: Theme.text-sm;
+        }
+    }
+
+    // The branch's presets, scrolled rather than grown, as the rail's list
+    // is: it fills from disk.
+    preset-menu := PopupWindow {
+        x: 0px;
+        y: parent.height - self.height;
+        width: 200px;
+        property <length> row-height: 22px * Theme.row-growth;
+        height: min(root.preset-options.length, 10) * self.row-height + 8px;
+        close-policy: close-on-click;
+
+        Rectangle {
+            background: Theme.surface;
+            border-width: Theme.hairline;
+            border-color: Theme.border;
+            border-radius: Theme.radius-md;
+
+            Flickable {
+                x: 4px;
+                y: 4px;
+                width: parent.width - 8px;
+                height: parent.height - 8px;
+                content-height: root.preset-options.length * preset-menu.row-height;
+                VerticalLayout {
+                    for option[i] in root.preset-options : Rectangle {
+                        height: preset-menu.row-height;
+                        border-radius: Theme.radius-sm;
+                        background: row-touch.has-hover ? Theme.surface-active : transparent;
+                        HorizontalLayout {
+                            padding-left: 6px;
+                            padding-right: 6px;
+                            Text {
+                                text: option;
+                                color: Theme.text-muted;
+                                font-size: Theme.text-xl;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                        }
+                        row-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            // No `close()` here: `close-policy` dismisses the
+                            // popup on this click, and closing it first would
+                            // tear down this row while its handler is still
+                            // running (`dupe-audit popup-close-order`).
+                            clicked => { root.preset-selected(i); }
+                        }
+                    }
+                }
             }
         }
     }
 }
 
 // The layer's face (`docs/plans/archive/containers/09`, after Bitwig's FX Layer):
-// the list of its branches with `+` under it, and Gain and Mix beside it.
-// The rows are the caller's children, because each reads its branch head's
-// row out of the rack model, which a face cannot see.
+// the list of its branches with `+` under it, and the selected branch's
+// controls beside it. The layer's own Gain and Mix are `LayerEndPanel`, at
+// the far end of its box. The rows are the caller's children, because each
+// reads its branch head's row out of the rack model, which a face cannot see;
+// so are the controls' values, for the same reason.
 export component LayerDeviceFace inherits EffectDeviceShell {
-    kind: "FX / 1U";
-    // Normalized 0..1: Mix is a ratio, and Gain is fader travel through the
-    // mixer's taper (`ParamCurve::Fader`).
-    in-out property <float> mix;
-    in-out property <float> gain;
+    kind: "FX";
     in property <int> branch-count;
-    callback mix-changed(float);
-    callback gain-changed(float);
+    in property <bool> branch-available;
+    in property <string> branch-name;
+    in property <float> branch-level: 0.75;
+    in property <float> branch-mix: 1.0;
+    in property <bool> branch-bypassed;
+    in property <float> branch-input-trim-db;
+    in property <float> branch-output-trim-db;
+    in property <[string]> branch-preset-options;
+    in property <string> branch-preset-name;
     callback add-branch-requested();
+    callback branch-level-changed(float);
+    callback branch-mix-changed(float);
+    callback branch-bypass-toggled();
+    callback branch-input-trim-changed(float);
+    callback branch-output-trim-changed(float);
+    callback branch-preset-selected(int);
+    callback branch-save-preset-requested();
 
     HorizontalLayout {
-        padding: 6px;
-        padding-top: DeviceRackMetrics.header-height + 6px;
-        spacing: 6px;
+        padding: LayerMetrics.padding;
+        padding-top: DeviceRackMetrics.header-height + LayerMetrics.padding;
+        spacing: LayerMetrics.padding;
 
         Rectangle {
-            horizontal-stretch: 1;
+            width: LayerMetrics.list-width;
             background: Theme.panel;
             border-radius: Theme.radius-sm;
             clip: true;
 
             VerticalLayout {
                 padding: 3px;
-                spacing: 1px;
+                spacing: LayerMetrics.row-spacing;
                 alignment: start;
                 @children
                 if root.branch-count == 0 : Text {
-                    // A branch row's height, growing with it (MOO-333).
-                    height: 22px * Theme.row-growth;
+                    height: LayerMetrics.row-height;
                     vertical-alignment: center;
                     horizontal-alignment: center;
                     text: "no branches";
@@ -227,9 +525,55 @@ export component LayerDeviceFace inherits EffectDeviceShell {
             }
         }
 
-        VerticalLayout {
-            spacing: 6px;
-            alignment: end;
+        LayerBranchControls {
+            width: LayerMetrics.controls-width;
+            available: root.branch-available;
+            name: root.branch-name;
+            branch-level: root.branch-level;
+            branch-mix: root.branch-mix;
+            bypassed: root.branch-bypassed;
+            input-trim-db: root.branch-input-trim-db;
+            output-trim-db: root.branch-output-trim-db;
+            preset-options: root.branch-preset-options;
+            preset-name: root.branch-preset-name;
+            level-changed(v) => { root.branch-level-changed(v); }
+            mix-changed(v) => { root.branch-mix-changed(v); }
+            bypass-toggled => { root.branch-bypass-toggled(); }
+            input-trim-changed(v) => { root.branch-input-trim-changed(v); }
+            output-trim-changed(v) => { root.branch-output-trim-changed(v); }
+            preset-selected(i) => { root.branch-preset-selected(i); }
+            save-preset-requested => { root.branch-save-preset-requested(); }
+        }
+    }
+}
+
+// The layer's own Gain and Mix, standing at the far end of its box: after the
+// devices of the branch it shows, before its output rail, so the controls
+// that act on the summed branches sit where the sum comes out.
+export component LayerEndPanel inherits Rectangle {
+    // Normalized 0..1: Mix is a ratio, and Gain is fader travel through the
+    // mixer's taper (`ParamCurve::Fader`).
+    in-out property <float> mix;
+    in-out property <float> gain;
+    callback mix-changed(float);
+    callback gain-changed(float);
+
+    width: LayerMetrics.end-width;
+
+    VerticalLayout {
+        padding-top: DeviceRackMetrics.header-height + LayerMetrics.padding;
+        padding-bottom: LayerMetrics.padding;
+        spacing: 6px;
+        alignment: start;
+        Text {
+            text: "LAYER";
+            horizontal-alignment: center;
+            color: Theme.text-faint;
+            font-size: Theme.text-xs;
+            letter-spacing: 0.5px;
+        }
+        HorizontalLayout {
+            alignment: center;
             ParameterKnob {
                 width: 56px;
                 diameter: 34px;
@@ -242,6 +586,9 @@ export component LayerDeviceFace inherits EffectDeviceShell {
                 value-text: GainMath.format-db(GainMath.fader-position-to-db(root.gain));
                 changed(v) => { root.gain-changed(v); }
             }
+        }
+        HorizontalLayout {
+            alignment: center;
             ParameterKnob {
                 width: 56px;
                 diameter: 34px;

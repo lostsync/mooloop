@@ -862,6 +862,53 @@ impl Session {
         })
     }
 
+    /// Moves the branch headed at `branch` to be branch number `position` of
+    /// the layer in `slot`, counting from 0 in the order the layer lists
+    /// them: what dragging a row of the layer's list does.
+    ///
+    /// The branch takes its whole run with it and stays a branch of the same
+    /// layer, so no container's size changes. A `position` past the last
+    /// branch means last. `None` when `slot` is not a layer, `branch` is not
+    /// one of its branches, or the branch is already at `position`.
+    pub fn move_layer_branch(
+        &mut self,
+        slot: usize,
+        branch: usize,
+        position: usize,
+    ) -> Option<EffectMoved> {
+        let target = self.effect_target;
+        let effects = self.effect_chain_mut()?;
+        if !is_layer(effects, slot) {
+            return None;
+        }
+        let runs: Vec<std::ops::Range<usize>> = mooloop_core::layer_branches(effects, slot)
+            .map(|head| mooloop_core::run_of(effects, head))
+            .collect();
+        let from = runs.iter().position(|run| run.start == branch)?;
+        let position = position.min(runs.len() - 1);
+        if from == position {
+            return None;
+        }
+        let before: Vec<DeviceId> = effects.iter().map(|effect| effect.id).collect();
+        let mut order = runs;
+        let moved = order.remove(from);
+        order.insert(position, moved);
+        // The branches tile the layer's span, so writing them back in the
+        // new order over that span is the whole edit: every row keeps its
+        // parent, and every container keeps its size.
+        let span = mooloop_core::span_of(effects, slot);
+        let rows: Vec<EffectSlotState> = order
+            .into_iter()
+            .flat_map(|run| effects[run].to_vec())
+            .collect();
+        effects.splice(span, rows);
+        let after: Vec<DeviceId> = effects.iter().map(|effect| effect.id).collect();
+        Some(EffectMoved {
+            target,
+            moves: mooloop_core::move_sequence(&before, &after),
+        })
+    }
+
     /// Flips an effect's bypass.
     pub fn toggle_effect_bypass(&mut self, slot: i32) -> Option<EngineCommand> {
         let target = self.effect_target;
@@ -2570,6 +2617,62 @@ mod tests {
             Some(0),
             "an empty layer, which is legal"
         );
+    }
+
+    /// Dragging a row of a layer's list moves the whole branch among its
+    /// siblings: every row keeps its parent, every box its size, and the
+    /// single-row moves the engine is sent rebuild the same order.
+    #[test]
+    fn moving_a_layer_branch_reorders_whole_branches() {
+        let mut session = Session::default();
+        session.insert_effect_at(EffectKind::Layer, usize::MAX).expect("room");
+        session.insert_effect_at(EffectKind::Delay, usize::MAX).expect("room");
+        for kind in [EffectKind::Drive, EffectKind::Filter, EffectKind::Gate] {
+            let branch = session.add_layer_branch(0).expect("a branch").slot;
+            session.insert_effect_into_container(kind, branch).expect("room");
+        }
+        session
+            .insert_effect_into_container(EffectKind::Bitcrush, 1)
+            .expect("a second device in the first branch");
+        // [Layer, [Chain, Bitcrush, Drive], [Chain, Filter], [Chain, Gate]], Delay
+        let ids = |session: &Session| -> Vec<DeviceId> {
+            session.channels[0].effects.iter().map(|effect| effect.id).collect()
+        };
+        let before = ids(&session);
+
+        // The first branch to last: past the end means last.
+        let moved = session.move_layer_branch(0, 1, 9).expect("moved");
+        assert_eq!(
+            kinds(&session),
+            [
+                EffectKind::Layer,
+                EffectKind::Chain,
+                EffectKind::Filter,
+                EffectKind::Chain,
+                EffectKind::Gate,
+                EffectKind::Chain,
+                EffectKind::Bitcrush,
+                EffectKind::Drive,
+                EffectKind::Delay,
+            ]
+        );
+        assert_eq!(depths(&session), [0, 1, 2, 1, 2, 1, 2, 2, 0]);
+        assert_eq!(mooloop_core::span_problem(&session.channels[0].effects), None);
+        let mut mirrored = before;
+        for (from, to) in moved.moves {
+            let id = mirrored.remove(from as usize);
+            mirrored.insert(to as usize, id);
+        }
+        assert_eq!(mirrored, ids(&session), "the engine's moves rebuild the order");
+
+        // The Gate's branch, now second, to first.
+        session.move_layer_branch(0, 3, 0).expect("moved");
+        assert_eq!(kinds(&session)[2], EffectKind::Gate);
+        assert_eq!(kinds(&session)[4], EffectKind::Filter);
+
+        assert!(session.move_layer_branch(0, 1, 0).is_none(), "already there");
+        assert!(session.move_layer_branch(0, 2, 1).is_none(), "not a branch head");
+        assert!(session.move_layer_branch(1, 1, 1).is_none(), "not a layer");
     }
 
     /// Wrapping as a layer makes a layer of one Chain branch around the run,

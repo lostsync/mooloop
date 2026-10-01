@@ -31,9 +31,10 @@ pub(crate) struct BranchView {
 pub(crate) struct RowView {
     /// The row is not drawn: it lies in a branch its layer is not showing, or
     /// it is the Chain heading the branch the layer *is* showing. A branch's
-    /// Chain is the layer's own business, not a device of the rack: its Level
-    /// is in the layer's list beside S, M and the meter, and its devices are
-    /// drawn straight under the layer's bracket (MOO-456).
+    /// Chain is the layer's own business, not a device of the rack: its S, M
+    /// and meter are on its row of the layer's list, its Level, Mix, bypass,
+    /// trims and presets in the layer face's controls for the selected
+    /// branch, and its devices are drawn straight under the layer's bracket.
     pub hidden: bool,
     /// How many *drawn* boxes enclose the row. `mooloop_core::depth_at`
     /// counts every enclosing container, and a shown branch's hidden Chain is
@@ -76,6 +77,18 @@ pub(crate) struct RowView {
     /// and so of the drag's gap (`DeviceRackMetrics.join-width`). The rack
     /// reads it as `EffectSlotRow.closing-joins` (MOO-340).
     pub closing_joins: Vec<i32>,
+    /// Beside `closing`, entry for entry: how many **layer ends** are drawn
+    /// up to and including the one before that box's output rail. A layer's
+    /// own Gain and Mix stand at the far end of its box, after the devices of
+    /// the branch it shows and its append join, and before its rail; every
+    /// box that closes here is counted, a layer closing on its own row too.
+    ///
+    /// A running count for `closing_joins`' reason: rail `t` sits
+    /// `closing_ends[t]` ends past the row as well, box `t` draws an end
+    /// exactly when its count is one more than box `t - 1`'s (or than 0),
+    /// and the last entry is part of the row's pitch. The rack reads it as
+    /// `EffectSlotRow.closing-ends`.
+    pub closing_ends: Vec<i32>,
     /// On a layer's row: its branches, in rack order.
     pub branches: Vec<BranchView>,
     /// On a layer's row: the rack index of the branch it is showing, or -1
@@ -297,6 +310,19 @@ pub(crate) fn rack_view(
                     joins += 1;
                 }
                 joins
+            })
+            .collect();
+        let mut ends = 0;
+        row.closing_ends = row
+            .closing
+            .iter()
+            .map(|&container| {
+                if effects[container as usize].params.container_flow()
+                    == Some(mooloop_core::ContainerFlow::Parallel)
+                {
+                    ends += 1;
+                }
+                ends
             })
             .collect();
     }
@@ -545,6 +571,50 @@ mod tests {
         assert_eq!(view[1].closing_joins, [0]);
     }
 
+    /// A layer's own Gain and Mix stand at the far end of its box, after the
+    /// devices of the branch it shows and before its rail: one end per layer
+    /// closing on the row, counted innermost first beside `closing_joins`.
+    #[test]
+    fn a_layer_draws_its_end_where_its_box_closes() {
+        let view = rack_view(&two_branches(), |_| None, |_| None);
+        assert_eq!(view[3].closing, [0]);
+        assert_eq!(view[3].closing_ends, [1], "the layer's end, before its rail");
+        assert!(
+            view.iter().enumerate().all(|(row, view)| row == 3 || view.closing_ends.is_empty()),
+            "no other row holds an end"
+        );
+
+        // An empty layer closes on its own row and still has its end.
+        let effects = chain(&[(EffectKind::Layer, 0), (EffectKind::Filter, 0)]);
+        let view = rack_view(&effects, |_| None, |_| None);
+        assert_eq!(view[0].closing_ends, [1]);
+
+        // [Layer, [Chain, [Chain, Drive]]]: the inner Chain is drawn and
+        // has no end, the layer outside it has one.
+        let effects = chain(&[
+            (EffectKind::Layer, 3),
+            (EffectKind::Chain, 2),
+            (EffectKind::Chain, 1),
+            (EffectKind::Drive, 0),
+        ]);
+        let view = rack_view(&effects, |_| None, |_| None);
+        assert_eq!(view[3].closing, [2, 0]);
+        assert_eq!(view[3].closing_joins, [1, 2]);
+        assert_eq!(view[3].closing_ends, [0, 1]);
+
+        // A layer nested in another's shown branch: an end each.
+        let effects = chain(&[
+            (EffectKind::Layer, 4),
+            (EffectKind::Chain, 3),
+            (EffectKind::Layer, 2),
+            (EffectKind::Chain, 1),
+            (EffectKind::Drive, 0),
+        ]);
+        let view = rack_view(&effects, |_| None, |_| None);
+        assert_eq!(view[4].closing, [2, 0]);
+        assert_eq!(view[4].closing_ends, [1, 2]);
+    }
+
     #[test]
     fn a_leaf_branch_is_named_after_itself_and_has_no_switches() {
         let effects = chain(&[
@@ -584,7 +654,7 @@ mod tests {
     }
 
     /// A branch's Chain that was folded when it was wrapped is shown open:
-    /// nothing would draw the strip that unfolds it.
+    /// a branch does not fold, because nothing draws it as a device.
     #[test]
     fn a_folded_branch_chain_still_shows_its_devices() {
         let mut effects = two_branches();

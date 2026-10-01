@@ -158,9 +158,9 @@ export component ContainerDeviceFace inherits EffectDeviceShell {
                 value-text: round(root.mix * 100) + "%";
                 changed(v) => { root.mix-changed(v); }
             }
-            // The run's level before the blend (`containers/09`). Inside a
-            // layer this is the branch's fader; the layer's list shows its
-            // meter, S and M.
+            // The run's level before the blend (`containers/09`). A Chain
+            // that is a layer's branch is not drawn with this face: the
+            // layer's face carries its Level and the rest.
             ParameterKnob {
                 width: 69px;
                 diameter: 38px;

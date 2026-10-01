@@ -45,7 +45,7 @@ import { BitcrushDeviceFace } from "bitcrush-device.slint";
 import { PreampDeviceFace } from "preamp-device.slint";
 import { BufferDeviceFace } from "buffer-device.slint";
 import { ContainerDeviceFace } from "container-device.slint";
-import { LayerBracket, LayerBranchListRow, LayerBranchRow, LayerDeviceFace } from "layer-device.slint";
+import { LayerBracket, LayerBranchListRow, LayerBranchRow, LayerDeviceFace, LayerEndPanel, LayerMetrics } from "layer-device.slint";
 import { DelayDeviceFace } from "delay-device.slint";
 import { GateDeviceFace } from "gate-device.slint";
 import { CompressorDeviceFace } from "compressor-device.slint";
@@ -390,13 +390,20 @@ struct EffectSlotRow {
     // the row; the last entry is what the row's tail holds. Rust's
     // (`RowView.closing_joins`), because a markup list cannot be summed.
     closing-joins: [int],
+    // Beside `closing`, entry for entry: how many layer ends -- a layer's own
+    // Gain and Mix, standing in its box after the devices of the branch it
+    // shows and before its rail -- are drawn up to and including the one
+    // before that box's rail. Box `t` draws one when its count is one more
+    // than box `t - 1`'s (or than 0); rail `t` sits `closing-ends[t]` ends
+    // past the row as well. Rust's (`RowView.closing_ends`).
+    closing-ends: [int],
     // Whether this row is a layer, which draws `LayerDeviceFace` rather than
     // the chain's face. A bool for `is-container`'s reason: the markup asks
     // what a row is, not what number its kind has this frame.
     is-layer: bool,
     // The row is not drawn and takes no width: it lies in a branch its layer
     // is not showing (`containers/09`), or it is the Chain heading the branch
-    // it is showing, whose Level is in the layer's list (MOO-456).
+    // it is showing, whose controls are the layer face's (MOO-462).
     hidden: bool,
     // The depth of the next row that is drawn. The box's right cap asks it;
     // it was `effect-slots[index + 1].depth` until hidden rows meant the next
@@ -2115,6 +2122,9 @@ export component MainWindow inherits Window {
     // branch at the end of the layer.
     callback layer-branch-selected(int, int);       // layer slot, branch head slot
     callback layer-branch-added(int);               // layer slot
+    // A row of a layer's list dragged to another place in it: the branch
+    // moves among its siblings, to that place counting from 0.
+    callback layer-branch-moved(int, int, int);     // layer slot, branch head slot, place
     callback remove-effect-clicked(int);            // slot
     // Wrap the device in `slot` -- and its run, when it is already a
     // container -- in a new container. Unwrap takes a container out and
@@ -5440,9 +5450,12 @@ export component MainWindow inherits Window {
                                         // `STRIP_PIN` picks between them, and
                                         // the engine reads the same constant.
                                         for slot[index] in root.effect-slots : cell := Rectangle {
-                                            property <length> face-width:
-                                                DeviceRackMetrics.unit-width * slot.units
-                                                + DeviceRackMetrics.half-gap * (slot.units - 1);
+                                            // A layer is as wide as what its face holds, not a
+                                            // count of units (MOO-462).
+                                            property <length> face-width: slot.is-layer
+                                                ? LayerMetrics.face-width
+                                                : DeviceRackMetrics.unit-width * slot.units
+                                                    + DeviceRackMetrics.half-gap * (slot.units - 1);
                                             // A container draws no output rail against its
                                             // own face -- it draws one past the last device
                                             // it holds -- so its frame is a rail narrower.
@@ -5463,7 +5476,9 @@ export component MainWindow inherits Window {
                                             property <length> tail-width:
                                                 slot.closing.length * DeviceRackMetrics.rail-width
                                                 + slot.closing-joins[slot.closing.length - 1]
-                                                    * DeviceRackMetrics.join-width;
+                                                    * DeviceRackMetrics.join-width
+                                                + slot.closing-ends[slot.closing.length - 1]
+                                                    * LayerMetrics.end-width;
                                             // An empty box draws a join inside it, between its
                                             // face and its own output rail (MOO-218).
                                             // A box closing on its own row holds nothing drawn: an
@@ -5585,6 +5600,8 @@ export component MainWindow inherits Window {
                                                                 * DeviceRackMetrics.rail-width
                                                             + slot.closing-joins[cell.innermost-close - level]
                                                                 * DeviceRackMetrics.join-width
+                                                            + slot.closing-ends[cell.innermost-close - level]
+                                                                * LayerMetrics.end-width
                                                         : cell.width;
                                                 }
                                             }
@@ -6251,10 +6268,31 @@ export component MainWindow inherits Window {
                                                     preset-name: slot.preset-name;
                                                     icon: Icons.effect-kinds[slot.kind];
                                                     branch-count: slot.branches.length;
-                                                    mix: slot.p0;
-                                                    gain: slot.p1;
-                                                    mix-changed(v) => { root.effect-param-changed(index, 0, v); }
-                                                    gain-changed(v) => { root.effect-param-changed(index, 1, v); }
+                                                    // The selected branch's controls (MOO-462): its
+                                                    // Chain's own row, by the branch head's rack index.
+                                                    // A bare device straight in the layer has none.
+                                                    property <int> shown: slot.selected-branch;
+                                                    branch-available: self.shown >= 0
+                                                        && root.effect-slots[self.shown].is-container;
+                                                    branch-name: self.shown < 0 ? ""
+                                                        : root.effect-slots[self.shown].preset-name != ""
+                                                            ? root.effect-slots[self.shown].preset-name
+                                                            : root.effect-slots[self.shown].label;
+                                                    // Ids 1 and 0, `CONTAINER_PARAM_LEVEL` and `_MIX`.
+                                                    branch-level: root.effect-slots[self.shown].p1;
+                                                    branch-mix: root.effect-slots[self.shown].p0;
+                                                    branch-bypassed: root.effect-slots[self.shown].bypassed;
+                                                    branch-input-trim-db: root.effect-slots[self.shown].input-trim-db;
+                                                    branch-output-trim-db: root.effect-slots[self.shown].output-trim-db;
+                                                    branch-preset-options: root.effect-slots[self.shown].preset-options;
+                                                    branch-preset-name: root.effect-slots[self.shown].preset-name;
+                                                    branch-level-changed(v) => { root.effect-param-changed(self.shown, 1, v); }
+                                                    branch-mix-changed(v) => { root.effect-param-changed(self.shown, 0, v); }
+                                                    branch-bypass-toggled => { root.effect-bypass-toggled(self.shown); }
+                                                    branch-input-trim-changed(v) => { root.effect-input-trim-changed(self.shown, v); }
+                                                    branch-output-trim-changed(v) => { root.effect-output-trim-changed(self.shown, v); }
+                                                    branch-preset-selected(i) => { root.effect-preset-selected(self.shown, i); }
+                                                    branch-save-preset-requested => { root.save-effect-preset-requested(self.shown); }
                                                     add-branch-requested => { root.layer-branch-added(index); }
                                                     reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     select-requested => { root.device-selected(index); }
@@ -6266,17 +6304,17 @@ export component MainWindow inherits Window {
                                                         name: branch.name;
                                                         controls: branch.controls;
                                                         selected: branch.slot == slot.selected-branch;
+                                                        bypassed: root.effect-slots[branch.slot].bypassed;
+                                                        layer: index;
+                                                        index: i;
+                                                        count: slot.branches.length;
+                                                        move-requested(place) => { root.layer-branch-moved(index, branch.slot, place); }
                                                         // Only a container head has these ids: on a
                                                         // leaf branch p2 and p3 are its own knobs.
                                                         muted: branch.controls && root.effect-slots[branch.slot].p2 >= 0.5;
                                                         soloed: branch.controls && root.effect-slots[branch.slot].p3 >= 0.5;
                                                         level-db: max(root.slot-meters(branch.slot).output-left-db,
                                                             root.slot-meters(branch.slot).output-right-db);
-                                                        // Id 1, `CONTAINER_PARAM_LEVEL`: what the Chain's
-                                                        // own Level knob wrote. The Chain is not drawn, so
-                                                        // the list carries it (MOO-456).
-                                                        level: root.effect-slots[branch.slot].p1;
-                                                        level-changed(v) => { root.effect-param-changed(branch.slot, 1, v); }
                                                         select-requested => { root.layer-branch-selected(index, branch.slot); }
                                                         // Ids 2 and 3, `CONTAINER_PARAM_MUTE` and
                                                         // `_SOLO`, on the branch head's own row.
@@ -6325,7 +6363,8 @@ export component MainWindow inherits Window {
                                             for container[tail] in slot.closing : DeviceOutputRail {
                                                 x: cell.shift + cell.frame-width + cell.inner-width
                                                     + tail * DeviceRackMetrics.rail-width
-                                                    + slot.closing-joins[tail] * DeviceRackMetrics.join-width;
+                                                    + slot.closing-joins[tail] * DeviceRackMetrics.join-width
+                                                    + slot.closing-ends[tail] * LayerMetrics.end-width;
                                                 y: 0px;
                                                 height: DeviceRackMetrics.face-height;
                                                 container-chrome: true;
@@ -6401,6 +6440,8 @@ export component MainWindow inherits Window {
                                             for container[tail] in slot.closing : append-holder := Rectangle {
                                                 property <int> joins-before:
                                                     tail == 0 ? 0 : slot.closing-joins[tail - 1];
+                                                property <int> ends-before:
+                                                    tail == 0 ? 0 : slot.closing-ends[tail - 1];
                                                 // A layer's box appends to the Chain of the branch
                                                 // it shows: that Chain is not drawn (MOO-456).
                                                 property <int> into: root.effect-slots[container].is-layer
@@ -6408,11 +6449,28 @@ export component MainWindow inherits Window {
                                                 if slot.closing-joins[tail] > append-holder.joins-before : DeviceJoin {
                                                     x: cell.shift + cell.frame-width + cell.inner-width
                                                         + tail * DeviceRackMetrics.rail-width
-                                                        + append-holder.joins-before * DeviceRackMetrics.join-width;
+                                                        + append-holder.joins-before * DeviceRackMetrics.join-width
+                                                        + append-holder.ends-before * LayerMetrics.end-width;
                                                     y: 0px;
                                                     drop-into: append-holder.into;
                                                     kind-selected(kind) => { root.append-effect-into-container(kind, append-holder.into); }
                                                     plugin-requested => { root.add-plugin-into-requested(append-holder.into); }
+                                                }
+                                                // A layer's own Gain and Mix, at the far end of its
+                                                // box: past its append join, before its rail (MOO-462).
+                                                if slot.closing-ends[tail] > append-holder.ends-before : LayerEndPanel {
+                                                    x: cell.shift + cell.frame-width + cell.inner-width
+                                                        + tail * DeviceRackMetrics.rail-width
+                                                        + slot.closing-joins[tail] * DeviceRackMetrics.join-width
+                                                        + append-holder.ends-before * LayerMetrics.end-width;
+                                                    y: 0px;
+                                                    height: DeviceRackMetrics.face-height;
+                                                    // Ids 0 and 1, `CONTAINER_PARAM_MIX` and `_LEVEL`,
+                                                    // on the layer's own row.
+                                                    mix: root.effect-slots[container].p0;
+                                                    gain: root.effect-slots[container].p1;
+                                                    mix-changed(v) => { root.effect-param-changed(container, 0, v); }
+                                                    gain-changed(v) => { root.effect-param-changed(container, 1, v); }
                                                 }
                                             }
                                             // The join leading out of this row, and past any

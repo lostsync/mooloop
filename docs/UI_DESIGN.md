@@ -301,6 +301,21 @@ alignment, and height contract as effects.
 - Every gain trim is the same `TrimKnob` class: dB from unity, −60 dB (−∞) to
   +12 dB, double-click to 0 dB. No gain control reads in percent; dB is the
   unit the values actually mean.
+- **A layer's face** (Adam, 2026-09-30, MOO-462) is, left to right: its branch
+  list, then the **selected branch's controls**, then the selected branch's
+  devices in the rack, then the **layer's own Gain and Mix** at the far end of
+  its box, before its output rail. A branch is a Chain the rack does not draw
+  as a device, so its controls live in the layer: its row in the list carries
+  the name, a `BYP` badge when the branch is bypassed, **S**, **M** and the
+  meter; the controls area carries what the Chain's face and rails had --
+  Level, Mix, bypass, input and output trim, and preset save and load. Fold is
+  dropped: a branch does not fold. A muted row is dimmed; a bypassed one is
+  badged rather than dimmed, because a bypassed branch is not silent -- it
+  passes its input on dry into the layer's sum. **Rows reorder by dragging
+  them along the list**, Bitwig's and Ableton's gesture (Adam: when in doubt,
+  their model is usually right). The face is as wide as its content
+  (`LayerMetrics.face-width` in `layer-device.slint`) and is not fitted to
+  rack units, which are being dropped (MOO-468).
 
 The device rack is one of five **views**, and a view has exactly one toolbar
 row, led by its slot's tab strip:

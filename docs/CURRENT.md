@@ -2075,15 +2075,23 @@ land on its own when it starts to matter:
   so the sum does not comb, and the layer declares its longest branch as its
   latency. Its Mix blends the sum against its input; bypassing it passes the
   input, delayed by that latency. A layer of one branch is a chain.
-- **A layer draws like Bitwig's FX Layer** (`containers/09`). Its face is one
-  rack unit: a list of its branches, each row with a name, **S**, **M** and a
-  level meter, a `+` under the list that adds an empty branch at the end, and
-  **Gain** and **Mix** knobs. Only the selected branch's devices are drawn in
-  the rack, to the right of the layer under an accent bracket; clicking
-  another row in the list shows that branch instead. Which branch is shown is
-  not saved and is not an undo step. Every branch the `+` makes is a Chain,
-  whose face now has a **Level** knob beside its Mix: inside a layer it is
-  the branch's fader. Mute takes a branch out of the sum and Solo keeps only
+- **A layer draws like Bitwig's FX Layer** (`containers/09`, laid out by
+  Adam's 2026-09-30 ruling in MOO-462; `docs/UI_DESIGN.md`, *Device Rack
+  Layout*). Its face is a list of its branches, each row with a name, a
+  `BYP` badge when the branch is bypassed, **S**, **M** and a level meter,
+  a `+` under the list that adds an empty branch at the end, and beside the
+  list the **selected branch's controls**: its Level, Mix, bypass, input and
+  output trim, and preset **Save** and **Load** (a branch saves and loads as
+  a Chain preset). Only the selected branch's devices are drawn in the rack,
+  to the right of the layer under an accent bracket, and the layer's own
+  **Gain** and **Mix** stand at the far end of its box, after those devices
+  and before its output rail. Clicking another row shows that branch instead
+  and selects its Chain as the rack's device, so copy, duplicate, delete and
+  the sidebar's parameter list act on the branch; which branch is shown is
+  not saved and is not an undo step. **Dragging a row along the list moves
+  the branch** among its siblings, one undo step ("Branch moved"). The face
+  is as wide as what it holds, not a count of rack units. Every branch the
+  `+` makes is a Chain. Mute takes a branch out of the sum and Solo keeps only
   the soloed branches of that one layer; both ramp, and both are undoable
   and saved.
 - **Every branch of a layer is a Chain** (MOO-456, 2026-09-30). A layer is
@@ -2110,10 +2118,9 @@ land on its own when it starts to matter:
   straight under the layer's bracket, one box deep (`RowView.draw_depth`); the
   layer's box holds the append join the Chain's would have, wired to that
   Chain, and a layer showing an empty branch closes on its own row with the
-  join inside it wired to the branch. The branch's **Level** is a mini knob in
-  the layer's list, beside S, M and the meter, writing the Chain's parameter 1
-  as its face's knob did. Not reachable now: the Chain's Mix, bypass, trims,
-  fold, preset rail and selecting the Chain (MOO-456 comments).
+  join inside it wired to the branch. Its controls are the layer face's (the
+  entry above); a branch does not fold, and a branch Chain folded in an older
+  song is shown open.
 - **Making and emptying a layer** (`containers/10`). The rail's wrap button
   opens a menu, **Chain** or **Layer**. Wrapping in a layer makes a layer of
   one branch, a Chain holding what was wrapped, so the branch has its S, M
