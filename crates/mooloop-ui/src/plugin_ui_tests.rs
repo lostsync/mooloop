@@ -1314,16 +1314,12 @@ fn a_window_goes_only_after_its_plugin_gui() {
 }
 
 /// **A window that cannot open is the face's badge, and the face stays.**
-/// No X server here: the reason is the window side's own. Where the host
-/// offers no GUI API the plugin can embed in -- macOS, until the host learns
-/// Cocoa (MOO-337) -- the plugin refuses first and the reason is its own:
-/// this is what a macOS user gets for a plugin with a GUI, and it runs there.
+/// The plugin accepts the platform's GUI API (X11 on Linux, Cocoa on macOS),
+/// so the failure is the window side's: its fake has no display, and the
+/// reason is its own on every platform.
 #[test]
 fn a_window_that_cannot_open_is_the_badge() {
-    #[cfg(all(unix, not(target_vendor = "apple")))]
     let reason = "DISPLAY";
-    #[cfg(not(all(unix, not(target_vendor = "apple"))))]
-    let reason = "cannot open an embedded window in X11";
     let (mut h, _log) = gui_harness();
     h.state.borrow_mut().plugin_guis =
         crate::plugin_gui::PluginGuis::new(Box::new(|| Err(mooloop_plugin_window::WindowError::NoDisplay)));
