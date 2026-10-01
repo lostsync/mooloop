@@ -219,7 +219,9 @@ These are firm enough to build against:
 - **There is no song-level automation.** (Adam, 2026-09-17.) To automate a
   ramp across a pattern played twice, clone the pattern and draw half the ramp
   in each, as in Impulse Tracker. Song automation is part of the tracker
-  question in `IDEAS.md`, not a separate feature.
+  question in `IDEAS.md`, not a separate feature. **Under review since
+  2026-09-30:** Adam wants a track's automation in the playlist editor as song
+  automation (open: MOO-419).
 - **Audio is recorded into the channel's sampler**, on the selected channel
   and pattern, and the channel's one input menu decides whether record-arm
   captures audio or notes. (Adam, 2026-09-17; `plans/archive/audio-recording/`.)

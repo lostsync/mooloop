@@ -56,8 +56,9 @@ hook is the unstable `fontique_011` module, behind the opt-in
 `unstable-fontique-011` feature. That hook does register a font from its bytes
 (`slint::fontique_011::shared_collection().register_fonts(..)`, process-wide),
 but Slint says it may change in any minor release -- it was `fontique_010` in
-1.17.1 -- and mooloop does not enable it. Whether a theme may ship a font
-through it is open as MOO-320; this step assumes it may not. A font is
+1.17.1 -- and mooloop does not enable it. A theme may not ship a font through
+it: Adam, 2026-09-30, *not yet*, until Slint makes the hook stable (MOO-320,
+closed until then). A font is
 either embedded at build time by `import "./x.ttf"` in a `.slint` file, or
 resolved by name from the system.
 

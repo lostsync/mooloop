@@ -122,8 +122,9 @@ sans-serif"`. mooloop hands the whole string to the renderer, which walks it.
 its stable API has no runtime font registration. It does have one behind an
 opt-in, unstable feature (`unstable-fontique-011`, whose
 `slint::fontique_011::shared_collection()` takes a font's bytes), which Slint
-says may change in any minor release; mooloop does not turn it on, and whether
-a theme may ship a font that way is open (MOO-320). So a family is resolved
+says may change in any minor release. mooloop does not turn it on, and Adam
+ruled on 2026-09-30 that a theme ships no font that way *yet*: it comes back
+when Slint makes the hook stable (MOO-320, closed until then). So a family is resolved
 from what is installed on the machine and a name nobody has falls back to the
 platform default without a word. If your theme depends on a face, say so in
 `description`.

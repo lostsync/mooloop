@@ -1385,15 +1385,19 @@ land on its own when it starts to matter:
 - **Markers outside the committed region collapse onto its edges.** A commit
   renders only the playback region; a marker before it maps to frame 0 and a
   marker past it to the render's end, and the map then drops the duplicates.
-  Revert restores every source marker exactly, so nothing is lost, but the
-  published map after a commit holds fewer slices than the source had. Either
-  the commit should refuse when markers fall outside the region, or the face
-  should say how many it dropped.
+  Revert restores every source marker exactly, but the published map after a
+  commit holds fewer slices than the source had, so every later slice plays a
+  key lower. Adam ruled on 2026-09-30 that every marker maps through the
+  stretch and none is dropped (MOO-370). That means the commit renders the
+  whole sample, which lands with the commit's rework as a render (MOO-375,
+  below).
 - **A commit's spec is the whole render.** Nothing about the source file is
   checked on reload: a project whose referenced sample was replaced on disk
   re-renders the new audio under the old spec and lays the old markers over
-  it. Recording the source's frame count in `SampleCommit` and treating a
-  mismatch as a stale commit would catch this.
+  it (MOO-394). Adam ruled on 2026-09-30 that a committed sample is treated
+  like a rendered one: the render replaces the sample and is written to disk
+  when it is made (MOO-375). After that rework, a reload plays the stored
+  render and re-renders nothing.
 
 ### Transport And Arrangement
 
@@ -1542,7 +1546,9 @@ land on its own when it starts to matter:
   `kill`, Ctrl+C -- quit through the quit path without its dialog: the log
   says which signal, a take still recording is finished, and unsaved song
   changes are not saved but are kept in the autosave for the next launch to
-  offer. `docs/OPERATIONS.md`,
+  offer. It does not write a last autosave on the way out either. Adam,
+  2026-09-30 (MOO-407): *"if you received a kill there's no telling what the
+  situation is. write might fail and corrupt your autosave"*. `docs/OPERATIONS.md`,
   "Diagnostic Log", has the details.
 - **A song old enough to reference the built-in kick opens with it audible.**
   Projects saved before the sampler stopped auto-loading a kick carry a

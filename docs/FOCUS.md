@@ -65,14 +65,15 @@ Later the same night:
 - MOO-322 (a loaded container preset's plugin processes);
 - MOO-336 was refuted, and its regression test kept.
 
-CI is green on Linux and macOS at the head. MOO-320 carries a question
-for Adam. The container's disk filled twice under `mooloop-ui`
+CI is green on Linux and macOS at the head. The container's disk filled twice under `mooloop-ui`
 builds: see `docs/OPERATIONS.md`, *Working In A Cloud Container*.
 
-Two items are still open in 0.1.6, and both wait on Adam:
-- **MOO-289**'s launch case, which wasn't reproduced headless. He has two
-  checks to make on the laptop (Hyprland, `follow_mouse = 1`).
-- **MOO-237**, Core Audio's latency, which he'll check on a Mac.
+**MOO-289** closed on 2026-09-30: Adam found the launch case fixed on recent
+builds. **MOO-237**, Core Audio's latency, still waits on his Mac check. The
+rest of 0.1.6 is whatever open issue carries the label in Linear (on
+2026-09-30: MOO-462, the layer branch's controls, which has one small question
+open; MOO-86; MOO-298; and MOO-456, which is on `main` and wants a look in the
+running app).
 
 Steps 03-05 of the icon pass are 0.1.7.
 

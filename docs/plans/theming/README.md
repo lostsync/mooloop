@@ -83,8 +83,8 @@ is the unstable `fontique_011` module, behind the opt-in
 `unstable-fontique-011` feature, which mooloop does not enable. That hook does
 register fonts (`shared_collection().register_fonts(..)`), process-wide, and
 Slint says it may change in any minor release; 1.17.1 had it as `fontique_010`.
-Whether a theme may ship a font through it is Adam's call, open as MOO-320;
-until then a theme ships none. A font is embedded at compile time by
+A theme may not ship a font through it yet: Adam ruled on 2026-09-30 to wait
+until Slint makes the hook stable (MOO-320, closed until then). A font is embedded at compile time by
 `import "./x.ttf"` in a `.slint` file, or it is resolved by name from the
 system. So a theme file names a family and mooloop resolves it: first
 against the families it has compiled in, then against the system, then a

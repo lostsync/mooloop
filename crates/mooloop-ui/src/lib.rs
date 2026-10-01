@@ -18944,6 +18944,8 @@ impl AppUi {
     /// unsaved changes nobody decided about: a quit answered "Don't Save"
     /// discards it, and a clean song has nothing to recover. A quit by
     /// signal (`signals.rs`) saves nothing and asks nothing, so it keeps it.
+    /// It writes no last autosave first either, by Adam's ruling (MOO-407,
+    /// 2026-09-30): after a kill a write may fail and corrupt the autosave.
     fn finish_autosave(&self) {
         let Some(autosave) = self.autosave.borrow_mut().take() else {
             return;
