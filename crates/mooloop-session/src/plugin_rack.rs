@@ -321,9 +321,11 @@ pub struct PluginRack {
     gui_events: Vec<(PluginSlotId, PluginGuiEvent)>,
 }
 
-/// Where a plugin's GUI opens (step 11, policies 2 to 4). The ids are X11
-/// window ids, the only windowing API hosted so far; each window must
-/// outlive the GUI, which [`PluginGuiEvent::Closed`] or
+/// Where a plugin's GUI opens (step 11, policies 2 to 4). The ids are
+/// [`mooloop_plugin_host::GuiApi::native`] window ids
+/// ([`NativeWindow::native`]): an X11 window id on Linux, an `NSView*`'s
+/// address on macOS. Each window must outlive the GUI, which
+/// [`PluginGuiEvent::Closed`] or
 /// [`crate::session::Session::close_plugin_gui`] returning says is over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuiPlacement {
@@ -337,8 +339,8 @@ pub enum GuiPlacement {
 impl GuiPlacement {
     pub fn config(self) -> GuiConfig {
         match self {
-            Self::Embedded { .. } => GuiConfig::X11_EMBEDDED,
-            Self::Floating { .. } => GuiConfig::X11_FLOATING,
+            Self::Embedded { .. } => GuiConfig::native_embedded(),
+            Self::Floating { .. } => GuiConfig::native_floating(),
         }
     }
 }
@@ -601,14 +603,15 @@ impl PluginRack {
         out
     }
 
-    /// Which way `slot`'s GUI opens: embedded in an X11 window where the
-    /// plugin can (policy 2), floating where it only offers that (policy 4).
+    /// Which way `slot`'s GUI opens, in the platform's API
+    /// ([`GuiConfig::native_order`]): embedded where the plugin can
+    /// (policy 2), floating where it only offers that (policy 4).
     pub fn gui_placement_kind(&mut self, slot: PluginSlotId) -> Result<GuiConfig, GuiError> {
         let gui = self.gui_of(slot)?;
-        [GuiConfig::X11_EMBEDDED, GuiConfig::X11_FLOATING]
+        GuiConfig::native_order()
             .into_iter()
             .find(|&config| gui.is_api_supported(config))
-            .ok_or(GuiError::Unsupported(GuiConfig::X11_EMBEDDED))
+            .ok_or(GuiError::Unsupported(GuiConfig::native_embedded()))
     }
 
     fn gui_of(&mut self, slot: PluginSlotId) -> Result<&mut dyn HostedGui, GuiError> {
@@ -636,11 +639,11 @@ impl PluginRack {
                 let _ = gui.set_scale(scale);
             }
             match open.placement {
-                GuiPlacement::Embedded { parent } => gui.set_parent(NativeWindow::x11(parent))?,
+                GuiPlacement::Embedded { parent } => gui.set_parent(NativeWindow::native(parent))?,
                 GuiPlacement::Floating { transient_for } => {
                     gui.suggest_title(&open.title);
                     if let Some(window) = transient_for {
-                        if let Err(error) = gui.set_transient(NativeWindow::x11(window)) {
+                        if let Err(error) = gui.set_transient(NativeWindow::native(window)) {
                             log_warn!("plugin", "slot {}: {error}; its window may fall behind", slot.0);
                         }
                     }
@@ -1830,7 +1833,7 @@ pub(crate) mod tests {
             true
         }
         fn preferred_api(&mut self) -> Option<GuiConfig> {
-            Some(GuiConfig::X11_EMBEDDED)
+            Some(GuiConfig::native_embedded())
         }
         fn open_config(&self) -> Option<GuiConfig> {
             self.gui_open
@@ -2727,7 +2730,7 @@ pub(crate) mod tests {
         let slot = PluginSlotId(0);
         let processor = rack.insert(slot, FakeInstance::new(Arc::clone(&probe))).unwrap();
         let opened = rack.open_gui(slot, &embedded(42)).expect("it opens");
-        assert_eq!(opened.config, GuiConfig::X11_EMBEDDED);
+        assert_eq!(opened.config, GuiConfig::native_embedded());
         assert_eq!(opened.size, Some(GuiSize { width: 300, height: 200 }));
         assert!(rack.gui_is_open(slot));
 

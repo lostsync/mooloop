@@ -2,15 +2,32 @@
 //! (`docs/plans/plugin-hosting/11-plugin-gui-windows.md`).
 //!
 //! No plugin format's types are here. The window the GUI goes into is
-//! somebody else's: on Linux a bare X11 window the platform layer creates
-//! and hands over as a plain id. This module only says what a GUI
-//! can be asked to do, in what order, and what it asks back.
+//! somebody else's, handed over as a plain id: on Linux a bare X11 window
+//! the platform layer creates, on macOS an `NSView` in a native window. This
+//! module only says what a GUI can be asked to do, in what order, and what
+//! it asks back.
+//!
+//! **Which API.** [`GuiApi::native`] is the one a plugin GUI embeds in on
+//! the platform this was built for, and [`GuiConfig::native_order`] the
+//! configurations to try in turn, so a caller names no platform itself.
 //!
 //! **Control thread only.** Every [`HostedGui`] call happens on the thread
 //! that opened the instance, which is the pump's. An instance is not `Send`,
 //! so the compiler keeps it there; the CLAP adapter checks the thread as
 //! well and refuses with [`GuiError::WrongThread`], because a plugin's GUI
-//! called from another thread is undefined behaviour in every format.
+//! called from another thread is undefined behaviour in every format. On
+//! macOS that thread must also be the process's main thread, the only one
+//! AppKit may be called from; the pump runs on Slint's event loop, which is
+//! there.
+//!
+//! **Event loops.** An X11 GUI usually runs its event loop on the host's
+//! timers and file descriptors (`timer-support`, `posix-fd-support`, served
+//! by [`crate::HostedInstance::service_io`] from the pump). A Cocoa GUI
+//! needs neither: CLAP has it run on the main thread's run loop, which
+//! AppKit already drives, so its own timers and sources fire without the
+//! host. The host offers both extensions on every platform anyway, and a
+//! plugin that registers a timer on macOS has it fired from the pump like
+//! any other.
 //!
 //! **Order.** `create`, then (embedded) `set_parent` or (floating)
 //! `suggest_title` and `set_transient`, then `show`. `destroy` undoes
@@ -21,14 +38,40 @@ use std::fmt;
 
 /// A windowing API a GUI can be opened in.
 ///
-/// Only X11 for now: it is what nearly every Linux plugin GUI embeds into,
-/// under a Wayland session too, through XWayland. Cocoa and Win32 arrive
-/// with the platforms that need them.
+/// X11 is what nearly every Linux plugin GUI embeds into, under a Wayland
+/// session too, through XWayland. Cocoa is macOS's. Win32 arrives with the
+/// platform that needs it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum GuiApi {
-    /// X11, by window id.
+    /// X11, by window id. Sizes are physical pixels.
     X11,
+    /// Cocoa, by `NSView*`. Sizes are logical points.
+    Cocoa,
+}
+
+impl GuiApi {
+    /// The API a plugin GUI embeds in on the platform this was built for:
+    /// Cocoa on macOS, X11 everywhere else (Windows has none yet, and asks
+    /// for X11, which no Windows plugin offers).
+    pub const fn native() -> Self {
+        if cfg!(target_os = "macos") { Self::Cocoa } else { Self::X11 }
+    }
+
+    /// Whether a GUI's sizes in this API are logical (points, which the
+    /// system scales) rather than physical pixels. Under such an API the
+    /// plugin is not told a scale ([`HostedGui::set_scale`]).
+    pub const fn uses_logical_size(self) -> bool {
+        matches!(self, Self::Cocoa)
+    }
+
+    /// The API's name, as the device's badge shows it.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::X11 => "X11",
+            Self::Cocoa => "Cocoa",
+        }
+    }
 }
 
 /// How a GUI is opened: in which API, and whether it floats in a window of
@@ -43,38 +86,70 @@ pub struct GuiConfig {
 
 impl GuiConfig {
     /// Embedded in an X11 window of the host's: the configuration to try
-    /// first.
-    pub const X11_EMBEDDED: Self = Self {
-        api: GuiApi::X11,
-        floating: false,
-    };
-    /// Floating in a window of the plugin's own: the fallback for a plugin
-    /// that does not embed.
-    pub const X11_FLOATING: Self = Self {
-        api: GuiApi::X11,
-        floating: true,
-    };
+    /// first on Linux.
+    pub const X11_EMBEDDED: Self = Self::embedded(GuiApi::X11);
+    /// Floating in an X11 window of the plugin's own: the fallback for a
+    /// plugin that does not embed.
+    pub const X11_FLOATING: Self = Self::floating(GuiApi::X11);
+    /// Embedded in an `NSView` of the host's: the configuration to try first
+    /// on macOS.
+    pub const COCOA_EMBEDDED: Self = Self::embedded(GuiApi::Cocoa);
+    /// Floating in a Cocoa window of the plugin's own: the fallback for a
+    /// plugin that does not embed.
+    pub const COCOA_FLOATING: Self = Self::floating(GuiApi::Cocoa);
+
+    /// Embedded in a window of the host's, in `api`.
+    pub const fn embedded(api: GuiApi) -> Self {
+        Self { api, floating: false }
+    }
+
+    /// Floating in a window of the plugin's own, in `api`.
+    pub const fn floating(api: GuiApi) -> Self {
+        Self { api, floating: true }
+    }
+
+    /// Embedded, in [`GuiApi::native`]: what to try first on this platform.
+    pub const fn native_embedded() -> Self {
+        Self::embedded(GuiApi::native())
+    }
+
+    /// Floating, in [`GuiApi::native`]: the fallback on this platform.
+    pub const fn native_floating() -> Self {
+        Self::floating(GuiApi::native())
+    }
+
+    /// The configurations to offer a plugin on this platform, in the order
+    /// to try them: embedded first, then floating.
+    pub const fn native_order() -> [Self; 2] {
+        [Self::native_embedded(), Self::native_floating()]
+    }
 }
 
-/// A GUI's size, in the API's own pixels (physical for X11).
+/// A GUI's size, in the units of the API it is open in: **physical pixels**
+/// for [`GuiApi::X11`], **logical points** for [`GuiApi::Cocoa`] (an
+/// `NSView`'s own units, which the system scales;
+/// [`GuiApi::uses_logical_size`]). A size passes between the plugin and the
+/// window it is in unconverted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GuiSize {
-    /// Pixels across.
+    /// Across, in the API's units.
     pub width: u32,
-    /// Pixels down.
+    /// Down, in the API's units.
     pub height: u32,
 }
 
 /// A window of the host's, by its native id: an X11 window id for
-/// [`GuiApi::X11`]. The caller keeps the window alive until the GUI in it
-/// has been destroyed ([`HostedGui::destroy`]): the plugin's window is a
-/// child of it, and destroying the parent first pulls the plugin's window
-/// out from under it.
+/// [`GuiApi::X11`], an `NSView*`'s address for [`GuiApi::Cocoa`]. The caller
+/// keeps the window alive until the GUI in it has been destroyed
+/// ([`HostedGui::destroy`]): the plugin's window is a child of it, and
+/// destroying the parent first pulls the plugin's window out from under it.
+/// For Cocoa that is a memory-safety contract too, because the plugin
+/// dereferences the pointer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NativeWindow {
     /// The API `id` belongs to.
     pub api: GuiApi,
-    /// The window's id in that API.
+    /// The window's id in that API: for Cocoa, the pointer's address.
     pub id: u64,
 }
 
@@ -85,6 +160,34 @@ impl NativeWindow {
             api: GuiApi::X11,
             id,
         }
+    }
+
+    /// A Cocoa view, by its `NSView*`. Only the address is kept; the view
+    /// must outlive the GUI embedded in it (see [`NativeWindow`]).
+    pub fn cocoa(ns_view: *mut std::ffi::c_void) -> Self {
+        Self {
+            api: GuiApi::Cocoa,
+            id: ns_view.expose_provenance() as u64,
+        }
+    }
+
+    /// A window of [`GuiApi::native`], by its id in that API (for Cocoa, the
+    /// `NSView*`'s address): what a [`GuiConfig::native_order`]
+    /// configuration is parented to or kept above.
+    pub const fn native(id: u64) -> Self {
+        Self {
+            api: GuiApi::native(),
+            id,
+        }
+    }
+
+    /// The `NSView*` a Cocoa window was made from, or `None` for another
+    /// API or an address this target's pointers cannot hold.
+    pub fn as_ns_view(self) -> Option<*mut std::ffi::c_void> {
+        if self.api != GuiApi::Cocoa {
+            return None;
+        }
+        usize::try_from(self.id).ok().map(std::ptr::with_exposed_provenance_mut)
     }
 }
 
@@ -138,9 +241,7 @@ impl fmt::Display for GuiError {
                 f,
                 "the plugin cannot open {} in {}",
                 if config.floating { "a floating window" } else { "an embedded window" },
-                match config.api {
-                    GuiApi::X11 => "X11",
-                }
+                config.api.name()
             ),
             Self::NotOpen => f.write_str("the plugin's window is not open"),
             Self::AlreadyOpen => f.write_str("the plugin's window is already open"),
@@ -173,7 +274,9 @@ pub trait HostedGui {
     fn create(&mut self, config: GuiConfig) -> Result<(), GuiError>;
 
     /// Tell the plugin the window's scale. A plugin that reads the scale from
-    /// the system itself may refuse, which is not a failure to open.
+    /// the system itself may refuse, which is not a failure to open. Under an
+    /// API with logical sizes ([`GuiApi::uses_logical_size`]) the scale is
+    /// the system's: the plugin is not told, and this returns `Ok`.
     fn set_scale(&mut self, scale: f64) -> Result<(), GuiError>;
 
     /// The GUI's size now.
@@ -236,4 +339,57 @@ pub struct IoRegistrations {
     pub timers: usize,
     /// File descriptors registered.
     pub fds: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_native_api_is_cocoa_on_macos_and_x11_elsewhere() {
+        let expected = if cfg!(target_os = "macos") { GuiApi::Cocoa } else { GuiApi::X11 };
+        assert_eq!(GuiApi::native(), expected);
+        assert_eq!(
+            GuiConfig::native_order(),
+            [GuiConfig::embedded(expected), GuiConfig::floating(expected)]
+        );
+        assert_eq!(NativeWindow::native(7), NativeWindow { api: expected, id: 7 });
+    }
+
+    #[test]
+    fn the_named_configs_are_the_api_embedded_then_floating() {
+        assert_eq!(GuiConfig::X11_EMBEDDED, GuiConfig { api: GuiApi::X11, floating: false });
+        assert_eq!(GuiConfig::X11_FLOATING, GuiConfig { api: GuiApi::X11, floating: true });
+        assert_eq!(GuiConfig::COCOA_EMBEDDED, GuiConfig { api: GuiApi::Cocoa, floating: false });
+        assert_eq!(GuiConfig::COCOA_FLOATING, GuiConfig { api: GuiApi::Cocoa, floating: true });
+    }
+
+    #[test]
+    fn only_cocoa_sizes_are_logical() {
+        assert!(GuiApi::Cocoa.uses_logical_size());
+        assert!(!GuiApi::X11.uses_logical_size());
+    }
+
+    #[test]
+    fn a_cocoa_window_carries_its_views_address_and_gives_it_back() {
+        let mut view = 0u8;
+        let ns_view = (&raw mut view).cast::<std::ffi::c_void>();
+        let window = NativeWindow::cocoa(ns_view);
+        assert_eq!(window.api, GuiApi::Cocoa);
+        assert_eq!(window.id, ns_view.addr() as u64);
+        assert_eq!(window.as_ns_view(), Some(ns_view));
+        assert_eq!(NativeWindow::x11(window.id).as_ns_view(), None);
+    }
+
+    #[test]
+    fn the_badge_names_the_api_it_could_not_open_in() {
+        assert_eq!(
+            GuiError::Unsupported(GuiConfig::COCOA_EMBEDDED).to_string(),
+            "the plugin cannot open an embedded window in Cocoa"
+        );
+        assert_eq!(
+            GuiError::Unsupported(GuiConfig::X11_FLOATING).to_string(),
+            "the plugin cannot open a floating window in X11"
+        );
+    }
 }

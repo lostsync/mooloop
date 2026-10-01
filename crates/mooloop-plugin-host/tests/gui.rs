@@ -10,10 +10,13 @@
 //! (`mooloop_test_plugin::PROBE_IDS`). The library-wide ones are
 //! process-global, so every test here that opens a GUI holds [`SERIAL`].
 //!
-//! X11 is the only API the host speaks, and the test plugin offers it on
-//! Linux and the BSDs only.
+//! The test plugin offers its platform's API ([`GuiApi::native`]: Cocoa on
+//! macOS, X11 elsewhere), so the lifecycle runs in that API on each
+//! platform, and every other API the host speaks is refused. Its GUI never
+//! touches the window it is given, so the window ids here, `NSView`
+//! addresses included, are made up.
 
-#![cfg(all(unix, not(target_os = "macos")))]
+#![cfg(unix)]
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -22,7 +25,8 @@ use std::time::{Duration, Instant};
 use mooloop_core::{PluginFormat, PluginRef, PluginState};
 use mooloop_plugin_host::clap::ClapInstance;
 use mooloop_plugin_host::{
-    AudioConfig, GuiConfig, GuiError, GuiRequest, GuiSize, HostedInstance, IoRegistrations, NativeWindow,
+    AudioConfig, GuiApi, GuiConfig, GuiError, GuiRequest, GuiSize, HostedInstance, IoRegistrations,
+    NativeWindow,
 };
 use mooloop_test_plugin as test_plugin;
 
@@ -84,13 +88,13 @@ fn live(instance: &mut ClapInstance) -> [u64; 4] {
     ]
 }
 
-/// Open `instance`'s GUI embedded in X11 window `parent` and show it.
+/// Open `instance`'s GUI embedded in native window `parent` and show it.
 fn open_embedded(instance: &mut ClapInstance, parent: u64) {
     let gui = instance.gui().expect("the GUI variant has a GUI");
-    assert!(gui.is_api_supported(GuiConfig::X11_EMBEDDED));
-    gui.create(GuiConfig::X11_EMBEDDED).expect("it opens");
+    assert!(gui.is_api_supported(GuiConfig::native_embedded()));
+    gui.create(GuiConfig::native_embedded()).expect("it opens");
     gui.set_scale(1.0).expect("it takes a scale");
-    gui.set_parent(NativeWindow::x11(parent)).expect("it embeds");
+    gui.set_parent(NativeWindow::native(parent)).expect("it embeds");
     gui.show().expect("it shows");
 }
 
@@ -116,23 +120,23 @@ fn the_gui_opens_closes_and_reopens_in_order_and_refuses_calls_out_of_it() {
     let _serial = serial();
     let mut instance = open(test_plugin::GAIN_GUI_ID);
     let gui = instance.gui().expect("a GUI");
-    assert_eq!(gui.preferred_api(), Some(GuiConfig::X11_EMBEDDED));
+    assert_eq!(gui.preferred_api(), Some(GuiConfig::native_embedded()));
     assert_eq!(gui.show(), Err(GuiError::NotOpen), "nothing shows before it opens");
-    assert_eq!(gui.set_parent(NativeWindow::x11(7)), Err(GuiError::NotOpen));
-    gui.create(GuiConfig::X11_EMBEDDED).expect("it opens");
-    assert_eq!(gui.create(GuiConfig::X11_EMBEDDED), Err(GuiError::AlreadyOpen));
+    assert_eq!(gui.set_parent(NativeWindow::native(7)), Err(GuiError::NotOpen));
+    gui.create(GuiConfig::native_embedded()).expect("it opens");
+    assert_eq!(gui.create(GuiConfig::native_embedded()), Err(GuiError::AlreadyOpen));
     assert!(
         matches!(gui.show(), Err(GuiError::Refused(_))),
         "an embedded GUI shows only once it has a parent"
     );
     assert!(
-        matches!(gui.set_transient(NativeWindow::x11(7)), Err(GuiError::Refused(_))),
+        matches!(gui.set_transient(NativeWindow::native(7)), Err(GuiError::Refused(_))),
         "only a floating GUI is transient"
     );
-    gui.set_parent(NativeWindow::x11(7)).expect("it embeds");
+    gui.set_parent(NativeWindow::native(7)).expect("it embeds");
     gui.show().expect("it shows");
     assert!(gui.is_visible());
-    assert_eq!(gui.open_config(), Some(GuiConfig::X11_EMBEDDED));
+    assert_eq!(gui.open_config(), Some(GuiConfig::native_embedded()));
     assert_eq!(
         gui.size(),
         Some(GuiSize {
@@ -147,15 +151,59 @@ fn the_gui_opens_closes_and_reopens_in_order_and_refuses_calls_out_of_it() {
     gui.destroy();
 
     // Reopened, floating this time.
-    assert!(gui.is_api_supported(GuiConfig::X11_FLOATING));
-    gui.create(GuiConfig::X11_FLOATING).expect("it opens again");
+    assert!(gui.is_api_supported(GuiConfig::native_floating()));
+    gui.create(GuiConfig::native_floating()).expect("it opens again");
     gui.suggest_title("Test Gain (GUI) - Channel 1");
-    gui.set_transient(NativeWindow::x11(9)).expect("a floating GUI stays above its window");
+    gui.set_transient(NativeWindow::native(9)).expect("a floating GUI stays above its window");
     gui.show().expect("it shows");
     gui.destroy();
 
     assert_eq!(live(&mut instance), [0, 0, 0, 0]);
     assert_eq!(instance.misbehaviour(), 0, "the plugin saw every call on its main thread");
+}
+
+#[test]
+fn each_api_opens_where_the_plugin_offers_it_and_is_refused_where_it_does_not() {
+    let _serial = serial();
+    let mut instance = open(test_plugin::GAIN_GUI_ID);
+    for api in [GuiApi::X11, GuiApi::Cocoa] {
+        let window = match api {
+            GuiApi::X11 => NativeWindow::x11(0x0120_0007),
+            // Never dereferenced: the test plugin ignores its parent.
+            GuiApi::Cocoa => NativeWindow::cocoa(std::ptr::without_provenance_mut(0x7000)),
+            _ => unreachable!("the host speaks X11 and Cocoa"),
+        };
+        for config in [GuiConfig::embedded(api), GuiConfig::floating(api)] {
+            let gui = instance.gui().expect("a GUI");
+            if api != GuiApi::native() {
+                assert!(!gui.is_api_supported(config), "{config:?} is not this platform's");
+                assert_eq!(gui.create(config), Err(GuiError::Unsupported(config)));
+                assert_eq!(gui.open_config(), None);
+                continue;
+            }
+            assert!(gui.is_api_supported(config), "{config:?}");
+            gui.create(config).expect("it opens");
+            if config.floating {
+                gui.set_transient(window).expect("it stays above the window");
+            } else {
+                let other = if api == GuiApi::X11 {
+                    NativeWindow::cocoa(std::ptr::null_mut())
+                } else {
+                    NativeWindow::x11(7)
+                };
+                assert!(
+                    matches!(gui.set_parent(other), Err(GuiError::Refused(_))),
+                    "a window of another API is refused before the plugin sees it"
+                );
+                gui.set_parent(window).expect("it embeds");
+            }
+            gui.show().expect("it shows");
+            assert_eq!(gui.open_config(), Some(config));
+            gui.destroy();
+        }
+    }
+    assert_eq!(live(&mut instance), [0, 0, 0, 0]);
+    assert_eq!(instance.misbehaviour(), 0);
 }
 
 #[test]
@@ -193,15 +241,20 @@ fn the_plugins_requests_wait_for_the_pump_and_are_dropped_once_it_closes() {
     open_embedded(&mut instance, 12);
     assert!(requests(&mut instance).is_empty());
     // A new scale makes the test GUI ask for its size at that scale, as a
-    // real GUI does.
+    // real GUI does. Under Cocoa the plugin is never told a scale: its
+    // sizes are points.
     instance.gui().expect("a GUI").set_scale(2.0).expect("a scale");
-    assert_eq!(
-        requests(&mut instance),
-        [GuiRequest::Resize(GuiSize {
-            width: test_plugin::GUI_DEFAULT_SIZE.width * 2,
-            height: test_plugin::GUI_DEFAULT_SIZE.height * 2,
-        })]
-    );
+    if GuiApi::native().uses_logical_size() {
+        assert!(requests(&mut instance).is_empty(), "no scale reached the plugin");
+    } else {
+        assert_eq!(
+            requests(&mut instance),
+            [GuiRequest::Resize(GuiSize {
+                width: test_plugin::GUI_DEFAULT_SIZE.width * 2,
+                height: test_plugin::GUI_DEFAULT_SIZE.height * 2,
+            })]
+        );
+    }
     assert!(requests(&mut instance).is_empty(), "drained once");
     let gui = instance.gui().expect("a GUI");
     gui.set_scale(1.0).expect("a scale");
