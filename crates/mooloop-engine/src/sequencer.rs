@@ -330,6 +330,37 @@ impl Sequencer {
         self.active_channels = active - 1;
     }
 
+    /// Lift `from`'s notes and lanes to seat `to` across the patterns the
+    /// song holds, shifting the channels between by one seat, and point every
+    /// lane's address through the move. The result is what
+    /// [`Self::load_project`] builds from the project the edit produced.
+    ///
+    /// Realtime-safe: rotates preallocated lanes, allocating and freeing
+    /// nothing. Either seat past the active channels is ignored.
+    pub fn move_channel(&mut self, from: usize, to: usize) {
+        let active = self.active_channels;
+        if from >= active || to >= active || from == to {
+            return;
+        }
+        let (Ok(from_seat), Ok(to_seat)) = (u8::try_from(from), u8::try_from(to)) else {
+            return;
+        };
+        let edit = mooloop_core::ChannelEdit::Moved {
+            from: from_seat,
+            to: to_seat,
+        };
+        for pattern in self.patterns.iter_mut().take(self.active_patterns) {
+            if from < to {
+                pattern.channels[from..=to].rotate_left(1);
+            } else {
+                pattern.channels[to..=from].rotate_right(1);
+            }
+            for lanes in &mut pattern.channels[..active] {
+                lanes.rescope_lanes(edit);
+            }
+        }
+    }
+
     /// Replace musical state without growing any realtime-owned allocation.
     ///
     /// Runs off the audio thread (the executor installs a `RenderState` that

@@ -2434,14 +2434,10 @@ fn queue_channel_delete(
 
 /// Move the channel at `from` to `to`, undoably.
 ///
-/// The third channel edit, built on the same snapshot path as the two above
-/// rather than on an incremental engine command, and the reason is that those
-/// two do not have one either: `install_project_in_ui` rebuilds the whole
-/// `RenderState`. A move through the same door is consistent with a paste
-/// rather than being a special case, and an incremental rotate would have to
-/// rotate `EngineHandle`'s sample and slice slots with the strips or hand the
-/// moved channel its neighbour's audio. See
-/// `docs/plans/archive/console/01-a-channel-can-be-moved.md`.
+/// Queued as a whole edited document with its undo entry, like the other
+/// channel edits; the pump hands a lone move to the engine as one command
+/// (`edit_channels_in_ui`), which rotates the audio slots with the strips so
+/// no channel hears its neighbour's audio.
 fn queue_channel_move(
     tx: &ProjectEditSender,
     state: &Rc<RefCell<UiState>>,
@@ -17814,20 +17810,21 @@ impl AppUi {
                             // Read before the install, which sends the rack
                             // back to a channel; a track move puts it back.
                             let rack_was = st.borrow().session.effect_target;
-                            // A channel deleted, on its own, reaches the
-                            // engine as one command. An install that stands
-                            // for older edits merged into it still installs.
-                            let removed_channel =
-                                lone_channel_removal(&edit, engine_backlog.has_superseded());
-                            let installed = if let Some(channel) = removed_channel {
-                                remove_channel_in_ui(
+                            // A channel deleted or moved, on its own,
+                            // reaches the engine as one command. An install
+                            // that stands for older edits merged into it
+                            // still installs.
+                            let channel_edit =
+                                lone_channel_edit(&edit, engine_backlog.has_superseded());
+                            let installed = if let Some(channel_edit) = channel_edit {
+                                edit_channels_in_ui(
                                     &mut handle,
                                     default_sample_for_pump.as_ref(),
                                     &st,
                                     &window,
                                     &edit.project,
                                     &edit.samples,
-                                    channel,
+                                    channel_edit,
                                 )
                             } else {
                                 install_project_in_ui(
@@ -19499,45 +19496,46 @@ fn install_input(state: &UiState, project: &Project) -> mooloop_engine::InputSta
     }
 }
 
-/// The channel a queued edit removes, when that is all it does and it can
-/// reach the engine as one command: a recorded channel deletion that no older
-/// install was merged into (`merged`). Everything else installs.
-fn lone_channel_removal(edit: &ProjectEdit, merged: bool) -> Option<usize> {
+/// The channel edit a queued edit is, when that is all it is and it can
+/// reach the engine as one command: a recorded channel deletion or move that
+/// no older install was merged into (`merged`). Everything else installs.
+fn lone_channel_edit(edit: &ProjectEdit, merged: bool) -> Option<ChannelEdit> {
     match (edit.edit, &edit.history) {
-        (Some(ListEdit::Channel(ChannelEdit::Removed(channel))), Some((HistoryMove::Record, _)))
-            if !merged =>
-        {
-            Some(usize::from(channel))
-        }
+        (
+            Some(ListEdit::Channel(
+                channel_edit @ (ChannelEdit::Removed(_) | ChannelEdit::Moved { .. }),
+            )),
+            Some((HistoryMove::Record, _)),
+        ) if !merged => Some(channel_edit),
         _ => None,
     }
 }
 
-/// Remove the channel at `channel` from the engine as one command, with no
+/// Apply a channel removal or move to the engine as one command, with no
 /// install, for an edit whose result is `project`: the window takes the
-/// edited document in as an install's does, and every other channel keeps
-/// sounding. `false` when the engine refused even the install this falls
-/// back to, as [`install_project_in_ui`] answers.
-fn remove_channel_in_ui(
+/// edited document in as an install's does, and every channel the edit
+/// keeps goes on sounding. `false` when the engine refused even the install
+/// this falls back to, as [`install_project_in_ui`] answers.
+fn edit_channels_in_ui(
     handle: &mut EngineHandle,
     default_sample: Option<&Arc<SampleData>>,
     state: &Rc<RefCell<UiState>>,
     window: &MainWindow,
     project: &Project,
     samples: &[Option<Arc<SampleData>>],
-    channel: usize,
+    edit: ChannelEdit,
 ) -> bool {
     let mut incoming = project.clone();
     normalize_project_pattern_banks(&mut incoming);
     let sent = state.borrow().session.engine_mirrors();
     state.borrow_mut().replace_project(&incoming, samples, window);
-    let removed = {
+    let sent_edit = {
         let mut st = state.borrow_mut();
         let input = install_input(&st, &incoming);
         st.session
-            .send_channel_removal(handle, channel, Arc::new(incoming), input, sent)
+            .send_channel_edit(handle, edit, Arc::new(incoming), input, sent)
     };
-    if !removed {
+    if !sent_edit {
         return install_project_in_ui(handle, default_sample, state, window, project, samples, true);
     }
     finish_project_in_ui(handle, state, window, true);
@@ -19545,7 +19543,7 @@ fn remove_channel_in_ui(
 }
 
 /// The window's half of taking a document in, after the session holds it:
-/// everything [`install_project_in_ui`] and [`remove_channel_in_ui`] do alike.
+/// everything [`install_project_in_ui`] and [`edit_channels_in_ui`] do alike.
 /// `keep_transport` is false only for an open.
 fn finish_project_in_ui(
     handle: &mut EngineHandle,

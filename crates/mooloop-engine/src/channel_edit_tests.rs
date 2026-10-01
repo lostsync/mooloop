@@ -1,23 +1,23 @@
-//! Channel edits as incremental commands: a removal reaches the graph as one
-//! `StructuralCommand` and leaves it as an install of the edited project would
-//! (MOO-466).
+//! Channel edits as incremental commands: a removal or a move reaches the
+//! graph as one `StructuralCommand` and leaves it as an install of the edited
+//! project would (MOO-466).
 //!
 //! The acceptance case is parity, in-process: the same live state, edited
 //! once by the command and once by the install path the executor runs
 //! (prepare, carry, swap), renders the same samples afterwards. Beside it:
 //! every other strip is the same strip, the callback allocates nothing, and
-//! a refused removal hands its payload back untouched.
+//! a refused edit hands its payload back untouched.
 
 use std::sync::Arc;
 
 use mooloop_core::{
-    AutomationLane, AutomationPoint, AuxSend, DeviceKind, EffectKind, EffectSlotState, EffectTarget,
+    AutomationLane, AutomationPoint, AuxSend, ChannelEdit, DeviceKind, EffectKind, EffectSlotState, EffectTarget,
     ModLfoParams, ModPolarity, ModRoute, ModulatorParams, NoteEvent, ParamAddr, Project,
     ProjectChannel,
 };
 use mooloop_dsp::SampleData;
 
-use crate::render::{bank_without, ChannelRemoval, RenderState};
+use crate::render::{bank_after, ChannelReseat, RenderState};
 use crate::render_test_support::SAMPLE_RATE;
 use crate::{carry_plan, InputState, StructuralCommand, StructuralReclaim};
 
@@ -152,17 +152,20 @@ fn input() -> InputState {
     }
 }
 
-/// Remove `channel` from `live` the way the handle does.
-fn remove(live: &mut RenderState, channel: usize, incoming: &Project) -> Box<ChannelRemoval> {
-    let bank = bank_without(&live.audio_bank(), channel).expect("a seat in the bank");
-    let removal = ChannelRemoval::new(incoming, bank, input());
-    match live.apply_structural(StructuralCommand::RemoveChannel {
-        channel: channel as u8,
-        removal,
-    }) {
-        Some(StructuralReclaim::ChannelRemoved(removal)) => removal,
-        _ => panic!("a removal comes back as ChannelRemoved"),
+/// Apply `edit` to `live` the way the handle does, `incoming` being the
+/// project it produced.
+fn reseat(live: &mut RenderState, edit: ChannelEdit, incoming: &Project) -> Box<ChannelReseat> {
+    let bank = bank_after(&live.audio_bank(), edit).expect("seats in the bank");
+    let reseat = ChannelReseat::new(edit, incoming, bank, input());
+    match live.apply_structural(StructuralCommand::ReseatChannels { reseat }) {
+        Some(StructuralReclaim::ChannelsReseated(reseat)) => reseat,
+        _ => panic!("a channel edit comes back as ChannelsReseated"),
     }
+}
+
+/// Remove `channel` from `live` the way the handle does.
+fn remove(live: &mut RenderState, channel: usize, incoming: &Project) -> Box<ChannelReseat> {
+    reseat(live, ChannelEdit::Removed(channel as u8), incoming)
 }
 
 /// Install `incoming` over `live` the way the executor does for an edit.
@@ -203,7 +206,8 @@ fn removing_a_channel_renders_what_installing_the_result_renders() {
 
         let mut by_command = playing(&project, &samples);
         let removal = remove(&mut by_command, channel, &incoming);
-        assert!(removal.removed(), "channel {channel} was refused");
+        assert!(removal.applied(), "channel {channel} was refused");
+        assert!(removal.carries_departed());
         let mut by_install = install(playing(&project, &samples), &project, &incoming);
 
         let blocks = (2 * SAMPLE_RATE as usize) / BLOCK;
@@ -229,7 +233,7 @@ fn a_removal_changes_nothing_but_the_removed_channel() {
         incoming.remove_channel(channel).expect("a channel to remove");
 
         let mut by_command = playing(&project, &samples);
-        assert!(remove(&mut by_command, channel, &incoming).removed());
+        assert!(remove(&mut by_command, channel, &incoming).applied());
         let mut untouched = playing(&project, &samples);
 
         let blocks = (2 * SAMPLE_RATE as usize) / BLOCK;
@@ -266,7 +270,7 @@ fn a_removal_keeps_every_other_strip() {
 
     let removal = remove(&mut live, 1, &incoming);
 
-    assert!(removal.removed());
+    assert!(removal.applied());
     assert_eq!(live.strip_count(), project.channels.len() - 1);
     let after: Vec<usize> = (0..live.strip_count()).map(|seat| live.strip_identity(seat)).collect();
     let expected: Vec<usize> = before.iter().enumerate().filter(|&(seat, _)| seat != 1).map(|(_, id)| *id).collect();
@@ -286,9 +290,10 @@ fn a_removal_allocates_nothing_on_the_callback() {
     let mut live = playing(&project, &samples);
     let mut incoming = project.clone();
     incoming.remove_channel(3).unwrap();
-    let bank = bank_without(&live.audio_bank(), 3).unwrap();
-    let removal = ChannelRemoval::new(&incoming, bank, input());
-    let command = StructuralCommand::RemoveChannel { channel: 3, removal };
+    let edit = ChannelEdit::Removed(3);
+    let bank = bank_after(&live.audio_bank(), edit).unwrap();
+    let reseat = ChannelReseat::new(edit, &incoming, bank, input());
+    let command = StructuralCommand::ReseatChannels { reseat };
 
     let locks = mooloop_core::lock_check::locks_taken();
     let before = (crate::COUNTING.allocations(), crate::COUNTING.frees());
@@ -300,7 +305,9 @@ fn a_removal_allocates_nothing_on_the_callback() {
     assert_eq!(after, before, "the removal allocated or freed on the callback");
     assert_eq!(locked, 0, "the removal took a lock on the callback");
     match reclaimed {
-        Some(StructuralReclaim::ChannelRemoved(removal)) => assert!(removal.removed()),
+        Some(StructuralReclaim::ChannelsReseated(removal)) => {
+            assert!(removal.applied() && removal.carries_departed());
+        }
         _ => panic!("the departed channel did not come back in the payload"),
     }
 }
@@ -316,7 +323,8 @@ fn a_refused_removal_changes_nothing() {
     let identity = live.strip_identity(0);
     for channel in [0, 5] {
         let removal = remove(&mut live, channel, &one);
-        assert!(!removal.removed(), "channel {channel} of a one-channel song was removed");
+        assert!(!removal.applied(), "channel {channel} of a one-channel song was removed");
+        assert!(!removal.carries_departed());
         assert_eq!(live.strip_count(), 1);
         assert_eq!(live.strip_identity(0), identity);
     }
@@ -344,3 +352,163 @@ fn a_channel_added_after_a_removal_plays_in_the_vacated_seat() {
     assert_eq!(live.channel_source(seat).kind(), DeviceKind::PolySynth);
 }
 
+
+/// The moves the tests below make: forwards and back, by one seat and across
+/// the song, past the routed channel (4) and onto it.
+const MOVES: [(usize, usize); 6] = [(0, 5), (5, 0), (1, 2), (4, 1), (2, 4), (3, 4)];
+
+/// Move `from` to `to` in `live` the way the handle does.
+fn move_to(live: &mut RenderState, from: usize, to: usize, incoming: &Project) -> Box<ChannelReseat> {
+    reseat(
+        live,
+        ChannelEdit::Moved {
+            from: from as u8,
+            to: to as u8,
+        },
+        incoming,
+    )
+}
+
+/// **A move sounds exactly like the install it replaces**, solo or not.
+/// Without routes, for the reason the removal's twin gives: the install
+/// rebuilds a channel whose route was renumbered.
+#[test]
+fn moving_a_channel_renders_what_installing_the_result_renders() {
+    for solo in [false, true] {
+        for (from, to) in MOVES {
+            let project = song(solo, false);
+            let samples = samples(&project);
+            let mut incoming = project.clone();
+            incoming.move_channel(from, to).expect("a channel to move");
+
+            let mut by_command = playing(&project, &samples);
+            let moved = move_to(&mut by_command, from, to, &incoming);
+            assert!(moved.applied(), "{from} -> {to} was refused");
+            assert!(!moved.carries_departed(), "a move took a channel out");
+            let mut by_install = install(playing(&project, &samples), &project, &incoming);
+
+            let blocks = (2 * SAMPLE_RATE as usize) / BLOCK;
+            assert_same(
+                &render(&mut by_command, blocks),
+                &render(&mut by_install, blocks),
+                &format!("moving {from} -> {to} (solo {solo}): the command against the install"),
+            );
+        }
+    }
+}
+
+/// **A move is inaudible.** The song with everything a seat names -- the
+/// LFO routed on channel 4, a lane on channel 5, a send, channel 4 soloed or
+/// not, a note held on every channel across the edit -- plays the same after
+/// the command as a copy that was never edited. The moved channel has a track
+/// to itself, so every track sums its channels in the same order either way
+/// and the comparison can be bit for bit.
+#[test]
+fn a_move_changes_nothing_audible() {
+    for solo in [false, true] {
+        for (from, to) in MOVES {
+            let mut project = song(solo, true);
+            project.ensure_tracks(4);
+            project.channels[from].setup.channel.bus = 3;
+            let samples = samples(&project);
+            let mut incoming = project.clone();
+            incoming.move_channel(from, to).expect("a channel to move");
+
+            let mut by_command = playing(&project, &samples);
+            assert!(move_to(&mut by_command, from, to, &incoming).applied());
+            let mut untouched = playing(&project, &samples);
+
+            let blocks = (2 * SAMPLE_RATE as usize) / BLOCK;
+            assert_same(
+                &render(&mut by_command, blocks),
+                &render(&mut untouched, blocks),
+                &format!("moving {from} -> {to} (solo {solo}): the command against no edit"),
+            );
+        }
+    }
+}
+
+/// **Every channel keeps its strip across a move**, the routed one included
+/// with its note still held: the same boxes, reordered as the channels were.
+#[test]
+fn a_move_keeps_every_strip() {
+    for (from, to) in MOVES {
+        let project = song(false, true);
+        let samples = samples(&project);
+        let mut live = playing(&project, &samples);
+        let mut expected: Vec<usize> =
+            (0..project.channels.len()).map(|seat| live.strip_identity(seat)).collect();
+        let lifted = expected.remove(from);
+        expected.insert(to, lifted);
+        let mut incoming = project.clone();
+        incoming.move_channel(from, to).unwrap();
+
+        assert!(move_to(&mut live, from, to, &incoming).applied());
+
+        let after: Vec<usize> = (0..live.strip_count()).map(|seat| live.strip_identity(seat)).collect();
+        assert_eq!(after, expected, "{from} -> {to}: a strip was replaced or misplaced");
+    }
+}
+
+/// **The install a move used to be rebuilds the routed channel** where the
+/// command keeps it: the reason the test above holds the command to a song
+/// with no edit rather than to the install. When this starts failing, the
+/// install has learned to carry a renumbered route, and the routed song can
+/// join the install parity test.
+#[test]
+fn the_install_still_rebuilds_a_channel_whose_route_was_renumbered() {
+    let project = song(false, true);
+    let samples = samples(&project);
+    let live = playing(&project, &samples);
+    let routed = live.strip_identity(4);
+    let mut incoming = project.clone();
+    incoming.move_channel(0, 5).unwrap();
+
+    let installed = install(live, &project, &incoming);
+
+    assert_ne!(installed.strip_identity(3), routed, "the install carried the routed channel");
+}
+
+/// **The callback allocates nothing, frees nothing and takes no lock**
+/// applying a move.
+#[test]
+fn a_move_allocates_nothing_on_the_callback() {
+    let project = song(false, true);
+    let samples = samples(&project);
+    let mut live = playing(&project, &samples);
+    let mut incoming = project.clone();
+    let edit = incoming.move_channel(5, 0).unwrap();
+    let bank = bank_after(&live.audio_bank(), edit).unwrap();
+    let reseat = ChannelReseat::new(edit, &incoming, bank, input());
+    let command = StructuralCommand::ReseatChannels { reseat };
+
+    let locks = mooloop_core::lock_check::locks_taken();
+    let before = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+    let reclaimed = live.apply_structural(command);
+    live.process_once_block(BLOCK);
+    let after = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+    let locked = mooloop_core::lock_check::locks_taken() - locks;
+
+    assert_eq!(after, before, "the move allocated or freed on the callback");
+    assert_eq!(locked, 0, "the move took a lock on the callback");
+    match reclaimed {
+        Some(StructuralReclaim::ChannelsReseated(reseat)) => assert!(reseat.applied()),
+        _ => panic!("the move's payload did not come back"),
+    }
+}
+
+/// **A move that cannot land changes nothing**: onto itself, or from or to
+/// a seat past the last channel.
+#[test]
+fn a_refused_move_changes_nothing() {
+    let project = song(false, true);
+    let samples = samples(&project);
+    let mut live = playing(&project, &samples);
+    let before: Vec<usize> = (0..live.strip_count()).map(|seat| live.strip_identity(seat)).collect();
+    for (from, to) in [(2, 2), (6, 0), (0, 6)] {
+        let moved = move_to(&mut live, from, to, &project);
+        assert!(!moved.applied(), "{from} -> {to} landed");
+        let after: Vec<usize> = (0..live.strip_count()).map(|seat| live.strip_identity(seat)).collect();
+        assert_eq!(after, before, "{from} -> {to} moved a strip");
+    }
+}

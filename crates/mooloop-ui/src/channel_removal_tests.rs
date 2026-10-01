@@ -1,5 +1,6 @@
-//! A channel deleted from the window reaches the engine as one command, not
-//! an install (MOO-466), and its undo entry still restores the document.
+//! A channel deleted or moved from the window reaches the engine as one
+//! command, not an install (MOO-466), and its undo entry still restores the
+//! document.
 
 use super::*;
 
@@ -44,16 +45,16 @@ fn a_channel_delete_reaches_the_engine_without_an_install() {
     let installs = handle.installs_queued();
     let edit = delete(&state, &window, 1);
 
-    let channel = lone_channel_removal(&edit, false).expect("a lone delete is a command");
-    assert_eq!(channel, 1);
-    assert!(remove_channel_in_ui(
+    let channel_edit = lone_channel_edit(&edit, false).expect("a lone delete is a command");
+    assert_eq!(channel_edit, ChannelEdit::Removed(1));
+    assert!(edit_channels_in_ui(
         &mut handle,
         None,
         &state,
         &window,
         &edit.project,
         &edit.samples,
-        channel
+        channel_edit
     ));
 
     assert_eq!(handle.installs_queued(), installs, "the delete installed a project");
@@ -73,14 +74,14 @@ fn undoing_a_command_delete_restores_the_channel() {
     let Some((HistoryMove::Record, entry)) = edit.history.clone() else {
         panic!("a delete records an undo entry")
     };
-    assert!(remove_channel_in_ui(
+    assert!(edit_channels_in_ui(
         &mut handle,
         None,
         &state,
         &window,
         &edit.project,
         &edit.samples,
-        2
+        ChannelEdit::Removed(2)
     ));
 
     let restored = entry.before.clone();
@@ -98,14 +99,14 @@ fn undoing_a_command_delete_restores_the_channel() {
     assert_eq!(channel_ids(&state), expected, "the undo did not bring the channel back");
 }
 
-/// **Only a lone, recorded delete is a command.** A paste, a move, an undo
-/// and a delete merged behind a full ring all still install.
+/// **Only a lone, recorded delete or move is a command.** A paste, an undo
+/// and an edit merged behind a full ring all still install.
 #[test]
-fn only_a_lone_recorded_delete_skips_the_install() {
+fn only_a_lone_recorded_delete_or_move_skips_the_install() {
     let (window, state, _handle, _project) = opened();
     let edit = delete(&state, &window, 0);
-    assert_eq!(lone_channel_removal(&edit, false), Some(0));
-    assert_eq!(lone_channel_removal(&edit, true), None, "a merged install");
+    assert_eq!(lone_channel_edit(&edit, false), Some(ChannelEdit::Removed(0)));
+    assert_eq!(lone_channel_edit(&edit, true), None, "a merged install");
 
     let retagged = |list: Option<ListEdit>| ProjectEdit {
         project: edit.project.clone(),
@@ -114,16 +115,89 @@ fn only_a_lone_recorded_delete_skips_the_install() {
         history: edit.history.clone(),
         edit: list,
     };
+    let moved = ChannelEdit::Moved { from: 0, to: 2 };
+    assert_eq!(
+        lone_channel_edit(&retagged(Some(ListEdit::Channel(moved))), false),
+        Some(moved)
+    );
     for other in [
         Some(ListEdit::Channel(ChannelEdit::Inserted(1))),
-        Some(ListEdit::Channel(ChannelEdit::Moved { from: 0, to: 2 })),
+        Some(ListEdit::Track(mooloop_core::TrackEdit::Removed(1))),
         None,
     ] {
-        assert_eq!(lone_channel_removal(&retagged(other), false), None, "{other:?}");
+        assert_eq!(lone_channel_edit(&retagged(other), false), None, "{other:?}");
     }
     let mut undo = retagged(edit.edit);
     if let Some((movement, _)) = undo.history.as_mut() {
         *movement = HistoryMove::Undo;
     }
-    assert_eq!(lone_channel_removal(&undo, false), None, "an undo");
+    assert_eq!(lone_channel_edit(&undo, false), None, "an undo");
+}
+
+/// Move `from` to `to` the way the channel rack's drag does, and hand back
+/// what the pump receives.
+fn move_channel(
+    state: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    from: usize,
+    to: usize,
+) -> ProjectEdit {
+    let (tx, rx) = std::sync::mpsc::channel();
+    assert!(queue_channel_move(
+        &ProjectEditSender(tx),
+        state,
+        window,
+        from,
+        to,
+        "Channel moved"
+    ));
+    match rx.try_recv() {
+        Ok(PendingEngineMessage::ProjectEdit(edit)) => edit,
+        _ => panic!("a move queues a project edit"),
+    }
+}
+
+/// **A move installs nothing either**, and the window and session hold the
+/// channels in their new order; undoing it (which still installs) puts them
+/// back.
+#[test]
+fn a_channel_move_reaches_the_engine_without_an_install() {
+    let (window, state, mut handle, project) = opened();
+    let installs = handle.installs_queued();
+    let edit = move_channel(&state, &window, 0, 2);
+
+    let channel_edit = lone_channel_edit(&edit, false).expect("a lone move is a command");
+    assert_eq!(channel_edit, ChannelEdit::Moved { from: 0, to: 2 });
+    assert!(edit_channels_in_ui(
+        &mut handle,
+        None,
+        &state,
+        &window,
+        &edit.project,
+        &edit.samples,
+        channel_edit
+    ));
+
+    assert_eq!(handle.installs_queued(), installs, "the move installed a project");
+    let original: Vec<mooloop_core::ChannelId> =
+        project.channels.iter().map(|channel| channel.id).collect();
+    let mut expected = original.clone();
+    let lifted = expected.remove(0);
+    expected.insert(2, lifted);
+    assert_eq!(channel_ids(&state), expected);
+
+    let Some((HistoryMove::Record, entry)) = edit.history.clone() else {
+        panic!("a move records an undo entry")
+    };
+    let restored = entry.before.clone();
+    assert!(install_project_in_ui(
+        &mut handle,
+        None,
+        &state,
+        &window,
+        &restored.project,
+        &restored.seated(),
+        true
+    ));
+    assert_eq!(channel_ids(&state), original, "the undo did not put the order back");
 }

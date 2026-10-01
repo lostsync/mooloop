@@ -1,10 +1,10 @@
-//! A channel removal sent as one engine command keeps what the reconcilers
-//! had sent, renumbered, so the tick after it resends nothing the removal did
-//! not change (MOO-466).
+//! A channel removal or move sent as one engine command keeps what the
+//! reconcilers had sent, renumbered, so the tick after it resends nothing the
+//! edit did not change (MOO-466).
 
 use std::sync::Arc;
 
-use mooloop_core::{DeviceKind, EffectKind, EffectTarget, EngineCommand, MusicalEdge};
+use mooloop_core::{ChannelEdit, DeviceKind, EffectKind, EffectTarget, EngineCommand, MusicalEdge};
 use mooloop_engine::{CommandSink, EngineHandle, InputState, StructuralCommand};
 use mooloop_session::session::Session;
 
@@ -90,8 +90,40 @@ fn a_command_removal_leaves_the_reconcilers_nothing_to_resend() {
     // The command: it keeps it, renumbered.
     let sent = session.engine_mirrors();
     session.replace_project(&edited, &[]);
-    assert!(session.send_channel_removal(&mut handle, 1, Arc::new(edited), no_input(), sent));
+    assert!(session.send_channel_edit(
+        &mut handle,
+        ChannelEdit::Removed(1),
+        Arc::new(edited),
+        no_input(),
+        sent
+    ));
     let mut after = Counting::default();
     sync_all(&mut session, &mut after);
     assert_eq!(after.sent, 0, "the tick after the removal resent what the engine kept");
+}
+
+/// **The tick after a command move sends nothing either**: the compensation
+/// the latent channel was owed moves with it, so nothing is resent, where an
+/// install would resend the plan.
+#[test]
+fn a_command_move_leaves_the_reconcilers_nothing_to_resend() {
+    let mut session = session_owing_compensation();
+    let mut handle = EngineHandle::without_device("channel move test");
+    sync_all(&mut session, &mut handle);
+    let mut edited = session.project_snapshot(120, 0);
+    let edit = edited.move_channel(3, 0).expect("a channel to move");
+
+    let mut installed = session_owing_compensation();
+    sync_all(&mut installed, &mut Counting::default());
+    installed.replace_project(&edited, &[]);
+    let mut resent = Counting::default();
+    sync_all(&mut installed, &mut resent);
+    assert!(resent.sent > 0, "the install would resend nothing, so nothing is measured");
+
+    let sent = session.engine_mirrors();
+    session.replace_project(&edited, &[]);
+    assert!(session.send_channel_edit(&mut handle, edit, Arc::new(edited), no_input(), sent));
+    let mut after = Counting::default();
+    sync_all(&mut session, &mut after);
+    assert_eq!(after.sent, 0, "the tick after the move resent what the engine kept");
 }

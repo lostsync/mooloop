@@ -165,7 +165,8 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   automation lanes, modulation routes, an Aux In's subscription — and so does
   the session's own state: the selected device, the open automation lane, and
   the preset labels a channel and its rack rows are wearing. The move is one
-  undoable edit.
+  undoable edit, and nothing stops for it: every channel, the moved one and
+  the ones it passed, keeps its sounding notes, tails and modulators.
 - Mixer tracks can be reordered the same way, by dragging a strip's name
   plate; the strips it passes slide aside. The master stays first: its plate
   selects and never drags, and a drop over it lands in seat 1. Everything that

@@ -11,7 +11,7 @@ use crate::project::{HistoryMove, ProjectEdit, ProjectSnapshot};
 use mooloop_core::{
     chain_latency_with, compensable_send_edges, compile_audio_graph, compile_bus_graph,
     compile_latency, log_error, sends_are_compensable,
-    CompiledAudioGraph,
+    ChannelEdit, CompiledAudioGraph,
     BbtPosition, CompiledLatency, DeviceKind, EffectTarget, EngineCommand, OutletDescriptor,
     PublishesOutlets, Ticks,
     MASTER_BUS, MAX_BUSES, MAX_CHANNELS,
@@ -556,9 +556,9 @@ pub struct TransportPosition {
 
 /// What the session has told the engine, as its reconcilers record it.
 ///
-/// Read before a channel removal installs the edited document in the session
+/// Read before a channel edit installs the edited document in the session
 /// ([`Session::replace_project`] forgets it, as an install should), and
-/// handed to [`Session::send_channel_removal`], which keeps it renumbered: the
+/// handed to [`Session::send_channel_edit`], which keeps it renumbered: the
 /// engine kept every surviving channel's state, so nothing it was told needs
 /// telling again.
 #[derive(Debug, Clone)]
@@ -582,28 +582,28 @@ impl Session {
         }
     }
 
-    /// Remove the channel at `channel` from the engine as one command
-    /// ([`EngineHandle::remove_channel`]), with no install.
+    /// Apply a channel edit -- a removal or a move -- to the engine as one
+    /// command ([`EngineHandle::edit_channels`]), with no install.
     ///
     /// For a session that has just taken in `project`, the document the
-    /// removal produced, through [`Self::replace_project`]; `sent` is
+    /// edit produced, through [`Self::replace_project`]; `sent` is
     /// [`Self::engine_mirrors`] read before it did. The mirrors come back
     /// renumbered to the incoming seats, and the ones the command itself
     /// settled -- the audio edges, the channel solo -- at what it carried, so
-    /// the next reconcile sends only what the removal changed (a
-    /// compensation delay the departed channel was setting, say).
+    /// the next reconcile sends only what the edit changed (a compensation
+    /// delay a removed channel was setting, say).
     ///
     /// `false` means nothing reached the engine and the mirrors are as
     /// `replace_project` left them; the caller installs `project` instead.
-    pub fn send_channel_removal(
+    pub fn send_channel_edit(
         &mut self,
         handle: &mut EngineHandle,
-        channel: usize,
+        edit: ChannelEdit,
         project: std::sync::Arc<mooloop_core::Project>,
         input: mooloop_engine::InputState,
         sent: EngineMirrors,
     ) -> bool {
-        if !handle.remove_channel(channel, project, input) {
+        if !handle.edit_channels(edit, project, input) {
             return false;
         }
         let EngineMirrors {
@@ -613,12 +613,29 @@ impl Session {
             track_graph,
             mut sampler_stretch,
         } = sent;
-        if channel < MAX_CHANNELS {
-            compensation.channels[channel..].rotate_left(1);
-            compensation.channels[MAX_CHANNELS - 1] = 0;
-        }
-        if channel < sampler_stretch.len() {
-            sampler_stretch.remove(channel);
+        match edit {
+            ChannelEdit::Removed(channel) => {
+                let channel = usize::from(channel);
+                if channel < MAX_CHANNELS {
+                    compensation.channels[channel..].rotate_left(1);
+                    compensation.channels[MAX_CHANNELS - 1] = 0;
+                }
+                if channel < sampler_stretch.len() {
+                    sampler_stretch.remove(channel);
+                }
+            }
+            ChannelEdit::Moved { from, to } => {
+                let (from, to) = (usize::from(from), usize::from(to));
+                if from < MAX_CHANNELS && to < MAX_CHANNELS {
+                    move_seat(&mut compensation.channels, from, to);
+                }
+                if from < sampler_stretch.len() && to < sampler_stretch.len() {
+                    move_seat(&mut sampler_stretch, from, to);
+                }
+            }
+            // The engine refuses an insertion, so `edit_channels` returned
+            // above.
+            ChannelEdit::Inserted(_) => {}
         }
         self.compensation_sent = compensation;
         self.console_sums_sent = console_sums;
@@ -1188,6 +1205,16 @@ impl Session {
             beat: bbt.beat as i32,
             tick: bbt.tick as i32,
         }
+    }
+}
+
+/// Move the entry at `from` to `to`, shifting the ones between by one seat,
+/// as [`ChannelEdit::Moved`] reorders the channels. Both must be in range.
+fn move_seat<T>(seats: &mut [T], from: usize, to: usize) {
+    if from < to {
+        seats[from..=to].rotate_left(1);
+    } else if to < from {
+        seats[to..=from].rotate_right(1);
     }
 }
 

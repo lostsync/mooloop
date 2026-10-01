@@ -237,7 +237,7 @@ use jack_driver::{JackDriver as PlatformDriver, Opening};
 use null_driver::NullDriver;
 use render::{ReclaimedEffect, RenderState};
 pub use render::{
-    AudioTapBank, ChannelRemoval, ChannelStorage, ContainerScratch, EffectSlot,
+    AudioTapBank, ChannelReseat, ChannelStorage, ContainerScratch, EffectSlot,
     SendBank, SendSpec,
 };
 
@@ -330,7 +330,7 @@ pub enum StructuralCommand {
     /// Remove whatever is at `slot`, if anything. Also reclaimed, not dropped.
     RemoveEffect { target: EffectTarget, slot: u8 },
     /// Append one channel's storage, built on this thread, as the channel
-    /// after the last. [`Self::RemoveChannel`] takes a channel's storage out
+    /// after the last. [`Self::ReseatChannels`] takes a channel's storage out
     /// with it, so the graph holds storage for exactly its channels; were it
     /// ever to hold a spare, this would hand the arriving storage straight
     /// back, carrying the spare's old instrument, which the arriving one
@@ -339,20 +339,19 @@ pub enum StructuralCommand {
     /// The storage's strip is already running the channel's instrument, so
     /// there is no separate kind to disagree with it.
     AddChannel { storage: Box<ChannelStorage> },
-    /// Take `channel` out of the graph and close the gap. Every other
-    /// channel keeps its strip -- voices, tails, rings, modulator phases --
-    /// in its new seat, and the graph ends up as an install of the project
-    /// the removal produced would leave it, without building one.
+    /// Apply a channel edit -- a removal or a move -- to the graph in place.
+    /// Every channel keeps its strip -- voices, tails, rings, modulator
+    /// phases -- in its new seat, a removed one's storage is taken out, and
+    /// the graph ends up as an install of the project the edit produced
+    /// would leave it, without building one.
     ///
-    /// `removal` carries that project's whole-bank tables, built on this
-    /// thread by [`EngineHandle::remove_channel`]; it comes back as
-    /// [`StructuralReclaim::ChannelRemoved`] holding the departed channel's
-    /// storage and what the tables replaced. A channel that does not exist,
-    /// or the last one, is refused, and the box comes back untouched.
-    RemoveChannel {
-        channel: u8,
-        removal: Box<render::ChannelRemoval>,
-    },
+    /// `reseat` carries the edit and that project's whole-bank tables, built
+    /// on this thread by [`EngineHandle::edit_channels`]; it comes back as
+    /// [`StructuralReclaim::ChannelsReseated`] holding a removed channel's
+    /// storage and what the tables replaced. An insertion, a seat that does
+    /// not exist, a move onto itself or the removal of the last channel is
+    /// refused, and the box comes back untouched.
+    ReseatChannels { reseat: Box<render::ChannelReseat> },
     /// Replace what `channel` plays with `node`, built on this thread at its
     /// kind's defaults; the patch follows as parameter commands.
     ///
@@ -554,9 +553,9 @@ pub(crate) enum StructuralReclaim {
     AudioGraph(Box<AudioTapBank>),
     /// The previous generation's sends, with their compensation rings.
     TrackGraph(Box<SendBank>),
-    /// A channel removal's payload, holding the departed channel's storage
-    /// and the tables it replaced.
-    ChannelRemoved(Box<render::ChannelRemoval>),
+    /// A channel edit's payload, holding a removed channel's storage and the
+    /// tables it replaced.
+    ChannelsReseated(Box<render::ChannelReseat>),
     /// A take displaced by a new one on the same channel, or one with no
     /// channel to record on.
     Take(Box<Take>),
@@ -590,7 +589,7 @@ impl StructuralReclaim {
             Self::Source(node) => node.retire(),
             Self::HostedProcessor(node) => node.retire(),
             Self::RenderState { retired, .. } => retired.retire_nodes(),
-            Self::ChannelRemoved(removal) => removal.retire_nodes(),
+            Self::ChannelsReseated(reseat) => reseat.retire_nodes(),
             Self::PreviewSample { .. }
             | Self::SamplerAudio(_)
             | Self::SamplerStretch(_)
@@ -1758,7 +1757,7 @@ impl EngineHandle {
                 StructuralReclaim::ConsoleSum(buffer) => drop(buffer),
                 StructuralReclaim::AudioGraph(bank) => drop(bank),
                 StructuralReclaim::TrackGraph(bank) => drop(bank),
-                StructuralReclaim::ChannelRemoved(removal) => drop(removal),
+                StructuralReclaim::ChannelsReseated(reseat) => drop(reseat),
                 StructuralReclaim::Take(take) => drop(take),
                 StructuralReclaim::MidiRouting(routing) => drop(routing),
                 StructuralReclaim::AudioInputRouting(routing) => drop(routing),
@@ -1839,41 +1838,38 @@ impl EngineHandle {
         self.send_structural(StructuralCommand::AddChannel { storage })
     }
 
-    /// Remove the channel at `channel`, as one command and without an
-    /// install: every other channel keeps sounding in its new seat.
+    /// Apply a channel edit -- a removal or a move -- as one command and
+    /// without an install: every channel keeps sounding in its new seat.
     ///
-    /// `project` is the document the removal produced and `input` its input
+    /// `project` is the document the edit produced and `input` its input
     /// state, as [`Self::install_project`] takes them; the audio edges and
     /// the solo verdicts are derived from `project` here, as an install
     /// derives them. From here on the handle publishes audio by the incoming
     /// seats, and the next install carries strips against `project`.
     ///
-    /// `false` means nothing was sent -- the index is out of range or the
-    /// ring refused -- and the handle is unchanged.
+    /// `false` means nothing was sent -- an insertion, which no command
+    /// carries yet, a seat out of range, or a refusing ring -- and the handle
+    /// is unchanged.
     #[must_use]
-    pub fn remove_channel(
+    pub fn edit_channels(
         &mut self,
-        channel: usize,
+        edit: mooloop_core::ChannelEdit,
         project: Arc<mooloop_core::Project>,
         input: InputState,
     ) -> bool {
-        let Ok(seat) = u8::try_from(channel) else {
+        let Some(bank) = render::bank_after(&self.audio_slots, edit) else {
             return false;
         };
-        let Some(bank) = render::bank_without(&self.audio_slots, channel) else {
-            return false;
-        };
-        let removal = render::ChannelRemoval::new(&project, bank.clone(), input);
-        if !self.send_structural(StructuralCommand::RemoveChannel {
-            channel: seat,
-            removal,
-        }) {
+        let reseat = render::ChannelReseat::new(edit, &project, bank.clone(), input);
+        if !self.send_structural(StructuralCommand::ReseatChannels { reseat }) {
             return false;
         }
-        // A channel added at that seat later must not inherit the departed
-        // one's audio.
-        if let Some(departed) = bank.last() {
-            departed.store(None);
+        // A channel added at a removed one's seat later must not inherit the
+        // departed one's audio.
+        if let mooloop_core::ChannelEdit::Removed(_) = edit {
+            if let Some(departed) = bank.last() {
+                departed.store(None);
+            }
         }
         // Spectrum subscriptions are keyed by seat; the window re-sends its
         // own after the edit, as it does after an install.

@@ -232,3 +232,21 @@ effect-preset load; undo stays a swap until MOO-469.
   its channel's seat, so after a removal `carry_plan` sees every later
   channel with a route as a changed setup and rebuilds it, cutting its
   voices. The command keeps it sounding.
+
+**`MoveChannel` is the second**, as the same command: `RemoveChannel`
+became `ReseatChannels`, whose payload carries the `ChannelEdit`, so a
+paste can join it as `Inserted` with the pasted channel's storage. What it
+found:
+
+- **A move is a rotation of the same arrays** over `[min..=max]`, plus the
+  sequencer's patterns (`Sequencer::move_channel`) and every rack and lane
+  address pointed through the edit. Nothing is taken out, so nothing new
+  comes back through the reclaim ring but the displaced tables.
+- **A never-edited reference works without muting anything** if the moved
+  channel has a track to itself: every track then sums its channels in the
+  same order before and after, and the comparison is bit for bit.
+- **The install still rebuilds a moved-past channel with a route**
+  (MOO-487); `the_install_still_rebuilds_a_channel_whose_route_was_renumbered`
+  pins that, so the day `carry_plan` learns to map routes the routed song
+  can join the install parity test. Undo of a move still goes through that
+  install (MOO-469).
