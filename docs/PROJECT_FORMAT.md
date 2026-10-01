@@ -245,6 +245,24 @@ full-range zone and saves byte-identical. On load, a range outside 0 to 127
 is clamped and an inverted one swapped (`channel.sampler.zone`), and a
 missing zone file is a sample warning, like a missing base sample.
 
+Zone regions (MOO-463, 2026-10-01; Adam, 2026-09-30: "all 3 sound good")
+make each extra zone its own region of its file. A zone gains `region =
+{ start, end, reverse, loop_start, loop_end, loop_mode, loop_crossfade_ms,
+tune_semitones, tune_cents, level_db }`, in the parameters' own units
+(points are fractions of the zone's file; `level_db` is a trim from -48,
+which is silence, to +12). A field missing from `region` takes a fresh
+zone's value: the whole file, no loop, no tune, 0 dB. The base zone keeps
+its region in the parameters' existing fields, and its level trim in a new
+parameter `zone_level_db`, omitted at 0, so a song without zones saves
+byte-identical. A zone saved between 0.1.5 and this change has no
+`region`. Such a zone played the parameters' start, end, loop and tune, so
+on load it is given a copy of them, once, and is independent from then on.
+That copy is a migration and is not reported as a repair. A zone that
+somehow reaches the engine without a region plays the parameters' region,
+as it did before. A lane or modulation route on a region parameter moves
+every zone by the same amount from its own setting; a lane on Reverse or
+Loop mode plays its value in every zone while it differs from the knob.
+
 Slice mode adds `play_mode` and `slice_base_note` to the parameters, plus a
 `slices` table beside them holding the slice boundaries as `{ id, frame }`
 pairs sorted by source frame. All three default, so a song written before

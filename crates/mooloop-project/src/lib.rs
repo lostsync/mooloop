@@ -1791,12 +1791,20 @@ fn validate_envelope<T>(envelope: &Envelope<T>, expected: &str) -> Result<(), Er
     Ok(())
 }
 
+/// Resolve a loaded source's sample references against `bundle`, and give
+/// each key zone saved before zones had regions a copy of the sampler's
+/// (`mooloop_core::materialize_zone_regions`): every document that carries
+/// a source passes through here once as it loads. The copy is a migration,
+/// not a repair, so it is not reported.
 fn resolve_setup_asset(
     bundle: &Path,
     channel: usize,
     source: &mut ChannelSource,
     warnings: &mut Vec<AssetWarning>,
 ) -> Result<(), Error> {
+    if let Some(sampler) = source.sampler_state_mut() {
+        mooloop_core::materialize_zone_regions(&sampler.params, &mut sampler.zones);
+    }
     for reference in sample_references_mut(source) {
         resolve_reference(bundle, channel, reference, warnings)?;
     }
@@ -2735,6 +2743,76 @@ mod tests {
         assert!(!text.contains("zones") && !text.contains("keys"), "{text}");
         let back: mooloop_core::SamplerState = toml::from_str(&text).unwrap();
         assert_eq!(back, state);
+    }
+
+    /// **Every zone's region survives a save and a reopen (MOO-463),** in a
+    /// song and in a channel preset, with nothing repaired.
+    #[test]
+    fn every_zones_region_round_trips_through_a_song_and_a_preset() {
+        use mooloop_core::ZoneRegion;
+        let temp = tempdir().unwrap();
+        let mut project = zoned_project(temp.path());
+        let state = project.channels[0].setup.sampler_state_mut().unwrap();
+        state.params.start = 0.125;
+        state.params.zone_level_db = -3.0;
+        state.zones[0].region = Some(ZoneRegion { start: 0.25, end: 0.5, ..ZoneRegion::default() });
+        state.zones[1].region = Some(ZoneRegion {
+            start: 0.6,
+            reverse: true,
+            tune_cents: -12.0,
+            level_db: 2.5,
+            ..ZoneRegion::default()
+        });
+        let original = project.channels[0].setup.sampler_state().unwrap().clone();
+        let regions = |state: &mooloop_core::SamplerState| {
+            state.zones.iter().map(|zone| zone.region).collect::<Vec<_>>()
+        };
+
+        let bundle = temp.path().join("song.mooloop");
+        save_song(&bundle, &project, AssetMode::Referenced).unwrap();
+        let loaded = load_bundle(&bundle).unwrap();
+        assert!(loaded.repairs.is_empty(), "{:?}", loaded.repairs);
+        let LoadedDocument::Song(song) = loaded.document else {
+            panic!("expected song")
+        };
+        let state = song.channels[0].setup.sampler_state().unwrap();
+        assert_eq!(regions(state), regions(&original));
+        assert_eq!(state.params, original.params);
+
+        let preset = temp.path().join("zoned.mooloop-channel");
+        save_channel(&preset, &project.channels[0].setup, AssetMode::Referenced).unwrap();
+        let LoadedDocument::Channel(setup) = load_bundle(&preset).unwrap().document else {
+            panic!("expected a channel")
+        };
+        assert_eq!(regions(setup.sampler_state().unwrap()), regions(&original));
+    }
+
+    /// **A zone saved since 0.1.5 copies the sampler's region once (MOO-463).**
+    /// Its file has no `region`; it loads with the sampler's values as its
+    /// own, unreported, and saves them from then on.
+    #[test]
+    fn a_zone_saved_before_regions_loads_with_a_copy_of_the_samplers() {
+        use mooloop_core::ZoneRegion;
+        let temp = tempdir().unwrap();
+        let mut project = zoned_project(temp.path());
+        let state = project.channels[0].setup.sampler_state_mut().unwrap();
+        state.params.end = 0.75;
+        state.params.tune_semitones = 5.0;
+        for zone in &mut state.zones {
+            zone.region = None;
+        }
+        let params = state.params;
+        let bundle = temp.path().join("old.mooloop");
+        save_song(&bundle, &project, AssetMode::Referenced).unwrap();
+        assert!(!fs::read_to_string(&bundle).unwrap().contains("region"));
+        let loaded = load_bundle(&bundle).unwrap();
+        assert!(loaded.repairs.is_empty(), "{:?}", loaded.repairs);
+        let LoadedDocument::Song(song) = loaded.document else {
+            panic!("expected song")
+        };
+        for zone in &song.channels[0].setup.sampler_state().unwrap().zones {
+            assert_eq!(zone.region, Some(ZoneRegion::of_base(&params)));
+        }
     }
 
     #[test]
