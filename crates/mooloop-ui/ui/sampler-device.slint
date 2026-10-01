@@ -16,28 +16,54 @@ export struct SamplerZoneRow {
     missing: bool,
 }
 
+/// A zone's name on the ZONES page: clicking it selects the zone for the
+/// SAMPLE page, and the selected one is marked.
+component ZoneName inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    in property <bool> faint;
+    callback clicked();
+    horizontal-stretch: 1;
+    border-radius: Theme.radius-sm;
+    background: root.selected ? Theme.accent-active : touch.has-hover ? Theme.surface-raised : transparent;
+    HorizontalLayout {
+        padding-left: 4px;
+        padding-right: 4px;
+        Text {
+            text: root.text;
+            color: root.faint ? Theme.text-faint : Theme.text;
+            font-size: Theme.text-sm; overflow: elide;
+            vertical-alignment: center;
+        }
+    }
+    touch := TouchArea { clicked => { root.clicked(); } }
+}
+
 /// The sampler's minimal key-zone editor (MOO-14): the base sample's key
 /// range, and a list of extra zones, each a file with its low and high key
-/// and its root, added from a file and removed. The mapping workspace is
-/// MOO-40.
+/// and its root, added from a file and removed. Clicking a zone's name
+/// selects it for the SAMPLE page (`selected`: 0 is the sampler's own
+/// sample, `n` the extra zone `n - 1`). The mapping workspace is MOO-40.
 export component SamplerZonesPage inherits VerticalLayout {
     in property <int> base-low: 0;
     in property <int> base-high: 127;
     in property <string> base-name;
     in property <[SamplerZoneRow]> zones;
+    in property <int> selected;
     callback base-keys-changed(int, int);
     callback zone-add-clicked();
     callback zone-keys-changed(int, int, int);
     callback zone-root-changed(int, int);
     callback zone-remove-clicked(int);
+    callback zone-selected(int);
 
     spacing: 4px;
     HorizontalLayout {
         spacing: 6px;
-        Text {
+        ZoneName {
             text: root.base-name == "" ? "Sample" : root.base-name;
-            color: Theme.text; font-size: Theme.text-sm; overflow: elide;
-            vertical-alignment: center; horizontal-stretch: 1;
+            selected: root.selected == 0 && root.zones.length > 0;
+            clicked => { root.zone-selected(0); }
         }
         StepperField {
             label: "LOW"; value: root.base-low; minimum: 0; maximum: 127;
@@ -69,11 +95,11 @@ export component SamplerZonesPage inherits VerticalLayout {
                 spacing: 4px;
                 for zone[index] in root.zones : HorizontalLayout {
                     spacing: 6px;
-                    Text {
+                    ZoneName {
                         text: zone.missing ? zone.name + " (missing)" : zone.name;
-                        color: zone.missing ? Theme.text-faint : Theme.text;
-                        font-size: Theme.text-sm; overflow: elide;
-                        vertical-alignment: center; horizontal-stretch: 1;
+                        faint: zone.missing;
+                        selected: root.selected == index + 1;
+                        clicked => { root.zone-selected(index + 1); }
                     }
                     StepperField {
                         label: "LOW"; value: zone.low; minimum: 0; maximum: 127;
@@ -522,6 +548,23 @@ export component SamplerDeviceFace inherits Rectangle {
     callback zone-keys-changed(int, int, int);
     callback zone-root-changed(int, int);
     callback zone-remove-clicked(int);
+    // The zone the SAMPLE and VOICE pages edit (MOO-463): 0 the sampler's
+    // own sample, `n` the extra zone `n - 1`. Its waveform, markers, root,
+    // loop, tune and level are what those pages show; the rest of the patch
+    // is every zone's. `zone-name` and `zone-description` name its file.
+    in property <int> zone-selected;
+    in property <string> zone-name;
+    in property <string> zone-description;
+    in property <bool> zone-follow;
+    // The selected zone's level trim, in dB.
+    in property <float> zone-level;
+    callback zone-select(int);
+    callback zone-follow-changed(bool);
+    callback zone-level-changed(float);
+    // Zone 1 is the sampler's own sample: it alone browses files, is
+    // sliced and is committed.
+    property <bool> zoned: root.zones.length > 0 && root.play-mode == 0;
+    property <bool> extra-zone: root.zoned && root.zone-selected > 0;
 
     // Maps a position normalized against the whole sample (0..1) to a
     // position normalized against the currently visible zoom window, for
@@ -541,6 +584,45 @@ export component SamplerDeviceFace inherits Rectangle {
             DevicePageButton { text: "RECORD"; active: root.page == 3; clicked => { root.page = 3; } }
             DevicePageButton { text: "ZONES"; active: root.page == 4; clicked => { root.page = 4; } }
             Rectangle { horizontal-stretch: 1; }
+            // The zone strip (MOO-463): which zone SAMPLE and VOICE edit.
+            // In the page bar, so the tune on VOICE says whose it is too.
+            if root.zoned && root.page <= 1 : HorizontalLayout {
+                spacing: 2px;
+                Text {
+                    text: "ZONE";
+                    color: Theme.text-faint;
+                    font-size: Theme.text-sm;
+                    vertical-alignment: center;
+                }
+                ToolButton {
+                    icon: Icons.previous; tooltip: "Previous zone";
+                    hint: "Edit the zone before this one";
+                    enabled: root.zone-selected > 0; min-width: 22px; max-width: 22px;
+                    clicked => { root.zone-select(root.zone-selected - 1); }
+                }
+                Text {
+                    text: (root.zone-selected + 1) + "/" + (root.zones.length + 1);
+                    color: Theme.text;
+                    font-size: Theme.text-sm;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    min-width: 30px;
+                }
+                ToolButton {
+                    icon: Icons.next; tooltip: "Next zone";
+                    hint: "Edit the zone after this one";
+                    enabled: root.zone-selected < root.zones.length; min-width: 22px; max-width: 22px;
+                    clicked => { root.zone-select(root.zone-selected + 1); }
+                }
+                ToggleButton {
+                    text: "FOLLOW"; tooltip: "Follow";
+                    hint: "Edit the zone of the last key played";
+                    checked: root.zone-follow;
+                    min-width: 52px; max-width: 52px; max-height: 20px;
+                    toggled(on) => { root.zone-follow-changed(on); }
+                }
+                Rectangle { width: 6px; }
+            }
             // The trim belongs to the patch, not to a page, so it sits in the
             // page bar and stays reachable from all three. One control: the
             // channel fader in the rack rail is still the mix level.
@@ -577,29 +659,35 @@ export component SamplerDeviceFace inherits Rectangle {
             spacing: 4px;
             HorizontalLayout {
                 spacing: 3px;
+                // Browsing loads the sampler's own sample, zone 1's.
                 ToolButton {
                     icon: Icons.previous; tooltip: "Previous sample";
-                    enabled: root.can-previous-sample; min-width: 28px; max-width: 28px;
+                    enabled: root.can-previous-sample && !root.extra-zone; min-width: 28px; max-width: 28px;
                     clicked => { root.previous-sample-clicked(); }
                 }
                 ToolButton {
                     icon: Icons.search; tooltip: "Load sample";
+                    enabled: !root.extra-zone;
                     min-width: 28px; max-width: 28px;
                     clicked => { root.load-sample-clicked(); }
                 }
                 ToolButton {
                     icon: Icons.next; tooltip: "Next sample";
-                    enabled: root.can-next-sample; min-width: 28px; max-width: 28px;
+                    enabled: root.can-next-sample && !root.extra-zone; min-width: 28px; max-width: 28px;
                     clicked => { root.next-sample-clicked(); }
                 }
                 VerticalLayout {
                     min-width: 130px; horizontal-stretch: 1; spacing: 0px;
+                    property <string> shown-name: root.extra-zone ? root.zone-name : root.sample-name;
                     Text {
-                        text: root.sample-name == "" ? "No sample loaded" : root.sample-name;
-                        color: root.sample-name == "" ? Theme.text-faint : Theme.text;
+                        text: parent.shown-name == "" ? "No sample loaded" : parent.shown-name;
+                        color: parent.shown-name == "" ? Theme.text-faint : Theme.text;
                         font-size: Theme.text-lg; overflow: elide;
                     }
-                    Text { text: root.sample-description; color: Theme.text-faint; font-size: Theme.text-sm; overflow: elide; }
+                    Text {
+                        text: root.extra-zone ? root.zone-description : root.sample-description;
+                        color: Theme.text-faint; font-size: Theme.text-sm; overflow: elide;
+                    }
                 }
                 StepperField {
                     controlled: false;
@@ -993,6 +1081,31 @@ export component SamplerDeviceFace inherits Rectangle {
                         text: "SNAP"; min-width: 44px; max-width: 44px; min-height: 20px;
                         tooltip: "Zero-cross"; hint: "Snap all four markers to zero crossings now";
                         clicked => { root.snap-markers-clicked(); }
+                    }
+                }
+                // Each zone's own trim, against the other zones (MOO-463).
+                if root.zoned : Rectangle { width: 1px; background: Theme.border; }
+                if root.zoned : HorizontalLayout {
+                    spacing: 4px;
+                    alignment: start;
+                    Text {
+                        text: "LEVEL";
+                        color: Theme.text-faint;
+                        font-size: Theme.text-sm;
+                        vertical-alignment: center;
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        MiniKnob {
+                            diameter: 28px; fill: Theme.accent;
+                            label: "Zone level";
+                            hint: "This zone's level against the other zones";
+                            minimum: -48; maximum: 12; default-value: 0; step: 0.5;
+                            value: root.zone-level;
+                            // The trim's floor is silence, so it reads as the gain floor.
+                            value-text: GainMath.format-db(root.zone-level <= -48 ? -60 : root.zone-level);
+                            changed(v) => { root.zone-level-changed(v); }
+                        }
                     }
                 }
                 Rectangle { horizontal-stretch: 1; }
@@ -1539,6 +1652,8 @@ export component SamplerDeviceFace inherits Rectangle {
             base-low: root.zone-base-low;
             base-high: root.zone-base-high;
             zones: root.zones;
+            selected: root.zone-selected;
+            zone-selected(zone) => { root.zone-select(zone); }
             base-keys-changed(low, high) => { root.zone-base-keys-changed(low, high); }
             zone-add-clicked => { root.zone-add-clicked(); }
             zone-keys-changed(index, low, high) => { root.zone-keys-changed(index, low, high); }

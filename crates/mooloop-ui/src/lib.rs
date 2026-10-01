@@ -32,6 +32,8 @@ mod rack_displays;
 #[cfg(test)]
 mod rack_displays_tests;
 #[cfg(test)]
+mod sampler_zone_tests;
+#[cfg(test)]
 mod source_names_tests;
 mod display_backend;
 mod plugin_gui;
@@ -162,8 +164,10 @@ use mooloop_session::project::{
 use mooloop_dsp::sample_analysis::OnsetSettings;
 use mooloop_session::sampler::{
     commit_is_stale, fit_readout, frame_fractions, slice_fractions, snap_marker, snap_status,
-    typed_bars, SampleMarker, SliceAccept, SliceEdit,
+    typed_bars, zone_view, RegionEdit, SampleMarker, SliceAccept, SliceEdit,
 };
+use mooloop_core::ZoneRegion;
+use mooloop_dsp::sampler::decode_playhead;
 use mooloop_session::sample::{
     adjacent_sample, inspect_sample, load_sample_at_path, sample_description, sample_duration,
     tune_label, waveform_peaks, waveform_peaks_windowed,
@@ -4552,6 +4556,17 @@ struct UiState {
     /// `audio-sample-rate` for the readouts; this is the copy the publishers
     /// reach, which take `&self` and no window.
     audio_sample_rate: u32,
+    /// The sampler zone the SAMPLE and VOICE pages edit, as `(channel,
+    /// zone)` (MOO-463): read through [`UiState::sampler_zone`], which
+    /// answers zone 1 for any other channel, so selecting a channel starts
+    /// at its zone 1. View state, never saved or undone.
+    sampler_zone: (usize, usize),
+    /// FOLLOW on the zone strip: a played key selects its zone.
+    sampler_zone_follow: bool,
+    /// The zones sounding on a channel as of the last pump tick, read from
+    /// its playheads: a zone that starts sounding is a key just played in
+    /// it, which is what FOLLOW selects.
+    sampler_sounding: (usize, Vec<usize>),
 }
 
 /// The browser panel's three tabs, numbered as `browser-tab` numbers them.
@@ -4726,6 +4741,9 @@ impl UiState {
             automation_point_model,
             automation_target_model,
             audio_sample_rate,
+            sampler_zone: (0, 0),
+            sampler_zone_follow: false,
+            sampler_sounding: (0, Vec::new()),
             takes: TakeRecorder::new(settings::recordings_dir()),
             session_start: SystemTime::now(),
             // Both come from the driver, which this constructor deliberately
@@ -5201,6 +5219,160 @@ impl UiState {
             })
             .collect();
         window.set_sampler_zones(ModelRc::new(VecModel::from(rows)));
+    }
+
+    /// The zone the SAMPLE and VOICE pages edit on the selected channel
+    /// (MOO-463): 0 is zone 1, the sampler's own sample, and `n` the extra
+    /// zone `n - 1`. Zone 1 on any channel but the one a zone was picked on,
+    /// for a zone that has gone, and in Slice mode, where a key picks a
+    /// slice of zone 1.
+    fn sampler_zone(&self) -> usize {
+        let (channel, zone) = self.sampler_zone;
+        let Some(state) = self.session.channels.get(self.session.selected) else {
+            return 0;
+        };
+        if channel != self.session.selected
+            || zone > state.zones.len()
+            || state.sampler_params().play_mode == mooloop_core::PlayMode::Slice
+        {
+            return 0;
+        }
+        zone
+    }
+
+    /// Pick the zone the SAMPLE and VOICE pages edit, and show it.
+    fn select_sampler_zone(&mut self, window: &MainWindow, zone: usize) {
+        self.sampler_zone = (self.session.selected, zone);
+        if self.sampler_zone() != zone {
+            self.sampler_zone = (self.session.selected, 0);
+        }
+        self.sync_sampler_zone_view(window);
+        window.set_waveform_view_offset(0.0);
+        window.set_waveform_view_visible_fraction(1.0);
+    }
+
+    /// The SAMPLE and VOICE pages' zone fields from the selected zone: its
+    /// file, waveform, markers, root, loop, tune and level, the zone strip,
+    /// and what is drawn from them.
+    fn sync_sampler_zone_view(&self, window: &MainWindow) {
+        let Some(ch) = self.session.channels.get(self.session.selected) else {
+            return;
+        };
+        let zone = self.sampler_zone();
+        let view = zone_view(ch, zone);
+        let p = view.params;
+        window.set_sampler_zone_selected(zone as i32);
+        window.set_sampler_zone_follow(self.sampler_zone_follow);
+        window.set_sampler_zone_level(p.zone_level_db);
+        window.set_sampler_zone_name(
+            view.path.map(browser_display_name).unwrap_or_default().into(),
+        );
+        window.set_sampler_zone_description(
+            view.sample.as_deref().map(sample_description).unwrap_or_default().into(),
+        );
+        window.set_sample_frames(view.sample.as_ref().map_or(0, |sample| sample.frames.len() as i32));
+        if zone == 0 {
+            self.waveform_model.set_vec(ch.waveform.clone());
+        } else {
+            self.waveform_model.set_vec(
+                view.sample
+                    .as_deref()
+                    .map(|sample| waveform_peaks(sample, WAVEFORM_BINS))
+                    .unwrap_or_default(),
+            );
+        }
+        window.set_start_pos(p.start);
+        window.set_end_pos(p.end);
+        window.set_loop_start(p.loop_start);
+        window.set_loop_end(p.loop_end);
+        window.set_reverse_playback(p.reverse);
+        window.set_root_note(i32::from(view.root_note));
+        window.set_tune_semitones(p.tune_semitones);
+        window.set_tune_cents(p.tune_cents);
+        self.publish_tune_label(window);
+        window.set_loop_mode(match p.loop_mode {
+            LoopMode::Off => 0,
+            LoopMode::Forward => 1,
+            LoopMode::Pingpong => 2,
+        });
+        Self::publish_loop_fade(window, ch, zone);
+        Self::publish_fit_readout(window, ch, zone, window.get_bpm() as f64);
+    }
+
+    /// The selected channel's sampler playheads for the pump: FOLLOW selects
+    /// a zone that has started sounding since the last tick, and the
+    /// positions returned are the selected zone's alone, for its waveform.
+    /// `raw` is the engine's meter, zone-tagged
+    /// (`mooloop_dsp::sampler::encode_playhead`).
+    fn sampler_playheads(&mut self, window: &MainWindow, raw: &[f32]) -> Vec<f32> {
+        let channel = self.session.selected;
+        let mut sounding: Vec<usize> = raw.iter().map(|value| decode_playhead(*value).0).collect();
+        sounding.sort_unstable();
+        sounding.dedup();
+        let (was_channel, was) = &self.sampler_sounding;
+        let started = (*was_channel == channel)
+            .then(|| sounding.iter().rev().find(|zone| !was.contains(zone)).copied())
+            .flatten();
+        self.sampler_sounding = (channel, sounding);
+        if let Some(zone) = started.filter(|_| self.sampler_zone_follow) {
+            if zone != self.sampler_zone() {
+                self.select_sampler_zone(window, zone);
+            }
+        }
+        let shown = self.sampler_zone();
+        raw.iter()
+            .map(|value| decode_playhead(*value))
+            .filter(|(zone, _)| *zone == shown)
+            .map(|(_, at)| at)
+            .collect()
+    }
+
+    /// The tune knob's readout, for the selected zone's root and tune.
+    fn publish_tune_label(&self, window: &MainWindow) {
+        if let Some(ch) = self.session.channels.get(self.session.selected) {
+            let view = zone_view(ch, self.sampler_zone());
+            let params = SamplerParams { root_note: view.root_note, ..view.params };
+            window.set_tune_label(tune_label(params).into());
+        }
+    }
+
+    /// Send on what a zone edit changed: zone 1's parameters to the engine,
+    /// or an extra zone's channel audio, which carries its region.
+    fn send_region_edit(
+        &self,
+        edit: RegionEdit,
+        tx: &EngineCommandSender,
+        audio_out: &ChannelAudioSender,
+    ) -> bool {
+        match edit {
+            RegionEdit::Unchanged => false,
+            RegionEdit::Params(params) => {
+                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                    channel: self.session.selected as u8,
+                    params,
+                });
+                true
+            }
+            RegionEdit::Zone => {
+                self.publish_selected_audio(audio_out);
+                true
+            }
+        }
+    }
+
+    /// Edit the selected zone's region on the selected channel as one knob
+    /// edit, and send it on. `false` when nothing changed.
+    fn edit_selected_region(
+        &mut self,
+        tx: &EngineCommandSender,
+        audio_out: &ChannelAudioSender,
+        edit: impl FnOnce(&mut ZoneRegion),
+    ) -> bool {
+        let (channel, zone) = (self.session.selected, self.sampler_zone());
+        match self.session.edit_zone_region(channel, zone, edit) {
+            Some(changed) => self.send_region_edit(changed, tx, audio_out),
+            None => false,
+        }
     }
 
     /// What the rack draws of `effects`, the chain of `target`, given which
@@ -6793,11 +6965,13 @@ impl UiState {
 
     /// Fit-to-tempo's readout (MOO-39): the loop's own length and tempo,
     /// what it lasts fitted, and a warning when the bar count looks wrong.
-    fn publish_fit_readout(window: &MainWindow, channel: &ChannelState, bpm: f64) {
-        let params = channel.sampler_params();
-        let readout = channel
-            .published_sample()
-            .and_then(|sample| fit_readout(&params, sample, Some(&channel.slices), bpm));
+    /// Of `zone`'s region, as [`zone_view`] numbers zones.
+    fn publish_fit_readout(window: &MainWindow, channel: &ChannelState, zone: usize, bpm: f64) {
+        let view = zone_view(channel, zone);
+        let readout = view
+            .sample
+            .as_deref()
+            .and_then(|sample| fit_readout(&view.params, sample, view.slices, bpm));
         let Some(readout) = readout else {
             window.set_stretch_fit_label("".into());
             window.set_stretch_fit_warning(false);
@@ -6830,9 +7004,11 @@ impl UiState {
 
     /// The loop fade's knob, readout and span (MOO-43). Its own function
     /// because the span moves whenever the loop does, so the loop's handlers
-    /// republish it without a whole editor refresh.
-    fn publish_loop_fade(window: &MainWindow, channel: &ChannelState) {
-        let params = channel.sampler_params();
+    /// republish it without a whole editor refresh. Of `zone`, as
+    /// [`zone_view`] numbers zones.
+    fn publish_loop_fade(window: &MainWindow, channel: &ChannelState, zone: usize) {
+        let view = zone_view(channel, zone);
+        let params = view.params;
         let descriptor = DeviceKind::Sampler
             .descriptor(mooloop_core::generator::SAMPLER_PARAM_LOOP_FADE)
             .expect("the sampler describes its loop fade");
@@ -6845,8 +7021,8 @@ impl UiState {
             }
             .into(),
         );
-        let span = channel.published_sample().and_then(|sample| {
-            mooloop_dsp::Sampler::loop_seam_span(params, sample, Some(&channel.slices))
+        let span = view.sample.as_deref().and_then(|sample| {
+            mooloop_dsp::Sampler::loop_seam_span(params, sample, view.slices)
         });
         window.set_sampler_loop_fade_shown(span.is_some());
         let (start, end) = span.unwrap_or((0.0, 0.0));
@@ -6860,7 +7036,7 @@ impl UiState {
             .map(|grid| grid.label().into())
             .collect();
         window.set_sampler_loop_grid_options(slint::ModelRc::new(slint::VecModel::from(options)));
-        let (band_start, band_end) = channel.published_sample().map_or(
+        let (band_start, band_end) = view.sample.as_deref().map_or(
             (params.loop_start, params.loop_end),
             |sample| {
                 let len = sample.frames.len();
@@ -6868,7 +7044,7 @@ impl UiState {
                     params,
                     len,
                     None,
-                    Some(&channel.slices),
+                    view.slices,
                 );
                 let len = len.max(1) as f64;
                 ((start / len) as f32, (end / len) as f32)
@@ -7126,12 +7302,6 @@ impl UiState {
         window.set_sample_name(ch.sample_name.as_str().into());
         window.set_sample_description(ch.sample_description.as_str().into());
         window.set_sample_duration(ch.sample_duration);
-        window.set_sample_frames(
-            ch.published_sample()
-                .map(|sample| sample.frames.len() as i32)
-                .unwrap_or(0),
-        );
-        self.waveform_model.set_vec(ch.waveform.clone());
         self.slice_model.set_vec(slice_fractions(ch));
         window.set_play_mode(p.play_mode.to_index());
         window.set_slice_base_note(i32::from(p.slice_base_note));
@@ -7162,22 +7332,8 @@ impl UiState {
         window.set_decay(p.decay);
         window.set_sustain(p.sustain);
         window.set_release(p.release);
-        window.set_start_pos(p.start);
-        window.set_end_pos(p.end);
-        window.set_loop_start(p.loop_start);
-        window.set_loop_end(p.loop_end);
-        window.set_reverse_playback(p.reverse);
-        window.set_root_note(p.root_note as i32);
         self.sync_sampler_zones(window);
-        window.set_tune_semitones(p.tune_semitones);
-        window.set_tune_cents(p.tune_cents);
-        window.set_tune_label(tune_label(*p).into());
         window.set_retune_live(p.retune_live);
-        window.set_loop_mode(match p.loop_mode {
-            LoopMode::Off => 0,
-            LoopMode::Forward => 1,
-            LoopMode::Pingpong => 2,
-        });
         window.set_voice_mode(match p.voice_mode {
             VoiceMode::OneShot => 0,
             VoiceMode::Gate => 1,
@@ -7214,8 +7370,9 @@ impl UiState {
         window.set_stretch_sync(p.stretch_sync);
         window.set_stretch_bars(stretch_bars_to_norm(p.stretch_bars));
         window.set_stretch_bars_label(format_bars(p.stretch_bars).into());
-        Self::publish_loop_fade(window, ch);
-        Self::publish_fit_readout(window, ch, window.get_bpm() as f64);
+        // The selected zone's fields: its file, waveform, markers, root,
+        // loop, tune and level (MOO-463).
+        self.sync_sampler_zone_view(window);
         window.set_filter_cutoff(p.filter_cutoff);
         window.set_filter_resonance(p.filter_resonance);
         window.set_filter_env((p.filter_env_amount + 1.0) * 0.5);
@@ -9274,7 +9431,7 @@ impl AppUi {
                                     .as_ref()
                                     .is_some_and(|commit| commit_is_stale(channel, commit, bpm)),
                             );
-                            UiState::publish_fit_readout(&window, channel, bpm);
+                            UiState::publish_fit_readout(&window, channel, st.sampler_zone(), bpm);
                         }
                     }
                     true
@@ -13592,6 +13749,7 @@ impl AppUi {
         macro_rules! wire_marker_param {
             ($on:ident, $marker:expr) => {{
                 let tx = cmd_tx.clone();
+                let audio_out = channel_audio_tx.clone();
                 let st = state.clone();
                 let commands = command_state.clone();
                 let window_weak = window.as_weak();
@@ -13605,16 +13763,17 @@ impl AppUi {
                     let resolved = std::cell::RefCell::new((v, None));
                     with_gesture_history(&st, &commands, &window, "Sample marker", || {
                         let mut st = st.borrow_mut();
-                        let ch = st.session.selected;
-                        let Some(channel) = st.session.channels.get_mut(ch) else {
+                        let Some(channel) = st.session.channels.get(st.session.selected) else {
                             return false;
                         };
+                        // The selected zone's marker, snapped in its own file.
+                        let view = zone_view(channel, st.sampler_zone());
                         let mut value = v;
                         let mut status = None;
                         if window.get_snap_to_zero() {
-                            if let Some(sample) = channel.published_sample().cloned() {
+                            if let Some(sample) = view.sample.as_deref() {
                                 if let Some((snapped, result)) =
-                                    snap_marker(&channel.sampler_params(), &sample, marker, v)
+                                    snap_marker(&view.params, sample, marker, v)
                                 {
                                     value = snapped;
                                     status = Some(snap_status(marker, result));
@@ -13622,14 +13781,7 @@ impl AppUi {
                             }
                         }
                         *resolved.borrow_mut() = (value, status);
-                        if let Some(params) = channel.sampler_params_mut() {
-                            marker.set(params, value);
-                        }
-                        let p = channel.sampler_params();
-                        let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                            channel: ch as u8,
-                            params: p,
-                        });
+                        st.edit_selected_region(&tx, &audio_out, |region| marker.set_region(region, value));
                         true
                     });
                     let (value, status) = resolved.into_inner();
@@ -13637,8 +13789,9 @@ impl AppUi {
                     {
                         let st = st.borrow();
                         if let Some(channel) = st.session.channels.get(st.session.selected) {
-                            UiState::publish_loop_fade(&window, channel);
-                            UiState::publish_fit_readout(&window, channel, window.get_bpm() as f64);
+                            let zone = st.sampler_zone();
+                            UiState::publish_loop_fade(&window, channel, zone);
+                            UiState::publish_fit_readout(&window, channel, zone, window.get_bpm() as f64);
                         }
                     }
                     if let Some(status) = status {
@@ -13690,17 +13843,22 @@ impl AppUi {
             // on. Markers resolve in region order so each one is bounded by
             // its neighbours' already-resolved positions.
             let tx = cmd_tx.clone();
+            let audio_out = channel_audio_tx.clone();
             let st = state.clone();
             let window_weak = window.as_weak();
             window.on_snap_markers_clicked(move || {
                 let Some(window) = window_weak.upgrade() else {
                     return;
                 };
-                with_gesture_history(&st, &commands, &window, "Snap markers", || {                    let Some(snapped) = st.borrow_mut().session.snap_all_markers() else {
+                with_gesture_history(&st, &commands, &window, "Snap markers", || {
+                    let mut state = st.borrow_mut();
+                    let zone = state.sampler_zone();
+                    let Some(snapped) = state.session.snap_all_markers(zone) else {
                         window.set_status_message("No sample to snap".into());
                         return false;
                     };
-                    let _ = tx.send(snapped.command);
+                    state.send_region_edit(snapped.edit, &tx, &audio_out);
+                    drop(state);
                     for (marker, value) in snapped.resolved {
                         set_marker_property(&window, marker, value);
                     }
@@ -13719,6 +13877,7 @@ impl AppUi {
             // Normalized in, through the descriptor: the face holds no copy
             // of the fade's range (MOO-43).
             let tx = cmd_tx.clone();
+            let audio_out = channel_audio_tx.clone();
             let st = state.clone();
             let commands = command_state.clone();
             let weak = window.as_weak();
@@ -13729,26 +13888,13 @@ impl AppUi {
                     .expect("the sampler describes its loop fade");
                 let ms = descriptor.from_normalized(norm);
                 with_gesture_history(&st, &commands, &window, "Loop fade", || {
-                    let mut st = st.borrow_mut();
-                    let ch = st.session.selected;
-                    let Some(channel) = st.session.channels.get_mut(ch) else {
-                        return false;
-                    };
-                    if channel.sampler_params().loop_crossfade_ms == ms {
-                        return false;
-                    }
-                    if let Some(p) = channel.sampler_params_mut() {
-                        p.loop_crossfade_ms = ms;
-                    }
-                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                        channel: ch as u8,
-                        params: channel.sampler_params(),
-                    });
-                    true
+                    st.borrow_mut().edit_selected_region(&tx, &audio_out, |region| {
+                        region.loop_crossfade_ms = ms;
+                    })
                 });
                 let st = st.borrow();
                 if let Some(channel) = st.session.channels.get(st.session.selected) {
-                    UiState::publish_loop_fade(&window, channel);
+                    UiState::publish_loop_fade(&window, channel, st.sampler_zone());
                 }
             });
         }
@@ -13780,8 +13926,9 @@ impl AppUi {
                 });
                 let st = st.borrow();
                 if let Some(channel) = st.session.channels.get(st.session.selected) {
-                    UiState::publish_loop_fade(&window, channel);
-                    UiState::publish_fit_readout(&window, channel, window.get_bpm() as f64);
+                    let zone = st.sampler_zone();
+                    UiState::publish_loop_fade(&window, channel, zone);
+                    UiState::publish_fit_readout(&window, channel, zone, window.get_bpm() as f64);
                 }
             });
         }
@@ -13843,7 +13990,8 @@ impl AppUi {
                 let Some(channel) = st.session.channels.get(st.session.selected) else {
                     return;
                 };
-                let Some(sample) = channel.published_sample() else {
+                // The selected zone's file, which is what the page draws.
+                let Some(sample) = zone_view(channel, st.sampler_zone()).sample else {
                     return;
                 };
                 let total = sample.frames.len();
@@ -13854,7 +14002,7 @@ impl AppUi {
                 let span = (visible_fraction.max(0.0) * total as f32).round().max(1.0) as usize;
                 let end = (start + span).min(total);
                 st.waveform_model.set_vec(waveform_peaks_windowed(
-                    sample,
+                    &sample,
                     WAVEFORM_BINS,
                     start,
                     end,
@@ -13867,22 +14015,12 @@ impl AppUi {
             let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
+            let audio_out = channel_audio_tx.clone();
             window.on_reverse_playback_changed(move |reverse| {
                 let Some(window) = weak.upgrade() else { return };
                 with_gesture_history(&st, &commands, &window, "Reverse", || {
-                    let mut st = st.borrow_mut();
-                    let ch = st.session.selected;
-                    let Some(channel) = st.session.channels.get_mut(ch) else {
-                        return false;
-                    };
-                    if let Some(p) = channel.sampler_params_mut() {
-                        p.reverse = reverse;
-                    }
-                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                        channel: ch as u8,
-                        params: channel.sampler_params(),
-                    });
-                    true
+                    st.borrow_mut()
+                        .edit_selected_region(&tx, &audio_out, |region| region.reverse = reverse)
                 });
             });
         }
@@ -13892,25 +14030,22 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
+            let audio_out = channel_audio_tx.clone();
             window.on_root_note_changed(move |note| {
                 let Some(window) = weak.upgrade() else { return };
                 with_gesture_history(&st, &commands, &window, "Root note", || {
                     let mut st = st.borrow_mut();
-                    let ch = st.session.selected;
-                    let Some(channel) = st.session.channels.get_mut(ch) else {
+                    let (channel, zone) = (st.session.selected, st.sampler_zone());
+                    let root = note.clamp(0, 127) as u8;
+                    let Some(edit) = st.session.set_zone_root_at(channel, zone, root) else {
                         return false;
                     };
-                    if let Some(p) = channel.sampler_params_mut() {
-                        p.root_note = note.clamp(0, 127) as u8;
+                    let sent = st.send_region_edit(edit, &tx, &audio_out);
+                    st.publish_tune_label(&window);
+                    if zone > 0 {
+                        st.sync_sampler_zones(&window);
                     }
-                    if let Some(window) = weak.upgrade() {
-                        window.set_tune_label(tune_label(channel.sampler_params()).into());
-                    }
-                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                        channel: ch as u8,
-                        params: channel.sampler_params(),
-                    });
-                    true
+                    sent
                 });
             });
         }
@@ -13920,25 +14055,14 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
+            let audio_out = channel_audio_tx.clone();
             window.on_tune_semitones_changed(move |v: f32| {
                 let Some(window) = weak.upgrade() else { return };
                 with_gesture_history(&st, &commands, &window, "Tune", || {
                     let mut st = st.borrow_mut();
-                    let ch = st.session.selected;
-                    let Some(channel) = st.session.channels.get_mut(ch) else {
-                        return false;
-                    };
-                    if let Some(p) = channel.sampler_params_mut() {
-                        p.tune_semitones = v;
-                    }
-                    if let Some(window) = weak.upgrade() {
-                        window.set_tune_label(tune_label(channel.sampler_params()).into());
-                    }
-                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                        channel: ch as u8,
-                        params: channel.sampler_params(),
-                    });
-                    true
+                    let sent = st.edit_selected_region(&tx, &audio_out, |region| region.tune_semitones = v);
+                    st.publish_tune_label(&window);
+                    sent
                 });
             });
         }
@@ -13948,25 +14072,14 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
+            let audio_out = channel_audio_tx.clone();
             window.on_tune_cents_changed(move |v: f32| {
                 let Some(window) = weak.upgrade() else { return };
                 with_gesture_history(&st, &commands, &window, "Tune", || {
                     let mut st = st.borrow_mut();
-                    let ch = st.session.selected;
-                    let Some(channel) = st.session.channels.get_mut(ch) else {
-                        return false;
-                    };
-                    if let Some(p) = channel.sampler_params_mut() {
-                        p.tune_cents = v;
-                    }
-                    if let Some(window) = weak.upgrade() {
-                        window.set_tune_label(tune_label(channel.sampler_params()).into());
-                    }
-                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                        channel: ch as u8,
-                        params: channel.sampler_params(),
-                    });
-                    true
+                    let sent = st.edit_selected_region(&tx, &audio_out, |region| region.tune_cents = v);
+                    st.publish_tune_label(&window);
+                    sent
                 });
             });
         }
@@ -14026,27 +14139,17 @@ impl AppUi {
             let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
+            let audio_out = channel_audio_tx.clone();
             window.on_loop_mode_changed(move |i| {
                 let Some(window) = weak.upgrade() else { return };
                 with_gesture_history(&st, &commands, &window, "Loop mode", || {
-                    let mut st = st.borrow_mut();
-                    let ch = st.session.selected;
-                    let Some(channel) = st.session.channels.get_mut(ch) else {
-                        return false;
-                    };
-                    if let Some(p) = channel.sampler_params_mut() {
-                        p.loop_mode = loop_mode_from_int(i);
-                    }
-                    let p = channel.sampler_params();
-                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                        channel: ch as u8,
-                        params: p,
-                    });
-                    true
+                    st.borrow_mut().edit_selected_region(&tx, &audio_out, |region| {
+                        region.loop_mode = loop_mode_from_int(i);
+                    })
                 });
                 let st = st.borrow();
                 if let Some(channel) = st.session.channels.get(st.session.selected) {
-                    UiState::publish_loop_fade(&window, channel);
+                    UiState::publish_loop_fade(&window, channel, st.sampler_zone());
                 }
             });
         }
@@ -14726,7 +14829,7 @@ impl AppUi {
                     window.set_stretch_ratio_label(format!("{:.2}x", params.stretch_ratio).into());
                     let st = st.borrow();
                     if let Some(channel) = st.session.channels.get(st.session.selected) {
-                        UiState::publish_fit_readout(&window, channel, bpm);
+                        UiState::publish_fit_readout(&window, channel, st.sampler_zone(), bpm);
                     }
                 }
             });
@@ -14742,6 +14845,7 @@ impl AppUi {
                 with_gesture_history(&st, &commands, &window, "Stretch bars", || {
                     let mut st = st.borrow_mut();
                     let channel_index = st.session.selected;
+                    let zone = st.sampler_zone();
                     let channel = &mut st.session.channels[channel_index];
                     let bars = stretch_bars_from_norm(norm);
                     if let Some(p) = channel.sampler_params_mut() {
@@ -14753,7 +14857,7 @@ impl AppUi {
                     });
                     if let Some(window) = weak.upgrade() {
                         window.set_stretch_bars_label(format_bars(bars).into());
-                        UiState::publish_fit_readout(&window, channel, window.get_bpm() as f64);
+                        UiState::publish_fit_readout(&window, channel, zone, window.get_bpm() as f64);
                     }
                     true
                 });
@@ -14846,10 +14950,27 @@ impl AppUi {
                 .clamp(i32::from(MIN_STRETCH_GRAIN), i32::from(MAX_STRETCH_GRAIN))
                 as u16;
         });
-        wire_typed_stretch_field!(on_tune_typed, |p: &mut SamplerParams, v: f32| {
-            p.tune_semitones =
-                v.clamp(SAMPLER_TUNE_SEMITONE_CLAMP.0, SAMPLER_TUNE_SEMITONE_CLAMP.1);
-        });
+        {
+            // The selected zone's tune, typed (MOO-463).
+            let tx = cmd_tx.clone();
+            let audio_out = channel_audio_tx.clone();
+            let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_tune_typed(move |text| {
+                let Some(window) = weak.upgrade() else { return };
+                if let Some(typed) = parse_typed_value(text.as_str()) {
+                    let semitones =
+                        typed.clamp(SAMPLER_TUNE_SEMITONE_CLAMP.0, SAMPLER_TUNE_SEMITONE_CLAMP.1);
+                    with_gesture_history(&st, &commands, &window, "Typed value", || {
+                        st.borrow_mut().edit_selected_region(&tx, &audio_out, |region| {
+                            region.tune_semitones = semitones;
+                        })
+                    });
+                }
+                st.borrow().refresh_editor(&window);
+            });
+        }
 
         {
             let weak = window.as_weak();
@@ -16555,10 +16676,49 @@ impl AppUi {
                         }
                         state.publish_selected_audio(&audio_out);
                         state.sync_sampler_zones(&window);
+                        state.sync_sampler_zone_view(&window);
                     }
                     record_project_history(&commands, before, &st, &window, $label);
                 });
             }};
+        }
+        // The zone the SAMPLE and VOICE pages edit, from the strip or a
+        // ZONES row, and FOLLOW (MOO-463). View state: nothing is recorded.
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_sampler_zone_select(move |zone| {
+                let Some(window) = weak.upgrade() else { return };
+                st.borrow_mut()
+                    .select_sampler_zone(&window, usize::try_from(zone).unwrap_or(0));
+            });
+        }
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_sampler_zone_follow_changed(move |on| {
+                let Some(window) = weak.upgrade() else { return };
+                let mut state = st.borrow_mut();
+                state.sampler_zone_follow = on;
+                window.set_sampler_zone_follow(on);
+            });
+        }
+        {
+            // The selected zone's level trim, in dB: zone 1's is a
+            // parameter, an extra zone's rides its audio.
+            let tx = cmd_tx.clone();
+            let audio_out = channel_audio_tx.clone();
+            let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_sampler_zone_level_changed(move |db| {
+                let Some(window) = weak.upgrade() else { return };
+                let db = db.clamp(mooloop_core::ZONE_LEVEL_DB_RANGE.0, mooloop_core::ZONE_LEVEL_DB_RANGE.1);
+                with_gesture_history(&st, &commands, &window, "Zone level", || {
+                    st.borrow_mut().edit_selected_region(&tx, &audio_out, |region| region.level_db = db)
+                });
+                window.set_sampler_zone_level(db);
+            });
         }
         zone_edit!(on_sampler_zone_base_keys_changed, "Sample keys", |session, channel, low, high| {
             session.set_base_keys(channel, midi_key(low), midi_key(high))
@@ -18611,22 +18771,10 @@ impl AppUi {
                     }
                 }
                 profile.borrow_mut().lap(pump_profile::Section::DeviceRows);
-                {
-                    // A playhead only means anything for the selected
-                    // channel's sampler; otherwise leave it empty so no
-                    // stale line lingers over an unrelated device or a bus.
-                    let state = st.borrow();
-                    let is_sampler = state
-                        .session.channels
-                        .get(selected_channel)
-                        .is_some_and(|channel| channel.kind() == DeviceKind::Sampler);
-                    // In place while the voice count holds, so the lines'
-                    // repeater keeps its instances (MOO-261).
-                    if showing_device_rack && !editing_bus && is_sampler {
-                        state.publish_playheads(&handle.playhead_positions(selected_channel));
-                    } else {
-                        state.publish_playheads(&[]);
-                    }
+                if let Some(window) = weak.upgrade() {
+                    pump_sampler_playheads(&st, &window, showing_device_rack && !editing_bus, || {
+                        handle.playhead_positions(selected_channel)
+                    });
                 }
                 {
                     // Live modulation on the knobs. The engine publishes the
@@ -19568,6 +19716,37 @@ fn load_sample_with_history(
 /// A key from the ZONES page's steppers, which range over MIDI already.
 fn midi_key(value: i32) -> u8 {
     value.clamp(0, 127) as u8
+}
+
+/// The pump's playhead step: the selected channel's sampler voices as
+/// lines over its waveform, or none (MOO-261, MOO-463).
+///
+/// A playhead only means anything for the selected channel's sampler, and
+/// only `shown` (the device rack, not a bus); otherwise the lines are
+/// emptied so no stale one lingers over an unrelated device. Only the
+/// selected zone's voices are drawn, since its waveform is the one shown,
+/// and FOLLOW reads from them which zone a key just started. Written in
+/// place while the voice count holds, so the lines' repeater keeps its
+/// instances. `raw` is the engine's playhead meter, read only when drawn.
+/// Takes the state mutably, so no other borrow of it may be live.
+fn pump_sampler_playheads(
+    st: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    shown: bool,
+    raw: impl FnOnce() -> Vec<f32>,
+) {
+    let mut state = st.borrow_mut();
+    let is_sampler = state
+        .session
+        .channels
+        .get(state.session.selected)
+        .is_some_and(|channel| channel.kind() == DeviceKind::Sampler);
+    if shown && is_sampler {
+        let positions = state.sampler_playheads(window, &raw());
+        state.publish_playheads(&positions);
+    } else {
+        state.publish_playheads(&[]);
+    }
 }
 
 /// A decoded file becomes a new key zone on `channel` (MOO-14), as one undo

@@ -180,6 +180,21 @@ impl ChannelAudioSnapshot {
     }
 }
 
+/// A voice's playhead as one float, which is what the engine's playhead
+/// meter carries: `position` in `[0, 1]` for zone 0 (the base zone), and
+/// `2 * zone + position` for an extra zone `zone` (numbered from 1), so the
+/// UI can tell which zone's waveform a playhead belongs on and which zones
+/// are sounding. [`decode_playhead`] is the inverse.
+pub fn encode_playhead(zone: usize, position: f32) -> f32 {
+    2.0 * zone as f32 + position.clamp(0.0, 1.0)
+}
+
+/// The zone and the `[0, 1]` position [`encode_playhead`] packed.
+pub fn decode_playhead(value: f32) -> (usize, f32) {
+    let zone = (value.max(0.0) / 2.0).floor();
+    (zone as usize, (value - 2.0 * zone).clamp(0.0, 1.0))
+}
+
 /// Whether `voice` is playing the zone that plays `sample` from `root`, so a
 /// legato move to it is a pitch change rather than a new note (MOO-14). The
 /// base zone is matched by its buffer alone: its root is the patch's, which
@@ -1039,16 +1054,19 @@ impl Sampler {
         self.params.choke_group
     }
 
-    /// Normalized (0..1) playback position of every active voice, for a UI
-    /// playhead. Inactive slots (and voices with no loaded sample) report
-    /// `f32::NAN`, which the caller filters out rather than drawing a
+    /// Every active voice's playhead, for the UI: its normalized (0..1)
+    /// position in its own sample, tagged with its zone as
+    /// [`encode_playhead`] packs them, so a voice of the base zone reads as
+    /// its plain position. Inactive slots (and voices with no loaded sample)
+    /// report `f32::NAN`, which the caller filters out rather than drawing a
     /// playhead at frame zero.
     pub fn voice_positions(&self) -> [f32; MAX_SAMPLER_VOICES as usize] {
         let mut positions = [f32::NAN; MAX_SAMPLER_VOICES as usize];
         for (voice, position) in self.voices.iter().zip(positions.iter_mut()) {
             if let (true, Some(sample)) = (voice.active, voice.sample.as_ref()) {
                 let len = sample.len().max(1) as f64;
-                *position = (voice.play_pos / len).clamp(0.0, 1.0) as f32;
+                let at = (voice.play_pos / len).clamp(0.0, 1.0) as f32;
+                *position = encode_playhead(voice.zone.map_or(0, |index| index + 1), at);
             }
         }
         positions
@@ -4989,6 +5007,25 @@ mod tests {
         assert!(shared.l.iter().any(|value| *value != 0.0));
         assert_eq!(shared.l, copied.l);
         assert_eq!(shared.r, copied.r);
+    }
+
+    /// A playhead says which zone it is in: a base-zone voice reads as its
+    /// plain position, an extra zone's decodes to its zone and position.
+    #[test]
+    fn a_playhead_names_its_zone() {
+        const LEN: usize = 48_000;
+        let mut sampler = Sampler::new(slot(region_audio(LEN, None)), zone_params(), 48_000);
+        strike(&mut sampler, 48, 16, &[]);
+        let base = sampler.voice_positions()[0];
+        assert!((0.0..0.01).contains(&base), "{base}");
+        sampler.reset();
+        strike(&mut sampler, 60, 16, &[]);
+        let (zone, at) = decode_playhead(sampler.voice_positions()[0]);
+        assert_eq!(zone, 1);
+        assert!((0.0..0.01).contains(&at), "{at}");
+        for (zone, at) in [(0, 0.0), (0, 1.0), (1, 0.5), (3, 1.0), (40, 0.25)] {
+            assert_eq!(decode_playhead(encode_playhead(zone, at)), (zone, at));
+        }
     }
 
     /// An edit to a zone's region reaches a note already sounding in it, and

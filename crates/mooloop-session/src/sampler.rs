@@ -1321,19 +1321,6 @@ pub fn zone_view(channel: &ChannelState, zone: usize) -> ZoneView<'_> {
     }
 }
 
-/// The zone a key plays on `channel`, numbered as [`zone_view`] numbers
-/// them, for FOLLOW: `None` for a key no zone holds, or in Slice mode,
-/// where a key picks a slice of the base zone.
-pub fn zone_for_key(channel: &ChannelState, note: u8) -> Option<usize> {
-    if channel.sampler_params().play_mode == mooloop_core::PlayMode::Slice {
-        return Some(0);
-    }
-    match mooloop_core::zone_for_note(note, channel.keys, channel.zones.iter().map(|zone| zone.zone.keys))? {
-        mooloop_core::ZoneChoice::Base => Some(0),
-        mooloop_core::ZoneChoice::Extra(index) => Some(index + 1),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2175,8 +2162,7 @@ mod zone_tests {
     }
 
     /// An edit to an extra zone moves that zone alone, and zone 1's edit is
-    /// the sampler's parameters; FOLLOW's lookup numbers the zones as the
-    /// strip does.
+    /// the sampler's parameters.
     #[test]
     fn a_zone_edit_moves_only_its_zone() {
         let (base, zone) = (tone(261.63, 0.5, 1.0), tone(523.25, 0.25, 1.0));
@@ -2196,8 +2182,6 @@ mod zone_tests {
         assert_eq!(session.channels[0].zones[0].zone.region.unwrap().level_db, 0.0);
         assert_eq!(session.edit_zone_region(0, 1, |_| {}), Some(RegionEdit::Unchanged));
         assert_eq!(session.edit_zone_region(0, 9, |_| {}), None);
-        assert_eq!(zone_for_key(&session.channels[0], 40), Some(0));
-        assert_eq!(zone_for_key(&session.channels[0], 90), Some(1));
         assert_eq!(zone_view(&session.channels[0], 1).root_note, 72);
         assert_eq!(zone_view(&session.channels[0], 5).zone, 0, "a zone not there shows zone 1");
     }

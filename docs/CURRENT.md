@@ -304,10 +304,21 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   zone is pitched from its own root. A zone is removed with its x, and every
   edit is one undo step. The first zone added to a full-keyboard sampler
   takes the upper half of the keys. A later zone takes the keys above every
-  range, or splits the top range when there are none. Slices, the stretch
-  commit and the SAMPLE page's ROOT belong to the sampler's own sample: in
-  Slice mode the zones are ignored. Start, end, loop and stretch apply to
-  every zone. Zones embed with the song like its sample. A copied sampler
+  range, or splits the top range when there are none. Each zone is its own
+  region of its file (MOO-463): start, end, reverse, loop points, loop mode
+  and fade, root, tune and a LEVEL trim. A ZONE strip in the device's page
+  bar (on SAMPLE and VOICE, once a sampler has zones) picks the zone those
+  pages edit, and so does clicking a zone's name on ZONES; the sampler's own
+  sample is zone 1. The waveform, markers, ROOT, reverse, loop, tune and
+  LEVEL then show and set that zone alone, and only its voices draw a
+  playhead. FOLLOW, off by default, selects the zone of each key as it
+  starts sounding. Envelopes, filter, drive and crush, voice, glide, stretch
+  and play mode are shared by every zone. A new zone plays its whole file. A
+  lane or modulation route on start, end, loop or tune moves every zone by
+  the same amount from its own setting. Slices and the stretch commit belong
+  to zone 1, and in Slice mode the zones are ignored and the strip is
+  hidden. A zone saved by 0.1.5 keeps the shared region it played, as its
+  own. Zones embed with the song like its sample. A copied sampler
   channel carries its zones' audio, so it pastes with every zone playing
   into a song opened or created since the copy (MOO-242). A zone whose file is
   missing says so on the page and plays nothing. Zones store a velocity range

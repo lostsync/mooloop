@@ -817,3 +817,12 @@ In the order worth playing:
     - The preset browser should head each source's group with the full name.
     - A new channel should be named by the model number ("ML-M1 2").
     - An old song with a "Drum Synth 1" channel should keep that name.
+32. **Key zones as regions** (MOO-463). Adam's own case: cut three chords
+    out of two guitar loops into one sampler. Load the first loop, set zone
+    1's start and end on SAMPLE around its first chord, add the second loop
+    and the first loop again on ZONES, pick each on the ZONE strip (or click
+    its name on ZONES) and set its start and end around its chord. Each key
+    should play only its own chord. Then try FOLLOW, the LEVEL trim, and a
+    lane on Start: every zone should move by the same amount. The session
+    test `three_chords_cut_from_two_files_each_play_their_own_region` pins
+    the levels; whether it feels right to work with is the question.

@@ -2447,6 +2447,12 @@ export component MainWindow inherits Window {
     in-out property <int> sampler-zone-base-low: 0;
     in-out property <int> sampler-zone-base-high: 127;
     in-out property <[SamplerZoneRow]> sampler-zones;
+    // The zone the sampler's SAMPLE and VOICE pages edit (MOO-463).
+    in-out property <int> sampler-zone-selected;
+    in-out property <string> sampler-zone-name;
+    in-out property <string> sampler-zone-description;
+    in-out property <bool> sampler-zone-follow;
+    in-out property <float> sampler-zone-level;
     in-out property <int> sampler-glide-mode: 1;
     in-out property <int> sampler-env-trigger;
     in-out property <int> choke-group;
@@ -2578,6 +2584,9 @@ export component MainWindow inherits Window {
     callback sampler-zone-keys-changed(int, int, int);
     callback sampler-zone-root-changed(int, int);
     callback sampler-zone-remove-clicked(int);
+    callback sampler-zone-select(int);
+    callback sampler-zone-follow-changed(bool);
+    callback sampler-zone-level-changed(float);
     callback sampler-glide-mode-changed(int);
     callback sampler-env-trigger-changed(int);
     callback choke-group-changed(int);
@@ -4953,6 +4962,14 @@ export component MainWindow inherits Window {
                                                 zone-keys-changed(index, low, high) => { root.sampler-zone-keys-changed(index, low, high); }
                                                 zone-root-changed(index, note) => { root.sampler-zone-root-changed(index, note); }
                                                 zone-remove-clicked(index) => { root.sampler-zone-remove-clicked(index); }
+                                                zone-selected: root.sampler-zone-selected;
+                                                zone-name: root.sampler-zone-name;
+                                                zone-description: root.sampler-zone-description;
+                                                zone-follow: root.sampler-zone-follow;
+                                                zone-level: root.sampler-zone-level;
+                                                zone-select(zone) => { root.sampler-zone-select(zone); }
+                                                zone-follow-changed(on) => { root.sampler-zone-follow-changed(on); }
+                                                zone-level-changed(db) => { root.sampler-zone-level-changed(db); }
                                                 glide-mode <=> root.sampler-glide-mode;
                                                 env-trigger <=> root.sampler-env-trigger;
                                                 choke-group <=> root.choke-group;
