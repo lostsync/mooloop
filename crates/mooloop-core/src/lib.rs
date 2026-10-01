@@ -240,7 +240,8 @@ pub use project::{
 pub use sampler::{
     clamp01, frames_per_bar, snap_bars_to_power_of_two, zone_for_note, EnvTimes, KeyRange,
     LoopMode, PlayMode, RetriggerMode, SampleCommit, SampleZone, SamplerParams, VelocityRange,
-    ZoneChoice, SliceMap, SliceMarker, StretchMode, VoiceMode,
+    ZoneChoice, ZoneRegion, SliceMap, SliceMarker, StretchMode, VoiceMode,
+    materialize_zone_regions, zone_level_gain, ZONE_LEVEL_DB_RANGE,
     DEFAULT_SLICE_BASE_NOTE, MAX_CHOKE_GROUP, MAX_SAMPLER_VOICES, MAX_SLICES, MAX_STRETCH_BARS,
     MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO, MIN_STRETCH_BARS, MIN_STRETCH_GRAIN, MIN_STRETCH_RATIO,
 };

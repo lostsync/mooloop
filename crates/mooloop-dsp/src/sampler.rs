@@ -34,8 +34,8 @@ use crate::synth_voice::{note_to_freq, MIN_GLIDE_S};
 use mooloop_core::mlm1::{EnvTrigger, GlideMode};
 use mooloop_core::sampler::LoopQuantize;
 use mooloop_core::{
-    clamp01, zone_for_note, EnvTimes, KeyRange, LoopMode, PlayMode, RetriggerMode, SampleZone,
-    SamplerParams, SliceMap, VoiceMode, ZoneChoice,
+    clamp01, zone_for_note, zone_level_gain, EnvTimes, KeyRange, LoopMode, PlayMode,
+    RetriggerMode, SampleZone, SamplerParams, SliceMap, VoiceMode, ZoneChoice, ZoneRegion,
     MAX_CHOKE_GROUP, MAX_LINEAR_GAIN, MAX_SAMPLER_VOICES, SAMPLER_TUNE_CENT_CLAMP,
     SAMPLER_TUNE_SEMITONE_CLAMP,
 };
@@ -72,14 +72,16 @@ pub struct ChannelAudioSnapshot {
     pub zones: Vec<ZoneAudio>,
 }
 
-/// One extra zone as a voice reads it: its decoded buffer, its keys, and the
-/// key that plays the buffer at its own pitch. `sample` is `None` for a zone
-/// whose file is missing, which plays nothing and steals nothing.
+/// One extra zone as a voice reads it: its decoded buffer, its keys, the key
+/// that plays the buffer at its own pitch, and its region. `sample` is `None`
+/// for a zone whose file is missing, which plays nothing and steals nothing.
+/// `region` is `None` for a zone that plays the base zone's region.
 #[derive(Clone)]
 pub struct ZoneAudio {
     pub keys: KeyRange,
     pub root_note: u8,
     pub sample: Option<Arc<SampleData>>,
+    pub region: Option<ZoneRegion>,
 }
 
 impl ZoneAudio {
@@ -88,8 +90,19 @@ impl ZoneAudio {
             keys: zone.keys,
             root_note: zone.root_note.min(127),
             sample,
+            region: zone.region,
         }
     }
+}
+
+/// What a pitched note found to play: the buffer, the key that plays it at
+/// its own pitch, and for an extra zone its position and region.
+struct ZoneHit<'a> {
+    sample: &'a Arc<SampleData>,
+    root: u8,
+    /// `None` for the base zone.
+    zone: Option<usize>,
+    region: Option<ZoneRegion>,
 }
 
 impl ChannelAudioSnapshot {
@@ -129,15 +142,25 @@ impl ChannelAudioSnapshot {
         self.sample.is_none() && self.slices.is_none() && self.zones.is_empty()
     }
 
-    /// The buffer and root key a pitched note plays, or `None` for a note no
-    /// zone holds or a zone with nothing loaded. `base_root` is the base
-    /// zone's, which lives in the patch rather than here.
-    fn zone_for(&self, note: u8, base_root: u8) -> Option<(&Arc<SampleData>, u8)> {
+    /// What a pitched note plays, or `None` for a note no zone holds or a
+    /// zone with nothing loaded. `base_root` is the base zone's, which lives
+    /// in the patch rather than here.
+    fn zone_for(&self, note: u8, base_root: u8) -> Option<ZoneHit<'_>> {
         match zone_for_note(note, self.keys, self.zones.iter().map(|zone| zone.keys))? {
-            ZoneChoice::Base => self.sample.as_ref().map(|sample| (sample, base_root.min(127))),
+            ZoneChoice::Base => self.sample.as_ref().map(|sample| ZoneHit {
+                sample,
+                root: base_root.min(127),
+                zone: None,
+                region: None,
+            }),
             ZoneChoice::Extra(index) => {
                 let zone = &self.zones[index];
-                zone.sample.as_ref().map(|sample| (sample, zone.root_note))
+                zone.sample.as_ref().map(|sample| ZoneHit {
+                    sample,
+                    root: zone.root_note,
+                    zone: Some(index),
+                    region: zone.region,
+                })
             }
         }
     }
@@ -435,6 +458,13 @@ struct Voice {
     /// for the base zone, the zone's own otherwise. A legato note may only
     /// slide within one zone, since another zone is another sample.
     root_note: u8,
+    /// Which extra zone this voice is playing, `None` for the base zone.
+    zone: Option<usize>,
+    /// The region of that zone, `None` for one that plays the base zone's:
+    /// the voice plays `region.apply(params, knob)` rather than `params`.
+    /// Taken at note-on and refreshed from the snapshot each block, so an
+    /// edit to the zone reaches a sounding note as a knob edit would.
+    region: Option<ZoneRegion>,
     /// The source-frame span this voice was given at note-on, in
     /// [`PlayMode::Slice`]; `None` in `Pitched`, where the region is the
     /// whole answer.
@@ -479,6 +509,8 @@ impl Voice {
             glide: Glide::new(note_to_freq(60)),
             glide_base: 1.0 / f64::from(note_to_freq(60)),
             root_note: 60,
+            zone: None,
+            region: None,
             slice: None,
             direction: 1.0,
             env: AdsrEnv::new(sample_rate),
@@ -489,6 +521,16 @@ impl Voice {
             hold_remaining: 0,
             loop_enabled: false,
             active: false,
+        }
+    }
+
+    /// The parameters this voice plays, given the sampler's resolved ones
+    /// and its knob: `params` itself for the base zone, its zone's region
+    /// in their place otherwise (see [`ZoneRegion::apply`]).
+    fn plays(&self, params: SamplerParams, knob: &SamplerParams) -> SamplerParams {
+        match self.region {
+            Some(region) => region.apply(params, knob),
+            None => params,
         }
     }
 
@@ -505,6 +547,8 @@ impl Voice {
         self.glide.jump_to(note_to_freq(60));
         self.glide_base = 1.0 / f64::from(note_to_freq(60));
         self.root_note = 60;
+        self.zone = None;
+        self.region = None;
         self.slice = None;
         self.direction = 1.0;
         self.env = AdsrEnv::new(sample_rate);
@@ -527,7 +571,11 @@ impl Voice {
 /// change inside one segment by construction.
 #[derive(Clone, Copy)]
 struct VoiceContext {
+    /// The sampler's resolved parameters: the knob with any lane or route
+    /// applied. What a base-zone voice plays.
     params: SamplerParams,
+    /// The knob alone, which an extra zone's region offsets from.
+    knob: SamplerParams,
     sample_rate: u32,
     bpm: f64,
     /// `2^(bits-1)` for `shape_frame`'s bit-reduction quantizer, a function
@@ -627,7 +675,13 @@ pub struct Sampler {
     /// Sample handles let go of on the audio thread, waiting for the host to
     /// take them off it. See [`Sampler::pop_retired`].
     retired: RetiredSamples,
+    /// The resolved parameters: the knob with whatever lanes and routes
+    /// last sent. What the base zone plays.
     params: SamplerParams,
+    /// The knob alone, as last set through [`Self::set_params`]. An extra
+    /// zone's region is offset by `params - knob`, so a lane on a region
+    /// parameter moves every zone by the same amount.
+    knob: SamplerParams,
     sample_rate: u32,
     voices: [Voice; MAX_SAMPLER_VOICES as usize],
     next_age: u64,
@@ -718,6 +772,7 @@ impl Sampler {
             last_audio: None,
             retired: RetiredSamples::new(),
             params,
+            knob: params,
             sample_rate,
             voices,
             next_age: 1,
@@ -734,8 +789,19 @@ impl Sampler {
         }
     }
 
-    /// Replace the parameter set. Called from the RT command drain.
+    /// Replace the parameter set: the knob, and what plays until a lane or
+    /// route next moves it. Called from the RT command drain.
     pub fn set_params(&mut self, mut params: SamplerParams) {
+        params.polyphony = params.polyphony.clamp(1, MAX_SAMPLER_VOICES);
+        params.choke_group = params.choke_group.min(MAX_CHOKE_GROUP);
+        self.knob = params;
+        self.set_resolved(params);
+    }
+
+    /// Replace what plays, leaving the knob alone: a lane's or a route's
+    /// value. The same clamping and voice reconfiguration as
+    /// [`Self::set_params`], and allocation-free.
+    fn set_resolved(&mut self, mut params: SamplerParams) {
         params.polyphony = params.polyphony.clamp(1, MAX_SAMPLER_VOICES);
         params.choke_group = params.choke_group.min(MAX_CHOKE_GROUP);
         self.params = params;
@@ -766,18 +832,15 @@ impl Sampler {
         }
     }
 
-    /// Apply one descriptor-addressed parameter, leaving the rest alone.
-    ///
-    /// Routed through `set_params` rather than writing the field directly so a
-    /// control-rate change gets exactly the same clamping and voice
-    /// reconfiguration a whole-struct update does. Both are non-allocating.
+    /// Apply one descriptor-addressed parameter from a lane or a route,
+    /// leaving the others and the knob alone.
     fn apply_param(&mut self, id: u32, value: f32) {
         let mut params = mooloop_core::GeneratorParams::Sampler(self.params);
         if params.set(id, value).is_none() {
             return;
         }
         if let mooloop_core::GeneratorParams::Sampler(params) = params {
-            self.set_params(params);
+            self.set_resolved(params);
         }
     }
 
@@ -1038,6 +1101,33 @@ impl Sampler {
         self.last_audio.clone()
     }
 
+    /// Give every voice sounding an extra zone that zone's current region,
+    /// so an edit to the zone is heard on a held note as a knob edit is.
+    ///
+    /// Reads the slot only while such a voice sounds, so a sampler with no
+    /// extra zones reads it at note-on alone, as it always has. A voice whose
+    /// zone has gone, or now holds another buffer, keeps the region it had.
+    fn refresh_zone_regions(&mut self) {
+        if !self.voices.iter().any(|voice| voice.active && voice.zone.is_some()) {
+            return;
+        }
+        let Some(audio) = self.current_audio() else {
+            return;
+        };
+        for voice in self.voices.iter_mut().filter(|voice| voice.active) {
+            let Some(zone) = voice.zone.and_then(|index| audio.zones.get(index)) else {
+                continue;
+            };
+            let same_buffer = match (&zone.sample, &voice.sample) {
+                (Some(zone), Some(held)) => Arc::ptr_eq(zone, held),
+                _ => false,
+            };
+            if same_buffer {
+                voice.region = zone.region;
+            }
+        }
+    }
+
     fn voice_limit(&self) -> usize {
         self.params.polyphony.clamp(1, MAX_SAMPLER_VOICES) as usize
     }
@@ -1168,16 +1258,26 @@ impl Sampler {
         //
         // Resolved before a voice is chosen: a note no zone holds has nothing
         // to play, so it must not steal a voice on its way to being silent.
-        let zone = if self.params.play_mode == PlayMode::Slice {
-            audio
-                .sample
-                .as_ref()
-                .map(|sample| (sample, self.params.root_note.min(127)))
+        let hit = if self.params.play_mode == PlayMode::Slice {
+            audio.sample.as_ref().map(|sample| ZoneHit {
+                sample,
+                root: self.params.root_note.min(127),
+                zone: None,
+                region: None,
+            })
         } else {
             audio.zone_for(note, self.params.root_note)
         };
-        let Some((sample, root_note)) = zone.map(|(sample, root)| (sample.clone(), root)) else {
+        let Some((sample, root_note, zone, region)) =
+            hit.map(|hit| (hit.sample.clone(), hit.root, hit.zone, hit.region))
+        else {
             return;
+        };
+        // What this note plays: the patch for the base zone, the patch with
+        // the zone's region in place for an extra one.
+        let plays = match region {
+            Some(region) => region.apply(self.params, &self.knob),
+            None => self.params,
         };
         // A legato note slides the sounding voice only within its zone:
         // another zone is another sample, which has to be struck.
@@ -1266,7 +1366,7 @@ impl Sampler {
         if displaces && self.retired.samples_full() {
             return;
         }
-        let (start, end) = Self::resolve_playback_bounds(self.params, len, slice);
+        let (start, end) = Self::resolve_playback_bounds(plays, len, slice);
         let age = self.next_age;
         self.next_age = self.next_age.wrapping_add(1).max(1);
 
@@ -1296,11 +1396,9 @@ impl Sampler {
         if !voice.active {
             return;
         }
-        voice.play_pos = if self.params.reverse {
-            end - 1.0
-        } else {
-            start
-        };
+        voice.play_pos = if plays.reverse { end - 1.0 } else { start };
+        voice.zone = zone;
+        voice.region = region;
         voice.slice = slice;
         voice.key_pitch_ratio = key_pitch_ratio;
         // The glide rests on the struck note. `key_pitch_ratio` keeps its
@@ -1316,13 +1414,13 @@ impl Sampler {
             }
             None => voice.glide.jump_to(struck_hz),
         }
-        voice.playback_rate = key_pitch_ratio * tuning_ratio(self.params);
-        voice.direction = if self.params.reverse { -1.0 } else { 1.0 };
+        voice.playback_rate = key_pitch_ratio * tuning_ratio(plays);
+        voice.direction = if plays.reverse { -1.0 } else { 1.0 };
         voice.velocity_amp = f32::from(velocity) / 127.0;
         voice.filter = [Svf::new(), Svf::new()];
         voice.held_frame = [0.0, 0.0];
         voice.hold_remaining = 0;
-        voice.loop_enabled = self.params.loop_mode != LoopMode::Off;
+        voice.loop_enabled = plays.loop_mode != LoopMode::Off;
         voice.env.configure(self.params.amp_env());
         voice.env.note_on();
         voice.filter_env.configure(self.params.resolved_filter_env());
@@ -1348,7 +1446,7 @@ impl Sampler {
         self.last_audio.as_ref().is_some_and(|audio| {
             audio
                 .zone_for(note, self.params.root_note)
-                .is_some_and(|(sample, root)| plays_zone(&self.voices[0], audio, sample, root))
+                .is_some_and(|hit| plays_zone(&self.voices[0], audio, hit.sample, hit.root))
         })
     }
 
@@ -1722,6 +1820,7 @@ impl Sampler {
     ) {
         let VoiceContext {
             params,
+            knob,
             sample_rate,
             bpm,
             bit_scale,
@@ -1732,6 +1831,11 @@ impl Sampler {
         if !voice.active {
             return;
         }
+        // The region, loop and tune this voice's zone plays. Only those
+        // fields differ from `params`, so the shaping constants `cx` carries
+        // still hold.
+        let params = voice.plays(params, &knob);
+        let zone_gain = zone_level_gain(params.zone_level_db);
         // The sample, the resolved bounds, and the loop mode are all fixed
         // for the whole segment -- events are what change them, and the block
         // is already split at every event. Resolving them once here is both
@@ -1813,7 +1917,10 @@ impl Sampler {
             // The trim is the last stage before the bus, after the shaping
             // in `shape_frame`: it is the patch's output level, not another
             // colour control.
-            let amp = voice.env.level * voice.velocity_amp * output_gain.advance();
+            let mut amp = voice.env.level * voice.velocity_amp * output_gain.advance();
+            if zone_gain != 1.0 {
+                amp *= zone_gain;
+            }
 
             // Fetch the frame through the band-limited reader. The region
             // it is told about is the one the head is actually in: a looping
@@ -1935,11 +2042,12 @@ impl Sampler {
             self.render_span(bus, start, end);
             return;
         }
-        let tuning = tuning_ratio(self.params);
+        let (params, knob) = (self.params, self.knob);
         let mut pos = start;
         while pos < end {
             let next = (pos + GLIDE_STEP).min(end);
             for voice in self.voices.iter_mut().filter(|v| v.active && v.glide.is_sliding()) {
+                let tuning = tuning_ratio(voice.plays(params, &knob));
                 voice.key_pitch_ratio = f64::from(voice.glide.hz()) * voice.glide_base;
                 voice.playback_rate = voice.key_pitch_ratio * tuning;
                 voice.glide.skip(next - pos);
@@ -1966,6 +2074,7 @@ impl Sampler {
         let drive = clamp01(params.drive);
         let cx = VoiceContext {
             params,
+            knob: self.knob,
             sample_rate: self.sample_rate,
             bpm: self.bpm,
             bit_scale,
@@ -2058,6 +2167,7 @@ impl AudioNode for Sampler {
             self.release_all();
         }
         self.was_playing = ctx.playing;
+        self.refresh_zone_regions();
 
         // Split the block at event offsets: render, apply event, repeat.
         let mut pos = 0usize;
@@ -4766,9 +4876,153 @@ mod tests {
                 keys: KeyRange::new(zone_low, 127),
                 root_note: 72,
                 sample: Some(zone.clone()),
+                region: None,
             }],
         );
         Sampler::new(slot(audio), params, 48_000)
+    }
+
+    /// A buffer whose every frame holds its own index over its length, so
+    /// where a voice is reading is the level it plays.
+    fn ramp(len: usize) -> Arc<SampleData> {
+        Arc::new(SampleData {
+            frames: (0..len).map(|i| [i as f32 / len as f32; 2]).collect(),
+            sample_rate: 48_000,
+            root_note: 60,
+        })
+    }
+
+    /// One zone above the base's keys (from C4, root C4), playing `region`,
+    /// both from ramps of `len`.
+    fn region_audio(len: usize, region: Option<ZoneRegion>) -> ChannelAudioSnapshot {
+        ChannelAudioSnapshot::for_sampler(
+            Some(ramp(len)),
+            &SliceMap::new(),
+            KeyRange::new(0, 59),
+            vec![ZoneAudio {
+                keys: KeyRange::new(60, 127),
+                root_note: 60,
+                sample: Some(ramp(len)),
+                region,
+            }],
+        )
+    }
+
+    /// Strike `note` and render `frames`, with `events` (lane values) landing
+    /// before the note.
+    fn strike(sampler: &mut Sampler, note: u8, frames: usize, events: &[Event]) -> StereoBus {
+        let mut list = EventList::empty();
+        for event in events {
+            list.push(TimedEvent { offset: 0, event: *event });
+        }
+        list.push(on(1, note));
+        let mut bus = StereoBus::with_capacity(frames);
+        sampler.process(&ctx(frames, 48_000), &mut bus, &list, None);
+        bus
+    }
+
+    /// **Each zone plays its own region (MOO-463).** The base zone plays the
+    /// patch's start and end, the extra zone its own, and each stops at its
+    /// own end.
+    #[test]
+    fn each_zone_plays_its_own_region() {
+        const LEN: usize = 4_800;
+        let params = SamplerParams { start: 0.0, end: 0.25, ..zone_params() };
+        let region = ZoneRegion { start: 0.5, end: 0.75, ..ZoneRegion::default() };
+        let mut sampler = Sampler::new(slot(region_audio(LEN, Some(region))), params, 48_000);
+
+        let base = strike(&mut sampler, 48, 100, &[]);
+        assert!(base.l[10] < 0.25, "the base zone reads its own region: {}", base.l[10]);
+        sampler.reset();
+        let zone = strike(&mut sampler, 60, 2_000, &[]);
+        assert!((0.5..0.75).contains(&zone.l[10]), "the zone reads from its start: {}", zone.l[10]);
+        assert!(zone.l[..1_100].iter().all(|value| *value < 0.75));
+        assert_eq!(sampler.active_voice_count(), 0, "the zone stopped at its own end");
+        assert!(zone.l[1_300..].iter().all(|value| *value == 0.0));
+    }
+
+    /// **A lane moves every zone by the same amount (MOO-463).** A lane
+    /// takes the knob's start from 0.1 to 0.2; the zone set to 0.5 starts at
+    /// 0.6, and the base zone at the lane's 0.2.
+    #[test]
+    fn a_lane_on_start_moves_every_zone_from_its_own_setting() {
+        const LEN: usize = 48_000;
+        let params = SamplerParams { start: 0.1, ..zone_params() };
+        let region = ZoneRegion { start: 0.5, ..ZoneRegion::default() };
+        let lane = [Event::ParamValue { id: mooloop_core::generator::SAMPLER_PARAM_START, value: 0.2 }];
+
+        let mut sampler = Sampler::new(slot(region_audio(LEN, Some(region))), params, 48_000);
+        strike(&mut sampler, 60, 16, &lane);
+        assert!((sampler.voices[0].play_pos / LEN as f64 - 0.6).abs() < 1e-3);
+        assert_eq!(sampler.knob.start, 0.1, "a lane does not move the knob");
+
+        sampler.reset();
+        strike(&mut sampler, 48, 16, &lane);
+        assert!((sampler.voices[0].play_pos / LEN as f64 - 0.2).abs() < 1e-3);
+    }
+
+    /// **A zone saved before regions sounds as it did.** One that plays
+    /// the base zone's region (`None`, the old behaviour) and one given a
+    /// copy of it on load render bit for bit alike, under a lane too.
+    #[test]
+    fn a_copied_region_renders_exactly_as_a_shared_one() {
+        const LEN: usize = 9_600;
+        let params = SamplerParams {
+            start: 0.1,
+            end: 0.9,
+            loop_mode: LoopMode::Forward,
+            loop_start: 0.3,
+            loop_end: 0.6,
+            tune_cents: 13.0,
+            ..zone_params()
+        };
+        let lane = [
+            Event::ParamValue { id: mooloop_core::generator::SAMPLER_PARAM_LOOP_END, value: 0.55 },
+            Event::ParamValue { id: mooloop_core::generator::SAMPLER_PARAM_TUNE_CENTS, value: 40.0 },
+        ];
+        let render = |region| {
+            let mut sampler = Sampler::new(slot(region_audio(LEN, region)), params, 48_000);
+            strike(&mut sampler, 67, 6_000, &lane)
+        };
+        let shared = render(None);
+        let copied = render(Some(ZoneRegion::of_base(&params)));
+        assert!(shared.l.iter().any(|value| *value != 0.0));
+        assert_eq!(shared.l, copied.l);
+        assert_eq!(shared.r, copied.r);
+    }
+
+    /// An edit to a zone's region reaches a note already sounding in it, and
+    /// its level trim scales it.
+    #[test]
+    fn a_zone_edit_reaches_a_held_note_and_its_level_scales_it() {
+        const LEN: usize = 48_000;
+        let params = zone_params();
+        let region = ZoneRegion { loop_mode: LoopMode::Forward, ..ZoneRegion::default() };
+        let quieter = ZoneRegion { level_db: -6.0206, ..region };
+        // Two samplers struck alike; one has its zone republished at -6 dB.
+        let run = |edit: ZoneRegion| {
+            let audio_slot = slot(region_audio(LEN, Some(region)));
+            let mut sampler = Sampler::new(audio_slot.clone(), params, 48_000);
+            strike(&mut sampler, 60, 64, &[]);
+            // A snapshot of new buffers: the voice keeps the region it has
+            // rather than take one from a zone that now plays something else.
+            audio_slot.store(Some(Arc::new(region_audio(LEN, Some(edit)))));
+            let mut bus = StereoBus::with_capacity(64);
+            sampler.process(&ctx(64, 48_000), &mut bus, &EventList::empty(), None);
+            assert_eq!(sampler.voices[0].region, Some(region));
+            // Over the same buffer, the edit reaches the sounding voice.
+            let mut audio = region_audio(LEN, Some(edit));
+            audio.zones[0].sample = sampler.voices[0].sample.clone();
+            audio_slot.store(Some(Arc::new(audio)));
+            while sampler.pop_retired().is_some() {}
+            let mut after = StereoBus::with_capacity(64);
+            sampler.process(&ctx(64, 48_000), &mut after, &EventList::empty(), None);
+            assert_eq!(sampler.voices[0].region, Some(edit));
+            after.l[32]
+        };
+        let (unity, trimmed) = (run(region), run(quieter));
+        assert!(unity > 0.0);
+        assert!((trimmed / unity - 0.5).abs() < 1e-3, "{trimmed} against {unity}");
     }
 
     fn zone_params() -> SamplerParams {

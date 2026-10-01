@@ -831,6 +831,15 @@ pub struct SamplerParams {
     /// (`Legato`), keeping its envelopes and its place in the sample.
     #[serde(default)]
     pub env_trigger: crate::mlm1::EnvTrigger,
+    /// The base zone's level trim in dB, the one region field a sampler had
+    /// no knob for before zones had regions; see [`ZoneRegion::level_db`].
+    /// Not a descriptor, so nothing automates it. Omitted at 0 dB.
+    #[serde(default, skip_serializing_if = "is_zero_db")]
+    pub zone_level_db: f32,
+}
+
+fn is_zero_db(value: &f32) -> bool {
+    *value == 0.0
 }
 
 fn default_retune_live() -> bool {
@@ -902,6 +911,7 @@ impl Default for SamplerParams {
             glide: 0.0,
             glide_mode: crate::mlm1::GlideMode::default(),
             env_trigger: crate::mlm1::EnvTrigger::default(),
+            zone_level_db: 0.0,
         }
     }
 }
@@ -1050,17 +1060,18 @@ fn default_zone_root() -> u8 {
     60
 }
 
-/// One extra zone of a sampler: its own sample, the keys it plays, and the
-/// key that plays that sample at its own pitch (MOO-14).
+/// One extra zone of a sampler: its own sample, the keys it plays, the key
+/// that plays that sample at its own pitch, and its own region of the sample.
 ///
-/// The sampler's existing sample is the *base* zone and is not one of these:
-/// it keeps its root in `SamplerParams::root_note`, its keys in
-/// `SamplerState::keys`, and alone owns the slices and the stretch commit,
-/// because a slice map indexes one buffer's frames and a commit is a render
-/// of one buffer. An extra zone plays its own sample pitched from its own
-/// root, stretched live like any voice, never sliced or committed. The
-/// sampler's start, end and loop points are fractions, so they apply to every
-/// zone's sample alike.
+/// The sampler's existing sample is the *base* zone (zone 1 on the face) and
+/// is not one of these: its region is the region fields of `SamplerParams`
+/// (with [`SamplerParams::zone_level_db`]), its keys `SamplerState::keys`,
+/// and it alone owns the slices and the stretch commit, because a slice map
+/// indexes one buffer's frames and a commit is a render of one buffer. An
+/// extra zone plays its own sample pitched from its own root over its own
+/// [`ZoneRegion`], stretched live like any voice, never sliced or committed.
+/// Everything else -- envelopes, filter, drive and crush, voice, glide,
+/// stretch and play mode -- is the sampler's, shared by every zone.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SampleZone {
     #[serde(default)]
@@ -1071,17 +1082,189 @@ pub struct SampleZone {
     pub root_note: u8,
     #[serde(default)]
     pub sample: crate::SampleReference,
+    /// This zone's region, or `None` for a zone saved before zones had one.
+    ///
+    /// `None` plays the base zone's region, which is what such a zone always
+    /// did, and [`materialize_zone_regions`] gives it a copy on load so the
+    /// zone is independent from then on. Omitted when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<ZoneRegion>,
 }
 
 impl Default for SampleZone {
+    /// A fresh zone, with a fresh region of its own.
     fn default() -> Self {
         Self {
             keys: KeyRange::FULL,
             velocity: VelocityRange::FULL,
             root_note: default_zone_root(),
             sample: crate::SampleReference::Empty,
+            region: Some(ZoneRegion::default()),
         }
     }
+}
+
+impl SampleZone {
+    /// The region this zone plays when the sampler's knobs are `base`: its
+    /// own, or the base zone's for a zone that has none.
+    pub fn region_or(&self, base: &SamplerParams) -> ZoneRegion {
+        self.region.unwrap_or_else(|| ZoneRegion::of_base(base))
+    }
+
+    /// This zone's region, made its own first if it was reading the base
+    /// zone's, so an edit to one field cannot move the others.
+    pub fn region_mut(&mut self, base: &SamplerParams) -> &mut ZoneRegion {
+        let region = self.region_or(base);
+        self.region.get_or_insert(region)
+    }
+}
+
+/// The range of a zone's level trim, in dB. The floor is silence.
+pub const ZONE_LEVEL_DB_RANGE: (f32, f32) = (-48.0, 12.0);
+
+/// The part of a sampler patch each key zone owns (Adam, 2026-09-30): where
+/// in its sample it plays, how it loops, how it is tuned, and how loud it is
+/// against the other zones.
+///
+/// Points are fractions of the zone's own sample, as in [`SamplerParams`];
+/// tune is semitones and cents; `level_db` is a trim in dB within
+/// [`ZONE_LEVEL_DB_RANGE`]. The default is a fresh zone: the whole file, no
+/// loop, no transposition, unity level. A field missing from a saved region
+/// takes the fresh zone's value.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ZoneRegion {
+    pub start: f32,
+    pub end: f32,
+    pub reverse: bool,
+    pub loop_start: f32,
+    pub loop_end: f32,
+    pub loop_mode: LoopMode,
+    pub loop_crossfade_ms: f32,
+    pub tune_semitones: f32,
+    pub tune_cents: f32,
+    pub level_db: f32,
+}
+
+impl Default for ZoneRegion {
+    fn default() -> Self {
+        Self {
+            level_db: 0.0,
+            ..Self::of_base(&SamplerParams::default())
+        }
+    }
+}
+
+impl ZoneRegion {
+    /// The base zone's region, read out of the sampler's knobs.
+    pub fn of_base(params: &SamplerParams) -> Self {
+        Self {
+            start: params.start,
+            end: params.end,
+            reverse: params.reverse,
+            loop_start: params.loop_start,
+            loop_end: params.loop_end,
+            loop_mode: params.loop_mode,
+            loop_crossfade_ms: params.loop_crossfade_ms,
+            tune_semitones: params.tune_semitones,
+            tune_cents: params.tune_cents,
+            level_db: params.zone_level_db,
+        }
+    }
+
+    /// Write this region into the base zone's fields of `params`.
+    pub fn store_in_base(self, params: &mut SamplerParams) {
+        params.start = self.start;
+        params.end = self.end;
+        params.reverse = self.reverse;
+        params.loop_start = self.loop_start;
+        params.loop_end = self.loop_end;
+        params.loop_mode = self.loop_mode;
+        params.loop_crossfade_ms = self.loop_crossfade_ms;
+        params.tune_semitones = self.tune_semitones;
+        params.tune_cents = self.tune_cents;
+        params.zone_level_db = self.level_db;
+    }
+
+    /// The parameters a voice of this zone plays: `resolved` (the sampler's
+    /// knobs with any lane or route applied) with this zone's region in
+    /// place of the base zone's.
+    ///
+    /// A lane or route on a region parameter moves every zone by the same
+    /// amount from its own setting: each continuous field is this zone's
+    /// value plus `resolved - knob`. A switch (reverse, loop mode) cannot be
+    /// offset, so while one is driven away from its knob the driven value
+    /// plays in every zone. A field equal to its knob takes the resolved
+    /// value outright, so a zone that copied the base zone's region plays
+    /// exactly what the base zone does until one of them is edited. The
+    /// result is not clamped: the voice resolves points into its own sample
+    /// and keeps start before end and the loop inside the region.
+    pub fn apply(self, resolved: SamplerParams, knob: &SamplerParams) -> SamplerParams {
+        fn follow(own: f32, knob: f32, resolved: f32) -> f32 {
+            if own == knob {
+                resolved
+            } else if resolved == knob {
+                own
+            } else {
+                own + (resolved - knob)
+            }
+        }
+        fn switch<T: PartialEq + Copy>(own: T, knob: T, resolved: T) -> T {
+            if resolved == knob {
+                own
+            } else {
+                resolved
+            }
+        }
+        SamplerParams {
+            start: follow(self.start, knob.start, resolved.start),
+            end: follow(self.end, knob.end, resolved.end),
+            reverse: switch(self.reverse, knob.reverse, resolved.reverse),
+            loop_start: follow(self.loop_start, knob.loop_start, resolved.loop_start),
+            loop_end: follow(self.loop_end, knob.loop_end, resolved.loop_end),
+            loop_mode: switch(self.loop_mode, knob.loop_mode, resolved.loop_mode),
+            loop_crossfade_ms: follow(
+                self.loop_crossfade_ms,
+                knob.loop_crossfade_ms,
+                resolved.loop_crossfade_ms,
+            ),
+            tune_semitones: follow(self.tune_semitones, knob.tune_semitones, resolved.tune_semitones),
+            tune_cents: follow(self.tune_cents, knob.tune_cents, resolved.tune_cents),
+            zone_level_db: self.level_db,
+            ..resolved
+        }
+    }
+
+    /// The level trim as a linear gain; see [`zone_level_gain`].
+    pub fn level_gain(&self) -> f32 {
+        zone_level_gain(self.level_db)
+    }
+}
+
+/// A zone level trim in dB as a linear gain: exactly 1.0 at 0 dB, silence at
+/// or below the floor of [`ZONE_LEVEL_DB_RANGE`] (and for NaN), capped at
+/// its top.
+pub fn zone_level_gain(level_db: f32) -> f32 {
+    if level_db == 0.0 {
+        return 1.0;
+    }
+    if level_db.is_nan() || level_db <= ZONE_LEVEL_DB_RANGE.0 {
+        return 0.0;
+    }
+    10.0f32.powf(level_db.min(ZONE_LEVEL_DB_RANGE.1) / 20.0)
+}
+
+/// Give every zone with no region of its own a copy of the base zone's, read
+/// from the sampler's knobs `base`. Run once as a document loads, so a zone
+/// saved before zones had regions sounds as it did and is independent from
+/// then on. Returns how many zones it gave a region.
+pub fn materialize_zone_regions(base: &SamplerParams, zones: &mut [SampleZone]) -> usize {
+    let mut count = 0;
+    for zone in zones.iter_mut().filter(|zone| zone.region.is_none()) {
+        zone.region = Some(ZoneRegion::of_base(base));
+        count += 1;
+    }
+    count
 }
 
 /// Which zone a note plays, if any.
@@ -1140,6 +1323,90 @@ mod zone_tests {
         assert_eq!(KeyRange::new(10, 200).repaired(), KeyRange::new(10, 127));
         let velocity = VelocityRange { low: 255, high: 3 }.repaired();
         assert_eq!((velocity.low, velocity.high), (3, 127));
+    }
+
+    /// A lane moves every zone by the same amount from its own setting, and
+    /// a switch it drives plays in every zone while it is driven.
+    #[test]
+    fn a_driven_region_moves_each_zone_by_the_same_amount() {
+        let knob = SamplerParams {
+            start: 0.1,
+            tune_semitones: 2.0,
+            ..SamplerParams::default()
+        };
+        let own = ZoneRegion {
+            start: 0.5,
+            end: 0.75,
+            tune_semitones: -3.0,
+            ..ZoneRegion::default()
+        };
+        // Undriven: the zone plays its own region exactly.
+        let played = own.apply(knob, &knob);
+        assert_eq!((played.start, played.end, played.tune_semitones), (0.5, 0.75, -3.0));
+        // A lane takes start from 0.1 to 0.2 and tune up a semitone.
+        let resolved = SamplerParams {
+            start: 0.2,
+            tune_semitones: 3.0,
+            reverse: true,
+            ..knob
+        };
+        let played = own.apply(resolved, &knob);
+        assert!((played.start - 0.6).abs() < 1.0e-6, "{}", played.start);
+        assert_eq!(played.tune_semitones, -2.0);
+        assert!(played.reverse, "a driven switch plays in every zone");
+        assert_eq!(played.end, 0.75, "an undriven field is the zone's own");
+    }
+
+    /// A zone that copied the base zone's region plays the base zone's
+    /// resolved values bit for bit, which is what a zone saved before
+    /// regions did.
+    #[test]
+    fn a_copied_region_follows_the_base_exactly() {
+        let knob = SamplerParams {
+            start: 0.1,
+            loop_end: 0.7,
+            ..SamplerParams::default()
+        };
+        let resolved = SamplerParams {
+            start: 0.123_456_7,
+            loop_end: 0.333,
+            loop_mode: LoopMode::Forward,
+            ..knob
+        };
+        assert_eq!(ZoneRegion::of_base(&knob).apply(resolved, &knob), resolved);
+    }
+
+    /// A zone saved before regions loads with none and is given a copy of
+    /// the sampler's; a fresh zone has its own default; a sampler with no
+    /// level trim saves no `zone_level_db`.
+    #[test]
+    fn a_zone_saved_before_regions_copies_the_sampler_once() {
+        let old: SampleZone = toml::from_str("root_note = 64\nkeys = { low = 60, high = 72 }\n")
+            .expect("a 0.1.5 zone parses");
+        assert_eq!(old.region, None);
+        let base = SamplerParams {
+            start: 0.25,
+            tune_cents: 7.0,
+            ..SamplerParams::default()
+        };
+        let mut zones = [old.clone(), SampleZone::default()];
+        assert_eq!(materialize_zone_regions(&base, &mut zones), 1);
+        assert_eq!(zones[0].region, Some(ZoneRegion::of_base(&base)));
+        assert_eq!(zones[1].region, Some(ZoneRegion::default()));
+        let saved = toml::to_string(&zones[0]).expect("serializes");
+        let back: SampleZone = toml::from_str(&saved).expect("round-trips");
+        assert_eq!(back, zones[0]);
+        assert!(!toml::to_string(&old).unwrap().contains("region"));
+        assert!(!toml::to_string(&SamplerParams::default()).unwrap().contains("zone_level_db"));
+    }
+
+    #[test]
+    fn a_zone_level_is_unity_at_zero_and_silent_at_its_floor() {
+        assert_eq!(zone_level_gain(0.0), 1.0);
+        assert_eq!(zone_level_gain(ZONE_LEVEL_DB_RANGE.0), 0.0);
+        assert_eq!(zone_level_gain(f32::NAN), 0.0);
+        assert!((zone_level_gain(-6.0) - 0.501).abs() < 1.0e-3);
+        assert_eq!(zone_level_gain(40.0), zone_level_gain(ZONE_LEVEL_DB_RANGE.1));
     }
 }
 
