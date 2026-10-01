@@ -305,6 +305,17 @@ addition:
   normalizing, auto-bumped names, remembered settings and presets. MOO-180 is
   the one the rest stand on. The pattern render is also the groundwork for
   render-in-place once clips exist, which stays after 0.2.0.
+- **Song automation joins, 2026-09-30.** Adam, asked whether it is before or
+  after the freeze: *"yeah probably before 0.2.0, almost certainly"*. It
+  reverses the 2026-09-17 ruling that there is none. Pattern lanes stay as
+  clip automation, and song lanes are added in a panel under the playlist.
+  It is the Linear project **Song automation**, planned as
+  `plans/song-automation/` (nine steps, MOO-470 to MOO-477 and MOO-419).
+- **Undo as incremental commands joins, 2026-09-30.** Adam, on MOO-466:
+  *"answer is 1 now, 2 by 0.2.0 if not sooner"*. Option 1 is MOO-466: channel,
+  track, pattern and preset edits stop rebuilding the engine. Option 2,
+  undo and redo applying the difference the same way instead of a whole-song
+  install, is MOO-469.
 
 Plus, from §3: the keyboard pass, the plan filing, and the Buffer tempo bug.
 
@@ -342,7 +353,10 @@ earlier, not by leaving scope.
   editors that nearly agree. Adam, 2026-09-26: it is one idea (automation
   written in something tracker-inspired), and *"something i am interested in
   doing. i havent decided on it"*. Out, and not a question waiting on him:
-  it comes back only when he raises it.
+  it comes back only when he raises it. **Song automation itself was decided
+  on its own on 2026-09-30** (in, above). It shares the pattern lanes' point
+  type and, by its last step, their editor, so a tracker-style view would
+  still be one view of one data model, not a third editor.
 - **A curated factory bank.** Every device ships presets to prove its
   architecture reaches its range; authoring content by taste across every
   device is a deliberate later push.

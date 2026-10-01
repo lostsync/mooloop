@@ -132,6 +132,14 @@ things they do very well."* So the three-way fork above is one idea, and it is
 an interest rather than a decision. Nobody designs or builds it until he
 raises it himself.
 
+**2026-09-30: song automation was decided on its own**, without the
+tracker. On MOO-419 Adam put a track's automation in the playlist editor and
+kept pattern lanes as *"basically 'clip automation'"*. It is planned as
+`plans/song-automation/`. To keep this entry's warning about two editors that
+nearly agree, the plan gives song lanes the pattern lanes' point type and, in
+its last step, their editor. The tracker idea above is still Adam's to raise,
+and would now be a view of that one model.
+
 Recorded while writing `docs/plans/archive/console/`, which is the mixer half of the
 same morning list and which deliberately does not touch the playlist.
 

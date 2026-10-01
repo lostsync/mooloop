@@ -13,6 +13,22 @@ file is the narrative -- how each plan got where it is and what it is worth
 reading before reopening -- and where it states a plan's state, it is a
 summary as of its date.
 
+`song-automation/` **was planned 2026-09-30 and is not started.**
+- **What it is.** Automation lanes on the song's timeline, in a panel under
+  the playlist, beside the pattern lanes, which stay as clip automation.
+- **Where it came from.** Adam answered MOO-419 (a track's fader can't be
+  automated) by putting the lane in the playlist editor. He listed what the
+  piano roll's lane lacks: cascading menus, curves, selection and a context
+  menu, several lanes at once, and resizing. Then he confirmed the reversal
+  of his 2026-09-17 "no song automation": *"you can write a plan"*.
+- **The shape.** Nine steps, ordered so a song lane is heard by step 03. The
+  last moves the piano roll onto the same editor, so there is one lane editor.
+- **Open.** One question: which lane wins when both drive a parameter
+  (MOO-471).
+- **Scope.** In for 0.2.0.
+
+Read its README for the survey and what it reverses and keeps.
+
 `icon-pass/` **was planned 2026-09-26 and is not started.** It's the "text
 label -> icon pass" `ENHANCEMENTS.md` deferred as polish over a moving shell.
 Adam brought it back when MOO-273 needed an icon for each device kind, and

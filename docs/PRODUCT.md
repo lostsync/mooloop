@@ -216,12 +216,16 @@ These are firm enough to build against:
   DAW-style lanes tied to the mixer's tracks are an open idea for later, and
   the one thing it must not repeat is how FL Studio grafted them onto its
   playlist.
-- **There is no song-level automation.** (Adam, 2026-09-17.) To automate a
-  ramp across a pattern played twice, clone the pattern and draw half the ramp
-  in each, as in Impulse Tracker. Song automation is part of the tracker
-  question in `IDEAS.md`, not a separate feature. **Under review since
-  2026-09-30:** Adam wants a track's automation in the playlist editor as song
-  automation (open: MOO-419).
+- **Song automation lives in the playlist; pattern lanes stay.** (Adam,
+  2026-09-30, reversing his 2026-09-17 *"there is no song-level automation"*:
+  *"yeah i guess i changed my mind. yeah pattern lanes stay. that's basically
+  'clip automation'."*) A song lane belongs to the song's timeline and is
+  drawn in a panel under the playlist's pattern rows, grouped by track and
+  then device. A pattern lane is clip automation and replays wherever its
+  pattern is placed. The playlist's rows stay patterns, so this doesn't
+  repeat FL Studio's graft (above). Both kinds are one point type and, in the
+  end, one editor, so the tracker question in `IDEAS.md` stays open as a view
+  of the same data. Planned as `plans/song-automation/`, before 0.2.0.
 - **Audio is recorded into the channel's sampler**, on the selected channel
   and pattern, and the channel's one input menu decides whether record-arm
   captures audio or notes. (Adam, 2026-09-17; `plans/archive/audio-recording/`.)

@@ -71,8 +71,8 @@ builds: see `docs/OPERATIONS.md`, *Working In A Cloud Container*.
 **MOO-289** closed on 2026-09-30: Adam found the launch case fixed on recent
 builds. **MOO-237**, Core Audio's latency, still waits on his Mac check. The
 rest of 0.1.6 is whatever open issue carries the label in Linear (on
-2026-09-30: MOO-462, the layer branch's controls, which has one small question
-open; MOO-86; MOO-298; and MOO-456, which is on `main` and wants a look in the
+2026-09-30: MOO-462, the layer branch's controls, every question answered;
+MOO-86; MOO-298; and MOO-456, which is on `main` and wants a look in the
 running app).
 
 Steps 03-05 of the icon pass are 0.1.7.
