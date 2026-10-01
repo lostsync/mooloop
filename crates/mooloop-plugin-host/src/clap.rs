@@ -659,20 +659,47 @@ impl Drop for ClapInstance {
     }
 }
 
+/// CLAP's name for `api`.
+fn clap_api(api: GuiApi) -> GuiApiType<'static> {
+    match api {
+        GuiApi::X11 => GuiApiType::X11,
+        GuiApi::Cocoa => GuiApiType::COCOA,
+    }
+}
+
+/// The API CLAP's `api` names, or `None` for one the host does not speak.
+fn neutral_api(api: GuiApiType) -> Option<GuiApi> {
+    if api == GuiApiType::X11 {
+        Some(GuiApi::X11)
+    } else if api == GuiApiType::COCOA {
+        Some(GuiApi::Cocoa)
+    } else {
+        None
+    }
+}
+
 fn clap_config(config: GuiConfig) -> GuiConfiguration<'static> {
     GuiConfiguration {
-        api_type: match config.api {
-            GuiApi::X11 => GuiApiType::X11,
-        },
+        api_type: clap_api(config.api),
         is_floating: config.floating,
     }
 }
 
+/// `window` as CLAP's `clap_window`: an X11 id as a number, a Cocoa view as
+/// its `NSView*`.
 fn clap_window(window: NativeWindow) -> Result<Window<'static, 'static>, GuiError> {
     match window.api {
         GuiApi::X11 => std::ffi::c_ulong::try_from(window.id)
             .map(Window::from_x11_handle)
             .map_err(|_| GuiError::Refused("take an X11 window id this wide")),
+        GuiApi::Cocoa => {
+            let ns_view = window
+                .as_ns_view()
+                .ok_or(GuiError::Refused("take an NSView address this wide"))?;
+            // SAFETY: this only stores the pointer in a `clap_window`; it is
+            // dereferenced by the plugin, under `NativeWindow`'s contract.
+            Ok(unsafe { Window::from_cocoa_nsview(ns_view) })
+        }
     }
 }
 
@@ -693,6 +720,16 @@ impl ClapInstance {
         }
         Ok(gui)
     }
+
+    /// `window` as CLAP's, refused unless it is in the API the GUI is open
+    /// in: a plugin reads `clap_window`'s union by the API it opened with.
+    fn window_for_open_gui(&self, window: NativeWindow) -> Result<Window<'static, 'static>, GuiError> {
+        match self.gui_open {
+            Some(config) if config.api == window.api => clap_window(window),
+            Some(_) => Err(GuiError::Refused("take a window of another windowing API")),
+            None => Err(GuiError::NotOpen),
+        }
+    }
 }
 
 impl HostedGui for ClapInstance {
@@ -706,8 +743,8 @@ impl HostedGui for ClapInstance {
     fn preferred_api(&mut self) -> Option<GuiConfig> {
         let gui = self.gui_ext().ok()?;
         let preferred = gui.get_preferred_api(&self.instance.plugin_handle())?;
-        (preferred.api_type == GuiApiType::X11).then_some(GuiConfig {
-            api: GuiApi::X11,
+        Some(GuiConfig {
+            api: neutral_api(preferred.api_type)?,
             floating: preferred.is_floating,
         })
     }
@@ -739,6 +776,10 @@ impl HostedGui for ClapInstance {
 
     fn set_scale(&mut self, scale: f64) -> Result<(), GuiError> {
         let gui = self.open_gui_ext()?;
+        // CLAP: a scale is not given under an API with logical sizes.
+        if self.gui_open.is_some_and(|config| config.api.uses_logical_size()) {
+            return Ok(());
+        }
         gui.set_scale(&self.instance.plugin_handle(), scale)
             .map_err(|_| GuiError::Refused("take the window's scale"))
     }
@@ -788,18 +829,19 @@ impl HostedGui for ClapInstance {
 
     fn set_parent(&mut self, window: NativeWindow) -> Result<(), GuiError> {
         let gui = self.open_gui_ext()?;
-        let window = clap_window(window)?;
+        let window = self.window_for_open_gui(window)?;
         // SAFETY: `NativeWindow`'s contract, which the caller keeps: the
         // window outlives the GUI in it. An X11 id is a number, not a
         // pointer, so a stale one is an X error in the plugin, not memory
-        // this process could corrupt.
+        // this process could corrupt. An `NSView*` is a pointer, and the
+        // contract is all that keeps it valid.
         unsafe { gui.set_parent(&self.instance.plugin_handle(), window) }
             .map_err(|_| GuiError::Refused("embed in the window"))
     }
 
     fn set_transient(&mut self, window: NativeWindow) -> Result<(), GuiError> {
         let gui = self.open_gui_ext()?;
-        let window = clap_window(window)?;
+        let window = self.window_for_open_gui(window)?;
         // SAFETY: as for `set_parent`.
         unsafe { gui.set_transient(&self.instance.plugin_handle(), window) }
             .map_err(|_| GuiError::Refused("stay above the window"))
@@ -1857,3 +1899,37 @@ impl PluginOpener for ClapOpener {
 /// is activated for. The driver's own buffer is at most this, and the
 /// executor never passes more (`mooloop_dsp::MAX_BLOCK_SIZE`).
 pub const MAX_FRAMES: u32 = MAX_BLOCK_SIZE as u32;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_api_maps_to_claps_name_for_it_and_back() {
+        for (api, clap) in [(GuiApi::X11, GuiApiType::X11), (GuiApi::Cocoa, GuiApiType::COCOA)] {
+            assert!(clap_api(api) == clap);
+            assert_eq!(neutral_api(clap), Some(api));
+            for floating in [false, true] {
+                let config = clap_config(GuiConfig { api, floating });
+                assert!(config.api_type == clap);
+                assert_eq!(config.is_floating, floating);
+            }
+        }
+        assert_eq!(neutral_api(GuiApiType::WAYLAND), None);
+        assert_eq!(neutral_api(GuiApiType::WIN32), None);
+    }
+
+    #[test]
+    fn an_x11_window_is_its_id_and_a_cocoa_window_its_nsview() {
+        let x11 = clap_window(NativeWindow::x11(0x0120_0007)).unwrap();
+        assert!(x11.api_type() == GuiApiType::X11);
+        assert_eq!(x11.as_x11_handle(), Some(0x0120_0007));
+
+        let mut view = 0u8;
+        let ns_view = (&raw mut view).cast::<std::ffi::c_void>();
+        let cocoa = clap_window(NativeWindow::cocoa(ns_view)).unwrap();
+        assert!(cocoa.api_type() == GuiApiType::COCOA);
+        assert_eq!(cocoa.as_cocoa_nsview(), Some(ns_view));
+        assert_eq!(cocoa.as_x11_handle(), None);
+    }
+}

@@ -537,7 +537,7 @@ words. **Do not reopen this as a version-bump question.**
 | 08 | Plugin browser, the menu row, and the face for plugins without a GUI | #28 | **UI build**, drafted with `slint-sketch` | **done 2026-09-24** (MOO-83; remainder MOO-228, MOO-229: pins, list, selectors landed 2026-09-26) |
 | 09 | A channel source that is a boxed node | #29 | core, engine, session | **done 2026-09-24** (MOO-84) |
 | 10 | CLAP instruments | #29 | plugin-host, engine | **done 2026-09-25** (MOO-85) |
-| 11 | Plugin GUIs in their own windows | #30 | plugin-host, **UI build** | **done 2026-09-29** (MOO-86: host side MOO-300, the window MOO-301, the pump and face MOO-302; Adam's real-desktop checks passed; remainder MOO-303, MOO-343) |
+| 11 | Plugin GUIs in their own windows | #30 | plugin-host, **UI build** | **done 2026-09-29** (MOO-86: host side MOO-300, the window MOO-301, the pump and face MOO-302; Adam's real-desktop checks passed; remainder MOO-303, MOO-343). macOS (MOO-452): the host offers Cocoa (MOO-479); the window (MOO-480) and the pump (MOO-481) to come |
 | 12 | VST3 | — | plugin-host | outline only |
 | 13 | AU (macOS, optional) | — | plugin-host | outline only |
 
@@ -2014,6 +2014,48 @@ hiding is a unit test in `plugin_gui.rs`.
 LSP and the test plugin open, float, resize and hide on focus loss under
 Hyprland, and with the setting on. And whether the unmap-and-map raise is
 acceptable, or flickers.
+
+## Step 11 on macOS: the host offers Cocoa, recorded 2026-10-01 (MOO-479)
+
+The first of MOO-452's three legs (native macOS windows for plugin GUIs):
+the host side, headless. Adam found CLAP plugins loading on macOS but their
+GUIs asked for in X11, which no Mac plugin offers. The window (MOO-480,
+Platform) and the pump (MOO-481, Interface) follow.
+
+- **`GuiApi::Cocoa`**, with `GuiConfig::COCOA_EMBEDDED` / `COCOA_FLOATING`
+  and `NativeWindow::cocoa(ns_view)`: CLAP's `clap_window.cocoa` is an
+  `NSView*`, carried as the pointer's address in `NativeWindow::id` and
+  given back by `as_ns_view`. The CLAP adapter maps it to
+  `CLAP_WINDOW_API_COCOA` (`clap_api`, `neutral_api`, `clap_window`, unit
+  tested), and `preferred_api` reports Cocoa as well as X11.
+- **The platform's API, named once**: `GuiApi::native()` is Cocoa on macOS
+  and X11 elsewhere; `GuiConfig::native_order()` is embedded then floating
+  in it, and `NativeWindow::native(id)` a window of it. The session's GUI
+  verbs (`plugin_gui_kind`, `GuiPlacement::config`, `open_plugin_gui`) use
+  them, so `GuiPlacement`'s ids are an X11 id on Linux and an `NSView*`'s
+  address on macOS, and neither the session nor the pump spells a
+  `#[cfg(target_os)]`. On Linux every value is what it was.
+- **Sizes**: `GuiSize` is physical pixels under X11 and logical points
+  under Cocoa (CLAP). `GuiApi::uses_logical_size` says which; under Cocoa
+  `set_scale` is not passed to the plugin and returns `Ok`.
+- **A window of the wrong API is refused** before the plugin sees it:
+  `set_parent` and `set_transient` take only a window in the API the GUI is
+  open in, because the plugin reads `clap_window`'s union by that API, and
+  for Cocoa the member is a pointer.
+- **Timers and fds are not needed on macOS.** A Cocoa GUI runs on the main
+  thread's run loop, which AppKit drives. The host still offers both
+  extensions there, and the pump fires whatever a plugin registers. On
+  macOS the control thread must be the process's main thread; the pump runs
+  on Slint's event loop, which is.
+- **Tests**: `tests/gui.rs` now runs on every Unix, macOS included, in the
+  platform's API, and
+  `each_api_opens_where_the_plugin_offers_it_and_is_refused_where_it_does_not`
+  opens both configs of the native API and is refused both of the other.
+  The test plugin already offered its platform's API (`NATIVE_API`).
+  `mooloop-session`'s `tests/plugin_gui.rs` stays Linux-only.
+
+Nothing here opens a real window. The build box has no macOS target; macOS
+CI on the leg's draft PR is what compiled and ran it.
 
 ## The test plugins
 
