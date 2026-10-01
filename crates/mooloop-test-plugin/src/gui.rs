@@ -63,7 +63,19 @@ pub const PROBE_FDS_LIVE: u32 = 0xFFFF_0012;
 /// broke CLAP's order. Zero is the contract.
 pub const PROBE_GUIS_LEAKED: u32 = 0xFFFF_0013;
 
-/// Every probe id, none of which any parameter list names.
+/// Not a counter: reading it on the main thread is the GUI turning the
+/// plugin's main knob (the gain's `gain`, the sine's `level`) up by
+/// [`GUI_EDIT_DB`], and it returns the new value. The plugin moves the value,
+/// calls the host's `request_flush`, and reports the change (a gesture
+/// around the value) at its next `process` or `params.flush`: what a host
+/// test drives a plugin GUI's edit by (MOO-498). Not in [`PROBE_IDS`],
+/// whose reads change nothing.
+pub const PROBE_GUI_EDIT: u32 = 0xFFFF_0020;
+
+/// How far one [`PROBE_GUI_EDIT`] moves the knob, in dB.
+pub const GUI_EDIT_DB: f64 = 1.0;
+
+/// Every counter probe id, none of which any parameter list names.
 pub const PROBE_IDS: [u32; 6] = [
     PROBE_TIMER_TICKS,
     PROBE_FD_READS,

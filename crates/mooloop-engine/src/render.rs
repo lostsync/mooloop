@@ -1492,14 +1492,42 @@ impl PendingEffectParams {
     /// For a box that is full and whose node keeps its own values. Returns
     /// whether it took them; a box it refused is left as it was.
     fn flush_into<N: AudioNode + ?Sized>(&mut self, node: &mut N, last: TimedEvent) -> bool {
-        let mut events = [last; MAX_PENDING_EFFECT_PARAMS + 1];
+        self.flush_with(node, Some(last))
+    }
+
+    /// For a plugin that will not be processed this block: hand it what is
+    /// queued now, if anything is, or if it asked for a flush
+    /// ([`AudioNode::wants_param_flush`]) -- the way its own GUI's changes
+    /// get out. A box it refused is left as it was.
+    fn flush_idle<N: AudioNode + ?Sized>(&mut self, node: &mut N) {
+        if self.has_values() || node.wants_param_flush() {
+            self.flush_with(node, None);
+        }
+    }
+
+    fn has_values(&self) -> bool {
+        self.events
+            .iter()
+            .flatten()
+            .any(|event| matches!(event.event, Event::ParamValue { .. }))
+    }
+
+    fn flush_with<N: AudioNode + ?Sized>(&mut self, node: &mut N, last: Option<TimedEvent>) -> bool {
+        let filler = TimedEvent {
+            offset: 0,
+            event: Event::Choke,
+        };
+        let mut events = [last.unwrap_or(filler); MAX_PENDING_EFFECT_PARAMS + 1];
         let mut len = 0;
         for event in self.events.iter().flatten() {
             events[len] = *event;
             len += 1;
         }
-        events[len] = last;
-        let flushed = node.flush_params(&events[..=len]);
+        if let Some(last) = last {
+            events[len] = last;
+            len += 1;
+        }
+        let flushed = node.flush_params(&events[..len]);
         if flushed {
             self.clear();
         }
@@ -2212,6 +2240,26 @@ impl EffectChain {
     fn retire_nodes(&mut self) {
         for node in self.nodes.iter_mut().flatten() {
             node.retire();
+        }
+    }
+
+    /// Flush every hosted plugin in the chain that this block did not
+    /// process -- asleep, bypassed, inside a bypassed box, or the whole
+    /// chain skipped with its muted channel -- and that has knob moves
+    /// waiting or asked for a flush: its face's edits reach it, and its own
+    /// GUI's changes come back, while no audio runs through it. Called after
+    /// the block's walk, so a processed slot's box is already empty and its
+    /// request already answered by `process`. Native devices are left to
+    /// their box, which their base restates.
+    fn flush_idle_plugins(&mut self) {
+        for slot in 0..self.bound {
+            let (Some(state), Some(node)) = (self.slots[slot].as_deref_mut(), self.nodes[slot].as_deref_mut())
+            else {
+                continue;
+            };
+            if state.kind == Some(mooloop_core::EffectKind::Plugin) {
+                state.events.flush_idle(node);
+            }
         }
     }
 
@@ -5151,6 +5199,15 @@ impl ChannelStrip {
             take: None,
             sequenced: SequencedVoices::new(),
         }
+    }
+
+    /// Flush a hosted instrument the block did not process (a muted
+    /// channel's, or one asleep) that has edits waiting or asked for a
+    /// flush ([`EffectChain::flush_idle_plugins`]). After the walk: a
+    /// rendered strip moved its box onto the channel's list at the top of
+    /// the block, and its processor answered any request itself.
+    fn flush_idle_source(&mut self) {
+        self.source_pending.flush_idle(&mut *self.source);
     }
 
     /// Queue a hosted instrument's knob edit for the next block the strip
@@ -11235,6 +11292,16 @@ impl RenderState {
             }
         }
         self.site_times.lap(None);
+        // Hosted plugins this block did not process trade parameter changes
+        // now, both ways (`EffectChain::flush_idle_plugins`).
+        let live = self.live_channels();
+        for strip in &mut self.strips[..live] {
+            strip.effects.flush_idle_plugins();
+            strip.flush_idle_source();
+        }
+        for bus in &mut self.buses {
+            bus.effects.flush_idle_plugins();
+        }
         // After the walk on purpose: the preview bypasses every chain, so it
         // is heard raw and does not move the mixer's meters.
         // After every strip and track has rendered, so each source buffer

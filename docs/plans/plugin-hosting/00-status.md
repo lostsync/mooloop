@@ -2137,6 +2137,33 @@ the first two legs left the pump nothing to do.
 
 The real-plugin check on a real Mac is Adam's (open: MOO-490).
 
+## Found on the Mac: a plugin that is not processing trades no parameters (MOO-498, 2026-10-01)
+
+Surge XT FX's GUI and its face knobs did not follow each other on a kick
+track: parameter changes cross inside `process`, a slot asleep in silence,
+bypassed or on a muted channel is not processed, and the host ignored the
+plugin's `request_flush`. Not macOS's: Linux behaved the same with nothing
+playing through the plugin.
+
+- `ClapShared::request_flush` raises an atomic the processor reads
+  (`AudioNode::wants_param_flush`, new, false for every native node,
+  forwarded by `HostedSource`); `process` and `flush_params` lower it.
+- After each block's walk, `RenderState` flushes every hosted plugin the
+  block did not process (`EffectChain::flush_idle_plugins`,
+  `ChannelStrip::flush_idle_source`) that has a face edit waiting or wants a
+  flush: MOO-344's `flush_params`, on the audio thread, never inside
+  `process`. Its output events already went onto the ring
+  `drain_param_events` reads, so the face moves on the next pump tick. One
+  sweep after the walk rather than a call at each skip site, so every way
+  of not being processed (a bypassed box's run too) is covered once.
+- An inactive plugin has no processor in the engine, so there is nothing
+  to flush there: its face edits wait for the processor's arrival as before.
+- The test gain and sine take a GUI edit by probe (`PROBE_GUI_EDIT`): the
+  value moves, `request_flush`, and the change goes out at the next
+  `process` or flush. `crates/mooloop-engine/src/plugin_param_flush_tests.rs`
+  drives both directions through the executor, asleep, bypassed, muted, and
+  as a muted and an idle instrument.
+
 ## The test plugins
 
 CI cannot install third-party plugins, so step 01 builds **an in-repo CLAP

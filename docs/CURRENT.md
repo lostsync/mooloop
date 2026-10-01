@@ -2714,7 +2714,13 @@ with a commit loads and plays the render it played then.
   plugin asks; it floats above mooloop's windows and hides while mooloop is
   not the active application, so mooloop never hides it itself; its close
   button closes the GUI as on Linux (MOO-480, MOO-481). Not yet tried on a
-  real Mac with a real plugin: open: MOO-490.
+  real Mac with a real plugin: open: MOO-490. **A knob turned in the GUI
+  moves the face's, and the face's moves the GUI's, while the plugin is not
+  processing** -- asleep in silence, bypassed, on a muted channel, an
+  instrument muted or idle (MOO-498, 2026-10-01): the engine flushes such
+  a plugin (CLAP's `params.flush`, on the audio thread) the block it has a
+  face edit waiting or asks for one (`request_flush`). Before, neither
+  side followed the other until audio ran through the plugin.
 - **A hosted plugin's parameters take lanes and routes** (MOO-82,
   plugin-hosting 07). The face's knobs set them (above), but a lane or route
   reaches a plugin parameter only from a song that names one, or through the

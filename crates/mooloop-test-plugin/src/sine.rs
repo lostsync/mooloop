@@ -17,8 +17,8 @@
 //! voices are multiplied by exactly 1, so a song that never touches it
 //! renders what it did before the parameter existed.
 
-use crate::gui::{TestGui, impl_test_gui, register_test_gui};
-use crate::{AtomicF64, HostServices};
+use crate::gui::{GUI_EDIT_DB, PROBE_GUI_EDIT, TestGui, impl_test_gui, register_test_gui};
+use crate::{AtomicF64, GuiEdit, HostServices};
 use clack_extensions::audio_ports::{
     AudioPortFlags, AudioPortInfo, AudioPortInfoWriter, AudioPortType, PluginAudioPorts,
     PluginAudioPortsImpl,
@@ -82,6 +82,9 @@ pub struct SineShared<'a> {
     level_db: AtomicF64,
     /// The host's modulation offset on the level, in dB.
     level_mod_db: AtomicF64,
+    /// A level change made in the GUI ([`PROBE_GUI_EDIT`]) and not yet
+    /// reported.
+    gui_edit: GuiEdit,
 }
 
 impl<'a> SineShared<'a> {
@@ -90,7 +93,22 @@ impl<'a> SineShared<'a> {
             services: HostServices::new(host),
             level_db: AtomicF64::new(LEVEL_DB_DEFAULT),
             level_mod_db: AtomicF64::new(0.0),
+            gui_edit: GuiEdit::new(),
         })
+    }
+
+    /// The GUI turns the level up [`GUI_EDIT_DB`] ([`PROBE_GUI_EDIT`]),
+    /// returning where it now is.
+    fn gui_edit_now(&self) -> f64 {
+        let level = (self.level_db.load() + GUI_EDIT_DB).clamp(LEVEL_DB_MIN, LEVEL_DB_MAX);
+        self.level_db.store(level);
+        self.gui_edit.made(&self.services);
+        level
+    }
+
+    /// Report a GUI edit the host has not heard yet.
+    fn report_gui_edit(&self, output: &mut OutputEvents) {
+        self.gui_edit.report(PARAM_LEVEL, self.level_db.load(), output);
     }
 
     /// A parameter event, from either thread's queue.
@@ -204,6 +222,7 @@ impl<'a> PluginAudioProcessor<'a, SineShared<'a>, SineMain<'a>> for SineProcesso
         }
         let frames = channels.frames_count() as usize;
 
+        self.shared.report_gui_edit(&mut *events.output);
         let mut frame = 0;
         for batch in events.input.batch() {
             for event in batch.events() {
@@ -308,10 +327,11 @@ impl Voice {
 }
 
 impl PluginAudioProcessorParams for SineProcessor<'_> {
-    fn flush(&mut self, input: &InputEvents, _output: &mut OutputEvents) {
+    fn flush(&mut self, input: &InputEvents, output: &mut OutputEvents) {
         for event in input {
             self.shared.handle_param_event(event);
         }
+        self.shared.report_gui_edit(output);
     }
 }
 
@@ -340,7 +360,11 @@ impl PluginMainThreadParams for SineMain<'_> {
     }
 
     /// The level, or a GUI probe's value (`crate::gui::PROBE_IDS`).
+    /// [`PROBE_GUI_EDIT`] is the GUI turning the level.
     fn get_value(&self, id: ClapId) -> Option<f64> {
+        if id.get() == PROBE_GUI_EDIT {
+            return Some(self.shared.gui_edit_now());
+        }
         if id.get() == PARAM_LEVEL {
             return Some(self.shared.level_db.load());
         }
@@ -367,10 +391,11 @@ impl PluginMainThreadParams for SineMain<'_> {
         }
     }
 
-    fn flush(&self, input: &InputEvents, _output: &mut OutputEvents) {
+    fn flush(&self, input: &InputEvents, output: &mut OutputEvents) {
         for event in input {
             self.shared.handle_param_event(event);
         }
+        self.shared.report_gui_edit(output);
     }
 }
 

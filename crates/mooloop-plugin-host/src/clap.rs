@@ -163,6 +163,11 @@ pub struct ClapShared {
     unlogged: AtomicU64,
     /// Calls the plugin itself reported as the host misbehaving.
     misbehaviour: AtomicU64,
+    /// Raised by `request_flush`, taken by the processor
+    /// ([`AudioNode::wants_param_flush`]): the plugin has parameter changes
+    /// of its own to report, or wants the host's, and its slot may not be
+    /// processed to carry them.
+    flush_requested: Arc<AtomicBool>,
 }
 
 impl<'a> SharedHandler<'a> for ClapShared {
@@ -211,9 +216,13 @@ impl HostThreadCheckImpl for ClapShared {
 }
 
 impl HostParamsImplShared for ClapShared {
-    /// Ignored: the engine calls the processor every block, which is when a
-    /// flush would happen anyway.
-    fn request_flush(&self) {}
+    /// A flag the processor reads: the engine flushes a plugin whose slot is
+    /// not processed that block (asleep, bypassed, on a muted channel), and a
+    /// processed one is flushed by `process` itself. Raising it neither locks
+    /// nor allocates, so the plugin may ask from any thread.
+    fn request_flush(&self) {
+        self.flush_requested.store(true, Ordering::Release);
+    }
 }
 
 /// The GUI's requests of its window: bits and one packed size, so a request
@@ -419,6 +428,8 @@ pub struct ClapInstance {
     config: AudioConfig,
     requests: Arc<RequestFlags>,
     flags: Arc<ProcessorFlags>,
+    /// Shared with the plugin's `request_flush` and every processor built.
+    flush_requested: Arc<AtomicBool>,
     events_out: Option<rtrb::Consumer<PluginParamEvent>>,
     layout: Layout,
     /// The thread the instance was opened on: every GUI call must be made
@@ -472,6 +483,8 @@ impl ClapInstance {
         let requests = Arc::new(RequestFlags::new());
         let (shared_requests, main_requests) = (requests.clone(), requests.clone());
         let main_thread = std::thread::current().id();
+        let flush_requested = Arc::new(AtomicBool::new(false));
+        let shared_flush = flush_requested.clone();
         let mut instance = PluginInstance::<ClapHost>::new(
             move |_| ClapShared {
                 main_thread,
@@ -480,6 +493,7 @@ impl ClapInstance {
                 gui_size: AtomicU64::new(0),
                 unlogged: AtomicU64::new(0),
                 misbehaviour: AtomicU64::new(0),
+                flush_requested: shared_flush,
             },
             move |_| ClapMainThread {
                 requests: main_requests,
@@ -504,6 +518,7 @@ impl ClapInstance {
             config,
             requests,
             flags: Arc::new(ProcessorFlags::default()),
+            flush_requested,
             events_out: None,
             layout,
             main_thread,
@@ -1199,6 +1214,7 @@ impl HostedInstance for ClapInstance {
             events: EventBuffer::with_capacity(EVENTS_IN + NOTE_ROWS),
             events_out: producer,
             flags,
+            flush_requested: self.flush_requested.clone(),
             at_rest: false,
             steady_time: 0,
             main_thread: self.main_thread,
@@ -1255,6 +1271,8 @@ pub struct ClapProcessor {
     events: EventBuffer,
     events_out: rtrb::Producer<PluginParamEvent>,
     flags: Arc<ProcessorFlags>,
+    /// The plugin's `request_flush`, raised from any thread.
+    flush_requested: Arc<AtomicBool>,
     /// The plugin may sleep, as of the last block ([`AudioNode::is_at_rest`]).
     at_rest: bool,
     /// CLAP's `steady_time`: frames since this processor was built, blocks
@@ -1509,15 +1527,27 @@ impl AudioNode for ClapProcessor {
             .map(|index| self.params[index].1)
     }
 
+    /// The plugin called `request_flush` since it was last processed or
+    /// flushed.
+    fn wants_param_flush(&self) -> bool {
+        self.flush_requested.load(Ordering::Acquire)
+    }
+
     /// CLAP's `params.flush`, on the audio thread, which CLAP allows for an
     /// active plugin outside `process` (and this is never called inside
     /// it). Started or stopped, the plugin takes the values; what it says
-    /// back goes on the same ring a block's output events do. `false` for a
-    /// failed plugin, one with no parameters, and one that panics.
+    /// back goes on the same ring a block's output events do, so the
+    /// control thread's [`HostedInstance::drain_param_events`] reads a
+    /// flush's changes as it reads a block's. Answers any pending
+    /// `request_flush`. `false` for a failed plugin, one with no
+    /// parameters, and one that panics.
     fn flush_params(&mut self, events: &[TimedEvent]) -> bool {
         if self.flags.failed.load(Ordering::Relaxed) {
             return false;
         }
+        // Taken before the call: a request the plugin makes during it is
+        // for changes after it, and is answered next block.
+        self.flush_requested.store(false, Ordering::Release);
         let (Some(params), Some(processor)) = (self.params_ext, self.processor.as_mut()) else {
             return false;
         };
@@ -1604,6 +1634,9 @@ impl AudioNode for ClapProcessor {
         let Some(processor) = self.processor.as_mut() else {
             return;
         };
+        // A processed block carries the plugin's changes out and the
+        // host's in, which is what a flush is for.
+        self.flush_requested.store(false, Ordering::Release);
         let started = match processor.ensure_processing_started() {
             Ok(started) => started,
             Err(_) => {

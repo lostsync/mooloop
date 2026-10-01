@@ -22,8 +22,8 @@
 //! an offset in dB over the gain's value, clamped with it into the range,
 //! and it holds until the next one. `get_value` reports the value without it.
 
-use crate::gui::{TestGui, impl_test_gui, register_test_gui};
-use crate::{AtomicF64, HostServices};
+use crate::gui::{GUI_EDIT_DB, PROBE_GUI_EDIT, TestGui, impl_test_gui, register_test_gui};
+use crate::{AtomicF64, GuiEdit, HostServices};
 use clack_extensions::audio_ports::{
     AudioPortFlags, AudioPortInfo, AudioPortInfoWriter, AudioPortType, PluginAudioPorts,
     PluginAudioPortsImpl,
@@ -114,6 +114,9 @@ pub struct GainShared<'a> {
     /// Log one line from every `process` call, as a plugin with debug
     /// logging left on does ([`crate::GAIN_CHATTY_ID`], MOO-324).
     chatty: bool,
+    /// A gain change made in the GUI ([`PROBE_GUI_EDIT`]) and not yet
+    /// reported.
+    gui_edit: GuiEdit,
 }
 
 impl<'a> GainShared<'a> {
@@ -146,6 +149,7 @@ impl<'a> GainShared<'a> {
             active_latency_step: AtomicU32::new(0),
             ports: [inputs, outputs],
             chatty: false,
+            gui_edit: GuiEdit::new(),
         })
     }
 
@@ -207,6 +211,20 @@ impl<'a> GainShared<'a> {
             }
             _ => {}
         }
+    }
+
+    /// The GUI turns the gain up [`GUI_EDIT_DB`] ([`PROBE_GUI_EDIT`]),
+    /// returning where it now is.
+    fn gui_edit_now(&self) -> f64 {
+        let gain = (self.gain_db.load() + GUI_EDIT_DB).clamp(GAIN_DB_MIN, GAIN_DB_MAX);
+        self.gain_db.store(gain);
+        self.gui_edit.made(&self.services);
+        gain
+    }
+
+    /// Report a GUI edit the host has not heard yet.
+    fn report_gui_edit(&self, output: &mut OutputEvents) {
+        self.gui_edit.report(PARAM_GAIN, self.gain_db.load(), output);
     }
 
     /// Carry out a pending nudge: move the gain and tell the host, as a
@@ -347,6 +365,7 @@ impl<'a> PluginAudioProcessor<'a, GainShared<'a>, GainMain<'a>> for GainProcesso
             };
         }
 
+        self.shared.report_gui_edit(&mut *events.output);
         for batch in events.input.batch() {
             for event in batch.events() {
                 self.shared.handle_event(event);
@@ -375,10 +394,11 @@ impl<'a> PluginAudioProcessor<'a, GainShared<'a>, GainMain<'a>> for GainProcesso
 }
 
 impl PluginAudioProcessorParams for GainProcessor<'_> {
-    fn flush(&mut self, input: &InputEvents, _output: &mut OutputEvents) {
+    fn flush(&mut self, input: &InputEvents, output: &mut OutputEvents) {
         for event in input {
             self.shared.handle_event(event);
         }
+        self.shared.report_gui_edit(output);
     }
 }
 
@@ -469,7 +489,11 @@ impl PluginMainThreadParams for GainMain<'_> {
 
     /// A parameter's value, or a GUI probe's (`crate::gui::PROBE_IDS`),
     /// which no list names: what a host test reads the GUI's counters by.
+    /// [`PROBE_GUI_EDIT`] is the GUI turning the gain.
     fn get_value(&self, id: ClapId) -> Option<f64> {
+        if id.get() == PROBE_GUI_EDIT {
+            return Some(self.shared.gui_edit_now());
+        }
         self.shared.param(id.get()).or_else(|| self.gui.probe(id.get()))
     }
 
@@ -511,10 +535,11 @@ impl PluginMainThreadParams for GainMain<'_> {
         }
     }
 
-    fn flush(&self, input: &InputEvents, _output: &mut OutputEvents) {
+    fn flush(&self, input: &InputEvents, output: &mut OutputEvents) {
         for event in input {
             self.shared.handle_event(event);
         }
+        self.shared.report_gui_edit(output);
     }
 }
 

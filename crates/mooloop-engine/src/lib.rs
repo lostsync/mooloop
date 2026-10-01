@@ -215,6 +215,8 @@ mod plugin_source_tests;
 #[cfg(test)]
 mod plugin_instrument_param_tests;
 #[cfg(test)]
+mod plugin_param_flush_tests;
+#[cfg(test)]
 mod plugin_instrument_tests;
 #[cfg(test)]
 mod plugin_retire_tests;

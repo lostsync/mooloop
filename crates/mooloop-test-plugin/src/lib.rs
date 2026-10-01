@@ -46,11 +46,13 @@
 #![deny(unsafe_code)]
 
 use clack_extensions::log::{HostLog, LogSeverity};
+use clack_extensions::params::HostParams;
 use clack_extensions::thread_check::HostThreadCheck;
+use clack_plugin::events::event_types::{ParamGestureBeginEvent, ParamGestureEndEvent, ParamValueEvent};
 use clack_plugin::entry::prelude::*;
 use clack_plugin::prelude::*;
 use std::ffi::{CStr, CString};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 mod gain;
 mod gui;
@@ -62,7 +64,8 @@ pub use gain::{
     PARAM_LATENCY, PARAM_NUDGE, STATE_MAGIC,
 };
 pub use gui::{
-    GUI_DEFAULT_SIZE, GUI_MIN_SIZE, GUI_TIMER_MS, PROBE_FDS_LIVE, PROBE_FD_READS, PROBE_GUIS_LEAKED,
+    GUI_DEFAULT_SIZE, GUI_EDIT_DB, GUI_MIN_SIZE, GUI_TIMER_MS, PROBE_FDS_LIVE, PROBE_FD_READS,
+    PROBE_GUI_EDIT, PROBE_GUIS_LEAKED,
     PROBE_GUIS_LIVE, PROBE_IDS, PROBE_TIMERS_LIVE, PROBE_TIMER_TICKS,
 };
 pub use sidechain::{AUX_LEVEL, PROBE_SIDECHAIN_BLOCKS, PROBE_SIDECHAIN_LOUD};
@@ -268,6 +271,7 @@ struct HostServices<'a> {
     host: HostSharedHandle<'a>,
     log: Option<HostLog>,
     thread_check: Option<HostThreadCheck>,
+    params: Option<HostParams>,
     /// The thread that created the plugin: the host's main thread.
     main_thread: u64,
     /// The thread that last started or ran the processor, 0 for none since
@@ -290,6 +294,7 @@ impl<'a> HostServices<'a> {
         Self {
             log: host.get_extension(),
             thread_check: host.get_extension(),
+            params: host.get_extension(),
             host,
             main_thread: thread_token(),
             audio_thread: AtomicU64::new(0),
@@ -303,6 +308,13 @@ impl<'a> HostServices<'a> {
             .thread_check
             .is_some_and(|check| check.is_audio_thread(&self.host) == Some(false));
         thread_token() != self.main_thread && !host_says_no
+    }
+
+    /// CLAP's `host_params.request_flush`, where the host has it.
+    fn request_flush(&self) {
+        if let Some(params) = self.params {
+            params.request_flush(&self.host);
+        }
     }
 
     /// Strict mode's check on `start_processing`.
@@ -377,6 +389,36 @@ impl<'a> HostServices<'a> {
                 self.log(LogSeverity::HostMisbehaving, what);
             }
         }
+    }
+}
+
+/// A knob turned in the plugin's own GUI ([`PROBE_GUI_EDIT`]) and not yet
+/// reported to the host. A GUI moves the value at once and asks the host for
+/// a flush; the change goes out with the next `process` or `params.flush`,
+/// whichever the host calls first, as CLAP has a plugin do.
+struct GuiEdit(AtomicBool);
+
+impl GuiEdit {
+    fn new() -> Self {
+        Self(AtomicBool::new(false))
+    }
+
+    /// The GUI moved the knob: report it next, and ask for a flush.
+    fn made(&self, services: &HostServices) {
+        self.0.store(true, Ordering::Release);
+        services.request_flush();
+    }
+
+    /// Report a GUI edit not yet reported, `id` now at `value`, as a gesture
+    /// at frame 0.
+    fn report(&self, id: u32, value: f64, output: &mut OutputEvents) {
+        if !self.0.swap(false, Ordering::AcqRel) {
+            return;
+        }
+        let id = ClapId::new(id);
+        let _ = output.try_push(ParamGestureBeginEvent::new(0, id));
+        let _ = output.try_push(ParamValueEvent::new(0, id, Pckn::match_all(), value));
+        let _ = output.try_push(ParamGestureEndEvent::new(0, id));
     }
 }
 

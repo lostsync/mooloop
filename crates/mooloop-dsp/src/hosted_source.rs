@@ -145,6 +145,10 @@ impl AudioNode for HostedSource {
         self.node.as_mut().is_some_and(|node| node.flush_params(events))
     }
 
+    fn wants_param_flush(&self) -> bool {
+        self.node.as_ref().is_some_and(|node| node.wants_param_flush())
+    }
+
     fn on_discontinuity(&mut self, kind: Discontinuity) {
         if let Some(node) = self.node.as_mut() {
             node.on_discontinuity(kind);
