@@ -35,8 +35,49 @@ too big.
 - **The window draws about twice as fast** after the move to Slint 1.18.1. A
   frame of a busy song went from 36 ms to 18 ms, and the rack and the mixer
   now reach 60 frames a second.
+- **Everyday edits no longer rebuild the song.** Deleting, moving or pasting
+  a channel, adding, removing or moving a track, cloning, clearing or
+  removing a pattern, and adding an effect preset each change only what they
+  touch. Every other channel keeps playing through the edit, with its notes,
+  tails and LFOs, and the window doesn't stall: before, deleting a channel
+  in a 16-channel song rebuilt all of it, which took 85–140 ms on a fast
+  desktop and longer on a laptop. Undo still rebuilds the song.
+- **Each key zone is a region of its own**, and one file can hold many
+  zones (see *Instruments*).
 
 ### Instruments
+
+- **Each key zone has its own start, end, loop, reverse, tune and level.**
+  The envelopes, filter, drive, glide and stretch stay shared by the whole
+  sampler.
+  - A strip at the top of the SAMPLE page picks the zone you're editing, and
+    clicking a row on ZONES picks it too. With FOLLOW on, the last key you
+    play picks its zone. The waveform, the markers and every knob on the
+    page show and set that zone.
+  - A lane or LFO on START, END, LOOP or TUNE moves every zone by the same
+    amount from its own setting.
+  - Songs from 0.1.5 load and sound as they did.
+- **Many zones from one file.** **DUPE** copies the selected zone to the
+  next free key, and you move its start and end. **ZONES FROM SLICES** turns
+  a sliced sample into one zone per slice, one key each, every hit at its
+  recorded pitch, with no file edited. Zones on the same file share its
+  audio, and a song saves that file once.
+- **Slices and zones don't mix.** A sampler with zones can't go into Slice
+  mode, and one in Slice mode can't add zones. A 0.1.5 song that has both
+  plays its slices, as it did, until you switch it to Pitch.
+- **A stretch commit is a rendered sample.** COMMIT renders the whole sample
+  and loads the render in its place, written to disk the way a recorded take
+  is.
+  - Every slice, Start/End and loop marker moves onto the render. Before, a
+    marker at or outside the region's edge was dropped and every later slice
+    moved down a key.
+  - **REBAKE** stretches the committed audio again, so slices and trims you
+    make after a commit are kept. Before, the next commit or revert threw
+    them away.
+  - **REVERT** goes back to the original sample in one click, with your
+    markers mapped back onto it.
+  - A reopened song plays the stored render, even if the original file has
+    changed since. File → Clean Up Takes lists renders no song uses.
 
 - **The instruments have names:** the **Munotone ML-M1**, the **Polyneight
   ML-P8** and the **Dominic DS-01**. The first drum synth, the easy sub-kick
@@ -84,6 +125,24 @@ too big.
   Before, every add landed in front of the last device, or outside the box.
   The join past the Chain's edge still adds after it.
 - The Buffer's HISTORY shows "64 BARS" whole.
+- **The Layer's branch controls are back.** The face is the branch list,
+  then the selected branch's Level, Mix, bypass, input and output trims and
+  preset Save and Load, then that branch's devices, with the Layer's own
+  Gain and Mix at the far end. Drag a branch's row to reorder the branches.
+  A bypassed branch shows **BYP** on its row; a dimmed row still means
+  muted. The face is as wide as its controls.
+- A knob turned while its device is bypassed, asleep or on a muted channel
+  always reaches the device, plugins and plugin instruments included.
+  Before, the ninth different knob you turned replaced the first, and the
+  device kept playing the old value while the face showed the new one.
+- **Hide plugins mooloop can't use yet** (Preferences → Plugins): a plugin
+  that loaded but has a port layout mooloop doesn't handle yet leaves the
+  browser. A plugin that fails to load or scan is never hidden: it stays,
+  greyed, with its reason, and is listed under FAILED TO LOAD.
+- **Plugin windows on macOS.** A plugin's own GUI opens in a mooloop panel
+  that stays above the main window and hides while mooloop isn't the active
+  app, instead of asking for X11. The Run under XWayland setting isn't shown
+  there.
 
 ### Automation and modulation
 
@@ -147,6 +206,14 @@ too big.
     scheme's own accent.
 - When the audio callback runs late, the status bar names the bar and the
   channels or tracks that took the time. Click it to clear it.
+- **The Platinum and Impulse themes bevel everything they were meant to:**
+  knob caps, the device header, each device in the rack, the panes, the
+  dock, the toolbar, the status bar and both sidebars. A knob reads pressed
+  while you drag it. Flat themes look exactly as they did and cost nothing
+  more to draw.
+- On Linux, with Run under XWayland on, the window comes up the same size as
+  without it. Before, it could come up about 1.5 times too large on a
+  high-density laptop screen.
 
 ### Files and reliability
 

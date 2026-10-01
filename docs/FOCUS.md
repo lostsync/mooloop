@@ -68,18 +68,45 @@ Later the same night:
 CI is green on Linux and macOS at the head. The container's disk filled twice under `mooloop-ui`
 builds: see `docs/OPERATIONS.md`, *Working In A Cloud Container*.
 
+**2026-10-01:** team orchestration worked the Todo column, then the High
+and 0.1.6 issues (Adam's `/goal`). Each issue names its commit. In summary:
+- key zones are regions: each zone has its own start, end, loop, tune and
+  level, the SAMPLE page edits the selected zone, and DUPE and ZONES FROM
+  SLICES make many zones from one file (MOO-463, MOO-464);
+- a stretch commit is a render that replaces the sample: every marker is
+  kept, commits stack, and REVERT returns to the original (MOO-375, with
+  MOO-370 and MOO-394);
+- mundane edits no longer rebuild the engine. Deleting, moving and pasting
+  a channel, adding, removing and moving a track, cloning, clearing and
+  removing a pattern, and adding an effect preset are each one engine
+  command (MOO-466). MOO-465 timed what they replace: 85–140 ms of engine
+  install on the UI thread for a 16-channel delete on the build box;
+- the layer face shows the selected branch's controls, reorders branches by
+  drag and badges a bypassed one (MOO-462); a knob turned on a bypassed,
+  asleep or muted device is never lost (MOO-344);
+- plugins: unsupported ones can be hidden, failed ones never are (MOO-298),
+  and on macOS a plugin's GUI opens in a native panel (MOO-479 to 481,
+  under MOO-452);
+- the bevel reaches the knob caps, the rack and the panes (MOO-153); the
+  XWayland window comes up at the session's scale (MOO-343); and MOO-149
+  found no shared delay-tap block, so MOO-150 is cancelled.
+
+Filed during it, unlabelled: MOO-482 to 497. Four of them are questions
+for Adam: MOO-485 (a branch row's click, and a look at the layer face),
+MOO-486 (a look under XWayland), MOO-488 (does a delete still freeze in his
+own song) and MOO-490 (a real plugin on a real Mac).
+
 **MOO-289** closed on 2026-09-30: Adam found the launch case fixed on recent
 builds. **MOO-237**, Core Audio's latency, still waits on his Mac check. The
 rest of 0.1.6 is whatever open issue carries the label in Linear (on
-2026-09-30: MOO-462, the layer branch's controls, every question answered;
-MOO-86; MOO-298; and MOO-456, which is on `main` and wants a look in the
-running app).
+2026-10-01: MOO-86, whose macOS half waits on MOO-490; MOO-237; and MOO-456,
+which is on `main` and wants a look in the running app).
 
 Steps 03-05 of the icon pass are 0.1.7.
 
 **Cutting 0.1.6 is Adam's call.** Before tagging, dispatch `release.yml` on
-`main` (`docs/OPERATIONS.md`, "Releases And Tags"). None of the push has been
-heard: listening items 27 to 31 below are its own. `JOURNAL.md` has the
+`main` (`docs/OPERATIONS.md`, "Releases And Tags"). None of it has been
+heard: listening items 27 to 37 below are its own. `JOURNAL.md` has the
 record.
 
 `archive/ROADMAP.md` orders the whole product by dependency, and `SCOPE.md`
