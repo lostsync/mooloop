@@ -1,5 +1,36 @@
 # Extract mid-level DSP blocks: status
 
+## 2026-10-01: step 01 answered, step 02 cancelled (MOO-149, MOO-150)
+
+The delay-layer question is answered, and the answer is no: there is **no
+"modulated tap" block**. `DelayEffect` and `ModulationEffect` agree on the
+nouns and differ on every policy between them:
+
+- what goes back into the line: one damped tap, or a mix of two or three
+  undamped taps;
+- where the damping sits: inside the loop, or on the wet output;
+- how the loop is bounded: a `tanh` knee (MOO-124), or a linear trim on the
+  output whose doc rejects the knee (MOO-200);
+- the NaN rule: MOO-174 for the delay, MOO-176 for the modulation;
+- whether the head fades: `ReadHead`, or bare reads recomputed every sample.
+
+The policies they share already live in shared code (`DelayLine`,
+`feedback_tail_frames`, `invalidates_tails`, `write_silence`, `OnePoleLp`,
+`Smoothed`). What is still copied is arithmetic. Step 02 is cancelled, and
+its file now says what would reopen it: a third device that needs a tap.
+
+There is **no gain-stage block to add** over `shaper.rs` either. The four
+entry points already there (`apply_drive` and its hoisted pair, `PreDrive`,
+`shape` with `drive_compensation`, and `reference_drive_compensation` with
+`Oversampler2x`) are each a different anchoring policy, and every caller
+already uses one of them.
+
+The search found one copied **number** with no guard: DS-01's
+`DRIVE_GAIN_RANGE = 15.0` claims to be shared with `apply_drive`, but it is a
+second copy of a bare literal in `shaper.rs`, and no test reads both. That is
+MOO-482 (DSP Foundations). Step 03, the graph canvas (MOO-151, Interface),
+is unaffected and is the plan's last open step.
+
 ## 2026-09-23: step 01 re-aimed at the voice blocks (MOO-144)
 
 Step 01 was written aimed at the delay layer (`DelayEffect` and

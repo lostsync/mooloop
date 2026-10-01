@@ -1,47 +1,33 @@
 # Rebuild the delay and modulation devices on the extracted block
 
-## Precondition
+**Cancelled 2026-10-01 (MOO-150), because step 01 found no block to build.**
+`01-find-the-missing-middle-layer.md` has the reasons under *The answer*.
+In short: `DelayEffect` and `ModulationEffect` share a `DelayLine` and
+little else. They disagree on what goes back into the line (one tap or a mix
+of taps), where the damping sits (inside the loop or on the wet output), how
+the loop is bounded (a `tanh` knee or a linear trim), how a NaN is handled,
+and whether the read head fades. Every one of those is a deliberate,
+documented, tested choice. What they do share already lives in shared code:
+`DelayLine`, `node::feedback_tail_frames`, `Discontinuity::invalidates_tails`,
+`write_silence`, `OnePoleLp` and `Smoothed`. What remains copied is about ten
+lines of arithmetic, which a block would not make shorter.
 
-Only start this once `01-find-the-missing-middle-layer.md` has produced a
-concrete block definition and both devices demonstrably get simpler under
-it. If step 01 concluded the abstraction isn't there, skip this file.
+## What would reopen it
 
-## What to do
+A third device that needs a delay tap, such as a multi-tap or ping-pong delay.
+None is planned. When one is, do these in order:
 
-1. Implement the block from step 01's definition, with its own tests, and
-   land it *unused*. Same discipline as
-   `docs/plans/archive/share-dsp-primitives/02-add-the-missing-primitives.md`:
-   additive first, adoption second.
-2. Rebuild `ModulationEffect` on it. This one first — it's the smaller
-   device (299 lines) and its `Ensemble` mode already hand-rolls the
-   multi-tap pattern, so it's the strongest test of whether the block is
-   shaped right. If the block can't express ensemble cleanly, it's wrong.
-   Note the phaser path deliberately does *not* go through the delay line
-   (`modulation.rs:1-7` explains why: an all-pass cascade is cheaper and
-   more accurate than faking it with a tap) — leave that alone.
-3. Rebuild `DelayEffect` on it (550 lines, the bigger risk). Its
-   tempo-sync, its cross-feedback modes, and its `ReadHead` fade-on-time-
-   change all have to survive intact.
-4. Only after both are rebuilt and passing, consider whether a new device
-   falls out cheaply (a proper multi-tap, a ping-pong preset). Do not build
-   a new device *before* the two existing ones are converted — a block
-   validated only against a device written to fit it proves nothing.
+1. Write down that device's loop: what it feeds back, where it damps, and how
+   it bounds the loop. Use the table in step 01.
+2. If the loop matches `DelayEffect`'s, the block is `ReadHead` plus that
+   loop, lifted out of `delay.rs`. Land it unused, then move `DelayEffect`
+   onto it. `DelayEffect` has to get shorter, keep its three head modes, and
+   keep `a_nan_sample_leaves_the_loop_after_one_trip` and the feedback bound
+   test passing. Then build the new device on the block. This is Effects'
+   work: the loop is effect policy, and `ReadHead` already supplies the
+   primitive.
+3. If the loop matches neither device, there is still no shared block. The
+   new device gets its own loop over `DelayLine` and `ReadHead`.
 
-## The bar
-
-Both devices must get shorter. If `delay.rs` plus the new block is longer
-than `delay.rs` was, and neither file is clearer, revert and record why in
-step 01's notes. That's a legitimate outcome and worth writing down so the
-question doesn't get reopened from scratch later.
-
-## Verification
-
-- `cargo test -p mooloop-dsp --release` after each device conversion,
-  separately.
-- `cargo test -p mooloop-engine --release`.
-- Bit-exactness is unlikely to survive an operation reorder, so instead:
-  render a fixed input through each device before and after at several
-  parameter settings, and compare RMS and spectral envelope rather than
-  samples. Any audible difference must be explained, not accepted.
-- Manual A/B on both devices across all modes — this is the kind of change
-  where a mode nobody tested silently breaks.
+Leave `ModulationEffect` alone in every case. Its loop feeds back a mix of
+taps, and splitting that into per-tap feedback changes the sound.
