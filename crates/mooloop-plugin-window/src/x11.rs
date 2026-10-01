@@ -33,6 +33,10 @@ use std::fmt;
 
 use mooloop_core::log_warn;
 use mooloop_plugin_host::{GuiApi, GuiSize, NativeWindow};
+
+pub use crate::window::{
+    extent, PluginWindowEvent, PluginWindowId, PluginWindowSpec, WindowError, MAX_EXTENT,
+};
 use x11rb::connection::Connection;
 use x11rb::errors::{ConnectError, ConnectionError, ReplyError, ReplyOrIdError};
 use x11rb::protocol::xproto::{
@@ -43,10 +47,6 @@ use x11rb::protocol::xproto::{
 use x11rb::protocol::Event;
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
-
-/// The largest width or height X11 can give a window (its coordinates are
-/// signed 16-bit). A plugin that asks for more gets this.
-pub const MAX_EXTENT: u32 = 32_767;
 
 /// `WM_CLASS`, instance then class. The class is the application's, so a
 /// window rule written for mooloop can match its plugin windows by class and
@@ -65,44 +65,6 @@ x11rb::atom_manager! {
         _NET_WM_WINDOW_TYPE_DIALOG,
     }
 }
-
-/// Why a plugin window could not be made or used. Its text is what the
-/// device's badge (step 08) shows.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WindowError {
-    /// `DISPLAY` is not set: there is no X server (or XWayland) to open a
-    /// plugin window on.
-    NoDisplay,
-    /// The X server named by `DISPLAY` could not be reached.
-    Connect(String),
-    /// The connection to the X server failed after it was made.
-    Connection(String),
-    /// The window is not one of this connection's, or was destroyed.
-    UnknownWindow(PluginWindowId),
-    /// A parent that is not an X11 window cannot be an X11 window's
-    /// transient-for.
-    NotX11(NativeWindow),
-}
-
-impl fmt::Display for WindowError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NoDisplay => f.write_str(
-                "there is no X server to open the plugin's window on (DISPLAY is not set)",
-            ),
-            Self::Connect(why) => write!(f, "could not reach the X server: {why}"),
-            Self::Connection(why) => write!(f, "the connection to the X server failed: {why}"),
-            Self::UnknownWindow(id) => write!(f, "no plugin window {:#x}", id.0),
-            Self::NotX11(parent) => write!(
-                f,
-                "the plugin's window cannot belong to a {:?} window",
-                parent.api
-            ),
-        }
-    }
-}
-
-impl std::error::Error for WindowError {}
 
 impl From<ConnectionError> for WindowError {
     fn from(error: ConnectionError) -> Self {
@@ -126,48 +88,6 @@ impl From<ConnectError> for WindowError {
     fn from(error: ConnectError) -> Self {
         Self::Connect(error.to_string())
     }
-}
-
-/// A plugin window, by its X11 id.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PluginWindowId(pub u32);
-
-impl PluginWindowId {
-    /// The id to hand the plugin's `set_parent`.
-    pub const fn native(self) -> NativeWindow {
-        NativeWindow::x11(self.0 as u64)
-    }
-}
-
-/// What the pump reads from a plugin window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PluginWindowEvent {
-    /// The close button, or the window manager's close: `WM_DELETE_WINDOW`.
-    /// The window is still there; the pump closes the GUI, then destroys it.
-    CloseRequested,
-    /// The window's size changed from outside -- the user dragged its edge,
-    /// or a tiling compositor sized it. Not reported for a size the pump set
-    /// itself with [`PluginWindows::resize`].
-    Resized(GuiSize),
-    /// Keyboard focus came to the window, or to the plugin's window inside
-    /// it.
-    FocusIn,
-    /// Keyboard focus left the window and everything inside it. Hiding a
-    /// focused window with [`PluginWindows::hide`] reports this too.
-    FocusOut,
-}
-
-/// What a new plugin window is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PluginWindowSpec<'a> {
-    /// The plugin's and the track's name, as the spec asks
-    /// (`11-plugin-gui-windows.md`, policy 2).
-    pub title: &'a str,
-    /// The size the plugin's GUI asked for, in physical pixels.
-    pub size: GuiSize,
-    /// Whether the plugin can be resized (`HostedGui::can_resize`). When it
-    /// cannot, the size hints fix the window at its size.
-    pub resizable: bool,
 }
 
 /// `WM_NORMAL_HINTS`: ICCCM's `WM_SIZE_HINTS`, eighteen `CARD32`s.
@@ -224,16 +144,6 @@ impl SizeHints {
         words[8] = self.max.1;
         words
     }
-}
-
-/// A window's size as X11 can hold it: at least 1, at most [`MAX_EXTENT`].
-/// X11 refuses a zero-sized window outright, and a plugin that reports 0x0
-/// before it has laid itself out is not rare.
-pub fn extent(size: GuiSize) -> (u32, u32) {
-    (
-        size.width.clamp(1, MAX_EXTENT),
-        size.height.clamp(1, MAX_EXTENT),
-    )
 }
 
 /// `title` as `WM_NAME`'s `STRING` type holds it: ISO 8859-1, anything
@@ -321,9 +231,9 @@ pub fn window_properties(atoms: &Atoms, spec: &PluginWindowSpec<'_>) -> Vec<Prop
 /// `WM_TRANSIENT_FOR` naming `parent`, which must be an X11 window.
 pub fn transient_for_property(parent: NativeWindow) -> Result<Property, WindowError> {
     let id = match parent.api {
-        GuiApi::X11 => u32::try_from(parent.id).map_err(|_| WindowError::NotX11(parent))?,
-        // `GuiApi` is non-exhaustive: Cocoa and Win32 arrive later.
-        _ => return Err(WindowError::NotX11(parent)),
+        // An id X11 cannot have is no X11 window either.
+        GuiApi::X11 => u32::try_from(parent.id).map_err(|_| WindowError::ForeignParent(parent))?,
+        _ => return Err(WindowError::ForeignParent(parent)),
     };
     Ok(Property {
         name: AtomEnum::WM_TRANSIENT_FOR.into(),
@@ -1016,7 +926,7 @@ mod tests {
     #[test]
     fn transient_for_refuses_an_id_x11_cannot_have() {
         let parent = NativeWindow::x11(u64::from(u32::MAX) + 1);
-        assert_eq!(transient_for_property(parent), Err(WindowError::NotX11(parent)));
+        assert_eq!(transient_for_property(parent), Err(WindowError::ForeignParent(parent)));
     }
 
     #[test]

@@ -537,7 +537,7 @@ words. **Do not reopen this as a version-bump question.**
 | 08 | Plugin browser, the menu row, and the face for plugins without a GUI | #28 | **UI build**, drafted with `slint-sketch` | **done 2026-09-24** (MOO-83; remainder MOO-228, MOO-229: pins, list, selectors landed 2026-09-26) |
 | 09 | A channel source that is a boxed node | #29 | core, engine, session | **done 2026-09-24** (MOO-84) |
 | 10 | CLAP instruments | #29 | plugin-host, engine | **done 2026-09-25** (MOO-85) |
-| 11 | Plugin GUIs in their own windows | #30 | plugin-host, **UI build** | **done 2026-09-29** (MOO-86: host side MOO-300, the window MOO-301, the pump and face MOO-302; Adam's real-desktop checks passed; remainder MOO-303, MOO-343). macOS (MOO-452): the host offers Cocoa (MOO-479); the window (MOO-480) and the pump (MOO-481) to come |
+| 11 | Plugin GUIs in their own windows | #30 | plugin-host, **UI build** | **done 2026-09-29** (MOO-86: host side MOO-300, the window MOO-301, the pump and face MOO-302; Adam's real-desktop checks passed; remainder MOO-303, MOO-343). macOS (MOO-452): the host offers Cocoa (MOO-479), the window is an `NSPanel` (MOO-480); the pump (MOO-481) to come |
 | 12 | VST3 | — | plugin-host | outline only |
 | 13 | AU (macOS, optional) | — | plugin-host | outline only |
 
@@ -2056,6 +2056,52 @@ Platform) and the pump (MOO-481, Interface) follow.
 
 Nothing here opens a real window. The build box has no macOS target; macOS
 CI on the leg's draft PR is what compiled and ran it.
+
+## Step 11 on macOS: the window, recorded 2026-10-01 (MOO-480)
+
+The second leg: a window of mooloop's own for a Cocoa GUI to embed into,
+in `crates/mooloop-plugin-window`.
+
+- **One surface, two platforms.** `window.rs` holds what both speak
+  (`PluginWindowId`, `PluginWindowSpec`, `PluginWindowEvent`,
+  `WindowError`); `x11.rs` is compiled off macOS, `cocoa.rs` on it, and
+  the crate root re-exports the platform's `PluginWindows`. The calls are
+  the same, so `ui/src/plugin_gui.rs` compiles and runs unchanged on both.
+  `x11rb` is a dependency off macOS only; the `objc2` 0.6 family (`objc2`,
+  `objc2-foundation`, `objc2-app-kit`, all already in the lock through the
+  engine's CoreAudio bindings and winit) on macOS only, with only the
+  features a panel needs, so nothing new entered the lock.
+- **An `NSPanel`**, titled, closable, resizable only when the plugin is,
+  centred, made hidden. Its content view is the plugin's parent:
+  `PluginWindowId::native()` gives it, from a main-thread table of open
+  panels (the id is a `u32` of mooloop's, since the pump and its tests
+  name ids that way; an id that names no open panel is a null view).
+  Sizes are points, unconverted. A resize keeps the title bar where it was
+  (Cocoa's origin is the bottom-left). A delegate per panel reports the
+  close button (`windowShouldClose:` answers no, so the pump closes the GUI
+  first and then destroys the panel), a resize from outside (not one the
+  pump set), and key-window changes as focus.
+- **Above the main window**: `DisplayBackend::Cocoa` can set transient.
+  `set_transient_for` makes the panel a floating panel (above mooloop's
+  windows), and every panel hides while mooloop is not the active
+  application (`hidesOnDeactivate`), as a utility panel does. A child window (`addChildWindow:`) was not
+  used: it would be dragged along with the main window. So the Wayland
+  workaround, hiding on focus loss, never runs on macOS.
+- **Main thread only.** `PluginWindows::connect` refuses any other thread
+  (`WindowError::NotMainThread`); the type is `!Send`, so it cannot leave.
+- **"Run under XWayland" is inert on macOS**: `XWAYLAND_SETTING_APPLIES`
+  is false there and `plan_backend` forces nothing and expects Cocoa.
+  Hiding the Preferences toggle is MOO-481's (Interface).
+- **Tests**: `cocoa.rs`'s pure helpers and the off-main-thread refusal run
+  in macOS CI's unit tests. `tests/cocoa_window.rs` has no libtest harness,
+  so its `main` is the main thread: it makes a real panel, checks the
+  content view is the parent, resizes it both ways, presses the close
+  button (`performClose:`) and destroys it. It opens a window, so it runs
+  only with `CI` or `MOOLOOP_WINDOW_TESTS` set: macOS CI runs it, a Mac
+  desktop does not unless asked. It is the twin of the ignored
+  `a_window_on_a_real_x_server`.
+
+A real Mac check with a real plugin is Adam's, asked once MOO-481 lands.
 
 ## The test plugins
 
