@@ -237,8 +237,7 @@ requires the same samples as the install, and as a song never edited (with
 a removed channel muted, or a moved one on a track of its own so every track
 sums in the same order). The session keeps what its reconcilers had sent,
 renumbered (`Session::send_channel_edit`), so the next tick sends only what
-the edit changed. Track edits, a single-row preset loaded onto a
-container, and undo still install; an effect preset, loaded
+the edit changed. Undo still installs; an effect preset, loaded
 into a device or added as a new one, goes through the per-slot
 `InstallEffect` path like any insert.
 
@@ -258,6 +257,25 @@ did not (MOO-494). `pattern_edit_tests.rs` holds the command to the
 install's samples, to a song made with the edit from the start, and to a
 live lane clear. A pattern edit moves no seat, so the session keeps its
 mirrors as they were (`Session::send_pattern_edit`).
+
+**Adding, removing or moving a track is a command too**
+(`StructuralCommand::ReseatTracks`). The track bank is rotated in place: an
+added track's strip, built on the control thread, is pushed into the
+reserved capacity and rotated to its seat; a removed one's is rotated to
+the end and popped into the payload; a moved one is rotated. Every
+channel's destination, every channel's modulation routes and every lane
+scoped to a track follow the edit. Everything the mixer derives from the
+whole bank arrives built from the incoming project -- the track graph, the
+send bank, a compensation ring per producer, the console accumulators, the
+solo verdicts and the input routing (an audio input can tap a track) --
+and a surviving send keeps its ring and level, and a producer owed the same
+delay keeps its live ring, as the install's carry keeps them.
+`track_edit_tests.rs` holds the command to the install's samples and mixer
+derivations, with a latent limiter, a send, two console sums and a soloed
+track, and to a song made with the edit from the start. The session sends
+its own latency plan with the command (`Session::send_track_edit`), so the
+reconcilers' mirrors are set to what was installed and the next tick sends
+nothing.
 
 **A project install carries effect devices by `DeviceId`** (MOO-137, agreed
 with Realtime Engine on 2026-09-23). `carry_plan` still carries a channel or

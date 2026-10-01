@@ -382,6 +382,18 @@ impl ChannelPattern {
     /// and without allocating, so the engine can run it where the edit
     /// arrives.
     pub fn rescope_lanes(&mut self, edit: crate::ChannelEdit) {
+        self.rescope_lane_addresses(crate::ListEdit::Channel(edit));
+    }
+
+    /// [`Self::rescope_lanes`] for a track edit: a lane scoped to a track's
+    /// chain or strip follows the track, and one whose track was removed
+    /// closes -- [`crate::structure::rescope_lanes_for_track`] for the
+    /// preallocated bank, in place and without allocating.
+    pub fn rescope_track_lanes(&mut self, edit: crate::TrackEdit) {
+        self.rescope_lane_addresses(crate::ListEdit::Track(edit));
+    }
+
+    fn rescope_lane_addresses(&mut self, edit: crate::ListEdit) {
         let mut index = 0;
         while index < self.open_lanes {
             match edit.address(self.lanes[index].target) {

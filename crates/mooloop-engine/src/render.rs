@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
 use mooloop_core::{
-    audio_tap_index, compile_bus_graph, AutomationLane, ChannelEdit, ChannelSource,
+    audio_tap_index, compile_bus_graph, AutomationLane, ChannelEdit, ChannelSource, TrackEdit,
     CompiledAudioGraph, CompiledBusGraph, DeviceKind, OutletDescriptor, PublishesOutlets,
     Ds01Params, DrumSynthParams, EffectTarget, EngineCommand, GeneratorParams,
     LoopRange, ModDestinationDescriptor, MusicalEdge, PlaybackMode,
@@ -207,6 +207,70 @@ pub(crate) fn rotate_seat<T>(seats: &mut [T], from: usize, to: usize) {
     } else if to < from {
         seats[to..=from].rotate_right(1);
     }
+}
+
+/// The latency compensation `project` compiles to over `graph`, each
+/// device's own latency supplied by `own`. What an install derives and what
+/// `Session::latency_plan` derives with the hosted plugins' real latencies.
+fn project_latency_with(
+    project: &Project,
+    graph: &CompiledBusGraph,
+    own: &dyn Fn(&mooloop_core::EffectSlotState) -> u32,
+) -> mooloop_core::CompiledLatency {
+    let mut channel_latency = [0u32; MAX_CHANNELS];
+    let mut channel_bus = [MASTER_BUS; MAX_CHANNELS];
+    for (index, channel) in project.channels.iter().take(MAX_CHANNELS).enumerate() {
+        channel_latency[index] = mooloop_core::chain_latency_with(&channel.setup.effects, own);
+        channel_bus[index] = channel.setup.channel.bus;
+    }
+    let mut bus_latency = [0u32; MAX_BUSES];
+    for (index, bus) in project.buses.iter().take(MAX_BUSES).enumerate() {
+        bus_latency[index] = mooloop_core::chain_latency_with(&bus.effects, own);
+    }
+    // Why a non-sorting bank has no sends is written once, in
+    // `mooloop_core::mixer`, because `Session::latency_plan` has to make the
+    // same decision and for a while did not.
+    compile_latency(
+        graph,
+        &channel_latency,
+        &channel_bus,
+        &bus_latency,
+        &compensable_send_edges(&project.buses),
+    )
+}
+
+/// The latency compensation an install of `project` builds: every device at
+/// its kind's latency, a hosted plugin at none until its processor is in.
+#[cfg(test)]
+pub(crate) fn project_latency(project: &Project) -> mooloop_core::CompiledLatency {
+    project_latency_with(
+        project,
+        &compile_bus_graph(&project.buses).unwrap_or_default(),
+        &|effect| effect.kind().latency_frames(),
+    )
+}
+
+/// Every send in `project`, flattened for the engine's bank with the delays
+/// `plan` gives them, in the order `mooloop_core::send_edges` flattens them.
+/// None for a bank that does not sort, which `plan` has no send entries for.
+fn project_send_specs(project: &Project, plan: &mooloop_core::CompiledLatency) -> Vec<SendSpec> {
+    let sorts = sends_are_compensable(&project.buses);
+    project
+        .buses
+        .iter()
+        .take(if sorts { MAX_BUSES } else { 0 })
+        .enumerate()
+        .flat_map(|(index, setup)| setup.sends.iter().map(move |send| (index, send)))
+        .zip(0..)
+        .map(|((index, send), edge)| SendSpec {
+            producer: EffectTarget::Bus(index as u8),
+            target: send.target,
+            tap: send.tap,
+            enabled: send.enabled,
+            level: send.level,
+            delay: plan.send(edge),
+        })
+        .collect()
 }
 
 /// One generation's audio edges and the buffers they carry.
@@ -4444,6 +4508,34 @@ impl BusStrip {
             && self.sign.is_settled()
     }
 
+    /// What a project install does to each track's strip, and what an added
+    /// track's strip is built with ([`TrackReseat::new`]): the track's own
+    /// settings and chain, at `bpm`. Everything derived from the whole bank
+    /// -- compensation, console, solo -- is set elsewhere.
+    ///
+    /// Control thread only: it builds nodes. What it displaces is pushed
+    /// into `reclaim`.
+    fn load_setup(
+        &mut self,
+        setup: &mooloop_core::BusSetup,
+        sample_rate: u32,
+        bpm: f64,
+        reclaim: &mut Reclaim,
+    ) {
+        self.output.muted = setup.bus.muted;
+        self.output.set_volume(setup.bus.volume);
+        self.output.set_pan(setup.bus.pan);
+        self.polarity = setup.bus.polarity;
+        // Reset before installing: a document arriving is the one moment
+        // there is nothing to be continuous with, and a state being reused
+        // -- an undo, or a project with fewer tracks than the last one --
+        // would otherwise hand the new song a filter bank holding the old
+        // one's audio.
+        self.strip.reset();
+        self.strip.set_params(setup.bus.strip);
+        self.effects.load(&setup.effects, sample_rate, bpm, reclaim);
+    }
+
     /// Aim the output stage and the polarity at this block's knobs. First
     /// thing in the track's block, so `is_resting` and every mute decision
     /// after it are answered about this block rather than the last.
@@ -4635,6 +4727,154 @@ impl ChannelReseat {
     #[cfg(test)]
     pub(crate) fn carries_departed(&self) -> bool {
         self.strip.is_some()
+    }
+}
+
+/// What [`crate::StructuralCommand::ReseatTracks`] hands the audio thread:
+/// the track edit, an added track's strip, and everything the project it
+/// produced derives across the whole mixer -- the track graph, the sends,
+/// every producer's compensation ring, the console accumulators, the solo
+/// verdicts, where each channel feeds and the input routing -- all built on
+/// the control thread so the callback only moves, rotates and swaps.
+///
+/// The same box comes back as [`crate::StructuralReclaim::TracksReseated`],
+/// holding what it displaced -- a removed track's strip with its chain and
+/// tails, and the rings, sums and tables it replaced -- to be dropped on the
+/// control thread.
+pub struct TrackReseat {
+    edit: TrackEdit,
+    applied: bool,
+    /// An added track's strip on the way in, a removed one's on the way out;
+    /// reserved for one either way, so the callback pushes and pops without
+    /// allocating.
+    strips: Vec<BusStrip>,
+    graph: CompiledBusGraph,
+    sends: Box<SendBank>,
+    /// Each producer's compensation ring for the incoming plan, by incoming
+    /// seat; afterwards whichever ring of each pair was not kept.
+    channel_compensation: [Option<Box<IntegerDelay>>; MAX_CHANNELS],
+    bus_compensation: [Option<Box<IntegerDelay>>; MAX_BUSES],
+    console: [bool; MAX_BUSES],
+    /// A fresh accumulator for every track something console-encoded
+    /// reaches; afterwards the ones the tracks held.
+    console_sums: [Option<Box<StereoBus>>; MAX_BUSES],
+    solo_silenced: [bool; MAX_BUSES],
+    /// The track each channel feeds, by channel seat.
+    destinations: [u8; MAX_CHANNELS],
+    midi_routing: Box<MidiRouting>,
+    audio_input_routing: Box<AudioInputRouting>,
+    monitor: [bool; MAX_CHANNELS],
+}
+
+impl TrackReseat {
+    /// Build the payload for `edit`, from `project`, the document the edit
+    /// produced: `input` is its input state as an install takes it, and
+    /// `latency` its compensation plan (the session's, which knows each
+    /// hosted plugin's latency, or the install's, which counts each device
+    /// at its kind's). An added track is built here as an install of `project`
+    /// would build it, at `sample_rate`. Allocates; control thread only.
+    pub(crate) fn new(
+        edit: TrackEdit,
+        project: &Project,
+        input: crate::InputState,
+        latency: &mooloop_core::CompiledLatency,
+        sample_rate: u32,
+    ) -> Box<Self> {
+        let graph = compile_bus_graph(&project.buses).unwrap_or_default();
+        let tracks = project.buses.len().min(MAX_BUSES);
+        let solo_silenced = mooloop_core::mixer::solo_silenced(&project.buses);
+        // The master feeds nothing, so its switch would encode into a sum
+        // nothing decodes; `install_console` refuses it the same way.
+        let console: [bool; MAX_BUSES] = std::array::from_fn(|index| {
+            index != MASTER_BUS as usize
+                && project.buses.get(index).is_some_and(|setup| setup.bus.console)
+        });
+        let mut wanted = [false; MAX_BUSES];
+        for index in 1..tracks {
+            if console[index] {
+                wanted[graph.destination(index) as usize] = true;
+            }
+        }
+        let mut strips = Vec::with_capacity(1);
+        if let TrackEdit::Inserted(at) = edit {
+            let at = usize::from(at);
+            if let Some(setup) = project.buses.get(at).filter(|_| at < MAX_BUSES) {
+                let mut strip = BusStrip::new(sample_rate);
+                let mut reclaim = Reclaim::new();
+                strip.load_setup(
+                    setup,
+                    sample_rate,
+                    crate::transport::playable_tempo(project.bpm.into()),
+                    &mut reclaim,
+                );
+                strip.console = console[at];
+                strip.solo_silenced = solo_silenced[at];
+                strip.settle();
+                strip.effects.settle_ramps();
+                strips.push(strip);
+            }
+        }
+        let mut destinations = [MASTER_BUS; MAX_CHANNELS];
+        for (seat, channel) in project.channels.iter().take(MAX_CHANNELS).enumerate() {
+            // As `ChannelStrip::load_setup` decides it.
+            let destination = clamp_bus(channel.setup.channel.bus);
+            destinations[seat] = if usize::from(destination) < tracks.max(1) {
+                destination
+            } else {
+                MASTER_BUS
+            };
+        }
+        let mut monitor = [false; MAX_CHANNELS];
+        for (seat, on) in input.monitor.iter().take(MAX_CHANNELS).enumerate() {
+            monitor[seat] = *on;
+        }
+        Box::new(Self {
+            edit,
+            applied: false,
+            strips,
+            graph,
+            sends: Box::new(SendBank::new(&project_send_specs(project, latency), sample_rate)),
+            channel_compensation: std::array::from_fn(|seat| {
+                IntegerDelay::new(latency.channel(seat)).map(Box::new)
+            }),
+            bus_compensation: std::array::from_fn(|seat| {
+                IntegerDelay::new(latency.bus(seat)).map(Box::new)
+            }),
+            console,
+            console_sums: std::array::from_fn(|seat| {
+                wanted[seat].then(|| Box::new(StereoBus::with_capacity(MAX_BLOCK_SIZE)))
+            }),
+            solo_silenced,
+            destinations,
+            midi_routing: Box::new(MidiRouting {
+                routes: input.midi_routing,
+            }),
+            audio_input_routing: Box::new(AudioInputRouting {
+                taps: input.audio_input,
+            }),
+            monitor,
+        })
+    }
+
+    /// Retire a removed track's nodes on the thread that ran them; see
+    /// [`crate::StructuralReclaim::retire_nodes`].
+    pub(crate) fn retire_nodes(&mut self) {
+        for strip in &mut self.strips {
+            strip.retire_nodes();
+        }
+    }
+
+    /// Whether the edit reached the graph. A refused one comes back as it
+    /// went.
+    pub(crate) fn applied(&self) -> bool {
+        self.applied
+    }
+
+    /// Whether the payload carries a track's strip: a removed one's back, or
+    /// an added one's that never landed.
+    #[cfg(test)]
+    pub(crate) fn carries_strip(&self) -> bool {
+        !self.strips.is_empty()
     }
 }
 
@@ -6573,6 +6813,115 @@ impl RenderState {
         std::mem::swap(&mut self.audio, &mut reseat.audio);
     }
 
+    /// Apply a track edit to the graph in place: an added track's strip
+    /// arrives built at its seat, a removed one's is taken out and the gap
+    /// closed, a moved one's is lifted to its new seat and the ones it passed
+    /// shift by one. Every other track keeps its strip -- chain, tails,
+    /// filter and fader state -- and every channel keeps sounding. Whatever
+    /// names a track follows the edit: each channel's destination, every
+    /// modulation route and lane scoped to a track. The whole-mixer
+    /// derivations -- track graph, sends, compensation, console, solo -- are
+    /// the incoming project's, with a surviving send's ring and level and a
+    /// same-length compensation ring kept live, as the install's carry keeps
+    /// them. Afterwards the graph is what an install of the project the edit
+    /// produced would build, with every strip carried.
+    ///
+    /// Audio thread: moves, rotates and swaps, allocating and freeing
+    /// nothing. Refuses the master's seat, a seat that does not exist, a move
+    /// to where the track already is and an addition to a full bank, and
+    /// `reseat` then comes back as it arrived ([`TrackReseat::applied`] is
+    /// false).
+    fn reseat_tracks(&mut self, reseat: &mut TrackReseat) {
+        let tracks = self.buses.len();
+        let master = usize::from(MASTER_BUS);
+        let edit = reseat.edit;
+        match edit {
+            TrackEdit::Removed(at) => {
+                let at = usize::from(at);
+                if at == master
+                    || at >= tracks
+                    || !reseat.strips.is_empty()
+                    || reseat.strips.capacity() == 0
+                {
+                    return;
+                }
+                self.buses[at..].rotate_left(1);
+                let Some(departed) = self.buses.pop() else {
+                    return;
+                };
+                // Into the room reserved for it: the departed chain and its
+                // tails go back to be dropped on the control thread.
+                reseat.strips.push(departed);
+            }
+            TrackEdit::Inserted(at) => {
+                let at = usize::from(at);
+                if at == master
+                    || at > tracks
+                    || tracks >= MAX_BUSES.min(self.buses.capacity())
+                    || reseat.strips.len() != 1
+                {
+                    return;
+                }
+                let Some(arrival) = reseat.strips.pop() else {
+                    return;
+                };
+                self.buses.push(arrival);
+                self.buses[at..].rotate_right(1);
+            }
+            TrackEdit::Moved { from, to } => {
+                let (from, to) = (usize::from(from), usize::from(to));
+                if from == master || to == master || from >= tracks || to >= tracks || from == to {
+                    return;
+                }
+                rotate_seat(&mut self.buses, from, to);
+            }
+        }
+        reseat.applied = true;
+        for seat in 0..self.live_channels() {
+            let mut rack = self.modulation[seat];
+            if rack.rescope_tracks(edit) {
+                self.write_mod_rack(seat, rack);
+            }
+        }
+        self.sequencer.rescope_tracks(edit);
+        for (seat, strip) in self.strips.iter_mut().enumerate() {
+            strip.destination = reseat.destinations[seat];
+            keep_live_ring(&mut reseat.channel_compensation[seat], &mut strip.compensation);
+            std::mem::swap(&mut strip.compensation, &mut reseat.channel_compensation[seat]);
+        }
+        for (seat, strip) in self.buses.iter_mut().enumerate() {
+            keep_live_ring(&mut reseat.bus_compensation[seat], &mut strip.compensation);
+            std::mem::swap(&mut strip.compensation, &mut reseat.bus_compensation[seat]);
+            strip.solo_silenced = reseat.solo_silenced[seat];
+            strip.console = reseat.console[seat];
+            // A fresh accumulator where one is wanted and none where it is
+            // not, as the install leaves every track: the sum is rebuilt each
+            // block, so nothing that sounds is lost with the old one.
+            std::mem::swap(&mut strip.console_sum, &mut reseat.console_sums[seat]);
+            strip.console_dirty = false;
+        }
+        // A send is matched by where its two ends went, so a surviving one
+        // keeps its ring and its level; one to or from a removed track is
+        // left behind with the old bank.
+        reseat.sends.adopt_rings_from(&mut self.sends, |seat| match seat {
+            EffectTarget::Bus(track) => edit.track(track).map(EffectTarget::Bus),
+            channel => Some(channel),
+        });
+        std::mem::swap(&mut self.sends, &mut reseat.sends);
+        if let TrackEdit::Inserted(at) = edit {
+            // An added track's sends start at their levels, as its strip
+            // does; nothing of it was sounding to be continuous with.
+            if let Some(strip) = self.buses.get(usize::from(at)) {
+                let silenced = strip.output.muted || strip.solo_silenced;
+                self.sends.settle(EffectTarget::Bus(at), silenced);
+            }
+        }
+        self.bus_graph = reseat.graph;
+        self.monitor = reseat.monitor;
+        std::mem::swap(&mut self.midi_routing, &mut reseat.midi_routing);
+        std::mem::swap(&mut self.audio_input_routing, &mut reseat.audio_input_routing);
+    }
+
     /// Put `rack` at `seat` and tell the running modulators which slots
     /// changed. Written directly rather than through `edit_modulation`, whose
     /// destination diff would restore base values at seats that, mid
@@ -6883,6 +7232,64 @@ impl RenderState {
         ))
     }
 
+    /// Which strip sits at track `seat`, as an address: its summing buffer's,
+    /// which moves with the strip wherever its seat goes.
+    #[cfg(test)]
+    pub(crate) fn track_identity(&self, seat: usize) -> usize {
+        self.buses[seat].bus.l.as_ptr() as usize
+    }
+
+    /// The modulation matrix the channel at `seat` runs.
+    #[cfg(test)]
+    pub(crate) fn mod_rack(&self, seat: usize) -> ModRack {
+        self.modulation[seat]
+    }
+
+    /// How many tracks hold a console accumulator.
+    #[cfg(test)]
+    pub(crate) fn console_sums_held(&self) -> usize {
+        self.buses.iter().filter(|strip| strip.console_sum.is_some()).count()
+    }
+
+    /// Everything the mixer derives from the whole bank, as the graph holds
+    /// it: the track graph, the routes of the sends and their delays, every
+    /// compensation ring's length, the console switches and accumulators,
+    /// the solo verdicts and where each channel feeds.
+    #[cfg(test)]
+    pub(crate) fn mixer_derivations(&self) -> String {
+        let sends: Vec<_> = (0..PRODUCER_SLOTS)
+            .flat_map(|slot| {
+                let producer = producer_at(slot);
+                self.sends.range(producer).map(move |index| (producer, index))
+            })
+            .map(|(producer, index)| {
+                let send = &self.sends.sends[index];
+                (producer, send.target, send.tap, ring_frames(&send.compensation))
+            })
+            .collect();
+        let tracks: Vec<_> = self
+            .buses
+            .iter()
+            .map(|strip| {
+                (
+                    ring_frames(&strip.compensation),
+                    strip.console,
+                    strip.console_sum.is_some(),
+                    strip.solo_silenced,
+                )
+            })
+            .collect();
+        let channels: Vec<_> = self
+            .strips
+            .iter()
+            .map(|strip| (ring_frames(&strip.compensation), strip.destination, strip.solo_silenced))
+            .collect();
+        format!(
+            "graph {:?}\nsends {sends:?}\ntracks {tracks:?}\nchannels {channels:?}",
+            self.bus_graph
+        )
+    }
+
     /// The slot each seat publishes its audio into.
     #[cfg(test)]
     pub(crate) fn audio_bank(&self) -> ChannelAudioBank {
@@ -7048,25 +7455,12 @@ impl RenderState {
         }
         for (index, strip) in self.buses.iter_mut().enumerate() {
             match project.buses.get(index) {
-                Some(setup) => {
-                    strip.output.muted = setup.bus.muted;
-                    strip.output.set_volume(setup.bus.volume);
-                    strip.output.set_pan(setup.bus.pan);
-                    strip.polarity = setup.bus.polarity;
-                    // Reset before installing: a document arriving is the
-                    // one moment there is nothing to be continuous with, and
-                    // a state being reused -- an undo, or a project with
-                    // fewer tracks than the last one -- would otherwise hand
-                    // the new song a filter bank holding the old one's audio.
-                    strip.strip.reset();
-                    strip.strip.set_params(setup.bus.strip);
-                    strip.effects.load(
-                        &setup.effects,
-                        self.sample_rate,
-                        self.transport.bpm,
-                        &mut self.reclaim,
-                    );
-                }
+                Some(setup) => strip.load_setup(
+                    setup,
+                    self.sample_rate,
+                    self.transport.bpm,
+                    &mut self.reclaim,
+                ),
                 None => strip.reset(&mut self.reclaim),
             }
         }
@@ -7319,28 +7713,7 @@ impl RenderState {
         project: &Project,
         own: &dyn Fn(&mooloop_core::EffectSlotState) -> u32,
     ) {
-        let mut channel_latency = [0u32; MAX_CHANNELS];
-        let mut channel_bus = [MASTER_BUS; MAX_CHANNELS];
-        for (index, channel) in project.channels.iter().take(MAX_CHANNELS).enumerate() {
-            channel_latency[index] = mooloop_core::chain_latency_with(&channel.setup.effects, own);
-            channel_bus[index] = channel.setup.channel.bus;
-        }
-        let mut bus_latency = [0u32; MAX_BUSES];
-        for (index, bus) in project.buses.iter().take(MAX_BUSES).enumerate() {
-            bus_latency[index] = mooloop_core::chain_latency_with(&bus.effects, own);
-        }
-        // Why a non-sorting bank has no sends is written once, in
-        // `mooloop_core::mixer`, because `Session::latency_plan` has to make
-        // the same decision and for a while did not.
-        let sorts = sends_are_compensable(&project.buses);
-        let edges = compensable_send_edges(&project.buses);
-        let plan = compile_latency(
-            &self.bus_graph,
-            &channel_latency,
-            &channel_bus,
-            &bus_latency,
-            &edges,
-        );
+        let plan = project_latency_with(project, &self.bus_graph, own);
         for (index, strip) in self.strips.iter_mut().enumerate() {
             strip.compensation = IntegerDelay::new(plan.channel(index)).map(Box::new);
         }
@@ -7349,25 +7722,7 @@ impl RenderState {
         }
         // The sends belong to the same plan, so they are built from the same
         // pass rather than a second one that could disagree with it.
-        let specs: Vec<SendSpec> = project
-            .buses
-            .iter()
-            .take(if sorts { MAX_BUSES } else { 0 })
-            .enumerate()
-            .flat_map(|(index, setup)| {
-                setup.sends.iter().map(move |send| (index, send))
-            })
-            .zip(0..)
-            .map(|((index, send), edge)| SendSpec {
-                producer: EffectTarget::Bus(index as u8),
-                target: send.target,
-                tap: send.tap,
-                enabled: send.enabled,
-                level: send.level,
-                delay: plan.send(edge),
-            })
-            .collect();
-        *self.sends = SendBank::new(&specs, self.sample_rate);
+        *self.sends = SendBank::new(&project_send_specs(project, &plan), self.sample_rate);
     }
 
     /// Resolve an effect address to the chain that owns it. Both arms are
@@ -8050,6 +8405,10 @@ impl RenderState {
             StructuralCommand::ReseatChannels { mut reseat } => {
                 self.reseat_channels(&mut reseat);
                 Some(StructuralReclaim::ChannelsReseated(reseat))
+            }
+            StructuralCommand::ReseatTracks { mut reseat } => {
+                self.reseat_tracks(&mut reseat);
+                Some(StructuralReclaim::TracksReseated(reseat))
             }
             StructuralCommand::SetContainerSpan {
                 target,

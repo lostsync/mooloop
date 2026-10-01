@@ -376,6 +376,23 @@ impl Sequencer {
         }
     }
 
+    /// Point every lane scoped to a track through a track edit, across the
+    /// patterns and channels the song holds: a lane on a moved or renumbered
+    /// track follows it, and one on a removed track closes. Notes and
+    /// channel-scoped lanes are untouched. The result is what
+    /// [`Self::load_project`] builds from the project the edit produced.
+    ///
+    /// Realtime-safe: rewrites and closes preallocated lanes, allocating and
+    /// freeing nothing.
+    pub fn rescope_tracks(&mut self, edit: mooloop_core::TrackEdit) {
+        let active = self.active_channels;
+        for pattern in self.patterns.iter_mut().take(self.active_patterns) {
+            for lanes in &mut pattern.channels[..active] {
+                lanes.rescope_track_lanes(edit);
+            }
+        }
+    }
+
     /// Replace musical state without growing any realtime-owned allocation.
     ///
     /// Runs off the audio thread (the executor installs a `RenderState` that

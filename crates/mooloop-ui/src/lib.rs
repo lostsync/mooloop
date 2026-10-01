@@ -49,6 +49,8 @@ mod meter;
 mod channel_removal_tests;
 #[cfg(test)]
 mod pattern_edit_tests;
+#[cfg(test)]
+mod track_edit_tests;
 #[cfg(feature = "mockup")]
 mod mockup;
 mod settings;
@@ -2477,10 +2479,9 @@ fn queue_channel_move(
 
 /// Add a mixer track, undoably.
 ///
-/// A whole-document edit rather than an incremental command, because the
-/// engine builds a strip per track when a project loads -- `grow_buses` --
-/// and there is no structural command that adds one. The same door
-/// `queue_channel_insert` uses, and undoable for the same reason.
+/// Tagged as the track list edit it is, so the pump sends it to the engine
+/// as one command (`edit_tracks_in_ui`) rather than an install, as it does a
+/// removal or a move.
 fn queue_track_add(
     tx: &ProjectEditSender,
     state: &Rc<RefCell<UiState>>,
@@ -2492,10 +2493,16 @@ fn queue_track_add(
     };
     let mut project = before.project.clone();
     let samples = before.samples.clone();
-    if project.add_track().is_none() {
+    let Some(at) = project.add_track() else {
         return false;
-    }
-    queue_project_edit(tx, before, ProjectSnapshot { project, samples }, "Track added")
+    };
+    queue_structural_edit(
+        tx,
+        before,
+        ProjectSnapshot { project, samples },
+        "Track added",
+        Some(ListEdit::Track(TrackEdit::Inserted(at as u8))),
+    )
 }
 
 /// Remove a mixer track, undoably.
@@ -11601,12 +11608,12 @@ impl AppUi {
             });
         }
 
-        // Track structure. Adding and removing a track reinstalls the
-        // document, because the engine materialises a strip per track when a
-        // project loads and everything that named a later track has to
-        // renumber -- the same path a channel paste takes, and undoable for
-        // the same reason. A rename touches neither, so it is a plain session
-        // edit like a pattern rename.
+        // Track structure. Adding, removing and moving a track are project
+        // edits tagged with their `TrackEdit`, so everything that named a
+        // later track renumbers and the step is undoable; the pump sends each
+        // to the engine as one command, as it does a channel paste. A rename
+        // touches neither, so it is a plain session edit like a pattern
+        // rename.
         {
             let tx = project_edit_tx.clone();
             let commands = command_state.clone();
@@ -17932,6 +17939,9 @@ impl AppUi {
                             // is one command too.
                             let pattern_edit =
                                 lone_pattern_edit(&edit, engine_backlog.has_superseded());
+                            // And a track added, removed or moved.
+                            let track_edit =
+                                lone_track_edit(&edit, engine_backlog.has_superseded());
                             let installed = if let Some(channel_edit) = channel_edit {
                                 edit_channels_in_ui(
                                     &mut handle,
@@ -17951,6 +17961,16 @@ impl AppUi {
                                     &edit.project,
                                     &edit.samples,
                                     pattern_edit,
+                                )
+                            } else if let Some(track_edit) = track_edit {
+                                edit_tracks_in_ui(
+                                    &mut handle,
+                                    default_sample_for_pump.as_ref(),
+                                    &st,
+                                    &window,
+                                    &edit.project,
+                                    &edit.samples,
+                                    track_edit,
                                 )
                             } else {
                                 install_project_in_ui(
@@ -19647,6 +19667,53 @@ fn lone_pattern_edit(edit: &ProjectEdit, merged: bool) -> Option<PatternEdit> {
         }
         _ => None,
     }
+}
+
+/// The track edit a queued edit is, when that is all it is and it can reach
+/// the engine as one command: a recorded track addition, removal or move
+/// that no older install was merged into (`merged`). Everything else
+/// installs.
+fn lone_track_edit(edit: &ProjectEdit, merged: bool) -> Option<TrackEdit> {
+    match (edit.edit, &edit.history) {
+        (Some(ListEdit::Track(track_edit)), Some((HistoryMove::Record, _))) if !merged => {
+            Some(track_edit)
+        }
+        _ => None,
+    }
+}
+
+/// Apply a track addition, removal or move to the engine as one command,
+/// with no install, for an edit whose result is `project`: the window takes
+/// the edited document in as an install's does, and every channel and track
+/// the edit keeps goes on sounding. `false` when the engine refused even the
+/// install this falls back to, as [`install_project_in_ui`] answers.
+fn edit_tracks_in_ui(
+    handle: &mut EngineHandle,
+    default_sample: Option<&Arc<SampleData>>,
+    state: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    project: &Project,
+    samples: &[Option<Arc<SampleData>>],
+    edit: TrackEdit,
+) -> bool {
+    let mut incoming = project.clone();
+    normalize_project_pattern_banks(&mut incoming);
+    let sent = state.borrow().session.engine_mirrors();
+    state.borrow_mut().replace_project(&incoming, samples, window);
+    let sent_edit = {
+        let mut st = state.borrow_mut();
+        let input = install_input(&st, &incoming);
+        st.session
+            .send_track_edit(handle, edit, Arc::new(incoming), input, sent)
+    };
+    if !sent_edit {
+        return install_project_in_ui(handle, default_sample, state, window, project, samples, true);
+    }
+    // The per-track ballistics are keyed by seat, and the edit renumbered
+    // the seats; the pump resets them on its next tick, as after an install.
+    state.borrow_mut().bus_meters_stale = true;
+    finish_project_in_ui(handle, state, window, true);
+    true
 }
 
 /// Apply a pattern clone, clear or removal to the engine as one command,

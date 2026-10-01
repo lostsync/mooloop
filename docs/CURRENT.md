@@ -1681,7 +1681,10 @@ with a commit loads and plays the render it played then.
   adds a track, and a track's device face renames it or removes it. Both are
   undoable, and a rename is one undo step however many characters it took.
   Removing one falls anything routed to it back to the master rather
-  than leaving it unheard.
+  than leaving it unheard. As of 2026-10-01 (MOO-466) adding, removing or
+  moving a track reaches the engine as one edit rather than a rebuild of the
+  song: every channel and every other track keeps its sounding notes, tails,
+  sends and delay compensation. Undo still rebuilds.
 
   **There is no `+ Bus` and no `+ Send`.** What a track *is* — an ordinary
   track, a bus, a send return — is decided entirely by what routes into it.

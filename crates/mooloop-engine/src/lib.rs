@@ -230,6 +230,8 @@ mod source_slot_tests;
 mod strip_tests;
 #[cfg(test)]
 mod take_tests;
+#[cfg(test)]
+mod track_edit_tests;
 
 use executor::{Executor, ExecutorIo};
 #[cfg(target_os = "macos")]
@@ -239,7 +241,7 @@ use jack_driver::{JackDriver as PlatformDriver, Opening};
 use null_driver::NullDriver;
 use render::{ReclaimedEffect, RenderState};
 pub use render::{
-    AudioTapBank, ChannelReseat, ChannelStorage, ContainerScratch, EffectSlot,
+    AudioTapBank, ChannelReseat, ChannelStorage, ContainerScratch, EffectSlot, TrackReseat,
     SendBank, SendSpec,
 };
 
@@ -357,6 +359,21 @@ pub enum StructuralCommand {
     /// itself, the removal of the last channel or an insertion into a full
     /// song is refused, and the box comes back untouched.
     ReseatChannels { reseat: Box<render::ChannelReseat> },
+    /// Apply a track edit -- an addition, a removal or a move -- to the
+    /// graph in place (`RenderState::reseat_tracks`). Every other track keeps
+    /// its strip, chain and tails in its new seat, every channel keeps
+    /// sounding, and the graph ends up as an install of the project the edit
+    /// produced would leave it, without building one.
+    ///
+    /// `reseat` carries the edit, an added track's strip and that project's
+    /// whole-mixer tables -- graph, sends, compensation, console, solo,
+    /// destinations, input routing -- built on this thread by
+    /// [`EngineHandle::edit_tracks`]; it comes back as
+    /// [`StructuralReclaim::TracksReseated`] holding a removed track's strip
+    /// and whatever the tables displaced. The master's seat, a seat that does
+    /// not exist, a move onto itself or an addition to a full bank is
+    /// refused, and the box comes back untouched.
+    ReseatTracks { reseat: Box<render::TrackReseat> },
     /// Replace what `channel` plays with `node`, built on this thread at its
     /// kind's defaults; the patch follows as parameter commands.
     ///
@@ -573,6 +590,10 @@ pub(crate) enum StructuralReclaim {
     /// channel's storage, an inserted one's empty lanes, the tables it
     /// replaced -- or, refused, everything it arrived with.
     ChannelsReseated(Box<render::ChannelReseat>),
+    /// A track edit's payload, holding what it displaced: a removed track's
+    /// strip with its chain, the rings, accumulators, sends and tables it
+    /// replaced -- or, refused, everything it arrived with.
+    TracksReseated(Box<render::TrackReseat>),
     /// A take displaced by a new one on the same channel, or one with no
     /// channel to record on.
     Take(Box<Take>),
@@ -611,6 +632,7 @@ impl StructuralReclaim {
             Self::HostedProcessor(node) => node.retire(),
             Self::RenderState { retired, .. } => retired.retire_nodes(),
             Self::ChannelsReseated(reseat) => reseat.retire_nodes(),
+            Self::TracksReseated(reseat) => reseat.retire_nodes(),
             Self::PreviewSample { .. }
             | Self::SamplerAudio(_)
             | Self::SamplerStretch(_)
@@ -1828,6 +1850,21 @@ impl EngineHandle {
                 StructuralReclaim::AudioGraph(bank) => drop(bank),
                 StructuralReclaim::TrackGraph(bank) => drop(bank),
                 StructuralReclaim::ChannelsReseated(reseat) => drop(reseat),
+                StructuralReclaim::TracksReseated(reseat) => {
+                    // `edit_tracks` checked the edit against the project it
+                    // recorded, so a refusal here means the two disagree. The
+                    // handle stops claiming to know what the engine holds, and
+                    // the next structural edit installs, which puts them back
+                    // in step (MOO-496).
+                    if !reseat.applied() {
+                        mooloop_core::log_error!(
+                            "audio",
+                            "a track edit was refused by the audio thread; the next edit installs"
+                        );
+                        self.last_installed = None;
+                    }
+                    drop(reseat);
+                }
                 StructuralReclaim::Take(take) => drop(take),
                 StructuralReclaim::MidiRouting(routing) => drop(routing),
                 StructuralReclaim::AudioInputRouting(routing) => drop(routing),
@@ -2036,6 +2073,72 @@ impl EngineHandle {
         if !self.send_structural(StructuralCommand::EditPattern { change }) {
             return false;
         }
+        self.last_installed = Some(project);
+        true
+    }
+
+    /// Apply a track addition, removal or move to the engine as one command
+    /// ([`StructuralCommand::ReseatTracks`]), with no install, for an edit
+    /// whose result is `project`. Every channel and every track the edit
+    /// does not remove goes on sounding; the transport goes on running.
+    ///
+    /// `input` is `project`'s input state as [`Self::install_project`] takes
+    /// it, and `latency` its compensation plan: what each channel, track and
+    /// send waits afterwards. The track graph, the console accumulators and
+    /// the solo verdicts are derived from `project` here, as an install
+    /// derives them.
+    ///
+    /// `false` means nothing was sent -- `project` is not what the edit makes
+    /// of the last project the engine took in (a seat that is not there, the
+    /// master's, a full bank, or no project taken in since the driver
+    /// opened), or the ring refused it -- and the handle is unchanged; the
+    /// caller installs `project` instead. The handle keeps no seat-keyed
+    /// state of its own for tracks, so all it commits on a send is `project`
+    /// as the last one taken in; should the audio thread refuse the command
+    /// anyway, [`Self::poll`] forgets that, and the next edit installs.
+    #[must_use]
+    pub fn edit_tracks(
+        &mut self,
+        edit: mooloop_core::TrackEdit,
+        project: Arc<mooloop_core::Project>,
+        input: InputState,
+        latency: &mooloop_core::CompiledLatency,
+    ) -> bool {
+        use mooloop_core::{TrackEdit, MASTER_BUS, MAX_BUSES};
+        let Some(live) = self.last_installed.as_ref() else {
+            return false;
+        };
+        let before = live.buses.len();
+        let master = usize::from(MASTER_BUS);
+        let fits = match edit {
+            TrackEdit::Removed(at) => {
+                let at = usize::from(at);
+                at != master && at < before && project.buses.len() + 1 == before
+            }
+            TrackEdit::Inserted(at) => {
+                let at = usize::from(at);
+                at != master && at <= before && before < MAX_BUSES && project.buses.len() == before + 1
+            }
+            TrackEdit::Moved { from, to } => {
+                let (from, to) = (usize::from(from), usize::from(to));
+                from != master
+                    && to != master
+                    && from != to
+                    && from < before
+                    && to < before
+                    && project.buses.len() == before
+            }
+        };
+        if !fits {
+            return false;
+        }
+        let reseat = render::TrackReseat::new(edit, &project, input, latency, self.sample_rate);
+        if !self.send_structural(StructuralCommand::ReseatTracks { reseat }) {
+            return false;
+        }
+        // Spectrum subscriptions are keyed by seat; the window re-sends its
+        // own after the edit, as it does after an install.
+        self.shared.device_telemetry.clear_spectra();
         self.last_installed = Some(project);
         true
     }

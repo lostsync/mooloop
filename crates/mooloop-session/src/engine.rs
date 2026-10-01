@@ -699,6 +699,44 @@ impl Session {
         true
     }
 
+    /// Apply a track addition, removal or move to the engine as one command
+    /// ([`EngineHandle::edit_tracks`]), with no install.
+    ///
+    /// For a session that has just taken in `project`, the document the
+    /// edit produced, through [`Self::replace_project`]; `sent` is
+    /// [`Self::engine_mirrors`] read before it did. The command carries this
+    /// session's own plan -- [`Self::latency_plan`], with each hosted
+    /// plugin's real latency -- so the track graph, the sends, the
+    /// compensation, the console accumulators and the track solo the engine
+    /// holds afterwards are what the reconcilers would send, and their
+    /// mirrors are set to exactly that: the next tick sends nothing. What
+    /// names channels only -- the stretch mirror -- comes back as it was.
+    ///
+    /// `false` means nothing reached the engine and the mirrors are as
+    /// `replace_project` left them; the caller installs `project` instead.
+    pub fn send_track_edit(
+        &mut self,
+        handle: &mut EngineHandle,
+        edit: mooloop_core::TrackEdit,
+        project: std::sync::Arc<mooloop_core::Project>,
+        input: mooloop_engine::InputState,
+        sent: EngineMirrors,
+    ) -> bool {
+        let plan = self.latency_plan();
+        if !handle.edit_tracks(edit, project, input, &plan) {
+            return false;
+        }
+        let routes = self.send_specs(&plan).iter().map(SendRoute::of).collect();
+        self.keep_mirrors(EngineMirrors {
+            compensation: CompensationSent::of(&plan),
+            console_sums: self.console_plan(),
+            solo_silenced: mooloop_core::mixer::solo_silenced(&self.buses),
+            track_graph: (compile_bus_graph(&self.buses).unwrap_or_default(), routes),
+            sampler_stretch: sent.sampler_stretch,
+        });
+        true
+    }
+
     /// Take `mirrors` back as what the reconcilers have sent, after a command
     /// that left the engine holding them, and settle the two the session
     /// derives from the document it now holds.

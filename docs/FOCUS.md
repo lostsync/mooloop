@@ -869,3 +869,12 @@ In the order worth playing:
     pattern's lane was sweeping should go back to its knob. Then undo each.
     `engine/src/pattern_edit_tests.rs` holds the samples to the old rebuild
     and to a song made that way; whether it feels instant is the question.
+37. **Adding, removing and moving tracks under a playing song** (MOO-466).
+    With a long reverb on one track, a send into another, a lookahead
+    Limiter on a third and a pad held across a bar, add a track, drag tracks
+    past each other and remove an empty one while it plays: no tail should
+    cut, no send should drop out, nothing should click or shift in time.
+    Then remove a track that has channels on it (they should carry on through
+    the master) and undo each. `engine/src/track_edit_tests.rs` holds the
+    samples to the old rebuild and to a song made that way; whether it
+    feels instant is the question.

@@ -272,3 +272,31 @@ an arm of `ReseatChannels`, because they move no seat. What they found:
   does, so a clear of a lane under the playhead is held to a live lane
   clear instead of to the install.
 
+**Track add, removal and move are the last** (step 03), as
+`StructuralCommand::ReseatTracks`. What they found:
+
+- **The track bank needs no spare.** `buses` is reserved for every track
+  at construction, so an added track's strip, built on the control thread,
+  is pushed and rotated into its seat, and a removed one's is rotated to
+  the end and popped into a payload `Vec` reserved for it. Nothing is reset
+  in place.
+- **What names a track is short**: each channel strip's destination, the
+  channels' modulation routes, lanes scoped to a track (in every channel's
+  patterns) and the audio-input routing. Everything else track-keyed is the
+  mixer's whole-bank derivation -- graph, sends, compensation, console
+  sums, solo -- and arrives built from the incoming project, with live
+  rings kept by the install's own rules (`adopt_rings_from` through the
+  edit's seat map, `keep_live_ring`).
+- **Here the install is a fair reference.** `carry_plan` matches tracks by
+  id and ignores outputs, sends and solo, so every surviving track is
+  carried; only a channel whose route names a renumbered track is rebuilt,
+  as MOO-487 says for channels. The parity test leaves that route out and
+  the song-made-with-the-edit test keeps it.
+- **A channel's route to a track's device does nothing in the engine**:
+  `RenderState` passes no modulation to a track's chain. The rack is still
+  rescoped, and `a_track_edit_rescopes_every_route_to_a_track` holds it to
+  the incoming project's, since no render can hear it.
+- **The session sends its own plan** with the command, the one with each
+  hosted plugin's latency, so the mirrors are set to what was installed
+  rather than renumbered.
+
