@@ -111,6 +111,37 @@ pub(crate) fn click(window: &MainWindow, point: (f32, f32)) {
     });
 }
 
+/// A press at `from`, `steps` moves of `step` each, and a release where the
+/// last move ended, with a frame's worth of mock time after the press and
+/// after every move.
+///
+/// The frames are what make this a user's drag. A real window draws between
+/// pointer events, and drawing is when a repeater whose model was replaced
+/// throws its rows away; without them a test goes on dragging an instance
+/// the window would already have discarded. The first one is also longer
+/// than a `Flickable`'s forwarding delay, so a press one held back reaches
+/// the control before the first move does.
+pub(crate) fn drag(window: &MainWindow, from: (f32, f32), step: (f32, f32), steps: usize) {
+    let frame = |ms| i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(ms));
+    let point = |n: usize| at((from.0 + step.0 * n as f32, from.1 + step.1 * n as f32));
+    let window = window.window();
+    window.dispatch_event(WindowEvent::PointerMoved { position: point(0) });
+    window.dispatch_event(WindowEvent::PointerPressed {
+        position: point(0),
+        button: PointerEventButton::Left,
+    });
+    frame(150);
+    for n in 1..=steps {
+        window.dispatch_event(WindowEvent::PointerMoved { position: point(n) });
+        frame(16);
+    }
+    window.dispatch_event(WindowEvent::PointerReleased {
+        position: point(steps),
+        button: PointerEventButton::Left,
+    });
+    frame(16);
+}
+
 /// Typing, one character at a time, into whatever holds the focus.
 pub(crate) fn type_text(window: &MainWindow, text: &str) {
     for character in text.chars() {

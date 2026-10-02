@@ -1696,9 +1696,9 @@ with a commit loads and plays the render it played then.
 - **Sends.** A track can route a copy of itself to another track, in addition
   to its output. The track's face carries a `Send to…` picker that offers the
   legal targets, and each send it gains draws a row there: the target's name,
-  where it taps, a switch, a remove, and a fader. The sends area draws exactly
-  the sends that exist and scrolls when they outgrow the room — there is no
-  ceiling on how many a track has.
+  where it taps, a switch, a remove, and a fader the width of the row. The
+  sends area draws exactly the sends that exist and scrolls when they outgrow
+  the room — there is no ceiling on how many a track has.
 
   **A send is a route, not a kind of track.** The track at the far end is an
   ordinary track that happens to be fed by sends, which is what makes it an

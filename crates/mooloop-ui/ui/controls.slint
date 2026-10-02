@@ -1981,6 +1981,11 @@ export component ParameterFader inherits Rectangle {
     in property <bool> bipolar;
     in property <length> label-width: 34px;
     in property <length> track-min-width: 112px;
+    /// Whether a horizontal track takes the whole width the fader is given.
+    /// By default it keeps to `track-min-width` and the rest of the width
+    /// stays empty; a fader with a line of its own has nothing to leave it
+    /// for, and the empty part does not answer the pointer.
+    in property <bool> track-fills;
     in property <length> layout-spacing: 6px;
     in property <color> fill: Theme.accent;
     in property <color> text-color: Theme.text-muted;
@@ -2041,7 +2046,7 @@ export component ParameterFader inherits Rectangle {
 
     if root.orientation == AudioOrientation.horizontal : HorizontalLayout {
         spacing: root.layout-spacing;
-        alignment: start;
+        alignment: root.track-fills ? LayoutAlignment.stretch : LayoutAlignment.start;
         Text {
             text: root.label;
             color: root.text-color;

@@ -355,6 +355,10 @@ export component SendRow inherits Rectangle {
             min-height: 20px;
             label-width: 0px;
             track-min-width: 40px;
+            // The fader has this line to itself, so its track takes all of
+            // it: left at its 40px minimum, the track would be the only part
+            // of the row a pointer could grab.
+            track-fills: true;
             layout-spacing: 4px;
             value: root.send.level;
             maximum: GainMath.db-to-linear(GainMath.fader-db[0]);

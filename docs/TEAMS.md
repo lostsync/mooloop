@@ -346,7 +346,9 @@ Files marked *shared* are split in the table above.
   (*shared*), `status_bar.rs`, `channel_colors.rs`, `mockup.rs`, `theme/`,
   `typed_value.rs`, `pump_profile.rs` (`MOOLOOP_PROFILE_UI`), `rack_displays.rs`
   and its tests (the pump's per-tick display models: rack meters and traces,
-  strip meters, lamps and playheads, MOO-261)
+  strip meters, lamps and playheads, MOO-261), `models.rs` (publishing into a
+  model a repeater draws without rebuilding its rows) and
+  `repeated_drag_tests.rs`
 - `ui/build.rs`, `ui/examples/`, `ui/tests/common/`
 - `ui/ui/`: `main.slint` (*shared*), `controls.slint`, `toolbar.slint`,
   `menubar.slint`, `channel-sidebar.slint`, `appearance-dialog.slint`,

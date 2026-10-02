@@ -13,6 +13,7 @@
 //! without an engine.
 
 use super::*;
+use crate::models::write_rows;
 
 /// What a rack slot's device reads when nothing has been published for it:
 /// the same resting values as `slot-meters()` in `main.slint`.
@@ -87,31 +88,13 @@ fn strip_level_display_changed(previous: &StripLevel, next: &StripLevel) -> bool
         || previous.clipping != next.clipping
 }
 
-/// Bring a `VecModel` to `values`, touching only the entries that differ, or
-/// resetting it when the length changed. Returns how many entries were
-/// written, so zero means no binding moved.
-pub(crate) fn write_values(model: &VecModel<f32>, values: &[f32]) -> usize {
-    if model.row_count() != values.len() {
-        model.set_vec(values.to_vec());
-        return values.len().max(1);
-    }
-    let mut written = 0;
-    for (index, value) in values.iter().enumerate() {
-        if model.row_data(index) != Some(*value) {
-            model.set_row_data(index, *value);
-            written += 1;
-        }
-    }
-    written
-}
-
-/// [`write_values`] into a trace model the pump made, which is always a
+/// [`write_rows`] into a trace model the pump made, which is always a
 /// `VecModel`; anything else is left alone.
 fn write_trace(model: &ModelRc<f32>, values: &[f32]) -> usize {
     model
         .as_any()
         .downcast_ref::<VecModel<f32>>()
-        .map_or(0, |vec| write_values(vec, values))
+        .map_or(0, |vec| write_rows(vec, values))
 }
 
 /// What one publish wrote, for the tests' "nothing moved, nothing written".
@@ -209,7 +192,7 @@ impl UiState {
     pub(crate) fn publish_strip_reductions(&self, reduction: &[f32]) -> DisplayWrites {
         DisplayWrites {
             meters: 0,
-            values: write_values(&self.strip_reductions, reduction),
+            values: write_rows(&self.strip_reductions, reduction),
         }
     }
 
@@ -218,7 +201,7 @@ impl UiState {
     pub(crate) fn publish_playheads(&self, positions: &[f32]) -> DisplayWrites {
         DisplayWrites {
             meters: 0,
-            values: write_values(&self.playhead_model, positions),
+            values: write_rows(&self.playhead_model, positions),
         }
     }
 }

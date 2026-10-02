@@ -979,6 +979,16 @@ writing another.
   property, which Rust sets with `set_*`; a dialog's own state).
   `controlled_faces_tests.rs` turns every slider on every face and then
   changes the document from outside; each one has to follow.
+- **A drag outlives the edit it sends.** Slint rebuilds every row of a `for`
+  repeater whose model is reset (`set_vec`) or replaced by a new `ModelRc`,
+  and a control in a rebuilt row has lost its press: the value moves once
+  and the drag ends. So where a repeated control's edit is republished into
+  the model its own row is drawn from, the publisher writes that model in
+  place (`ui/src/models.rs`), or the repeater counts something the edit
+  cannot change -- the strip's EQ rows repeat over the spec's band count,
+  not over the row's arrays. Adam, 2026-10-02: *"some controls are
+  near-impossible to drag. eq in the strip. slice markers"*.
+  `repeated_drag_tests.rs` drags each such control through several moves.
 - **Identity.** A control that can reach Rust names its parameter through its
   face's `modulation-edit-started(index)`, the one callback every face
   forwards with the parameter's identity. Learn, Automate and descriptor-read

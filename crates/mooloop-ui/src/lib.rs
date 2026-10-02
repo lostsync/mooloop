@@ -32,6 +32,8 @@ mod rack_displays;
 #[cfg(test)]
 mod rack_displays_tests;
 #[cfg(test)]
+mod repeated_drag_tests;
+#[cfg(test)]
 mod sampler_zone_tests;
 #[cfg(test)]
 mod source_names_tests;
@@ -45,6 +47,7 @@ mod plugin_ui_tests;
 #[cfg(test)]
 mod window_probe;
 mod meter;
+mod models;
 #[cfg(test)]
 mod channel_removal_tests;
 #[cfg(test)]
@@ -4479,7 +4482,8 @@ struct UiState {
     waveform_model: Rc<VecModel<f32>>,
     /// Slice boundaries of the selected channel, normalized against the
     /// published buffer so they ride the same `to-view` zoom the waveform and
-    /// every other marker already go through.
+    /// every other marker already go through. Written only through
+    /// [`UiState::publish_slices`].
     slice_model: Rc<VecModel<f32>>,
     /// Normalized position of every currently active sampler voice on the
     /// selected channel, refreshed each pump tick. Empty when idle, when a
@@ -5226,6 +5230,13 @@ impl UiState {
         }
     }
 
+    /// The selected channel's slice markers, written into the model the
+    /// handles are drawn from rather than replacing it, so the handle being
+    /// dragged is not rebuilt by the move it just sent.
+    fn publish_slices(&self, markers: &[f32]) {
+        models::write_rows(&self.slice_model, markers);
+    }
+
     /// The sampler's ZONES page from the selected channel (MOO-14).
     fn sync_sampler_zones(&self, window: &MainWindow) {
         let Some(ch) = self.session.channels.get(self.session.selected) else {
@@ -5248,7 +5259,9 @@ impl UiState {
                 missing: zone.is_missing(),
             })
             .collect();
-        window.set_sampler_zones(ModelRc::new(VecModel::from(rows)));
+        // Into the model the list already draws, so a LOW, HIGH or ROOT
+        // field being dragged is not rebuilt by the edit it just sent.
+        window.set_sampler_zones(models::rows_in_place(Some(window.get_sampler_zones()), rows));
     }
 
     /// The zone the SAMPLE and VOICE pages edit on the selected channel
@@ -6748,7 +6761,12 @@ impl UiState {
             // graph, and the strip dims its name rather than looking muted.
             solo_silenced: solo_silenced.get(index).copied().unwrap_or(false),
             strip: strip_row(&setup.bus.strip, self.audio_sample_rate),
-            sends: self.send_rows(index),
+            // Into the model the strip already draws, so the send bar being
+            // dragged is not rebuilt by the level it just sent.
+            sends: models::rows_in_place(
+                self.mixer_strip_model.row_data(index).map(|row| row.sends),
+                self.send_rows(index),
+            ),
             send_allowed: self.allowed_destinations(index),
             feed_count: self.session.bus_feed_count(index) as i32,
             allowed: self.allowed_destinations(index),
@@ -6817,7 +6835,10 @@ impl UiState {
         window.set_editing_bus_can_move_right(self.session.can_move_track(index, 1));
         window.set_editing_bus_allowed(self.allowed_destinations(index));
         window.set_editing_bus_send_feed_count(self.session.track_send_count(index) as i32);
-        window.set_editing_bus_sends(self.send_rows(index));
+        window.set_editing_bus_sends(models::rows_in_place(
+            Some(window.get_editing_bus_sends()),
+            self.send_rows(index),
+        ));
         // The same mask the output picker uses: an output and a send are
         // legal under one rule, so a send cannot creep past a check the
         // picker makes.
@@ -6827,11 +6848,11 @@ impl UiState {
     /// The sends on `bus`, in the order they were authored -- which is the
     /// order the engine's bank groups them in, so a row's position is the
     /// address a level change is sent to.
-    fn send_rows(&self, bus: usize) -> ModelRc<MixerSendRow> {
+    fn send_rows(&self, bus: usize) -> Vec<MixerSendRow> {
         let Some(setup) = self.session.buses.get(bus) else {
-            return ModelRc::from(Rc::new(VecModel::from(Vec::new())));
+            return Vec::new();
         };
-        let rows: Vec<MixerSendRow> = setup
+        setup
             .sends
             .iter()
             .map(|send| MixerSendRow {
@@ -6847,8 +6868,7 @@ impl UiState {
                 pre_fader: send.tap == SendTap::PreFader,
                 enabled: send.enabled,
             })
-            .collect();
-        ModelRc::from(Rc::new(VecModel::from(rows)))
+            .collect()
     }
 
     /// Push the selected channel's Aux In into its face.
@@ -7372,7 +7392,7 @@ impl UiState {
         window.set_sample_name(ch.sample_name.as_str().into());
         window.set_sample_description(ch.sample_description.as_str().into());
         window.set_sample_duration(ch.sample_duration);
-        self.slice_model.set_vec(slice_fractions(ch));
+        self.publish_slices(&slice_fractions(ch));
         window.set_play_mode(p.play_mode.to_index());
         window.set_slice_base_note(i32::from(p.slice_base_note));
         window.set_sample_committed(ch.commit.is_some());
@@ -14333,7 +14353,7 @@ impl AppUi {
                             return;
                         }
                         SliceEdit::Changed(markers) => {
-                            st.slice_model.set_vec(markers);
+                            st.publish_slices(&markers);
                         }
                     }
                     st.publish_selected_audio(&audio_out);
@@ -14355,7 +14375,7 @@ impl AppUi {
                     let Some(markers) = st.session.move_slice(index, position) else {
                         return;
                     };
-                    st.slice_model.set_vec(markers);
+                    st.publish_slices(&markers);
                     st.publish_selected_audio(&audio_out);
                 }
                 record_project_history(&commands, before, &history_state, &window, "Slice moved");
@@ -14375,7 +14395,7 @@ impl AppUi {
                     let Some(markers) = st.session.remove_slice(index) else {
                         return;
                     };
-                    st.slice_model.set_vec(markers);
+                    st.publish_slices(&markers);
                     st.publish_selected_audio(&audio_out);
                 }
                 record_project_history(&commands, before, &history_state, &window, "Slice removed");
@@ -14396,7 +14416,7 @@ impl AppUi {
                         window.set_status_message("No sample to slice".into());
                         return;
                     };
-                    st.slice_model.set_vec(markers);
+                    st.publish_slices(&markers);
                     st.publish_selected_audio(&audio_out);
                     window.set_status_message(format!("Divided into {} slices", count.max(1)).into());
                 }
@@ -14460,7 +14480,7 @@ impl AppUi {
                         else {
                             return;
                         };
-                        st.slice_model.set_vec(markers);
+                        st.publish_slices(&markers);
                         st.publish_selected_audio(&audio_out);
                         window.set_status_message(format!("Added {added} detected slices").into());
                     }
@@ -14531,7 +14551,7 @@ impl AppUi {
                     let Some(markers) = st.session.clear_slices() else {
                         return;
                     };
-                    st.slice_model.set_vec(markers);
+                    st.publish_slices(&markers);
                     st.publish_selected_audio(&audio_out);
                 }
                 record_project_history(&commands, before, &history_state, &window, "Slices cleared");
