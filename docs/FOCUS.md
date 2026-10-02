@@ -91,16 +91,19 @@ and 0.1.6 issues (Adam's `/goal`). Each issue names its commit. In summary:
   XWayland window comes up at the session's scale (MOO-343); and MOO-149
   found no shared delay-tap block, so MOO-150 is cancelled.
 
-Filed during it, unlabelled: MOO-482 to 497. Four of them are questions
+Filed during it, unlabelled: MOO-482 to 498. Three of them are questions
 for Adam: MOO-485 (a branch row's click, and a look at the layer face),
-MOO-486 (a look under XWayland), MOO-488 (does a delete still freeze in his
-own song) and MOO-490 (a real plugin on a real Mac).
+MOO-486 (a look under XWayland) and MOO-488 (does a delete still freeze in
+his own song).
 
+**The Mac checks, 2026-10-02.** Adam ran a Release build of `9457a1e0` on a
+Mac. Surge XT FX's GUI passed every step of MOO-490 once MOO-498 (a plugin
+slot that isn't processing traded no parameters, on Linux too) landed, so
+MOO-452 and MOO-86 are done. He confirmed Core Audio's latency (MOO-237).
 **MOO-289** closed on 2026-09-30: Adam found the launch case fixed on recent
-builds. **MOO-237**, Core Audio's latency, still waits on his Mac check. The
-rest of 0.1.6 is whatever open issue carries the label in Linear (on
-2026-10-01: MOO-86, whose macOS half waits on MOO-490; MOO-237; and MOO-456,
-which is on `main` and wants a look in the running app).
+builds. The rest of 0.1.6 is whatever open issue carries the label in Linear
+(on 2026-10-02: MOO-456, which is on `main` and wants a look in the running
+app).
 
 Steps 03-05 of the icon pass are 0.1.7.
 
@@ -262,8 +265,13 @@ one he has answered that nobody has acknowledged yet), and after 2026-09-23 it
 is short:
 
 - **The listening passes** below, which nobody has taken since 2026-09-18.
-- **MOO-237:** whether the Core Audio output latency mooloop logs matches
-  what HALLab reports for the same device, on a real Mac.
+- **MOO-485, MOO-486, MOO-488:** a branch row's click and the layer face, a
+  look under XWayland, and whether a delete still freezes in his own song.
+
+Answered 2026-10-02, on a Mac:
+- **MOO-490:** a real plugin GUI (Surge XT FX) passes every step, once
+  MOO-498 let a plugin that isn't processing trade parameters.
+- **MOO-237:** *"latency confirmed"*.
 
 Answered 2026-09-27:
 - **MOO-273:** *"i love the sheet. iconts are 10/10"*. Every kind's icon

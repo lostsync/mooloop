@@ -2135,7 +2135,12 @@ the first two legs left the pump nothing to do.
   `mooloop-session`'s `tests/plugin_gui.rs` is still Linux-only for two
   X11 asserts and a scale step Cocoa never takes (open: MOO-491).
 
-The real-plugin check on a real Mac is Adam's (open: MOO-490).
+**Checked on a real Mac, 2026-10-02 (MOO-490).** Adam ran Surge XT FX on a
+Release build of `9457a1e0`: the GUI opens in a panel, survives close and
+reopen, goes away cleanly when the device is removed and at quit, and hides
+with the app. Its knobs and the face's follow each other both ways, once
+MOO-498 (below) made the host trade parameters with a slot that is not
+processing. Step 11 is done on macOS as well as Linux.
 
 ## Found on the Mac: a plugin that is not processing trades no parameters (MOO-498, 2026-10-01)
 
