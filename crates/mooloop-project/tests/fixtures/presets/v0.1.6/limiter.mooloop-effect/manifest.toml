@@ -1,0 +1,23 @@
+format_version = 1
+document_type = "effect"
+asset_mode = "embedded"
+contains = ["effect_params"]
+
+[preset]
+name = "corpus Limiter"
+category = ""
+tags = []
+
+[document]
+bypassed = false
+wet_dry = 0.63
+input_trim = 1.0
+output_trim = 1.0
+
+[document.params]
+type = "limiter"
+
+[document.params.state]
+ceiling_db = -15.12
+release_ms = 185.63
+gain_db = 8.88

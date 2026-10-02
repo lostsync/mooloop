@@ -1,0 +1,694 @@
+format_version = 1
+document_type = "song"
+asset_mode = "referenced"
+
+[document]
+bpm = 131
+swing_percent = 58
+ppq = 96
+beats_per_bar = 4
+playback_mode = "pattern"
+current_pattern = 0
+strip_volume_taper = 1
+selected_channel = 0
+next_channel_id = 4
+next_track_id = 2
+pattern_lengths = [16]
+playlist = []
+
+[[document.channels]]
+id = 0
+notes = [[]]
+automation = [[]]
+next_note_id = 1
+
+[document.channels.setup]
+effects = []
+next_device_id = 0
+
+[document.channels.setup.channel]
+name = "corpus 0"
+kind = "ds01"
+muted = false
+volume = 1.0
+pan = 0.0
+bus = 1
+
+[document.channels.setup.source]
+type = "ds01"
+
+[document.channels.setup.source.state.params]
+tune = 0.0
+level = 1.0
+choke_group = 0
+choke_time = 0.005
+retrigger = "poly"
+velocity_amount = 1.0
+tone_level = 1.0
+tone_pitch = 55.0
+tone_wave = 0.0
+tone_partials = 1
+tone_spread = 0.5
+tone_fm_amount = 0.0
+tone_fm_ratio = 2.0
+noise_level = 0.15
+noise_color = "white"
+noise_rate = 48000.0
+filter_morph = 0.5
+filter_cutoff = 2500.0
+filter_res = 0.1
+body_level = 0.0
+body_pitch = 220.0
+body_ratio = 0.0
+body_decay = 0.4
+body_damping = 0.3
+body_excite = 0.0
+burst_repeats = 1
+burst_spacing = 0.012
+burst_spread = 0.0
+burst_level_step = 0.0
+burst_pitch_step = 0.0
+drive = 0.0
+character = "soft"
+bias = 0.0
+bits = 16.0
+output_hp = 20.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[document.channels.setup.source.state.params.amp]
+attack = 0.0
+hold = 0.0
+decay = 0.6
+curve = 0.0
+sustain = 0.0
+release = 0.1
+gate = false
+
+[document.channels.setup.source.state.params.pitch]
+attack = 0.0
+decay = 0.05
+curve = 0.0
+depth = 14.0
+
+[document.channels.setup.source.state.params.noise_env]
+attack = 0.0
+hold = 0.0
+decay = 0.006
+curve = 0.0
+sustain = 0.0
+release = 0.1
+gate = false
+
+[document.channels.setup.source.state.params.mod_env]
+attack = 0.0
+hold = 0.0
+decay = 0.3
+curve = 0.0
+sustain = 0.0
+release = 0.1
+gate = false
+
+[document.channels.setup.modulation]
+
+[[document.channels]]
+id = 1
+notes = [[]]
+automation = [[]]
+next_note_id = 1
+
+[document.channels.setup]
+effects = []
+next_device_id = 0
+
+[document.channels.setup.channel]
+name = "corpus 1"
+kind = "ds01"
+muted = false
+volume = 1.0
+pan = 0.0
+bus = 1
+
+[document.channels.setup.source]
+type = "ds01"
+
+[document.channels.setup.source.state.params]
+tune = 0.0
+level = 0.7
+choke_group = 0
+choke_time = 0.005
+retrigger = "poly"
+velocity_amount = 1.0
+tone_level = 0.0
+tone_pitch = 160.0
+tone_wave = 0.0
+tone_partials = 1
+tone_spread = 0.5
+tone_fm_amount = 0.0
+tone_fm_ratio = 2.0
+noise_level = 1.0
+noise_color = "white"
+noise_rate = 48000.0
+filter_morph = 1.0
+filter_cutoff = 1200.0
+filter_res = 0.1
+body_level = 0.7
+body_pitch = 185.0
+body_ratio = 0.3
+body_decay = 0.15
+body_damping = 0.8
+body_excite = 0.0
+burst_repeats = 1
+burst_spacing = 0.012
+burst_spread = 0.0
+burst_level_step = 0.0
+burst_pitch_step = 0.0
+drive = 0.0
+character = "soft"
+bias = 0.0
+bits = 16.0
+output_hp = 20.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[document.channels.setup.source.state.params.amp]
+attack = 0.0
+hold = 0.0
+decay = 0.6
+curve = 0.0
+sustain = 0.0
+release = 0.1
+gate = false
+
+[document.channels.setup.source.state.params.pitch]
+attack = 0.0
+decay = 0.045
+curve = 0.0
+depth = 0.0
+
+[document.channels.setup.source.state.params.noise_env]
+attack = 0.0
+hold = 0.0
+decay = 0.6
+curve = 0.0
+sustain = 0.0
+release = 0.1
+gate = false
+
+[document.channels.setup.source.state.params.mod_env]
+attack = 0.0
+hold = 0.0
+decay = 0.3
+curve = 0.0
+sustain = 0.0
+release = 0.1
+gate = false
+
+[document.channels.setup.modulation]
+
+[[document.channels]]
+id = 2
+notes = [[]]
+automation = [[]]
+next_note_id = 1
+
+[document.channels.setup]
+effects = []
+next_device_id = 0
+
+[document.channels.setup.channel]
+name = "corpus 2"
+kind = "ds01"
+muted = false
+volume = 1.0
+pan = 0.0
+bus = 1
+
+[document.channels.setup.source]
+type = "ds01"
+
+[document.channels.setup.source.state.params]
+tune = 0.0
+level = 0.45
+choke_group = 1
+choke_time = 0.005
+retrigger = "poly"
+velocity_amount = 1.0
+tone_level = 0.5
+tone_pitch = 400.0
+tone_wave = 1.0
+tone_partials = 6
+tone_spread = 1.0
+tone_fm_amount = 0.0
+tone_fm_ratio = 2.0
+noise_level = 0.7
+noise_color = "metal"
+noise_rate = 48000.0
+filter_morph = 1.0
+filter_cutoff = 7000.0
+filter_res = 0.1
+body_level = 0.0
+body_pitch = 220.0
+body_ratio = 0.0
+body_decay = 0.4
+body_damping = 0.3
+body_excite = 0.0
+burst_repeats = 1
+burst_spacing = 0.012
+burst_spread = 0.0
+burst_level_step = 0.0
+burst_pitch_step = 0.0
+drive = 0.0
+character = "soft"
+bias = 0.0
+bits = 16.0
+output_hp = 20.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[document.channels.setup.source.state.params.amp]
+attack = 0.0
+hold = 0.0
+decay = 0.09
+curve = 0.0
+sustain = 0.0
+release = 0.1
+gate = false
+
+[document.channels.setup.source.state.params.pitch]
+attack = 0.0
+decay = 0.045
+curve = 0.0
+depth = 0.0
+
+[document.channels.setup.source.state.params.noise_env]
+attack = 0.0
+hold = 0.0
+decay = 0.07
+curve = 0.0
+sustain = 0.0
+release = 0.1
+gate = false
+
+[document.channels.setup.source.state.params.mod_env]
+attack = 0.0
+hold = 0.0
+decay = 0.3
+curve = 0.0
+sustain = 0.0
+release = 0.1
+gate = false
+
+[document.channels.setup.modulation]
+
+[[document.channels]]
+id = 3
+notes = [[]]
+automation = [[]]
+next_note_id = 1
+
+[document.channels.setup]
+effects = []
+next_device_id = 0
+
+[document.channels.setup.channel]
+name = "corpus 3"
+kind = "ds01"
+muted = false
+volume = 1.0
+pan = 0.0
+bus = 1
+
+[document.channels.setup.source]
+type = "ds01"
+
+[document.channels.setup.source.state.params]
+tune = 0.0
+level = 0.45
+choke_group = 1
+choke_time = 0.005
+retrigger = "poly"
+velocity_amount = 1.0
+tone_level = 0.5
+tone_pitch = 400.0
+tone_wave = 1.0
+tone_partials = 6
+tone_spread = 1.0
+tone_fm_amount = 0.0
+tone_fm_ratio = 2.0
+noise_level = 0.7
+noise_color = "metal"
+noise_rate = 48000.0
+filter_morph = 1.0
+filter_cutoff = 7000.0
+filter_res = 0.1
+body_level = 0.0
+body_pitch = 220.0
+body_ratio = 0.0
+body_decay = 0.4
+body_damping = 0.3
+body_excite = 0.0
+burst_repeats = 1
+burst_spacing = 0.012
+burst_spread = 0.0
+burst_level_step = 0.0
+burst_pitch_step = 0.0
+drive = 0.0
+character = "soft"
+bias = 0.0
+bits = 16.0
+output_hp = 20.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[[document.channels.setup.source.state.params.matrix]]
+source = "none"
+dest = 1
+amount = 0.0
+curve = 0.0
+
+[document.channels.setup.source.state.params.amp]
+attack = 0.0
+hold = 0.0
+decay = 0.9
+curve = 0.0
+sustain = 0.0
+release = 0.1
+gate = false
+
+[document.channels.setup.source.state.params.pitch]
+attack = 0.0
+decay = 0.045
+curve = 0.0
+depth = 0.0
+
+[document.channels.setup.source.state.params.noise_env]
+attack = 0.0
+hold = 0.0
+decay = 0.8
+curve = 0.0
+sustain = 0.0
+release = 0.1
+gate = false
+
+[document.channels.setup.source.state.params.mod_env]
+attack = 0.0
+hold = 0.0
+decay = 0.3
+curve = 0.0
+sustain = 0.0
+release = 0.1
+gate = false
+
+[document.channels.setup.modulation]
+
+[[document.buses]]
+id = 0
+effects = []
+next_device_id = 0
+sends = []
+
+[document.buses.bus]
+name = "Master"
+muted = false
+volume = 1.0
+pan = 0.0
+output = 0
+console = false
+polarity = false
+solo = false
+
+[document.buses.bus.strip]
+voicing = "moo"
+pre_in = false
+drive_db = 0.0
+eq_in = false
+comp_in = false
+threshold_db = -18.0
+ratio = 3.0
+attack_ms = 10.0
+release_ms = 120.0
+knee_db = 6.0
+mix = 1.0
+makeup_db = 0.0
+
+[[document.buses.bus.strip.bands]]
+kind = "high_shelf"
+position = 2
+gain_db = 0.0
+q = 0.707
+
+[[document.buses.bus.strip.bands]]
+kind = "bell"
+position = 3
+gain_db = 0.0
+q = 0.9
+
+[[document.buses.bus.strip.bands]]
+kind = "bell"
+position = 3
+gain_db = 0.0
+q = 0.9
+
+[[document.buses.bus.strip.bands]]
+kind = "low_shelf"
+position = 2
+gain_db = 0.0
+q = 0.707
+
+[[document.buses]]
+id = 1
+effects = []
+next_device_id = 0
+sends = []
+
+[document.buses.bus]
+name = "Drums"
+muted = false
+volume = 1.0
+pan = 0.0
+output = 0
+console = false
+polarity = false
+solo = false
+
+[document.buses.bus.strip]
+voicing = "moo"
+pre_in = false
+drive_db = 0.0
+eq_in = false
+comp_in = false
+threshold_db = -18.0
+ratio = 3.0
+attack_ms = 10.0
+release_ms = 120.0
+knee_db = 6.0
+mix = 1.0
+makeup_db = 0.0
+
+[[document.buses.bus.strip.bands]]
+kind = "high_shelf"
+position = 2
+gain_db = 0.0
+q = 0.707
+
+[[document.buses.bus.strip.bands]]
+kind = "bell"
+position = 3
+gain_db = 0.0
+q = 0.9
+
+[[document.buses.bus.strip.bands]]
+kind = "bell"
+position = 3
+gain_db = 0.0
+q = 0.9
+
+[[document.buses.bus.strip.bands]]
+kind = "low_shelf"
+position = 2
+gain_db = 0.0
+q = 0.707
+
+[document.loop_range]
+start_tick = 0
+end_tick = 768
+enabled = false

@@ -1,0 +1,31 @@
+format_version = 1
+document_type = "effect"
+asset_mode = "embedded"
+contains = ["effect_params"]
+
+[preset]
+name = "corpus Bus Comp"
+category = ""
+tags = []
+
+[document]
+bypassed = false
+wet_dry = 0.63
+input_trim = 1.0
+output_trim = 1.0
+
+[document.params]
+type = "bus_comp"
+
+[document.params.state]
+voicing = "Punch"
+threshold_db = -25.2
+makeup_db = 6.66
+mix = 0.37
+grip_ratio = 1
+grip_attack = 2
+grip_release = 1
+punch_ratio = 2
+punch_attack = 2
+punch_release = 2
+tube_time = 2
