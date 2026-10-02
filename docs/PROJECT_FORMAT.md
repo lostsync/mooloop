@@ -7,6 +7,10 @@ ordinary copied audio files live in a sibling asset directory; samples are
 never encoded into TOML. Kits, channel documents, and preset-library entries
 remain directory bundles containing a TOML manifest and optional audio assets.
 
+When the playlist grows clips (after 0.2.0), read the DAWproject section of
+`IDEAS.md` before adding the fields. It compares what DAWproject, the open
+exchange format between DAWs, stores in a song with what this format stores.
+
 ## Bundle Layout
 
 The conventional suffixes are:

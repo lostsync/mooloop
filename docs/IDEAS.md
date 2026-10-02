@@ -218,3 +218,103 @@ wire shipped ones; whether the graph is rewireable at runtime or compiled per
 edit; and any visual design. None of it needs answering to keep the option
 open. What keeps it open is the three habits in
 `COMPOSABLE_DEVICE_UNITS.md`, which are worth following regardless.
+
+---
+
+## DAWproject: interchange, and a checklist for a DAW-shaped song
+
+Recorded direction, 2026-10-02. Export is MOO-501, in Backlog for after
+0.2.0. Nothing else here is scheduled.
+
+**Why it is here: two reasons.**
+
+The first is a stance. Adam, on hearing of it: *"if i am making a DAW and
+someone has an open source initiative involving DAWs...in general that is
+something i would want to support."* Neural Amp Modeler is the next one he means
+to look at the same way. That would already have happened, except that a NAM
+model captures a piece of gear at one fixed setting, so it has nothing to turn.
+
+The second matters more to the format: *"the other thing i think this might
+provide, at least for me, is some kind of template for what information needs
+to be in a full on daw project file. because that seems to be where mooloop is
+heading. after 0.2.0 we're probably going to try to somehow dawify the playlist
+editor without destroying the vintage FL magic. we'll have audio clips then."*
+
+**What it is.** [DAWproject](https://github.com/bitwig/dawproject) is Bitwig's
+open, vendor-neutral exchange format between DAWs. A `.dawproject` file is a
+ZIP holding `project.xml`, `metadata.xml`, audio files and plugin state files.
+The schema is `Project.xsd`, about 840 lines. Version 1.0 is stable, and the
+repository has been quiet since mid-2025.
+- **Read and written by:** Bitwig 5, Studio One 6.5 (now Fender Studio Pro),
+  Cubase 14, Cubasis, VST Live and n-Track.
+- **Converted to and from by others:** DawVert handles FL Studio, Ableton Live,
+  Reaper and LMMS; ProjectConverter handles Reaper.
+- **Not supported by:** Ardour or Zrythm.
+
+**Export fits the song as it is today.** The mapping is in MOO-501. The short
+version:
+- Two parts map cleanly: the two-level mixer, because a DAWproject Channel names
+  its destination; and sends.
+- A playlist placement becomes one clip per channel that has notes in the
+  pattern.
+- Time is `tick / 96` quarter notes, exactly.
+- Swing has nowhere to go, so it is baked into the note times.
+- What does not travel is the sound. No other DAW can play mooloop's own
+  sources, so an export that should sound right has to carry each channel
+  rendered to audio beside its notes.
+
+**Import waits for the playlist.** A Bitwig or Cubase song is per-track clips,
+audio clips on the timeline, tempo and time-signature changes, and usually more
+than 64 bars. Today's song has none of those, and its playlist's limits (256
+patterns, 512 placements, 64 bars) bind on any real song. Import becomes
+reasonable once the dawified playlist exists, and the checklist below is what
+that playlist would have to hold to receive one.
+
+### What a DAW song holds, read off the schema
+
+Each row is something DAWproject stores, set against what mooloop stores now.
+
+| Item | DAWproject | mooloop today |
+| --- | --- | --- |
+| Clip on a timeline | `time` and `duration` on the parent timeline | a placement has a start; its length is the pattern's |
+| Clip window | `playStart`/`playStop`: where in the content playback starts and stops | none |
+| Clip loop | `loopStart`/`loopEnd` in content time | none |
+| Fades | `fadeInTime`/`fadeOutTime`, with their own `fadeTimeUnit` | none |
+| Clip mute, name, colour | `enable`, `name`, `color` on each clip | name and colour per pattern, nothing per placement |
+| Linked clips | a clip may `reference` one timeline defined elsewhere, so the same content plays in many places | this is what a pattern already is |
+| Clip content | any timeline, including more clips; a Bitwig audio clip is a clip of audio events | notes and lanes |
+| Time units | each timeline says `beats` or `seconds`, and a clip's content can differ from its parent, as an audio clip in seconds on an arrangement in beats does | ticks only |
+| Audio | file, channel count, sample rate, duration in seconds | audio exists only inside a sampler |
+| Warping | `Warps`: (time, contentTime) pairs plus a stretch algorithm | the sampler's stretch ratio or bar sync |
+| Tracks | nested Tracks (folders), each with a content type | flat; grouping is routing |
+| Channel | role (regular, master, effect, submix, vca), destination, channel count | roles come from routing; no VCA |
+| Notes | key, `vel`, `rel` (release velocity), MIDI channel, and per-note expression timelines (gain, pan, transpose, timbre, formant, pressure) | key, velocity, length |
+| Automation target | a parameter by id, or an expression: CC, pitch bend, channel or poly pressure, program change | a `ParamAddr`; nothing MIDI-shaped |
+| Interpolation | hold or linear | linear; curves are planned in song automation |
+| Tempo and metre | tempo and time-signature automation at the arrangement root, which is what converts beats to seconds | one whole-number BPM, 4/4 |
+| Markers | named markers on the arrangement | none |
+| Song metadata | title, artist, album, original artist, composer, songwriter, producer, arranger, year, genre, copyright, website, comment | none |
+| Device | id, name, vendor, role, enabled, a state file, its parameter list | as stored; a plugin slot carries id, name, vendor and version |
+| Clip launcher | scenes of clip slots | none, and not planned |
+
+**Two things in that table bear on the "FL magic" question.** The first is the
+linked-clip row. DAWproject handles "the same content placed many times" as
+one timeline plus clips that reference it, and that is what a mooloop pattern
+already is. The only difference is that a pattern's content spans every
+channel. So patterns and DAW clips need not compete: a pattern placement can be
+a linked clip whose content happens to be many channels wide. The second is the
+time-units row. A clip's content can keep its own time base, and its window and
+loop are measured in that time base. That is what lets audio measured in
+seconds sit on an arrangement measured in beats, and it is the part a
+tick-only format would find hardest to add later.
+
+**The schema is a floor, not a ceiling.** DAWproject leaves out several things
+a song needs, and mooloop already has some of them, so the table is not a
+complete list:
+- a sampler (the request, issue #67, has been open since 2023);
+- clip gain (#71);
+- sidechains (#90);
+- multi-output plugins (#70);
+- automation curves;
+- swing or groove;
+- modulation.

@@ -215,7 +215,10 @@ These are firm enough to build against:
   a pattern, the answer is to raise the pattern limits, not to add clips.
   DAW-style lanes tied to the mixer's tracks are an open idea for later, and
   the one thing it must not repeat is how FL Studio grafted them onto its
-  playlist.
+  playlist. The direction after 0.2.0 (Adam, 2026-10-02): *"we're probably
+  going to try to somehow dawify the playlist editor without destroying the
+  vintage FL magic. we'll have audio clips then."* `IDEAS.md`'s DAWproject
+  section lists what a DAW song holds that this one does not yet.
 - **Song automation lives in the playlist; pattern lanes stay.** (Adam,
   2026-09-30, reversing his 2026-09-17 *"there is no song-level automation"*:
   *"yeah i guess i changed my mind. yeah pattern lanes stay. that's basically
