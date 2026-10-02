@@ -43,11 +43,13 @@ automation" (MOO-24):**
 | Before or after the 0.2.0 freeze? | **Before**, *"almost certainly"* |
 | Write a plan? | **Yes**: this directory |
 
+**2026-10-02, on MOO-471**, asked which lane wins when a pattern lane and a
+song lane drive one parameter: *"i dont think there should be a winner.
+teamwork makes the dream work."* They combine: each lane's distance from the
+knob adds (the rule is in step 02).
+
 ## Open
 
-- **Step 02 (MOO-471):** which lane wins when a pattern lane and a song lane
-  drive the same parameter. Recommended: the pattern lane, while its pattern
-  plays. Built that way behind one function until he answers.
 - **Step 03 (MOO-472):** Adam sees the panel's mock-up before its markup is
   built.
 
@@ -56,7 +58,7 @@ automation" (MOO-24):**
 | Step | State |
 | --- | --- |
 | 01 — the song lane store | Backlog (MOO-470) |
-| 02 — the engine plays song lanes | Backlog (MOO-471); question open |
+| 02 — the engine plays song lanes | Backlog (MOO-471) |
 | 03 — the automation panel | Backlog (MOO-472) |
 | 04 — a track's fader and pan | Backlog (MOO-419) |
 | 05 — choosing a parameter | Backlog (MOO-473) |

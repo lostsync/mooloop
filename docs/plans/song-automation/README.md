@@ -52,8 +52,8 @@ MOO-24, `PRODUCT.md` *Working Decisions*). Song lanes now exist.
 **Kept:** pattern lanes, unchanged. They are the clip automation. Every saved
 song plays exactly as before, and a per-pattern wobble is still written on
 the pattern. Where a pattern lane and a song lane drive the same parameter,
-one rule decides which wins. That rule is the one open question in this plan
-(step 02).
+neither wins: they combine, each lane's distance from the knob adding (Adam,
+2026-10-02; the rule is in step 02).
 
 **Kept: the playlist's rows.** A playlist row is still a pattern
 (`main.slint`, `for pattern in root.pattern-count`). `PRODUCT.md` warns that

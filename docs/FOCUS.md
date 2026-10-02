@@ -91,10 +91,8 @@ and 0.1.6 issues (Adam's `/goal`). Each issue names its commit. In summary:
   XWayland window comes up at the session's scale (MOO-343); and MOO-149
   found no shared delay-tap block, so MOO-150 is cancelled.
 
-Filed during it, unlabelled: MOO-482 to 498. Three of them are questions
-for Adam: MOO-485 (a branch row's click, and a look at the layer face),
-MOO-486 (a look under XWayland) and MOO-488 (does a delete still freeze in
-his own song).
+Filed during it, unlabelled: MOO-482 to 498. Its three questions for Adam
+(MOO-485, MOO-486, MOO-488) were answered on 2026-10-02 and closed.
 
 **The Mac checks, 2026-10-02.** Adam ran a Release build of `9457a1e0` on a
 Mac. Surge XT FX's GUI passed every step of MOO-490 once MOO-498 (a plugin
@@ -265,13 +263,20 @@ one he has answered that nobody has acknowledged yet), and after 2026-09-23 it
 is short:
 
 - **The listening passes** below, which nobody has taken since 2026-09-18.
-- **MOO-485, MOO-486, MOO-488:** a branch row's click and the layer face, a
-  look under XWayland, and whether a delete still freezes in his own song.
+- **MOO-456:** Wrap in Layer, on `main`, wants a look in the running app.
 
 Answered 2026-10-02, on a Mac:
 - **MOO-490:** a real plugin GUI (Surge XT FX) passes every step, once
   MOO-498 let a plugin that isn't processing trade parameters.
 - **MOO-237:** *"latency confirmed"*.
+
+Answered 2026-10-02:
+- **MOO-485:** a branch row's click selects the branch too, and *"i like the
+  look"*.
+- **MOO-486:** under XWayland the UI is *"pretty much identical, no issues"*.
+- **MOO-488:** deleting a channel no longer freezes his song.
+- **MOO-471:** a pattern lane and a song lane on one parameter combine;
+  neither wins (`docs/plans/song-automation/02-the-engine-plays-song-lanes.md`).
 
 Answered 2026-09-27:
 - **MOO-273:** *"i love the sheet. iconts are 10/10"*. Every kind's icon

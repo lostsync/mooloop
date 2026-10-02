@@ -4,23 +4,30 @@ The renderer resolves song lanes in Song mode, beside pattern lanes, through
 the one *base + offset* rule every automation site already applies. It is
 headless and tested without a window.
 
-## The question this step waits on (open: see its Linear issue)
+## Two lanes on one parameter: they combine
 
-**When a pattern lane and a song lane drive the same parameter at the same
-moment, which wins?**
+Adam, 2026-10-02 (MOO-471): *"some kind of summing? i dont think there
+should be a winner. teamwork makes the dream work."* Neither lane wins.
 
-1. **The pattern lane, while its pattern is playing and the lane has points.**
-   The song lane drives everywhere else. A pattern lane is clip automation,
-   and the clip is the more specific thing. **Every song saved before this
-   plays exactly as it did.** Recommended.
-2. **The song lane, always.** The song lane is the final say; a pattern lane
-   only plays where the song lane has no points.
-3. **They combine.** The pattern lane is an offset on the song lane, the way
-   a modulation route is.
+**The rule.** Each lane moves the parameter by how far it sits from the
+knob, and the two moves add. In knob travel (normalized 0-1):
+
+    base = clamp(knob + (song - knob) + (pattern - knob), 0, 1)
+
+- `knob` is the stored base that a knob edit always updates and that
+  clearing a lane hands back (`render.rs`, the base/offset table above
+  `fill`).
+- **With one lane, the base is that lane's value**, exactly as today. So
+  every song saved before song lanes plays as it did, and Pattern mode never
+  consults a song lane.
+- A stepped parameter (a mode, a switch) snaps the sum to its nearest step.
+- Modulation routes still add their offsets on top of this base, as they do
+  on a single lane's.
 
 Every site resolves "the lane for this target" once per block (below), so
-the rule is one function wherever it lands. Nothing else in this step waits
-on it. Build with 1 behind that function until the answer comes.
+the rule is one function. If listening asks for a different sum (song lane
+absolute and pattern lane bipolar around its middle, say), that one
+function changes.
 
 ## Where it goes
 
@@ -42,9 +49,9 @@ on it. Build with 1 behind that function until the answer comes.
 - **`has_automation_at`** (`:659`) and **`visit_automation_targets_at`**
   (`:708`) report song-lane targets as well. Then `AutomationBlock` (`render.rs:1204`) is
   built whenever either kind of lane drives something.
-- **The precedence rule** is one function both use: the pattern lane under the
-  position, the song lane, or both. It stays one function so the answer above
-  changes one place.
+- **The combining rule** is one function both use: the pattern lane under the
+  position, the song lane, or their sum as above. It stays one function so a
+  change to the sum touches one place.
 - **`LaneTargets`** (`render.rs:1229`) holds at most 64 targets a block.
   - Song lanes can push past that. Size it from the number of lanes the
     sequencer actually holds, off the audio thread.
@@ -72,8 +79,9 @@ export plays song lanes with nothing extra. Test it; don't assume it.
     Adam's 2026-09-17 ruling had to do by cloning a pattern.
   - In Pattern mode the same lane does nothing.
   - Switching from Song to Pattern hands the knob back.
-- **A test per precedence case.** A pattern lane and a song lane on one
-  destination, under the rule as answered (1 until it is).
+- **A test per combining case** on one destination: a pattern lane alone and
+  a song lane alone (each plays as today), both (their moves add), both
+  pushing past an end (clamped), and both on a stepped parameter (snapped).
 - **More driven destinations than today's 64** play without one being dropped
   or frozen, at 512 frames.
 - **No allocation in the callback**, with the existing allocation tests
