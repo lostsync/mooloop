@@ -2707,14 +2707,13 @@ with a commit loads and plays the render it played then.
   refuses) is said in the face's badge, and the face stays. Every pump tick
   services each plugin's timers and fds, which is what a Linux plugin GUI
   runs on. A plugin channel's instrument opens its GUI the same way, from
-  the open-window button on its source face (MOO-304). Not yet: the
-  per-desktop record of how the windows behave, which is Adam's (MOO-86).
+  the open-window button on its source face (MOO-304).
   **On macOS** the window is a panel of mooloop's own that the plugin's
   Cocoa GUI is placed in, titled the same way, sized in points as the
   plugin asks; it floats above mooloop's windows and hides while mooloop is
   not the active application, so mooloop never hides it itself; its close
-  button closes the GUI as on Linux (MOO-480, MOO-481). Not yet tried on a
-  real Mac with a real plugin: open: MOO-490. **A knob turned in the GUI
+  button closes the GUI as on Linux (MOO-480, MOO-481). Adam checked it on
+  a Mac with Surge XT FX on 2026-10-02 (MOO-490). **A knob turned in the GUI
   moves the face's, and the face's moves the GUI's, while the plugin is not
   processing** -- asleep in silence, bypassed, on a muted channel, an
   instrument muted or idle (MOO-498, 2026-10-01): the engine flushes such

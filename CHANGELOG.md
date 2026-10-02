@@ -9,9 +9,10 @@ refactors, tests, CI and tooling are left out unless they change what ships.
 Correctness first. A paste no longer loses a sampler's zones, a sample copy
 no longer overwrites a file, automation no longer jumps to the wrong
 parameter when a channel changes instrument, the Modulation device's
-feedback is bounded, and a range export keeps its reverb. After that, plugins
-get presets and a face that copes with hundreds of parameters, and the window
-and two of the heaviest sounds cost much less.
+feedback is bounded, and a range export keeps its reverb. After that,
+plugins open their own windows and get presets and a face that copes with
+hundreds of parameters, and the window and two of the heaviest sounds cost
+much less.
 
 **Heads up:** a Modulation device (flanger, phaser, chorus, ensemble, ADT)
 with Feedback above 75% is now quieter. Its resonance peaks at +12 dB instead
@@ -25,6 +26,9 @@ too big.
 
 ### Highlights
 
+- **Plugins open their own windows.** A plugin with a GUI of its own opens
+  it from a button on its face, on Linux and macOS. A plugin instrument has
+  a face now too, in the source's place (see *Effects and plugins*).
 - **Presets for plugins.** A hosted plugin device saves and loads as an
   effect preset, with the plugin's own state inside it. Loading one onto
   another channel, in another song, opens the plugin as it was saved.
@@ -71,6 +75,8 @@ too big.
   - Every slice, Start/End and loop marker moves onto the render. Before, a
     marker at or outside the region's edge was dropped and every later slice
     moved down a key.
+  - A loop snapped to slices commits at the length it played. Before, it
+    could land at another length.
   - **REBAKE** stretches the committed audio again, so slices and trims you
     make after a commit are kept. Before, the next commit or revert threw
     them away.
@@ -92,6 +98,18 @@ too big.
   too, with every sample unchanged.
 - A copied sampler channel pasted into a song opened after the copy keeps
   its key zones' audio.
+- On ML-M1 and ML-P8, turning or automating Sustain while a note is held is
+  heard at once, and raising it mid-decay no longer clicks. Before, a held
+  note kept its old level until the next note.
+- A choke now cuts an ML-M1 or ML-P8 note that is already in a long
+  release. A note you audition or play on a keyboard chokes the rest of its
+  choke group, as a sequenced one does.
+- Turning Drive up from zero no longer clicks on the sampler, the drum
+  synths or the Filter effect. Only settings below 5% sound different.
+- IMA and Microsoft ADPCM WAV files load, and a sample with one damaged
+  packet loads with that packet skipped instead of failing.
+- DETECT needs a fraction of the memory on a long take. A five-minute take
+  used to take about 460 MB.
 
 ### Effects and plugins
 
@@ -99,14 +117,44 @@ too big.
   stereo image. The face's Wet knob is now called **Mix**, and it is the
   same control as before.
 - The Modulation device's feedback is bounded (see *Heads up*).
+- A tempo-synced Modulation device loaded from a preset, or pasted from a
+  song at another tempo, sweeps at this song's tempo. Before, it kept the
+  old tempo's rate until the tempo changed.
 - The Reverb costs about a quarter less, with every sample unchanged.
+- **A plugin's own window.** A plugin with a GUI has an open-window button
+  at the foot of its face. Press it to open the plugin's window, or to
+  bring it to the front; closing the window leaves the plugin playing. The
+  face's knobs and the window follow each other, even while the plugin is
+  asleep, bypassed or on a muted channel. A window that can't open says
+  why on the face.
+  - On Linux the window is an X11 one, through XWayland on a Wayland
+    desktop. There the plugin windows hide while mooloop isn't focused and
+    come back when it is. **Run under XWayland** (Preferences → Plugins)
+    runs all of mooloop on X11 from the next start, which keeps plugin
+    windows above the main window instead.
+  - On macOS the window is a mooloop panel that stays above the main
+    window and hides while mooloop isn't the active app. The Run under
+    XWayland setting isn't shown there.
 - A mono CLAP effect can go in a chain: it hears the chain summed to mono,
   and its output is copied to both sides. The browser no longer greys it
   out. A plugin that is still refused says which ports it has.
+- **A plugin with extra ports runs**, such as Surge XT with its scene
+  outputs or an effect with a sidechain input. mooloop uses the ports the
+  plugin marks as main, which must be mono or stereo. A sidechain hears
+  silence, since nothing can feed one yet, and extra outputs are left out.
+  Before, such a plugin was refused.
 - A plugin knob takes modulation routes, shows the modulation ring, and can
   be named for an automation lane or a MIDI mapping, like a native knob. A
-  parameter the plugin stops reporting is kept and drawn greyed, and comes
-  back when the plugin reports it again.
+  MIDI mapping on one moves it. A parameter the plugin stops reporting is
+  kept and drawn greyed, and comes back when the plugin reports it again.
+- **A plugin instrument has a face**, in the source's place under a SOURCE
+  header named after the plugin: its pinned parameters as knobs, and the
+  open-window button when it has a GUI. Select the header to find and pin
+  the rest in the sidebar. Its parameters now take lanes, modulation
+  routes and MIDI mappings like an effect's, and the lane picker lists them
+  first. Replacing the instrument drops the lanes and routes on its
+  parameters, as deleting an effect does; undo brings them back. Before, a
+  plugin channel showed no face.
 - **Preferences → Plugins:** extra plugin folders, the scan timeout, rescan
   at startup, **Rescan All** with progress, and the files that could not be
   read and why.
@@ -125,12 +173,23 @@ too big.
   Before, every add landed in front of the last device, or outside the box.
   The join past the Chain's edge still adds after it.
 - The Buffer's HISTORY shows "64 BARS" whole.
-- **The Layer's branch controls are back.** The face is the branch list,
-  then the selected branch's Level, Mix, bypass, input and output trims and
-  preset Save and Load, then that branch's devices, with the Layer's own
-  Gain and Mix at the far end. Drag a branch's row to reorder the branches.
-  A bypassed branch shows **BYP** on its row; a dimmed row still means
-  muted. The face is as wide as its controls.
+- A Buffer's freeze is never saved: a song saved frozen opens unfrozen, and
+  a copied Buffer arrives unfrozen. Undo still keeps it. Before, a song
+  saved frozen reopened frozen, with nothing in its history.
+- The Buffer's return to live input fades over its Xfade time at every
+  sample rate. Before, the fade was half as long at 96 kHz and a quarter
+  as long at 192 kHz.
+- **A Layer's selected branch has its controls on the Layer's face.** The
+  face is the branch list, then the selected branch's Level, Mix, bypass,
+  input and output trims and preset Save and Load, then that branch's
+  devices, with the Layer's own Gain and Mix at the far end. Drag a
+  branch's row to reorder the branches. A bypassed branch shows **BYP** on
+  its row; a dimmed row still means muted. The face is as wide as its
+  controls. The shown branch's devices sit straight under the Layer's
+  bracket, no longer inside a Chain box of their own. Every branch is a
+  Chain, whether a device got there by a drop, a paste, a move or Wrap in
+  Layer, and a song with a device sitting straight in a layer opens with it
+  wrapped in one, so every branch has its S, M and Level.
 - A knob turned while its device is bypassed, asleep or on a muted channel
   always reaches the device, plugins and plugin instruments included.
   Before, the ninth different knob you turned replaced the first, and the
@@ -139,10 +198,43 @@ too big.
   that loaded but has a port layout mooloop doesn't handle yet leaves the
   browser. A plugin that fails to load or scan is never hidden: it stays,
   greyed, with its reason, and is listed under FAILED TO LOAD.
-- **Plugin windows on macOS.** A plugin's own GUI opens in a mooloop panel
-  that stays above the main window and hides while mooloop isn't the active
-  app, instead of asking for X11. The Run under XWayland setting isn't shown
-  there.
+- Removing, replacing or restarting a strict plugin such as Odin2 no longer
+  closes mooloop. A plugin that failed to open is tried again after a
+  sample-rate change, a restart it asks for or a rescan, and its old error
+  clears once it opens. After an undo or opening another song, a plugin's
+  face no longer shows the readouts of the plugin that was there before.
+
+### Mixing and routing
+
+- Switching a send off, or between pre- and post-fader, fades instead of
+  stepping.
+- A muted channel's delay or reverb tail dies away while it is muted.
+  Before, the tail froze and played out when you unmuted.
+- A channel delayed to line up with a Limiter or a plugin elsewhere no
+  longer cuts off the end of its last note as it goes quiet, and a track
+  no longer cuts off the end of what it sends to a return.
+- A fader or send at silence draws at the bottom of its travel, not 5% up.
+- The track's device face shows Solo before Mute, as the mixer strip does.
+- Picking the output a channel or track already has is no longer an edit.
+  Before, it added an empty undo step, cleared redo and marked the song
+  unsaved.
+- Adding an effect preset, pasting a device or loading a container preset
+  on a mixer track leaves the rack on that track. Before, it jumped to the
+  selected channel's devices.
+
+### Sequencing and recording
+
+- A key held through Stop records the length you held it, not a sliver.
+- In Song mode, a note played just as the loop comes round is recorded at
+  the end of the loop, where you heard it, not a whole loop early.
+- A take no longer drops notes when the window falls behind.
+- Undoing a note's move, or a change to its length, while it sounds ends
+  it. Before, a pad could drone on until Stop.
+- In the piano roll, a note press has to move 3 pixels before it drags.
+  Before, a Ctrl-click with a slight wobble stacked a hidden copy of the
+  note on top of it.
+- Lengthening selected notes works when one of them already runs past the
+  pattern's end. Before, that note made the drag shorten them all.
 
 ### Automation and modulation
 
@@ -152,6 +244,9 @@ too big.
 - A lane left quiet that way is listed in the lane picker, greyed, under
   the instrument it was drawn on. Open it there and remove it when it's
   taking a lane slot you need.
+- MIDI pickup takes over from a control resting one step off the knob's
+  value. Before, such a control never caught it. Deleting or relearning a
+  mapping no longer hands its pickup state to the mappings after it.
 
 ### Export
 
@@ -193,10 +288,20 @@ too big.
   pick a channel or device, or switch views with Ctrl+1..5 to move it.
   Copy, cut, paste and the arrow keys act on the outlined pane. Selected
   notes are copied and pasted only when the piano roll is the outlined
-  pane.
+  pane. Close or hide that pane and they act on the channel again.
 - Keyboard shortcuts no longer go dead after you leave a rename field with
   Escape or Enter, close a dialog, or when the panel of the control you
   clicked is rebuilt or hidden.
+- Dragging the channel strip's EQ knobs, the sampler's slice markers, a
+  send's level in the mixer or the sidebar, or a key field on ZONES follows
+  the pointer the whole way. Before, each moved one step and stopped. The
+  sidebar's send fader answers along its whole length, not only at its
+  left end.
+- Resetting a shortcut in Preferences takes its default key back from any
+  action you had given it to. Before, both kept it.
+- An edit, undo or redo no longer re-reads the sample browser's folders
+  from disk. A folder that holds only hidden folders no longer shows as
+  having content and opens onto nothing.
 - Preferences → Appearance:
   - The page scrolls to its end, so Borders, Emphasis, Relief, Depth and
     every section below can be reached.
@@ -211,16 +316,31 @@ too big.
   dock, the toolbar, the status bar and both sidebars. A knob reads pressed
   while you drag it. Flat themes look exactly as they did and cost nothing
   more to draw.
-- On Linux, with Run under XWayland on, the window comes up the same size as
-  without it. Before, it could come up about 1.5 times too large on a
-  high-density laptop screen.
 
 ### Files and reliability
 
+- **PipeWire on Debian, Ubuntu and Mint.** mooloop finds PipeWire's JACK
+  library where these distributions leave it off the library path, so it
+  plays without being started through `pw-jack`. Before, it found no JACK
+  server and played nothing. Preferences → Audio names the library in use.
+- Preferences → Audio no longer offers mooloop's own inputs, or another
+  mooloop's, as an output, and a saved pick of one is dropped. Before,
+  picking one fed the output back into mooloop on every launch.
 - Copying a sample into a song's folder never overwrites a file that took
   its name in the meantime.
 - On macOS, recorded MIDI is placed using the device's real output latency,
   not one buffer's worth.
+- A song recovered after a crash keeps its key zones' samples, and
+  autosave no longer copies them on every write. Before, a recovered
+  song's zones pointed into a folder the next autosave removed.
+- Clean Up Takes keeps a take that only a copied channel uses, so pasting
+  that channel later still finds it.
+- A save that fails at its very last step, after the song file is in
+  place, no longer removes the samples that file names.
+- An empty or relative `XDG_CONFIG_HOME` or `XDG_DATA_HOME` is ignored.
+  Before, settings, presets and takes went into a `mooloop` folder wherever
+  the app was started. Started under `nohup`, mooloop keeps running when
+  its terminal closes.
 
 ## 0.1.5 — 2026-09-25
 
