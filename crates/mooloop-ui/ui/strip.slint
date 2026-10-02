@@ -582,7 +582,11 @@ export component StripEqPage inherits Rectangle {
                 horizontal-alignment: center;
             }
         }
-        for band[index] in root.strip.band-gain-db : HorizontalLayout {
+        // Repeated over the spec's band count, which is set once, rather
+        // than over the row's arrays: Rust builds a fresh row for every
+        // edit, a repeater handed a new model rebuilds its rows, and a knob
+        // rebuilt under the pointer drops the drag after its first step.
+        for index in StripSpec.band-names.length : HorizontalLayout {
             spacing: 1px;
             height: root.major + 2px;
             alignment: root.wide ? LayoutAlignment.center : LayoutAlignment.start;
@@ -595,7 +599,7 @@ export component StripEqPage inherits Rectangle {
                 // The outer two bands have a choice; the mids are bells
                 // always, so their icon is a label rather than a control.
                 property <bool> switchable: index == 0
-                    || index == root.strip.band-gain-db.length - 1;
+                    || index == StripSpec.band-names.length - 1;
                 Icon {
                     x: 0px;
                     y: (parent.height - self.height) / 2;
@@ -627,7 +631,7 @@ export component StripEqPage inherits Rectangle {
             }
             StripKnob {
                 param: StripSpec.band(index, StripSpec.band-gain);
-                natural: band;
+                natural: root.strip.band-gain-db[index];
                 bipolar-value: true;
                 size: root.major;
                 enabled: root.strip.eq-in;
