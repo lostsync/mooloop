@@ -99,16 +99,18 @@ Mac. Surge XT FX's GUI passed every step of MOO-490 once MOO-498 (a plugin
 slot that isn't processing traded no parameters, on Linux too) landed, so
 MOO-452 and MOO-86 are done. He confirmed Core Audio's latency (MOO-237).
 **MOO-289** closed on 2026-09-30: Adam found the launch case fixed on recent
-builds. The rest of 0.1.6 is whatever open issue carries the label in Linear
-(on 2026-10-02: MOO-456, which is on `main` and wants a look in the running
-app).
+builds.
 
 Steps 03-05 of the icon pass are 0.1.7.
 
-**Cutting 0.1.6 is Adam's call.** Before tagging, dispatch `release.yml` on
-`main` (`docs/OPERATIONS.md`, "Releases And Tags"). None of it has been
-heard: listening items 27 to 37 below are its own. `JOURNAL.md` has the
-record.
+**0.1.6 was cut on 2026-10-02** (`v0.1.6` at `d7d86da0`,
+https://github.com/lostsync/mooloop/releases/tag/v0.1.6), at Adam's word.
+Its changelog section first caught up with three batches it had missed
+(`623b4a74`), and every issue closed since `v0.1.5` carries the `0.1.6`
+label. MOO-456 still carries it, open and In Review: its fix shipped, and
+it waits on a look in the running app; moving it on is Adam's call. None
+of 0.1.6 has been heard: listening items 27 to 37 below are its own.
+`JOURNAL.md` has the record.
 
 `archive/ROADMAP.md` orders the whole product by dependency, and `SCOPE.md`
 says what 0.2.0 is. This document is narrower: it names the active sequence
