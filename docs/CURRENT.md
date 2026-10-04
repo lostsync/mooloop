@@ -11,44 +11,42 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   dock. The transport row carries play/stop, pattern-vs-song mode, a
   bar:beat:tick position readout, beat lamps, drag-or-type tempo, global
   sixteenth-note swing, and the master meter, and never changes.
-- **The work area is five views in three slots**, as of 2026-09-08. `main`
-  and `split` divide the top; `bottom` is the dock. A view lives in exactly
-  one slot, and a slot's tab strip lists what it holds, so no strip can
-  misreport what is on screen. Each slot's rectangle is computed rather than
-  nested in layouts, which is what lets a view be drawn anywhere off one
-  instance.
-- **A channel sidebar flanks the work area on the left**, as of 2026-09-13.
-  It holds the selected **channel or track**'s name and colour -- following
-  the same selection the device rack does, so the two cannot describe
-  different things -- plus three MIDI rows for a channel: IN and CH are live,
-  and OUT is inert because MIDI output does not exist. A channel also carries
-  an **OUTPUT** picker naming the mixer track it feeds, as of 2026-09-19. It
-  is the same edit the rack row's chip makes, reading the same model row, so
-  the two cannot disagree -- but it says `Bus 3` where a 30px chip in a run of
-  steps can only say an arrow and a number, and it is to hand when the step
-  grid is not on screen. A track's destination is not there: it lives on the
-  track's own mixer strip, beside the analog-sum switch it is a property of. A track draws no MIDI
-  rows at all rather than disabled ones: disabled means "not configurable
-  yet", which is true of OUT and would be a lie about a track, which has no
-  MIDI input to configure. It is hidden until the status
-  bar's leftmost chip, **View > Channel Sidebar** or **Ctrl+[**
-  (`view.channel-sidebar-toggle`, 2026-09-24, MOO-8) opens it. At the
-  bottom it has a **MIX** row -- mute, solo, volume and pan -- for the channel
-  or the track it shows, as of 2026-09-24 (MOO-8). The rack row keeps its
-  own four, and both drive the same verbs, so moving one moves the other. For a track it also holds that track's
-  **sends**: one row each with destination, level, pre/post tap, enable and
-  remove, plus a picker that routes a copy to another track. They were an area
-  of the track's device face until 2026-09-13, and moving them put the editor
-  somewhere always to hand rather than behind whichever view the bottom pane
-  was showing. The mixer strip keeps only the levels, as one bar per send
-  reading `3 REVERB  -6.0`: drag it (relatively; Ctrl for fine), double-click
-  for unity, Shift+click to switch the send off or on, Alt+click to remove it.
-  The tap point and the remove button are the sidebar's alone. It resizes
-  by its right edge between 180 and 400px, remembers its width, and edits
-  whatever channel is selected rather than holding a selection of its own.
-  The `reference/img/mooloop-1.0-mockup.png` panel also draws PLUGINS and
-  MIXER tabs; those are second views of the rack and the mixer and are
-  deliberately not built.
+- **The work area is five views in three slots.** `main` and `split` divide
+  the top; `bottom` is the dock. A view lives in exactly one slot, and a
+  slot's tab strip lists what it holds, so no strip can misreport what is on
+  screen. Each slot's rectangle is computed rather than nested in layouts,
+  which is what lets a view be drawn anywhere off one instance.
+- **A channel sidebar flanks the work area on the left.** It holds the
+  selected **channel or track**'s name and colour -- following the same
+  selection the device rack does, so the two cannot describe different
+  things -- plus three MIDI rows for a channel: IN and CH are live, and OUT is
+  inert because MIDI output does not exist. A channel also carries an
+  **OUTPUT** picker naming the mixer track it feeds. It is the same edit the
+  rack row's chip makes, reading the same model row, so the two cannot
+  disagree -- but it says `Bus 3` where a 30px chip in a run of steps can only
+  say an arrow and a number, and it is to hand when the step grid is not on
+  screen. A track's destination is not there: it lives on the track's own
+  mixer strip, beside the analog-sum switch it is a property of. A track draws
+  no MIDI rows at all rather than disabled ones: disabled means "not
+  configurable yet", which is true of OUT and would be a lie about a track,
+  which has no MIDI input to configure. It is hidden until the status bar's
+  leftmost chip, **View > Channel Sidebar** or **Ctrl+[**
+  (`view.channel-sidebar-toggle`) opens it. At the bottom it has a **MIX**
+  row -- mute, solo, volume and pan -- for the channel or the track it shows.
+  The rack row keeps its own four, and both drive the same verbs, so moving
+  one moves the other. For a track it also holds that track's **sends**: one
+  row each with destination, pre/post tap, enable, remove and a level
+  fader the width of the row, plus a
+  `Send to…` picker that routes a copy to another track. The mixer strip
+  keeps only the levels, as one bar per send reading `3 REVERB  -6.0`: drag it
+  (relatively; Ctrl for fine), double-click for unity, Shift+click to switch
+  the send off or on, Alt+click to remove it. The tap point and the remove
+  button are the sidebar's alone. It resizes by its right edge between 180 and
+  400px, remembers its width, and edits whatever channel is selected rather
+  than holding a selection of its own. The
+  `reference/img/mooloop-1.0-mockup.png` panel also draws PLUGINS and MIXER
+  tabs; those are second views of the rack and the mixer and are deliberately
+  not built.
 - **The top pane splits.** The status bar's middle chip opens it with the main
   pane's other view; the divider between the two halves drags, resets to even
   on a double-click, and closes the split when dragged to either bound —
@@ -61,17 +59,12 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   `Ctrl+Shift+\` do the same. Zoom never moves a view, so leaving it puts
   everything back where it was. The zoomed tab takes the full accent rather
   than the muted active fill, and the status bar says how to get out.
-- **A track's rack reads in signal order**, as of 2026-09-13: its head (name,
-  routing, polarity, then its channel strip's drive/EQ/comp, bundled into one
-  row rather than two beside each other since 2026-09-14), its own devices as
-  inserts, and its fader last. The fader used to be drawn first, inside the
-  head face, because that face sits where a channel's *generator* sits -- the
-  start of a channel's path and the wrong end of a track's. Nothing sounded
-  different; the rack simply showed a stage before the stages that precede it.
+- **A track's rack reads in signal order**: its head (name, routing,
+  polarity, then its channel strip's drive/EQ/comp, in one row), its own
+  devices as inserts, and its fader last.
 - **The bottom pane resizes for any view that does not declare its own
   height**, which is every view except `DEVICES` — a device face is a fixed
-  268px and does not stretch. The playlist became resizable on 2026-09-08;
-  before that the grip was live on the notes page alone.
+  268px and does not stretch.
 - **Each view remembers its own dock height**, so switching tabs restores the
   height that view was left at rather than sharing one number.
 - **The pane arrangement survives a restart**, in `[ui.layout]` of
@@ -92,39 +85,30 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   the bottom pane.
 - **A view is revealed, not navigated to.** `Ctrl+1`..`Ctrl+5` and the `View`
   menu name `Steps`, `Mixer`, `Devices`, `Notes` and `Playlist`, and each
-  shows that view wherever it lives. There is no longer an `editor page`: a
-  page index of the lower dock could not name a view that had moved out of
-  it.
+  shows that view wherever it lives.
 - **A view has exactly one toolbar row, and its slot's tab strip leads it.**
   With `STEPS` up it carries pattern selection, the cursor tools and pattern
   length; with `MIXER` up, nothing, because the mixer's controls are on its
   strips; with `DEVICES` up, the device chain's source picker and, at the far
-  end, the field that renames the channel and its preset browser.
-  The dock used to stack **two** rows -- a header with the switcher, the
-  channel name and the preset browser, and a per-page row under it. Merging
-  them returned 34px and removed a `SONG ARRANGEMENT` label that named the
-  pane a tab beside it already named. The preset browser is now on `DEVICES`
-  alone; on the piano roll a whole-channel preset browser was noise.
-  The pattern controls and the `STEPS/MIXER` switcher had already moved once,
-  on 2026-09-07, off a 26px strip of their own.
+  end, the field that renames the channel and its preset browser. The preset
+  browser is on `DEVICES` alone; on the piano roll a whole-channel preset
+  browser was noise.
 - **Each editor owns its own grid snap**, in its own row: the piano roll a
-  toggle and a menu, the playlist a menu. A third snap control used to sit in
-  the toolbar and ask `editor-page` which of the two indices it was editing.
+  toggle and a menu, the playlist a menu.
 - The source device is a picker rather than a chip per instrument.
 - **Changing a channel's device leaves what was aimed at the old one inert,
-  and keeps it** (MOO-135, 2026-09-26). A lane, a modulation route or a MIDI
-  binding on the sampler's Cutoff no longer starts moving whatever the new
-  device calls the same id (the drum synth's snare tone). It stays in the
-  song and is saved with it: the shelf lists the route as an unavailable
-  destination, and the mapping list shows the binding as an unavailable
-  parameter. Switching the channel back makes all three work again. The new
-  device still arrives at its defaults (MOO-192). An inert lane still counts
-  toward the channel's eight lanes per pattern, and the cap stays (MOO-270,
-  route 2). The lane picker lists a pattern's inert lanes as missing rows
-  (italic, thin) after the device's own rows, under the device they were
-  drawn on (MOO-329). Picking one opens the lane, and Remove lane takes it
-  out as one undo step, which frees its slot. No new lane can be made on a
-  device the channel no longer runs.
+  and keeps it.** A lane, a modulation route or a MIDI binding on the
+  sampler's Cutoff does not start moving whatever the new device calls the
+  same id (the drum synth's snare tone). It stays in the song and is saved
+  with it: the shelf lists the route as an unavailable destination, and the
+  mapping list shows the binding as an unavailable parameter. Switching the
+  channel back makes all three work again. The new device still arrives at
+  its defaults (MOO-192). An inert lane still counts toward the channel's
+  eight lanes per pattern, and the cap stays (MOO-270). The lane picker lists
+  a pattern's inert lanes as missing rows (italic, thin) after the device's
+  own rows, under the device they were drawn on. Picking one opens the lane,
+  and Remove lane takes it out as one undo step, which frees its slot. No new
+  lane can be made on a device the channel no longer runs.
 - Patterns are chosen with a fixed-width stepper plus a jump menu and can be
   named; the selector costs the same width at any pattern count.
 - Pattern length moves a beat at a time with Shift -- on the STEPS field's
@@ -142,23 +126,23 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   four-channel DS-01 drum machine kit every time (Kick, Snare, Closed Hat and
   Open Hat, from the factory patches Machine Kick, Machine Snare, Machine Hat
   and Machine Open Hat, whose names each channel's generator wears), grouped
-  onto one `Drums` track (MOO-267). Channels can use any of
-  six sources — the sampler, the Gitdum DS-SX (the v1 drum synth), the
-  Dominic DS-01, the Munotone ML-M1, the Polyneight ML-P8, or Aux In, which
-  plays another channel's published audio outlet — and every rack row exposes
-  solo and mute, output volume, and constant-power stereo pan. A source wears
-  its full name where there is room and its model number where it is tight
-  (Adam, 2026-09-26; MOO-140): the rack's `+`, the source picker's menu, the
-  device header and the preset browser's groups read "Polyneight ML-P8"; the
-  96px picker chip, a new channel's name ("ML-P8 2") and the automation and
-  MIDI lists read "ML-P8". These are display names only: a
-  song's stored channel names, such as an old "Drum Synth 1", are kept as
-  saved. The rack's `+` offers those six when adding a channel, which is
-  the same list the source picker offers when changing one; its rows are
-  ordinary menu rows, reading down a left edge like the rest of the
-  interface's menus. The v1 mono and poly synths were retired from both on
-  2026-09-22 (the ML-M1 and ML-P8 cover them): a song that uses one loads and
-  plays unchanged, and its channel's picker still lists it while selected.
+  onto one `Drums` track. Channels can use any of six sources — the sampler,
+  the Gitdum DS-SX (the v1 drum synth), the Dominic DS-01, the Munotone
+  ML-M1, the Polyneight ML-P8, or Aux In, which plays another channel's
+  published audio outlet — and every rack row exposes solo and mute, output
+  volume, and constant-power stereo pan. A source wears its full name where
+  there is room and its model number where it is tight (Adam's ruling): the
+  rack's `+`, the source picker's menu, the device header and the preset
+  browser's groups read "Polyneight ML-P8"; the 96px picker chip, a new
+  channel's name ("ML-P8 2") and the automation and MIDI lists read "ML-P8".
+  These are display names only: a song's stored channel names, such as an old
+  "Drum Synth 1", are kept as saved. The rack's `+` offers those six when
+  adding a channel, which is the same list the source picker offers when
+  changing one; its rows are ordinary menu rows, reading down a left edge like
+  the rest of the interface's menus. The v1 mono and poly synths are not
+  offered in either (the ML-M1 and ML-P8 cover them): a song that uses one
+  loads and plays unchanged, and its channel's picker still lists it while
+  selected.
 - Channels can be reordered by dragging a rack row's name plate. The rows
   between the grab and the landing slide aside, and the gap that opens is the
   drop indicator. Every address in the song that named a channel follows it —
@@ -175,8 +159,8 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   the device rack stays on the moved track, and the move is one undoable edit.
   The Track menu's **Move … Left** and **Move … Right** do the same one seat
   at a time for the track the rack is editing, and are bindable in
-  Preferences > Shortcuts. A control binding now also follows a channel
-  reorder, insert or delete; before 2026-09-16 it stayed on the old seat.
+  Preferences > Shortcuts. A control binding also follows a channel reorder,
+  insert or delete.
 - Patterns are created explicitly from a one-pattern project, with up to 256
   addressable pattern IDs and independent logical lengths from 1 to 256 steps.
   Hidden steps survive shortening and re-extending a pattern.
@@ -185,21 +169,17 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   sidebar's NAME row, or in the step rack: a double-click on a channel's
   plate turns it into a name field, and Tab or Shift+Tab moves the field to
   the next or previous channel, so a run of channels can be named from the
-  keyboard (MOO-224). Enter, Escape or a click elsewhere closes it, and Tab
-  past the last channel does too. Each channel's rename is its own undo step.
-  A track is renamed on its own
-  device face, a pattern in the transport toolbar. A channel or a track
-  refuses a blank name, because its rack plate or its mixer column is the only
-  thing identifying it; a pattern accepts one and reads as `Pattern N`
-  wherever it is drawn -- the pattern menu and the playlist's gutter --
-  because its number is beside it there. A channel keeps the name it was given
-  when its source device is changed: only a channel still wearing the outgoing
-  device's default name is renamed after the new one. **A pattern's name
-  survived save and reload only from 2026-09-13**; before that the session
-  held it and the project format had nowhere to put it, so reopening a song
-  numbered every pattern again. Cloning a pattern gives the copy its name and
-  colour, and cloning or deleting one leaves every other pattern's name on
-  that pattern; until 2026-09-22 both shifted the names after it by one.
+  keyboard. Enter, Escape or a click elsewhere closes it, and Tab past the
+  last channel does too. Each channel's rename is its own undo step. A track
+  is renamed on its own device face, a pattern in the transport toolbar. A
+  channel or a track refuses a blank name, because its rack plate or its mixer
+  column is the only thing identifying it; a pattern accepts one and reads as
+  `Pattern N` wherever it is drawn -- the pattern menu and the playlist's
+  gutter -- because its number is beside it there. A channel keeps the name it
+  was given when its source device is changed: only a channel still wearing
+  the outgoing device's default name is renamed after the new one. Cloning a
+  pattern gives the copy its name and colour, and cloning or deleting one
+  leaves every other pattern's name on that pattern.
 - Pattern and Song transport modes are independent of the visible editor.
   The playlist is a lower-pane tab, supports layered tick-addressed pattern
   instances, and remains editable while either mode plays. Clip width follows
@@ -251,11 +231,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 - Which modifier each roll gesture answers to is remappable in
   Preferences > Shortcuts: snap override, add to selection, remove from
   selection, copy on drag, and stretch. Defaults are Shift, Ctrl, Ctrl+Shift,
-  Ctrl, and Alt. Shift is snap override alone -- it used to add to the
-  selection too, which meant a Shift-drag deselected the note it was about to
-  move and carried it off on its own. The snap override inverts the toggle
-  rather than only defeating it, so it frees a drag when snap is on and
-  quantises one when it is off.
+  Ctrl, and Alt. Shift is snap override alone, because a Shift that also
+  added to the selection deselected the note a Shift-drag was about to move
+  and carried it off on its own. The snap override inverts the toggle rather
+  than only defeating it, so it frees a drag when snap is on and quantises one
+  when it is off.
 - How a Super (Meta/Win) press is read is a preference on that same page:
   separate keys, which is the default and what every binding assumes; Super
   acting as Alt, where either key presses an Alt chord; or Alt and Super
@@ -281,24 +261,25 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 - A sampler editor with waveform, WAV/AIFF/MP3/FLAC/Ogg Vorbis loading and
   mixed-format sibling navigation, trim, reverse, root note, coarse/fine tune,
   loop region and mode, ADSR, low-pass filter with envelope depth and
-  resonance, drive, bit reduction, and rate reduction. The filter runs its own ADSR, reached through a CURVE/ENV switch
-  on the Tone page's filter panel; a patch that never sets one follows the
-  amplitude envelope, which is what every project saved before it did. An
-  Output trim in the page bar sets the patch's level ahead of the channel's
-  inserts; a sampler created today starts at -9 dB so a normalized file peaks
-  where the synths' default patches do, while projects saved before the trim
-  existed load at unity. Voice controls cover one-shot/gated playback, 1-16
-  voices, restart/layer retriggering, and 16 cross-channel choke groups.
-  At one voice in Pitched mode the sampler also glides and plays legato
-  (MOO-45), with the ML-M1's controls: Glide (0-2 s), GLIDE MODE (Always also
+  resonance, drive, bit reduction, and rate reduction. The filter runs its own
+  ADSR, reached through a CURVE/ENV switch on the Tone page's filter panel; a
+  patch that never sets one, which includes every project saved before it
+  existed, follows the amplitude envelope. An Output trim in the page bar sets
+  the patch's level ahead of the channel's inserts; a sampler created today
+  starts at -9 dB so a normalized file peaks where the synths' default patches
+  do, while projects saved before the trim existed load at unity. Voice
+  controls cover one-shot/gated playback, 1-16 voices, restart/layer
+  retriggering, and 16 cross-channel choke groups.
+  At one voice in Pitched mode the sampler also glides and plays legato,
+  with the ML-M1's controls: Glide (0-2 s), GLIDE MODE (Always also
   slides into a release tail, Legato only between held notes) and ENV TRIG
   (Retrig restarts the sample and envelopes on every note; Legato only moves
   the pitch of the note already sounding, so a line keeps its place in the
   sample). Releasing the newest key while an older one is held falls back to
   the older pitch with no new attack. The three are greyed out with more than
   one voice or in Slice mode. A patch with no glide and Retrig plays exactly as
-  a one-voice sampler always did, so older songs don't change.
-  Key zones (MOO-14), on the ZONES page: the sampler's own sample plays a key
+  a plain one-voice sampler, so older songs don't change.
+  Key zones, on the ZONES page: the sampler's own sample plays a key
   range (LOW and HIGH), and + ZONE adds another audio file as a zone with its
   own key range and ROOT. A note plays the sample if its range holds the
   note, otherwise the first zone whose range holds it, otherwise nothing. A
@@ -306,7 +287,7 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   edit is one undo step. The first zone added to a full-keyboard sampler
   takes the upper half of the keys. A later zone takes the keys above every
   range, or splits the top range when there are none. Each zone is its own
-  region of its file (MOO-463): start, end, reverse, loop points, loop mode
+  region of its file: start, end, reverse, loop points, loop mode
   and fade, root, tune and a LEVEL trim. A ZONE strip in the device's page
   bar (on SAMPLE and VOICE, once a sampler has zones) picks the zone those
   pages edit, and so does clicking a zone's name on ZONES; the sampler's own
@@ -317,12 +298,12 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   and play mode are shared by every zone. A new zone plays its whole file. A
   lane or modulation route on start, end, loop or tune moves every zone by
   the same amount from its own setting. Slices and the stretch commit belong
-  to zone 1. Slices and zones never both apply (MOO-464): a sampler with
+  to zone 1. Slices and zones never both apply: a sampler with
   zones is greyed out of Slice mode (a MIDI mapping or lane on Play mode
   cannot put it there either), its markers and DETECT are unavailable, and
   in Slice mode + ZONE and DUPE are greyed out. A song saved since 0.1.5
   with both plays its slices, its zones unheard, until it is switched to
-  Pitch. Many zones can share one file (MOO-464): DUPE copies the selected
+  Pitch. Many zones can share one file: DUPE copies the selected
   zone, its file and region, onto the next free key (rooted to play what the
   original's lowest key did; with no key free it takes the upper half of the
   original's range), and selects it. On an unzoned sampler with slice
@@ -335,7 +316,7 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   region it played, as its own. Zones embed with the song like its sample,
   and a file several zones share is embedded once. A copied sampler
   channel carries its zones' audio, so it pastes with every zone playing
-  into a song opened or created since the copy (MOO-242). A zone whose file is
+  into a song opened or created since the copy. A zone whose file is
   missing says so on the page and plays nothing. Zones store a velocity range
   that nothing plays yet (velocity layers). The full mapping workspace
   (MOO-40) and SFZ import (MOO-41) are not built.
@@ -391,15 +372,12 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   priority stack, legato/retrigger and glide modes, and velocity Accent. The
   ML-P8 face is five pages -- OSC, NETWORK, FILTER, AMP and ML-P8 MOD, whose
   name distinguishes it from the frame's MOD button, which opens the channel
-  shelf. It was one dense screen until 2026-09-04: at four rack units that fit
-  sixty-nine parameters only at a 20px dial and a 9px caption, which is
-  unreadable on a laptop, so the face spends a click per group and every
-  control is a 34px `KnobStack` with its value still typed into. NETWORK is
-  the source-by-destination grid with a page to itself; its four columns
-  divide the face's width rather than holding a fixed 176px and centring the
-  remainder. Each cell is a **horizontal** slider -- the bar and the drag both
-  run along the cell's long axis, since a cell seven times wider than it is
-  tall spent its length saying nothing and its height saying the value. A cell
+  shelf. Sixty-nine parameters on one four-unit screen were unreadable on a
+  laptop, so the face spends a click per group and every control is a 34px
+  `KnobStack` with its value typed into. NETWORK is the
+  source-by-destination grid with a page to itself; its four columns divide
+  the face's width. Each cell is a **horizontal** slider -- the bar and the
+  drag both run along the cell's long axis. A cell
   draws its modulation state the way a knob's ring does: an armed source marks
   every legal cell and shows the excursion its route would produce about the
   authored value, an unarmed one shows where the running sources have actually
@@ -431,50 +409,41 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   held input/output peaks; its dry path is preallocated and runs after the
   device DSP, so parallel processing works even when an effect itself has no
   mix parameter. At full wet the blend is exactly the device, sample for
-  sample (MOO-226, 2026-09-25: the equal-power law's `cos` of a quarter
-  turn is not zero in `f32`, and had added the dry copy back about 147 dB
-  down). The dry path is delayed by the device's declared dry-path
+  sample. The dry path is delayed by the device's declared dry-path
   alignment latency before the blend, so latency-introducing effects do not
   comb-filter their own dry copy; wet-only returns may retain their own
-  intentional pre-delay. **Every host move ramps** (MOO-108, 2026-09-23):
+  intentional pre-delay. **Every host move ramps**:
   wet/dry, both trims and a container's Mix follow their controls through
   the mixer's 5 ms one-pole per sample, and bypass is a crossfade between
   the device's output and the bypassed path while the device keeps running,
   taken out of the path once the fade is 60 dB down (about 35 ms). A
   bypassed container fades its Mix to dry the same way before its run stops
   being called. A device coming back from bypass is told its held audio is
-  stale (`Discontinuity::Seek`), so an un-bypassed delay starts empty rather
-  than playing the repeats it held when it went out. Knobs turned while a
-  device is not being processed (bypassed, asleep, or on a muted channel)
-  all land when it runs again, however many were turned (MOO-344,
-  2026-10-01): past eight distinct knobs a native device is handed its
-  whole base, and a hosted plugin, effect or instrument, takes them at once
-  through CLAP's `params.flush`. Before, the ninth overwrote the first,
-  which then played its old value while the face and the file showed the
-  new one. Removing a device fades
+  stale, so an un-bypassed delay starts empty rather than playing the
+  repeats it held when it went out. Knobs turned while a device is not being
+  processed (bypassed, asleep, or on a muted channel) all land when it runs
+  again, however many were turned; a hosted plugin, effect or instrument,
+  takes them at once through CLAP's `params.flush`. Removing a device fades
   it out of the path first: the executor holds the removal, and the edits
   queued behind it, until the fade has run, or 100 ms at most for a chain
-  that is not being processed. Installing is the same in reverse (MOO-172):
+  that is not being processed. Installing is the same in reverse:
   an added device fades in along the bypass crossfade, and one installed over
   another waits for that one to fade out first. Loading an effect preset,
   or a container preset over a run, works that way too: the old device or
-  run fades out and the loaded one fades in. A preset load used to rebuild
-  the whole channel, cutting its voices and tails, and now it doesn't. The
-  device keeps its identity, so its routes and lanes stay attached. A
-  single-row preset loaded onto a container's own row changes the box's
-  values -- Mix, Level, its branch mute and solo, bypass, wet/dry and trims
-  -- the way its controls would, and the box and everything in it keep
-  sounding. `continuity_tests.rs` holds each of these to
-  the family's step bound. Buses meter their effect slots the same way channels do: the
-  rack polls whichever chain it shows, and a bus's head face reads its summed
-  input and post-chain peak. Sources have a blank input meter because they generate rather
-  than receive audio.
+  run fades out and the loaded one fades in, and the channel is not rebuilt,
+  so its voices and tails carry on. The device keeps its identity, so its
+  routes and lanes stay attached. A single-row preset loaded onto a
+  container's own row changes the box's values -- Mix, Level, its branch mute
+  and solo, bypass, wet/dry and trims -- the way its controls would, and the
+  box and everything in it keep sounding. Buses meter their effect slots the
+  same way channels do: the rack polls whichever chain it shows, and a bus's
+  head face reads its summed input and post-chain peak. Sources have a blank
+  input meter because they generate rather than receive audio.
 - Every gain trim — device input/output, the rack-row volume knob, the source
   output trim — is the same dB knob class: −60 dB (−∞) to +12 dB from unity,
   double-click to 0 dB. Project files and the engine wire keep linear gain.
   A new channel starts at 0 dB however it is made, and the strip's volume
-  descriptor defaults there too (`DEFAULT_CHANNEL_VOLUME`); one added from
-  the toolbar used to start at −1.9 dB.
+  descriptor defaults there too.
 - The generator at the head of a chain is selectable, by clicking its header
   the way a device row is selected, and wears the same border. It is the one
   rack row a click could not name. What it does not do is take part in
@@ -483,51 +452,41 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   presets are for.
 - Every effect face inherits one shared shell (`EffectDeviceShell`): the
   identity header and drag-to-reorder live there, so a face file holds only
-  its working controls and a new effect kind adds no chrome of its own. The
-  shell publishes the grab into the `RackDrag` global and reads the landing
-  back out of it; the rack's rows work out which of them the pointer is over,
-  because they are what knows the geometry.
+  its working controls and a new effect kind adds no chrome of its own.
 - Source-device oscillator, lo-fi, and filter plots respond to their live
   parameters. Drum plots are generated by the production voice renderer;
   filter response geometry is reusable for LPF, BPF, and HPF modes.
-- **The status bar holds a failure until it is read** (MOO-132). A warning
+- **The status bar holds a failure until it is read.** A warning
   or an error has its own segment at the bar's left, in amber or red, and
   stays there until it is clicked away or a notice of at least its weight
   replaces it -- the next "Device selected" goes to the ordinary line beside
   it instead of over it. A sample that will not decode, a load onto a channel
   that is not a sampler, a new-channel load with no room, a failed preview,
   a take that could not be written or has nowhere to land, and a device
-  whose NaN output the master's guard is silencing all arrive there; before,
-  each went to the log or was overwritten within a click. So do a device
-  that panicked and was silenced, and "No audio": when the audio stops or
-  never started, that notice stays after the Reconnect question is
+  whose NaN output the master's guard is silencing all arrive there. So do a
+  device that panicked and was silenced, and "No audio": when the audio stops
+  or never started, that notice stays after the Reconnect question is
   dismissed, and comes down by itself when the audio is running again.
   The bar's right end reads the audio callback once a second: its load as a
   share of the block budget, a dropout count in amber that a click resets,
   and a "not realtime" badge when the callback thread is ordinary rather than
-  realtime. The badge reads the thread's policy at each refresh (MOO-215), so
+  realtime. The badge reads the thread's policy at each refresh, so
   it clears when the driver promotes the thread after its first block and
   appears if the thread is demoted mid-session. It shows "DSP –" while no audio is heard, rather than the null
   driver's timing. Hovering either segment explains it in the hint line.
-  As of 2026-09-26 (MOO-236) **a slow callback says where it was**: a
-  callback that uses more than 60% of its budget
-  (`load::HOT_SPOT_SHARE_PERCENT`) records the song position and the three
-  channels or tracks that took most of it, timed on the audio thread with
-  one clock read per strip (`engine/src/site_times.rs`). The readout shows
-  the last one in amber beside it, "bar 12.3 · Bass 41%, Drums 22%", each
-  figure a share of the block's budget, in a fixed-width box that elides
-  rather than moving the bar, with the explanation in the hint line on
-  hover; it holds until the readout is clicked, and
-  the log gets one line a second while it keeps happening. An export does
-  not time anything.
+  **A slow callback says where it was**: a callback that uses more than 60%
+  of its budget records the song position and the three channels or tracks
+  that took most of it. The readout shows the last one in amber beside it,
+  "bar 12.3 · Bass 41%, Drums 22%", each figure a share of the block's
+  budget, in a fixed-width box that elides rather than moving the bar, with
+  the explanation in the hint line on hover; it holds until the readout is
+  clicked, and the log gets one line a second while it keeps happening. An
+  export does not time anything.
   `status_bar::notify` in `ui/src/status_bar.rs` is the one door.
 - **An edit the engine's command ring has no room for waits instead of
-  being lost** (MOO-134). The pump asks `EngineHandle::command_room()` before
-  each message and holds what would not fit, in order, with everything
+  being lost.** The pump holds what would not fit, in order, with everything
   queued behind it (`mooloop_session::engine::EngineBacklog`), delivering it
-  first on a later tick. A parameter change used to be logged and dropped,
-  and a refused channel edit said "waiting for audio" and was then thrown
-  away with its undo step. Two installs waiting together merge into the
+  first on a later tick. Two installs waiting together merge into the
   newest, keeping the older one's undo step; a load or a Reconnect clears
   what was addressed to the old song. A backlog lasting a second raises a
   warning in the status bar -- "the audio engine has stopped" when the
@@ -551,25 +510,24 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   with waveform, name, and format stats, and loading either into the selected
   channel or into a new one. The sampler face's prev/next-sample arrows step
   through **the folder the sample was browsed from**, which a save does not
-  move: embedding a song rewrites where the bytes are, and before 2026-09-14
-  it took the arrows with it, so "next sample" on a kick loaded the snare out
-  of the song's own bundle. A song opened from disk has no browse folder to
-  remember and steps through its bundle, which is all the document knows. **Presets**: every well-known preset directory
+  move, even when embedding rewrites where the bytes are. A song opened from
+  disk has no browse folder to remember and steps through its bundle, which
+  is all the document knows. **Presets**: every well-known preset directory
   scanned on entry to the tab and grouped — Channels, then one group per
   device kind, then one per effect kind, empty groups omitted — each group
   expanding to its presets with a count beside it, and a preset's category
   and tags shown when they say something its group does not. **A click
-  selects a preset; a double-click, Enter or a drop onto the rack loads it**
-  (MOO-9, 2026-09-24), and a right-click offers Load and, for an effect
-  preset, Add as New Device. An effect preset added as a new device fades in
-  where it lands like any inserted device, and nothing else on the song
-  stops or is rebuilt for it. The click also **auditions an instrument or
-  channel preset** (MOO-227): the preset is rendered offline, off the UI
-  thread, into a short phrase (a bar of hits for the drum devices, an
-  arpeggio into a chord for the pitched ones, root and fifth for a sampler)
-  and played through the preview voice when autoplay is on, like a clicked
-  sample. The song is not touched. An effect preset's click only selects, and
-  that is Adam's ruling (MOO-227, 2026-09-26: no effect audition). A **filter** field above both tabs narrows the
+  selects a preset; a double-click, Enter or a drop onto the rack loads it**,
+  and a right-click offers Load and, for an effect preset, Add as New
+  Device. An effect preset added as a new device fades in where it lands like
+  any inserted device, and nothing else on the song stops or is rebuilt for
+  it. The click also **auditions an instrument or channel preset**: the
+  preset is rendered offline, off the UI thread, into a short phrase (a bar
+  of hits for the drum devices, an arpeggio into a chord for the pitched
+  ones, root and fifth for a sampler) and played through the preview voice
+  when autoplay is on, like a clicked sample. The song is not touched. An
+  effect preset's click only selects, and that is Adam's ruling (no effect
+  audition). A **filter** field above both tabs narrows the
   tree by words: presets by name, category, tags and group, opening every
   group that has a match; samples by file name, searched through every folder
   under every location rather than only the open ones (bounded, on the UI
@@ -578,16 +536,14 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   preset is offered only on a channel already holding that kind and is drawn
   greyed otherwise. **An effect preset appends a device to the end of the
   chain the rack is showing -- a channel's or a mixer track's -- rather than
-  replacing one**, and the rack stays there with the new device selected
-  (MOO-457: until 2026-09-30 the install that carried the edit sent the rack
-  from a track back to the selected channel). So it is always
-  loadable -- unless the selected device is that preset's kind, when it loads
-  into that device instead, which is Adam's rule for the double-click; the
-  rack row's own rail is still where a preset replaces what is already in
-  any row. **Every preset load is one undoable edit**, effect,
+  replacing one**, and the rack stays there with the new device selected. So
+  it is always loadable -- unless the selected device is that preset's kind,
+  when it loads into that device instead, which is Adam's rule for the
+  double-click; the rack row's own rail is still where a preset replaces what
+  is already in any row. **Every preset load is one undoable edit**, effect,
   channel and generator alike, and so is a kit load; none of them stops the
   song, because each edits the song that is playing rather than opening
-  another (MOO-95).
+  another.
 - A two-pane Preferences dialog with General, Audio, MIDI, Appearance,
   Shortcuts and Plugins pages; General persists developer mode and reveals the presently
   empty Developer page. The MIDI page lists the inputs the driver is offering,
@@ -608,16 +564,16 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   Night, Rosé Pine, Monokai, Graphite, High Contrast, Ember, Indigo**, most
   with both of their published light and dark variants, and two homages,
   **Platinum** (after Mac OS 8) and **Impulse** (after Impulse Tracker), which
-  bring square corners and a bevel with them. A fourteenth row,
+  bring square corners and a bevel with them. A further row,
   **Wallpaper**, appears whenever pywal or wallust has left a palette in
   `~/.cache/wal/` or `~/.cache/wallust/`, and is that palette. A variant the
   scheme does not publish is derived from the one it does and says so in the
   list. A **Dark / Light / Auto** control picks the side, where Auto follows
   the desktop's own `org.freedesktop.appearance color-scheme` (the system
   appearance on macOS), **live**: switching the desktop between light and dark
-  switches mooloop within a frame, with Preferences open or closed (MOO-156).
+  switches mooloop within a frame, with Preferences open or closed.
   **The three colour pickers' quick swatches come from the scheme the page
-  names**, even after a swatch has made the colours Custom (MOO-283): Base
+  names**, even after a swatch has made the colours Custom: Base
   offers its three background-like neutrals (slots 00-02), Accent its eight
   hues plus its own accent when that is none of them, and Alert its eight
   hues. So a built-in's own three seeds are each a selectable swatch.
@@ -627,13 +583,13 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   palette index, so changing themes never repaints anybody's channels.
   Beside the colours: roundness, contrast, **text size** (65-200%; 100% is
   what read as 115% before 0.1.6, and a stored size is read against the new
-  base rather than migrated, MOO-286), **border and emphasis widths**, **relief** (flat, bevel or inset, with a
-  depth, and taken away again by a theme that doesn't state one). A bevel
-  draws on the buttons, toggles, segmented selectors and tabs, the knobs'
-  caps (lit from the other side while dragged), each device's plate and
-  header and a folded device, every pane including the dock, the toolbar,
-  the status bar and both sidebars, as of 2026-10-01 (MOO-153); dividers,
-  rails and the inside of faces stay flat. And
+  base rather than migrated), **border and emphasis widths**, **relief**
+  (flat, bevel or inset, with a depth, and taken away again by a theme that
+  doesn't state one). A bevel draws on the buttons, toggles, segmented
+  selectors and tabs, the knobs' caps (lit from the other side while
+  dragged), each device's plate and header and a folded device, every pane
+  including the dock, the toolbar, the status bar and both sidebars;
+  dividers, rails and the inside of faces stay flat. And
   **two font families** -- one for the
   interface and one for readouts. A font that is not installed falls back to
   the platform default, because mooloop registers no fonts at runtime (Slint
@@ -641,7 +597,7 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   and a theme can only name a family. Themes save to
   `<config>/mooloop/themes/<name>.toml`, one file per theme, and a malformed
   one is skipped with a message rather than stopping startup. **Density** has
-  no control on the page since 0.1.6, but a theme that states one (Impulse)
+  no control on the page, but a theme that states one (Impulse)
   still applies it and the setting still persists. All of it
   previews live and persists on Apply or OK. Motion speed's **Instant** is labelled as
   reduced motion and is the default, so nothing animates unless asked to. Shared audio controls, tooltips, and master
@@ -660,11 +616,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   Apply/OK. A **Context column** beside each chord says where it applies —
   blank for the global majority, so the column marks the exceptions rather
   than restating the rule sixty-three times, and "Focused panel" means the
-  chord asks what was clicked last. The recorder accepts an unmodified key;
-  it refused one until 2026-09-14, which had made the shipped bare-L and
-  bare-digit defaults impossible to put back after a Reset.
+  chord asks what was clicked last. The recorder accepts an unmodified key,
+  so the shipped bare-L and bare-digit defaults can be put back after a
+  Reset.
 - A traditional menu bar above the toolbar (`menubar.slint`): File, Edit,
-  Pattern, Channel, View, and Help. Menus are declared where their window
+  Pattern, Channel, Track, View, and Help. Menus are declared where their window
   callbacks are in scope, so an item is one `MenuRow` line and a new action is
   one callback plus one line. Rows disable themselves when they cannot act
   rather than being absent — Select All Notes is live only in the piano roll
@@ -681,7 +637,7 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   Song documents are inspectable versioned TOML files with
   optional copied WAV assets in a sibling `.mooloop-assets` directory:
   samples in its `samples/`, recorded takes in its `recordings/`. **A save
-  adds to that directory and never rebuilds it** (since 2026-09-22): a file
+  adds to that directory and never rebuilds it**: a file
   already there keeps its place and its name and is not copied again, and a
   file the song stops using stays until File > Clean Up Takes moves it to
   the trash, so an undo back to it still finds it. Older
@@ -689,15 +645,20 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   Missing or corrupt samples warn and load as silent slots. **Renaming a song
   and its assets folder together, in a file manager, works**: the document
   still names the old folder, and the loader reads this song's own instead and
-  says so, which the next save writes back. Until 2026-09-14 that pair of
-  renames made the song permanently unopenable.
+  says so, which the next save writes back.
 - Offline export of one pattern pass, the song, or a range of it (below),
   followed by a release tail that runs
   until every device has fallen silent (`RenderState::is_at_rest`, so a
   reverb's decay and a delay's last echo are waited for), capped at a
   0-30 second limit the dialog sets (10 s by default). Outputs are WAV at
   16-bit PCM, 24-bit PCM or 32-bit float, or 192/256/320 kbps MP3, each
-  stereo or mono. As of 2026-09-25 (MOO-186), the card's Format row is WAV
+  stereo or mono.
+
+  **The export dialog** is five sections, Source, Range, Format, Tail and
+  Output, and stays up through the render with a progress bar and a Cancel,
+  which stops the render and leaves any file already at the target
+  untouched; then it shows the file's length and rate and every count below.
+  A finished file replaces the target with one rename. The Format row is WAV
   or MP3 with Stereo or Mono, then a WAV's depth and a Dither box, or an
   MP3's bitrate. Dither is TPDF, on by default at 16-bit and off at 24,
   and never applied to float. Its seed comes from the file's place in
@@ -705,90 +666,85 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   unrelated dither. A mono file is (L + R) / 2: a centred sound
   keeps its per-side level, and a hard-panned one is 6 dB down
   (`GAIN_STRUCTURE.md`, "Mono files"). An MP3 in mono uses LAME's mono
-  mode. It renders in 512-frame blocks, a size live playback runs at,
-  rather than the graph's 8192-frame maximum, where one automated parameter
-  filled a device's event list and every later one on it was dropped from
-  the export. Parameter events that still find no room are counted, and an
-  export that lost any logs how many. The render passes through the same
-  output guard as playback, so a file never holds NaN or a sample over
-  0 dBFS; `RenderSummary` counts the mix's overs (which the safety limiter
-  held at the ceiling), the non-finite samples written as silence, and any
-  sample the PCM encoder still had to clamp, and a non-zero count is
-  logged. As of 2026-09-23 (MOO-125) the export dialog stays up through the
-  render with a progress bar and a Cancel, which stops the render and leaves
-  any file already at the target untouched, and then shows the file's length
-  and rate and every one of those counts. A finished file replaces the
-  target with one rename. As of 2026-09-25 (MOO-180) the dialog is five
-  sections, Source, Range, Format, Tail and Output, and there is **no
-  save-file chooser**: Output is a folder field with Browse... (a folder
-  chooser) and a file-name field on the card itself. An empty folder is the
-  song's own folder, or the music folder (`XDG_MUSIC_DIR`, else `~/Music`)
-  for a song never saved; an empty name is the song's name. A folder that
-  is not there is said on the card before anything renders. As of
-  2026-09-25 (MOO-188) an export **never replaces a file by default**:
-  "Don't overwrite: number it", under the name, is on, and a name already
-  in the folder is written as `song-001.wav`, then `-002`, three digits
-  before the extension. The files of one export share one number, the
-  lowest free for all of them, and a typed number is not read (`song-001`
-  numbers to `song-001-001`). The line beside the box says the file that
-  will be written. A file that appears under the chosen name while the
-  export renders is left alone, and the export takes the next free number
-  instead: the last step is a rename that refuses to replace (a hard link,
-  or a claimed new file and a copy where the drive has no hard links). With
-  the box off, an export that would replace files asks once, saying how
-  many. As of 2026-09-25 (MOO-182), Source is the master mix or
-  **Tracks**. Tracks shows a checklist of every track but the master, with
-  a bus's feeders indented under it, plus All / None, "+ master" and "Skip
-  silent". The tracks feeding the master are checked by default: their
-  stems summed are the master's input. Each checked track's own output
-  (after its rack, fader and balance, before what it feeds, as a console's
-  direct out) goes to `<name>-<track name>` in one pass, and every file of
-  the export shares the one number. Every stem is as long as the master,
-  because the tail runs until the whole song is at rest. A muted or
-  solo-silenced track's stem is silence, and with Skip silent it is not
-  written (that is logged; the result card does not list it). No limiter
-  runs on a stem: an over is written as it is in float, clamped in PCM,
-  and counted per file, so float is the format for stems. As of 2026-09-25
-  (MOO-183), Source also has **Channels**: every channel is listed and
-  checked, and each checked one's own output (its source, rack, fader and
-  pan, bypassing the mixer) goes to `<name>-<channel name>` in the same
-  single pass. A channel on a muted track still renders; a muted channel
-  renders silence. As of 2026-09-25 (MOO-181) Range is a choice
-  of four: the whole song, the loop selection (its points whether or not
-  looping is on; unavailable while the song has none), a custom range
-  typed as bar.beat (or bar.beat.sixteenth), which starts as the loop
-  selection, and the current pattern, one pass. The card shows the stretch
-  each covers under the choice, follows the transport (song or pattern)
-  until a range is picked, and refuses a custom range that ends at or
-  before its start or past the song, with Export disabled and the reason
-  on the card. As of 2026-09-26 (MOO-239) a range is **the same frames as
-  the whole song**: the render plays from the song's top with nothing
-  written until the range's first frame, so a reverb or delay from before
-  the range is in the file, automation and tempo-synced LFOs read what
-  playing through reads, and a note that began before the range sounds
-  from its first sample (MOO-181 had rendered from a locate, which started
-  effects empty and chased no note). There is no setting: the pre-roll is
-  always from the top, and costs an offline render of the bars before the
-  range.
-  As of 2026-09-25 (MOO-190) the card **remembers how the last export was
-  delivered**, across launches and in every song: the format, a WAV's depth
-  and dither, an MP3's bitrate (both, whichever was exported), stereo or
-  mono, the tail, and "Don't overwrite: number it". They are saved in
-  `settings.toml`'s `[export]` table when an export starts, and the card
-  opens on them each time, so an edit on a card that was cancelled is not
-  kept. An entry that will not read, or a format this build does not know,
-  is its default and a line in the log, and never costs the rest of the
-  settings. The folder, name, source and range belong to the song and are
-  not carried between songs (saving them in the song: MOO-194).
-  Underneath, an export is a job of passes, each pass one render handed to
-  every file it writes, under one progress bar and one Cancel; cancelling
-  keeps the files of passes that had finished. As of 2026-09-25 (MOO-223)
-  an export renders with subnormals flushed to zero, as the audio callback
-  does. Its render thread's floating-point mode is restored afterwards, so
-  an export and playback through the executor agree to the bit.
-  Every format renders at the session's rate: an MP3
-  of a session faster than 48 kHz is rendered at the session's rate and
-  converted by LAME as it encodes (88.2/176.4 kHz to 44.1, the rest to 48).
+  mode.
+
+  **Output** has no save-file chooser: it is a folder field with Browse... (a
+  folder chooser) and a file-name field on the card itself. An empty folder
+  is the song's own folder, or the music folder (`XDG_MUSIC_DIR`, else
+  `~/Music`) for a song never saved; an empty name is the song's name. A
+  folder that is not there is said on the card before anything renders. An
+  export **never replaces a file by default**: "Don't overwrite: number it",
+  under the name, is on, and a name already in the folder is written as
+  `song-001.wav`, then `-002`, three digits before the extension. The files of
+  one export share one number, the lowest free for all of them, and a typed
+  number is not read (`song-001` numbers to `song-001-001`). The line beside
+  the box says the file that will be written. A file that appears under the
+  chosen name while the export renders is left alone, and the export takes
+  the next free number instead: the last step is a rename that refuses to
+  replace (a hard link, or a claimed new file and a copy where the drive has
+  no hard links). With the box off, an export that would replace files asks
+  once, saying how many.
+
+  **Source** is the master mix, **Tracks** or **Channels**. Tracks shows a
+  checklist of every track but the master, with a bus's feeders indented
+  under it, plus All / None, "+ master" and "Skip silent". The tracks feeding
+  the master are checked by default: their stems summed are the master's
+  input. Each checked track's own output (after its rack, fader and balance,
+  before what it feeds, as a console's direct out) goes to
+  `<name>-<track name>` in one pass, and every file of the export shares the
+  one number. Every stem is as long as the master, because the tail runs
+  until the whole song is at rest. A muted or solo-silenced track's stem is
+  silence, and with Skip silent it is not written (that is logged; the result
+  card does not list it). No limiter runs on a stem: an over is written as it
+  is in float, clamped in PCM, and counted per file, so float is the format
+  for stems. Channels lists every channel, checked, and each checked one's
+  own output (its source, rack, fader and pan, bypassing the mixer) goes to
+  `<name>-<channel name>` in the same single pass. A channel on a muted track
+  still renders; a muted channel renders silence.
+
+  **Range** is a choice of four: the whole song, the loop selection (its
+  points whether or not looping is on; unavailable while the song has none),
+  a custom range typed as bar.beat (or bar.beat.sixteenth), which starts as
+  the loop selection, and the current pattern, one pass. The card shows the
+  stretch each covers under the choice, follows the transport (song or
+  pattern) until a range is picked, and refuses a custom range that ends at
+  or before its start or past the song, with Export disabled and the reason
+  on the card. A range is **the same frames as the whole song**: the render
+  plays from the song's top with nothing written until the range's first
+  frame, so a reverb or delay from before the range is in the file,
+  automation and tempo-synced LFOs read what playing through reads, and a
+  note that began before the range sounds from its first sample. There is no
+  setting: the pre-roll is always from the top, and costs an offline render
+  of the bars before the range.
+
+  The card **remembers how the last export was delivered**, across launches
+  and in every song: the format, a WAV's depth and dither, an MP3's bitrate
+  (both, whichever was exported), stereo or mono, the tail, and "Don't
+  overwrite: number it". They are saved in `settings.toml`'s `[export]` table
+  when an export starts, and the card opens on them each time, so an edit on
+  a card that was cancelled is not kept. An entry that will not read, or a
+  format this build does not know, is its default and a line in the log, and
+  never costs the rest of the settings. The folder, name, source and range
+  belong to the song and are not carried between songs (saving them in the
+  song: MOO-194).
+
+  **The render.** An export is a job of passes, each pass one render handed
+  to every file it writes, under one progress bar and one Cancel; cancelling
+  keeps the files of passes that had finished. It renders in 512-frame
+  blocks, a size live playback runs at, rather than the graph's 8192-frame
+  maximum, where one automated parameter could fill a device's event list.
+  Parameter events that still find no room are counted, and an export that
+  lost any logs how many. It renders with subnormals flushed to zero, as the
+  audio callback does, and its render thread's floating-point mode is
+  restored afterwards, so an export and playback through the executor agree
+  to the bit. The render passes through the same output guard as playback, so
+  a file never holds NaN or a sample over 0 dBFS; `RenderSummary` counts the
+  mix's overs (which the safety limiter held at the ceiling), the non-finite
+  samples written as silence, and any sample the PCM encoder still had to
+  clamp, and a non-zero count is logged. Every format renders at the
+  session's rate: an MP3 of a session faster than 48 kHz is rendered at the
+  session's rate and converted by LAME as it encodes (88.2/176.4 kHz to 44.1,
+  the rest to 48).
 - A shared widget library in `crates/mooloop-ui/ui`: knobs with value arcs and a
   bipolar mode (`controls.slint`), LED-segment metering with scales, latching
   clip indicators, gain-reduction and correlation meters (`meters.slint`), and a
@@ -809,10 +765,10 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 - The active interface contract is `docs/UI_DESIGN.md`. A visual composition
   tool using the real controls is available with `cargo run -p mooloop-ui
   --features mockup --example mockup`, or from Preferences > Developer in a
-  build carrying that feature. It is off by default because everything one
-  `.slint` entry point reaches compiles into a single generated Rust module,
-  so exporting the tool from the window put 1.78 MB of generated Rust into
-  every build; the Developer page hides the row when it is absent. Its palette comes from one
+  build carrying that feature. It is off by default because exporting it from
+  the window compiles it into every build (everything one `.slint` entry point
+  reaches becomes a single generated Rust module); the Developer page hides
+  the row when it is absent. Its palette comes from one
   catalog (`ui/mockup-catalog.slint`), grouped by role or module and filterable;
   items have z-order, a layers list, rack-unit sizing for device kinds, and a
   snap grid. Named layouts save to `layouts/` under the config directory, keyed
@@ -835,7 +791,7 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   moving the selection while holding one does not strand a note. Note-on and
   note-off play, with velocity passed through. **The sustain pedal (CC 64)
   holds released keys** on every source, since it defers the release
-  rather than asking the device (MOO-128). One pedal serves every input, and
+  rather than asking the device. One pedal serves every input, and
   lifting it releases each held note on the channels that played it. A
   recorded note still ends when its key comes up. **The bend wheel bends**
   every pitched source (all but Aux In) by up to ±2 semitones, a fixed
@@ -848,8 +804,7 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   wheel (CC 1) and aftertouch are modulation sources** on every channel,
   whatever its instrument: the shelf's outlet band lists *Mod Wheel* and
   *Aftertouch* after the generator's own outlets, and they arm and route to
-  any knob the way an outlet does (runtime slots 16 and 17, saved as
-  `performance = 0` or `1` on the route). Aftertouch is channel pressure or,
+  any knob the way an outlet does. Aftertouch is channel pressure or,
   from a keyboard that sends it per key, the hardest-pressed key's pressure.
   Both reach the same channels a bend does, stay where the keyboard left
   them when the selection moves, return to rest on Panic, and are live
@@ -860,23 +815,19 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   of the keyboard, but nothing installs one:
   `EngineHandle::set_buffer_midi_map` has no caller outside its own tests.
 - **Per-channel MIDI input, controller mapping, transport control and MIDI
-  recording.** `docs/plans/archive/midi-control/` landed on 2026-09-15. A channel picks
-  its input and an Omni-or-1–16 channel filter from the sidebar's IN and CH
-  rows, and the engine routes notes by them (only since 2026-09-17: until
-  then every project install, the startup one included, handed the audio
-  thread a renderer that read a private routing nobody wrote, so every channel
-  behaved as Follow Selection); a stored port that is not plugged
-  in says so under the picker rather than leaving the channel silently
-  unplayable. A record-arm button sits beside play and stop — arming, not
-  recording, so arming while stopped works — and an armed transport captures
-  played notes into the pattern selected when the key went down, even if
-  the selection moves before it comes up. In pattern mode a note lands where
-  it was played in the loop (until 2026-09-17 every note after the first pass
-  stacked on the pattern's last tick); in song mode it lands at its offset in
-  the placement of the selected pattern under the playhead, and a note played
-  where no placement of that pattern is playing is heard but not recorded.
+  recording.** A channel picks its input and an Omni-or-1–16 channel filter
+  from the sidebar's IN and CH rows, and the engine routes notes by them; a
+  stored port that is not plugged in says so under the picker rather than
+  leaving the channel silently unplayable. A record-arm button sits beside
+  play and stop — arming, not recording, so arming while stopped works — and
+  an armed transport captures played notes into the pattern selected when the
+  key went down, even if the selection moves before it comes up. In pattern
+  mode a note lands where it was played in the loop; in song mode it lands at
+  its offset in the placement of the selected pattern under the playhead, and
+  a note played where no placement of that pattern is playing is heard but
+  not recorded.
   **OVR/REPL** beside the arm picks what a take does to the notes already
-  there (MOO-234, 2026-09-25). **Overdub**, the default, adds every pass.
+  there. **Overdub**, the default, adds every pass.
   **Replace** removes the recording channel's notes in the pattern being
   recorded into as the playhead crosses their start, so each pass replaces
   the one before and only the last is left; a note is never removed by the
@@ -891,10 +842,10 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   undo step. The mode is not saved, like the arm.
   A recorded note is stamped earlier by the driver's playback latency, so it
   lands where the player heard the song rather than where the engine was
-  rendering it (MOO-209, 2026-09-25): JACK's reported playback latency on the
+  rendering it: JACK's reported playback latency on the
   output port, or on Core Audio the output device's latency, safety offset,
   IO buffer and stream latency as the HAL reports them, summed (one output
-  buffer if any of those reads fails; MOO-237, 2026-09-26), read again once
+  buffer if any of those reads fails), read again once
   a second. Core Audio's number is logged each time an output stream opens
   (`output latency on ...` in the diagnostic log). Its input latency, which
   starts an audio take late, adds the input device's latency, safety offset
@@ -971,7 +922,7 @@ selected source (sampler / drum synth / DS-01 / v1 mono / ML-M1 / ML-P8 / poly /
                                   driver output (JACK ports or a Core Audio device)
 ```
 
-**The output guard** (MOO-93, `docs/GAIN_STRUCTURE.md`) is the last thing
+**The output guard** (`docs/GAIN_STRUCTURE.md`) is the last thing
 every block passes through, live or exported. A NaN or infinite sample from a
 device that blew up leaves as silence and is counted as a latched fault
 instead of reaching the speakers, and a zero-latency safety limiter holds the
@@ -980,20 +931,19 @@ The master's meter reads the mix *before* the guard, so a mix that is over
 still lights the clip latch, and a non-finite sample reads as an infinite
 peak rather than as silence.
 
-**The Bus Comp** (MOO-13, `docs/GAIN_STRUCTURE.md`; called that everywhere
-it is shown since MOO-216) is the
+**The Bus Comp** (`docs/GAIN_STRUCTURE.md`) is the
 master's own section, drawn in the master's device rack between its inserts
 and its fader, where it runs. Three voicings, each a measured unit's law:
 **Grip** (the SSL G bus), **Punch** (the API-2500) and **Tube** (the
 Fairchild 670), picked with one `◂ GRIP ▸` chip whose arrows or wheel step
-through them (MOO-295). Grip and Punch show ratio, attack and release, each a switch
+through them. Grip and Punch show ratio, attack and release, each a switch
 reading the unit's own markings; Tube shows the 670's six-position TIME
 instead. Threshold, makeup and wet/dry are shared, and each voicing keeps its
 own settings when another is picked. A needle meter reads its gain reduction,
 with a held mark. Out, it leaves the mix bit for bit. It is saved with the
 master's strip.
 
-**The Bus Comp is also an insert** (MOO-216), in the insert menu after Comp,
+**The Bus Comp is also an insert**, in the insert menu after Comp,
 so a drum bus, a channel or a container branch can have one. It is the
 master section's compressor, not a copy: the same DSP, the same face
 (needle, voicing chip, per-voicing knobs) in the accent colour, three
@@ -1003,21 +953,19 @@ and takes modulation, it reports no latency, and it ships a factory bank of
 six (two per voicing). At the end of the master's chain it renders the same
 as the master's section at the same settings, sample for sample.
 
-**The safety limiter has no lookahead and no knob** (MOO-217). The
-lookahead knob that sat on the master's Out face for a day (MOO-169) is gone:
-nothing leaving the master is late, so monitoring, takes and exports carry no
-extra delay for it. A song saved with the knob turned up opens at no
+**The safety limiter has no lookahead and no knob**: nothing leaving the
+master is late, so monitoring, takes and exports carry no extra delay for it.
+A song saved with a lookahead set on the master's Out face opens at no
 lookahead, with nothing to repair.
 
-**Inside the graph** (MOO-176), the effect host checks each device's input in
+**Inside the graph**, the effect host checks each device's input in
 the peak fold it already takes for the meters. A block carrying a NaN or an
 infinity has those samples silenced before the device sees them, and it's
 counted (`EngineHandle::effect_faults`). The status bar raises a warning the
 first time that happens. The reverb, plate, modulation effect, gate,
 compressor, limiter and Buffer also clear their own state if a non-finite
-value gets in, one pass over the block, the way MOO-174 made the shared
-filters do. So a device that blows up costs one block of silence downstream,
-where it used to silence every device after it until the song was reloaded.
+value gets in, one pass over the block, as the shared filters do. So a
+device that blows up costs one block of silence downstream.
 
 The engine preallocates channel strips, pattern storage, event lists, and audio
 buses. A driver-independent render state owns transport, scheduling,
@@ -1028,7 +976,7 @@ macOS, chosen at compile time -- or, chosen at run time when that driver will
 not open, none. Offline export drives the same render path with no driver at
 all.
 
-**With no audio device the app still opens** (MOO-115). When JACK will not
+**With no audio device the app still opens.** When JACK will not
 open -- no libjack installed, or no server answering, which the log and the
 window tell apart -- the engine runs on a null driver: a thread rendering
 512-frame blocks at 48 kHz into nothing, so editing, the transport and the
@@ -1039,7 +987,7 @@ client down (a PipeWire restart does), changed its sample rate, or the
 callback has not run for three seconds. Reconnect closes the driver, opens it
 again, builds a new engine at whatever rate it now reports, and installs the
 open song into it -- samples, routing, mixer -- with the transport stopped and
-nothing marked unsaved (MOO-118). Dismissed, the status bar keeps saying so,
+nothing marked unsaved. Dismissed, the status bar keeps saying so,
 and Preferences > Audio > Refresh reconnects. A device that panics in the
 audio callback costs a block of silence rather than the audio for the rest of
 the session: the block is silenced and counted, the log and the status bar say
@@ -1060,7 +1008,7 @@ so two instances each connect, move and reconnect only their own outputs and
 MIDI input, and neither offers a mooloop's inputs as an output.
 
 On Linux the engine picks which `libjack` it loads before JACK is first
-touched (MOO-342). Debian, Ubuntu and Mint keep pipewire-jack's library off
+touched. Debian, Ubuntu and Mint keep pipewire-jack's library off
 the default search path, where the name finds JACK2's client library and no
 server, so when PipeWire is running, its JACK library is installed, no JACK
 server answers, and neither `LD_LIBRARY_PATH` (`pw-jack`) nor `LD_PRELOAD`
@@ -1069,13 +1017,11 @@ crate is answered with it. Otherwise the default stands. The log names the
 file actually loaded, and Preferences > Audio shows it beside the driver's
 name. The `.deb` lists `pipewire-jack` first among its libjack alternatives.
 
-Channels render in a compiled order rather than in index order, so a producer
-runs before any channel subscribed to one of its audio outlets and the samples
-arrive in the same block. A project with no subscriptions compiles to the
-identity order and allocates no tap buffers, so the schedule is provably
-inaudible until an edge is authored. The channel modulator tick pass stays in
-index order and stays a separate loop: a modulator's phase must not depend on
-a subscription somebody made on another channel.
+Channels render in a compiled order (`ARCHITECTURE.md`), so a producer runs
+before any channel subscribed to one of its audio outlets. The channel
+modulator tick pass stays in index order and stays a separate loop: a
+modulator's phase must not depend on a subscription somebody made on another
+channel.
 
 Devices and channels with nothing to do are not rendered. A device says how
 long it can still be heard after its input goes silent and whether its own
@@ -1084,22 +1030,12 @@ quiet longer than that, and stops rendering a whole channel strip when it has
 no events, its generator has no voices and has been putting out silence, and
 every effect on it would be skipped. Waking is the first block with audio in
 it, from the state the device had when it stopped — nothing is reset and
-nothing ramps. On a thirty-two channel project with one channel playing, a
-256-frame block costs about a tenth of what it did; with every channel playing
-it costs what it did before, because nothing is skipped. What a project
-renders is unchanged either way, at any block size.
+nothing ramps. What a project renders is unchanged either way, at any block
+size.
 
-Every strip preallocates every source node and switches its active source
-without allocating in the callback. WAV decode, waveform construction, and
-directory scanning occur off the audio thread. A decoded sample is published
-through an `ArcSwapOption` slot.
-
-Project installation prepares a complete `RenderState`, including effect
-construction and sequencer import, on the control thread. The audio callback
-receives that state through the ordered command stream, swaps one box at a
-block boundary, and returns the displaced state through the reclaim ring for
-control-thread destruction. Parameter commands cannot cross that generation
-boundary.
+WAV decode, waveform construction, directory scanning and project
+installation happen off the audio thread; how a prepared project, a sample or
+a displaced node crosses to it and back is `AUDIO_ARCHITECTURE.md`'s.
 
 ## Useful Foundations
 
@@ -1123,72 +1059,48 @@ boundary.
   unity rate is sample-exact, pitching up narrows the kernel's cutoff to
   keep foldback down, and the kernel folds across loop and ping-pong
   boundaries rather than filtering against silence.
-- DSP tests cover sampler pitch, trim, loops, envelopes, filter behavior,
-  reverse playback, and lo-fi stages, plus drum synth, v1 mono, ML-M1, v1
-  poly, and ML-P8 voice, envelope, glide, filter, sync, and modulation
-  behavior. ML-P8's sync aliasing is compared against an eight-times
-  oversampled render rather than by looking for energy in a high band, since
-  a hard-synced oscillator folds its alias products onto its master's own
-  harmonic grid. V1 mono tests also
-  bound the largest sample-to-sample step across note retriggers and parameter
-  changes, which is what the declicking work is defended by.
-- DSP tests measure through one shared kit, `mooloop_dsp::testkit`: frequency
-  response, alias level, THD, band level and the largest sample-to-sample step,
-  with the sample rates every primitive is checked at (44.1, 48, 96 and
-  192 kHz). The SVF is held to its bilinear-transform transfer function, the
-  biquad's `magnitude_db` to a measured sine, the oscillators to their pitch,
-  a per-wave alias bound and the table sine's THD, `Smoothed` to its time
-  constant and to settling, and the oversampler to its passband and alias
-  reduction -- each at all four rates. A NaN or infinite cutoff, resonance,
-  drive, Q, gain, frequency or smoothing target lands on the edge of its range
-  rather than in a filter's or oscillator's state, where it would have made
-  every later sample NaN. A NaN or infinite *sample* -- a NaN frame in a
-  decoded file, a blown-up upstream device -- is lost, but it no longer stays
-  in any SVF, cascade, ladder, biquad or one-pole state, and a delay does not
-  feed it back round its loop: the next finite sample is heard (MOO-174).
+- DSP primitives are checked at 44.1, 48, 96 and 192 kHz through one shared
+  measurement kit, `mooloop_dsp::testkit`. A NaN or infinite cutoff,
+  resonance, drive, Q, gain, frequency or smoothing target lands on the edge
+  of its range rather than in a filter's or oscillator's state, where it
+  would have made every later sample NaN. A NaN or infinite *sample* -- a NaN
+  frame in a decoded file, a blown-up upstream device -- is lost, but it does
+  not stay in any SVF, cascade, ladder, biquad or one-pole state, and a delay
+  does not feed it back round its loop: the next finite sample is heard.
   The reverb, plate, modulation effect, dynamics, limiter and Buffer clear
-  their own state too (MOO-176, described under "Inside the graph" above;
-  `a_nan_in_the_input_is_gone_within_a_block_in_every_insert` holds them to
-  it).
+  their own state too (described under "Inside the graph" above).
 - The ML-M1's Ladder and Acid filters put their corner in the same place at
   every sample rate: their stages are cornered by solving the stage's own
   response rather than by the impulse-invariant pole, so one Cutoff is one
-  sound at 44.1, 48, 96 and 192 kHz (MOO-116). Below a few kHz at 48 kHz
-  nothing moves. `scale::cutoff_hz_from_normalized` is the one cutoff-knob
-  law: 20 Hz to 20 kHz whatever the rate, with the filter primitives' own
-  `0.45 x sample rate` clamp the only place the rate enters.
+  sound at 44.1, 48, 96 and 192 kHz. `scale::cutoff_hz_from_normalized` is
+  the one cutoff-knob law: 20 Hz to 20 kHz whatever the rate, with the filter
+  primitives' own `0.45 x sample rate` clamp the only place the rate enters.
 - Every filtered instrument (v1 mono and poly, the sampler, ML-M1, ML-P8)
   maps Cutoff through that law, so a knob position is one frequency at every
-  rate and matches the face's readout; until 2026-09-23 they mapped it to
-  `0.45 x sample rate`, so knob 0.75 was 3.8 kHz at 48 kHz and 10.7 kHz at
-  192 while every face read 3.56 kHz (MOO-119). They share one voice-cutoff
-  block (`voice_filter::VoiceCutoff`: six octaves of envelope, keytracking
-  from middle C) rather than five copies of it (MOO-144). ML-P8's feedback
-  DC blocker is specified in Hz.
+  rate and matches the face's readout. They share one voice-cutoff block
+  (`voice_filter::VoiceCutoff`: six octaves of envelope, keytracking from
+  middle C). ML-P8's feedback DC blocker is specified in Hz.
 - Glide slides linearly in pitch and arrives in the Glide time: an octave up
   and an octave down are mirror images, and a 100 ms glide is on the new note
-  after 100 ms (MOO-145). It was a one-pole in Hz, lopsided in pitch and about
-  4.6 times slower than its label.
+  after 100 ms.
 - Resonance tapers exponentially on every SVF-based filter (the v1 synths,
   the sampler, ML-P8, the Filter effect, ML-M1's clean model): the peak grows
-  by about 2.6 dB for each tenth of the knob up to +20 dB, where it used to
-  sit flat for most of the knob and put 9 dB in its last tenth (MOO-123). A
-  24 dB slope is one shared compensated cascade (`filter::SvfCascade`, which
-  was ML-P8's LP24): its corner lands where the 12 dB one's does and it peaks
-  about as hard, so the Filter effect's 24 dB mode no longer reaches +40 dB,
-  and that effect bends its output under the voice ceiling (MOO-124). Delay
-  feedback saturates in the loop above half scale, so a loud input into 0.98
-  feedback settles at twice full scale at most rather than fifty times.
-- **A song saved before 2026-09-23 sounds slightly different** after these
-  changes, with every stored value unchanged (they are normalized, and the
+  by about 2.6 dB for each tenth of the knob up to +20 dB. A 24 dB slope is
+  one shared compensated cascade (`filter::SvfCascade`): its corner lands
+  where the 12 dB one's does and it peaks about as hard, so the Filter
+  effect's 24 dB mode does not reach +40 dB, and that effect bends its output
+  under the voice ceiling. Delay feedback saturates in the loop above half
+  scale, so a loud input into 0.98 feedback settles at twice full scale at
+  most rather than fifty times.
+- **A song saved before 2026-09-23 sounds slightly different** from when it
+  was saved, with every stored value unchanged (they are normalized, and the
   curves under them moved): a Cutoff knob at 0.75 is 3.56 kHz where it was
   3.77 kHz at 48 kHz (about a semitone down; more at 96 and 192 kHz, where
-  it was far brighter); mid-knob Resonance is less peaky (at 0.5 the SVF's
-  damping is 0.45 where it was 1.05) with the same top; a glide arrives in
-  its Glide time, about 4.6 times sooner than before; ML-P8's LP24 and the
-  Filter effect's 24 dB mode peak harder or softer to match their 12 dB
-  modes; and delay repeats above half scale saturate. There is no migration:
-  the old curves are what MOO-116, 119, 123, 124 and 145 fixed.
+  it was far brighter); mid-knob Resonance is less peaky with the same top; a
+  glide arrives in its Glide time, about 4.6 times sooner than before; ML-P8's
+  LP24 and the Filter effect's 24 dB mode peak harder or softer to match
+  their 12 dB modes; and delay repeats above half scale saturate. There is no
+  migration.
 - The v1 mono synth's LFO is one shape (sine, triangle, saw, square, or sample and
   hold) with a depth per destination: pitch, filter cutoff, pulse width, and
   tremolo. It free-runs across notes and silence unless set to retrigger.
@@ -1199,130 +1111,116 @@ boundary.
 
 ## Behaviour, And Where It Stops
 
-> **This section is mislabelled and is being split.** It was called "Important
-> Limitations", and `### Mixing, Routing, And Effects` below it runs to 588
-> lines that are mostly *features* — "the mixer is a list of tracks", "sends",
-> "a channel strip on every track". A reader looking for what does not work has
-> to read what does, first. Renamed 2026-09-14 so the heading stops lying; the
-> content split is a separate pass, because deciding which of ~700 entries is a
-> gap and which is a description means reading all of them, not their headings.
-> Until then, treat this as *behaviour plus its edges*, and `SCOPE.md` as the
-> list of what is actually missing.
+Behaviour plus its edges, by area. `SCOPE.md` is the list of what is
+actually missing.
 
 ### Event And Voice Model
 
 - Probability, microtiming controls, ties, and parameter locks are not yet
   implemented. Note starts and lengths otherwise retain PPQ precision.
-- **A note the sequencer started is always ended**, as of 2026-09-23
-  (MOO-99). Each channel keeps a table of the voices its pattern started, and
-  every edit that takes a note-off out of the playhead's reach releases the
-  voice: deleting, shortening, moving or re-pitching a sounding note, a
-  pattern-length change, a placement removed, a playback-mode or pattern
-  switch, and a mute or solo. Lengthening a sounding note or changing its
-  velocity leaves it ringing. A note that ends while its channel is muted is
-  still ended, so unmuting no longer brings back a frozen voice. A Song-mode
-  loop fold releases the pattern's voices with a note-off rather than choking
-  every channel, so a chord the player is holding rings across the loop point
-  and a pad's release tail rings over it. **Panic (All Notes Off)** is a
-  bindable action with no default chord: it ends every voice and every held
-  key, pedal included, without stopping the song.
+- **A note the sequencer started is always ended.** Each channel keeps a
+  table of the voices its pattern started, and every edit that takes a
+  note-off out of the playhead's reach releases the voice: deleting,
+  shortening, moving or re-pitching a sounding note, a pattern-length change,
+  a placement removed, a playback-mode or pattern switch, and a mute or solo.
+  Lengthening a sounding note or changing its velocity leaves it ringing. A
+  note that ends while its channel is muted is still ended, so unmuting does
+  not bring back a frozen voice. A Song-mode loop fold releases the pattern's
+  voices with a note-off rather than choking every channel, so a chord the
+  player is holding rings across the loop point and a pad's release tail
+  rings over it. **Panic (All Notes Off)** is a bindable action with no
+  default chord: it ends every voice and every held key, pedal included,
+  without stopping the song.
 - **Cloning, clearing or deleting a pattern under a playing song** reaches
-  the engine as one edit rather than a rebuild of the song, as of
-  2026-10-01 (MOO-466). The cleared or deleted pattern's sounding notes end;
-  in Song mode so do those of every pattern the edit renumbers (the ones
-  after a clone or a deletion), and in Pattern mode a clone made current
-  plays on from where the original was. A knob a cleared or deleted
-  pattern's lane was driving under the playhead returns to its own value, as
-  it does when you switch away from that pattern. Undo still rebuilds.
+  the engine as one edit rather than a rebuild of the song. The cleared or
+  deleted pattern's sounding notes end; in Song mode so do those of every
+  pattern the edit renumbers (the ones after a clone or a deletion), and in
+  Pattern mode a clone made current plays on from where the original was. A
+  knob a cleared or deleted pattern's lane was driving under the playhead
+  returns to its own value, as it does when you switch away from that
+  pattern. Undo still rebuilds.
 - One channel holds at most 1,024 notes in one pattern (the engine's
-  preallocated store; `docs/CAPACITY_POLICY.md`). As of 2026-09-23 (MOO-133)
-  every way of adding a note -- drawing, painting, a step, a step slice, a
-  roll slice, duplicate, paste and recording -- refuses at the cap and the
-  status bar says why; a paste or duplicate that would cross it is refused
-  whole rather than cut short. Before this the next note was drawn but
-  silent, and the song refused to save.
+  preallocated store; `docs/CAPACITY_POLICY.md`). Every way of adding a note
+  -- drawing, painting, a step, a step slice, a roll slice, duplicate, paste
+  and recording -- refuses at the cap and the status bar says why; a paste or
+  duplicate that would cross it is refused whole rather than cut short.
 - NoteOn, NoteOff, and choke events are sample-accurate and deterministically
   ordered. One-shot loops exit into their remaining sample tail; gated loops
   release through the amplitude envelope.
-- **A forward loop's seam can be crossfaded** (MOO-43, 2026-09-24). Loop
-  fade, beside the loop mode on the sampler's header, is 0 to 100 ms of the
-  sample's own time. The loop's last stretch blends, equal-power, into the
-  material just before its start, so its last frame is its first frame's
-  neighbour and the seam has nothing to click on. The loop keeps its length
-  and its start (a break's downbeat) plays as it always did. A loop that
-  starts at the region's first frame has no material before it, so its end
-  fades out to silence and its first millisecond fades back in. The
-  waveform shades the span the fade covers. Reverse crosses the same blend, ping-pong has no seam, a fade
-  is never more than half the loop, and 0 ms (the default, and every song
-  saved before) is the hard seam, bit for bit. The fade is a descriptor, so
-  it can be automated and modulated.
-- **Fit to tempo says what it's doing, and SYNC off keeps the sound**
-  (MOO-39, 2026-09-24). With SYNC on, a line under Bars reads the loop's own
-  length and tempo and what it lasts fitted, for example "1.00 s at 120.0
-  BPM → 2.00 s". It turns the warning colour when the bar count gives the
-  loop a tempo outside 60-200 BPM, or needs more stretch than the sampler
-  has, and the status bar then says why and suggests a bar count. The Bars
-  field also takes the loop's own tempo, "96 bpm", and turns it into bars.
-  Turning SYNC off writes the ratio it was running into the Speed knob, in
-  the same undo step, so the loop keeps sounding the same until the knob is
-  touched. That ratio is the root key's at the current tune; a transposed
-  note plays shorter or longer from then on, which is what a fixed ratio
-  means. A fitted loop renders the same offline as live.
-- **A loop's bounds can snap to a grid** (MOO-47, 2026-09-24). Loop grid,
-  beside the L/R fields, is Free, Slices, or 1 bar down to 1/32. A division
-  is of the sample's own bar count (the Bars fit-to-tempo uses), counted
-  from the playback region's start. Slices snaps to the slice markers and
-  the region's ends. It applies wherever the bounds come from, the markers,
-  a lane or a modulator, so a lane sweeping Loop start steps through the
-  grid in rhythm instead of sliding through every frame. The loop band is
-  drawn at the snapped bounds. A grid can't collapse or invert the loop: a
-  loop shorter than one step becomes one step. A grid with fewer than two
-  points inside the region leaves the loop free. Loop grid is automatable
-  and not modulatable, and Free (the default, and every older song) is the
-  loop as it always was.
-- **Slices can be detected** (MOO-44, 2026-09-24). DETECT in Slice mode
-  finds the hits in the playback region and previews a ghosted marker on
-  each. Nothing changes until the preview is accepted. While it's up, the
-  slice row holds Sensitivity (how quiet a hit still counts) and Spacing
-  (the closest two markers may land, 10-250 ms). Each of them re-detects.
-  REPLACE keeps the markers placed or moved by hand and replaces the rest,
-  MERGE keeps every marker and adds the detected ones that aren't beside
-  one, and CANCEL changes nothing. Either accept is one undo step. The
-  detector measures both channels and a high-passed copy of each, so a hit
-  panned to one side counts and a steady tone doesn't. Each marker lands
-  just before its attack. Detected markers are ordinary markers. Whether
-  a marker was placed by hand is saved, and every marker in an older song
-  counts as hand-placed.
-- **A sliced break becomes a pattern** (MOO-46, 2026-09-24). PATTERN, in
-  Slice mode, writes one note per slice into the channel's current
-  pattern, at the tick the slice falls on in the break. The break is the
-  playback region, `Bars` long. Each note is the base note plus the
-  slice's position, the same mapping the keyboard plays, and lasts until
-  the next slice. Placement keeps the break's own timing unless 1/16 is
-  lit. REPLACE clears the channel's notes in that pattern first, and ADD
-  writes beside them. A pattern shorter than the break grows to hold it.
-  Either is one undo step. Slices past MIDI 127, or past the longest a
-  pattern can be, are left out and counted in the status bar. The notes
-  are ordinary pattern data from then on.
+- **A forward loop's seam can be crossfaded.** Loop fade, beside the loop
+  mode on the sampler's header, is 0 to 100 ms of the sample's own time. The
+  loop's last stretch blends, equal-power, into the material just before its
+  start, so its last frame is its first frame's neighbour and the seam has
+  nothing to click on. The loop keeps its length and its start (a break's
+  downbeat) plays as it always did. A loop that starts at the region's first
+  frame has no material before it, so its end fades out to silence and its
+  first millisecond fades back in. The waveform shades the span the fade
+  covers. Reverse crosses the same blend, ping-pong has no seam, a fade is
+  never more than half the loop, and 0 ms (the default, and every song saved
+  before the fade existed) is the hard seam, bit for bit. The fade is a
+  descriptor, so it can be automated and modulated.
+- **Fit to tempo says what it's doing, and SYNC off keeps the sound.** With
+  SYNC on, a line under Bars reads the loop's own length and tempo and what
+  it lasts fitted, for example "1.00 s at 120.0 BPM → 2.00 s". It turns the
+  warning colour when the bar count gives the loop a tempo outside 60-200
+  BPM, or needs more stretch than the sampler has, and the status bar then
+  says why and suggests a bar count. The Bars field also takes the loop's own
+  tempo, "96 bpm", and turns it into bars. Turning SYNC off writes the ratio
+  it was running into the Speed knob, in the same undo step, so the loop
+  keeps sounding the same until the knob is touched. That ratio is the root
+  key's at the current tune; a transposed note plays shorter or longer from
+  then on, which is what a fixed ratio means. A fitted loop renders the same
+  offline as live.
+- **A loop's bounds can snap to a grid.** Loop grid, beside the L/R fields,
+  is Free, Slices, or 1 bar down to 1/32. A division is of the sample's own
+  bar count (the Bars fit-to-tempo uses), counted from the playback region's
+  start. Slices snaps to the slice markers and the region's ends. It applies
+  wherever the bounds come from, the markers, a lane or a modulator, so a
+  lane sweeping Loop start steps through the grid in rhythm instead of
+  sliding through every frame. The loop band is drawn at the snapped bounds.
+  A grid can't collapse or invert the loop: a loop shorter than one step
+  becomes one step. A grid with fewer than two points inside the region
+  leaves the loop free. Loop grid is automatable and not modulatable, and
+  Free (the default, and every older song) is the loop as it always was.
+- **Slices can be detected.** DETECT in Slice mode finds the hits in the
+  playback region and previews a ghosted marker on each. Nothing changes
+  until the preview is accepted. While it's up, the slice row holds
+  Sensitivity (how quiet a hit still counts) and Spacing (the closest two
+  markers may land, 10-250 ms). Each of them re-detects. REPLACE keeps the
+  markers placed or moved by hand and replaces the rest, MERGE keeps every
+  marker and adds the detected ones that aren't beside one, and CANCEL
+  changes nothing. Either accept is one undo step. The detector measures both
+  channels and a high-passed copy of each, so a hit panned to one side counts
+  and a steady tone doesn't. Each marker lands just before its attack.
+  Detected markers are ordinary markers. Whether a marker was placed by hand
+  is saved, and every marker in an older song counts as hand-placed.
+- **A sliced break becomes a pattern.** PATTERN, in Slice mode, writes one
+  note per slice into the channel's current pattern, at the tick the slice
+  falls on in the break. The break is the playback region, `Bars` long. Each
+  note is the base note plus the slice's position, the same mapping the
+  keyboard plays, and lasts until the next slice. Placement keeps the break's
+  own timing unless 1/16 is lit. REPLACE clears the channel's notes in that
+  pattern first, and ADD writes beside them. A pattern shorter than the break
+  grows to hold it. Either is one undo step. Slices past MIDI 127, or past
+  the longest a pattern can be, are left out and counted in the status bar.
+  The notes are ordinary pattern data from then on.
 - Sampler voice allocation is fixed-capacity and deterministic: restart reuses
   the oldest matching pitch, layer mode overlaps notes, and overflow steals
   a releasing voice before a held one, the oldest of either. The sampler, the
-  Poly Synth and the ML-P8 all steal in that order (MOO-110, 2026-09-23).
-- **Nothing a voice does ends mid-waveform** (MOO-110, 2026-09-23). A voice
-  the sampler steals -- which on the default patch, one voice in Restart, is
-  every new note -- moves to one of the sixteen slots above the Voices count
-  and fades there over the choke's 5 ms while the new note starts fresh in
-  its place. A non-looping region or slice fades over its last 2 ms (at most
-  a quarter of a short slice) instead of stopping on whatever sample it
-  held. Lowering Voices on the sampler or the Poly Synth, or switching the
-  Poly Synth to Mono, fades the voices it retires. `continuity_tests.rs`
-  holds a default-patch retrigger and a region end on a sine to the family's
-  largest-step bound; before, each stepped by up to the whole signal.
+  Poly Synth and the ML-P8 all steal in that order.
+- **Nothing a voice does ends mid-waveform.** A voice the sampler steals --
+  which on the default patch, one voice in Restart, is every new note --
+  moves to one of the sixteen slots above the Voices count and fades there
+  over the choke's 5 ms while the new note starts fresh in its place. A
+  non-looping region or slice fades over its last 2 ms (at most a quarter of
+  a short slice) instead of stopping on whatever sample it held. Lowering
+  Voices on the sampler or the Poly Synth, or switching the Poly Synth to
+  Mono, fades the voices it retires.
 
 ### Recording Into The Sampler
 
 Clip recording, the way Ableton's or Bitwig's clip mode records and Maschine's
-sampler does (`docs/plans/archive/audio-recording/`, steps 02-05, 2026-09-18):
+sampler does:
 
 - **Every channel has an AUDIO row** in the channel sidebar, beside MIDI IN
   and independent of it: Off, the master, any track, any channel -- itself
@@ -1354,7 +1252,7 @@ sampler does (`docs/plans/archive/audio-recording/`, steps 02-05, 2026-09-18):
   reported the same way, and what it had checkpointed is kept and lands on
   the channel; one that failed inside its first second leaves no partial
   behind.
-- **Takes a crash left unfinished open again** (MOO-75). At startup every
+- **Takes a crash left unfinished open again.** At startup every
   take in the recordings folder whose WAV header counts less than the file
   holds -- a crash inside a take's first second leaves one saying zero frames,
   which nothing could open -- is patched from the file's length, and the status
@@ -1384,7 +1282,7 @@ sampler does (`docs/plans/archive/audio-recording/`, steps 02-05, 2026-09-18):
   could still reach is never offered, which is why the offer is made at quit:
   closing the project is when history-only takes stop being reachable.
   Cancelling the quit clears up nothing.
-- **File > Clean Up Takes** (`recording.clean-up`, MOO-38) opens the same
+- **File > Clean Up Takes** (`recording.clean-up`) opens the same
   dialog at any time, with two lists. *Not used by this song*, ticked: this
   session's takes in the shared folder that nothing reaches, and takes in the
   song's own `recordings/` that neither the open song, its undo history nor
@@ -1392,71 +1290,66 @@ sampler does (`docs/plans/archive/audio-recording/`, steps 02-05, 2026-09-18):
   saying why: shared-folder takes older than this run, which a crash (or a
   quit while only the undo history used them) leaves behind and which may be
   the only copy of a take from a song that was never saved. Stretch renders
-  in the shared `renders/` folder (MOO-375) are listed on exactly the same
+  in the shared `renders/` folder are listed on exactly the same
   terms as takes in the shared recordings folder: one the open song, its undo
   history, the clipboard or an autosave uses -- as its sample or as a
   commit's original, which REVERT goes back to -- is never offered. Nothing
   moves until **Move to Trash**, and then only to the trash. The quit offer
   lists takes only.
-- **The hardware input is an AUDIO source** under both drivers. Under JACK,
-  since 2026-09-19, it is "Audio In": `mooloop:in_l`/`in_r` wired to the first
-  physical capture pair. Under Core Audio, since 2026-09-20, it is the
-  system's default input device, listed by that device's own name -- Core
-  Audio opens a device rather than joining a graph, so there is a device to
-  name. A take from it starts the round-trip latency after its bar, so it
-  lines up with what was played. With it picked, the AUDIO row shows a peak
-  meter and **MON**, which plays the input through the channel -- off by
-  default, not saved, and never switched on by anything else, because a
-  microphone through speakers feeds back.
+- **The hardware input is an AUDIO source** under both drivers. Under JACK
+  it is "Audio In": `mooloop:in_l`/`in_r` wired to the first physical capture
+  pair. Under Core Audio it is the system's default input device, listed by
+  that device's own name -- Core Audio opens a device rather than joining a
+  graph, so there is a device to name. A take from it starts the round-trip
+  latency after its bar, so it lines up with what was played. With it picked,
+  the AUDIO row shows a peak meter and **MON**, which plays the input through
+  the channel -- off by default, not saved, and never switched on by anything
+  else, because a microphone through speakers feeds back.
 - **On a Mac the input row appears only if there is an input.** No input
   device, a device that will not run at the engine's sample rate, or a
   microphone macOS has not granted mooloop, and the AUDIO row simply lists no
   input; the reason is logged once at startup. macOS asks for the microphone
   the first time mooloop opens it, and refusing it is not an error the
   interface reports anywhere else.
-- **Not yet:** deleting takes nothing uses (step 06).
 
 ### Sampler Slicing And Stretch
 
-A stretching sampler holds stretch state for twice its Voices count (two
-voices, about 200 KB, at the default of one), rather than for all sixteen
-(MOO-7). Changing Voices resizes it within a pump tick, whether the change
-came from the stepper, a MIDI-learned control, a preset or an undo, and the
-voices already sounding keep their state through the resize. The spare half
-is where a stolen voice fades out. A channel with an automation lane on
-Voices holds all sixteen, because a lane moves Voices on the audio thread,
-where nothing can be allocated.
+A stretching sampler holds stretch state for twice its Voices count rather
+than for all sixteen. Changing Voices resizes it within a pump tick, whether
+the change came from the stepper, a MIDI-learned control, a preset or an
+undo, and the voices already sounding keep their state through the resize.
+The spare half is where a stolen voice fades out. A channel with an
+automation lane on Voices holds all sixteen, because a lane moves Voices on
+the audio thread, where nothing can be allocated.
 
-Known gaps left open by the 2026-09 slice/commit push, each small enough to
-land on its own when it starts to matter:
+Known gaps:
 
 - **Live stretch is bypassed, not refused, in Slice mode, in reverse, and in
   Pong.** The DSP declines to run WSOLA backwards and the commit path is the
   answer, and the face still shows the ON toggle lit while nothing stretches.
-  The toggle now says which of the three it is, and to commit, in the status
-  bar; `StatusHint` reaches it from any face without the threaded property
-  this entry used to ask for.
+  The toggle says which of the three it is, and to commit, in the status
+  bar.
 - **A REVERT onto an original that changed on disk places markers by
   proportion.** The traces a revert maps markers through are re-made from the
   original, so an original replaced since the commit cannot reproduce them;
   the revert still happens, maps the markers by the share of the length they
   sat at, and says so in the status bar.
 
-**COMMIT renders the sample and loads the render in its place** (MOO-375,
-MOO-370, MOO-394; Adam, 2026-09-30: a committed sample is treated like a
-rendered one). It renders the whole sample, not just the playback region, so
-every marker has somewhere to go: slices, Start/End and the loop points all
-move to where the stretch put them, and none is dropped, so a slice keeps its
-key and a slice pattern keeps playing the same hits. The render is written
-when it is made to a shared `renders/` folder in the data directory, beside
-`recordings/` (`~/.local/share/mooloop/renders/`), and becomes the channel's
-sample: the song owns it the way it owns a take, a save copies it into the
-song's `samples/`, and a reload plays the stored file rather than re-rendering
+**COMMIT renders the sample and loads the render in its place** (Adam's
+ruling: a committed sample is treated like a rendered one). It renders the
+whole sample, not just the playback region, so every marker has somewhere to
+go: slices, Start/End and the loop points all move to where the stretch put
+them, and none is dropped, so a slice keeps its key and a slice pattern keeps
+playing the same hits. The render is written when it is made to a shared
+`renders/` folder in the data directory, beside `recordings/`
+(`~/.local/share/mooloop/renders/`), and becomes the channel's sample: the
+song owns it the way it owns a take, a save copies it into the song's
+`samples/`, and a reload plays the stored file rather than re-rendering
 anything. If it cannot be written the commit still happens and the status bar
 says why; the song then keeps the original and re-makes the render from it on
-load, as 0.1.5 did. The live stretch is switched off and a free ratio set
-back to 1, since the stretch is in the audio. Edits after a commit are
-ordinary edits of the sample on screen.
+load. The live stretch is switched off and a free ratio set back to 1, since
+the stretch is in the audio. Edits after a commit are ordinary edits of the
+sample on screen.
 
 **The badge after a commit reads stale when committing again would stretch
 the committed audio**: the tempo moved under a fitted loop, a marker a
@@ -1488,35 +1381,30 @@ with a commit loads and plays the render it played then.
   releases nothing. Nor does switching with the transport stopped, where an
   audition or a held key belongs to the player rather than to the pattern being
   left, nor re-selecting the pattern already current, nor a selection past the
-  end of the bank. Before 2026-09-20 all four cut off every sounding voice on
-  every channel.
-- **Moving around the app does not interrupt what is playing**, as of
-  2026-09-20, and that is now a rule rather than a set of fixes. Selecting a
-  pattern, a channel, a bus, a device or a track is a view change: it changes
-  what is drawn and what the next edit will address, and none of it reaches
-  the audio thread. The one gesture that must tell the engine anything is the
-  pattern selection, because the active pattern is also where a recorded note
-  goes -- and the engine charges for what changed rather than for the fact
-  that a command arrived. `scripts/dupe-audit navigation-sends` reports a
-  selection handler that breaks the rule, and its clean run is its answer.
-- **A seek no longer rings the old position over the new one.** Delay,
+  end of the bank.
+- **Moving around the app does not interrupt what is playing**, and that is
+  a rule. Selecting a pattern, a channel, a bus, a device or a track is a view
+  change: it changes what is drawn and what the next edit will address, and
+  none of it reaches the audio thread. The one gesture that must tell the
+  engine anything is the pattern selection, because the active pattern is
+  also where a recorded note goes -- and the engine charges for what changed
+  rather than for the fact that a command arrived.
+  `scripts/dupe-audit navigation-sends` reports a selection handler that
+  breaks the rule.
+- **A seek does not ring the old position over the new one.** Delay,
   modulation, reverb and plate tails are cleared when the transport is seeked
   or stopped, because what they hold is audio from a part of the song that is
   no longer playing. An unsynced LFO free-runs through a seek. A
-  **tempo-synced LFO follows the song position** as of 2026-09-23
-  (MOO-127): while the transport runs its phase is re-derived from the
-  position in beats every control tick, so Play, Stop-and-play and Seek land
-  it where the position implies, and an export -- which builds fresh
-  modulators at the top -- hears the phase playback did. Stopped, it
-  free-runs; one set to retrigger on notes follows the notes instead. Until
-  then this paragraph claimed free-running modulation kept a bounce in step,
-  which it did not.
-- **Tails survive a loop fold and a pattern switch**, as of 2026-09-22
-  (MOO-59). A delay repeat or a reverb tail from the end of a song loop wraps
-  into its start, the way a groove box plays a loop; before this every lap
-  emptied every delay line, reverb and plate in the project. A Pattern-mode
-  pattern switch under a running transport no longer clears them either: it
-  was meant not to, and was sending a seek behind its own program change.
+  **tempo-synced LFO follows the song position**: while the transport runs
+  its phase is re-derived from the position in beats every control tick, so
+  Play, Stop-and-play and Seek land it where the position implies, and an
+  export -- which builds fresh modulators at the top -- hears the phase
+  playback did. Stopped, it free-runs; one set to retrigger on notes follows
+  the notes instead.
+- **Tails survive a loop fold and a pattern switch.** A delay repeat or a
+  reverb tail from the end of a song loop wraps into its start, the way a
+  groove box plays a loop. A Pattern-mode pattern switch under a running
+  transport does not clear them either.
 - The playhead can be moved with the transport running or stopped, snapped to
   the playlist's own musical snap, and it reaches the end of the *song* --
   including the part of a long clip that overhangs the 64-bar start canvas --
@@ -1528,12 +1416,12 @@ with a commit loads and plays the render it played then.
   overlap anyway** -- nothing revalidates a length change. Both go on playing,
   which is what layering means here; what a click in the overlap resolves to
   is the **latest-starting** clip, the same rule automation uses for layered
-  placements, so the buried one can still be removed. Before 2026-09-14 it
-  could not be reached at all. The timeline is horizontally
-  zoomable. Global swing delays alternate sixteenth notes from 50% (straight)
-  through 75% (strong shuffle), preserving note duration in realtime and
-  offline rendering. There is no clip dragging, time-signature model, groove
-  template, per-pattern swing override, or per-channel timing offset.
+  placements, so the buried one can still be removed. The timeline is
+  horizontally zoomable. Global swing delays alternate sixteenth notes from
+  50% (straight) through 75% (strong shuffle), preserving note duration in
+  realtime and offline rendering. There is no clip dragging, time-signature
+  model, groove template, per-pattern swing override, or per-channel timing
+  offset.
 
 ### State And Persistence
 
@@ -1575,26 +1463,22 @@ with a commit loads and plays the render it played then.
 - File > New Song (Ctrl+N) starts a fresh starter song, asking first when the
   current one has unsaved changes, as Open Song, Quit and the window's close
   button do. **That question is the app's own dialog, Save / Don't Save /
-  Cancel** (MOO-91): Save runs the ordinary save, and goes on to quit, open or
-  start the new song only once the save has succeeded -- a failed or cancelled
-  save leaves you where you were. Quit and the close button ask it in the same
-  words. It used to be a zenity question with no Save button, and with no
-  zenity it read as Cancel, so a song with unsaved changes could not be quit
-  at all. Replacing a preset of the same name and loading a kit that drops
+  Cancel**: Save runs the ordinary save, and goes on to quit, open or start
+  the new song only once the save has succeeded -- a failed or cancelled save
+  leaves you where you were. Quit and the close button ask it in the same
+  words. Replacing a preset of the same name and loading a kit that drops
   channels holding notes are asked in the same dialog, and none of them blocks
-  the UI thread. **A file chooser is
-  asked of the desktop's file chooser portal first**
-  (`org.freedesktop.portal.FileChooser`, which KDE, GNOME and most tiling
-  setups provide), then of `zenity`, then of `kdialog`; on macOS it is the
-  system's own panels through `osascript`. **When none of them can show one,
-  that is not a cancel** (MOO-90): Save, Save As, Open, Export and the kit,
+  the UI thread. **A file chooser is asked of the desktop's file chooser
+  portal first** (`org.freedesktop.portal.FileChooser`, which KDE, GNOME and
+  most tiling setups provide), then of `zenity`, then of `kdialog`; on macOS
+  it is the system's own panels through `osascript`. **When none of them can
+  show one, that is not a cancel**: Save, Save As, Open, Export and the kit,
   channel and bundle pickers raise the error dialog, listing what was tried
   and what to install, and Load Sample and Add Folder say so in the status
-  bar. It used to read as Cancel, so on a desktop without zenity those
-  commands did nothing and said nothing.
+  bar.
 - Missing samples are recoverable by loading a replacement audio file, but
   there is no dedicated path-search/relink dialog yet.
-- **Unsaved changes survive a crash** (MOO-103). Once a minute, while the
+- **Unsaved changes survive a crash.** Once a minute, while the
   song has unsaved changes and no knob or drag is held, it is autosaved to
   `~/.local/state/mooloop/autosave/` (`$XDG_STATE_HOME`; beside the settings
   on a Mac). Samples are referenced where they are, never copied, and File >
@@ -1605,33 +1489,29 @@ with a commit loads and plays the render it played then.
   writes there. Saving, or answering the unsaved-changes question with
   Don't Save, removes the autosave. Each running mooloop holds a lock on its
   own autosave folder, so a second window never offers the first one's song.
-- **A file operation that crashes no longer locks the File menu** (MOO-103).
-  A panic in an open, save, load or export worker (a sample decoder, say)
-  is reported in the error dialog as an internal error, and the menu works
-  again. It used to stay greyed out until restart.
+- **A file operation that crashes does not lock the File menu.** A panic in
+  an open, save, load or export worker (a sample decoder, say) is reported in
+  the error dialog as an internal error, and the menu works again.
 - **Every run leaves a trace.** The diagnostic log is written on every run to
   `~/.local/state/mooloop/mooloop.log` (`$XDG_STATE_HOME`; `~/Library/Logs/mooloop/`
   on a Mac), rolled aside past 4 MB, and Preferences > Developer shows where;
-  it is no longer a preference. A panic leaves a crash report with a
+  it is not a preference. A panic leaves a crash report with a
   backtrace in `crashes/` beside it. SIGTERM, SIGINT and SIGHUP -- a logout,
   `kill`, Ctrl+C -- quit through the quit path without its dialog: the log
   says which signal, a take still recording is finished, and unsaved song
   changes are not saved but are kept in the autosave for the next launch to
-  offer. It does not write a last autosave on the way out either. Adam,
-  2026-09-30 (MOO-407): *"if you received a kill there's no telling what the
-  situation is. write might fail and corrupt your autosave"*. `docs/OPERATIONS.md`,
+  offer. It does not write a last autosave on the way out either, by Adam's
+  ruling: *"if you received a kill there's no telling what the situation is.
+  write might fail and corrupt your autosave"*. `docs/OPERATIONS.md`,
   "Diagnostic Log", has the details.
 - **A song old enough to reference the built-in kick opens with it audible.**
   Projects saved before the sampler stopped auto-loading a kick carry a
   `SampleReference::Builtin`, which the install substitutes the cached default
-  for. Until 2026-09-15 a second publication four lines later cleared it, so
-  the channel was silent while its name, waveform and duration all described a
-  kick; `control-plane-seams/03` fixed it.
+  for.
 - **Two sample loads into one channel resolve in the order they were asked
-  for, not the order they finish.** Loading a long file and then changing your
-  mind used to be decided by decode time, so the first choice could land last
-  and win. Each dispatch carries a request token now and a superseded
-  completion is discarded.
+  for, not the order they finish.** Each dispatch carries a request token and
+  a superseded completion is discarded, so a long file chosen first cannot
+  land last and win.
 
 ### Mixing, Routing, And Effects
 
@@ -1640,24 +1520,20 @@ with a commit loads and plays the render it played then.
   mute as one 18px chip split across its middle — yellow above, red below.
   Neither half wears a letter; the colour of the lit half is what says which
   is on.
-- **Every mixer move ramps** (MOO-107, 2026-09-22). A channel's or a track's
+- **Every mixer move ramps.** A channel's or a track's
   fader, pan or balance, its mute, a solo silencing it or giving it back, and
-  a track's polarity all reach the audio through a one-pole lag of 5 ms
-  (`STRIP_GAIN_SMOOTH_S` in `engine/src/render.rs`), the one sends already
-  used, per sample -- including when a lane or a modulator drives the fader,
-  whose control-rate staircase the lag rounds off. A mute is a fade: the
-  channel or track goes on rendering, its output and its sends aimed at
+  a track's polarity all reach the audio through a one-pole lag of 5 ms, the
+  one sends use, per sample -- including when a lane or a modulator drives the
+  fader, whose control-rate staircase the lag rounds off. A mute is a fade:
+  the channel or track goes on rendering, its output and its sends aimed at
   silence, and stops contributing only once both have arrived, about a
   hundred milliseconds later. Polarity crossfades through zero. So does a
   send: switching one off fades it out and lets its delay drain before it is
   held, and moving it between pre- and post-fader fades out, switches tap and
-  fades back in, all within about ten milliseconds (MOO-397). A document
-  arriving starts at its own values rather than ramping into them, so a
-  bounce's first milliseconds are at the levels the song holds.
-  `continuity_tests.rs` holds each of these moves on a sustained sine to the
-  largest-step bound in `render_test_support.rs`; before the change each one
-  stepped by up to the whole signal, and a polarity flip by twice it.
-- **Solo in place, per channel**, since 2026-09-22. A soloed channel silences
+  fades back in, all within about ten milliseconds. A document arriving
+  starts at its own values rather than ramping into them, so a bounce's first
+  milliseconds are at the levels the song holds.
+- **Solo in place, per channel.** A soloed channel silences
   the *other* channels and is heard through its own volume, pan, mute and
   track, exactly as a soloed track is. It is the same ruling one level down
   and a simpler derivation: channels do not feed each other, so there are no
@@ -1681,10 +1557,10 @@ with a commit loads and plays the render it played then.
   adds a track, and a track's device face renames it or removes it. Both are
   undoable, and a rename is one undo step however many characters it took.
   Removing one falls anything routed to it back to the master rather
-  than leaving it unheard. As of 2026-10-01 (MOO-466) adding, removing or
-  moving a track reaches the engine as one edit rather than a rebuild of the
-  song: every channel and every other track keeps its sounding notes, tails,
-  sends and delay compensation. Undo still rebuilds.
+  than leaving it unheard. Adding, removing or moving a track reaches the
+  engine as one edit rather than a rebuild of the song: every channel and
+  every other track keeps its sounding notes, tails, sends and delay
+  compensation. Undo still rebuilds.
 
   **There is no `+ Bus` and no `+ Send`.** What a track *is* — an ordinary
   track, a bus, a send return — is decided entirely by what routes into it.
@@ -1694,17 +1570,16 @@ with a commit loads and plays the render it played then.
   the master plus sixteen; strips are materialised per track as a project
   loads rather than preallocated, which `CAPACITY_POLICY.md` measures.
 - **Sends.** A track can route a copy of itself to another track, in addition
-  to its output. The track's face carries a `Send to…` picker that offers the
-  legal targets, and each send it gains draws a row there: the target's name,
-  where it taps, a switch, a remove, and a fader the width of the row. The
-  sends area draws exactly the sends that exist and scrolls when they outgrow
-  the room — there is no ceiling on how many a track has.
+  to its output. Sends are edited in the channel sidebar (above) and levelled
+  on the mixer strip. The sends area draws exactly the sends that exist and
+  scrolls when they outgrow the room — there is no ceiling on how many a
+  track has.
 
   **A send is a route, not a kind of track.** The track at the far end is an
   ordinary track that happens to be fed by sends, which is what makes it an
   effects return; there is no return object and nothing to create. The starter
-  kit no longer opens with one (MOO-267): a return is a track with a reverb on
-  it that another track sends to.
+  kit opens with none: a return is a track with a reverb on it that another
+  track sends to.
 
   Two tap points: **post-fader** (the default, so the send follows the track's
   fader) and **pre-fader** (after the track's devices, before its fader, so it
@@ -1727,23 +1602,18 @@ with a commit loads and plays the render it played then.
   summing points, which generally arrive at different times and are owed
   different delays, so a track feeding a latency-bearing return waits for it
   on its dry path and stays sample-aligned where the two meet again.
-- Any bus may feed any other. The realtime thread still never sorts a graph:
-  `mooloop_core::compile_bus_graph` normalizes and topologically sorts the bank
-  off the audio thread (Kahn's algorithm over fixed-size arrays, no allocation)
-  and the engine walks the resulting `CompiledBusGraph`. This is the model
-  REAPER and Ardour use - whoever edits the graph compiles it into a flat
-  schedule, and the callback only executes that schedule.
-- The schedule is this cheap because every bus owns a permanently allocated
-  buffer and no two nodes ever share one, which removes the pooled,
-  reference-counted buffer assignment a general graph engine needs.
+- Any bus may feed any other. The realtime thread never sorts a graph:
+  `mooloop_core::compile_bus_graph` normalizes and topologically sorts the
+  bank off the audio thread, and the engine walks the resulting
+  `CompiledBusGraph`.
 - Destinations and their matching render order are one fixed-size compiled
   value, and a track's sends travel with it as one command, so no block can
   render edges against a stale order or a send whose target the order has not
-  been told about. A short stored bank is a small mixer and is left
-  as it is -- padding it back to seventeen was removed. Invalid individual
-  routes are repaired to the master by the integrity pass, which reports the
-  repair; a send naming a track that is gone is dropped by `sanitize_bank`
-  after the load, which reports nothing (`docs/LOOSE_ENDS.md`).
+  been told about. A short stored bank is a small mixer and is left as it is.
+  Invalid individual routes are repaired to the master by the integrity pass,
+  which reports the repair; a send naming a track that is gone is dropped by
+  `sanitize_bank` after the load, which reports nothing
+  (`docs/LOOSE_ENDS.md`).
 - A send orders its target after its source, the same way an output does, and
   a cycle closed through a send is refused the same way one closed through an
   output is.
@@ -1752,7 +1622,7 @@ with a commit loads and plays the render it played then.
   switch -- under one strip-wide **voicing**: `Moo`, `Grip`, `Punch`, `Iron`.
   Every section is **out by default**, and out is not "flat": a section that
   is out does not touch the samples, so a project that has never opened a
-  strip renders bit-identically to one built before the strip existed. That is
+  strip renders bit-identically to one with no strip at all. That is
   what entitles it to exist on every track rather than being a device
   somebody places; the price of having one everywhere is three booleans a
   block, against a track bank that is capped at seventeen today.
@@ -1863,7 +1733,7 @@ with a commit loads and plays the render it played then.
   needs a latency story this engine does not have.
 - A muted bus still processes, so effect tails on it decay rather than freeze,
   but contributes no audio and meters as silent. A muted channel does the same
-  once it has faded (MOO-418): its generator is left uncalled, but its effect
+  once it has faded: its generator is left uncalled, but its effect
   chain is fed silence until it reports at rest, so a delay or reverb tail
   decays under the mute instead of replaying on unmute. A muted channel whose
   chain is at rest costs nothing.
@@ -1873,10 +1743,9 @@ with a commit loads and plays the render it played then.
   between two UI frames is still shown. The channel rack has no meter of its
   own: `ChannelMeter` is drawn on the mixer strip, the device rack's two rails
   and a track's fader row, and nowhere else. **All of them are continuous
-  bars with a peak-hold hairline**; the LED-segment form they had until
-  2026-09-15 survives only in the mockup catalog. Preferences > Appearance >
-  Metering tunes how fast they fall, from 30 dB/s down to 3, defaulting to the
-  IEC rate of about 12.
+  bars with a peak-hold hairline**; the LED-segment form survives only in the
+  mockup catalog. Preferences > Appearance > Metering tunes how fast they
+  fall, from 30 dB/s down to 3, defaulting to the IEC rate of about 12.
 
   **Only a meter with a clip latch behind it draws a clip lamp.**
   `ChannelMeter` takes `show-clip`, and the rack's two rails set it false:
@@ -1885,24 +1754,15 @@ with a commit loads and plays the render it played then.
   from whichever of the two the user clicks -- and shows peak hold from the
   same reading. **The master's toolbar meter is the same latch again**: it
   reads bus 0 through the mixer strip's own ballistics, so either lamp clears
-  both and neither can disagree with the other. Before 2026-09-14 it read a
-  separate per-block engine event instead, which is a bounded ring the audio
-  thread drops from under pressure -- the always-visible meter was the lossy
-  one. Until 2026-09-14 the rails drew a lamp that could not light
-  and the fader row drew one that was never bound, while its peak marker was
-  pinned to the level.
+  both and neither can disagree with the other.
 - Channels retain the historical constant-power pan law, so existing project
   levels do not jump. Mixer buses use a distinct stereo balance law that is
   unity at centre and never boosts an endpoint; adding centred routing stages
   is therefore level-neutral.
 - Each channel runs a full 256-slot addressable effect chain after its
-  generator. Value edits, boxed structural edits, and prepared projects share
-  one ordered control stream, so no edit can cross a project-generation
-  boundary. Displaced nodes and whole render states return through a bounded
-  reclaim ring for control-thread destruction; reorder is an in-place pointer
-  rotation (`MoveEffect`), and knob changes arrive as sample-timed
-  `ParamValue` events. Effect chains persist in song files
-  (`ChannelSetup.effects`, serde-defaulted for older manifests).
+  generator, and knob changes arrive as sample-timed `ParamValue` events.
+  Effect chains persist in song files (`ChannelSetup.effects`,
+  serde-defaulted for older manifests).
 - Structural edits keep every address honest. An effect is addressed by its
   slot and a channel by its index, so adding, moving, or removing a device --
   or deleting or pasting a channel -- is stated once as a permutation
@@ -1919,8 +1779,7 @@ with a commit loads and plays the render it played then.
   that is not there, leaving addresses on a generator that has no descriptor
   table yet untouched.
 - Thirteen effect kinds ship: a low-pass/high-pass filter, a drive/saturation
-  with four curves at 2x oversampling (a 31-tap half-band that skips its
-  zero taps, and a rational `tanh` within 1e-4 inside it, MOO-250) whose Drive changes character rather
+  with four curves at 2x oversampling whose Drive changes character rather
   than level -- a signal at the -12 dBFS operating level keeps its peak at
   any drive on any curve, and a hotter one is held down toward it -- a preamp carrying the channel strip's
   four voicings -- Moo, Grip, Punch and Iron, the last three measured from
@@ -1929,13 +1788,12 @@ with a commit loads and plays the render it played then.
   preamp the way to put an automatable gain stage in the middle of a chain;
   it is deliberately not oversampled, so it adds no latency and can sit
   anywhere. Its band display draws what the stage *added* (two analyzers,
-  dry against wet), and **it analyzes only while the window is drawing it**
-  (MOO-233, 2026-09-25): the saved switch means "show it when I look", so
-  a song saved with displays on costs nothing headless, in an export, or
-  unsubscribed. Every spectrum analyzer (this one and the EQ's) spreads its
-  band bank across its hop rather than running it in one callback, so no
-  callback pays for a whole bank; three Preamps with the display on had put
-  a millisecond spike into Adam's `deep`. A bitcrush that is deliberately not oversampled either, a stereo delay with damped cross-feedable feedback and
+  dry against wet), and **it analyzes only while the window is drawing it**:
+  the saved switch means "show it when I look", so a song saved with
+  displays on costs nothing headless, in an export, or unsubscribed. Every
+  spectrum analyzer (this one and the EQ's) spreads its band bank across its
+  hop rather than running it in one callback, so no callback pays for a
+  whole bank. A bitcrush that is deliberately not oversampled either, a stereo delay with damped cross-feedable feedback and
   digital/tape/reverse responses to a moving delay time. Its Time control is
   a knob with a sync lamp: dark, it sweeps free milliseconds; lit, it steps
   the same twenty-one-entry musical grid the modulators use, `4/1` down to
@@ -1952,9 +1810,8 @@ with a commit loads and plays the render it played then.
   rather than an automatable parameter that decided what every other EQ lane
   meant. Its bands run the same two laws the channel strip does, from the same
   function: **a band's Q is its slope while that band is a shelf** and its Q
-  while it is a bell, and a proportional bell narrows as it is pushed. The
-  shelf half of that arrived 2026-09-14 -- before it, a shelf's Q knob moved
-  nothing. **Its response plot draws the filter that is running**, not a
+  while it is a bell, and a proportional bell narrows as it is pushed.
+  **Its response plot draws the filter that is running**, not a
   shape resembling it: Rust designs the same coefficients the audio path
   designs and evaluates their magnitude response, so the drawn curve is
   within a tenth of a decibel of what a sine measures through the bank. Both
@@ -1962,52 +1819,42 @@ with a commit loads and plays the render it played then.
   a shelf's drawn slope follows its Q knob, and the same plot draws the
   channel strip's four bands the same way. The band buttons read 1 to 7 --
   the numbering their parameters use -- and the pass-slope buttons read
-  12/24/36/48/72 dB per octave, which is what the bank rolls off at; they
-  read LOW/1..6 and 6/12/18/24/36 before 2026-09-15. **All seven bands start
-  on and spread across the band** at the seven-band graphic EQ's own centres
-  -- 63, 160, 400, 1k, 2.5k, 6.3k and 16k -- with a **low shelf at band 1 and
-  a high shelf at band 7**; before 2026-09-15 three were on, the high shelf
-  was band 3, and the other four sat on top of each other at 1 kHz, so four
-  of the seven handles were underneath band 2's. Every band rests flat, and a
-  bell at 0 dB is the identity filter, so a fresh EQ still passes the signal
-  through untouched. The target row is drawn in the order the plot reads --
-  the high-pass, the seven bands, then the low-pass -- and **a target that
-  has a shape of its own draws it**: the two shelves and the two pass filters
-  are line-art glyphs, a plain bell is its number, and the glyph follows the
-  band's live kind rather than a fixed picture of the opening arrangement.
-  The analyzer's switch sits in the plot's own top corner instead of a third
-  button in that row, and the selected target's ON sits beside the three
-  knobs it switches on. Double-clicking a knob
-  returns to the *selected* band's resting value rather than to band 2's. A
-  feedback-delay-network hall reverb; and one five-mode modulation processor
+  12/24/36/48/72 dB per octave, which is what the bank rolls off at. **All
+  seven bands start on and spread across the band** at the seven-band
+  graphic EQ's own centres -- 63, 160, 400, 1k, 2.5k, 6.3k and 16k -- with a
+  **low shelf at band 1 and a high shelf at band 7**. Every band rests flat,
+  and a bell at 0 dB is the identity filter, so a fresh EQ still passes the
+  signal through untouched. The target row is drawn in the order the plot
+  reads -- the high-pass, the seven bands, then the low-pass -- and **a
+  target that has a shape of its own draws it**: the two shelves and the two
+  pass filters are line-art glyphs, a plain bell is its number, and the glyph
+  follows the band's live kind rather than a fixed picture of the opening
+  arrangement. The analyzer's switch sits in the plot's own top corner
+  instead of a third button in that row, and the selected target's ON sits
+  beside the three knobs it switches on. Double-clicking a knob returns to
+  the *selected* band's resting value. A feedback-delay-network hall reverb;
+  and one five-mode modulation processor
   (chorus, flange, phaser, ensemble, and ADT) whose Rate carries the same
   sync lamp the delay does, over the same grid, clamped to the 12 Hz its LFO
   runs to. Its delay-based modes share a
   bounded fractional stereo ring; Phaser uses a stereo all-pass cascade
   whose coefficients are worked out every 8 samples and followed in a
-  straight line between (MOO-235), which costs about a fifth of doing it
-  every sample: less than Chorus up to 8 stages, and about the same at 12.
+  straight line between.
   Past Feedback 75% (either sign) every mode's wet output is trimmed by
   `min(1, 4 * (1 - |fb|))`, so a feedback resonance peaks at +12 dB instead
-  of the +22 dB a loop at 92% reaches (MOO-200); the loop itself is not
+  of the +22 dB a loop at 92% reaches; the loop itself is not
   touched, so a flanger at full feedback rings as long as it did. Width
-  (MOO-245) scales the wet signal's side against its mid, from both
+  scales the wet signal's side against its mid, from both
   voices folded to the centre at 0% to the mode's own image at 100%, the
   default, where it changes nothing; the face's Mix knob is the slot's own
-  wet/dry rather than a second blend. The face's knob panel is five a row
-  since. The
-  generic host supplies their dry/wet blend, so the DSP returns the processed
-  signal only. The reverb runs eight modulated delay lines through a Hadamard
-  feedback matrix behind a diffused, pre-delayed input, each line's return
-  smeared through its own allpass diffuser inside the feedback loop so the
-  tail blooms into a dense wash rather than ringing on eight sparse modes,
-  at a fixed per-sample
-  cost independent of decay time and with no reported latency; Size, Decay,
-  Damp, Pre, Diffuse, Width and Mod are all ordinary event-driven parameters,
-  so every one of them is a working modulation destination. It replaced a
-  generated-room convolution player whose per-block cost spiked over a
-  64-frame budget at a two-second tail and which could not accept a parameter
-  change at all without an off-thread IR rebuild. Beside it is a cheaper
+  wet/dry rather than a second blend. The face's knob panel is five a row.
+  The generic host supplies their dry/wet blend, so the DSP returns the
+  processed signal only. The reverb (`REVERB.md`) is eight modulated,
+  diffused delay lines whose tail blooms into a dense wash rather than
+  ringing on eight sparse modes, at a fixed per-sample cost independent of
+  decay time and with no reported latency; Size, Decay, Damp, Pre, Diffuse, Width and Mod
+  are all ordinary event-driven parameters, so every one of them is a
+  working modulation destination. Beside it is a cheaper
   plate: eight parallel Freeverb-tuned combs into four series allpasses per
   channel, with Size, Decay, Damp, and Width, for material that does not need
   the hall. The thirteenth kind is the retained-audio Buffer described below,
@@ -2029,67 +1876,51 @@ with a commit loads and plays the render it played then.
   on a silent channel does not sit lit up.
 - The dynamics effects detect on the louder of the two channels and apply one
   gain to both, so compression cannot walk the stereo image around.
-  **The limiter looks ahead and limits true peaks** (MOO-142, 2026-09-23).
-  It holds its audio back 96 frames (2 ms at 48 kHz) and declares that
-  latency, so the mixer compensates it like any other -- which means **every
-  existing Limiter now adds 96 frames of latency** to its channel, and every
-  other channel is delayed to meet it. Its gain computer
-  finds each frame's 4x-interpolated true peak, holds the deepest need across
-  the lookahead, and ramps into it so the gain has arrived when the peak comes
-  out. Nothing leaves above the ceiling, between samples included, without the
-  hard clamp that used to do the real work on every transient; the clamp is
-  now only a backstop. It sounds cleaner on transients: they come down
-  smoothly instead of being squared off, and there's no clipping distortion.
+  **The limiter looks ahead and limits true peaks.** It holds its audio back
+  96 frames (2 ms at 48 kHz) and declares that latency, so the mixer
+  compensates it like any other -- which means **every Limiter adds 96
+  frames of latency** to its channel, and every other channel is delayed to
+  meet it. Its gain computer finds each frame's 4x-interpolated true peak,
+  holds the deepest need across the lookahead, and ramps into it so the gain
+  has arrived when the peak comes out. Nothing leaves above the ceiling,
+  between samples included; the hard clamp is only a backstop. It sounds
+  cleaner on transients: they come down smoothly instead of being squared
+  off, and there's no clipping distortion.
   **The gate has two thresholds**: it opens at the knob and shuts only once
   the level falls 6 dB under it (`GATE_HYSTERESIS_DB`), judged on a level
   detector that holds across a waveform's troughs, so material sitting on
-  the threshold no longer flicks it open and shut. It sounds steadier on
+  the threshold does not flick it open and shut. It sounds steadier on
   sustained material near the line, and a sparse hit rings a few
   milliseconds longer before the gate shuts. **The compressor has its own
   Mix**, a linear parallel balance like the channel strip's `w/d mix` (0 is
-  the input exactly), where the header's equal-power Wet ran a compressor and
-  its own input 3 dB hot at 50%. Its gain computer was already the strip's
-  under the `Moo` voicing (the same detector and curve); the voicings'
-  programme dependence and ratio bend stay the strip's own.
+  the input exactly), because the header's equal-power Wet runs a compressor
+  and its own input 3 dB hot at 50%. Its gain computer is the strip's under
+  the `Moo` voicing (the same detector and curve); the voicings' programme
+  dependence and ratio bend stay the strip's own.
 - Each kind publishes a static `ParamDescriptor` table
   (range, curve, unit, default) in `mooloop-core`, which is the single source
-  of truth for normalization and clamping; `Event::ParamValue` carries natural
-  units so nodes never handle curves. `EffectSlotState.params` is a tagged
-  `EffectParams` enum, and the pre-tag untagged filter shape still loads.
-- `mooloop-dsp`'s `delayline` module (`DelayLine` + `ReadHead`) is a shared
-  ring primitive with cubic-Hermite fractional reads and crossfaded head
-  jumps. The delay effect is its first consumer; the retained-audio buffer
-  device is meant to be the second rather than growing its own ring.
+  of truth for normalization and clamping (`MODULATION.md`). The pre-tag
+  untagged filter shape still loads.
 - A rack device may be a **container**: `EffectKind::Chain` holds an ordered
   run of the devices after it, appears in the rack exactly where a device
   would, and is designed to nest four deep -- though nothing refuses a fifth,
   and a box past the cap stops blending (it still bypasses; see
   `docs/LOOSE_ENDS.md`). It is made either from the insert menu, like any
   other device, or by wrapping a device that is already there (a button on
-  its left rail). **A device is added from the arrow between two devices**
-  (MOO-218, 2026-09-24): the `→` turns into a `+` under the pointer and opens
+  its left rail). **A device is added from the arrow between two devices**:
+  the `→` turns into a `+` under the pointer and opens
   the insert menu, and the device lands in that gap -- inside a box when the
   arrow is inside it, after the box when the arrow leads out of it. An empty
   box draws an arrow of its own inside it, which adds into the box. **A Chain
   holding devices draws an arrow after its last one, inside the box and
-  before its rail, which adds at the end of the Chain** (MOO-299, MOO-340,
-  2026-09-29); the arrow past its rail still adds after it. The same arrow
+  before its rail, which adds at the end of the Chain**; the arrow past its
+  rail still adds after it. The same arrow
   takes **Plugin…** and a dropped preset, and so does an empty Chain's own
   arrow; a layer's shown Chain branch has one, a layer does not. The arrow
   after a layer's head adds nothing: a new branch is the layer face's `+`.
   There is no `+` on a device's rail and no add slot after the chain; the
   last arrow adds at the end. A preset dragged out of the browser and dropped
   on an arrow lands there too.
-- **A device folds to its header, on its side** (MOO-219, 2026-09-24): the
-  `<` at the top of every insert's left rail, where the insert `+` was,
-  collapses it to a strip one rail wide -- `>` to open it, its colour chip,
-  its name and kind reading top to bottom, and its on/off, wet/dry and
-  remove still working at the foot. A folded device sounds exactly as it did,
-  and it drags to reorder like any row. A folded Chain or Layer hides
-  everything inside it and brings it back as it was, folds included. **The
-  fold is saved with the song and is not an undo step**; undo and redo keep
-  whatever is folded now, so no Ctrl+Z unfolds anything (whether it should
-  be saved at all is Adam's call: MOO-219).
   The end of a box is named rather than indexed, because the index past a
   run means "after the container" -- for an empty box, "just inside" and
   "just after" are the same position, so which one is meant has to come from
@@ -2097,16 +1928,14 @@ with a commit loads and plays the render it played then.
   whole run, delayed to match that run's latency — the wet/dry that a
   *single* device has always had, applied to a group. It really is the one
   control: the shell's own dry/wet is not offered on a container row, because
-  a box has no node to be wet with. **Its two trims are heard** (MOO-210,
-  2026-09-25; before it they were drawn, saved and undone and multiplied
-  nothing): the input trim on what enters the box, so on both sides of its
-  Mix, and the output trim on what leaves it, after the blend, as a device's
-  are. Both ramp, and a bypassed box is its input with neither on it; a
-  bypass fades them with the Mix. Songs keep their saved trims, so one that
-  saved a box trimmed away from unity reopens at that level (none of Adam's
-  did). Bypassing a container skips its run without moving the channel in
-  time. **Nothing in the
-  interface**: a device's left rail wraps it in a container, a container's
+  a box has no node to be wet with. **Its two trims are heard**: the input
+  trim on what enters the box, so on both sides of its Mix, and the output
+  trim on what leaves it, after the blend, as a device's are. Both ramp, and
+  a bypassed box is its input with neither on it; a bypass fades them with
+  the Mix. Songs keep their saved trims, so one that saved a box trimmed away
+  from unity reopens at that level. Bypassing a container skips its run
+  without moving the channel in time. **In the interface**: a device's left
+  rail wraps it in a container, a container's
   right rail unwraps it, and dragging a device onto a row already inside a box
   puts it in that box. **Containers nest four deep and the wrap button goes
   out at the fourth**, because the engine preallocates one dry buffer per open
@@ -2130,6 +1959,16 @@ with a commit loads and plays the render it played then.
   rather than a colour per level. An empty container caps itself, so an empty
   box still looks like a box. A container wider than the viewport has no
   collapsed form yet.
+- **A device folds to its header, on its side**: the
+  `<` at the top of every insert's left rail, where the insert `+` was,
+  collapses it to a strip one rail wide -- `>` to open it, its colour chip,
+  its name and kind reading top to bottom, and its on/off, wet/dry and
+  remove still working at the foot. A folded device sounds exactly as it did,
+  and it drags to reorder like any row. A folded Chain or Layer hides
+  everything inside it and brings it back as it was, folds included. **The
+  fold is saved with the song and is not an undo step**; undo and redo keep
+  whatever is folded now, so no Ctrl+Z unfolds anything (whether it should
+  be saved at all is Adam's call: MOO-219).
 - A container's face draws the **parallel split** the box cannot show: the
   signal entering, a dry lane straight across, a wet lane through a chip per
   device in the run, and the sum taken between them at a node that rides to
@@ -2149,9 +1988,9 @@ with a commit loads and plays the render it played then.
   so the sum does not comb, and the layer declares its longest branch as its
   latency. Its Mix blends the sum against its input; bypassing it passes the
   input, delayed by that latency. A layer of one branch is a chain.
-- **A layer draws like Bitwig's FX Layer** (`containers/09`, laid out by
-  Adam's 2026-09-30 ruling in MOO-462; `docs/UI_DESIGN.md`, *Device Rack
-  Layout*). Its face is a list of its branches, each row with a name, a
+- **A layer draws like Bitwig's FX Layer** (laid out by Adam's ruling;
+  `docs/UI_DESIGN.md`, *Device Rack Layout*). Its face is a list of its
+  branches, each row with a name, a
   `BYP` badge when the branch is bypassed, **S**, **M** and a level meter,
   a `+` under the list that adds an empty branch at the end, and beside the
   list the **selected branch's controls**: its Level, Mix, bypass, input and
@@ -2168,7 +2007,7 @@ with a commit loads and plays the render it played then.
   `+` makes is a Chain. Mute takes a branch out of the sum and Solo keeps only
   the soloed branches of that one layer; both ramp, and both are undoable
   and saved.
-- **Every branch of a layer is a Chain** (MOO-456, 2026-09-30). A layer is
+- **Every branch of a layer is a Chain.** A layer is
   chains in parallel. Wrap in Layer, the layer's `+` and a drop into a layer
   all put the device inside a branch's Chain: a drop on the layer, or on the
   gap between two branches, lands first in a branch's Chain, and a device put
@@ -2180,22 +2019,19 @@ with a commit loads and plays the render it played then.
   refused rather than leaving a Layer straight round a device. **A song with
   a bare device directly in a layer gets that device wrapped in a fresh Chain
   when it opens** (`load_bundle` does it, for a song's channels and buses, a
-  kit, a channel and an effect run; MOO-461): the file format is unchanged,
-  every existing device keeps its id, the new Chain is transparent (default Level, Mix, Mute and Solo),
-  and it is part of loading rather than an undo step. This supersedes
-  `containers/07`'s "a leaf direct child is a one-device branch" and
-  `containers/09`'s "a device directly inside a layer is a branch with no S
-  or M"; the engine still plays a bare device in a layer if one is ever
-  found. The gestures, the step itself (`normalize_layer_branches` in
-  `core/src/effect.rs`) and the load call are done, and the rack's drawing of a branch's Chain was the rack run's, which has landed: **the rack
-  does not draw a layer's shown branch's Chain**. Its devices are drawn
+  kit, a channel and an effect run, through `normalize_layer_branches` in
+  `core/src/effect.rs`): the file format is unchanged, every existing device
+  keeps its id, the new Chain is transparent (default Level, Mix, Mute and
+  Solo), and it is part of loading rather than an undo step. The engine still
+  plays a bare device in a layer if one is ever found. **The rack does not
+  draw a layer's shown branch's Chain**. Its devices are drawn
   straight under the layer's bracket, one box deep (`RowView.draw_depth`); the
   layer's box holds the append join the Chain's would have, wired to that
   Chain, and a layer showing an empty branch closes on its own row with the
   join inside it wired to the branch. Its controls are the layer face's (the
   entry above); a branch does not fold, and a branch Chain folded in an older
   song is shown open.
-- **Making and emptying a layer** (`containers/10`). The rail's wrap button
+- **Making and emptying a layer.** The rail's wrap button
   opens a menu, **Chain** or **Layer**. Wrapping in a layer makes a layer of
   one branch, a Chain holding what was wrapped, so the branch has its S, M
   and Level from the start. A right-click on a branch in the list offers
@@ -2231,10 +2067,7 @@ with a commit loads and plays the render it played then.
   module's `input_slot` across the same permutation. **A reorder also moves
   each module's running state**: an LFO keeps its phase, its smoothing and its
   fade position, an envelope keeps its stage and level, and a Random module
-  keeps its sequence. Before 2026-09-14 a drag rebuilt every moved module, so
-  an envelope dragged to the front dropped a held note's contour to zero
-  mid-sustain, and two LFOs dragged past each other swapped params without
-  swapping phase and both jumped. Arming a module's Assign
+  keeps its sequence. Arming a module's Assign
   switch makes legal controls assignable; dragging one sets route depth while
   the control keeps its base value. Removing a route restores the
   destination's base, on generator parameters as well as effect ones. The
@@ -2244,20 +2077,18 @@ with a commit loads and plays the render it played then.
   beside the modules. Device (effect) outlets, cross-channel sources, and
   macros remain planned.
 - **The retained-audio Buffer is a ring that is always recording, and four
-  ways to hear it instead of the input.** Rebuilt 2026-09-16, the day it was
-  first played; what it replaced was a turntable model, described at the end
-  of this entry.
+  ways to hear it instead of the input.**
   **Three held gestures, each owning its own settings.** JUMP plays forward
   from `Jump Back` behind now; REVERSE plays backward from now; STUTTER
   repeats the last `Stutter` length. Each holds the ring still while it is
   down — the press is a freeze — and letting go returns to live audio and
   restarts the writer. JUMP and REVERSE wrap round the ring rather than
   running out, so a held button never lets go on its own. None of them
-  borrows another's setting: the stutter's length is its own knob, which is
-  the question the rebuild started from. The three are **gates** rather than
-  triggers — `Jump`, `Reverse` and `Stutter Gate` are high for exactly as long
-  as the gesture lasts — so a finger on the button, a held MIDI note and a
-  block drawn in a lane are one mechanism. Last one pressed wins.
+  borrows another's setting: the stutter's length is its own knob. The three
+  are **gates** rather than triggers — `Jump`, `Reverse` and `Stutter Gate`
+  are high for exactly as long as the gesture lasts — so a finger on the
+  button, a held MIDI note and a block drawn in a lane are one mechanism.
+  Last one pressed wins.
   **`Position` is a playhead, heard only while it moves.** A static Position is
   a setting nobody is playing, and the device falls through to live audio.
   The head *is* the position rather than chasing it, so the playback speed is
@@ -2292,15 +2123,15 @@ with a commit loads and plays the render it played then.
   face's HISTORY stepper. `bars` is not a descriptor parameter and cannot
   become one: resizing reallocates, so the replacement is built on the control
   thread and swapped in at a block boundary, down the road a tempo change
-  travels. **The replacement takes over the history** (MOO-137): the most
+  travels. **The replacement takes over the history**: the most
   recent frames the old ring held, as many as the new one has room for, so a
-  tempo change or a HISTORY change no longer empties an unfrozen Buffer. A
+  tempo change or a HISTORY change does not empty an unfrozen Buffer. A
   frozen buffer refuses that swap rather than losing what is playing, which
   also means **changing HISTORY while frozen does nothing to the running
   ring** until it thaws and something resizes it again. An undo, a redo or
   any other whole-project install keeps a Buffer whose own settings did not
   change, with its ring, and keeps the channel it sits on sounding.
-  **A freeze is not saved** (MOO-196, Adam: *"freeze is temporary"*), and
+  **A freeze is not saved** (Adam: *"freeze is temporary"*), and
   neither is the ring's audio. A reopened song, a preset, a pasted device or
   a pasted channel arrives unfrozen and recording; an undo keeps a freeze and
   its ring. A Buffer that is rebuilt with Freeze on and an empty ring anyway
@@ -2309,17 +2140,12 @@ with a commit loads and plays the render it played then.
   document saved with a gesture held reopens holding it.
   The face's SEAMS readout counts wraps and cuts — a stutter's repeats, a
   reverse head lapping the ring — which is the number that says whether the
-  head is doing what the picture claims. It replaced RETURNS, a count of
-  forced returns to live, which is a failure this design cannot have.
-  **What it replaced, and what that leaves behind.** The turntable model had
-  one read head fought over by `Position` (which armed a *chase* whose closing
-  speed was the playback rate), `Rate`, and a `Length`/`Loop` window, under
-  an arbitration rule with arrival and stillness tests; the face's buttons
-  were macros writing those shared knobs, so STUT could not have a length of
-  its own. `Rate`, `Length` and `Loop` are retired, and ids 3, 4 and 5 are
-  spent alongside `Offset`'s 0. Their saved values are dropped on load, and
-  **an automation lane or modulation route that names one of them stays in
-  the document but drives nothing**. `Quant Grid` is now `Quant Start` on the
+  head is doing what the picture claims.
+  **Retired parameters.** `Rate`, `Length` and `Loop`, from the turntable
+  model the Buffer replaced, are retired, and ids 3, 4 and 5 are spent
+  alongside `Offset`'s 0. Their saved values are dropped on load, and **an
+  automation lane or modulation route that names one of them stays in the
+  document but drives nothing**. `Quant Grid` is now `Quant Start` on the
   same id, and a saved `quant_grid` key loads into it. A project saved before
   either change still opens with its `Offset` converted to `Position`, lanes
   and routes included.
@@ -2331,18 +2157,12 @@ with a commit loads and plays the render it played then.
   three-oscillator synths reserve ten parameter ids per oscillator, starting
   at 100; ML-P8's, DS-01's and the v1 drum synth's ids are each their own
   namespace starting at zero, because none of them is that voice with a
-  different count. `docs/MODULATION.md` records the approved design;
-  build order is in
-  `docs/plans/archive/buffer-implementation/02-control-and-modulation.md`.
-- The **v1** drum synth was the last one without a table, and the argument
-  against giving it one did not survive being checked. It was called a
-  mode-union whose ids would change meaning with the Mode switch;
-  `DrumSynthParams` is a flat struct of named fields, each of which means one
-  thing forever -- `kick_start_hz` is the kick sweep start whatever Mode says,
-  which is exactly why the other modes' knobs are *retained* across a mode
-  change rather than reset. It now has sixteen continuous controls and four
-  selectors under ids of its own, and a modulation route and an automation
-  lane both reach them.
+  different count. `docs/MODULATION.md` records the approved design.
+- The **v1** drum synth has sixteen continuous controls and four selectors
+  under ids of its own, and a modulation route and an automation lane both
+  reach them. Each id means one thing forever -- `kick_start_hz` is the kick
+  sweep start whatever Mode says, which is exactly why the other modes' knobs
+  are *retained* across a mode change rather than reset.
   **What Mode selects is audibility, not meaning.** A route onto a kick
   control does nothing while the device is in Snare mode: the value is still
   written and still the one the patch authored, it is simply not heard. That
@@ -2352,10 +2172,9 @@ with a commit loads and plays the render it played then.
   parameter exists. Mode itself is automatable and is latched on a voice at
   its trigger, so a lane moving it changes the *next* hit rather than
   reshaping the one that is playing.
-  The device is otherwise unchanged: three modes, the same sound, and old
-  projects load exactly as before. DS-01 remains the better instrument and the
-  reason the v1 device does not need to grow; it was never the reason the v1
-  device could not have a table.
+  The device has three modes, and old projects load exactly as before. DS-01
+  remains the better instrument and the reason the v1 device does not need to
+  grow.
 - DS-01 is a second drum instrument, not a rewrite of the first: one universal
   percussion voice with no drum-type mode, three layers — a morphing tone with
   a partial bank and FM, a four-colour noise generator through a morphing
@@ -2369,20 +2188,19 @@ with a commit loads and plays the render it played then.
   cowbell, clave and a zap -- seeded once into `presets/generators/ds01/` as
   generator presets, since a DS-01 patch's modulation is inside its own voice
   and has no channel rack to re-scope. Those are the same patches the DSP
-  acceptance test asserts, so what ships is what is checked. The bank was
-  played on 2026-09-04 and raised no range corrections; it is there to prove
-  the architecture reaches a kit from the controls rather than to be a curated
-  bank. It publishes six control outlets — `Amp Envelope`, `Mod Envelope`,
-  `Velocity`, `Note`, `Gate` and `Trigger` — reduced through the hit created
-  by the most recent trigger, which stays the focus for its whole life and
-  falls to zero rather than stepping backward onto an older hit that is still
-  ringing. `Trigger` is the one a drum channel wants: one publication wide per
-  hit, so a kick can duck a bass, open a gate, or fire an envelope on another
-  device with no sidechain graph. `Gate` is honest rather than useful here —
-  it answers "any hit is still waiting on its note-off", which is low for the
-  one-shot patches most of the kit uses. Its four audio outlets (`Tone`,
-  `Noise`, `Body`, `Pre-Shape`) are declared with frozen ids and tap points,
-  and an Aux In channel can read any of them.
+  acceptance test asserts, so what ships is what is checked. The bank is
+  there to prove the architecture reaches a kit from the controls rather than
+  to be a curated bank. It publishes six control outlets — `Amp Envelope`,
+  `Mod Envelope`, `Velocity`, `Note`, `Gate` and `Trigger` — reduced through
+  the hit created by the most recent trigger, which stays the focus for its
+  whole life and falls to zero rather than stepping backward onto an older
+  hit that is still ringing. `Trigger` is the one a drum channel wants: one
+  publication wide per hit, so a kick can duck a bass, open a gate, or fire
+  an envelope on another device with no sidechain graph. `Gate` is honest
+  rather than useful here — it answers "any hit is still waiting on its
+  note-off", which is low for the one-shot patches most of the kit uses. Its
+  four audio outlets (`Tone`, `Noise`, `Body`, `Pre-Shape`) are declared with
+  frozen ids and tap points, and an Aux In channel can read any of them.
 - **A device's published outlets can drive other devices.**
   `mooloop_core::outlet` states the vocabulary — control versus audio domain,
   the tap point an audio outlet is taken at, and the one-block latency every
@@ -2411,13 +2229,11 @@ with a commit loads and plays the render it played then.
   the destination's base. The lift stands on the module's **own amount**, not
   on the full range: an LFO at half depth swings `-0.5..0.5`, and a unipolar
   route from it still rests on the base and reaches half the route's depth.
-  Turning that amount to zero therefore contributes nothing, where until
-  2026-09-14 it parked the destination half a depth above the base while the
-  module visibly stopped moving. An LFO still fading in is the one case the
-  lift cannot see, because the fade is engine state rather than a parameter:
-  for the length of the fade a unipolar route from it rises from half the
-  module's depth instead of from the floor. An outlet publishes in its
-  *declared* range, where a
+  Turning that amount to zero therefore contributes nothing. An LFO still
+  fading in is the one case the lift cannot see, because the fade is engine
+  state rather than a parameter: for the length of the fade a unipolar route
+  from it rises from half the module's depth instead of from the floor. An
+  outlet publishes in its *declared* range, where a
   unipolar one is already `0..1`, so an outlet route takes the destination's
   own default — `Bipolar`, which passes the value through. `Unipolar` on an
   outlet remains meaningful, but only for a genuinely bipolar one such as
@@ -2457,7 +2273,7 @@ with a commit loads and plays the render it played then.
 
   It is not a send: the producing channel does not know it is being read and
   its own routing does not move. It is not a router either — one subscription,
-  one channel, one outlet. **Parallel sends are no longer absent**, but they are
+  one channel, one outlet. **Parallel sends exist**, but they are
   a second edge system rather than this one: a send is a producer-side edge that
   carries its own compensation, where an aux-in subscription lands pre-chain in
   the consumer and has nowhere to put a delay, which is why it is refused when
@@ -2465,12 +2281,12 @@ with a commit loads and plays the render it played then.
   key inputs are still absent.
 - The ML-P8 has a device output stage: Volume and Pan, before the channel
   strip's own. They exist to be the base its per-voice `VcaLevel` and `Pan`
-  modulation destinations offset from, which resolved from hardcoded unity and
-  centre before them -- so a Velocity route on Pan now swings around wherever
-  the patch put the device, and Spread widens around that rather than around
-  the middle. Volume is one-pole smoothed over 5 ms like the device's other
-  levels, so modulating it (a kick-gated envelope pumping a pad) or dragging
-  it glides instead of stepping once per 32-frame control tick (MOO-214).
+  modulation destinations offset from, so a Velocity route on Pan swings
+  around wherever the patch put the device, and Spread widens around that
+  rather than around the middle. Volume is one-pole smoothed over 5 ms like
+  the device's other levels, so modulating it (a kick-gated envelope pumping
+  a pad) or dragging it glides instead of stepping once per 32-frame control
+  tick.
 - The ML-P8 allocates its eight physical voices as *groups*. Unison at 1x, 2x,
   4x and 8x spends the pool rather than growing it, leaving 8, 4, 2 and 1 notes
   of polyphony; a note allocates a complete group and steals complete older
@@ -2487,7 +2303,7 @@ with a commit loads and plays the render it played then.
   four fixed policies (OFF, I, II, Ensemble) reuses the rack's modulation
   effect over ML-P8's own scratch buses, never the channel's; OFF is a true
   bypass and a mode change crosses through a silent wet rather than stepping.
-  A unison group shares one note's level between its members (MOO-244):
+  A unison group shares one note's level between its members:
   each plays at `N^-(1/2 + c/2)`, where the coherence `c` falls from 1 for
   identical members to 0 as Detune and Drift pull them apart. A held note at
   any Unison count stays within a couple of decibels of 1x, and within
@@ -2510,14 +2326,11 @@ with a commit loads and plays the render it played then.
   and has no channel rack to re-scope. Seven of the eight run at Unison 1x
   with the chorus off, and five leave Drift at 0: the bank's job is to show
   that the *network* reaches eight sounds, so a patch that needed a duplicator
-  to be interesting would not have proved it, and a test asserts the counts
-  rather than a comment claiming them. Init Saw is the device default
+  to be interesting would not have proved it. Init Saw is the device default
   unchanged, because the gain contract is calibrated against exactly that
   signal. Those are the same patches the DSP acceptance test plays, so what
-  ships is what is checked. Adam played it on 2026-09-05 and it raised no
-  range corrections; the bar it is held to is the one he set closing DS-01's
-  bank -- enough to prove the architecture reaches its range from the
-  controls, not a curated bank.
+  ships is what is checked. The bar it is held to is Adam's: enough to prove
+  the architecture reaches its range from the controls, not a curated bank.
 - Clip automation is per (pattern, channel), lives in the clip that drew it,
   and may address a bus. Two clips automating one destination is not
   prevented; the lowest channel wins at render time.
@@ -2531,70 +2344,64 @@ with a commit loads and plays the render it played then.
   not a command: the playhead moves out from under a lane on its own, and the
   destination latches until something touches it. That one is in
   `docs/LOOSE_ENDS.md`.
-- **The mixer is latency compensated.** Every device declares the frames it
-  adds, the bus tree compiles into a per-producer delay, and each channel and
-  bus waits by the difference before it sums — so two channels hitting on the
-  same tick land in the same frame even when one carries an oversampled device
-  and the other does not. Only Drive costs anything today (fifteen frames), so
-  the audible effect is small; what it removes is the comb filtering that was
-  worst exactly when two channels were most alike, and what it unblocked is
-  parallel sends — now built, and compensated per edge rather than per producer,
-  because a track with a send reaches two summing points that owe it different
-  delays — and sidechains, which are untrustworthy without it and are still
-  absent.
+- **The mixer is latency compensated**, for every device, native or hosted.
+  Every device declares the frames it adds (`AudioNode` reports integer
+  processing latency and `EffectKind` declares it without being built), the
+  bus tree compiles into a per-producer delay, and each channel and bus waits
+  by the difference before it sums — so two channels hitting on the same tick
+  land in the same frame even when one carries an oversampled device and the
+  other does not. What it removes is the comb filtering that was worst
+  exactly when two channels were most alike. The drive costs the measured 15
+  frames of its complete 2x interpolate/decimate path, and it also delays its
+  internal dry path by the same amount so its own wet/dry control cannot mix
+  time-misaligned signals; the Limiter's 96 frames are under the dynamics
+  entry above. Sends are compensated per edge rather than per producer
+  (above). Sidechains, which are untrustworthy without compensation,
+  are still absent.
   Bypass keeps its device's latency — a bypassed node's signal goes through
   the same delay rather than past it — so A/B-ing an effect A/Bs the effect
-  and not the timing. Removing the device is what gives the latency back. The
-  plan is derived from the project rather than tracked alongside it, so no
-  edit path can forget to update it, and an offline render compiles the same
-  plan as a live one.
+  and not the timing. Removing the device is what gives the latency back. A
+  hosted plugin's latency is its own, read once it is active: the
+  compensation plan asks the plugin for it, live and in an export. A plugin
+  *inside a container* sizes the container too: a Chain's dry copy waits for
+  it and a Layer's other branches are held back to meet it, resent whenever
+  the plugin reports a latency, so a latent plugin in a container sums as one
+  copy rather than combing against an early one. A resend at the same length
+  keeps the ring that is playing, so it is silent; a real change of latency
+  jumps, as any latency change does. The plan is derived from the project
+  rather than tracked alongside it, so no edit path can forget to update it,
+  and an offline render compiles the same plan as a live one.
 - **A channel** feeds exactly one track and cannot author a send of its own.
   The engine's sends are strip-level and a channel's compiles correctly, but
   nothing authors one, because the mixer draws no channel strips for the control
   to live on — that and the tap points below pre-fader are stage 2 of the send
   work. A send has a level and a tap, and no pan and no wet/dry split of its
-  own. There are no sidechains, external inputs, or per-track stem export.
-- Latency compensation covers every device, native or hosted. `AudioNode`
-  reports integer processing latency and `EffectKind` declares it without
-  being built; the drive is the only kind that costs anything, at the measured
-  15 frames of its complete 2x interpolate/decimate path, and it also delays
-  its internal dry path by the same amount so its own wet/dry control cannot
-  mix time-misaligned signals. Channels with unequal effect latency no longer
-  comb-filter when they meet at a bus -- see the mixer entry above. A hosted
-  plugin's latency is its own, read once it is active: the compensation plan
-  asks the plugin for it, live and in an export (MOO-81). A plugin *inside a
-  container* sizes the container too (MOO-212): a Chain's dry copy waits for
-  it and a Layer's other branches are held back to meet it, resent whenever
-  the plugin reports a latency, so a latent plugin in a container sums as one
-  copy rather than combing against an early one. A resend at the same length
-  keeps the ring that is playing, so it is silent; a real change of latency
-  jumps, as any latency change does.
-- **A CLAP effect goes in a chain from the window** (MOO-83,
-  plugin-hosting 08). The join's menu ends in **Plugin…**, which opens the
-  browser's third tab, **PLUGINS**, aimed at that join. The tab lists what
-  the scanner found (`<config>/plugins.toml`, re-read whenever the tab is
-  opened, which is how a scan that finished after startup shows up), one row
-  per plugin with its vendor, filtered like the presets by name, vendor or
-  what the row says. A plugin that cannot go in a chain is greyed with the
-  reason: an effect whose ports are not one input and one output of one or
-  two channels, or one the factory could not create; so is each
-  file that failed to scan, with why. **Preferences > Plugins' "Hide
-  plugins mooloop can't use yet"** (off by default, saved) leaves out the
-  plugins refused as *unsupported* -- they loaded, but a main port is not
-  one or two channels, an instrument takes no notes, or it is the other
-  role's -- and never one that *failed*: a plugin that could not be created
-  and a file that failed to scan stay listed, greyed with the reason, so a
-  plugin that breaks after an update never quietly disappears (MOO-298).
+  own. There are no sidechains or external inputs.
+- **A CLAP effect goes in a chain from the window.** The join's menu ends in
+  **Plugin…**, which opens the browser's third tab, **PLUGINS**, aimed at
+  that join. The tab lists what the scanner found (`<config>/plugins.toml`,
+  re-read whenever the tab is opened, which is how a scan that finished after
+  startup shows up), one row per plugin with its vendor, filtered like the
+  presets by name, vendor or what the row says. A plugin that cannot go in a
+  chain is greyed with the reason: an effect whose ports are not one input
+  and one output of one or two channels, or one the factory could not
+  create; so is each file that failed to scan, with why. **Preferences >
+  Plugins' "Hide plugins mooloop can't use yet"** (off by default, saved)
+  leaves out the plugins refused as *unsupported* -- they loaded, but a main
+  port is not one or two channels, an instrument takes no notes, or it is the
+  other role's -- and never one that *failed*: a plugin that could not be
+  created and a file that failed to scan stay listed, greyed with the reason,
+  so a plugin that breaks after an update never quietly disappears.
   A double-click, Enter or a drop puts
   the plugin in the chain: a drop before the join it lands on, otherwise
   before the join the menu was opened from, otherwise after the selected
   device (and the run a selected container holds), otherwise at the end.
   Adding it is one undo step ("Plugin added"). An instrument goes on a new
   channel instead (below).
-- **A plugin with no GUI has a face** (MOO-83): its parameters, in the
+- **A plugin with no GUI has a face**: its parameters, in the
   plugin's order and under its own names, as the knobs every native device
   uses, with the plugin's own text for each value ("7.2 dB"). **The face
-  shows the pinned parameters** (MOO-229): the first eight the plugin does
+  shows the pinned parameters**: the first eight the plugin does
   not hide until something is pinned, one unit wide while they fit three
   across and two rows, two units beyond that, with `<` `>` between pages.
   **The rest are in the sidebar**: with a plugin device selected, the
@@ -2616,25 +2423,23 @@ with a commit loads and plays the render it played then.
   however long the drag paused. A **missing** plugin keeps its face, drawn
   from the parameter list the song remembers, greyed, with a badge saying it
   is missing and plays dry; a plugin that failed says why. **A plugin knob
-  is a destination like a native one** (MOO-228): with a modulator armed it
+  is a destination like a native one**: with a modulator armed it
   authors a route on the plugin's own parameter and draws the ring, the
   offset and the route dots, and its context menu names it for a lane or a
-  MIDI mapping. **MIDI learn on a plugin knob works** (MOO-315): the
+  MIDI mapping. **MIDI learn on a plugin knob works**: the
   mapping list names the parameter ("Drums · Test Gain 1 · Gain") and the
-  control moves it, picking it up from the plugin's current value. Before,
-  the mapping read "Unavailable parameter" and moved nothing. A sweep of
-  such a control is one undo step, the plugin's own "Plugin Edit"; before
-  MOO-318 an empty "Controller move" step sat under it, so the first undo
-  did nothing. The lane picker lists a plugin instrument's parameters at
+  control moves it, picking it up from the plugin's current value. A sweep of
+  such a control is one undo step, the plugin's own "Plugin Edit". The lane
+  picker lists a plugin instrument's parameters at
   the head, under the plugin's name ("Test Sine"), before the inserts, and
   each plugin effect's after the native inserts and before the strip,
   under its name and chain place ("Test Gain 1"). The shelf
   names a route on one the same way. **A parameter the plugin
-  stops listing is kept** (Adam, MOO-74): its lane stays in the picker,
+  stops listing is kept** (Adam's ruling): its lane stays in the picker,
   titled thin and italic by its id ("Parameter 4000000000"), the lane and
   its shelf row draw greyed, and it plays nothing; when the plugin lists the
   id again they read normally, with nothing to repair. **A plugin
-  channel's source has the same face** (MOO-304, MOO-316), in the source's
+  channel's source has the same face**, in the source's
   place at the head of the chain, under a SOURCE header named after the
   plugin, one or two units wide as the face would be on a chain: its pinned
   parameters as knobs, the open-window button when the plugin has a GUI,
@@ -2643,7 +2448,7 @@ with a commit loads and plays the render it played then.
   ("Pin Parameter", saved with the song). Its knobs set the instrument's
   parameters, arm routes, MIDI-learn and name themselves for a lane or a
   mapping, all as `PluginParam` on the channel's source device.
-- **A plugin device saves and loads presets** (MOO-222) from its rail, like
+- **A plugin device saves and loads presets** from its rail, like
   any device. A preset keeps which plugin it is and the state the plugin
   holds at that moment, including a knob just turned in its own window. It
   is kept under `presets/effects/plugin/<vendor>/<id>/`, and a plugin
@@ -2652,7 +2457,7 @@ with a commit loads and plays the render it played then.
   the device keeps its lanes and routes. It is one undo step ("Effect preset
   loaded"). A 0.1.5 build refuses these presets. Not yet: plugin presets in
   the browser's PRESETS tab, and the plugin's own CLAP factory presets.
-- **A CLAP effect plays in a chain** (MOO-81, plugin-hosting 06). Besides
+- **A CLAP effect plays in a chain.** Besides
   the window (above), a plugin reaches a song from a song that already
   names it: a `plugin` effect device whose slot is in the song's `plugins`
   table (`PROJECT_FORMAT.md`, "Hosted plugins"), opened from disk or the
@@ -2663,12 +2468,12 @@ with a commit loads and plays the render it played then.
   saved state and activates it at the engine's rate. On the next pump tick it
   swaps the plugin's processor into the device, which played as a
   pass-through until then. A plugin with one input and one output, each
-  mono or stereo, is hosted. As of 2026-09-26 (MOO-266) a **mono effect
+  mono or stereo, is hosted. A **mono effect
   runs**, like a TRS cable into a TS jack, with no setting: a mono input
   hears the chain as `(L + R) / 2`, so a centred signal passes at unity and
   a hard-panned one comes through 6 dB down, and a mono output is copied to
-  both sides. The dry path and wet/dry stay stereo. As of 2026-09-28
-  (MOO-306) a plugin with **extra ports** is hosted as well, as long as its
+  both sides. The dry path and wet/dry stay stereo. A plugin with **extra
+  ports** is hosted as well, as long as its
   main input and main output are mono or stereo. Those are the ports it
   flags as main, wherever they sit. A sidechain or any other extra input
   hears silence, and an extra output (Surge XT's scenes, say) is thrown
@@ -2681,8 +2486,8 @@ with a commit loads and plays the render it played then.
   its parameters included. It is tried again when a scan finds new plugins.
   A structural edit (paste, move, delete, undo) keeps a hosted plugin
   running, state and all. A new sample rate, or a restart the plugin asks
-  for, rebuilds its processor. **The rebuild fades rather than clicks**
-  (MOO-213). The plugin fades out to the dry signal over about 35 ms, the
+  for, rebuilds its processor. **The rebuild fades rather than clicks.**
+  The plugin fades out to the dry signal over about 35 ms, the
   device plays dry, still as late as the plugin was, while the new
   processor is built, and then the plugin fades back in. A missing plugin
   that turns up fades in the same way, unless it reports latency: then the
@@ -2690,8 +2495,8 @@ with a commit loads and plays the render it played then.
   latency change. On quit, mooloop waits up to two seconds for
   every plugin's processor to come back from the audio thread before it
   destroys the plugin, and any GUI it has open is destroyed first.
-- **A plugin with a GUI of its own opens it from its face** (MOO-302,
-  plugin-hosting 11). The face's foot has an open-window button, drawn only
+- **A plugin with a GUI of its own opens it from its face.** The face's foot
+  has an open-window button, drawn only
   for a running plugin that has a GUI; pressed, the plugin's GUI opens in a
   bare X11 window of mooloop's (XWayland under Wayland), titled with the
   plugin's and the track's names, sized as the plugin asks and scaled as the
@@ -2707,24 +2512,19 @@ with a commit loads and plays the render it played then.
   refuses) is said in the face's badge, and the face stays. Every pump tick
   services each plugin's timers and fds, which is what a Linux plugin GUI
   runs on. A plugin channel's instrument opens its GUI the same way, from
-  the open-window button on its source face (MOO-304).
+  the open-window button on its source face.
   **On macOS** the window is a panel of mooloop's own that the plugin's
   Cocoa GUI is placed in, titled the same way, sized in points as the
   plugin asks; it floats above mooloop's windows and hides while mooloop is
   not the active application, so mooloop never hides it itself; its close
-  button closes the GUI as on Linux (MOO-480, MOO-481). Adam checked it on
-  a Mac with Surge XT FX on 2026-10-02 (MOO-490). **A knob turned in the GUI
+  button closes the GUI as on Linux. **A knob turned in the GUI
   moves the face's, and the face's moves the GUI's, while the plugin is not
   processing** -- asleep in silence, bypassed, on a muted channel, an
-  instrument muted or idle (MOO-498, 2026-10-01): the engine flushes such
+  instrument muted or idle: the engine flushes such
   a plugin (CLAP's `params.flush`, on the audio thread) the block it has a
-  face edit waiting or asks for one (`request_flush`). Before, neither
-  side followed the other until audio ran through the plugin.
-- **A hosted plugin's parameters take lanes and routes** (MOO-82,
-  plugin-hosting 07). The face's knobs set them (above), but a lane or route
-  reaches a plugin parameter only from a song that names one, or through the
-  session (MOO-228 draws it on the face)
-  (`crates/mooloop-session/examples/clap_automation_case.rs`). A lane sets
+  face edit waiting or asks for one (`request_flush`).
+- **A hosted plugin's parameters take lanes and routes.** The face's knobs
+  author them (above). A lane sets
   the parameter at every 32-frame control tick, in an export and live alike;
   a route is an offset over the plugin's own value (CLAP's parameter
   modulation), gone when the route goes. Only a parameter the plugin marks
@@ -2733,37 +2533,34 @@ with a commit loads and plays the render it played then.
   longer lists is kept and drives nothing. **Save asks every plugin for its
   state.** A change the plugin makes itself -- a gesture, values it moves, a
   `mark_dirty` -- is read off it, never sent back, and is one undo step
-  ("Plugin Edit"), so undoing an earlier edit no longer reopens the plugin
+  ("Plugin Edit"), so undoing an earlier edit does not reopen the plugin
   without it. A saved state the plugin refuses opens it with its defaults,
   and the song keeps the refused state unchanged.
-- **A channel's instrument can be a hosted plugin** (MOO-84, plugin-hosting
-  09). From the window: the channel rack's `+` menu ends in **Add Plugin…**,
+- **A channel's instrument can be a hosted plugin.** From the window: the
+  channel rack's `+` menu ends in **Add Plugin…**,
   which opens the browser's PLUGINS tab, and a double-click or Enter on an
-  instrument there (listed as "Instrument (no notes yet)") adds a new
-  channel, named after the plugin and selected, whose source is that plugin,
-  as one undo step ("Plugin channel added", MOO-83). A plugin channel also
-  comes from a song file that names one (`source.type = "plugin"`,
-  `PROJECT_FORMAT.md`), or from the session call
-  `Session::set_plugin_source(channel, plugin)`. **Today the host opens only
-  a plugin with one stereo input and one stereo output**, as for an effect,
-  so an instrument with no audio input is refused and its channel says why
-  in the status bar; which layouts a source takes is step 10's. The channel is silent until the plugin opens, and
-  stays silent, keeping its slot and state, while the plugin is missing. It is
+  instrument there adds a new channel, named after the plugin and selected,
+  whose source is that plugin, as one undo step ("Plugin channel added"). A
+  plugin channel also comes from a song file that names one
+  (`source.type = "plugin"`, `PROJECT_FORMAT.md`), or from the session call
+  `Session::set_plugin_source(channel, plugin)`. The channel is silent until
+  the plugin opens, and stays silent, keeping its slot and state, while the
+  plugin is missing. It is
   in an export, it survives an edit that keeps the channel, and a restart or a
   new sample rate pulls the plugin out and puts the next processor back.
-  **That swap fades rather than clicks** (MOO-230): the instrument fades to
+  **That swap fades rather than clicks**: the instrument fades to
   silence over about 35 ms before its processor leaves, and the next one
   fades in. The notes it was holding end with the fade and are not struck
   again on the new processor; the next note-on plays as usual. A plugin
-  channel's editor shows the plugin's face (MOO-304, MOO-316; see the
+  channel's editor shows the plugin's face (see the
   plugin face above), with knobs to turn, route and MIDI-learn from; its
   number is 8, after the eight native kinds, and "Add Plugin…" is its own
   row, not one of the eight. Not yet: the plugin's own latency is not
   compensated. Replacing a plugin instrument forgets the
   lanes and routes on its parameters, as deleting an effect does; undo brings
   them back.
-- **A CLAP instrument plays its channel's notes** (MOO-85, plugin-hosting
-  10), from the pattern, a keyboard or an audition, each at its own frame,
+- **A CLAP instrument plays its channel's notes**, from the pattern, a
+  keyboard or an audition, each at its own frame,
   live and in an export alike. Where a plugin may go is its own word: one
   that declares itself an instrument (or declares neither and takes notes)
   can be a channel's source if it has a note input and one output of one or
@@ -2776,7 +2573,7 @@ with a commit loads and plays the render it played then.
   plays of its own are counted, not routed. Plugins that take only MIDI get
   MIDI note messages. The plugin browser marks what will open where from the
   same rule.
-- **Plugins are found at startup** (MOO-80). At startup, on a thread of
+- **Plugins are found at startup.** At startup, on a thread of
   its own, mooloop looks for CLAP plugins in `~/.clap`, `/usr/lib/clap`,
   `/usr/lib64/clap`, `/usr/local/lib/clap` (inside a Flatpak also
   `/app/extensions/Plugins/clap`; on macOS the two
@@ -2789,19 +2586,19 @@ with a commit loads and plays the render it played then.
   kept in `<config>/plugins.toml`; an unchanged file is never scanned again,
   failed or not. `scan-on-startup = false` turns the startup scan off.
   `run-under-xwayland = true` (off by default; Preferences > Plugins' "Run
-  under XWayland (full plugin window behaviour)", MOO-302) runs the whole
+  under XWayland (full plugin window behaviour)") runs the whole
   application on X11 through XWayland under a Wayland session, from the next
   start, so plugin windows are kept above the main window; with no X server
-  it stays on Wayland and logs why (MOO-301). Under it the window is drawn
+  it stays on Wayland and logs why. Under it the window is drawn
   at the scale `WINIT_X11_SCALE_FACTOR` names, else the X server's
   `Xft.dpi`, else a whole `GDK_SCALE`, else 1 -- never one worked out from
-  the screen's reported millimetres, which drew it 1.5 times too large on a
-  ~144 dpi laptop panel (MOO-343). The log says which. On macOS the setting
-  does nothing: mooloop always runs on AppKit there (MOO-480), and
-  Preferences > Plugins does not show it (MOO-481).
+  the screen's reported millimetres, which draws it too large on a high-dpi
+  laptop panel. The log says which. On macOS the setting
+  does nothing: mooloop always runs on AppKit there, and
+  Preferences > Plugins does not show it.
   The log
   says what the scan found. A song's plugins are found through it, and the
-  browser's PLUGINS tab lists it (above). **Preferences > Plugins** (MOO-229)
+  browser's PLUGINS tab lists it (above). **Preferences > Plugins**
   shows the standard folders, the added ones (Add Folder…, and a × to
   remove one), the timeout, the startup switch, the hide switch with how
   many plugins it hides (or shows greyed), and under FAILED TO LOAD every
@@ -2822,10 +2619,9 @@ with a commit loads and plays the render it played then.
   its own, and the Buffer insert's rolling ring. Neither writes a channel's own output back
   into a project asset: there is still no capture-to-sample gesture.
 - The render graph is independent of the audio driver and supports finite
-  offline passes at the engine's sample rate, for WAV and MP3 alike; MP3 goes
-  through an in-process LAME encoder, which converts a render above 48 kHz
-  to a rate MP3 has. Stem/bus export and realtime-vs-offline null testing
-  are not implemented.
+  offline passes at the engine's sample rate (export, under Implemented User
+  Surface); MP3 goes through an in-process LAME encoder. Realtime-vs-offline
+  null testing is not implemented.
 - Replaced sample lifetimes need a deliberate deferred-reclamation design so
   the last large sample allocation can never be freed on the realtime thread.
 
@@ -2833,35 +2629,24 @@ with a commit loads and plays the render it played then.
 
 - The application is usable but still has interaction and responsive-layout
   edge cases.
-- **A control keeps following its parameter after you have touched it**
-  (MOO-220, 2026-09-24). Before, the first drag, wheel step or reset on a
-  knob, fader, toggle, segmented bank or stepper cut it loose from the value
-  it showed: picking another EQ band left Freq, Gain and Q on the band just
-  left, and undo, a preset load, a MIDI-mapped controller or automation moved
-  the sound but not a touched control on any insert face, the source output
-  trims, the sidebar's volume and pan, the mixer's faders and sends, the
-  modulation shelf, or the pattern and snap fields. Every shared control now
-  reports its change and draws what the document says; a knob's typed field
-  (`KnobField`, `KnobStack`) shows the live value whenever it is not being
-  typed into.
-- **A shortcut fires from wherever focus happens to be.** Fixed 2026-09-07;
-  the entry that stood here described the defect and got its cause wrong, so
-  it is worth recording what the cause actually was. Slint delivers a key to
-  the focused item and then walks *parent* items towards the window, and the
-  root `FocusScope` was a **sibling** of the layout holding the UI rather than
-  its ancestor — so it only ever received a key while it personally held
-  focus, which is why clicking a neutral background was what made shortcuts
-  start working. The scope now surrounds the UI, with `focus-on-click: false`
-  so it does not swallow the presses that reach the controls inside it.
-  Separately, `ToolButton` used to accept Space, and `ToggleButton`,
-  `SegmentedControl`, the pane tabs and every mute button are built from it,
-  so clicking any of them left a caret that re-fired that button instead of
-  starting the transport. Space is the transport; Enter activates a focused
-  button.
+- **A control keeps following its parameter after you have touched it.**
+  Every shared control -- knob, fader, toggle, segmented bank or stepper --
+  reports its change and draws what the document says, so picking another EQ
+  band moves Freq, Gain and Q to that band, and undo, a preset load, a
+  MIDI-mapped controller or automation moves a touched control along with the
+  sound: on any insert face, the source output trims, the sidebar's volume
+  and pan, the mixer's faders and sends, the modulation shelf, and the
+  pattern and snap fields. A knob's typed field (`KnobField`, `KnobStack`)
+  shows the live value whenever it is not being typed into.
+- **A shortcut fires from wherever focus happens to be.** The root
+  `FocusScope` surrounds the UI, with `focus-on-click: false` so it does not
+  swallow the presses that reach the controls inside it. `ToolButton` does
+  not accept Space, so clicking a toggle, a segmented control, a pane tab or
+  a mute button leaves no caret that re-fires it instead of starting the
+  transport. Space is the transport; Enter activates a focused button.
 - **A contextual chord resolves against the focused surface.** Ctrl+C/X/V
   mean the notes on the roll, the selected device in the rack, and the
-  channel everywhere else — the fallback they meant unconditionally before
-  there was a second clipboard. The four arrow keys are the same mechanism:
+  channel everywhere else. The four arrow keys are the same mechanism:
   nudge or transpose on the roll, walk the tree in the browser, pick a
   channel otherwise. Which surface is focused is the roll whenever it is on
   screen with a selection, and otherwise wherever the last click landed;
@@ -2879,11 +2664,10 @@ with a commit loads and plays the render it played then.
   must not install a device per keypress. An inspection decodes on a worker
   thread and several are in flight whenever the keys outrun a decode, so a
   reply about a sample the selection has already left is dropped rather than
-  landing on the pane and in the speakers over the row that replaced it. It has no
-  `FocusScope` of its own and deliberately does not get one — a nested scope
-  swallows the pointer press that focuses it, which is the
-  two-clicks-per-control bug `tests/first_click.rs` exists for. The root
-  scope already hears every key; what was missing was somewhere to aim them.
+  landing on the pane and in the speakers over the row that replaced it. It
+  has no `FocusScope` of its own and deliberately does not get one — a nested
+  scope swallows the pointer press that focuses it, which is the
+  two-clicks-per-control bug `tests/first_click.rs` exists for.
 - Keyboard note *selection* still does not exist: the arrow keys move an
   existing selection but cannot build one, which stays open in
   `ENHANCEMENTS.md`.
@@ -2905,9 +2689,8 @@ with a commit loads and plays the render it played then.
   only means "a clip is here" and a coloured clip still says that. A clip's
   number is drawn in black or white by the colour's luminance, so a label is
   readable on every colour that can be picked.
-- One automation lane is visible at a time. Its picker reaches the selected
-  channel's generator and every parameter of every effect on that channel and
-  on every bus, but several lanes cannot be shown at once, the velocity lane
+- One automation lane is visible at a time (its picker is described under
+  the piano roll, above): several lanes cannot be shown at once, the velocity lane
   is a separate fixed lane rather than one entry in that list, and a pattern
   holds at most eight lanes per channel.
 - A rack device can be selected, copied, cut, pasted and duplicated. The
@@ -2925,21 +2708,19 @@ with a commit loads and plays the render it played then.
   meant. Duplicate is on every rack row's left rail; all four are on
   Ctrl+Shift+C/X/V/D, and all but copy are undoable.
   **A copied, pasted or duplicated plugin device is a second instance of
-  its plugin** (MOO-271), in a slot of its own, opened with the copied
+  its plugin**, in a slot of its own, opened with the copied
   plugin's state: a duplicate takes the state the plugin holds now, a copy
   the state its last finished edit left in the song. It lands the same way
-  in another song. Before, the copy named the original's slot, so two
-  devices shared one plugin, or a paste into another song ran whatever that
-  song had under the same number. A container copied with a plugin inside
+  in another song. A container copied with a plugin inside
   carries it the same way. **A container preset carries the plugins inside
-  it** (MOO-321), with the state each held when it was saved, and loads them
+  it**, with the state each held when it was saved, and loads them
   into slots of their own; 0.1.5 refuses such a preset. One saved before
   that, holding a plugin, is refused rather than landing on whatever the
   target song had at the plugin's old slot number.
-  **A pasted or cloned channel runs its own instances of its plugins**
-  (MOO-317, MOO-331): its instrument and every plugin on its chain, inside
+  **A pasted or cloned channel runs its own instances of its plugins**:
+  its instrument and every plugin on its chain, inside
   containers too, each in a slot of its own, with the state the plugin held
-  when the channel was copied (MOO-332).
+  when the channel was copied.
   **Pasting or cloning a channel stops nothing**: every other channel keeps
   its sounding notes, tails and modulators, and the pasted one arrives with
   its notes, lanes, chain and modulation as an opened song would have it.
@@ -2986,37 +2767,8 @@ with a commit loads and plays the render it played then.
   every place the pump does, and its expected answer is zero. Project-level
   navigation remains limited.
 
-## Architecture Risks To Resolve Early
-
-1. Add probability and explicit microtiming controls without weakening the
-   tick-addressed event contract before broad automation.
-2. ~~Extend `docs/AUDIO_ARCHITECTURE.md`'s compiled plan from the current
-   one-destination bus tree to typed audio~~ — done 2026-09-05. The audio
-   edge exists: `compile_audio_graph` orders producers before consumers,
-   refuses rings, and hands out the tap indices, and a device is given its
-   auxiliary outputs for the duration of one process call rather than
-   retaining them. **Dependency edges are still missing**, and they are what
-   a sidechain needs: a signal that schedules a producer without being summed
-   into the consumer. The processing view is half built for the same reason —
-   a *generator* takes an auxiliary input today (that is what Aux In is);
-   an effect does not, and topology alone will not give it one.
-3. Budget channel buffer memory and specify read/write collision behavior
-   before buffers become part of every strip.
-4. Add deferred reclamation for replaced samples, graphs, and future buffers.
-
 ## Full Integration Verification
 
-These commands are the release/integration suite, not the default checklist
-for every change. Routine work should use the narrowest package, test target,
-or snapshot that covers the behavior, as specified in `AGENTS.md`. Run these
-commands sequentially when full integration coverage is warranted.
-
-```sh
-cargo test --workspace -j 2
-cargo clippy --workspace --all-targets -j 2 -- -D warnings
-cargo run -p mooloop-app --bin engine-selftest -j 2
-MOOLOOP_AUTODRIVE=1 cargo run -p mooloop-app --bin mooloop -j 2
-```
-
-The `-j 2` cap is not optional on Adam's workstation, and neither is the
-capped `[profile.dev]` debug info these rely on; see `AGENTS.md` for why.
+The release/integration suite is in `docs/OPERATIONS.md`, "All Tests And
+Release Verification"; routine work uses the narrowest check `AGENTS.md`
+specifies.
