@@ -182,7 +182,7 @@ that affect the decision at hand.
 | Which plans are live, and what state each is in | The projects in Linear; `docs/plans/README.md` lists them |
 | Whether a defect is already known, or what is waiting on Adam | Linear: search the `MOO` team, and the `Question` and `Answer` labels |
 | A change that alters a sound or a look only Adam can judge | `docs/LISTENING.md` |
-| Broad existing user surface or known gap | `docs/CURRENT.md` |
+| Broad existing user surface or known gap | `docs/CURRENT.md`, then the one area file in `docs/current/` it points to |
 | A small known gap you are about to rediscover | Linear first, then `docs/LOOSE_ENDS.md` for the gaps recorded before it |
 | Which team owns a file, a finding, or a Linear issue | `docs/TEAMS.md` |
 | A value stated in both Rust and `.slint`, or a run at the duplication fault | `docs/workflows/rust-slint-boundary/` |
@@ -288,10 +288,11 @@ audit every plain integer it accepts for this kind of lost semantic type.
 
 ## Documentation is part of the change
 
-`docs/CURRENT.md` describes the application as it exists. A change that adds,
-removes, or alters user-visible behaviour updates it in the same commit; so
-does a change that invalidates a fact stated in any other document. Leaving
-a document to be corrected later is how it stops being trusted.
+`docs/CURRENT.md` and its area files in `docs/current/` describe the
+application as it exists. A change that adds, removes, or alters user-visible
+behaviour updates the area's file in the same commit; so does a change that
+invalidates a fact stated in any other document. Leaving a document to be
+corrected later is how it stops being trusted.
 
 **A working document says what is true now.** When a change makes a passage
 untrue, rewrite or delete it; do not append a dated paragraph after it. How

@@ -13,7 +13,7 @@ meant to fit on a screen, and each is meant to be wrong in a way somebody can
 spot.
 
 The detailed audio-core contract stays in `AUDIO_ARCHITECTURE.md`; the mixer
-and device details stay in `CURRENT.md`.
+and device details stay in `current/mixer.md` and `current/devices.md`.
 
 ## The Crates
 
@@ -183,7 +183,7 @@ flowchart TB
 - A channel's generator is one of eight: the sampler, the drum synth, DS-01,
   the v1 mono synth, ML-M1, ML-P8, the v1 poly synth, or Aux In — whose sound
   is another channel's published audio outlet. Every strip preallocates every
-  one of them and switches without allocating in the callback. `CURRENT.md`
+  one of them and switches without allocating in the callback. `current/devices.md`
   describes what each is.
 - **Nothing sorts a graph on the audio thread.** Channels render in a compiled
   order and tracks in a compiled schedule, both produced off the thread — the

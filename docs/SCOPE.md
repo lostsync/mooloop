@@ -84,7 +84,7 @@ feel special. We have the measurements to do it (and to show that they're not
 the same as the channel comps)."*
 
 Built 2026-09-23 (`plans/archive/master-bus-compressor/`, MOO-13);
-`docs/CURRENT.md` has what it does. What the scoping settled:
+`docs/current/mixer.md` has what it does. What the scoping settled:
 
 - **Its own laws, not new values.** The reference run
   (`spikes/preamp-measure/RESULTS.md` §4) splits exactly on the axis that
@@ -108,7 +108,7 @@ Built 2026-09-23 (`plans/archive/master-bus-compressor/`, MOO-13);
 ### 2.2 Item 14 — sampler key zones
 
 Built 2026-09-25 (MOO-14): key ranges and roots per zone, a minimal ZONES
-page, the format and the export. `docs/CURRENT.md` has what it does.
+page, the format and the export. `docs/current/sampler.md` has what it does.
 
 Adam, 2026-09-14: *"sampler v2… a lot of that is done. I would say we should
 at least get key zones, if not layers."* **Velocity layers are the "if not

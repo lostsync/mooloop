@@ -884,10 +884,10 @@ fn prepare_song_reference(
     // the user has chosen, which is a gesture that does not exist;
     // `docs/LOOSE_ENDS.md` carries it. Before the warning, unticking "Embed
     // assets" and saving produced no warning, no status message and no
-    // change, so `CURRENT.md`'s "embedded and referenced asset policies are
-    // available per save" was true only of a song that had never been
-    // embedded. A warning rather than a refusal, because the save itself is
-    // correct and the rest of the document does follow the mode.
+    // change, so `docs/current/files.md`'s "embedded and referenced asset
+    // policies are available per save" was true only of a song that had never
+    // been embedded. A warning rather than a refusal, because the save itself
+    // is correct and the rest of the document does follow the mode.
     //
     // **And a sample the song owns but has not stored yet is embedded too.**
     // `embedded` means *owned by the song*. A recorded take is owned from the

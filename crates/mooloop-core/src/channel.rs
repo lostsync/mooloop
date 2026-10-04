@@ -291,9 +291,9 @@ fn is_unsoloed(solo: &bool) -> bool {
 /// a channel is a source, so the only honest reading is that soloing one
 /// silences the rest. The one edge that looks like a counter-example is an
 /// Aux In reading another channel's published outlet, and it is not one -- a
-/// producer publishes whether or not it is heard (`docs/CURRENT.md`, "A muted
-/// producer publishes too"), so silencing a source does not take its outlet
-/// away from whoever is reading it.
+/// producer publishes whether or not it is heard (`docs/current/devices.md`,
+/// "A muted producer publishes too"), so silencing a source does not take its
+/// outlet away from whoever is reading it.
 ///
 /// Answers only for the `count` channels the caller has; a seat past the end
 /// of the bank is not soloed and is not silenced either.

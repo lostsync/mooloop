@@ -34,7 +34,8 @@ every other effect, capturing whatever reaches its position in the chain.
   only while it moves, addressing the ring directly, so its own speed is the
   playback rate; `Span` narrows what it addresses. Frozen and otherwise idle,
   the ring plays as a loop. `Quantize` and `Quant Start` delay presses and
-  freezes to the grid, never releases. `CURRENT.md` has the whole behaviour.
+  freezes to the grid, never releases. `current/devices.md`, *The Buffer*, has the
+  whole behaviour.
 
   It replaced the turntable this document specified, where `Position` aimed a
   chase, `Rate` supplied free-run speed, `Length`/`Loop` drew a window, and an
@@ -63,7 +64,7 @@ still wants an allocation-tracking harness.
 What has *not* happened is the part this document exists to decide. There is
 no source-to-buffer workflow, no note-mapping layer, no parameter-lock UI, no
 freeze/snapshot persistence, and no MIDI mapping actually installed (see
-`CURRENT.md`). The success test below is unrun.
+`current/devices.md`). The success test below is unrun.
 
 ## Thesis
 

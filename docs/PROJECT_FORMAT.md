@@ -361,7 +361,7 @@ keytracking, note-priority and glide fields; the ML-P8's oscillator network
 matrix, sub, noise, sync sources, two envelopes, filter, own LFO and internal
 routes, its Unison, Detune, Spread, Drift and Chorus settings, and its output
 stage's volume and pan. Neither
-shares the v1 synths' parameter ids — see `CURRENT.md` on ML-P8's separate id
+shares the v1 synths' parameter ids — see `current/devices.md` on ML-P8's separate id
 namespace — but both are ordinary `#[serde(default)]` structures, so a field
 added later reads as its default rather than failing the load.
 

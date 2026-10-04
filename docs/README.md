@@ -13,7 +13,7 @@ table of which document to read for which task. Start there, not here.
 
 | Document | Job |
 | --- | --- |
-| [CURRENT.md](CURRENT.md) | What the application actually does, and where each behaviour stops. The one to update when behaviour changes. `SCOPE.md` is the list of what is missing. |
+| [CURRENT.md](CURRENT.md) | What the application actually does, and where each behaviour stops, as an index of ten area files in [current/](current/). The one to update when behaviour changes. `SCOPE.md` is the list of what is missing. |
 | [TERMINOLOGY.md](TERMINOLOGY.md) | Channel, track, bus, send — which word means what, and why channel and track are not one word. Settled by Adam; read before naming anything in the mixer. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Crates, components, and the data crossing between them, in five small diagrams. |
 | [TEAMS.md](TEAMS.md) | The ten teams: which one owns each file, each symbol in a shared file, and each seam, and the `Team` label that carries it in Linear. |

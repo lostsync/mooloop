@@ -690,8 +690,8 @@ the extension. The interface points the recorder at
 `settings::recordings_dir()`: **`$XDG_DATA_HOME/mooloop/recordings`**
 (`~/.local/share/...`) on Linux, and beside the settings on macOS and Windows.
 `$MOOLOOP_DATA_DIR` overrides it, and a `$MOOLOOP_CONFIG_DIR` with no data
-directory keeps it inside that config directory. `docs/CURRENT.md` describes
-what happens to takes after that.
+directory keeps it inside that config directory. `docs/current/sampler.md`
+describes what happens to takes after that.
 
 ## Diagnostic Log
 
@@ -728,8 +728,8 @@ which holds an OS lock on its `lock` file while it runs and, while the song is
 unsaved, writes `song.mooloop` and `about.txt` there once a minute. A folder
 whose lock can be taken belongs to a mooloop that has ended. Deleting the
 `autosave/` folder while no mooloop runs is always safe. A song that cannot be
-saved also cannot be autosaved, and the log says why. `docs/CURRENT.md` has
-the rest of its behaviour.
+saved also cannot be autosaved, and the log says why. `docs/current/files.md`
+has the rest of its behaviour.
 
 A song that cannot be saved is written to `~/.config/mooloop/quarantine/`
 anyway, with a `.txt` beside it holding the same explanation the dialog showed.
