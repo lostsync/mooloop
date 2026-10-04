@@ -24,7 +24,7 @@ use std::sync::Arc;
 /// the eight separate fields used to give it. The writer gives `None`, and
 /// says so in the log: a write aimed at a kind the channel is not running
 /// used to land in a field nothing read, silently, and now it lands nowhere
-/// but not silently (the Buffer lesson in `AGENTS.md`, "Trace the press").
+/// but not silently.
 macro_rules! typed_generator_access {
     ($($variant:ident, $params:ty, $get:ident, $get_mut:ident;)*) => {
         $(
@@ -364,9 +364,8 @@ impl crate::session::Session {
         // stranger (`reports/fable-2026-09-21.md`, finding 7). Cleared on
         // every paste rather than only across documents, because the
         // same-song case is not sound either -- `rescope_after` renumbers
-        // routes and lanes and does not touch these (`docs/LOOSE_ENDS.md`,
-        // "A pasted channel's inputs"). The status message says so, so the
-        // pick is re-made deliberately.
+        // routes and lanes and does not touch these. The status message says
+        // so, so the pick is re-made deliberately.
         channel.setup.channel.audio_input = mooloop_core::AudioInputSource::Off;
         channel.setup.channel.midi_input = mooloop_core::midi::ChannelMidiInput::default();
         // **Every hosted plugin gets a slot of its own** -- the instrument

@@ -3,10 +3,9 @@
 //! A device's parameters are its inlets: `ParamDescriptor` says how a value
 //! maps, and `ModDestinationDescriptor` says whether modulation may reach it.
 //! This module is the other direction — the named signals a device offers to
-//! the rest of the program, per `COMPOSABLE_DEVICE_UNITS.md` ("Inlets and
-//! outlets are designed, not inferred") and `MODULATION.md`'s
-//! source table, where `Generator outlet` and `Device outlet` have been listed
-//! as planned since the spec was written.
+//! the rest of the program, per `COMPOSABLE_DEVICE_UNITS.md` (*The target
+//! model, in brief*) and the `Generator outlet` and `Device outlet` rows of
+//! `MODULATION.md`'s source table.
 //!
 //! Three rules the rest of the program depends on, and which are the reason
 //! this is a declaration rather than something inferred from a device's

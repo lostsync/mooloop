@@ -30,9 +30,9 @@
 //!
 //! # Mutations run against the tree, before the fix was called done
 //!
-//! `AGENTS.md`'s `bar-arithmetic` lesson is that a check written after its fix
-//! is shaped to report what its author already knows about. The collector half
-//! of this file (the `.slint` parsing) was written and run first, against
+//! `AGENTS.md`'s *Duplication* gives the reason: a check written after its
+//! fix is shaped by what its author already knew. The collector half of this
+//! file (the `.slint` parsing) was written and run first, against
 //! `44fa4d5` before any Rust changed; it printed ten `record-state`
 //! comparisons on nine lines, and found two spellings the source report does
 //! not name -- the ladder runs to `:1144`, not `:1139`, and `main.slint` holds

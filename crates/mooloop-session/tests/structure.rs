@@ -1,8 +1,8 @@
 //! What a structural edit must not silently break.
 //!
-//! `docs/FOCUS.md` records the bug these exist for: routes and automation
-//! lanes named their destination by slot and their channel by index, so any
-//! structural edit re-aimed them at whatever slid into the seat.
+//! The bug these exist for: routes and automation lanes named their
+//! destination by slot and their channel by index, so any structural edit
+//! re-aimed them at whatever slid into the seat.
 //!
 //! Since `docs/plans/archive/containers/01`, a route and a lane name a `DeviceId`,
 //! so a reorder or an insert is not an event either of them can observe.

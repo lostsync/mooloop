@@ -810,10 +810,7 @@ mod tests {
         assert!(crossed, "no block crossed a bar line, so the test proved nothing");
     }
 
-    /// **A structural edit must not stop the song.** `LOOSE_ENDS.md`, "Every
-    /// structural edit stops the song": moving one channel halted the
-    /// transport and rewound the arrangement, including for the channels the
-    /// edit never touched.
+    /// **A structural edit must not stop or rewind the song.**
     ///
     /// The position is asserted to be *past* where it was when the install was
     /// queued, not merely non-zero, because that is the half the flag exists

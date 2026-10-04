@@ -23,10 +23,10 @@ pub(crate) fn falloff_db_per_second(index: i32) -> f32 {
 /// The rows the preference offers, labelled with the rate itself.
 ///
 /// Derived from the table rather than written beside it. A hand-typed
-/// `["30 dB/s", "12 dB/s", ...]` in the markup would be the fault `AGENTS.md`
-/// opens on -- a number spelled in Rust and again in Slint, with nothing able
-/// to notice when one of them moved -- and the label here is *only* the
-/// number, so there is nothing else for it to say.
+/// `["30 dB/s", "12 dB/s", ...]` in the markup would be the fault
+/// `AGENTS.md`'s *Duplication* is about -- a number spelled in Rust and again
+/// in Slint, with nothing able to notice when one of them moved -- and the
+/// label here is *only* the number, so there is nothing else for it to say.
 pub(crate) fn falloff_options() -> Vec<String> {
     FALLOFF_DB_PER_SECOND
         .iter()

@@ -2862,7 +2862,7 @@ mod tests {
     ///
     /// Un-embedding for real means copying the bytes out to somewhere the
     /// user has chosen, which is a gesture that does not exist. This is the
-    /// honest refusal, which is what `LOOSE_ENDS.md` called the cheap half.
+    /// honest refusal; un-embedding itself is in `docs/LOOSE_ENDS.md`.
     /// **A recorded take is the song's, whatever the save mode.** It sits in
     /// the shared recordings folder, owned (`embedded`) but not yet stored,
     /// and either kind of save copies it into the bundle -- so a song never

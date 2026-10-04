@@ -489,9 +489,7 @@ mod tests {
     /// `shelf_slope` clamps the slope at 2.0 and the seven-band EQ's Q
     /// descriptor runs 0.15..18 exponentially, because the same id has to
     /// serve that band as a bell. So the knob saturates part way along and the
-    /// rest of it is one filter. `LOOSE_ENDS.md` carried that as "the top
-    /// four-fifths", which was estimated rather than measured and is nearly
-    /// twice the truth.
+    /// rest of it is one filter.
     ///
     /// Pinned because the fraction is a *product* of two numbers that live in
     /// different crates -- the clamp here and the descriptor range in

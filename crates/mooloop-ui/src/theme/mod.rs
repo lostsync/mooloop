@@ -338,8 +338,9 @@ mod tests {
             assert_eq!(Mode::from_index(mode.index()), mode);
         }
         // Out of range is the default, not a panic: the index comes from a
-        // Slint selector, and `FOCUS.md` records that this codebase has two
-        // conventions for that and one of them is wrong.
+        // Slint selector, and `docs/LOOSE_ENDS.md` records that this
+        // codebase's `from_index` functions answer out-of-range input two
+        // different ways.
         assert_eq!(Mode::from_index(9), Mode::Dark);
         assert_eq!(Mode::from_index(-1), Mode::Dark);
     }

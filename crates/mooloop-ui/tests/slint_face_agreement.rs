@@ -884,8 +884,8 @@ fn optional_number(text: &str, key: &str) -> Option<f32> {
 /// and left Position's modulation overlay reading a slot nothing writes --
 /// an arc that would never have drawn. The fix belonged in the markup.
 ///
-/// The lesson is `AGENTS.md`'s, in a new costume: when a guard fails, check
-/// which side moved before deciding which side is wrong.
+/// The lesson is `AGENTS.md`'s *Duplication*, in a new costume: when a guard
+/// fails, check which side moved before deciding which side is wrong.
 fn face_param_id(kind: EffectKind, index: u32) -> u32 {
     if kind != EffectKind::Eq {
         return index;

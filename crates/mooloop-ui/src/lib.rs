@@ -553,9 +553,9 @@ pub fn install_fold_label(window: &MainWindow) {
 ///
 /// Called once, before the window is shown. It is why no range, default or
 /// id is spelled in `strip.slint`: `StripSpec.drive-db` *is*
-/// `STRIP_DRIVE_DB`, and a knob's minimum *is* its descriptor's -- the
-/// duplication `AGENTS.md` opens on, closed by construction rather than by a
-/// test that notices afterwards.
+/// `STRIP_DRIVE_DB`, and a knob's minimum *is* its descriptor's -- the fault
+/// `AGENTS.md`'s *Duplication* is about, closed by construction rather than
+/// by a test that notices afterwards.
 pub fn install_strip_spec(window: &MainWindow) {
     let spec = window.global::<StripSpec>();
     // The master section's rows continue the strip's, so `StripSpec.spec(id)`
@@ -7565,8 +7565,7 @@ impl AppUi {
         window.invoke_show_view(view_id(Pane::Source));
         // The two ceilings the markup enables Add/Clone/Paste against. They
         // are handed over once, from the core's own constants, so raising a
-        // cap never leaves a menu row disabled at the old number --
-        // `docs/CAPACITY_POLICY.md` names that exact symptom.
+        // cap never leaves a menu row disabled at the old number.
         window.set_max_channels(MAX_CHANNELS as i32);
         window.set_max_patterns(MAX_PATTERNS as i32);
         // Two lists the device declares once; nothing about a patch moves
@@ -18001,12 +18000,9 @@ impl AppUi {
                                     &edit.project,
                                     &edit.samples,
                                     // **Every project edit keeps the song
-                                    // running.** `LOOSE_ENDS.md`, "Every
-                                    // structural edit stops the song": a paste, a
-                                    // delete, a move, a track added, a preset
-                                    // loaded -- all of them stopped and rewound
-                                    // the transport, including for the channels
-                                    // the edit never touched.
+                                    // running**: a paste, a delete, a move, a
+                                    // track added, a preset loaded -- none of
+                                    // them stops or rewinds the transport.
                                     //
                                     // The plan proposed testing `edit.edit` for a
                                     // `ListEdit`, which would have covered the
@@ -20487,8 +20483,9 @@ fn finish_recovery(
 /// channel presets marked the song dirty and recorded nothing, so the next
 /// Ctrl+Z installed a snapshot from before them and took the preset away with
 /// no redo; a kit load cleared the history outright, as though a different
-/// song had been opened. `CURRENT.md` said undo covered presets. Now all
-/// three record here, and only opening a song clears the history.
+/// song had been opened. `docs/current/interface.md` said undo covered
+/// presets. Now all three record here, and only opening a song clears the
+/// history.
 fn finish_document_load(
     st: &Rc<RefCell<UiState>>,
     commands: &Rc<RefCell<CommandState>>,

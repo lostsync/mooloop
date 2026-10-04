@@ -1,12 +1,11 @@
 //! The Buffer workflow, end to end, as far as a test can carry it.
 //!
-//! `docs/FOCUS.md`'s step 2 sets the acceptance case and
-//! `docs/plans/archive/buffer-implementation/03-freeze-and-the-grid.md` closes on it:
-//!
-//! > generate or load sound, capture it continuously at a chosen insert
-//! > point, sequence an audible jump/reverse/repeat transformation, show what
-//! > the read head is doing, survive save and reload, and render the same
-//! > result offline.
+//! The acceptance case
+//! `docs/plans/archive/buffer-implementation/03-freeze-and-the-grid.md` closes
+//! on: generate or load sound, capture it continuously at a chosen insert
+//! point, sequence an audible jump/reverse/repeat transformation, show what
+//! the read head is doing, survive save and reload, and render the same
+//! result offline.
 //!
 //! Six of those seven are machine-checkable and are checked here. **"Show
 //! what the read head is doing" is not**: the face draws it, and a test can

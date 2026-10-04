@@ -1,15 +1,13 @@
 //! A plugin put in a chain from the window (MOO-83, plugin-hosting 08).
 //!
-//! FOCUS.md calls this lane 2's acceptance case: *the step that puts a
-//! plugin in a chain from the window*. So the window is driven the way a
-//! user drives it -- the join's menu, its "Plugin…" row, the browser's
-//! PLUGINS tab, a double-click, a knob on the plugin's face -- through the
-//! same handlers `AppUi::new` wires (`plugin_ui::wire`), with the in-repo
-//! CLAP test double found through a scanner cache, as the app finds a
-//! plugin. What reaches the engine is played through the plugin's own
-//! processor, so the song's saved state is the plugin's and not a guess.
-//! Then the song is saved, reopened and exported, and the export is held to
-//! the gain the knob set.
+//! The window is driven the way a user drives it -- the join's menu, its
+//! "Plugin…" row, the browser's PLUGINS tab, a double-click, a knob on the
+//! plugin's face -- through the same handlers `AppUi::new` wires
+//! (`plugin_ui::wire`), with the in-repo CLAP test double found through a
+//! scanner cache, as the app finds a plugin. What reaches the engine is
+//! played through the plugin's own processor, so the song's saved state is
+//! the plugin's and not a guess. Then the song is saved, reopened and
+//! exported, and the export is held to the gain the knob set.
 //!
 //! LSP's filter is the same case with a real plugin, from the window, and
 //! it is Adam's to hear (FOCUS.md, "Listening is a step").

@@ -152,7 +152,7 @@ pub struct StripBand {
 /// five-position outer bands and one step low for the seven-position mids --
 /// so under `MOO_EQ` a band 1 that meant 3 kHz opened at 2 kHz, against a
 /// face and a `double-click to default` that both said 3, and against
-/// `PROJECT_FORMAT.md`'s own claim that such a band "loads with the band
+/// `PROJECT_FORMAT.md`'s own claim that such a band "loads with each band
 /// centred". Four things stated what the middle was and the one serde reached
 /// was the only one that was wrong.
 ///
@@ -284,7 +284,7 @@ impl StripParams {
     ///
     /// The one table a face is held to. `slint_face_agreement.rs` reads it,
     /// which is what stops a range being spelled once in Rust and once in
-    /// the markup -- the fault `AGENTS.md` opens on.
+    /// the markup -- the fault `AGENTS.md`'s *Duplication* is about.
     pub fn descriptors() -> &'static [ParamDescriptor] {
         &DESCRIPTORS
     }

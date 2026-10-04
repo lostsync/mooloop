@@ -727,8 +727,8 @@ static EQ_DESCRIPTORS: [ParamDescriptor; EQ_DESCRIPTOR_COUNT] = eq_descriptors()
 /// `effect_slot_row` normalize a band's hertz onto it, `mooloop_dsp` samples
 /// the bank along it, and the markup reads the result back by position. It
 /// was `(hz / 20.0).ln() / 1000.0f32.ln()` written twice in `mooloop-ui`
-/// until 2026-09-14, which is the shape `AGENTS.md` opens on: an axis is a
-/// policy, and a policy spelled twice is one that drifts.
+/// until 2026-09-14, which is the shape `AGENTS.md`'s *Duplication* is
+/// about: an axis is a policy, and a policy spelled twice is one that drifts.
 ///
 /// It is a *display* convention rather than a parameter range -- a band's
 /// frequency descriptor runs 20 Hz to 20 kHz too, and the coincidence is not

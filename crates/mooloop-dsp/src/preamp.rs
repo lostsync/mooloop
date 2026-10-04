@@ -85,8 +85,8 @@
 //! slew limit.
 //!
 //! `docs/REFERENCE_MEASUREMENTS.md` is the protocol for taking those
-//! measurements, including the four ways a session can produce plausible
-//! numbers that are wrong.
+//! measurements, including the three things that silently produce wrong
+//! numbers.
 
 use crate::biquad::Biquad;
 use crate::harmonics::{DcBlocker, HarmonicProfile, HarmonicShaper, GRIP, IRON, MOO, PUNCH};

@@ -183,7 +183,7 @@ fn slint_meter_thresholds_match_the_rust_constants() {
 /// the literal `-60` is a copy of the floor that the check above cannot see.
 ///
 /// **It sweeps every face, not the two files the floor was first found in.**
-/// `LOOSE_ENDS.md` named `meters.slint` and `controls.slint` and counted
+/// The original note named `meters.slint` and `controls.slint` and counted
 /// twenty-two; `device-rack.slint`, `bus-device.slint`, `main.slint`,
 /// `gate-device.slint`, `limiter-device.slint`, `compressor-device.slint` and
 /// `device-drag-harness.slint` held twenty-six more. The first version of this

@@ -1167,7 +1167,8 @@ fn a_bypassed_containers_trims_are_not_heard() {
 /// - each branch's and each section's level is printed.
 ///
 /// The five sections are written to `target/listening/layer-parallel-drums.wav`
-/// (float32, 48 kHz) for Adam to play. `FOCUS.md` names the command.
+/// (float32, 48 kHz) for Adam to play. `docs/LISTENING.md`, "The layer
+/// device's parallel compression", names the command.
 #[test]
 fn layer_parallel_drums_render_offline_as_they_play() {
     use mooloop_core::{DrumMode, DrumSynthParams, CONTAINER_PARAM_MUTE, CONTAINER_PARAM_SOLO};

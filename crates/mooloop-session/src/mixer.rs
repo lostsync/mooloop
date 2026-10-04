@@ -66,8 +66,7 @@ impl Session {
         index != mooloop_core::MASTER_BUS as usize && index < self.buses.len()
     }
 
-    /// Rename a track. The gap `LOOSE_ENDS.md` has been carrying: the name
-    /// has always saved and loaded and nothing could set it.
+    /// Rename a track.
     ///
     /// An empty name is refused rather than stored, because a nameless column
     /// in a mixer is worse than a numbered one.

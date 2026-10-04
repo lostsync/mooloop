@@ -17,10 +17,10 @@
 //! realtime path would leave the project holding the old value, the interface
 //! drawing the old value, and undo unable to see the move — and it would be a
 //! second implementation of every parameter edit, which is the fault
-//! `AGENTS.md` opens with. The cost is one pump of latency on a knob turn,
-//! which is the right trade for a mapping layer; a performance subset that
-//! needs tighter timing can be given a realtime fast path later, against these
-//! same types.
+//! `AGENTS.md`'s *Duplication* is about. The cost is one pump of latency on a
+//! knob turn, which is the right trade for a mapping layer; a performance
+//! subset that needs tighter timing can be given a realtime fast path later,
+//! against these same types.
 //!
 //! The renderer has to know one thing about the map in advance: which keys
 //! are controls rather than notes, since it would otherwise play a pad before

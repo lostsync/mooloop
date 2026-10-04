@@ -427,12 +427,11 @@ this plan.
    check). Step 08 replaces this markup literal with a Rust-supplied model;
    whatever guards it must click it.
 7. **Found 2026-09-17, and not solved by this plan.** A channel paste, delete
-   or move rebuilds the whole `RenderState` through `install_project`
-   (`LOOSE_ENDS.md`, "Every structural edit stops the song"). `PluginSlotId`
-   stops a move from *renumbering* plugins, but not from tearing down every
-   plugin processor in the song and loading it again. Solved by
-   `plans/archive/channel-identity/` step 05, which **must land before step 06
-   here**.
+   or move rebuilds the whole `RenderState` through `install_project`.
+   `PluginSlotId` stops a move from *renumbering* plugins, but not from
+   tearing down every plugin processor in the song and loading it again.
+   Solved by `plans/archive/channel-identity/` step 05, which **must land
+   before step 06 here**.
 
    **Closed 2026-09-23 by step 06 (MOO-81).** The carry plan keeps an
    unchanged plugin device's processor across the install, and

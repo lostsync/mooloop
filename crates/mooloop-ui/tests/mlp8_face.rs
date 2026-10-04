@@ -20,12 +20,13 @@
 //! route-depth test was pointed at the value *field* first and passed there,
 //! because the field is a binding the knob never touches.
 //!
-//! The fourth thing here is `MODULATION.md`'s rule that every legal control
-//! becomes *visibly* assignable when a source is armed, and that an overlay
-//! shows the resulting excursion. A knob gets both from its ring. A network
-//! cell has no ring, drew neither, and so read as a region modulation could
-//! not reach -- while the gesture underneath it had worked all along. That is
-//! a claim about pixels and it is asserted about pixels.
+//! The fourth thing here is `MODULATION.md`'s rule (*Direct assignment*,
+//! steps 2 and 4) that every legal control acquires an assignable state when
+//! a source is armed, and that an overlay shows the resulting excursion. A
+//! knob gets both from its ring. A network cell has no ring, drew neither,
+//! and so read as a region modulation could not reach -- while the gesture
+//! underneath it had worked all along. That is a claim about pixels and it is
+//! asserted about pixels.
 
 use mooloop_core::mlp8;
 use mooloop_ui::{MlP8DeviceDragHarness, MlP8RouteRow};
@@ -203,7 +204,7 @@ fn a_network_cell_is_dragged_along_the_axis_it_is_drawn_on() {
 /// separately: the depth reached the rack all along, and the cell drew
 /// nothing about it -- no armed state, no excursion, no base marker -- so the
 /// whole grid read as a region modulation could not target. `MODULATION.md`
-/// requires the opposite in as many words.
+/// (*Direct assignment*, steps 2 and 4) requires the opposite.
 #[test]
 fn an_armed_source_reaches_a_network_cell_and_the_cell_shows_it() {
     let harness = harness();

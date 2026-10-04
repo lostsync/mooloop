@@ -13321,14 +13321,11 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
     /// **No allocations in the callback**, measured rather than read.
     ///
     /// `control-plane-seams/04`, and `buffer-implementation/`'s Stage 1
-    /// acceptance test 8, which `FOCUS.md` records as having been open since
-    /// it was written because it "needs an allocation-tracking harness rather
-    /// than a reading of the code". The harness turned out to be three lines
-    /// on the counting allocator this crate already installs: a per-thread
-    /// count of `alloc` and `realloc` calls that never decreases, because
-    /// `live()` is a net byte figure and cannot see an allocation paired with
-    /// a free in the same block — which is precisely what a `Vec` growing on
-    /// the audio thread looks like.
+    /// acceptance test 8. The harness is the counting allocator this crate
+    /// already installs, read as a per-thread count of `alloc` and `realloc`
+    /// calls that never decreases, because `live()` is a net byte figure and
+    /// cannot see an allocation paired with a free in the same block — which
+    /// is precisely what a `Vec` growing on the audio thread looks like.
     ///
     /// The block under the counter is the one that **retires a preview**,
     /// which is the path that allocated: `preview_retired` was a `Vec::new()`
@@ -13471,8 +13468,10 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
     /// and nowhere else.
     ///
     /// Still a floor rather than a ceiling, exactly as the preview test says:
-    /// it proves these paths do not allocate. **The locks half of test 8 is
-    /// not measured by anything**, and `LOOSE_ENDS.md` says so.
+    /// it proves these paths do not allocate. The locks half of test 8 is
+    /// counted by the executor soak in `soak_tests.rs`, which runs a Buffer
+    /// but not through each of these states, and which sees only a lock taken
+    /// through `mooloop_core::lock_check::Mutex`.
     #[test]
     fn no_buffer_operation_allocates_on_the_callback() {
         use mooloop_core::{BufferDuration, BufferEvent};
@@ -16678,10 +16677,8 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         }
     }
 
-    /// The whole acceptance case of the v1 drum synth's descriptor table
-    /// (`docs/FOCUS.md`, 2026-09-05, closed): a modulation route and an
-    /// automation lane both reach the v1 drum synth, which until then was the
-    /// one source nothing could move.
+    /// The whole acceptance case of the v1 drum synth's descriptor table: a
+    /// modulation route and an automation lane both reach the v1 drum synth.
     ///
     /// Both halves in one test because they share the resolve pass and the
     /// interesting question is whether a *generator* that had no table until
@@ -17825,9 +17822,9 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
     /// and to an export -- so nothing applied its mute: the button lit, both
     /// of its meters read silent (the published peak is zeroed a few lines
     /// up), and the audio carried on at full level. An export made in that
-    /// state was full level too. `CURRENT.md` already said a muted bus
-    /// "contributes no audio and meters as silent"; only the second half was
-    /// true.
+    /// state was full level too. `docs/current/mixer.md` already said a
+    /// muted bus "contributes no audio and meters as silent"; only the
+    /// second half was true.
     ///
     /// Measured through the master buffer rather than the meter, because the
     /// meter was the half that already worked.

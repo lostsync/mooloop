@@ -39,8 +39,8 @@ use std::sync::Arc;
 // `ChainKey` moved into `mooloop-core` on 2026-09-18, when the control map
 // came to need the same type: a persisted binding names a chain durably for
 // the reason a session key does, and two enums spelled `Channel(ChannelId) |
-// Bus(u8)` on either side of the crate boundary is the duplication
-// `AGENTS.md` opens with. Re-exported here because most of its callers are
+// Bus(u8)` on either side of the crate boundary is the fault `AGENTS.md`'s
+// *Duplication* is about. Re-exported here because most of its callers are
 // session-side and reach for it through this module.
 pub use mooloop_core::ChainKey;
 
@@ -1699,11 +1699,10 @@ impl Session {
         self.selected_note_id = None;
         self.selected_note_ids.clear();
         // A channel this document no longer has must lose its monitor
-        // toggle rather than leave it for some later id to inherit: this is
-        // the pruning `docs/LOOSE_ENDS.md`'s `input_monitor` entry named
-        // missing. Keyed by identity like the rest of `channels`, so a
-        // channel that merely moved keeps its toggle -- only one that is
-        // genuinely gone loses its entry.
+        // toggle rather than leave it for some later id to inherit. Keyed by
+        // identity like the rest of `channels`, so a channel that merely
+        // moved keeps its toggle -- only one that is genuinely gone loses its
+        // entry.
         self.input_monitor.retain(|id| channels.iter().any(|channel| channel.id == *id));
         self.channels = channels;
         // A zone whose audio is not in hand installs silent, and says so:

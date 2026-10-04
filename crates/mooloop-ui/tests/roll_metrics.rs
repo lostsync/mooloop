@@ -2,11 +2,11 @@
 //!
 //! `TICKS_PER_STEP` was a literal `24` twenty-five times in the markup --
 //! fifteen in `piano-grid.slint` and ten in `main.slint` -- because Slint
-//! cannot read a Rust constant. `docs/LOOSE_ENDS.md` recorded the cost of that
-//! precisely: drift was already *detected*, because `piano_tools.rs` and
-//! `piano_drag.rs` compute their fixtures from the engine's value, but acting
-//! on the failure meant finding twenty-five literals by hand, and the failure
-//! itself arrived as nineteen unrelated-looking assertion errors.
+//! cannot read a Rust constant. Drift was already *detected*, because
+//! `piano_tools.rs` and `piano_drag.rs` compute their fixtures from the
+//! engine's value, but acting on the failure meant finding twenty-five
+//! literals by hand, and the failure itself arrived as nineteen
+//! unrelated-looking assertion errors.
 //!
 //! There is now one copy, in `RollMetrics`, and this test is what makes it a
 //! copy that cannot drift silently: it fails on its own, before the roll's

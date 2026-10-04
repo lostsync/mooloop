@@ -129,12 +129,12 @@ component RouteRow inherits Rectangle {
 // a control nobody finds -- which is why `ParameterKnob` learned an axis
 // rather than this file growing its own pointer handling.
 //
-// It also draws what modulation is doing to it. `MODULATION.md` requires that
-// every legal control become *visibly* assignable when a source is armed, and
-// that an overlay show the resulting excursion; a knob gets both from its
-// ring, and this cell has no ring. Without them the whole network read as a
-// region modulation could not reach, which is the one region a synth like
-// this most wants to modulate.
+// It also draws what modulation is doing to it. `MODULATION.md` (*Direct
+// assignment*, steps 2 and 4) requires that every legal control acquire an
+// assignable state when a source is armed, and that an overlay show the
+// resulting excursion; a knob gets both from its ring, and this cell has no
+// ring. Without them the whole network read as a region modulation could not
+// reach, which is the one region a synth like this most wants to modulate.
 component NetworkCell inherits Rectangle {
     in property <string> tooltip;
     // The diagonal: an oscillator modulating itself. The same operation on

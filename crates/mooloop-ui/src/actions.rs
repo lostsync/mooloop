@@ -264,10 +264,10 @@ pub(crate) static ACTIONS: &[ActionSpec] = &[
         "home"
     ),
     action!("transport.loop-toggle", "Toggle Loop", "Transport", "l"),
-    // Toolbar-only until now (`docs/LOOSE_ENDS.md`): arming MIDI recording
-    // had no action id, so it could not be bound to a key or shown on the
-    // Shortcuts page. No default chord, like `pattern.clear` below -- it is
-    // registered so it *can* be bound, not because it ships bound.
+    // Arming MIDI recording has an action id so it can be bound to a key and
+    // shown on the Shortcuts page, not only pressed on the toolbar. No
+    // default chord, like `pattern.clear` below -- it is registered so it
+    // *can* be bound, not because it ships bound.
     action!("transport.record-arm-toggle", "Toggle Record Arm", "Transport"),
     // All notes off, with the song still running (MOO-99). No default
     // chord: it is the way out of a stuck note, registered so it can be

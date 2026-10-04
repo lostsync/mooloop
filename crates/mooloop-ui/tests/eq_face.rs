@@ -97,12 +97,11 @@ fn the_faces_ranges_are_the_engines_ranges() {
 
 /// **A knob's double-click returns to the selected target's own default.**
 ///
-/// The defect this closes had been in `LOOSE_ENDS.md` since the day per-band
-/// ids landed: the face's resting values were three numbers written into the
-/// markup, worked out for the target a fresh EQ opens on, so a double-click
-/// on band 1's Freq knob returned it to 1 kHz when band 1 rests at 120 Hz. It
-/// was equally true before per-band ids and uncheckable then, because one
-/// Freq descriptor stood for all seven bands.
+/// The defect this closes: the face's resting values were three numbers
+/// written into the markup, worked out for the target a fresh EQ opens on, so
+/// a double-click on band 1's Freq knob returned it to 1 kHz when band 1
+/// rests at 120 Hz. It was equally true before per-band ids and uncheckable
+/// then, because one Freq descriptor stood for all seven bands.
 #[test]
 fn every_target_rests_where_its_own_descriptors_do() {
     let ui = spec_window();

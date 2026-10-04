@@ -1487,9 +1487,7 @@ mod tests {
     }
 
     /// A channel that is genuinely gone must lose its monitor toggle rather
-    /// than leave it for some later channel's id to inherit --
-    /// `docs/LOOSE_ENDS.md`'s `Session::input_monitor` entry, "is never
-    /// pruned when a channel goes."
+    /// than leave it for some later channel's id to inherit.
     #[test]
     fn input_monitor_forgets_a_channel_that_is_removed() {
         let mut session = crate::session::Session::default();

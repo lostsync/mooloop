@@ -1073,8 +1073,8 @@ mod tests {
             params.bands[2].gain_db = 9.0;
         });
         // The descriptor's own ceiling rather than a number written here: a
-        // fourth copy of the shelf bands' Q maximum is the duplication
-        // `AGENTS.md` opens on, and holding a test to a range means reading
+        // fourth copy of the shelf bands' Q maximum is the fault `AGENTS.md`'s
+        // *Duplication* is about, and holding a test to a range means reading
         // the range.
         let q_ceiling = StripParams::descriptor(strip_band_param(0, STRIP_BAND_Q))
             .expect("band 0 has a Q descriptor")

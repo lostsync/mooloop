@@ -273,7 +273,8 @@ impl MidiInputSource {
     /// Written here rather than in the markup that draws the menu, with
     /// [`Self::from_row`] and [`Self::row`] beside it, because a menu's index
     /// and the value it stands for are one fact. Spelling the rows in `.slint`
-    /// and reading them back in Rust is the shape `AGENTS.md` opens on.
+    /// and reading them back in Rust is the shape `AGENTS.md`'s *Duplication*
+    /// is about.
     pub fn picker_rows(ports: &[MidiPortInfo]) -> Vec<String> {
         let mut rows = vec![
             "Follow Selection".to_owned(),

@@ -665,9 +665,8 @@ pub(crate) struct PreparedProject {
     ///
     /// Set for a **structural edit** -- a channel paste, delete or move --
     /// and clear for opening a document, which is meant to stop and rewind.
-    /// `LOOSE_ENDS.md`, "Every structural edit stops the song": moving one
-    /// channel halted the transport and rewound the whole arrangement,
-    /// including for the channels the edit never touched.
+    /// An edit leaves the whole song playing, including the channels it never
+    /// touched.
     ///
     /// **It is a flag rather than a transport value**, and that is the point.
     /// The install is prepared on the control thread and swapped in on the
