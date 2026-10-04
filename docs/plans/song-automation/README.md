@@ -101,7 +101,8 @@ same data.
 - A lane names a `ParamAddr` (`core/src/modulation.rs:269`): a scope
   `EffectTarget::{Channel(u8), Bus(u8)}`, an owner and a descriptor id.
 - Channels and tracks are still addressed by **seat** in it. `TrackId` exists
-  (`effect.rs:4044`), but nothing names a track by it yet (`project.rs:1369`).
+  (`effect.rs:4044`), and the only stored address that names a track by it
+  is a channel's `audio_input` (`input.rs`).
 - A track edit renumbers every pattern lane through `rescope_lanes_for_track`
   (`structure.rs:999`).
 - A track's inserts take lanes already. **Its fader and pan don't**: the bus

@@ -87,7 +87,7 @@ not three actions sharing a chord.
 Every `ActionSpec` therefore carries a `Scope`, and Preferences > Shortcuts
 draws it in a Context column beside the chord — blank for the global
 majority, so the column marks the exceptions rather than restating the rule
-sixty-five times. The scopes:
+on every global row. The scopes:
 
 | Scope | Column reads | Means |
 | --- | --- | --- |

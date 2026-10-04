@@ -193,9 +193,14 @@ area, and where each behaviour stops.
   to an offline render, which walks the arrangement once from the top. A loop
   reaching past the song's own end plays the part of it that exists, so
   shortening a song under a loop stops the loop rather than being refused.
-  Every sounding voice is released at the loop point, at a seek, and when the
-  current pattern is switched **in Pattern mode** under a running transport,
-  because in each case the note-off it was waiting for is no longer on the way.
+  At a song loop's fold, and when the current pattern is switched **in
+  Pattern mode** under a running transport, the voices the sequencer started
+  are sent a note-off, because the note-off each was waiting for is no longer
+  on the way. Their release tails ring, and a key the player holds or an
+  audition carries on (*Events and voices*, above). A seek chokes every voice
+  on every channel. Pattern mode's own wrap, and Song mode's at the end of the
+  song with no loop, are not folds: nothing is released, and a note that
+  outlasts the pattern ends at its own note-off on the next pass.
 - **Selecting a pattern is a view change everywhere else, and costs nothing.**
   In Song mode the selection is not what is playing -- it is what the editor
   draws and where a recorded note goes -- so switching it while the song runs

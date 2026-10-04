@@ -322,4 +322,6 @@ area, and where each behaviour stops.
   nothing authors one, because the mixer draws no channel strips for the control
   to live on — that and the tap points below pre-fader are stage 2 of the send
   work. A send has a level and a tap, and no pan and no wet/dry split of its
-  own. There are no sidechains or external inputs.
+  own. There are no sidechains: no device takes a key input, and a hosted
+  plugin's sidechain port runs on silence. The hardware input reaches the mix
+  only as a channel's AUDIO source with MON on ([sampler.md](sampler.md)).

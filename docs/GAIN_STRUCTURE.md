@@ -45,11 +45,14 @@ equal-power pan. `pan_gains(0.0)` is 0.707 a side, so a centred channel
 spends `CENTRE_PAN_DB` (-3.01) that every generator pays equally, and a
 calibrated generator's own output therefore peaks at
 `GENERATOR_OUTPUT_REFERENCE_DBFS` (-8.99). A stage that has to place an
-uncalibrated source level with the calibrated ones — the sampler's default
-trim, the browser's audition monitor — targets the *device output* figure,
-not the master one. Trimming to -12 instead would leave every loaded sample
-3 dB under the synths. Parity then holds at any pan position, because pan
-attenuates every channel identically.
+uncalibrated source level with the calibrated ones on a channel — the
+sampler's default trim, Aux In's default level — targets the *device
+output* figure, `gain::reference_level_gain()`, not the master one. Trimming
+to -12 instead would leave every loaded sample 3 dB under the synths. Parity
+then holds at any pan position, because pan attenuates every channel
+identically. The browser's audition monitor has no channel and no pan law,
+so it targets the master figure directly (*The sampler's output trim*,
+below).
 
 Adam explicitly waived backwards compatibility for level changes: existing
 projects got quieter, and no migration, compatibility flag, or version bump
@@ -283,8 +286,10 @@ Three consequences worth stating, because each one is a decision:
 
 - **Old projects keep their level.** The field deserializes to unity when a
   manifest predates it (`legacy_output_gain`), so a mix balanced against a
-  sampler at unity still plays at unity. Only a sampler created after the
-  field existed starts at -12 dB. `gain_structure_tests.rs` holds both cases.
+  sampler at unity still plays at unity. A newly created sampler starts at
+  `default_output_gain()`, about -9 dB. `gain_structure_tests.rs` holds what
+  each level sounds like, and `legacy_sampler_source_shape_remains_loadable`
+  (`mooloop-project`) holds the unity default on load.
 - **The trim is a described parameter** (`SAMPLER_PARAM_OUTPUT_GAIN`), so
   automation and modulation reach it like any other. It is lagged through
   `Smoothed`, and one lag serves every voice: `render_range` hands each

@@ -65,13 +65,29 @@ second real use makes the shared unit honest.
 ## What we actually do now
 
 Everything above is a target. Most of it is unimplemented: there is no port
-table and no `unit.inputs()`. `AudioNode` is an
-in-place stereo process call, two declared latencies, and two best-effort
-telemetry readers (`buffer_collisions`, `dynamics_frame`) — and those two are
-observation, deliberately not the outlet contract this document describes.
-That gap is deliberate: the contract is a design rule, and building its
-infrastructure ahead of a demonstrated workflow is how it would turn into
-ceremony.
+table and no `unit.inputs()`. `AudioNode` (`mooloop-dsp/src/node.rs`) is an
+in-place stereo `process`, the only required method, plus defaulted hooks:
+
+- `apply_curves`, which hands a node its lane- and route-driven parameters
+  as per-tick curves once a block, before `process`;
+- the rest-and-tail contract: `tail_frames`, `is_at_rest`, and `skip_block`
+  for a block the host does not process;
+- lifecycle: `on_discontinuity` when time stops being continuous, and
+  `retire` when the node leaves the audio thread for good;
+- two declared latencies, the active path's and the dry path's;
+- a hosted plugin's parameter plumbing (`hosted_param`, `flush_params`,
+  `wants_param_flush`);
+- best-effort telemetry for the displays (`buffer_collisions`,
+  `buffer_waveform`, `dynamics_frame`, the spectrum hooks) and the Buffer
+  device's own handles.
+
+The telemetry is observation, deliberately not the outlet contract this
+document describes. A generator's published outlets are on `SourceNode`, the
+generator trait built on `AudioNode`.
+
+The missing port table is deliberate: the contract is a design rule, and
+building its infrastructure ahead of a demonstrated workflow is how it would
+turn into ceremony.
 
 Three of its habits are load-bearing today, though, and they are cheap. They
 are the difference between a contract that stays reachable and one that has to

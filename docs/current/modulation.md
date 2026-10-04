@@ -14,8 +14,10 @@ area, and where each behaviour stops.
   automation resolve through it. They compose rather than compete: a lane
   supplies the base a knob would otherwise supply, and the matrix adds its
   offsets on top, so an LFO wobbles around a drawn curve. Both resolve at the
-  32-frame control rate into the destination's existing event path, and no
-  effect needed a change to receive them.
+  32-frame control rate into one curve per destination, handed to the device
+  once a block. A device with no curve path of its own (every native device
+  but the EQ) receives it as the parameter events it already took, so no
+  effect needed a change.
 - The channel modulation rack is a shelf pinned to the bottom of the editor
   dock, under the device rack and outside its scroll, collapsed by default.
   It is therefore never wider than the window, however long the device chain

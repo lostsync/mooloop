@@ -109,14 +109,27 @@ unimprovable.
 ### What the floor costs per edit, which is the part that hurts
 
 The gigabyte would be affordable if it were paid once. It is not.
-`EngineHandle::install_project` builds a *complete* new `RenderState` and
-returns the displaced one through the reclaim ring to be dropped by `poll` —
-both on the UI thread — and every `PendingEngineMessage::ProjectEdit` goes
-through it. `block_cost::project_install_cost` measures that round trip at
-**20 ms for a fifteen-channel project** and 48 ms for a thirty-two channel
-one. At drag rate that saturates the UI thread, which then cannot run the
-pump on schedule; `docs/plans/pattern-bank-floor/README.md` has the
-measurements.
+`EngineHandle::install_project` builds a *complete* new `RenderState`,
+carrying unchanged strips across by `ChannelId`, and returns the displaced
+one through the reclaim ring to be dropped by `poll`, both on the UI thread.
+`block_cost::project_install_cost` measures that round trip at **20 ms for a
+fifteen-channel project** and 48 ms for a thirty-two channel one;
+`docs/plans/pattern-bank-floor/README.md` has the measurements. Repeated at
+gesture rate, that saturates the UI thread, which then cannot run the pump on
+schedule.
+
+Most edits do not pay it. A knob, a note, and adding or moving an effect are
+engine commands. A channel, track or pattern list edit (add, delete, move,
+paste, clone, clear) is a `PendingEngineMessage::ProjectEdit` carrying its
+`ListEdit`, and the pump sends it to the engine as one command. What still
+installs a whole project:
+
+- every undo and redo, including the undo of a knob turn or a note;
+- device cut, paste and duplicate;
+- opening or starting a song, and loading a kit, channel preset or generator
+  preset;
+- a list edit the pump merged with older queued edits, or one the engine
+  refused.
 
 It does not reach the audio thread. The hypothesis that a gigabyte of
 `mmap`/`munmap` would, through page faults and TLB shootdown IPIs, **was
@@ -131,9 +144,9 @@ Two independent fixes, either of which helps:
 - make the render state cheap to build, per the section above, so an install
   costs what a fifteen-channel project's worth of state costs rather than what
   256 channels' worth does;
-- stop rebuilding it for edits that do not change structure. A note move or a
-  knob is already expressible on the POD command path, and the structural
-  command path already exists for the ones that are not.
+- stop rebuilding it for edits that do not change the whole document. List
+  edits have stopped. Undo and redo applying the difference the same way is
+  open: MOO-469.
 
 Neither is a thing to do casually — it is the core of the render state and
 the edit path either side of it.

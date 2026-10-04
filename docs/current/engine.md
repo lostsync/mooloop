@@ -194,11 +194,13 @@ a displaced node crosses to it and back is `AUDIO_ARCHITECTURE.md`'s.
 
 ## Samples and rendering
 
-- A loaded sample is immutable in the audio path. The only audio the
-  application generates for itself is a sampler stretch commit, rendered on
-  the UI thread and written to the data directory's `renders/` as a sample of
-  its own, and the Buffer insert's rolling ring. Neither writes a channel's own output back
-  into a project asset: there is still no capture-to-sample gesture.
+- A loaded sample is immutable in the audio path. The application generates
+  audio for itself in three places. A recorded take
+  ([sampler.md](sampler.md)) captures a channel (its own included), a track,
+  the master or the hardware input, becomes the recording sampler's sample,
+  and is copied into the song by a save. A sampler stretch commit is rendered
+  on the UI thread and written to the data directory's `renders/` as a sample
+  of its own. And the Buffer insert keeps its rolling ring.
 - The render graph is independent of the audio driver and supports finite
   offline passes at the engine's sample rate (export, in [files.md](files.md)); MP3 goes through an in-process LAME encoder. Realtime-vs-offline
   null testing is not implemented.

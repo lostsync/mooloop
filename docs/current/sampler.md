@@ -146,10 +146,10 @@ Clip recording, the way Ableton's or Bitwig's clip mode records and Maschine's
 sampler does:
 
 - **Every channel has an AUDIO row** in the channel sidebar, beside MIDI IN
-  and independent of it: Off, the master, any track, any channel -- itself
-  included. It names its source by identity, so it follows moves, and says so
-  when the source has been deleted. Any number of channels may hold one, and
-  it stays set.
+  and independent of it: Off, the hardware input (below), the master, any
+  track, any channel -- itself included. It names its source by identity, so
+  it follows moves, and says so when the source has been deleted. Any number
+  of channels may hold one, and it stays set.
 - **The sampler face has a RECORD page**: REC, the take's length as it grows, a
   live waveform, CLIP and LENGTH (1-64 bars), and what it records FROM.
   Pressing REC waits for the next bar line -- starting the transport if it is

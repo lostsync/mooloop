@@ -178,10 +178,23 @@ The first read head needs:
 - One-shot, loop, hold, and return-live behavior.
 - Gain and short crossfades at discontinuities.
 
-The shared parameter system should later expose read offset, window length,
-rate, direction, repeat, hold, return-live, freeze, and possibly write feedback
-or overwrite behavior. Buffer-specific lanes must not become a second
-automation engine.
+The shared parameter system drives the head, through the parameters the
+device publishes (`BUFFER_DESCRIPTORS` in `mooloop-core/src/effect.rs`). They
+cover that list in the shape the gestures took rather than the turntable's:
+
+- Read offset, window and rate are one control: `Position` is a playhead over
+  `Span`, and its own speed is the playback rate. There is no separate offset,
+  rate or window-length parameter; those ids are retired.
+- Direction, repeat and hold are the gates `Jump`, `Reverse` and
+  `Stutter Gate`, with `Jump Back` and `Stutter` as their lengths.
+- Return-live is a gate dropping, or `Position` coming to rest.
+- `Freeze`, `Crossfade`, `Quantize` and `Quant Start` complete the set. Write
+  feedback and overwrite do not exist.
+
+Every one of them is an ordinary automation-lane destination. Route policy
+refuses stepped parameters, so only `Position` and `Crossfade` take a
+modulation route. Buffer-specific lanes must not become a second automation
+engine.
 
 ## Future Control Outlets
 

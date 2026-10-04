@@ -247,23 +247,29 @@ source is not a special full-width page: it uses the same rack chrome,
 alignment, and height contract as effects.
 
 - Device faces have one fixed 268 px height.
-- Width is quantized in 220 px units with 4 px inter-device gaps. Half-unit
-  widths are valid for compact effects.
+- Width is quantized in whole 220 px units with 4 px inter-device gaps.
 - A source device declares its width the same way an effect does, and for the
-  same reason: 3U for the sampler, the two v1 synths and the ML-M1; 4U for the
+  same reason: 3U for the sampler, the DS-SX drum synth, the two v1 synths
+  and the ML-M1; 4U for the
   ML-P8 and the DS-01, which spend pages rather than one dense screen and
   need the fourth unit to hold three modules of 34 px dials without shrinking
   one; 2U for Aux In, whose whole content is a source, an outlet and a level,
-  and which at 3U would be empty rather than generous. A bus's output stage
+  and which at 3U would be empty rather than generous. A hosted plugin's face,
+  instrument or effect, is one unit when its controls fit one unit's page and
+  two otherwise (`face_units`). A bus's output stage
   stands in the same position, at 2U on its own or 3U bundled with the
   track's pinned channel strip when `STRIP_PIN` pins it to the head, where
   identity and routing share the strip's own box rather than standing as a
   mostly empty box beside it. An effect uses only the units its working
   controls require, declared once in `effect_kind_units`
   (`mooloop-ui/src/lib.rs`) rather than in each face: 1U for filter, drive,
-  preamp, bitcrush, limiter, plate, and Buffer; 2U for gate, compressor, EQ, and Mod;
-  3U for delay and reverb. A face that outgrows its width takes another unit;
-  it does not compress.
+  preamp, bitcrush, and limiter; 2U for gate, compressor, plate, EQ, Mod, and
+  Buffer; 3U for delay, reverb, and Bus Comp, which is the master section's
+  face at the master's width. A Chain or Layer's 1U is
+  only its folded strip's tag: the devices it holds carry their own widths,
+  and the rack draws a Layer's face at the width of what it holds
+  (`LayerMetrics.face-width`). A face that outgrows its width takes another
+  unit; it does not compress.
 - The rack scrolls horizontally. Device internals never compress when the
   application narrows.
 - Every device has a 28 px identity header with enabled state, name, kind, and
@@ -770,10 +776,10 @@ decide its shape. Settled 2026-09-10.
   offering gestures that do nothing.
 - **The transition spends `Motion.duration` and `Motion.curve`.** They are
   what the device rack's slide-aside and the dock's extent already animate on.
-  Slint 1.17 has no 3D transform, so a literal card flip is an x-scale through
-  zero with the faces swapped at the midpoint; a cross-dissolve with a small
-  slide is equally available. What is not available is a second set of timing
-  numbers.
+  Slint 1.18 has 2D rotation and scale but no 3D transform, so a literal card
+  flip is an x-scale through zero with the faces swapped at the midpoint; a
+  cross-dissolve with a small slide is equally available. What is not
+  available is a second set of timing numbers.
 
 ## Rack Actions
 

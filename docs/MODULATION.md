@@ -226,7 +226,7 @@ The first interpretation is `NormalizedRange`: depth is a fraction of the
 descriptor's entire normalized range. This exactly matches current
 `ModRoute` behavior. A later musical mapping, such as bounded semitone pitch,
 belongs here only when a real device needs it; it must still resolve via the
-descriptor and emit the same ordinary `ParamValue` event.
+descriptor into the same natural-unit value every other route delivers.
 
 Discrete modes, booleans, source selection, destructive actions, and structural
 controls default to `allowed: false`. A stepped target must opt in and state
@@ -291,9 +291,9 @@ updates the stored base. It sends the device a value only in the last row.
 Under a lane, the knob isn't heard until the lane is cleared or stops covering
 the playhead. The engine then hands the knob back. The engine answers "is a
 lane present" in one place (`AutomationCurve::at`), so the per-tick resolution
-and the knob edit can't disagree. A recorded lane, when recording lands, will
-be written from the knob and will take over as the base on the next control
-tick.
+and the knob edit can't disagree. Nothing records a knob into a lane: points
+are drawn by hand. A lane written from the knob, when automation write modes
+exist (open: MOO-478), will take over as the base on the next control tick.
 
 A bipolar route swings source `-1..1` about the base. A unipolar route maps
 that output to `0..1`, making the base the floor. Signed depth inverts either
@@ -348,9 +348,10 @@ design, and it holds under the curve path: `apply_curves`'s default
 implementation turns the curve back into the exact `Event::ParamValue` step
 an effect's ordinary block-splitting already knows how to consume, so a
 device that has not opted into a native curve path never has to. Events with
-sample offsets stay for what they are for -- notes, and the boundary a
-future hosted plugin's parameter queue is built from -- and a curve becomes
-events only there, or for a device that has not opted in.
+sample offsets stay for what they are for -- notes, and a hosted plugin's
+parameter queue, where a lane arrives as `ParamValue` and a route's offset as
+`ParamMod` -- and a curve becomes events only there, or for a device that has
+not opted in.
 `docs/plans/archive/automation-curves/00-status.md`.
 
 ### Base value plus offset
@@ -478,16 +479,21 @@ follower exposed as an outlet is the correct first audio-derived-control form.
 
 ## Note-triggered effects
 
-Effect slots currently receive only their own private parameter events
-(`render.rs` — "generators never see effect events", and the reverse). Keep
-that isolation for parameter events, but **give effect slots access to the
+An insert never sees a note. Its node gets its own slot's queue
+(`EffectSlot.events` in `render.rs`: a knob's value at the next block's first
+frame, and Buffer gestures) and the block's lane and route curves through
+`apply_curves`. The channel's event list, with its notes, goes to the
+generator alone, and the generator never sees an insert's events. Notes also
+reach the channel's modulation rack as per-tick note gates. Keep that
+isolation for parameter events, but **give effect slots access to the
 channel's note stream as a separate input**.
 
-This is what makes the rack an instrument rather than a chain of processors:
-an LFO that resets phase on note-on, a delay that flushes on a note, a
-step-sequenced modulator that advances per note, a stutter fired from a rack
-step. The sample-accurate note pipe already reaches every channel; it stops
-one node short.
+This is what makes the rack an instrument rather than a chain of processors.
+The rack's own modules already hear notes: an LFO resets its phase on
+note-on, and a step module advances per note. What no insert can do is react
+to one itself: a delay that flushes on a note, a stutter fired from a rack
+step. The sample-accurate note pipe reaches every channel's generator and
+modulation rack; it stops one node short of the inserts.
 
 ## Inter-device and inter-channel data
 
@@ -502,15 +508,17 @@ not of new DSP.
 Generators also publish named, channel-rate outlets. This is how note-derived
 data reaches an effect without pretending a shared channel effect can own
 per-voice state: a generator reduces its voices to one musical control signal,
-then a downstream effect consumes ordinary CV. A sampler or synth may, for
-example, assign velocity to an outlet; the channel adds a `DeviceIn` source,
-chooses that named outlet, and supplies trim and smoothing for routes to any
-legal destination.
+then a downstream effect consumes ordinary CV. ML-P8 and DS-01 publish them
+(ML-P8's include Velocity, Gate and its LFO). The shelf's OUTLETS pane lists
+the channel generator's outlets, and a route takes one as its source
+(`ModSourceRef::GeneratorOutlet`) to any legal destination on the channel.
 
-An outlet address is `(channel, outlet index)` plus its user-facing name.
-The first reduction is last-note; a later explicit outlet mode can add highest
-or loudest note without changing routing. `DeviceIn` is a sibling of `Lfo`,
-not telemetry: its smoothing is part of its musical contract, because an
+An outlet source names an outlet index on its own channel's generator, plus
+its user-facing name; naming another channel's is the cross-channel work
+below. The first reduction is last-note; a later explicit outlet mode can add
+highest or loudest note without changing routing. An outlet source is a
+sibling of an LFO, not telemetry: its smoothing is part of its musical
+contract, because an
 unsmoothed velocity step can click a filter cutoff. Outlets are read one
 block later, under the timing rule above.
 
@@ -585,9 +593,12 @@ into the shared `4/1` through `1/64T` musical-division range. This compact
 adding a second selector row for each one.
 
 Today `Kick notes → Envelope / Gate → Sampler / Position` is readable and
-playable in the ordinary rack. Later, `Kick / Gate → LFO / Reset → Sampler /
-Position` uses the same inlet and route concepts once generators publish typed
-outlets through the control table.
+playable in the ordinary rack. Generators publish typed outlets through the
+control table, and a route on the same channel can take one as its source,
+but a source inlet cannot: the LFO's reset is the owning channel's note-ons,
+and the envelope's gate is a channel-note adapter. `Kick / Gate → LFO / Reset
+→ Sampler / Position` uses the same inlet and route concepts once an inlet
+can bind a declared generator outlet, including another channel's.
 
 ### Direct assignment
 
@@ -684,8 +695,9 @@ sidechain and external routing. A graph UI, if useful, comes last.
 - A source on one channel can target legal generator, multiple insert, and
   strip parameters on that channel without appearing as a device-owned LFO.
 - Resolved values follow descriptor mapping, automation base, and summed route
-  offsets at 32-frame resolution; devices receive normal timed `ParamValue`
-  events only.
+  offsets at 32-frame resolution. Devices receive them as per-tick curves
+  through `AudioNode::apply_curves`, whose default hands a device with no
+  native curve path ordinary timed `ParamValue` events.
 - Editing a modulated knob changes its base without deleting or fighting routes,
   and the UI communicates both base and excursion.
 - Devices add parameters/outlets through metadata, not matrix special cases.

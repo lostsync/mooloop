@@ -158,7 +158,7 @@ area, and where each behaviour stops.
   index back at its own channel and drops one that names a device or control
   that is not there, leaving addresses on a generator that has no descriptor
   table yet untouched.
-- Thirteen effect kinds ship: a low-pass/high-pass filter, a drive/saturation
+- Fourteen effect kinds ship: a low-pass/high-pass filter, a drive/saturation
   with four curves at 2x oversampling whose Drive changes character rather
   than level -- a signal at the -12 dBFS operating level keeps its peak at
   any drive on any curve, and a hotter one is held down toward it -- a preamp carrying the channel strip's
@@ -238,10 +238,12 @@ area, and where each behaviour stops.
   plate: eight parallel Freeverb-tuned combs into four series allpasses per
   channel, with Size, Decay, Damp, and Width, for material that does not need
   the hall. The thirteenth kind is the retained-audio Buffer described below,
-  which is an ordinary insert in the same picker. Device faces are
-  width-quantized in rack units: filter, drive, preamp, bitcrush, limiter,
-  and plate take 1U; gate, compressor, EQ, Mod, and Buffer take 2U; delay and
-  reverb take 3U.
+  which is an ordinary insert in the same picker. The fourteenth is the Bus
+  Comp, the master section's compressor offered as an insert
+  ([engine.md](engine.md)). Device faces are width-quantized in rack units,
+  declared once in `effect_kind_units`: filter, drive, preamp, bitcrush, and
+  limiter take 1U; gate, compressor, plate, EQ, Mod, and Buffer take 2U;
+  delay, reverb, and Bus Comp take 3U.
 - Gate, compressor, and limiter share one transfer-curve display with a
   draggable threshold handle. Its live dot is fed by the device's own gain
   computer rather than by the surrounding peak meters: the audio thread

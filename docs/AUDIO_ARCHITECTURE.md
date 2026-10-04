@@ -116,10 +116,15 @@ itself and the graph-capable-but-not-graph-first rule; what the executor owes
 it is below.
 
 At each declared control tick, the executor evaluates a source, applies each
-route transform, adds offsets to the destination's base value, and puts the
-resolved natural-unit value on the existing sample-timed parameter path. A
-device outlet consumed across a device boundary is read on the following block
-unless a future contract explicitly compiles a different declared latency.
+route transform, and adds offsets to the destination's base value. Each
+driven destination's resolved natural-unit values for the block, one per tick,
+go to the device as a curve through `AudioNode::apply_curves`, before
+`process`. A node with no native curve path gets the default implementation,
+which turns the curve back into sample-timed `Event::ParamValue` steps at the
+tick offsets. A strip's Volume and Pan bypass both: the output stage applies
+them per tick directly. A device outlet consumed across a device boundary is
+read on the following block unless a future contract explicitly compiles a
+different declared latency.
 Display telemetry is never a control input. The runtime's fixed arrays --
 eight module slots and sixteen routes a channel -- are compile-time constants
 with a measured, linear price, not the persistent or product meaning of the
@@ -129,7 +134,7 @@ reservation.
 ## Graph Compiler
 
 The project mixer is editable data, not an execution plan. Compilation turns
-it into a fixed-capacity `RenderPlan` containing at least:
+it into a fixed-capacity render plan containing at least:
 
 - normalized node and port identities;
 - validated audio and dependency edges;
@@ -139,11 +144,19 @@ it into a fixed-capacity `RenderPlan` containing at least:
 - diagnostics for repaired legacy data or refused edits;
 - a generation identifying the project state it represents.
 
-Today each bus has one audio destination, so its routing is a tree directed
-toward the master and a compact bus permutation is sufficient. Parallel sends
-and sidechains will turn the dependency model into a DAG. They should extend
-the compiler's edge model rather than add a second scheduler inside individual
-effects.
+That plan is several compiled pieces rather than one type.
+`compile_bus_graph` gives the track bank a `CompiledBusGraph`: one output
+destination per track and a render order. `compile_latency` gives a
+`CompiledLatency`, one delay per channel, per track and per send.
+`compile_audio_graph` gives the channels an `AudioOrder` for the taps Aux In
+reads. The engine's `SendBank` holds each send's level and compensation ring.
+
+A track has exactly one output and any number of parallel sends beside it. The
+render order is a topological sort over both kinds of edge, so the track
+graph is a DAG rather than a tree toward the master. Sidechains are the
+missing edge kind: a dependency that schedules a producer without summing it
+into the consumer. They should extend the compiler's edge model rather than
+add a second scheduler inside individual effects.
 
 Cycles remain invalid graph topology. Musical feedback is an explicit node or
 edge kind with a defined delay measured in frames, gain behavior, and
@@ -300,9 +313,9 @@ eventual processing contract needs to describe:
 Latency and tail are implemented; "Rest And Tail" below states what they mean
 and what a host may do with them. **Transport discontinuities are implemented
 too**: `AudioNode::on_discontinuity(Discontinuity)` tells a node that time
-stopped being continuous, and names which kind -- `Seek`, `Stop` or
-`ProgramChange`. A general "reset to construction state" verb is not part of
-the contract, and nothing has asked for one.
+stopped being continuous, and names which kind -- `Seek`, `LoopFold`,
+`Stop` or `ProgramChange`. A general "reset to construction state" verb is
+not part of the contract, and nothing has asked for one.
 
 `Event::Choke` is not that channel. It is correct for what it names: a choke
 group cutting a hi-hat off. Borrowed to mean *time moved*, it was answered
@@ -530,11 +543,14 @@ Each node reports integer latency frames initially. The graph compiler sums
 serial latency and inserts compensation on shorter inputs at every summing or
 dependency point. Compensation storage is allocated before activation.
 
-The current one-destination mixer is cheap to compensate because each node has
-one downstream audio edge. Parallel sends and sidechains require the general
-DAG rule: compute the longest upstream arrival at each consumer and delay every
-shorter input by the difference. A sidechain also adds a dependency edge to
-the schedule even when it is not mixed into the consumer's output.
+Parallel sends make the track bank a DAG, so `compile_latency` applies the
+general rule: walking the render order, it finds the longest upstream arrival
+at each summing point, from outputs and sends alike, and delays every shorter
+input by the difference. The answer is one delay per edge: per channel, per
+track output and per send. Each send's delay is its own ring in `SendBank`,
+installed from the same plan as the channel and track rings. A sidechain,
+when it exists, will also add a dependency edge to the schedule even though it
+is not mixed into the consumer's output.
 
 Changing latency while active requires a new prepared plan or a bounded,
 declicked transition between preallocated delays. The mixer takes the first:

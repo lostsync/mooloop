@@ -514,9 +514,10 @@ before any of them existed still loads:
   `Project::reseat_channel_references` is its other half, and runs after every
   structural edit.
 - **A channel's `audio_input` is where it records audio from**, beside
-  `midi_input` and independent of it: `"master"`,
-  `{ track = 4 }` or `{ channel = 7 }`, a **track or channel id** rather than a
-  seat, so it survives a move and a deleted source resolves to nothing.
+  `midi_input` and independent of it: `"input"` (the hardware input),
+  `"master"`, `{ track = 4 }` or `{ channel = 7 }`. A track or channel is
+  named by **id** rather than seat, so it survives a move and a deleted
+  source resolves to nothing.
   Omitted when `off`, so a song written before it is byte-identical. Any
   channel may hold one whatever its device, and any number may. **A kit or
   channel document brings no audio input** -- it would name a channel of
@@ -527,9 +528,10 @@ before any of them existed still loads:
   positions for a bank that has none (`Project::assign_track_ids`, run beside
   `assign_channel_ids`), and the same uniqueness rule, reported as
   `track.id.duplicate`. A master the repair pass has to restore is minted
-  like any other track. **Nothing names a track by id yet**: a channel's
-  `bus`, a track's `output` and sends, and `EffectTarget::Bus` are still
-  seats. The id exists so the engine can match a track across an install
+  like any other track. **Only a channel's `audio_input` names a track by
+  id**: a channel's `bus`, a track's `output` and sends, and
+  `EffectTarget::Bus` are still seats. Otherwise the id exists so the engine
+  can match a track across an install
   (`docs/plans/archive/incremental-structure/`).
 
 - **Analog sum is one defaulted boolean per track.** `buses[].bus.console`
