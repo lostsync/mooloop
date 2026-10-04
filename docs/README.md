@@ -57,8 +57,8 @@ table of which document to read for which task. Start there, not here.
   issue for every step still to do. Linear says which state every plan and
   step is in; `00-status.md` in each records what the doing found. Work the
   files in order. Completed directories move to [plans/archive/](plans/archive/).
-  [plans/README.md](plans/README.md) is the narrative of how each plan got
-  where it is.
+  [plans/README.md](plans/README.md) is the index: what each plan is, and
+  what to read before reopening it.
 - [workflows/](workflows/) — procedures that are run *again*, where a plan is
   work that lands once. Each carries a record of what its runs found, because a
   workflow's failure mode is looking for something that has stopped being the
