@@ -7486,6 +7486,15 @@ impl UiState {
 impl AppUi {
     pub fn new(mut handle: EngineHandle) -> Result<Self, slint::PlatformError> {
         let window = MainWindow::new()?;
+        // On macOS the menus go in the system menu bar at the top of the
+        // screen, which Slint's built-in `MenuBar` becomes there; everywhere
+        // else they stay in the window's own bar (see `MainWindow` in
+        // `main.slint`). `SLINT_NO_MUDA` is Slint's switch for drawing that
+        // built-in bar in the window instead, and two in-window bars would be
+        // one too many.
+        window.set_native_menubar(
+            cfg!(target_os = "macos") && std::env::var_os("SLINT_NO_MUDA").is_none(),
+        );
         prepare_recordings_folder(&window);
         // From here on a quit signal is the pump's to answer; see `signals`.
         signals::install();
