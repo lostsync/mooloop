@@ -33,8 +33,7 @@ A song with embedded assets has this layout:
 ```
 
 `recordings/` holds the song's recorded takes, under the names they were
-recorded with (`audio-recording/06`; Adam, 2026-09-22: *"having a
-recordings/ doesnt sound like a terrible idea"*). A save tells a take from any
+recorded with. A save tells a take from any
 other sample by the folder its file is in: the shared folder a take is
 recorded into is also called `recordings`, and so is another song's on a
 Save As. Everything else a song owns goes into `samples/`, prefixed with its
@@ -51,9 +50,9 @@ drums.mooloop-kit/
     `-- 01-snare.wav
 ```
 
-**A save is durable, and the song is never missing** (since 2026-09-23,
-MOO-92). The new song file is written to a hidden sibling, flushed to the disk
-(`sync_all`), read back and parsed, and only then renamed onto the song's
+**A save is durable, and the song is never missing.** The new song file is
+written to a hidden sibling, flushed to the disk (`sync_all`), read back and
+parsed, and only then renamed onto the song's
 name. On POSIX that one rename is atomic, so a crash, a power cut or a reader
 sees the old song or the new one and never neither; the folder is synced after
 it so the rename survives too. What the save copied into the asset directory
@@ -69,22 +68,19 @@ that has files in it, so the old bundle is moved aside under a name only that
 save uses, the synced and read-back staging directory renamed into place, and
 the old one removed.
 
-**The asset directory is added to, never rebuilt** (since 2026-09-22). A file
+**The asset directory is added to, never rebuilt.** A file
 already in it stays where it is, under the name it has, and is not copied
 again -- however the song's path is spelled: "already in it" is decided on
 resolved paths, so a song opened through a relative path, a `..` or a
 symlinked parent and saved through another is still recognised as owning its
-samples (MOO-179, 2026-09-23; a name that grew before then keeps its length
-and stops growing); a file new to the song is copied in once, through a hidden `.part`
+samples (a name that grew under an earlier build keeps its length and stops
+growing); a file new to the song is copied in once, through a hidden `.part`
 sibling renamed into place, under a name nothing in the folder has. A file the
 song stops using stays in the folder -- an undo can bring it back -- until the
 clean-up dialog (`recording.clean-up`, `ACTIONS.md`) moves it to the trash. A
-save that fails removes only what it copied in. Before, every save staged a
-whole new folder from what that save referenced and deleted the old one:
-every Ctrl+S copied every embedded sample again, and a take replaced before
-the next save was deleted while the undo history still pointed at it
-(MOO-89). Adam, 2026-09-22: *"that rebuild is a problem, too. it keeps
-rewriting the filenames every save."*
+save that fails removes only what it copied in. Rebuilding the folder on
+every save, as earlier builds did, copied every embedded sample again and
+deleted a take the undo history still pointed at.
 
 Loading and resaving an older directory-style `.mooloop` song migrates it to
 the file and sidecar layout. Other bundle types retain their directory
@@ -112,7 +108,7 @@ Three of the eight tags were chosen rather than inherited from serde's
 | Generator | `source.type` |
 | --- | --- |
 | Sampler | `sampler` |
-| v1 drum synth (the Gitdum DS-SX since 2026-09-26) | `drum_synth` — the interface name changed and the tag did not; a channel saved as "Drum Synth 1" keeps that name |
+| v1 drum synth (now the Gitdum DS-SX) | `drum_synth` — the interface name changed and the tag did not; a channel saved as "Drum Synth 1" keeps that name |
 | v1 mono synth | `mono_synth` |
 | v1 poly synth | `poly_synth` |
 | ML-M1 | `ml1` — the device shipped under the wrong name and the tag is an on-disk identifier, so it was frozen rather than corrected |
@@ -124,9 +120,9 @@ Three of the eight tags were chosen rather than inherited from serde's
 `asset_mode` records the requested save policy. Each file sample also carries
 its own `embedded` flag, which means **the song owns this sample**: a
 referenced save keeps a bundle-owned sample when externalizing it would destroy
-the only copy, and since 2026-09-18 it also *copies in* an owned sample that is
+the only copy, and it also *copies in* an owned sample that is
 not in the bundle yet -- a recorded take, which sits in the shared recordings
-folder until the first save (`audio-recording/04`). Either way the report
+folder until the first save. Either way the report
 carries a "stays embedded" warning. So a saved song never refers to the
 recordings folder.
 
@@ -200,32 +196,26 @@ how many patterns a song has. Three rules govern them:
   reads as no colour rather than refusing the document, because a cosmetic
   field is the wrong thing to lose a song's worth of work to.
 
-`pattern_meta` was added on 2026-09-13, and the name half of it is a fix
-rather than a feature: patterns had been renamable since 2026-09-07, the
-session held the name, and the format had nowhere to put it -- so every
-reopened song came back with its patterns numbered and nothing reported a
-thing.
-
 `channels[].notes` is a pattern-indexed array of note lanes. Notes beyond a
 pattern's current logical length remain stored, so shortening and re-extending
 a pattern is lossless. The sampler state also contains every field in
 `SamplerParams`: voice/retrigger/choke settings, trim, reverse, root and tune,
 loop settings, ADSR, filter, drive, bit reduction, and rate reduction.
 
-`loop_crossfade_ms` (MOO-43, 2026-09-24) is how long a forward loop's seam
+`loop_crossfade_ms` is how long a forward loop's seam
 is crossfaded, in milliseconds of the sample's own time, from 0 to 100. It
 defaults to 0, a hard seam, so a song written before it existed loads and
 renders exactly as it did. A value outside the range, or not a number, is
 repaired into it on load.
 
-`loop_quantize` (MOO-47, 2026-09-24) is what a loop's bounds snap to:
+`loop_quantize` is what a loop's bounds snap to:
 `"off"`, `"slices"`, or a division of the bar (`"bar"`, `"half"`,
 `"quarter"`, `"eighth"`, `"sixteenth"`, `"thirty_second"`). The bar is the
 sample's musical length, `stretch_bars` bars over the playback region. It
 defaults to `"off"`, so a song written before it existed loops where it
 always did.
 
-`glide`, `glide_mode` and `env_trigger` (MOO-45, 2026-09-25) are the
+`glide`, `glide_mode` and `env_trigger` are the
 sampler's mono glide: the portamento time in seconds (0 to 2), when a note
 glides (`"Always"` or `"Legato"`), and whether an overlapping note restarts
 (`"Retrig"`) or only changes pitch (`"Legato"`). They are the ML-M1's own
@@ -233,7 +223,7 @@ controls and values. They default to 0, `"Legato"` and `"Retrig"`, and a
 sampler with no glide and `"Retrig"` plays exactly as one saved before they
 existed, so an older song loads unchanged.
 
-Key zones (MOO-14, 2026-09-25) add two fields beside `sample`. `keys =
+Key zones add two fields beside `sample`. `keys =
 { low, high }` is the MIDI key range the sampler's own sample, the *base
 zone*, plays. `zones` is a list of extra zones, each
 `{ keys = { low, high }, root_note, sample, velocity = { low, high } }`,
@@ -249,16 +239,16 @@ full-range zone and saves byte-identical. On load, a range outside 0 to 127
 is clamped and an inverted one swapped (`channel.sampler.zone`), and a
 missing zone file is a sample warning, like a missing base sample.
 
-Zone regions (MOO-463, 2026-10-01; Adam, 2026-09-30: "all 3 sound good")
-make each extra zone its own region of its file. A zone gains `region =
-{ start, end, reverse, loop_start, loop_end, loop_mode, loop_crossfade_ms,
-tune_semitones, tune_cents, level_db }`, in the parameters' own units
+Zone regions make each extra zone its own region of its file. A zone gains
+`region = { start, end, reverse, loop_start, loop_end, loop_mode,
+loop_crossfade_ms, tune_semitones, tune_cents, level_db }`, in the
+parameters' own units
 (points are fractions of the zone's file; `level_db` is a trim from -48,
 which is silence, to +12). A field missing from `region` takes a fresh
 zone's value: the whole file, no loop, no tune, 0 dB. The base zone keeps
 its region in the parameters' existing fields, and its level trim in a new
 parameter `zone_level_db`, omitted at 0, so a song without zones saves
-byte-identical. A zone saved between 0.1.5 and this change has no
+byte-identical. A zone saved before regions existed has no
 `region`. Such a zone played the parameters' start, end, loop and tune, so
 on load it is given a copy of them, once, and is independent from then on.
 That copy is a migration and is not reported as a repair. A zone that
@@ -272,15 +262,15 @@ Slice mode adds `play_mode` and `slice_base_note` to the parameters, plus a
 pairs sorted by source frame. All three default, so a song written before
 slicing loads as an ordinary pitched sampler with no markers.
 
-Each marker also carries `hand` (MOO-44, 2026-09-24): whether it was placed
+Each marker also carries `hand`: whether it was placed
 or moved by hand, rather than laid down by Divide or by transient detection.
 Detection's Replace keeps hand-placed markers. A marker saved without the
 field loads as hand-placed, so accepting a detection never drops a marker
 from an older song.
 
-**A committed time stretch is a render that replaces the sample** (MOO-375,
-2026-10-01; Adam, 2026-09-30: *"a committed sample should be treated pretty
-much like a rendered one"*). The render is a WAV file of its own: `sample`
+**A committed time stretch is a render that replaces the sample** (Adam,
+2026-09-30: *"a committed sample should be treated pretty much like a
+rendered one"*). The render is a WAV file of its own: `sample`
 names it, owned (`embedded = true`) the way a recorded take is, so a save
 copies it into the sidecar's `samples/` by the ordinary rule and a reload
 plays it as stored. The `commit` table says how it came to be (shown inline;
@@ -344,7 +334,7 @@ punch = 0.35
 ```
 
 Reverb readers default every field of `ReverbParams` individually. The device
-was a generated-room convolution player through August 2026 and stored room
+was once a generated-room convolution player and stored room
 geometry (`shape`, `material`, `width_m`, `depth_m`, `height_m`, `capture_x`,
 `capture_y`); the feedback delay network that replaced it stores `size`,
 `decay_s`, `damping`, `predelay_ms`, `diffusion`, `width`, `modulation`, and
@@ -415,14 +405,14 @@ face is meant to show.
 
 ## Effects, modulation, and automation
 
-Three later additions all hang off `#[serde(default)]`, so a manifest written
+The later additions below hang off `#[serde(default)]`, so a manifest written
 before any of them existed still loads:
 
 - `channels[].setup.effects` is the ordered insert chain: one
   `EffectSlotState` per slot, each a tagged `EffectParams` enum. The
   pre-tag untagged filter shape still decodes. **Every kind's `state`
   table fills a missing field from its default** (a struct-level
-  `#[serde(default)]` on every params struct, MOO-197), so a song or
+  `#[serde(default)]` on every params struct), so a song or
   preset written before a parameter existed loads, with that parameter at
   its default -- where a field names a default of its own for an older
   song's sake (the Modulation's `rate_division`), that one wins. A table that
@@ -437,15 +427,15 @@ before any of them existed still loads:
   ids takes its **positions** as its ids — which is exactly what the routes
   and lanes in such a project already mean by `slot`, so an older song loads
   pointing where it pointed.
-- **A device may be folded** (MOO-219, 2026-09-24): `collapsed: true` on an
+- **A device may be folded**: `collapsed: true` on an
   `EffectSlotState` means the rack draws it as its header on its side, and a
   folded container hides its run. It is view state -- no engine command, no
   DSP reads it, and toggling it is not an undo step (undo and redo carry the
   live folds across the snapshot they install). Defaulted and not written
   while false, so a song saved with nothing folded is byte-identical to one
   written before the field existed.
-- **A Buffer's `freeze` is not saved** (MOO-196, 2026-09-30). Adam,
-  2026-09-23: *"dont save freeze state or data. freeze is temporary."* It is
+- **A Buffer's `freeze` is not saved.** Adam, 2026-09-23: *"dont save freeze
+  state or data. freeze is temporary."* It is
   never written, and a `freeze` key in an older song or preset is ignored, so
   a Buffer saved frozen opens unfrozen, recording, with the rest of its
   settings as saved. A copied or pasted Buffer arrives unfrozen too. The
@@ -479,21 +469,16 @@ before any of them existed still loads:
   format did not change; only what the number means did, and it means the
   same thing for every file written so far.
 
-  This is what the identity is for, in its smallest form. As a position the
-  selection had to be renumbered by every structural edit, and two of the
-  three did it wrong: an insert above the selected channel never moved it at
-  all, and a removal *clamped* rather than followed, which is only
-  accidentally right when the selection is at the end of the bank. As an
-  identity there is nothing to renumber. A selection naming a channel the
-  song does not have is repaired to the first channel
-  (`song.selected_channel`), which is a different question from the range
-  check it replaced: an id of 40 is perfectly ordinary in a song that has
-  been edited forty times.
+  As an identity there is nothing to renumber after a structural edit. A
+  selection naming a channel the song does not have is repaired to the first
+  channel (`song.selected_channel`), which is a different question from a
+  range check: an id of 40 is perfectly ordinary in a song that has been
+  edited forty times.
 
-  **The other three fields that name another channel took identities on
-  2026-09-18**, and each took a different shape because each had a different
-  reason not to be an id outright. `docs/plans/archive/channel-identity/06` records
-  the reasoning; what a file holds is this:
+  **The other three fields that name another channel** each took a different
+  shape, because each had a different reason not to be an id outright.
+  `docs/plans/archive/channel-identity/06` records the reasoning; what a file
+  holds is this:
 
   - A **control binding**'s target stopped being a `ParamAddr` and became a
     `ParamKey`, whose `scope` is a `ChainKey` -- `Channel(ChannelId)` or
@@ -528,8 +513,8 @@ before any of them existed still loads:
   forgot to identify the references would leave them positional, silently.
   `Project::reseat_channel_references` is its other half, and runs after every
   structural edit.
-- **A channel's `audio_input` is where it records audio from**
-  (`audio-recording/`), beside `midi_input` and independent of it: `"master"`,
+- **A channel's `audio_input` is where it records audio from**, beside
+  `midi_input` and independent of it: `"master"`,
   `{ track = 4 }` or `{ channel = 7 }`, a **track or channel id** rather than a
   seat, so it survives a move and a deleted source resolves to nothing.
   Omitted when `off`, so a song written before it is byte-identical. Any
@@ -554,10 +539,9 @@ before any of them existed still loads:
   this existed reads as. The master's value is ignored, because the master
   feeds nothing.
 
-  A `channels[].setup.channel.console` briefly existed and was removed the
-  same day, when Adam settled that analog sum is a track's switch and not a
-  channel's. Serde ignores unknown fields, so a manifest written in that
-  window loads without complaint and simply drops it.
+  Adam settled that analog sum is a track's switch and not a channel's. A
+  `channels[].setup.channel.console` from the day one briefly existed is an
+  unknown field, and serde drops it.
 
   There is deliberately **no field naming the algorithm**. One curve exists,
   and a `console_mode` added later with `#[serde(default)]` is the same no-op
@@ -584,9 +568,7 @@ before any of them existed still loads:
   **The default for a missing `position` is per band, and it has to be.** The
   middle of a five-position outer band is 2 and the middle of a seven-position
   mid band is 3, so there is no one number a `#[serde(default)]` on the field
-  could return -- it has no array index. It returned `2` until 2026-09-14,
-  which meant the two mid bands opened one step low and this paragraph was
-  describing something the code did not do. `bands` now decodes through a wire
+  could return -- it has no array index. `bands` decodes through a wire
   type whose `position` is optional and filled from `DEFAULT_POSITIONS[i]`.
   Nothing else about a band became optional: `kind`, `gain_db` and `q` each
   still refuse to load when absent.
@@ -598,7 +580,7 @@ before any of them existed still loads:
   the two mid bands share one struct, and what would let a later face offer
   the third value without a format change.
 
-  **The master's own section rides in its strip** (MOO-13):
+  **The master's own section rides in its strip**:
   `buses[].bus.strip.master`, a `MasterSectionParams` holding the bus
   compressor -- `comp_in`, `voicing` (`Grip`, `Punch` or `Tube`, by name),
   `threshold_db`, `makeup_db`, `mix`, and each voicing's own switch
@@ -610,14 +592,14 @@ before any of them existed still loads:
   when it is the default**, so a song that never touched the section writes
   nothing and is byte-identical to one saved before it existed; an older song
   opens with the section out. **`lookahead_ms` is ignored**: songs saved on
-  2026-09-23/24 may carry it (the safety limiter's lookahead knob, MOO-169),
-  and since MOO-217 the limiter has no lookahead, so the key is read as
-  unknown and dropped, with no repair, and the song plays as if it were 0.
+  2026-09-23/24 may carry it (the safety limiter's lookahead knob), and the
+  limiter no longer has a lookahead, so the key is read as unknown and
+  dropped, with no repair, and the song plays as if it were 0.
   It is not written back. Its parameter id, 56, is retired. Every track's
   strip may carry one, and only the master's is run: the session refuses its ids on any other
   track. See `docs/plans/archive/master-bus-compressor/`.
 
-  **The same compressor as an insert** (MOO-216) is an ordinary effect row,
+  **The same compressor as an insert** is an ordinary effect row,
   `type = "bus_comp"`, whose `state` is a `BusCompParams`: the master
   section's compressor fields under the same names and meanings -- `voicing`
   by name, `threshold_db`, `makeup_db`, `mix`, and the seven switch
@@ -682,7 +664,7 @@ before any of them existed still loads:
   — so a delay saved on that division reopens four times slower, playing the
   half note its own label always claimed.
 - A modulation effect carries `state.width` (0 to 1, the wet signal's
-  stereo width), added 2026-09-26 (MOO-245), parameter id 8. It defaults to
+  stereo width), parameter id 8. It defaults to
   1.0, full width, where the DSP's width stage is the identity to the bit,
   so a file written before it plays exactly as it did. 0.1.5 ignores the
   key and plays such a song at full width.
@@ -697,18 +679,17 @@ before any of them existed still loads:
   the right order is recoverable and an impossible nesting is not.
 - A container (`chain` or `layer`) also carries `state.level` (linear gain on
   its run's output before the blend, default 1.0), `state.mute` and
-  `state.solo` (default false), added 2026-09-23 (`containers/09`). Mute and
+  `state.solo` (default false). Mute and
   solo act only when the container is a branch of a layer. Every file written
   before them reads as unity, unmuted and unsoloed, which is how it sounded.
 - A container row's own `input_trim` and `output_trim` (the host fields
-  every row carries) have always been saved and are **heard since
-  2026-09-25** (MOO-210): the input trim before the run and its dry copy,
-  the output trim after the blend. No field changed and nothing migrates.
+  every row carries) have always been saved and are **heard**: the input
+  trim before the run and its dry copy, the output trim after the blend.
+  Earlier builds ignored them, but no field changed and nothing migrates.
   A file that saved a box's trim away from unity therefore reopens at that
   level rather than at the level it used to play at, which is deliberate:
   the saved value is what the knob showed, and silently resetting it would
-  change the file behind the face. None of the fifteen songs Adam had on
-  the build box that day held a container with a non-unity trim.
+  change the file behind the face.
 - `channels[].setup.modulation` is that channel's `ModRack`. Only occupied
   slots are written, each with its slot index, its durable `id`, and its
   module parameters. Routes persist their durable `source` id alone; the
@@ -729,7 +710,7 @@ the two numbers agree. A channel is still named by *index*, so a route or lane
 scoped to a channel is still renumbered when the channel list changes.
 
 **A `ParamAddr` or `ParamKey` naming the channel's generator carries the
-kind of device it was made on** (since 2026-09-26, MOO-135). The owner is
+kind of device it was made on**. The owner is
 still written `owner = "source"`, exactly as before, and the kind is a
 sibling key on the same table, `source_kind`, spelled with the `source.type`
 tags above (`"sampler"`, `"ds01"`, `"ml1"` ...). It is written for every
@@ -772,9 +753,9 @@ holding the container and everything inside it, in rack order, with
 `contains = ["effect_params", "effect_run"]`. The entry is **added** rather
 than replacing `effect_params`, so a reader that predates run presets refuses
 the bundle instead of loading its first device and dropping the box. The
-head may be any container: since `containers/10` (2026-09-23) a layer saves
-this way too, its branches and all, and the bundle lists under its head's
-kind, so a layer's preset is offered on a layer's rail and a chain's on a
+head may be any container: a layer saves this way too, its branches and all,
+and the bundle lists under its head's kind, so a layer's preset is offered on
+a layer's rail and a chain's on a
 chain's. Nothing in the document changed for that; a chain-headed bundle
 written before reads exactly as it did. Device
 ids are stripped on save and minted fresh on load, because identity belongs to
@@ -786,9 +767,9 @@ a run is not carried — a route's source is a module in the channel's rack, not
 in the container — and `docs/plans/archive/containers/00-status.md` records why that
 is a deferred decision rather than an omission.
 
-**A container with a hosted plugin inside** (MOO-321, 2026-09-29) carries the
-plugin. Each plugin row's slot is renumbered to a key into the run itself,
-from `0`, and the run's own `plugins` table holds each key's
+**A container with a hosted plugin inside** carries the plugin. Each plugin
+row's slot is renumbered to a key into the run itself, from `0`, and the run's
+own `plugins` table holds each key's
 `PluginSlotState`, exactly as a song's `plugins` table writes one (see
 "Hosted plugins" below). The list becomes
 `contains = ["effect_params", "effect_run", "effect_plugin"]`:
@@ -824,16 +805,16 @@ data = "..."
 - The state is what each plugin held when the preset was saved, asked of the
   live instance (`Session::lift_run_live`), not the song's last capture.
 - Loading it mints each plugin row a **new slot** in the song it lands in,
-  opened with the carried state, as a copied or duplicated container does
-  (MOO-271). A key is never a slot number in any song.
+  opened with the carried state, as a copied or duplicated container does.
+  A key is never a slot number in any song.
 - **0.1.5 refuses it.** 0.1.5 checks an `effect_run` bundle's list against
   `["effect_params", "effect_run"]` before it parses the document, so it meets
   `effect_plugin` and refuses the bundle rather than landing the row on
   whatever the song has at that number
   (`an_older_reader_refuses_a_container_preset_with_a_plugin`).
 - A bundle with a plugin row whose key has no entry is refused whole and not
-  listed. That includes a container preset holding a plugin that was saved
-  before this change, which wrote the row's song slot number and no plugin.
+  listed. That includes a container preset holding a plugin saved by an
+  earlier build, which wrote the row's song slot number and no plugin.
   A save refuses such a run too.
 - A run with no plugin in it writes neither the table nor the entry, so it
   is byte-identical to one written before.
@@ -856,7 +837,7 @@ type = "plugin"
 state = 0
 ```
 
-A channel whose **source** is a plugin instrument (MOO-84) names its slot
+A channel whose **source** is a plugin instrument names its slot
 the same way, and its channel's `kind` is `plugin`:
 
 ```toml
@@ -869,9 +850,9 @@ type = "plugin"
 state = 1
 ```
 
-**`source_device` is the instrument's device identity** (MOO-312, MOO-313).
-A lane or route on one of its parameters is
-`owner.plugin_param = { device = <source_device> }` with the plugin's own
+**`source_device` is the instrument's device identity.** A lane or route on
+one of its parameters is `owner.plugin_param = { device = <source_device> }`
+with the plugin's own
 parameter id, exactly as on a plugin effect (MOO-74's address). It is minted
 from the channel's `next_device_id`, the namespace its effects draw from, so
 it never equals an effect's `id`.
@@ -890,8 +871,7 @@ it never equals an effect's `id`.
   an effect.
 - **Replacing the instrument** mints the new one a fresh id, and a native
   source gets none; the old instrument's lanes and routes go with it, as a
-  deleted effect's do, and undo brings them back. That is Adam's recommended
-  answer to the open Question on MOO-312, pending his ruling.
+  deleted effect's do, and undo brings them back.
 - An older build ignores the key, but refuses the song anyway on
   `source.type = "plugin"` (below).
 
@@ -974,7 +954,7 @@ naming them loses only those orphaned slots in an older build.
 A song with no plugins writes neither key, so it is byte-identical to one
 written before the table existed.
 
-**A plugin device's preset** (MOO-222, 2026-09-26) is an ordinary `effect`
+**A plugin device's preset** is an ordinary `effect`
 document whose row is the plugin device, with the slot written unassigned
 (`state = 4294967295`), and a top-level `plugin` table beside `document`
 holding that slot's `PluginSlotState`: the `plugin` reference, `params`,
@@ -1113,11 +1093,9 @@ audio file.
   at load, not refused.
 - Up to `MAX_AUTOMATION_LANES_PER_CHANNEL` (8) automation lanes per (pattern,
   channel), and at most one lane per destination. Also an engine constant, and
-  truncated on the same terms — `Pattern::set_lanes` takes the first eight, so
-  a manifest carrying more had lanes the *document* kept and the engine had
-  never heard of: they drew, edited and re-saved while changing no sound. The
-  integrity pass now takes the same eight and says how many went, so both
-  sides agree about which.
+  truncated on the same terms: the integrity pass takes the same first eight
+  that `Pattern::set_lanes` does and says how many went, so the document and
+  the engine agree about which.
 - Up to seventeen buses (master plus sixteen inserts), and a bank may hold
   fewer. A short stored bank is a small mixer and is **left as it is** --
   padding it back to seventeen was removed because it silently added fifteen

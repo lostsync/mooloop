@@ -4,37 +4,18 @@ How to get real numbers out of a plugin on Adam's studio machine, and what to
 capture, so that one session produces everything rather than three sessions
 each finding the last one missed something.
 
-Written 2026-09-09, when the first voicing numbers had to be picked rather
-than measured. Adam: *"we can do some sweep measurements on UAD and Waves
-plugs later to try and get some real numbers"*, and *"i have a few plugins
-that might be worth measuring for various mooloop stuff."*
-
-> **Run on 2026-09-10.** This protocol has been executed — 25 plugins,
-> preamps, EQs and compressors. The scripts are
-> [`spikes/preamp-measure/`](../spikes/preamp-measure/README.md) and the
-> numbers are in its
-> [`RESULTS.md`](../spikes/preamp-measure/RESULTS.md). This document stays as
-> the protocol and the reasoning behind it; what the run learned that changes
-> the *method* is folded in below, marked as such.
-
-Revised the same day, when Adam pointed out that the plugins can simply be
-loaded and driven in Python. The first version routed everything through
-rendered WAVs and was a worse plan for a reason worth keeping: the cost of
-"host the plugin" had been priced against the wrong option.
+The scripts are [`spikes/preamp-measure/`](../spikes/preamp-measure/README.md)
+and the numbers from the 2026-09-10 run (25 plugins: preamps, EQs and
+compressors) are in its [`RESULTS.md`](../spikes/preamp-measure/RESULTS.md).
 
 ## Load the plugins in Python and drive their parameters
 
-Adam, 2026-09-09: *"that instance of you can write some python that'll load
-the vsts and use their individual params to get the measurements you want w/o
-a bunch of wav files and shit."*
-
-**This replaces the first version of this document**, which routed everything
-through rendered WAVs on the grounds that hosting a plugin was days of work.
-That was true of the option being priced — a JUCE or CLAP host in Rust — and
-false of the one that matters: `pedalboard` (Spotify's, `pip install
-pedalboard`) loads VST3 and AU, exposes each parameter by name, and processes
-numpy arrays. `dawdreamer` is the heavier alternative if parameter
-*automation over time* is ever needed; it is not, for any of this.
+`pedalboard` (Spotify's, `pip install pedalboard`) loads VST3 and AU, exposes
+each parameter by name, and processes numpy arrays. `dawdreamer` is the
+heavier alternative if parameter *automation over time* is ever needed; it is
+not, for any of this. Hosting a plugin this way is cheaper than routing
+everything through rendered WAVs; it is a JUCE or CLAP host in Rust that
+would be days of work.
 
 The win is not mainly the absence of WAV shuttling. It is that **the plugin's
 own controls become a measured axis** rather than a fixed choice made once at
@@ -75,7 +56,6 @@ Before generating a battery, load each plugin once and check:
 
 Every tone must start from the same state, or a level step measured after a
 loud tone is measuring the plugin's recovery rather than its transfer curve.
-That is free in-process and was awkward by hand.
 
 ## Stepped tones, not a swept sine
 
@@ -103,9 +83,8 @@ nested loops rather than one long file:
 | Drive / input | whatever the plugin exposes, at 3-5 settings across its range |
 | Tone length | 0.5 s, of which the first half is discarded so anything level-dependent has settled |
 
-That third axis is the one the WAV workflow could not afford and the
-in-process one gets for nothing — and it is the axis the model actually wants,
-since `pre in / drive` is the control being modelled.
+The drive axis is the one the model actually wants, since `pre in / drive` is
+the control being modelled.
 
 Eighty-four tones per drive setting, at half a second each, is under a minute
 of processing per plugin. Measure **digital silence first** for the noise
@@ -115,22 +94,18 @@ one.
 
 No alignment chirp is needed — `pedalboard` reports and compensates plugin
 latency — but check it rather than assume it: process an impulse and confirm
-it comes back where it went in. It does: every unit measured came back within
-one sample.
+it comes back where it went in.
 
-**Measured 2026-09-10 — repeat each tone and reject, do not average.** Point 3
-above asks whether a plugin is deterministic. The answer for Waves plugins is
-"almost": a clean render is bit-repeatable, and roughly one render in eight
-carries a dropout that loses fundamental energy and lifts the broadband floor
-by tens of dB. Averaging that in moves a quiet cell's 2nd harmonic by 40 dB.
-Because the clean value is exact and the glitch only ever subtracts signal,
-the fix is selection rather than averaging: render four times, keep the one
-with the most fundamental in it, and record how many were discarded.
+**Repeat each tone and reject, do not average.** Point 3 above asks whether a
+plugin is deterministic. The answer for Waves plugins is "almost": a clean
+render is bit-repeatable, and roughly one render in eight carries a dropout
+that loses fundamental energy and lifts the broadband floor by tens of dB.
+Averaging that in moves a quiet cell's 2nd harmonic by 40 dB. Because the
+clean value is exact and the glitch only ever subtracts signal, the fix is
+selection rather than averaging: render four times, keep the one with the
+most fundamental in it, and record how many were discarded.
 
 ## Three things that silently produce wrong numbers
-
-Fewer than the WAV version needed, because most of that list was about not
-being able to see what the plugin was set to. These remain.
 
 1. **Auto-gain, auto-makeup and output normalisation must be off.** They
    corrupt the level dependence, which is the single thing this exercise
@@ -140,16 +115,14 @@ being able to see what the plugin was set to. These remain.
    flatter in level than it is.
 2. **Every parameter value gets written down with the result.** A harmonic
    profile is meaningless without the level and the drive setting it was
-   measured at — that is exactly why the first-pass voicing numbers could not
-   be authored. Dump the full parameter dictionary alongside each run, not
+   measured at. Dump the full parameter dictionary alongside each run, not
    just the ones being swept: the defaults matter too.
 3. **Run at the rate mooloop runs at.** Plugin oversampling changes with
    sample rate, and so does where its aliasing lands.
 
 ## What to capture, by what it is for
 
-Adam has *"a few plugins that might be worth measuring for various mooloop
-stuff"*, and they do not all want the same stimulus.
+Not every plugin wants the same stimulus.
 
 ### Preamps, saturators, tape — the harmonic surface
 
@@ -168,10 +141,9 @@ whole surface. `harmonics.rs` records why: the shaper's own level law is
 over levels will land somewhere that matches nothing.
 
 **That level is the operating level, and measured amplitudes are not the
-coefficients.** Both halves of that sentence corrected an earlier draft of
-this one on 2026-09-10. A measured amplitude *is* the coefficient only at
-full scale, where the Chebyshev identity is exact and where no music sits;
-`HarmonicShaper` now solves for the coefficients that hit the profile at
+coefficients.** A measured amplitude *is* the coefficient only at full scale,
+where the Chebyshev identity is exact and where no music sits;
+`HarmonicShaper` solves for the coefficients that hit the profile at
 -12 dBFS instead. Read the harmonics to fit from the -12 dBFS row.
 
 ### EQs — response per band, and where they distort
@@ -218,25 +190,22 @@ a different use, and mooloop's is an FDN rather than a convolver
 
 ## What Adam has
 
-Listed from memory 2026-09-09 and checked against the machine 2026-09-10.
-The memory was right about all of it. What the folder also turned out to hold
-is a full UADx set — 610-B, API Vision, Century, LA-2A, 1176 in three
-revisions, dbx 160, Fairchild 660 and 670, Distressor, SSL G bus, Studer
-A800, Manley Massive Passive — plus Waves PuigTec, VEQ3/4, CLA-3A, API-2500
-and API-550, and TDR's Kotelnikov and SlickEQ.
-
 `spikes/preamp-measure/candidates.py` is the working list, with a path and a
-role for each. All 25 units tried were licensed and passed real audio.
+role for each. The machine also holds a full UADx set — 610-B, API Vision,
+Century, LA-2A, 1176 in three revisions, dbx 160, Fairchild 660 and 670,
+Distressor, SSL G bus, Studer A800, Manley Massive Passive — plus Waves
+PuigTec, VEQ3/4, CLA-3A, API-2500 and API-550, and TDR's Kotelnikov and
+SlickEQ.
 
-**Starting with FrontDAW was the right call and it did not settle the
-question.** Its five styles do differ from each other under identical
-conditions, exactly as hoped — but every one of them has a *flat* harmonic
-response across frequency, where Waves NLS's Neve model has 23.8 dB of
-frequency-dependent drive. One plugin per voicing is enough to rank the
-voicings and is not enough to decide whether the transformer mechanism is
-part of the sound. That took a second opinion.
+**Start with FrontDAW, and do not stop there.** Its five styles do differ
+from each other under identical conditions — but every one of them has a
+*flat* harmonic response across frequency, where
+Waves NLS's Neve model has 23.8 dB of frequency-dependent drive. One plugin
+per voicing is enough to rank the voicings and is not enough to decide
+whether the transformer mechanism is part of the sound. That takes a second
+opinion.
 
-What still has to be decided at the machine is what each measurement is *for*.
+What has to be decided at the machine is what each measurement is *for*.
 "Measure everything" produces a pile of numbers with no home; "this is the
 `Iron` preamp target, this comp is what the strip should feel like" decides
 which stimulus each needs.
@@ -254,23 +223,3 @@ which stimulus each needs.
   sets level, SSL EV2's line gain walks its own output into clipping, and
   bx_console N's THD control does nothing whatever unless its EQ section is
   switched in.
-
-## What lands afterwards
-
-`PreampVoicing`'s four rows and `harmonics.rs`'s four profiles stop being
-picked and become measured — and the doc comments that currently say
-*provisional* get to say what they were fitted to instead.
-
-**Landed 2026-09-10 for the harmonic half**, and one thing in the module did
-have to change: a profile stated at full scale could not carry a measurement
-taken at the operating level, so the reference moved and the 4th and 5th
-harmonics left the profile. `tilt_db`, `tilt_hz` and `slew` are still picked.
-
-**Still true after the run, with one addition.** The measurements are taken
-and written down; nothing in `mooloop_dsp` has been re-authored from them
-yet, because two of the findings are choices for Adam rather than fits:
-whether `Iron` models a mic preamp or a console channel, which decides its
-harmonic order, and whether `Grip` gets a drive-dependent low shelf (open:
-MOO-163), which
-the SSL reference plainly has and the current exactly-reciprocal tilt pair
-cannot produce. `spikes/preamp-measure/RESULTS.md` states both.

@@ -54,7 +54,7 @@ against the unchanged tree, and watch it fail.
   the playlist). It is **omitted when empty**, so a song with no song lanes
   saves byte-identical to today. That is the precedent key zones set.
 - Lanes serialise like pattern lanes, through `SavedAddress`
-  (`PROJECT_FORMAT.md:671-714`).
+  (`PROJECT_FORMAT.md`, *Effects, modulation, and automation*).
 - `integrity::repair_project` checks song lanes with the same rules as
   `check_lanes` and `check_lane_addresses` (`project/src/integrity.rs:1109`,
   `:1716`):

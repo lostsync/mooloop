@@ -171,9 +171,6 @@ Mooloop is not trying to be:
 
 - A replacement for REAPER or a general linear recording DAW.
 - A clone of FruityLoops, Reason, Maschine, Bitwig, or any one reference UI.
-- A plugin host before its own instrument and sequencing model is coherent.
-  (Superseded 2026-09-14: CLAP is in for 0.2.0 — see `SCOPE.md` item 9 and
-  `plans/plugin-hosting/`.)
 - A modular patching environment as broad as Max/MSP.
 - A mandatory graph editor or an exposed patch-cord view for ordinary
   modulation work.
@@ -264,10 +261,9 @@ Still open:
   modify working audio?
 - How much live performance behavior matters relative to composition and
   export?
-- How far should MIDI go past a keyboard playing the selected channel? Adam
-  asked for exactly that on 2026-09-13 and it is in. Recording, controller
-  mapping and input choice landed with `plans/archive/midi-control/` on 2026-09-15;
-  MIDI output is in scope for 0.2.0 and not built.
+- How far should MIDI go past a keyboard playing the selected channel?
+  Recording, controller mapping and input choice are in; MIDI output is in
+  scope for 0.2.0.
 
 ## Decision Precedence
 

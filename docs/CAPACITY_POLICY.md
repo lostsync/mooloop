@@ -51,95 +51,60 @@ under half a megabyte for all 256 modulator racks together. `Sequencer::new`
 takes `initial_channels` and `active_patterns` and uses neither for sizing:
 they set counters on a bank that was already built at full extent.
 
-It is the same product this policy already has a paragraph about — the render
-graph's `MAX_CHANNELS × MAX_EFFECTS_PER_CHANNEL`, which cost 42.8 MiB and was
-fixed — and it was invisible for the same reason: each constant is defensible
-where it is defined, and nothing multiplies them where a reader would look.
-
 The remedy is the one the rest of the engine already uses. `RenderState.strips`
 is documented as "one entry per channel the project actually has, not per
 addressable channel", and `control_outputs` cites
 `docs/plans/archive/modulator-capacity/` for the same move. The pattern bank
 simply never had it done: it should size from the project and grow through the
 structural path the way channels do, leaving every ceiling exactly where it is.
+The sequencer is indexed by pattern and channel throughout, so this is a real
+change rather than a one-line one; `docs/plans/pattern-bank-floor/` is that
+change.
 
-Not yet done. The sequencer is indexed by pattern and channel throughout, so
-this is a real change rather than a one-line one, and the measurements are
-committed so it has a before to point at.
-
-**And it now bounds what can be put in the bank.** On 2026-09-21 the fix for
-opening an automation lane on the audio thread
-(`reports/fable-2026-09-21.md`, finding 1) was written as "give every lane
-slot its point storage up front". Eight slots per `ChannelPattern`, 1024
-points of 12 bytes each, is 96 KB per channel-pattern and **6 GiB** across
-the bank -- six times the floor this section is about, arrived at by exactly
-the multiplication it warns about, and nobody would have noticed at any
-single definition. What landed instead keeps the storage a lane already has
-(closing one vacates its slot and keeps the vector, so the callback never
-frees) and hands a slot that has never held one a spare from a pool refilled
+**And it now bounds what can be put in the bank.** Giving every automation
+lane slot its point storage up front -- eight slots per `ChannelPattern`, 1024
+points of 12 bytes each -- is 96 KB per channel-pattern and **6 GiB** across
+the bank, six times the floor this section is about, arrived at by exactly
+the multiplication it warns about. Instead a lane keeps the storage it already
+has (closing one vacates its slot and keeps the vector, so the callback never
+frees), and a slot that has never held one takes a spare from a pool refilled
 off the thread. The pool is a reserve, not a cap: when it is empty the lane
 still opens. **A ceiling costs nothing; dimensioning by one costs
 everything, and it costs more the moment anything per-slot grows.**
 
 ### The track bank, measured 2026-09-09
 
-The same lesson again, found and half-fixed the same day. `MAX_BUSES` was
-seventeen -- a small product cap of exactly the kind this document opens by
-forbidding -- *and* the engine preallocated all seventeen strips whether or
-not a song had them. `block_cost::track_memory` measures both halves:
+`MAX_BUSES` is seventeen -- a small product cap of exactly the kind this
+document opens by forbidding -- and the engine used to preallocate all
+seventeen strips whether or not a song had them. `block_cost::track_memory`
+measures both halves. **Making strips arrive with the project saved 2.00 MB
+of pure floor**, which is the reserving-versus-dimensioning distinction
+applied to tracks.
 
-```text
-  a project with 1 track          1067.95 MB
-  a project with 17 tracks        1069.95 MB
-  marginal cost of one track        128.0 KB
-
-  dimensioned by MAX_BUSES = 17, whatever the song holds:
-    DeviceMeters spectrum           12.85 MB   (273 targets x 257 stages x 48 bins)
-    ...of which per bus              48.2 KB
-```
-
-**Making strips arrive with the project saved 2.00 MB of pure floor**, which
-is the reserving-versus-dimensioning distinction applied to tracks. It is a
-small number beside the gigabyte above and it is the whole of what a fixed
-bank was buying.
-
-**Raising the ceiling is the other half and is not free.** At 48.2 KB per bus
-of fixed cost, taking `MAX_BUSES` to the `u8` address space would add 11.25 MB
-before anybody makes anything:
-
-```text
-  MAX_BUSES =  32  adds    0.71 MB      MAX_BUSES = 128  adds    5.22 MB
-  MAX_BUSES =  64  adds    2.21 MB      MAX_BUSES = 256  adds   11.25 MB
-```
-
-The reason was this document's own subject one level down: almost all of it
-was `DeviceMeters`'s spectrum array, `(MAX_CHANNELS + MAX_BUSES) * (MAX_EFFECTS_
-PER_CHANNEL + 1) * SPECTRUM_BINS` -- 12.85 MB of storage for analyzers that are
-individually gated by `spectrum_enabled` and almost never on.
-
-**Fixed the same day**, and the numbers moved as predicted. The spectra are a
-pool of `SPECTRUM_SLOTS` now, handed to whichever stages are subscribed, and
-the subscription flag doubles as the slot index so the audio thread's existing
-atomic load is also the lookup:
+**Raising the ceiling is the other half and is not free.** Almost all of its
+price was `DeviceMeters`'s spectrum array, `(MAX_CHANNELS + MAX_BUSES) *
+(MAX_EFFECTS_PER_CHANNEL + 1) * SPECTRUM_BINS` -- 12.85 MB of storage for
+analyzers that are individually gated by `spectrum_enabled` and almost never
+on. The spectra are a pool of `SPECTRUM_SLOTS` now, handed to whichever
+stages are subscribed, and the subscription flag doubles as the slot index so
+the audio thread's existing atomic load is also the lookup:
 
 ```text
                           before        after
   spectrum storage       12.85 MB      12.0 KB   (a pool; does not scale)
   per-bus ceiling cost    48.2 KB       8.0 KB
   MAX_BUSES = 256 adds   11.25 MB       1.87 MB
-  a 1-track project      1067.95 MB   1055.11 MB
 ```
 
 So the ceiling is now liftable for under two megabytes rather than eleven, and
 what remains dimensioned by it is honest: six meter cells, a subscription flag
 and a collision counter per addressable stage.
 
-It also unblocked something that was not the point and turned out to matter
-more. The analyzer is blocky and unfluid (`ENHANCEMENTS.md` has the diagnosis),
-and the fix wants far more bins -- which at the old array would have been 68 MB
-at 256 bins, and is 64 KB now. **The capacity mistake was holding the display
-quality hostage**, which is worth noticing: dimensioning by a ceiling does not
-just cost memory, it makes the thing it dimensions unimprovable.
+The old array was also holding the display quality hostage: the analyzer
+wants far more bins (`ENHANCEMENTS.md` has the diagnosis), which at the old
+array would have been 68 MB at 256 bins, and is 64 KB now. Dimensioning by a
+ceiling does not just cost memory, it makes the thing it dimensions
+unimprovable.
 
 ### What the floor costs per edit, which is the part that hurts
 
@@ -149,35 +114,17 @@ returns the displaced one through the reclaim ring to be dropped by `poll` —
 both on the UI thread — and every `PendingEngineMessage::ProjectEdit` goes
 through it. `block_cost::project_install_cost` measures that round trip at
 **20 ms for a fifteen-channel project** and 48 ms for a thirty-two channel
-one.
+one. At drag rate that saturates the UI thread, which then cannot run the
+pump on schedule; `docs/plans/pattern-bank-floor/README.md` has the
+measurements.
 
-A pointer drag reports an edit on every move frame; `history::Entry::gesture`
-exists precisely because it does. So a drag asks the UI thread for a 20 ms
-allocate-and-free of a gigabyte, sixty times a second, and the thread
-saturates — measured at 65% of a core sustained across a 46-minute session,
-against 0.8% when idle.
-
-It was also proposed here as the reason an edit is *audible* — that a
-gigabyte of `mmap`/`munmap` reaches the audio thread through page faults and
-TLB shootdown IPIs, which no scheduling priority defers. **That was tested and
-it is wrong.** `install_churn_disturbs_a_deadline_thread` runs a thread on a
-21.3 ms period beside a thread installing projects at drag rate, and on the
-machine this was reported from — eight cores, `SCHED_FIFO` 55, the priority
-mooloop's own callback holds — ninety-five installs produced *zero* late
-wake-ups, with a worst lateness of 0.02 ms against a 21.3 ms period. The idle
-column was 0.03 ms, so the loaded run was if anything quieter.
-
-What the install cost does explain is the interface. A saturated UI thread
-cannot run the pump on schedule, and the pump is what advances the position
-readout — so the clock reads unevenly for the same reason the drag stutters,
-with no audio fault involved at all.
-
-The dropouts reported alongside this had a complete and separate cause:
-`rtkit` had demoted every realtime thread on the machine, leaving PipeWire's
-data loop at `SCHED_OTHER`. `docs/OPERATIONS.md` records how to recognise it.
-The test above stays because a refuted hypothesis with a measurement behind it
-is worth more than an open question, and because it is the harness for asking
-the same thing again about some other change.
+It does not reach the audio thread. The hypothesis that a gigabyte of
+`mmap`/`munmap` would, through page faults and TLB shootdown IPIs, **was
+tested and is wrong**: `install_churn_disturbs_a_deadline_thread` runs a
+thread on a 21.3 ms period at `SCHED_FIFO` 55, the priority mooloop's own
+callback holds, beside a thread installing projects at drag rate, and
+ninety-five installs produced zero late wake-ups. The test stays as the
+harness for asking the same thing again about some other change.
 
 Two independent fixes, either of which helps:
 
@@ -188,24 +135,23 @@ Two independent fixes, either of which helps:
   knob is already expressible on the POD command path, and the structural
   command path already exists for the ones that are not.
 
-Not yet done, and not a thing to do casually — it is the core of the render
-state and the edit path either side of it. The measurements are committed so
-the decision has a before to point at.
+Neither is a thing to do casually — it is the core of the render state and
+the edit path either side of it.
 
 ## The pattern ceilings are a model decision, not only an engine one
 
 Two of the constants the section above multiplies are also the shape of the
-product, and that came up as an architecture question on 2026-09-17: a real
-instrument track -- one channel, a four-minute part, two thousand notes -- fits
-nowhere in the current model, and there are two separate reasons why.
+product: a real instrument track -- one channel, a four-minute part, two
+thousand notes -- fits nowhere in the current model, and there are two
+separate reasons why.
 
 The first is storage. `MAX_PATTERN_STEPS` is 256 sixteenth cells
 (`crates/mooloop-core/src/pattern.rs:13`), which at `STEPS_PER_BAR` of 16 is
 sixteen bars, and `MAX_NOTES_PER_CHANNEL_PATTERN` is not an independent number
 at all -- it is `MAX_PATTERN_STEPS * 4`, so 1024 (`pattern.rs:27`). Both are
 reserved in full up front so that `apply_command` never grows them in the
-callback, which is the whole subject of the section above. The four-minute part
-is past the first and the two thousand notes are past the second.
+callback. The four-minute part is past the first and the two thousand notes
+are past the second.
 
 The second is the arrangement. `PatternPlacement` is a pattern index and a
 start tick and nothing else (`crates/mooloop-core/src/playlist.rs:40`);
@@ -217,16 +163,14 @@ placement is therefore every channel at once, on one 64-bar canvas
 at `sequencer.rs:117`). There is no per-channel clip for a long part to live
 in, and nothing short of inventing one would give it a place.
 
-**Adam settled this the same day, in favour of the groovebox.** Patterns stay
-and there are no per-track clips. `docs/plans/archive/audio-recording/00-status.md`
-records the same ruling from the audio side that day -- audio records into the
-sampler, "there are no per-track audio clips, and this plan must not add any"
--- so this was one decision made once about notes and audio together, not two
-that happen to agree. It is a product decision rather than an implementation
-accident, which is why it is written here rather than left for each feature to
-rediscover: pattern-phase swing, `set_pattern_length` and clip automation are
-all built on the shared timeline, and every one of them makes the alternative
-more expensive without making it more likely.
+**Adam settled this on 2026-09-17, in favour of the groovebox.** Patterns
+stay and there are no per-track clips. The same ruling covers audio -- audio
+records into the sampler, and there are no per-track audio clips
+(`docs/plans/archive/audio-recording/00-status.md`) -- so this is one
+decision about notes and audio together. It is a product decision rather than
+an implementation accident: pattern-phase swing, `set_pattern_length` and
+clip automation are all built on the shared timeline, and every one of them
+makes the alternative more expensive without making it more likely.
 
 What the decision does not do is make the ceiling go away. If a part ever
 genuinely needs more than sixteen bars, **the answer is to raise
@@ -242,11 +186,6 @@ and twenty bars a four-minute part wants at 120 BPM would be about 7.5 GiB.
 while the bank is still dimensioned by it multiplies the largest number in the
 engine, which is exactly the fault this document opens by naming.
 
-A CLAP instrument is the likeliest thing to ask the question first, since a
-hosted instrument is where a long recorded part would arrive. That is step 10
-of `docs/plans/plugin-hosting/`, and the answer is settled before it starts
-rather than during it.
-
 ## Current boundaries
 
 - The current channel and effect bridges use complete `u8` address spaces:
@@ -255,26 +194,22 @@ rather than during it.
   signal-slot identities and a per-project prepared render plan, removing the
   fixed mixer-bank model rather than normalizing it as permanent.
 - Pattern IDs likewise use a complete `u8` address space (256 patterns).
-- `MAX_NOTES_PER_CHANNEL_PATTERN` (1,024) is enforced where notes are made,
-  as of 2026-09-23 (MOO-133): `ChannelState::has_room_for` is the one check,
-  every session verb that adds a note asks it before changing anything, and a
-  refusal is said in the status bar (`Session::take_note_refusal`). The
-  save-time integrity check stays as the backstop for a document that
-  arrives over the cap from elsewhere.
+- `MAX_NOTES_PER_CHANNEL_PATTERN` (1,024) is enforced where notes are made:
+  `ChannelState::has_room_for` is the one check, every session verb that adds
+  a note asks it before changing anything, and a refusal is said in the
+  status bar (`Session::take_note_refusal`). The save-time integrity check
+  stays as the backstop for a document that arrives over the cap from
+  elsewhere.
 - Containers nest four deep (`MAX_CONTAINER_DEPTH`), and this is a limit on
   the *gesture* rather than on the format. The number bounds a real
   allocation — one dry buffer per open container in the realtime pass — rather
   than a data structure, which is the distinction the section above is about.
 
-  **The gesture half is enforced as of 2026-09-14 and the format half is
-  not.** `mooloop_core::can_wrap` and its two siblings refuse a wrap, an
-  insert and a drag that would put a box past the cap, and the rack's wrap
-  button asks the same function rather than comparing a depth of its own —
-  before that, five clicks reached a box whose Mix did nothing at any value
-  and which the rack drew no chrome for. A deeper chain loaded, and still
-  loads, **unreported**: this entry used to claim the integrity pass caught it
-  "the way an over-long one is", and that has never been true. It is not a
-  one-line addition either, which is the part worth knowing — see
+  **The gesture half is enforced and the format half is not.**
+  `mooloop_core::can_wrap` and its two siblings refuse a wrap, an insert and a
+  drag that would put a box past the cap, and the rack's wrap button asks the
+  same function rather than comparing a depth of its own. A deeper chain
+  loads **unreported**, and reporting it is not a one-line addition -- see
   `docs/LOOSE_ENDS.md`. A leaf is deliberately not capped: the number bounds
   open runs, so four nested boxes with a filter inside them is legal and it is
   the fifth *box* that is not.
@@ -306,16 +241,11 @@ rather than during it.
   the Aux In selector can name, eight times the widest table declared, with a
   test that fails the day a device publishes an id past it.
 
-- **A channel holds one instrument, not all eight** (MOO-56, 2026-09-23).
-  `ChannelStrip` used to carry every generator kind by value and pick one
-  with a tag, so each new source kind was paid on every live channel whether
-  or not anything played it. It now holds one `Box<dyn SourceNode + Send>`.
-  The strip went from 44,728 bytes to 22,800. A live channel still pays for
-  the device it plays, on the heap, and the footprint test
-  (`render.rs`, `the_render_graph_costs_what_the_project_uses`) counts the
-  widest one, DS-01 at 6,960 bytes. At that worst case a live channel is
-  142,792 bytes rather than 157,760, and a sixteen-channel project 2,718 KiB
-  rather than 2,952. The price is that a source change is an ownership move:
+- **A channel holds one instrument, not all eight.** `ChannelStrip` holds one
+  `Box<dyn SourceNode + Send>`, so a source kind is paid for only on a channel
+  that plays it, on the heap; the footprint test (`render.rs`,
+  `the_render_graph_costs_what_the_project_uses`) counts the widest one, DS-01
+  at 6,960 bytes. The price is that a source change is an ownership move:
   the new device is built on the control thread and the old one leaves
   through the reclaim ring, so the change can land a block or more late when
   the ring is full (Adam, 2026-09-22: *"totally fine"*). The slot has no
@@ -326,32 +256,18 @@ rather than during it.
   sends are a `Vec` in the document and a `Vec` in the prepared plan; the
   audio thread holds one compensation ring and one `Smoothed` per send that
   exists, and three 64 KB scratch buffers for the *whole engine* — allocated
-  only when a project has a send at all. `block_cost::send_memory`, measured
-  2026-09-09:
-
-  ```text
-    a project with no sends         1055.49 MB   (the floor above, unmoved)
-    ...with one send                1055.68 MB
-    ...with nine                    1055.68 MB
-
-    the first send costs              193.2 KB   (three shared scratch buffers, once)
-    each one after                     24.0 B
-  ```
-
-  The shape is what this policy asks for and the numbers say it plainly: the
-  floor does not move at all, the *first* send buys the shared scratch, and
-  the ninth is indistinguishable from the first. What a send costs beyond
-  those bytes is its compensation ring, which is as long as the alignment it
-  is owed and nothing at all when it is owed none.
+  only when a project has a send at all. `block_cost::send_memory` shows the
+  floor unmoved by sends, the first send buying the shared scratch (193.2 KB,
+  once), and each one after costing 24 bytes. What a send costs beyond those
+  bytes is its compensation ring, which is as long as the alignment it is
+  owed and nothing at all when it is owed none.
   `render::tests::a_project_with_no_sends_allocates_nothing` guards the zero.
 
-  The drawn side matters here too, and is the half this document does not
-  usually get to state. `docs/plans/archive/console/THE-STRIP.md` first fixed the face
-  at four send bars — a *drawn* limit rather than an engine one, which this
-  document's own distinction would have permitted. Adam retired it on
-  2026-09-09: the area draws exactly the sends that exist and scrolls past the
-  room it has. A drawn ceiling is cheaper to remove than a dimensioned one and
-  it is still a ceiling, and there was no reason to have one.
+  The drawn side counts too. The sends area draws exactly the sends that
+  exist and scrolls past the room it has (Adam, 2026-09-09, retiring the four
+  send bars `docs/plans/archive/console/THE-STRIP.md` first drew). A drawn
+  ceiling is cheaper to remove than a dimensioned one and it is still a
+  ceiling, and there was no reason to have one.
 
 ## Rule for new work
 
