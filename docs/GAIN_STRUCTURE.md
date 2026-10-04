@@ -75,8 +75,8 @@ holds that sample by sample up to the +12 dB ceiling. If one track ever
 appears to duck another, nothing in the summing path can be responsible;
 look for a shared *nonlinear* stage instead — a driven filter, the drive
 effect, a compressor or limiter on a bus every source drains through, or
-**the channel strip's own compressor or drive on such a track**, which since
-2026-09-11 is one switch rather than a device somebody placed. Those
+**the channel strip's own compressor or drive on such a track**, which is
+one switch rather than a device somebody placed. Those
 are level-dependent by design, they have no time constant when the shaper is
 static, and no bus assignment escapes one sitting on the master.
 What matters is placement, not the effect: a channel's chain runs on that
@@ -139,13 +139,11 @@ second oscillator never changes the first one's level. The oscillator mix
 is followed by compensated saturation (`apply_drive`), anchored at the
 operating level, so raising drive changes character, not level.
 
-All of that is about the mix, and it still holds at every bus including the
-master. What changed on 2026-09-22 (MOO-93) is what happens *after* the
-master: **the output guard**, below, stands between the master bus and the
-driver, and it does bound a sample -- at 0 dBFS, and nowhere else. A mix under
-0 dBFS passes it bit for bit, so everything this section says is still what
-reaches the ports. Until then, sums above 0 dBFS reached the output device
-intact and a 24-bit export hard-clipped them without a word.
+All of that is about the mix, and it holds at every bus including the
+master. *After* the master, **the output guard**, below, stands between the
+master bus and the driver, and it does bound a sample -- at 0 dBFS, and
+nowhere else. A mix under 0 dBFS passes it bit for bit, so everything this
+section says is still what reaches the ports.
 
 ## The output guard
 
@@ -160,21 +158,20 @@ preview -- so live playback and export both pass through it. Two jobs:
   (`RenderSummary::non_finite_samples`). The master is scrubbed once more
   before the takes run, so a resample of the master never records one.
 - **A safety limiter at 0 dBFS** (`OUTPUT_CEILING`). Engineering, not a
-  musical device -- the master bus compressor is a separate item (MOO-13).
+  musical device -- the master bus compressor is separate (below).
   Zero latency: instant attack, a 20 ms hold, a 150 ms release, both sides
   linked, and a final clamp at the ceiling. **Transparent below 0 dBFS**: its
   gain is held as a reduction from unity that is exactly zero at rest, and a
   frame is only multiplied while it is not, so a mix that never goes over
   leaves bit for bit (`a_signal_under_the_ceiling_passes_bit_identical`).
   After an over it releases back to exactly unity, and is bit-transparent
-  again. **No lookahead, and no knob** (MOO-217, reversing MOO-169's
-  one-day knob), because lookahead delays everything on the master --
-  monitoring latency and every recording's alignment -- for a stage that
+  again. **No lookahead, and no knob** (MOO-217), because lookahead delays
+  everything on the master -- monitoring latency and every recording's
+  alignment -- for a stage that
   should normally be doing nothing; the cost is that an over's first frame
   is shaped rather than ducked ahead of time. Nothing on the master is late,
   so an export starts on the bar line as rendered
   (`the_live_and_exported_paths_start_on_the_bar_line`).
-
 
 **The master's meter reads the mix, before the guard.** A mix over 0 dBFS
 still lights the master's clip latch while nothing over 0 dBFS leaves, which
@@ -193,10 +190,10 @@ its job.
 
 ### Stems have no guard
 
-A track stem (`RenderTap::Track`, MOO-182) is the track's own output,
-taken before it reaches the master, and a channel stem
-(`RenderTap::Channel`, MOO-183) is taken before the mixer altogether, so
-the master's output guard and safety limiter never see either. Its sink does a guard's bookkeeping without
+A track stem (`RenderTap::Track`) is the track's own output, taken before
+it reaches the master, and a channel stem (`RenderTap::Channel`) is taken
+before the mixer altogether, so the master's output guard and safety
+limiter never see either. Its sink does a guard's bookkeeping without
 the limiting: a non-finite sample is written as silence and counted, and a
 sample over full scale is counted in the file's own `RenderSummary::overs`
 and written as it is. A float stem keeps it; a PCM stem clamps it and
@@ -208,7 +205,7 @@ differ from the mix
 
 ### Mono files, and dither
 
-**A mono export is `(L + R) / 2`** (MOO-186, `OutputChannels::Mono` in
+**A mono export is `(L + R) / 2`** (`OutputChannels::Mono` in
 `mooloop-engine/src/offline.rs`). Against the 3 dB pan law above, that
 means:
 
@@ -246,8 +243,8 @@ is not counted.
 
 ## The master bus compressor
 
-The master's strip carries a second compressor, the master section (MOO-13,
-`docs/plans/archive/master-bus-compressor/`), which runs **after the master's inserts
+The master's strip carries a second compressor, the master section
+(`docs/plans/archive/master-bus-compressor/`), which runs **after the master's inserts
 and before its fader**, so a fade-out on the master does not ride the mix out
 of compression on its way down. Three voicings, each a measured law with no
 programme dependence -- Grip (the SSL G bus: peak, soft knee), Punch (the
@@ -304,7 +301,7 @@ Three consequences worth stating, because each one is a decision:
 ## ML-P8's unison
 
 **Unison makes one note thicker. It doesn't add sources, so it is
-compensated** (MOO-244; Adam, 2026-09-25: *"poly8 unison gets LOUD ... at
+compensated** (Adam, 2026-09-25: *"poly8 unison gets LOUD ... at
 least on loudness we should compensate"*). *Summing* above still holds for
 sources and for chords: eight notes on an ML-P8 at 1x sum honestly. What
 changed is that the members of one unison group share their note's level
@@ -348,11 +345,10 @@ Machine, and holds an undetuned, undrifted group at exactly one voice.
 
 **Old songs get quieter where they used unison.** That is deliberate: Adam's
 ruling is that the compensation wins, so no migration scales a saved patch
-back up. Among the songs on hand, that means `housey-dropout-factory` (one
-ML-P8 above 1x) and `ok-then` (three). The factory bank's Wide Machine had
-set its Volume to 0.5 to pay for its own 4x stack by hand. It is back at full
-Volume, which is the level it was balanced at. A bank already seeded into a
-user's presets keeps the old 0.5, because factory banks seed once.
+back up. The factory bank's Wide Machine runs at full Volume, the level it
+was balanced at, rather than the 0.5 that paid for its 4x stack by hand. A
+bank already seeded into a user's presets keeps the old 0.5, because factory
+banks seed once.
 
 ## Ranges and readouts
 
@@ -364,7 +360,7 @@ user's presets keeps the old 0.5, because factory banks seed once.
   and the strip's Volume descriptor, which lanes, routes and mapped hardware
   go through. The descriptor uses the fader's own taper (`ParamCurve::Fader`),
   so unity is three-quarter travel everywhere and a controller and the mouse
-  never disagree about where a gain sits (MOO-131). The +12 dB clamp remains
+  never disagree about where a gain sits. The +12 dB clamp remains
   so a song saved hotter still loads at the gain it was saved at. Songs
   written under the old Linear volume curve are converted on load
   (`Project::migrate_linear_strip_volume`, marked by `strip_volume_taper`).
@@ -405,10 +401,6 @@ where the input's energy sits against its modes, so the constant is measured
 rather than derived. At 100% wet, a held note measured mid-sustain sits
 within ~1 dB of dry, enforced by `steady_state_wet_path_is_level_matched`.
 
-(The reverb was previously a convolution player and calibrated its impulse
-response across spectral probes instead. That mechanism went with it; the
-principle below did not.)
-
 One scalar cannot match tonal and broadband material at once. The diffuse
 tail's spectrum tilts low, so a narrowband partial samples a hotter point
 of the response than the broadband average; whichever case the calibration
@@ -425,8 +417,7 @@ far lower crest factor than the dry transient it is compared against; a
 plate that reads -5.7 dB on peak can sit at +1.3 dB on energy. Whole-render
 RMS flatters it because the buildup and tail sit inside the window and pull
 the average down. A wet branch several dB hot through the sustain passes
-both — which is exactly how the reverb shipped at +4.7 dB over dry, making
-1% wet audible and putting the mix knob at reverb/dry parity by 30%.
+both.
 
 **The host blend is equal-power** (`render.rs`): `dry·cos(θ) + wet·sin(θ)`,
 θ = wet·π/2. Correct for the decorrelated paths people actually blend
@@ -462,9 +453,7 @@ once a tick -- the same shape `Motion` uses for panel animation. The clip
 latch is a separate full-scale detector (≥ 0 dBFS) held **until it is
 clicked**, not on a timer, and is not tied to the colour thresholds.
 `clear_clip`'s own comment gives the reason: "A clip light that puts itself
-out is a light that is off by the time anyone looks at the meter." This
-paragraph said "2 s latch" until 2026-09-13; no such timer has ever
-existed.
+out is a light that is off by the time anyone looks at the meter."
 
 ## Where things live
 

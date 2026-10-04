@@ -3,15 +3,6 @@
 Status: design rule, September 2026. **Mostly a target; the three habits in
 "What we actually do now" are not** — those are load-bearing today.
 
-> Trimmed 2026-09-14 from 469 lines. What went was the long-form target model:
-> the Max-object mental model, composite units, designed inlets and outlets,
-> published versus private ports, parameters-versus-ports, and the
-> first-practical-use walkthrough — roughly 350 lines describing infrastructure
-> that does not exist and is deliberately not being built ahead of a
-> demonstrated workflow. It is summarised below and preserved in git. The
-> habits, the checklist and the consequence are kept whole, because those are
-> the parts anyone acts on.
-
 `AUDIO_ARCHITECTURE.md` owns preparation, execution, graph timing and realtime
 lifecycle. `MODULATION.md` owns the channel control-routing model. This owns
 how a reusable DSP piece presents itself.
@@ -37,8 +28,7 @@ around every private helper.
 
 ## The target model, in brief
 
-The trimmed sections described a port contract that does not exist yet. In
-summary, so the rule is still legible:
+The port contract does not exist yet. In summary:
 
 - A unit declares **inlets and outlets** deliberately, rather than having them
   inferred from whatever its fields happen to be.
@@ -57,7 +47,6 @@ The full version is in git (`docs/COMPOSABLE_DEVICE_UNITS.md` before
 
 ## Design checklist
 
-
 When adding or extracting a reusable unit, answer:
 
 1. What does it own, and what does it borrow?
@@ -75,9 +64,8 @@ second real use makes the shared unit honest.
 
 ## What we actually do now
 
-
 Everything above is a target. Most of it is unimplemented: there is no port
-table, no `unit.inputs()`, and no published outlet. `AudioNode` is an
+table and no `unit.inputs()`. `AudioNode` is an
 in-place stereo process call, two declared latencies, and two best-effort
 telemetry readers (`buffer_collisions`, `dynamics_frame`) — and those two are
 observation, deliberately not the outlet contract this document describes.
@@ -97,14 +85,11 @@ expression that computed it. Naming a value later is cheap when it is already
 a field with a defined meaning, and impossible when it only ever existed
 halfway through a line of arithmetic.
 
-`Osc` used to be the live counter-example: its `phase` was private with no
-reset, no wrap event, and no way to read it, which is exactly why hard sync
-could not be built on it. Building the ML-P8 forced the change this habit
-predicted — `Osc` now exposes `phase()`, `reset_to`, a reported cycle wrap,
-and a `sync_reset` that corrects the step with a BLEP — and the change was
-mechanical because the value already existed as a field. That is the whole
-argument for the habit: the retrofit cost one commit rather than a rewrite of
-every consumer.
+`Osc` is the worked example: hard sync on the ML-P8 needed its `phase`
+readable and resettable (`phase()`, `reset_to`, a reported cycle wrap, and a
+`sync_reset` that corrects the step with a BLEP), and because the value
+already existed as a field the retrofit cost one commit rather than a rewrite
+of every consumer.
 
 **2. Do not fuse topology that costs nothing to keep separable.**
 A voice may hold oscillator, filter, and amplifier in a fixed internal order
@@ -123,7 +108,6 @@ make the code better if no graph view is ever built, and they are the reason
 the option stays open at close to zero cost.
 
 ## Long-term consequence
-
 
 Maintaining this contract lets mooloop eventually support a node editor
 without redesigning every DSP primitive around it. A node editor becomes a way

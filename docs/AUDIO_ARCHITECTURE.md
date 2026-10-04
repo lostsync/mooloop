@@ -12,15 +12,6 @@ and a narrow realtime surface that remains pleasant to extend.
 This document owns the boundary between editable musical state and audio
 execution.
 
-`archive/ARCHITECTURE_REVIEW.md` grades the implementation against an external
-reference and agrees with this document almost everywhere. Its one finding
-against the engine was that migration step 5 below — graph-wide latency
-compensation — was the next infrastructure step and cheaper then than it would
-ever be again. It landed on 2026-09-05, and step 6's first half — the typed
-audio edge itself — landed the same day. What remains of step 6 is parallel
-sends and sidechain inputs, both of which now hang off a compiled edge model
-rather than waiting for one.
-
 ## Design Character
 
 The audio API should make the safe and musically correct operation the easy
@@ -80,29 +71,27 @@ There is one such gesture: the active pattern is also the record target, so
 `SetCurrentPattern` is still sent, and `set_current_pattern` answers whether
 the selection actually moved.
 
-This is written down because it was broken, and the bill was every sounding
-voice on every channel -- in Song mode, where the selected pattern is not what
-is playing. `scripts/dupe-audit navigation-sends` reports a selection handler
-that sends anything else; a gesture that is really an edit says so in its name
-(`on_automation_lane_opened`, not `…_selected`). MOO-57 and
+Broken once, it cost every sounding voice on every channel in Song mode, where
+the selected pattern is not what is playing. `scripts/dupe-audit
+navigation-sends` reports a selection handler that sends anything else; a
+gesture that is really an edit says so in its name
+(`on_automation_lane_opened`, not `…_selected`). See
 `docs/plans/archive/transport-discontinuity/`.
 
 **Two mechanisms cross the boundary, and nothing else does**: the ordered
 command stream, whose displaced heap objects come back through the reclaim
 ring, and atomics. Nothing the audio thread reads from the control side is
 reference-counted. The routing tables -- MIDI input, audio input, the buffer
-MIDI map -- were `ArcSwap` cells until 2026-09-19; a guard held on the audio
-thread could outlive the control thread's reference to a table it had just
-replaced, and the free then ran in the callback (`reports/fable-2026-09-19.md`,
-finding 2). They are `StructuralCommand::SetMidiRouting`,
-`SetAudioInputRouting` and `SetBufferMidi` now. The same review's finding 1
-was the same class by another door: a project install's carry plan was
-dropped at the end of the install arm; it leaves with the retired renderer.
+MIDI map -- are `StructuralCommand::SetMidiRouting`, `SetAudioInputRouting`
+and `SetBufferMidi`, not `ArcSwap` cells: a guard held on the audio thread
+could outlive the control thread's reference to a table it had just replaced,
+and the free then ran in the callback. A project install's carry plan leaves
+with the retired renderer for the same reason.
 `installing_a_project_allocates_and_frees_nothing` and
 `a_routing_change_frees_nothing_on_the_callback` measure both, around
 `Executor::process` rather than around the one call inside it. (The per-channel
 sample slot is still an `ArcSwapOption`, retired through the reclaim ring by
-`load_full`, as `reports/fable-2026-09-17.md` finding 2 settled.)
+`load_full`.)
 
 **Sequencer storage is not allocated on an edit either, and is not
 preallocated with the bank.** A pattern's automation lanes are a fixed array
@@ -115,42 +104,27 @@ bank. A slot that has never held a lane takes its storage from
 `LanePool`, refilled at project install; an empty pool still opens the lane,
 by allocating, rather than refusing an edit the user asked for. Closing that
 last hole means the session supplying the storage with the command, the way
-`StructuralCommand` supplies a routing table -- `LOOSE_ENDS.md`
-(`reports/fable-2026-09-21.md`, finding 1).
+`StructuralCommand` supplies a routing table -- `LOOSE_ENDS.md`.
 
 ## Control Graph Within A Channel
 
 The normal audio topology of a channel remains an ordered source-and-insert
 rack. Its modulation topology is explicit channel state: a `ModRack` owns
 control sources and routes, while sources, inserts, and the strip own their
-parameters. A device must not hold a private copy of the channel's LFOs or
-know which external control signals currently target it. It may own authored
-modulation that is part of its own DSP contract -- for example per-voice
-envelopes, oscillator cross-modulation, or an instrument-specific LFO -- and
-publish selected signals through typed outlets. Cross-device consumption then
-uses the channel route and timing rules below.
-
-Each route joins a stable source or outlet reference to a stable `ParamAddr`
-destination through a bounded transform (depth, polarity, and later shaping).
-Source metadata declares value semantics, control rate, and latency; parameter
-metadata declares range, curve, and modulation eligibility. The current
-runtime uses fixed arrays and a bounded source taxonomy to retain predictable
-work -- eight module slots and sixteen routes a channel -- but those
-implementation capacities are not the persistent or product meaning of the
-number. Both are compile-time constants with a measured, linear price;
-`CAPACITY_POLICY.md` says why a ceiling is not the same as a reservation.
+parameters. `MODULATION.md` owns that model, including what a device may own
+itself and the graph-capable-but-not-graph-first rule; what the executor owes
+it is below.
 
 At each declared control tick, the executor evaluates a source, applies each
 route transform, adds offsets to the destination's base value, and puts the
 resolved natural-unit value on the existing sample-timed parameter path. A
 device outlet consumed across a device boundary is read on the following block
 unless a future contract explicitly compiles a different declared latency.
-Display telemetry is never a control input.
-
-This is graph-capable data, not a second audio graph or a mandate to build a
-graph editor. A later zoomed-out view may visualize the same routes and the
-ordered audio chain. It must edit the same prepared channel state and preserve
-the rack as the normal interaction.
+Display telemetry is never a control input. The runtime's fixed arrays --
+eight module slots and sixteen routes a channel -- are compile-time constants
+with a measured, linear price, not the persistent or product meaning of the
+number; `CAPACITY_POLICY.md` says why a ceiling is not the same as a
+reservation.
 
 ## Graph Compiler
 
@@ -197,7 +171,7 @@ contract is strict:
 Two of these are checked by tests that run blocks through the executor
 (`soak_tests.rs`, and the hosted-plugin tests beside it). Allocation and
 deallocation are counted by the engine's test-only `CountingAllocator`.
-Locks are counted by `mooloop_core::lock_check` (MOO-173), but only locks
+Locks are counted by `mooloop_core::lock_check`, but only locks
 taken through its `Mutex`, which a lock on the render path must therefore
 be. An uncontended `std::sync::Mutex` never leaves user space, and no test
 can see one taken. The counter is compiled out without `debug_assertions`.
@@ -208,9 +182,9 @@ returns through a bounded reclaim channel and is destroyed on the control
 thread. If reclaim capacity is unavailable, the executor applies backpressure
 by leaving the structural edit queued; it never drops the object itself.
 
-**An effect edit never switches the sound in one sample** (MOO-108,
-MOO-172; agreed between Effects and Realtime Engine on 2026-09-23). The
-executor holds a `RemoveEffect`, and an `InstallEffect` into an **occupied**
+**An effect edit never switches the sound in one sample** (agreed between
+Effects and Realtime Engine on 2026-09-23). The executor holds a
+`RemoveEffect`, and an `InstallEffect` into an **occupied**
 slot, until `RenderState::effect_slot_vacated` reports that the occupant has
 faded out of the path: about 35 ms along the 5 ms host ramp, or 100 ms at
 most for a chain that is not being processed. A row inside a container
@@ -222,7 +196,7 @@ be arriving around rows that are already playing. `ReplaceEffect` (a
 prepared resource swapped under the same device) and a whole-project
 install are unchanged: a document load settles every ramp at its control.
 
-**Deleting or moving a channel is a command, not an install** (MOO-466).
+**Deleting or moving a channel is a command, not an install.**
 `StructuralCommand::ReseatChannels` carries the `ChannelEdit`. On the audio
 thread it takes a removed channel's storage out and closes the gap, or lifts
 a moved channel to its new seat and shifts the ones it passed, by moving and
@@ -252,10 +226,9 @@ pattern end, and so do those of every renumbered pattern, because a
 sequenced voice's id carries its pattern's index; in Pattern mode the
 voices end when the pattern now scheduled is not the content that started
 them (a clone made current plays on). A lane the edit took from under the
-playhead hands its knob back, as a pattern switch does, which the install
-did not (MOO-494). `pattern_edit_tests.rs` holds the command to the
-install's samples, to a song made with the edit from the start, and to a
-live lane clear. A pattern edit moves no seat, so the session keeps its
+playhead hands its knob back, as a pattern switch does.
+`pattern_edit_tests.rs` holds the command to the install's samples, to a
+song made with the edit from the start, and to a live lane clear. A pattern edit moves no seat, so the session keeps its
 mirrors as they were (`Session::send_pattern_edit`).
 
 **Adding, removing or moving a track is a command too**
@@ -277,8 +250,8 @@ its own latency plan with the command (`Session::send_track_edit`), so the
 reconcilers' mirrors are set to what was installed and the next tick sends
 nothing.
 
-**A project install carries effect devices by `DeviceId`** (MOO-137, agreed
-with Realtime Engine on 2026-09-23). `carry_plan` still carries a channel or
+**A project install carries effect devices by `DeviceId`** (agreed with
+Realtime Engine on 2026-09-23). `carry_plan` carries a channel or
 track strip whole when its setup is identical. A strip whose setup differs
 **only in its effect chain** is also carried whole
 (`CarryPlan::rechained_channels`/`rechained_tracks`), so its voices, source,
@@ -297,26 +270,12 @@ come across fades in, as an installed one does. A plugin device carries its
 live processor the same way. **A ring resize** (`ReplaceEffect` on a Buffer,
 after a tempo or HISTORY change) hands the replacement the history the
 outgoing ring holds, which is a bounded copy with no allocation. A frozen
-Buffer still refuses the resize.
+Buffer refuses the resize.
 
-Every structural edit now honours the second bullet. The three routing
-tables -- MIDI routing, audio-input routing and the buffer MIDI map -- were
-the one exception: `ArcSwap`s the callback `load()`ed, so a control-thread
-`store` landing while a guard was live left the audio thread the last owner
-of a `Vec` and freed it in the callback. They are plain boxes behind
-`StructuralCommand::SetMidiRouting`, `SetAudioInputRouting` and `SetBufferMidi`
-since `a576f17` (2026-09-20, after `db02366` was reverted unmerged by
-`eb4f605` to clear a merge); see *Two mechanisms cross the boundary* above,
-which is the current statement of the rule, and `render.rs`'s `buffer_midi`
-doc comment. The per-channel sample slot remains an `ArcSwapOption`, retired
-through the reclaim ring by `load_full`. Recorded 2026-09-20 from
-`reports/fable-2026-09-20.md` finding 1; corrected 2026-09-21 from
-`reports/fable-2026-09-21.md` finding 9.
-
-**The callback times itself, and says where a slow block went** (MOO-236,
-2026-09-26). Reading the monotonic clock is allowed: `Instant::now` is a
-vDSO read on Linux and `mach_absolute_time` on macOS, with no system call,
-lock or allocation. The executor reads it on entry and exit
+**The callback times itself, and says where a slow block went.** Reading
+the monotonic clock is allowed: `Instant::now` is a vDSO read on Linux and
+`mach_absolute_time` on macOS, with no system call, lock or allocation. The
+executor reads it on entry and exit
 (`LoadMeters::record`), and the block loop reads it once as each channel's
 and each bus's turn begins (`site_times.rs`, lap timing: a site's time runs
 to the next lap, so a strip's early `continue` needs no second read). A
@@ -339,24 +298,15 @@ eventual processing contract needs to describe:
 - stable parameter descriptors and instance identity.
 
 Latency and tail are implemented; "Rest And Tail" below states what they mean
-and what a host may do with them. **Transport discontinuities are, as of
-2026-09-20**: `AudioNode::on_discontinuity(Discontinuity)` tells a node that
-time stopped being continuous, and names which kind -- `Seek`, `Stop` or
-`ProgramChange`. A general "reset to construction state" verb is still not
-part of the contract, and nothing has asked for one.
+and what a host may do with them. **Transport discontinuities are implemented
+too**: `AudioNode::on_discontinuity(Discontinuity)` tells a node that time
+stopped being continuous, and names which kind -- `Seek`, `Stop` or
+`ProgramChange`. A general "reset to construction state" verb is not part of
+the contract, and nothing has asked for one.
 
-**A node is told when it leaves the audio thread for good** (MOO-311):
-`AudioNode::retire`, on that thread, after its last block and before it
-goes anywhere else to be dropped. The executor calls it on everything it
-pushes down the reclaim ring. An export calls it on its renderer once a pass
-is done, and a closing engine calls it on every node it holds. The default
-does nothing. It exists for a hosted plugin's processor, which CLAP says
-must be stopped on its audio thread. A container of nodes passes it on.
-
-Before it there was one channel for this, and it was the wrong one: the host
-synthesised `Event::Choke` into a node's event list, so *let go of these
-notes* and *time moved* arrived as the same sentence. The voices heard it and
-answered differently -- `release_all` in the synths, a hard fade in the
+`Event::Choke` is not that channel. It is correct for what it names: a choke
+group cutting a hi-hat off. Borrowed to mean *time moved*, it was answered
+differently by the voices -- `release_all` in the synths, a hard fade in the
 samplers -- and **everything that is not a voice heard nothing at all**, so a
 delay line's contents and a reverb's tail carried across a seek as though they
 belonged where the transport now is.
@@ -373,40 +323,34 @@ to silence:
   wanting that gets it by not implementing the method, which is the default.
 - **Read the kind.** A seek invalidates audio in flight; a program change does
   not, and flushing a reverb because the player looked at another pattern is a
-  worse artefact than the one this fixes. Honoured since 2026-09-22
-  (MOO-59): until then a pattern switch set the seek flag too, and the block
-  after it said `Seek` behind its own `ProgramChange`.
+  worse artefact than the one this fixes.
 - A node that cannot honour it declines in writing. Aux In and the
   retained-audio buffer both do; the buffer's ring is a performance somebody
   is playing, not audio from the old position.
-- **A device that contains a device forwards every hook.** A node holding
-  another node's state -- an effect nested inside an instrument, and in time a
-  plugin inside a slot -- is the only thing that can reach it: the executor's
-  fan-out stops at the node it installed. Declining is a decision; not
-  forwarding is an oversight, and it looks identical from outside. ML-P8 holds
-  a `Chorus` whose own `on_discontinuity` empties its line, and nothing calls
-  it, so a chorused ML-P8 rings its stale line across a seek
-  (`reports/fable-2026-09-21.md` finding 4). Written down 2026-09-21, before
-  the plugin slot needs it.
 
-`Event::Choke` remains, and is still correct for what it names: a choke group
-cutting a hi-hat off. What changed is that the host stopped borrowing it to
-mean something else.
+**A node is told when it leaves the audio thread for good**:
+`AudioNode::retire`, on that thread, after its last block and before it
+goes anywhere else to be dropped. The executor calls it on everything it
+pushes down the reclaim ring. An export calls it on its renderer once a pass
+is done, and a closing engine calls it on every node it holds. The default
+does nothing. It exists for a hosted plugin's processor, which CLAP says
+must be stopped on its audio thread. A container of nodes passes it on.
 
 **A device that contains a device forwards every hook it is given.** The
 fan-out reaches the outer node and stops: `on_discontinuity`, `skip_block`,
-`is_at_rest` and latency all have to be passed on again inside it. ML-P8 is
-the case that found the rule -- its finishing chorus is a `ModulationEffect`,
-which empties its line on a seek when it stands alone, and nothing was
-telling the one inside, so a seek rang across it
-(`reports/fable-2026-09-21.md`, finding 4). The plugin slot is the same shape
-at a larger size, and `docs/plans/plugin-hosting/` should read it that way.
+`is_at_rest` and latency all have to be passed on again inside it. Declining
+is a decision; not forwarding is an oversight, and it looks identical from
+outside. ML-P8 is the case that found the rule -- its finishing chorus is a
+`ModulationEffect`, which empties its line on a seek when it stands alone, and
+nothing was telling the one inside, so a seek rang across it. The plugin slot
+is the same shape at a larger size, and `docs/plans/plugin-hosting/` should
+read it that way.
 
 **A fold and a seek are different kinds, and tails survive a fold.**
 `Discontinuity::LoopFold` says the transport turned back at a loop end: time
-is discontinuous and the music usually is not. Adam's ruling, 2026-09-22
-(MOO-59): a delay repeat or a reverb tail wraps from the end of the loop into
-its start, the way a groove box plays a loop. So the four devices that hold a
+is discontinuous and the music usually is not. Adam's ruling, 2026-09-22: a
+delay repeat or a reverb tail wraps from the end of the loop into its start,
+the way a groove box plays a loop. So the four devices that hold a
 tail -- delay, modulation (and through it ML-P8's chorus), reverb and plate --
 clear on a `Seek` and a `Stop` and decline a `LoopFold` and a `ProgramChange`.
 The rule is written once, as `Discontinuity::invalidates_tails`
@@ -419,13 +363,11 @@ keeping its own list. `a_loop_fold_is_inaudible_in_every_effect_kind_and_a_seek_
 **A pattern switch is a program change and nothing else.** A seek sets
 `seeked`, and owes the next block a `Seek` and a choke of every voice. A
 Pattern-mode switch under a running transport owes neither: it releases the
-voices its pattern started and says `ProgramChange`. Until 2026-09-22 the
-switch set `seeked` too, so every tail device was told `Seek` straight after
-declining the `ProgramChange` (MOO-59). Whether a tail should ring out past
-**Stop** is open: MOO-171.
+voices its pattern started and says `ProgramChange`. Whether a tail should
+ring out past **Stop** is open: MOO-171.
 
-**The engine knows which voices the sequencer started** (MOO-99,
-`mooloop-engine/src/voices.rs`). Each channel strip keeps a fixed table of
+**The engine knows which voices the sequencer started**
+(`mooloop-engine/src/voices.rs`). Each channel strip keeps a fixed table of
 them, filled by reading what the sequencer scheduled into the block before
 the keyboard and the auditions join the same list. So a release can be a
 `NoteOff` for exactly the pattern's voices instead of a `Choke` for the whole
@@ -465,7 +407,7 @@ can compensate that effect against neighbouring paths.
 
 A node says whether it has anything to do, and the host stops calling it when
 it has not. Three defaulted methods carry it, and the defaults mean "never
-skip me" so a node that has not opted in behaves exactly as it did before:
+skip me":
 
 - `tail_frames` — how long this node can still be heard after its input goes
   silent. `u32::MAX` means unbounded or unknown.
@@ -483,8 +425,7 @@ has been putting out silence, and every occupied slot in its chain would be
 skipped. Nothing is published: the device meters are peak-hold cells the GUI
 empties as it reads them, so not writing one is publishing silence.
 
-Two rules follow from the block-boundary rule above, and both were found by
-breaking them:
+Two rules follow from the block-boundary rule above:
 
 - **A tail must cover any ring a parameter can move a read head inside**, not
   just the time the device takes to go quiet. A sleeping node's delay lines
@@ -581,8 +522,7 @@ number of channels may hold one.
   channel gone -- and the rest is read. Either way the file is finalized --
   except at quit, which joins nothing and runs no destructor on the drain
   thread, so a take still live when the process exits leaves its header
-  unpatched and its audio unreachable (`reports/fable-2026-09-20.md`
-  finding 2, 2026-09-20).
+  unpatched and its audio unreachable.
 
 ## Latency Compensation
 
@@ -622,8 +562,8 @@ ownership queue.
 
 ## Migration Sequence
 
-Steps 1 through 5 have landed, and so has the first half of 6. Sends,
-sidechains and step 7 are next.
+Steps 1 through 5 have landed, and so have step 6's typed audio edge and
+parallel sends. Sidechains and step 7 are next.
 
 1. Move project construction out of the JACK callback. Prepare a complete
    render state on the control thread, swap it at a block boundary, and return
@@ -635,15 +575,14 @@ sidechains and step 7 are next.
 4. Add node latency reporting and align effects' internal parallel paths,
    beginning with the oversampled drive.
 5. Introduce preallocated compensation delays and compile cumulative latency
-   for the existing mixer tree. **Landed 2026-09-05**, in
+   for the existing mixer tree. **Landed**, in
    `docs/plans/archive/latency-compensation/`: a device declares its latency without
    being built, `compile_latency` turns the tree into a per-producer delay, and
    the delays are installed structurally and reconciled by deriving the plan
-   rather than tracking it. Parallel sends, sidechains and limiter lookahead no
-   longer wait on it.
+   rather than tracking it.
 6. Generalize the render plan from one audio output edge per bus to typed audio
    and dependency edges. Add parallel sends, then auxiliary sidechain inputs.
-   **The typed audio edge landed 2026-09-05**, in
+   **The typed audio edge landed**, in
    `docs/plans/archive/typed-audio-edges/`: `compile_audio_graph` turns the
    channels' declared subscriptions into a render order and a refusal for each
    edge that cannot resolve, a producer fills a tap only when somebody has
@@ -652,17 +591,14 @@ sidechains and step 7 are next.
    so the whole-project null holds across block sizes and an export matches a
    live take sample for sample.
 
-   Two things it deliberately did not do, and **the first of them landed
-   2026-09-09**, in `docs/plans/archive/console/` step 05. **Parallel sends** are a
-   second outgoing edge from a strip, and they turned out not to extend this
-   mechanism at all: a send is a producer-side edge that carries its own
-   compensation, so it is aligned by construction and never goes through
-   `compile_audio_graph`. What it did change is the three places the
-   one-edge-per-node assumption actually lived — `compile_latency` became
-   per-edge, `reaches` became a depth-first search, and the block loop gained
-   two capture points and one emission point. `CompiledBusGraph::destinations`
-   was not touched, because a track still has exactly one *output*. Sends are
-   strip-level and a channel's compiles, but only a track can author one today.
+   **Parallel sends** landed in `docs/plans/archive/console/`. A send is a
+   second outgoing edge from a strip, and it does not extend this mechanism:
+   a send is a producer-side edge that carries its own compensation, so it is
+   aligned by construction and never goes through `compile_audio_graph`.
+   `compile_latency` is per-edge; `CompiledBusGraph::destinations` is
+   unchanged by sends, because a track still has exactly one *output*. Sends
+   are strip-level and a channel's compiles, but only a track can author one
+   today.
 
    **Sidechain key inputs** are still absent. They need the dependency-edge
    half — a signal that schedules a producer without being summed into the

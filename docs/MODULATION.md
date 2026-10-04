@@ -4,26 +4,14 @@ Status: the approved design and its implementation contract, August–September
 2026. Built: five module kinds, eight modules and sixteen routes per channel,
 durable route identity, direct assignment on ordinary controls.
 
-> Merged 2026-09-14 from `MODULATION.md` (the approved design) and
-> `MODULATION.md` (the spec that expanded it). The split made sense
-> while the thing was being designed and stopped making sense once it was
-> built — two documents for one subject is two places to look and two places
-> to drift. Dropped in the merge, as history rather than contract: the effect
-> build order, every item of which was struck through as done; the spec's
-> framing and "retain the existing foundation" sections; and its numbered
-> delivery list, which had gone stale (outlets landed 2026-09-05). All of it
-> is in git, and `JOURNAL.md` carries the narrative.
-
 `AUDIO_ARCHITECTURE.md` owns preparation, execution and realtime lifecycle.
 This document owns descriptors, addressing, ownership, and the resolution rule.
 
-
 ## What this document decides
 
-The filter shipped as a complete vertical slice, which proved the effect
-plumbing. Before adding ten more effects we need to settle how parameters are
-addressed, modulated, and automated — otherwise every new effect hardcodes its
-own ranges and the modulation system becomes a per-effect special case.
+How parameters are addressed, modulated, and automated — settled once, so that
+no new effect hardcodes its own ranges and the modulation system never becomes
+a per-effect special case.
 
 These decisions are made. Implement them; don't re-litigate them.
 
@@ -85,7 +73,7 @@ modulation depth, knob glue, and preset validation all read it. A range
 written a second time anywhere else is a bug.
 
 `id` values are stable and per-kind. They are persisted indirectly (automation
-lanes will reference them) so they must never be renumbered once shipped —
+lanes reference them) so they must never be renumbered once shipped —
 append new ids, retire old ones by leaving gaps.
 
 Events on the wire carry **natural** units, not normalized ones. Effects stay
@@ -117,8 +105,8 @@ would judge a plugin id against a native table without a compiler error.
 Adam's words: *"we don't want to not know what something belongs to"*.
 `docs/plans/plugin-hosting/00-status.md`, "Parameters", has the ruling.
 
-A plugin **instrument**'s parameters use the same owner (MOO-312). The
-`device` is the id the channel's source slot is given,
+A plugin **instrument**'s parameters use the same owner. The `device` is
+the id the channel's source slot is given,
 `ChannelSetup::source_device`, minted from the channel's own device ids when
 a plugin becomes its source, so it never names one of the channel's effects.
 There is no "source arm" of `PluginParam` and no `Source` owner holding a
@@ -126,22 +114,21 @@ plugin's id. Replacing the instrument forgets its lanes and routes, as
 deleting an effect does, and undo brings them back; a plugin missing on load
 keeps them.
 
-**The generator owner names its kind** (MOO-135, 2026-09-26, the same
-ruling applied to a channel's source). A descriptor id is stable *per kind*,
-and a channel's kind can change: id 12 is the sampler's Cutoff and the v1
+**The generator owner names its kind** (2026-09-26, the same ruling applied
+to a channel's source). A descriptor id is stable *per kind*, and a
+channel's kind can change: id 12 is the sampler's Cutoff and the v1
 drum synth's snare tone. So the owner is `ParamOwner::Source { kind }`, the
 kind the address was made on, and the address still costs 16 bytes. A
 resolver builds its addresses from the kind the channel runs now, so one
 made on another kind matches nothing. It is **inert, never dropped**: kept,
 saved back unchanged, and live again when the channel is switched back. This
 is the "never drop" rule from MOO-74. An inert lane keeps its slot among a
-pattern's eight (MOO-270 took the route that costs no engine storage), so
-`Session::inert_source_lanes` lists it for the lane picker to show as
-missing, MOO-74's treatment, where it can be removed. An existing one is
-reopened; `Session::lane_allowed` refuses to make a new one. On disk the
-owner is still spelled `"source"`, and the kind is a sibling key
-(`PROJECT_FORMAT.md`), so the saved
-bytes of every other address did not change.
+pattern's eight, so `Session::inert_source_lanes` lists it for the lane
+picker to show as missing, MOO-74's treatment, where it can be removed. An
+existing one is reopened; `Session::lane_allowed` refuses to make a new one.
+On disk the owner is still spelled `"source"`, and the kind is a sibling key
+(`PROJECT_FORMAT.md`), so the saved bytes of every other address did not
+change.
 
 This is deliberately a destination address, not a claim that every parameter
 is already a legal modulation target. Descriptors declare range and curve;
@@ -164,12 +151,12 @@ rows follow the capacity constant and scroll, which is pinned by a test that
 renders the shelf at eight and at sixteen. A larger
 capacity must not alter persisted destination or route meaning.
 
-That is now literally true rather than aspirational. `MAX_MODULATORS_PER_CHANNEL`
-is a constant the layout obeys, modulation edits each name one fact so the
-command ring no longer grows with capacity at all, and durable `ModSourceId`
-means slot numbers are an implementation detail rather than something a saved
-project depends on. Raising the number costs the DSP racks, the control outputs
-and the meters -- all linear and all small. See
+`MAX_MODULATORS_PER_CHANNEL` is a constant the layout obeys, modulation
+edits each name one fact so the command ring does not grow with capacity at
+all, and durable `ModSourceId` means slot numbers are an implementation
+detail rather than something a saved project depends on. Raising the number
+costs the DSP racks, the control outputs and the meters -- all linear and all
+small. See
 `docs/plans/archive/modulator-capacity/`.
 
 ### Sources and source metadata
@@ -190,10 +177,10 @@ struct ModSourceDescriptor {
 }
 ```
 
-`ModSourceId` is the durable source identity, and it landed. Rack devices have
-since been given the same treatment for the same reasons — `DeviceId`, minted
-on insertion, named by every route and lane, with the chain position derived —
-so a modulation destination is now as reorder-proof as a modulation source.
+`ModSourceId` is the durable source identity. Rack devices have the same
+treatment for the same reasons — `DeviceId`, minted on insertion, named by
+every route and lane, with the chain position derived — so a modulation
+destination is now as reorder-proof as a modulation source.
 See `docs/plans/archive/containers/01-a-device-is-an-identity.md`. It is minted when
 a module is added, carried through reorders, and never reused. `source_slot`
 survives only as the bounded runtime locator the realtime path indexes; it is
@@ -284,19 +271,12 @@ Devices receive only `resolved`; the engine owns base and the route sum.
 
 **Write precedence.** Three writers reach an effect parameter, and which one
 the device hears is a stated rule, not an order of calls. The same table sits
-on `control_events_for_slot` in `crates/mooloop-engine/src/render.rs`. The
-base-plus-offset rule below is unchanged by `docs/plans/automation-curves/`;
-what changed is the wire: rows one and two used to leave the engine as a
-`ParamValue` event pushed at every control tick, and now leave as one curve —
-a per-destination `[f32; ticks]`, handed to the node once a block through
-`AudioNode::apply_curves` — with the same resolved value at the same tick.
-**The carrier is now a curve, not a step of events.** A node without a native
-curve path still receives the identical step of `ParamValue` events it always
-did, converted from the curve by that trait method's default implementation,
-so nothing downstream of a device's `process` had to change for this. Only
-row three — the knob's own value, with no lane and no route — is still an
-event on the wire, because it is not a curve: it fires once, at one offset,
-not once a tick.
+on `control_events_for_slot` in `crates/mooloop-engine/src/render.rs`. Rows
+one and two leave the engine as one curve — a per-destination `[f32; ticks]`,
+handed to the node once a block through `AudioNode::apply_curves` (see "Mod
+matrix") — with the resolved value at each tick. Only row three — the knob's
+own value, with no lane and no route — is an event on the wire, because it is
+not a curve: it fires once, at one offset, not once a tick.
 
 | Lane | Route | Base | Offset | Who writes the device |
 | --- | --- | --- | --- | --- |
@@ -334,26 +314,11 @@ table beside `ControlOutputs`.
 
 ### Modulator rack
 
-Each channel owns one modulation rack and routing matrix. Neither belongs to
-an individual source or insert. A device supplies parameters and may publish
-named control outlets; the channel owns the source collection that can use
-those outlets and the routes that terminate in devices or the strip.
-
-This governs reusable channel sources and every route that crosses a device
-boundary. It does not strip an authored instrument of endemic modulation. A
-polysynth may own per-voice envelopes, velocity/key/gate relationships,
-audio-rate oscillator routing, and a device-specific LFO with saved internal
-routes. Those cannot in general be reproduced after the channel has reduced a
-chord to one control value. Selected internal signals become channel sources
-only by being published through the typed outlet contract below.
-
-The realtime implementation may use a fixed, bounded array (currently eight
-module slots and sixteen routes per channel) because it makes the callback
-predictable. That is an engine protocol boundary, not the product abstraction:
-the UI presents a collection of existing sources plus an add action, never a
-fixed row of permanent empty bays. Increasing capacity or admitting a new
-source type must not change the persisted route vocabulary or the ordinary
-interaction.
+Each channel owns one modulation rack and routing matrix (see "Decisions").
+It does not strip an authored instrument of endemic modulation: per-voice
+envelopes, velocity/key/gate relationships, audio-rate oscillator routing,
+and a device-specific LFO with saved internal routes cannot in general be
+reproduced after the channel has reduced a chord to one control value.
 
 Per-channel, not project-global. It matches the rack UI and keeps a channel a
 self-contained instrument. Project-global modulators can be added later as a
@@ -369,13 +334,6 @@ type or UI that assumes a modulator is only a little waveform generator.
 
 ### Mod matrix
 
-Each explicit route is `(source_ref, ParamAddr, transform)`, where the
-transform includes depth, polarity, and any later bounded shaping or offset.
-Source references are stable source or outlet identities, not merely a
-hard-coded slot number. Source metadata declares its label, signal shape
-(bipolar, unipolar, gate, or stepped), control rate, and latency; destination
-metadata declares that the parameter is legal to modulate.
-
 The engine evaluates sources before their destinations at the declared control
 rate, resolves the routes, and hands the destination a curve -- one resolved
 value per control tick, through `AudioNode::apply_curves` -- rather than
@@ -385,8 +343,8 @@ pushing an event per tick onto the destination's list. The conceptual path is:
 source -> normalized control signal -> route transform -> ParamAddr
 ```
 
-**No effect changes to support modulation. Ever.** That is still the whole
-design, and it still holds under the curve path: `apply_curves`'s default
+**No effect changes to support modulation. Ever.** That is the whole
+design, and it holds under the curve path: `apply_curves`'s default
 implementation turns the curve back into the exact `Event::ParamValue` step
 an effect's ordinary block-splitting already knows how to consume, so a
 device that has not opted into a native curve path never has to. Events with
@@ -476,8 +434,8 @@ setting or resetting phase. While the transport runs, a synced LFO that does
 not retrigger on notes takes its phase from the song position -- beats over
 its division, plus its phase offset, every control tick -- so Play, Seek and
 an export all land it where the position implies, and its random steps are a
-hash of the cycle number rather than a running generator (MOO-127,
-2026-09-23). Stopped, it free-runs from where it was. Fade-in uses the same free/synced timing
+hash of the cycle number rather than a running generator. Stopped, it
+free-runs from where it was. Fade-in uses the same free/synced timing
 vocabulary, begins when the source is installed, and restarts with a declared
 note trigger. Output smoothing is a bounded one-pole slew at control rate;
 square pulse width moves the high-to-low transition without changing the
@@ -514,13 +472,9 @@ again would sit it half a depth above the base at idle and give it half the
 swing. `Unipolar` stays meaningful on an outlet, but only for a genuinely
 bipolar one such as ML-P8's `LFO`.
 
-True audio-rate FM **through a channel route** and true audio sidechain are
-excluded. A device's fixed/internal oscillator network is outside this
-control-rate route contract. `AudioNode` currently has one in-place stereo bus;
-true sidechain requires prepared typed auxiliary edges/process buffers and
-graph latency compensation. Do not retain a borrowed source bus inside an
-effect. A control-rate envelope follower exposed as an outlet is the correct
-first audio-derived-control form.
+True audio-rate FM **through a channel route** ("Control rate, not audio
+rate") and true audio sidechain (below) are excluded. A control-rate envelope
+follower exposed as an outlet is the correct first audio-derived-control form.
 
 ## Note-triggered effects
 
@@ -557,46 +511,28 @@ An outlet address is `(channel, outlet index)` plus its user-facing name.
 The first reduction is last-note; a later explicit outlet mode can add highest
 or loudest note without changing routing. `DeviceIn` is a sibling of `Lfo`,
 not telemetry: its smoothing is part of its musical contract, because an
-unsmoothed velocity step can click a filter cutoff.
+unsmoothed velocity step can click a filter cutoff. Outlets are read one
+block later, under the timing rule above.
 
-Generators publish outlets into a per-channel table. Consumers read the table
-on the following block, with exactly one block of declared latency. That makes
-offline and realtime behavior identical and leaves graph order irrelevant; do
-not add a same-block exception. These outlets remain distinct from the display
-telemetry bank below, which is observation-only and has no audio timing
-contract.
-
-Buffer outlets follow the same rule if and when the Buffer earns them. Useful
-candidates include normalized playhead position, distance from the write head,
-window or loop phase, amplitude, transient state, and slice state. They are
-musical control signals only when declared with a rate and latency; the UI
-must never infer them by sampling a waveform display or telemetry snapshot.
+Buffer outlets follow the same rule if and when the Buffer earns them;
+`BUFFER_ENGINE.md` lists the candidates.
 
 **Across channels: deferred, by decision.** Not in this pass. `ParamAddr`
 already carries a channel-or-bus scope, so enabling cross-channel control
 later is a routing-policy change rather than a retyping of every engine
 command.
 
-**True audio sidechain: still deferred.** The mixer supplied the first
-compiled audio graph, but not the complete sidechain contract. A sidechain is
-a dependency edge in addition to ordinary audio routing: the source must be
+**True audio sidechain: still deferred.** A sidechain is a dependency edge
+in addition to ordinary audio routing: the source must be
 scheduled before the consumer even though its signal is not summed into that
 consumer's main input. `compile_bus_graph` currently models only each bus's one
 audio destination, and `AudioNode::process` currently accepts only one in-place
 stereo bus. Extend both through the process-buffer and typed-edge design in
 `AUDIO_ARCHITECTURE.md`; do not retain a borrowed source bus inside an effect.
 
-Latency compensation is also required and is not hypothetical. `AudioNode`
-now reports integer latency, and the drive effect declares 15 frames for its
-complete 2x oversampling path (both 31-tap half-band FIR stages, 15 samples
-each at the 2x rate, since MOO-250). Its internal dry path is aligned, but the graph does not yet
-delay neighbouring shorter paths at a sum. **Build preallocated graph
-compensation before parallel sends or true sidechain.**
-
-Control-rate ducking still does not need any of this: publish modulator
-outputs into a per-channel table read on the *following* block. One block of
-latency, deterministic, identical offline and realtime, and it makes graph
-order irrelevant. That remains the cheaper and more musical first move.
+Control-rate ducking does not need any of this: it publishes modulator outputs
+into the per-channel table read on the *following* block. That remains the
+cheaper and more musical first move.
 
 ### Display telemetry is observation, not a route
 
@@ -700,32 +636,6 @@ draw and edit the identical typed inlet and destination edges when a larger
 patch benefits from it. It may not create parallel routes, implicit
 modulation, or a new audio-rack model.
 
-## Modulation UI
-
-The channel has one collapsed-by-default modulation shelf beneath its device
-rack. It lists the channel's existing source chips and an add-source action;
-it is not a page inside Mono, Poly, Buffer, or an effect. The common device
-frame exposes the shelf where users are already reading signal order.
-
-Every device header shows a compact `MOD n` summary for the number of routes
-that terminate in that device, with optional source pills when that is clearer
-than a count. Activating the summary opens an inspector filtered to that
-device; it does not move or duplicate the modulation sources. The inspector
-is destination-first, for example `LFO 1 -> Cutoff +28%`, and is where a route
-can be reviewed or removed without opening a general matrix.
-
-Selecting a source chip arms it. Every legal ordinary control becomes visibly
-assignable; dragging that control establishes or adjusts the selected source's
-route depth. The control retains its base value. A modulation marker or
-overlay shows the resulting excursion, and a parameter inspector can list its
-base value and all incoming routes. Deselecting the source returns ordinary
-control manipulation to normal.
-
-There are no patch cords in this workflow. Inlets and outlets are explicit in
-the model, but their routine presentation is source selection, destination
-markers, overlays, and inspectors. The future matrix/graph view is an expert
-view of the same routes, not a prerequisite for using them.
-
 ## Anti-aliasing policy
 
 Hard and folding curves are **2x oversampled** (`Oversampler2x`), and the
@@ -762,17 +672,12 @@ cross-device signal through the ordinary outlet contract. Transitional synth
 LFOs that are merely generic channel modulators should still migrate instead
 of growing a parallel system.
 
-1. **Done.** Preserve `ModRack`/`ParamAddr`; add destination metadata and
-   expose LFO routes in the channel shelf.
-2. **Done.** Complete direct assignment, base/excursion feedback, destination
-   inspector, and undo as the normal workflow.
-3. **Done** for durable references and the step/random/math modules; macro and
-   note-derived sources are not built. See
-   `docs/plans/archive/modulator-modules/00-status.md`.
-4. Add declared generator/effect/Buffer outlets through the one-block control
-   table. **Next.**
-5. After typed auxiliary graph edges and compensation exist, evaluate true
-   sidechain and external routing. A graph UI, if useful, comes last.
+The channel-owned model, direct assignment, durable references, the
+step/random/math modules and generator outlets are built; macro and
+note-derived sources are not (`docs/plans/archive/modulator-modules/00-status.md`).
+Next, declared effect and Buffer outlets through the one-block control table.
+After typed auxiliary graph edges and compensation exist, evaluate true
+sidechain and external routing. A graph UI, if useful, comes last.
 
 ## Acceptance criteria
 

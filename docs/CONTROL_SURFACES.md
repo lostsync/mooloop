@@ -1,8 +1,7 @@
 # Control surfaces
 
-Status: the design behind `mooloop-core::control`, written 2026-09-15 with
-steps 01–03 of `docs/plans/archive/midi-control/` built and the interface not, and
-brought up to date the same day when step 04 landed.
+Status: the design behind `mooloop-core::control`, built by
+`docs/plans/archive/midi-control/`.
 
 `MODULATION.md` owns parameter addressing and the modulator rack. This
 document owns how something *outside* mooloop moves something inside it — a
@@ -82,7 +81,7 @@ tells it in advance which keys are controls: `ClaimedNotes`, derived from the
 map once a pump tick and sent with `EngineHandle::set_claimed_notes`. A claimed
 key -- a bound pad, or any key while a learn gesture waits -- is forwarded like
 a CC and is neither played nor recorded. Its release still lifts a note the
-same key started before it was claimed (MOO-129).
+same key started before it was claimed.
 
 ## Decisions that are made
 
@@ -114,8 +113,8 @@ same key started before it was claimed (MOO-129).
   parameter then *reads back*; the next message that finds it somewhere else
   knows something has overtaken it and starts catching again. The alternative
   -- every on-screen control, preset recall and undo step calling
-  `release_control_pickup_for` -- was the original plan and does not survive
-  contact with this codebase: a generator's parameters are written by three
+  `release_control_pickup_for` -- does not survive contact with this
+  codebase: a generator's parameters are written by three
   dozen individually named callbacks that assign the field directly, so the
   call would have been scattered across every device face and forgotten by the
   next one. The read-back rather than the requested value is the load-bearing
@@ -129,9 +128,8 @@ same key started before it was claimed (MOO-129).
   so it maps to `TransportControl::Pause`. Mapping it to `Stop`, which returns
   to the start, would make an external sequencer's stop button rewind the song.
   **Start is the other half**: it plays from the top, so it is
-  `ReturnToStart` then `Play`. Mapped to a bare `Play`, as it was until
-  2026-09-22, it resumed wherever mooloop had paused and the two machines ran
-  bars apart.
+  `ReturnToStart` then `Play`. Mapped to a bare `Play`, it would resume
+  wherever mooloop had paused and the two machines would run bars apart.
 - **Clock is dropped.** Twenty-four messages a beat, forever, and nothing
   syncs to it. It lands the day there is a clock to drive; the transport
   messages beside it are decoded now because they are gestures rather than a
@@ -196,7 +194,7 @@ and an instrument's internal routes are outside both.
 ## What is not built
 
 - **A mapped control carries no mark.** See `LOOSE_ENDS.md`; it needs a
-  per-parameter model on every face and was left out of step 04 on purpose.
+  per-parameter model on every face.
 - **A binding's mode cannot be changed from the editor.** A row switches
   takeover and inversion; the mode itself is whatever learn chose, which is
   Toggle for a note and Absolute for anything else. Relative encoders are the

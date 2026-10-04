@@ -5,18 +5,13 @@ settled.** Stage 1 shipped — see "What shipped" below — so the engineering
 questions this document poses are answered and the product question it poses
 is not. Do not read the future tense in the rest of this file as a statement
 that nothing exists. `docs/plans/archive/buffer-implementation/` is the build order;
-`docs/FOCUS.md`'s Buffer step is the remaining product test.
+the success test below is the remaining product test.
 
-**The insert model below was not settled as of 2026-08-30.** Adam's position
-then was that making Buffer an ordinary insert device was partly the wrong
-call: he designed it as though it had to work unchanged in another DAW, and
-Buffer is not meant to be portable -- it is meant to be part of how audio
-playback works inside mooloop. His stated intent was the **end of a device
-rack, with its own sequencing lane**, and the lane design was never worked out.
-So read what follows as what shipped rather than as what the device should be.
-
-**Settled 2026-09-15: Buffer stays a device.** Adam, on the realtime-sampler
-framing: *"it puts some of my doubts about a device-based implementation to
+**Settled 2026-09-15: Buffer stays a device.** Adam's position on 2026-08-30
+was that Buffer is not meant to be portable -- it is part of how audio
+playback works inside mooloop -- and that it belongs at the **end of a device
+rack, with its own sequencing lane**. On the realtime-sampler framing he
+said: *"it puts some of my doubts about a device-based implementation to
 rest."* The rack-end placement and the sequencing lane are not ruled out and
 are not foreclosed -- a lane would drive the published parameters either way.
 `docs/plans/archive/buffer-implementation/03-freeze-and-the-grid.md` is the work order
@@ -32,7 +27,7 @@ every other effect, capturing whatever reaches its position in the chain.
   allocates; `process` does not. Resizing the ring is an off-thread structural
   edit, which is why `bars` is deliberately not a descriptor-addressed
   parameter.
-- **Rebuilt 2026-09-16 around gestures that each own their settings.** JUMP
+- **Built around gestures that each own their settings.** JUMP
   (forward from `Jump Back`), REVERSE (backward from now) and STUTTER
   (repeating `Stutter`) are gate parameters: each holds the ring still while
   high and hands back to live when it drops. `Position` is a playhead heard
@@ -41,30 +36,22 @@ every other effect, capturing whatever reaches its position in the chain.
   the ring plays as a loop. `Quantize` and `Quant Start` delay presses and
   freezes to the grid, never releases. `CURRENT.md` has the whole behaviour.
 
-  What it replaced is worth recording because this document specified it: a
-  turntable, where `Position` aimed a chase whose closing speed was the
-  playback rate, `Rate` supplied free-run speed, `Length`/`Loop` drew a
-  window, and an arbitration rule decided which of them owned the one head.
-  The face's buttons were macros over those shared knobs. It needed a chase
-  time constant, an arrival test and a stillness test to know when an edit
-  was over; STUT could not have a length of its own without taking the
-  loop's; and `Rate`, the knob REV negated, could not be heard over a live
-  buffer because nothing detached a head for it to drive. (That last one was
-  real but was not why REV did nothing when Adam pressed it. The face was
-  sending descriptor ids to an API that takes table positions, so REV was
-  writing Freeze. See the plan status for 2026-09-16.) Adam, having played it: *"i dont understand what
-  is difficult. its a buffer."* `Rate`, `Length` and `Loop` are retired, and
-  their ids are spent with `Offset`'s.
+  It replaced the turntable this document specified, where `Position` aimed a
+  chase, `Rate` supplied free-run speed, `Length`/`Loop` drew a window, and an
+  arbitration rule decided which of them owned the one head: shared knobs
+  meant STUT could not have a length of its own without taking the loop's.
+  Adam, having played it: *"i dont understand what is difficult. its a
+  buffer."* `Rate`, `Length` and `Loop` are retired, and their ids are spent
+  with `Offset`'s.
 - `BufferEvent` is the MIDI map's gesture contract in `mooloop-core`: offset,
   rate, optional window, optional repeat count, a `BufferDuration`, and a
   crossfade. An event still builds its own head from that geometry -- it is
-  the one path that can ask for a speed other than ±1 -- and it still has no
-  caller outside its tests. Its relative-scrub CC does nothing now: the
-  platter it drove is gone, and `Position` is the scrub.
+  the one path that can ask for a speed other than ±1 -- and it has no
+  caller outside its tests. Its relative-scrub CC does nothing: the platter
+  it drove is gone, and `Position` is the scrub.
 - Seams -- a head wrapping its region, or a playhead move too fast to sweep
-  -- are counted and published as device telemetry. The count used to be of
-  collisions, a head overtaken by its writer; every head wraps now, so that
-  failure cannot happen and the number reports laps instead.
+  -- are counted and published as device telemetry. Every head wraps, so a
+  head overtaken by its writer cannot happen and the number reports laps.
 - The device still keeps its own `Vec<f32>` ring rather than the shared
   `mooloop_dsp::delayline` primitive this document required; moving it onto
   `DelayLine`/`ReadHead` has not been done.
@@ -164,8 +151,7 @@ Required state:
 - Follow state versus detached/manipulated state.
 - Read offset behind the write head, region length, direction, and rate.
 - A sample-accurate `Return Live` operation.
-- Defined behavior when a read head reaches the write head. The spike should
-  keep a small protected distance or read a defined prior sample.
+- Defined behavior when a read head reaches the write head.
 - Optional freeze, clear, and snapshot operations that never free large memory
   on the realtime thread.
 - Explicit position in the ordered device chain. Moving the device changes
@@ -225,8 +211,7 @@ only. Do not expand the first Buffer spike to implement this list.
 ## Bounded Spike
 
 Steps 1 through 4 are done; step 5 is not. Kept as written because the
-acceptance bar is what the workflow test in `FOCUS.md` still measures
-against.
+acceptance bar is what the success test below still measures against.
 
 1. Continuously write the device input into a short stereo ring.
 2. Pass live audio through a following read head with no surprising coloration
@@ -253,11 +238,10 @@ It must also pass these engineering tests:
 - No allocation, locks, I/O, or large-object destruction in the JACK callback.
 - Deterministic write/read-head behavior across varying block sizes.
 - Defined results for wraparound, read/write proximity, transport stop, tempo
-  change, and project reload. *Tempo change and reload are defined as of
-  2026-09-23 (MOO-137). A resized ring takes over the retained history, and
-  an undo or any other install keeps an unchanged Buffer with its ring. A
-  reloaded Buffer arrives unfrozen, because neither the freeze nor the
-  frozen audio is saved (MOO-196, 2026-09-30).*
+  change, and project reload. *Tempo change and reload are defined: a
+  resized ring takes over the retained history, and an undo or any other
+  install keeps an unchanged Buffer with its ring. A reloaded Buffer arrives
+  unfrozen, because neither the freeze nor the frozen audio is saved.*
 - Buffer history and head states are always visible.
 
 Reject or revise the thesis if the normal Follow state cannot behave like a

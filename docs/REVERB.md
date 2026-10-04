@@ -1,8 +1,5 @@
 # Reverb
 
-Status: feedback delay network implemented, August 2026. Supersedes the
-generated-room convolution player documented here through August 2026.
-
 The reverb is an eight-line feedback delay network with in-loop diffusion.
 Mono-summed input passes a pre-delay, a one-pole low cut, and four Schroeder
 allpass diffusers before it is injected into the network; each line's return is
@@ -27,7 +24,7 @@ are unity-magnitude, so they reshape density without touching the per-line
 decay budget the feedback gains solve for; the trip length those gains are
 solved against simply includes the allpass length. `Diffuse` shapes the onset
 (discrete echoes to a wash); the in-loop allpasses run at a fixed gain and keep
-the tail dense regardless, so a low `Diffuse` setting is no longer metallic.
+the tail dense regardless, so a low `Diffuse` setting is not metallic.
 
 ## Realtime contract
 
@@ -39,17 +36,13 @@ the tail dense regardless, so a low `Diffuse` setting is no longer metallic.
   and no spike, only a flat per-sample load. The in-loop diffusers add one
   allpass tap per line (eight more interpolated reads a sample) on top of the
   eight delay reads and four input diffusers, and the total is still a small
-  single-digit percentage of a 64-frame block budget at 48 kHz.
-  MOO-254 (2026-09-26) cut it by about a quarter without changing a sample:
-  18.5-21 us a 128-frame block on the build box, down from 24.7-27.4, in a
-  release build for x86-64-v2 as Linux ships (at baseline x86-64 it halved,
-  37-40 to 18-20). Measured by `reverb_path_cost` on the reverbs of
-  `housey-dropout-factory`, `ok-then`, `deep` and `sad_house`. The input diffusers run a stage at a time across
-  128-frame chunks, the eight lines run side by side as `[f32; 8]` rows, a
-  size glide that has stalled is skipped, and a ring read truncates rather
-  than calling `floor` (a libm call on baseline x86-64). The old loop is kept
-  under `#[cfg(test)]` and the new one is pinned against it bit for bit
-  (`the_restructured_network_is_the_old_one_bit_for_bit`). A change to the
+  single-digit percentage of a 64-frame block budget at 48 kHz;
+  `reverb_path_cost` measures it. The input diffusers run a stage at a time
+  across 128-frame chunks, the eight lines run side by side as `[f32; 8]`
+  rows, a size glide that has stalled is skipped, and a ring read truncates
+  rather than calling `floor` (a libm call on baseline x86-64). The old loop
+  is kept under `#[cfg(test)]` and the new one is pinned against it bit for
+  bit (`the_restructured_network_is_the_old_one_bit_for_bit`). A change to the
   loop's arithmetic breaks that pin; change the old path with it, or say
   why the sound may move.
 - Nothing allocates, locks, or reallocates in `process`. The rings are sized
@@ -70,16 +63,13 @@ optimized, for three reasons:
   single `process` call where the 512-sample input window filled. At a
   64-frame period a two-second tail measured ~1400 us in that one block out of
   eight against a 1333 us budget — an xrun — while the mean was an affordable
-  54 us. `docs/plans/archive/amortize-reverb-partition-cost/` proposed spreading that
-  work across the intervening blocks. An FDN removes the window instead of
-  redistributing it.
+  54 us. An FDN removes the window instead of redistributing it.
 - **It could not be modulated.** A convolution node cannot accept a parameter
   change; the response has to be regenerated and re-partitioned off-thread and
-  swapped in whole. The node ignored `events_in` outright, so a modulation
-  route aimed at a reverb knob was silently inert even though the destination
-  metadata declared it legal. `docs/MODULATION.md` requires "no effect
-  changes to support modulation, ever" — the convolution player was the one
-  device that could not honour it.
+  swapped in whole, so a modulation route aimed at a reverb knob was silently
+  inert. `docs/MODULATION.md` requires "no effect changes to support
+  modulation, ever" — the convolution player was the one device that could
+  not honour it.
 - **It sounded static.** A finite image-source set plus a filtered noise tail
   is geometrically defensible and completely still. Nothing in the response
   moved, so long settings rang rather than bloomed.
@@ -120,16 +110,15 @@ modulated. Plate uses the same history-preserving approach for Size, over
 
 ## Level
 
-`OUTPUT_REFERENCE` in `reverb.rs` pins the network's absolute output. A
-feedback network has no natural unity — its steady-state level depends on
-decay, size, and where the input's energy sits against the network's modes —
-so the constant is measured, not derived. It is enforced by
-`steady_state_wet_path_is_level_matched` in `gain_structure_tests.rs`, which
-holds a note and reads 1..2 s in, past the buildup and before the release.
+`OUTPUT_REFERENCE` in `reverb.rs` pins the network's absolute output. It is
+measured, not derived, and enforced by `steady_state_wet_path_is_level_matched`
+in `gain_structure_tests.rs`, which holds a note and reads 1..2 s in, past the
+buildup and before the release. `GAIN_STRUCTURE.md` ("Wet/dry and return
+effects") owns why, and how the wet path is level-matched to dry.
 
 ## Measured IRs
 
-There is no IR player in the tree any more. A convolution reverb remains a
+There is no IR player in the tree. A convolution reverb remains a
 reasonable *separate* device if measured-space loading is ever wanted: it
 would decode and resample off the audio thread, and would need the
 prepared-resource path (`StructuralCommand::ReplaceEffect` with a resource
