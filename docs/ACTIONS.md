@@ -9,9 +9,6 @@ console (Quake-style command entry), a future MCP server, and eventually
 node-based devices that pass control data around, should all be surfaces
 over the *same* underlying set of operations — not each grow their own
 bespoke wiring to the same internal state. This document is that contract.
-The eight shortcuts Adam originally asked for are in
-`docs/archive/SHORTCUTS.md`; all eight exist, so that list is history and
-this is the live rule.
 
 ## The rule
 
@@ -32,13 +29,8 @@ view. The id was not renamed with it, and that is the rule rather than an
 oversight: a user's rebindings are stored against the id, so renaming one
 silently drops whatever they had bound to it. Change the label, leave the id.
 
-`Ctrl+1`..`Ctrl+5` also stopped meaning "switch a particular pane to this
-page" on 2026-09-08 and started meaning "reveal this view, wherever it lives",
-without the table changing at all — which is what the ids had said all along.
-
 **A shortcut that reaches into a widget's internal state is a bug, not a
-shortcut** — this line is inherited from `FOCUS.md`'s original framing of
-the command layer, and applies equally to any future console/MCP command.
+shortcut**, and the same applies to any future console/MCP command.
 
 ## What's registered today
 
@@ -47,18 +39,13 @@ this document for the current list. **It holds 73 actions in 12 categories**
 as of 2026-09-26, and a test in `actions.rs` reads that sentence and fails if
 either number stops being true.
 
-This sentence has been wrong twice. On 2026-09-08 it said 46 where the table
-held 45; it was corrected to 47 on 2026-09-12, and the table held 49 by then.
-Both corrections were made by counting, and counting is what went wrong both
-times — which is why the third fix is a test rather than a fourth count.
-
 The categories are:
 Transport (play/pause on Space, stop on Shift+Space, return-to-start on Home,
 the song loop on L, and arming MIDI recording), File (including
-`recording.clean-up`, Clean Up Takes, which opens the unused-takes dialog of
-`audio-recording/06`), Edit (undo/redo, the
-three contextual clipboard verbs, select-all and delete), Navigation (the
-four arrow keys — transpose lives there now, because the same key picks a
+`recording.clean-up`, Clean Up Takes, which opens the unused-takes dialog),
+Edit (undo/redo, the three contextual clipboard verbs, select-all and
+delete), Navigation (the
+four arrow keys — transpose lives there, because the same key picks a
 channel or walks the browser tree when the roll is not where you are), Notes
 (the five pointer tools on keys 1-5 and the snap toggle on 6), View
 (revealing a view, showing or hiding the channel sidebar on Ctrl+[,
@@ -83,13 +70,12 @@ sit beside the roll's nudges, and a rarely-used move is not worth a chord
 that close to transposing. They also have rows in the Track menu, which greys
 them from the same predicate (`Session::can_move_track`) that decides whether
 the chord fires. `transport.record-arm-toggle` and `midi.learn-toggle` have none
-because both were toolbar-only until 2026-09-19 — added to the registry so
-they can be bound and appear on the Shortcuts page, not because either ships
-with a default binding. `transport.panic` (all notes off, MOO-99) has none
-for the same reason: it is registered so a stuck note has a way out that can
-be bound, and every chord near the transport's is already taken. `recording.clean-up` has none because it is
-housekeeping reached from the File menu, not something done often enough to
-earn a chord.
+because they are registered so they can be bound and appear on the Shortcuts
+page, not because either ships with a default binding. `transport.panic` (all
+notes off) has none for the same reason: it is registered so a stuck note has
+a way out that can be bound, and every chord near the transport's is already
+taken. `recording.clean-up` has none because it is housekeeping reached from
+the File menu, not something done often enough to earn a chord.
 
 ## Scope: where a chord applies
 
@@ -170,13 +156,13 @@ fader, a mute button -- does not move it. That is deliberate rather than a
 gap to close with a pointer hook: the control acts on what it is, not on the
 focused pane, and the chords' target has not changed.
 
-**The roll no longer wins on its own.** Until 2026-09-27 a roll on screen with
-notes selected took the chords ahead of whatever was clicked last. An outline
+**The roll does not win on its own.** A roll on screen with notes selected
+does not take the chords ahead of whatever was clicked last: an outline
 cannot say that -- it would sit on the browser row just clicked while Ctrl+C
-copied notes -- so it went. Pressing in the roll focuses its pane, so a
-marquee still aims the chords at the notes it drew. **Paste changed with
-it**: notes on the clipboard used to be pasted whatever was focused, as long
-as the roll was on screen; now they are pasted only with the roll outlined.
+copied notes. Pressing in the roll focuses its pane, so a marquee still aims
+the chords at the notes it drew. **Paste follows the same rule**: notes on
+the clipboard are pasted only with the roll outlined, not whenever the roll
+is on screen.
 
 The routing itself is one function, `actions::focused_target`, which the
 dispatcher calls with the surface it reads, and
@@ -259,10 +245,9 @@ genuinely new *key* (one not already decoded) would.
 ### The Super key is read before the chord is matched
 
 `UiSettings.shortcuts.super_key` (Preferences > Shortcuts, *Modifier keys*)
-says what an event's Super/Meta flag means: **Separate keys**, the default
-and what shipped before 2026-09-20; **Super acts as Alt**, where either key
-presses an Alt chord; or **Swap Alt and Super**, where the two exchange
-places. It answers two opposite complaints with one control — a desktop
+says what an event's Super/Meta flag means: **Separate keys**, the default;
+**Super acts as Alt**, where either key presses an Alt chord; or **Swap Alt
+and Super**, where the two exchange places. It answers two opposite complaints with one control — a desktop
 whose window manager eats Alt leaves Super as the only modifier an
 application can reach, and a keyboard with the two transposed wants them
 back the other way round.
@@ -287,15 +272,12 @@ role onto Meta; the keyboard, whose chords are fixed by the registry rather
 than picked per action, is the half that needed a setting.
 
 **Two ladders written by hand and checked against nothing is how a shipped
-action stayed dead for a week.** `transport.loop-toggle` landed on a bare L
-on 2026-09-07. The registry held it, the prefpane drew it, `ShortcutTable`
-resolved it — and no L ever arrived, because the root ladder forwarded six
-digits and nothing else unmodified, and the recorder refused an unmodified
-key outright, so it could not even be rebound to something that worked. Every
-test was green throughout, because every test asked the registry what it held
+action stayed dead for a week**: `transport.loop-toggle` was registered,
+drawn and resolved on a bare L that the root ladder never forwarded, and
+every test was green, because every test asked the registry what it held
 rather than asking the markup what it could deliver.
 
-Both ladders end in a catch-all now, and `actions.rs`'s `decoding` module
+Both ladders end in a catch-all, and `actions.rs`'s `decoding` module
 asks the markup: `every_default_chord_reaches_the_dispatcher` fails if a
 registry default is a chord `main.slint` cannot produce, and
 `the_recorder_decodes_what_the_dispatcher_does` fails if the two ladders name

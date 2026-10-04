@@ -118,20 +118,19 @@ two-colour meter.
 `family` and `family-mono` are CSS-style lists: `"Iosevka Aile, Inter,
 sans-serif"`. mooloop hands the whole string to the renderer, which walks it.
 
-**A theme names a font; it cannot ship one.** Checked against Slint 1.18.1:
-its stable API has no runtime font registration. It does have one behind an
-opt-in, unstable feature (`unstable-fontique-011`, whose
-`slint::fontique_011::shared_collection()` takes a font's bytes), which Slint
-says may change in any minor release. mooloop does not turn it on, and Adam
-ruled on 2026-09-30 that a theme ships no font that way *yet*: it comes back
-when Slint makes the hook stable (MOO-320, closed until then). So a family is resolved
-from what is installed on the machine and a name nobody has falls back to the
-platform default without a word. If your theme depends on a face, say so in
-`description`.
+**A theme names a font; it cannot ship one.** Slint 1.18.1's stable API has
+no runtime font registration; the one it has sits behind an opt-in, unstable
+feature (`unstable-fontique-011`) that Slint says may change in any minor
+release. Adam ruled on 2026-09-30 that a theme ships no font that way *yet*:
+it comes back when Slint makes the hook stable (MOO-320). So a family is
+resolved from what is installed on the machine and a name nobody has falls
+back to the platform default without a word. If your theme depends on a
+face, say so in `description`.
 
 `scale` multiplies the whole type scale. The interface's working range is
-8–12.65px at 1.0 (the old 115%, since 0.1.6), so 1.5 is 12–19px and is a different program to sit in front of for an
-evening. `weight` is a CSS weight; anything above 500 at 9px is a smudge.
+8–12.65px at 1.0, so 1.5 is 12–19px and is a different program to sit in
+front of for an evening. `weight` is a CSS weight; anything above 500 at 9px
+is a smudge.
 
 ## Shape and metrics
 

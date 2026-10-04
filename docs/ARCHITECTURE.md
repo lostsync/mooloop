@@ -6,15 +6,11 @@ The high-level map of Mooloop as it exists today: which crate owns what, how
 an edit reaches the audio thread, what the audio thread does with it, and what
 is allowed to cross between the two.
 
-This used to be one diagram, and it rendered about 4500 pixels wide against
-700 tall. Nothing that shape gets read whole, and what is not read whole gets
-patched a line at a time instead: the driver box was correctly updated for
-Core Audio while, in the same picture, the UI still owned the project
-`mooloop-session` had taken over, an engine control thread that has never
-existed still sat inside the engine, and every track was still called a bus
-after `TERMINOLOGY.md` settled that word. Five diagrams replace it, none wider
-than about 900 pixels. Each is meant to fit on a screen, and each is meant to
-be wrong in a way somebody can spot.
+It is five diagrams, none wider than about 900 pixels, rather than one: a
+diagram that does not fit on a screen is not read whole, and what is not read
+whole gets patched a line at a time until it contradicts itself. Each is
+meant to fit on a screen, and each is meant to be wrong in a way somebody can
+spot.
 
 The detailed audio-core contract stays in `AUDIO_ARCHITECTURE.md`; the mixer
 and device details stay in `CURRENT.md`.

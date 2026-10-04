@@ -19,87 +19,29 @@ and `PaneDrag` is a second instance of `RackDrag`'s shape — a global holding a
 drag whose grab and landing live in elements that do not contain each other.
 If a third one appears, that is the component this file should be asking for.
 
-Those banners were renamed on 2026-09-08, when the work area became five
-views in three slots: the channel rack, the device rack, the piano roll and
-the playlist each sit under a banner named for their view (`STEPS`, `MIXER`,
-`DEVICES`, `NOTES`, `PLAYLIST`) rather than for the dock they used to be a
-page of.
-
 Two entries are live bugs rather than duplication, marked **bug**. They are
 here because the missing component is why they happened.
 
-**Closed 2026-09-04: the stacked, editable knob.** `KnobStack` in
-`controls.slint`. `ParameterKnob` stacks a caption and a value around a large
-dial but the value is read-only; `KnobField` makes the value typed into but
-lays the three parts in a row, which is 130px wide once the dial is legible.
-A device page that wants four readable knobs across a quarter of a face needs
-both, and ML-P8's face rewrite is where that became load-bearing rather than
-theoretical. Its dial is a real `ParameterKnob` with its own captions off, so
-there is still one implementation of what a drag, a wheel, a
-double-click-to-default and an armed modulation source do. `show-sync` adds
-the shared `O.` LED beside the caption, which is what let the LFO's Rate stop
-being a visibly smaller widget than its neighbours.
+**Closed, and the thing to reach for:**
 
-**Closed 2026-09-04: the long-option picker.** `PickerChip` in
-`controls.slint`. A chip that opens a list and reports the index picked, for
-an option set past what a cycling chip or a segmented bank can carry. It was
-written inside `mlp8-device.slint` for a route list of six sources and
-thirty-one destinations; DS-01's matrix wanted the same thing against nine and
-forty-seven, which is the second use that turns a local component into a
-shared one. `KnobStack` gained a `fill` in the same pass, so a device whose
-pages are its layers can tint each page's dials to match, and `ParameterKnob`
-and `MiniKnob` gained `controlled` — report the change, do not write the
-property — which is what a face indexed by parameter id needs, because a knob
-that writes its own value drops the binding onto the model row it reads.
-**Since 2026-09-24 (MOO-220) it is the default** on every shared value control
--- the knobs and faders, `ToggleButton`, `SegmentedControl`, `SelectorBank`,
-and `toolbar.slint`'s `StepperField`, `MenuField` and `TempoField` -- because a
-`<=>` does not protect a binding at the far end of the chain, and the EQ's
-knobs were the proof. A caller over a plain property says `controlled: false`.
-
-**Closed 2026-09-27: the icon.** `Icons` and `Icon` in `icons.slint`
-(MOO-279, `docs/plans/icon-pass/`). Reach for them before drawing any shape
-that stands for an action or a kind. `Icons` holds every icon as a path
-string on a 16x16 grid, named for what it means (`Icons.close`,
-`Icons.previous`), and `Icon` is the one thing that draws one: a `Path` at a
-`size` in a `tint`. `ToolButton.icon` and `ToolModeButton.icon` take a
-registry entry (`icon: Icons.tool-select`) and draw it through `Icon`. Before
-this there were four sets of path strings in four files and one meaning drawn
-three ways. A face that needs an icon the registry lacks asks Interface for
-one; it does not spell a path string or a glyph of its own, and
-`scripts/dupe-audit icon-literal` counts the ones that still do. `Icon`'s
-`outline` is transitional: the icons that moved in are outlines, and step 03
-of the plan redraws them filled and deletes it.
-
-Every device kind has a filled icon (MOO-273): `Icons.source-kinds[n]` and
-`Icons.effect-kinds[n]` by `device_kind_to_int` and `effect_kind_index`, and
-`Icons.plugin` for a plugin of either role. `DeviceHeader.icon` and
-`CollapsedDevice.icon` take one, tinted with the device colour, faint while
-bypassed; `EffectDeviceShell.icon` forwards to its header, and `main.slint`
-binds it from the row's kind number. An empty `icon` draws nothing. The
-mixer's own headers, which have no kind, name theirs (MOO-294): the strip
-`Icons.strip`, a bus and the master `Icons.bus`, the output `Icons.output`,
-and the master's Bus Comp the insert's `Icons.effect-kinds[16]`.
-`DeviceKindSheet` in `mockup-catalog.slint` shows every kind's header.
-
-**Closed 2026-09-27: the stepping chip.** `StepperChip` in `controls.slint`
-(MOO-295): one box showing the current option of a short list, with a filled
-arrow inside it at each end (`Icons.step-previous`, `Icons.step-next`). An
-arrow or the wheel steps one option; it stops at the ends and dims that
-arrow, as `StepperField` does, rather than wrapping. It is controlled with no
-opt-out: it reads `selected-index` and reports through `selected(int)`. It is
-as wide as its longest option at the current text size, so it does not jump
-as it steps. For a list short enough to walk, like a compressor's three
-voicings; a longer one wants `PickerChip`. The Bus Comp's panel and the
-strip's voicing picker adopt it; `StepperChipSheet` in `mockup-catalog.slint`
-shows it. The mixer's strip, bus and output headers took the icons drawn
-beside it (`Icons.strip`, `Icons.bus`, `Icons.output`, MOO-294), shown on
-`MixerHeaderSheet`.
-
-A third caller arrived 2026-09-05 and needed nothing new: `aux-in-device.slint`
-picks a source channel and a published outlet from two `PickerChip`s, and the
-whole face is that pair, a `ParameterKnob` and two `SectionLabel`s. A device
-whose face adds no widget is the outcome this list is for.
+- **`KnobStack`** (`controls.slint`) — the stacked, editable knob a device
+  page uses. `UI_DESIGN.md` > Synth faces says why.
+- **`PickerChip`** (`controls.slint`) — a chip that opens a list and reports
+  the index picked, for an option set past what a cycling chip or a segmented
+  bank can carry.
+- **`StepperChip`** (`controls.slint`) — one box stepping through a list short
+  enough to walk, like a compressor's three voicings; a longer one wants
+  `PickerChip`. Shown on `StepperChipSheet`.
+- **`Icons` and `Icon`** (`icons.slint`) — reach for them before drawing any
+  shape that stands for an action or a kind. `ToolButton.icon` and
+  `ToolModeButton.icon` take a registry entry (`icon: Icons.tool-select`).
+  Every device kind has one (`Icons.source-kinds[n]`, `Icons.effect-kinds[n]`,
+  `Icons.plugin`), shown on `DeviceKindSheet`. A face that needs an icon the
+  registry lacks asks Interface for one; it does not spell a path string or a
+  glyph of its own, and `scripts/dupe-audit icon-literal` counts the ones that
+  still do.
+- **`controlled`** is the default on every shared value control;
+  `UI_DESIGN.md` > The Ranged-Control Contract has the rule.
 
 ---
 
@@ -114,7 +56,7 @@ is one element per adjacent sample pair, and that workaround is hand-rolled
 | --- | --- |
 | `device-displays.slint` | 8 (`:49`, `:77`, `:140`, `:166`, `:263`, `:306`, `:489`, `:498`) |
 | `plate-device.slint` | 2 (`:59`, `:79`) |
-| `modulation-device.slint` | 2 (`:17`, `:25`) — the file is 134 lines after the 2U rework, and both plots survived it |
+| `modulation-device.slint` | 2 (`:17`, `:25`) |
 | `eq-device.slint` | 1 (`:81`) |
 | `modulation-shelf.slint` | 1 (`:231`) |
 | `reverb-device.slint` | 1 (`:77`) |
@@ -201,8 +143,8 @@ wants to show a buffer starts from zero.
 Seven copies of scrim + card + title + footer. `#00000099` is hardcoded in
 all seven (`about-dialog.slint:10`, `export-dialog.slint:13`,
 `appearance-dialog.slint:684`, `save-preset-dialog.slint:14`,
-`save-error-dialog.slint:31`, and since 2026-09-23 `question-dialog.slint` and
-`takes-dialog.slint`), and `z: 200` in three of them; the two new ones sit at
+`save-error-dialog.slint:31`, `question-dialog.slint` and
+`takes-dialog.slint`), and `z: 200` in three of them; the last two sit at
 205 and 210 so the unsaved-changes question lands over the takes dialog.
 `about-dialog.slint` documents the duplication in a comment rather than
 resolving it.
@@ -214,11 +156,8 @@ private to the file. `StepBank`'s column math is duplicated inside it (`:293`
 and `:363`). The shelf is the second-largest `.slint` in the tree and almost
 none of it is reachable.
 
-`SyncMiniKnob` is the one that got out: the ML-P8's own LFO wanted the same
-free-Hz-or-division knob, so it and the `Divisions` vocabulary moved into
-`controls.slint` rather than being copied. That is the pattern the rest of this
-list is waiting for — a second caller is what makes a private component's
-generality real rather than assumed.
+`SyncMiniKnob` and the `Divisions` vocabulary have moved out to
+`controls.slint`, because the ML-P8's LFO was a second caller.
 
 ## 8. Adoption, not authorship
 
@@ -256,18 +195,11 @@ sources, columns are destinations, the diagonal is an oscillator on itself,
 and each cell is a bipolar amount you drag. `NetworkCell` and `SyncChip` are
 private to that file **on this list's own rule** — twelve cells is twelve
 instantiations of one component in one device, not two devices sharing one.
+A second device drawing a source-by-destination grid is when it becomes a
+shared component.
 
-It is recorded because there is a plausible second caller. Step 04 of
-`docs/plans/archive/poly-synth-v2/` adds ML-P8's internal modulation routes, and a
-source-by-destination grid is the same picture with a different vocabulary;
-if that step reaches for this, it becomes a shared component then rather
-than speculatively now.
-
-Worth keeping whichever way it goes: the cell is a `ParameterKnob` with
-`show-dial: false` rather than a second draggable control. Arming a
-modulation source changes what every gesture *means*, and a hand-rolled cell
-would have been a second implementation of that contract. `show-dial` joins
-`show-label` and `show-value-text`, which existed for the same reason.
+The cell is a `ParameterKnob` with `show-dial: false` rather than a second
+draggable control; `UI_DESIGN.md` > Synth faces says why.
 
 ## 11. Small, and already admitted in comments
 
@@ -278,9 +210,8 @@ would have been a second implementation of that contract. `show-dial` joins
   banner) and the browser sidebar grip; the comment at `main.slint:4023` says
   the second is *"the same moving-origin drag integrator as the dock
   splitter"*.
-  - Added 2026-09-15, after this file's audit date: `PlaylistLoopHandle`
-    (`main.slint`, PLAYLIST banner) is a third thin grabbable edge, and it is
-    worth being explicit that it is **not** a third splitter. A splitter
+  - `PlaylistLoopHandle` (`main.slint`, PLAYLIST banner) is a third thin
+    grabbable edge, and it is **not** a third splitter. A splitter
     accumulates deltas to move a boundary; this reports an absolute pointer
     position the caller turns into a tick. What the three do share is the
     paint-narrower-than-target rule — 2px drawn in a 9px hit area — and the

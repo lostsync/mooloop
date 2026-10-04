@@ -27,7 +27,7 @@ decorative:
 
 ## Composition Grammar
 
-The interface has four levels. Their ownership must remain visible.
+The interface has five levels. Their ownership must remain visible.
 
 1. App chrome: menu, transport, global timing, master state.
 2. Work surface: rack, notes, playlist, mixer.
@@ -166,8 +166,7 @@ Use contrast and spacing to show hierarchy, not floating cards within cards.
   by the colour's luminance, decided once in `ProjectColor::ink` where there
   is a test for it, rather than in markup where the weights would be spelled
   a second time. The threshold there was set by rendering every swatch with
-  both inks and looking, and the tidier-sounding 0.55 was wrong on two of
-  eleven.
+  both inks and looking; the tidier-sounding 0.55 is wrong on two of eleven.
 
 The source editor should feel like one instrument front panel. It should not
 look like several cards dropped into the center of a page.
@@ -210,14 +209,14 @@ what makes the ramp a widening rather than a change.
   left alone: an accent is a colour somebody chose.
 - **roundness** scales `Theme.radius-xs/sm/md/lg`.
 - **type-scale** scales `Theme.text-xs` … `text-4xl`, eight steps over a
-  7-22px grid times `Theme.type-base` (1.15 since MOO-286, which made the
-  old 115% the new 100%), so 8-25px at 100%. This is the accessibility
-  control and nothing else in the program makes small text bigger.
-  `Theme.row-growth` (1 up to 100%, the type scale above it) carries it to
-  the heights drawn around one line of text at 100%: a menu row, a menu's
-  per-row height, a `SectionLabel` (MOO-278, MOO-291). At 100% and below
-  nothing laid out around them moves.
-- **density** (no control on the Appearance page since MOO-286; themes set it) scales `Theme.control-height`, `control-min-width` and the
+  7-22px grid times `Theme.type-base` (1.15, MOO-286), so 8-25px at 100%.
+  This is the accessibility control and nothing else in the program makes
+  small text bigger. `Theme.row-growth` (1 up to 100%, the type scale above
+  it) carries it to the heights drawn around one line of text at 100%: a menu
+  row, a menu's per-row height, a `SectionLabel`. At 100% and below nothing
+  laid out around them moves.
+- **density** (no control on the Appearance page, MOO-286; themes set it)
+  scales `Theme.control-height`, `control-min-width` and the
   `pad-xs/sm/md/lg` ramp, which is padding and spacing both.
 - **hairline** and **stroke-emphasis** are the two stroke weights. A zero
   hairline is a real setting: a theme asks for a borderless interface there.
@@ -257,12 +256,9 @@ alignment, and height contract as effects.
   one; 2U for Aux In, whose whole content is a source, an outlet and a level,
   and which at 3U would be empty rather than generous. A bus's output stage
   stands in the same position, at 2U on its own or 3U bundled with the
-  track's pinned channel strip when `STRIP_PIN` pins it to the head -- the
-  two used to be a 2U box beside a 2U box, one of them mostly empty once the
-  EQ's response plot moved into the room the input stage was not using on
-  2026-09-11 and freed a unit; merged on 2026-09-13, that freed unit is spent
-  on identity and routing sharing the strip's own box instead of standing
-  empty beside it. An effect uses only the units its working
+  track's pinned channel strip when `STRIP_PIN` pins it to the head, where
+  identity and routing share the strip's own box rather than standing as a
+  mostly empty box beside it. An effect uses only the units its working
   controls require, declared once in `effect_kind_units`
   (`mooloop-ui/src/lib.rs`) rather than in each face: 1U for filter, drive,
   preamp, bitcrush, limiter, plate, and Buffer; 2U for gate, compressor, EQ, and Mod;
@@ -322,12 +318,9 @@ row, led by its slot's tab strip:
 
 `[DEVICES NOTES PLAYLIST] | [DEVICE CHAIN] [source type] ··· [channel name field] [channel preset browser/actions]`
 
-This used to be two stacked rows — a slot header carrying the switcher, the
-channel name and the preset browser, and a device-chain row under it. They
-merged because a slot header cannot hold per-view controls once a view can be
-moved between panes, and because the shared row was already asking which page
-was open in order to know whether to draw the preset browser, which is this
-document's own stated symptom for a control in the wrong place.
+One row, not a slot header over a device-chain row, because a slot header
+cannot hold per-view controls once a view can be moved between panes;
+**Toolbars** below has the rule.
 
 The channel preset browser is on this view and no other. A channel preset is
 the channel's sound, and this is the view whose subject is the channel's
@@ -349,7 +342,7 @@ handler and never writes back to `text`; `current-text` is what is actually
 in the box, and is what a test should read.
 
 **A field that removes itself does it on `left`, never on `editing`.** The
-step rack's inline rename (MOO-224) is an `if` that exists only while the
+step rack's inline rename is an `if` that exists only while the
 caret is in it, and its editing session is the undo gesture. Tear the field
 down from a handler on `editing` and it can go before its own focus handler
 has run `Gesture.end()`, so the next edit anywhere joins this one's undo
@@ -407,9 +400,7 @@ The rules that make it usable:
   one it replaced reads as a different device arriving rather than as this
   device, turned round.
 - **The transition spends `Motion.duration` and `Motion.curve`**, like every
-  other animation in the rack. Slint 1.17 has no 3D transform, so a literal
-  card flip is an x-scale through zero with the faces swapped at the
-  midpoint; a cross-dissolve with a small slide is equally available.
+  other animation in the rack; `Mixer Strips` says how a flip is drawn.
 
 **The first real candidate, when one is wanted:** the preamp's
 spectrum-deviation display, and anything else that answers "what is this
@@ -482,13 +473,10 @@ Both ends of a loop drag snap down and the range runs to the end of the last
 unit touched. That is what makes a click loop the bar clicked rather than
 nothing.
 
-This paragraph used to end "and it is why the strip needs no separate handles:
-the section is re-dragged rather than resized." **That stopped being true on
-2026-09-15**, and the reasoning is worth keeping rather than just deleting,
-because it was sound while it held. Re-dragging is a fine way to move a loop
-you are *making*; it is a poor way to nudge one you already have, and a song
-that now opens with two bars already marked makes the second case the common
-one. So both ends carry a handle: 2px of paint in a 9px target, with an
+Re-dragging is a fine way to move a loop you are *making*; it is a poor way
+to nudge one you already have, and a song that opens with two bars already
+marked makes the second case the common one. So both ends carry a handle:
+2px of paint in a 9px target, with an
 `ew-resize` cursor, because a two-pixel hit area is not a hit area and the
 cursor is what says so before the press rather than after it.
 
@@ -496,31 +484,27 @@ The section is drawn in the strip whether or not looping is live, dimmed when
 it is not, because switching a loop off keeps its points and a strip that went
 blank would say otherwise. Only a live loop tints the lanes below.
 
-The playhead is drawn whenever the playlist is in song mode, running or not.
-It used to appear only while playing, which was defensible when there was no
-way to move it and is not now: a position that can be aimed has to be visible
-to aim.
+The playhead is drawn whenever the playlist is in song mode, running or not:
+a position that can be aimed has to be visible to aim.
 
 ### Channel modulation shelf
 
-**Its location is under review as of 2026-09-05.** Adam wants the modulation
-rack moved and redesigned into its own panel; `reference/img/mooloop-1.0-mockup.png`
-puts it on the right with its own tabs. `FOCUS.md` parks the move until one
-question is settled -- whether the mockup's tracker and `IDEAS.md`'s automation
-tracker are one design or two -- because the relocation is a layout and that is
-not.
-What follows describes where it is today and, more usefully, the two rules that
-a move must carry with it — one shelf for the whole channel, and no fixed row
-of permanent empty slots.
+**Its location is under review.** Adam wants the modulation rack moved and
+redesigned into its own panel; `reference/img/mooloop-1.0-mockup.png` puts it
+on the right with its own tabs, and `FOCUS.md` says what has to be settled
+first. What follows describes where it is today and, more usefully, the two
+rules that a move must carry with it — one shelf for the whole channel, and
+no fixed row of permanent empty slots.
 
 The channel's modulation shelf lives immediately below the device rack and is
 collapsed by default. It is pinned to the bottom of the editor dock rather
 than living inside the rack's horizontal scroll: it is one surface for the
 whole channel, so following the chain's width put its module grid and Assign
-button off-window once the chain grew past a few devices. Its header is a small `MOD` affordance; opening it shows
-existing source chips and an add-source action. It is one shelf for the whole
-channel, so a source can target a source parameter, any insert, and the strip
-at the same time. Do not place a fixed row of permanent empty slots in the
+button off-window once the chain grew past a few devices. Its header is a
+small `MOD` affordance; opening it shows existing source chips and an
+add-source action. Because it is one shelf for the whole channel, a source
+can target a source parameter, any insert, and the strip at the same time.
+Do not place a fixed row of permanent empty slots in the
 rack or a separate modulation page inside every device: the grid's rows follow
 the capacity constant and scroll, so the number is not a layout decision.
 
@@ -597,8 +581,8 @@ plot responds to waveform, tuning, level, and pulse width.
 - **ML-M1** pages as `Osc` / `Amp/Filter` / `Perf`. `Perf` is the page that
   makes it a distinct device: note priority, legato and glide, and accent.
 - **ML-P8** pages as `OSC` / `NETWORK` / `FILTER` / `AMP` / `ML-P8 MOD`. It was
-  one screen until 2026-09-04, and that is the layout lesson worth keeping:
-  sixty-nine parameters on one 884x240 face fit only at a 20px dial and a 9px
+  one screen at first, and that is the layout lesson worth keeping:
+  sixty-nine parameters on one face fit only at a 20px dial and a 9px
   caption, which is a smudge on a 14" laptop. **A face that fits by shrinking
   its controls has not fit.** Pages cost a click and buy a dial you can read.
   NETWORK is the source-by-destination grid with a page to itself — rows are
@@ -649,15 +633,14 @@ decide its shape. Settled 2026-09-10.
   literal in four files. The width is set by the widest row that must not
   wrap, measured in real controls: an EQ band is freq / gain / q, a `MiniKnob`
   is 22 px, and three of them with gutters need 74 px of content. 62 px leaves
-  54 px, which is two knobs, which is why the same section used to need a
-  wider face than the one it lived on. Pick a strip's width by doing that
+  54 px, which is two knobs. Pick a strip's width by doing that
   arithmetic, not by choosing a number that looks narrow and paging around it.
 - **A strip that needs more controls gets another face, not more height.** A
   strip's height is its fader's, and the fader is the one element on it with a
   floor -- so an area that toggles open below the fader spends the only
   dimension that cannot give. Turning the strip over changes nothing's size.
 - **Where there is height, the strip stops paging -- and that is a
-  measurement, not a control.** Added 2026-09-12. `MixerMetrics.full-height`
+  measurement, not a control.** `MixerMetrics.full-height`
   is what the whole arrangement needs, stated as the sum of the parts the
   paged face already has to name, and a pane with that much room draws drive,
   EQ, comp, sends and then the meter and fader with the destination under
@@ -679,7 +662,7 @@ decide its shape. Settled 2026-09-10.
   pattern: the strips between the grab and the landing slide aside and the
   gap is the drop indicator. **The master refuses at the grab** -- its plate
   selects and never lifts -- and a drop over it lands next to it, so the
-  master stays first without a second rule to learn. Added 2026-09-16.
+  master stays first without a second rule to learn.
   **A turned strip's face stays at its seat for now**: a strip's page is
   private to the strip instance and a `for` reuses instances by seat, so a
   track moved off a turned strip arrives on its fader face and the strip
@@ -701,19 +684,17 @@ decide its shape. Settled 2026-09-10.
   sections fit stacked with no tabs. Adam, on the mockup: *"no scopes on the
   mixer -- that's partly the point."*
 - **A plot does not have to live in the section it draws.** On the rack row
-  the EQ's response sat above its own four band rows and did not fit: 72 px
-  of plot and 200 px of rows in a 224 px face drew the fourth band below the
-  panel. The plot moved to the column under DRIVE, whose one knob and voicing
-  bank leave most of a column empty, and got taller in the move. What decides
+  the EQ's response sat above its own four band rows and did not fit, so it
+  moved to the column under DRIVE, whose one knob and voicing bank leave most
+  of a column empty, and got taller in the move. What decides
   where a display goes is where the room is, not which heading it belongs
   under -- a section owns its *controls*.
 - **Size a panel from its contents, not from a share of the slack.** Two
   panels on `horizontal-stretch: 1` split what is left over, which gave the
-  strip's EQ 232 px and its compressor 212 px for clusters 96 px and 76 px
-  wide. The knobs were centred and still read as misplaced, because a small
-  huddle in the middle of a box twice its width looks like a mistake wherever
-  it actually sits: Adam, *"the area itself seems pinned to the left of the
-  channel strip, so the buttons are off center."* Measure the widest row that
+  strip's EQ and compressor boxes more than twice the width of their
+  clusters. The knobs were centred and still read as misplaced, because a
+  small huddle in the middle of a box twice its width looks like a mistake
+  wherever it actually sits. Measure the widest row that
   must not wrap, spell that as the width, and give the stretch to the one
   panel that has something to do with extra room -- here the compressor,
   whose curve widens.
@@ -724,11 +705,9 @@ decide its shape. Settled 2026-09-10.
   strip face, the track's pinned row in the device rack, and the zoomed console
   strip are one parameter set drawn three ways. A control that exists in only
   one of them makes the mixer's own state something a user has to manage
-  before they can do the work. Built 2026-09-11 for the first two, and
-  2026-09-12 for the third, which needed nothing new as
-  `docs/plans/archive/console/00-status.md` predicted -- it is the same four
-  components in a taller column, and it arrives by the pane being big enough
-  rather than by a zoom.
+  before they can do the work. The third is the same four components in a
+  taller column, and it arrives by the pane being big enough rather than by a
+  zoom.
 - **A strip control declares no range of its own.** Every knob on the channel
   strip takes its minimum, maximum, default, curve, name and unit from the
   descriptor table the engine reads, handed to the markup once at startup as
@@ -778,9 +757,9 @@ decide its shape. Settled 2026-09-10.
   **A stepped control also takes a shorter throw.** Every knob in the app
   crosses its range in 150 px of pointer travel, which is right when there is
   a value to resolve between two settings and wrong when there is not: five
-  frequency positions over 150 px is 37 px of drag for one of them, which
-  Adam hit immediately -- *"it is too hard to move the freq knobs with the
-  mouse pointer."* `MiniKnob.travel` is that distance, and a stepped
+  frequency positions over 150 px is 37 px of drag for one of them -- Adam:
+  *"it is too hard to move the freq knobs with the mouse pointer."*
+  `MiniKnob.travel` is that distance, and a stepped
   parameter sets it to 14 px a stop off its own descriptor, so a band that
   gains a position gains the travel for it.
 - **Where the strip's processing sits in a track's chain is one statement.**
@@ -839,9 +818,9 @@ Two panels flank the work area, and they are deliberately one mechanism: the
   (name, routing, polarity, then the strip), its own devices as inserts, and
   its fader last — because that is what the engine does, and `StripPin` says
   so in one constant both the block loop and the rack read. The fader was
-  drawn *first* until 2026-09-13, for a structural reason worth remembering:
-  the head slot is the seat a channel's **generator** occupies, so a track's
-  output stage inherited the position of a channel's input. A control's place
+  once drawn *first*, for a structural reason worth remembering: the head
+  slot is the seat a channel's **generator** occupies, so a track's output
+  stage inherited the position of a channel's input. A control's place
   in a rack is a claim about when it acts.
 - **Where a control acts decides where it is drawn, even when that splits a
   cluster.** A track's polarity stayed at the head when its fader moved to the
@@ -869,8 +848,6 @@ Two panels flank the work area, and they are deliberately one mechanism: the
   -- is usually a scrolling page, which cannot spend it and turns it into
   empty space. State what a fixed page wants, let it stop there, and the
   slack goes to the fader, the meter or the plot that reads better bigger.
-  The mixer strip had this backwards until 2026-09-12: a turned strip's
-  sections page took the room and its fader stayed at its minimum.
 
 ## Toolbars
 
@@ -889,7 +866,7 @@ Two panels flank the work area, and they are deliberately one mechanism: the
   the dock below it, the split at the divider, the browser at the right
   sidebar's edge. The row's arithmetic counts the chips rather than stating
   how many there are, because a fourth chip arriving is exactly when a
-  hardcoded three stops being true — which is what happened on 2026-09-13. Their glyphs share one
+  hardcoded three stops being true. Their glyphs share one
   outline, and what separates them is **fill, not position** — a docked panel
   appears and disappears and is drawn solid; a split is two editors and is
   drawn as two empty halves. Two rules 2px apart are the same square at 16px.
@@ -966,7 +943,7 @@ writing another.
   `Theme.warning` while a modulation source is armed on it. Value readout
   `Theme.accent` in `Theme.font-family-mono`. The value arc is `Theme.accent`
   unless the device has a colour of its own.
-- **The value is the owner's, not the control's** (MOO-220). A control
+- **The value is the owner's, not the control's.** A control
   reports a change and does not write its own value: `controlled` is `true`
   by default on every shared value control -- the knobs, the faders,
   `ToggleButton`, `SegmentedControl`, `SelectorBank`, `StepperField`,
@@ -1035,7 +1012,7 @@ rather than for fine, and the faders disagree on click-to-jump.
   clicked away. `status-message` stays for confirmations the next event may
   replace. The notice is a segment beside the hint line rather than a rung in
   its priority chain: below the hints it would be hidden whenever the pointer
-  moves, and above them it would hide every hint until dismissed (MOO-132).
+  moves, and above them it would hide every hint until dismissed.
 - **A mode or a preset that goes for a familiar sound is named for the sound,
   not for the hardware.** Adam's instruction, 2026-09-09, naming the channel
   strip's four voicings: *"dont reference these by name, can use a 'character
@@ -1070,12 +1047,10 @@ Before committing UI work, answer all of these:
   accepted from code alone?
 - Is anything hidden with `visible:` that is repeated, or hidden most of the
   time? Build it with `if` (or repeat only what is drawn) instead. Slint lowers
-  `visible:` to a 0x0 clip item that still exists and keeps its bindings live.
-  Under Slint 1.17 FemtoVG also tessellated every hidden one as a degenerate
-  circle each frame, about 0.1 ms each: the knobs' hidden route dots and arcs
-  were most of a 100 ms frame (MOO-256). 1.18 stopped that (MOO-268), but an
-  element that isn't built is still cheaper than one that is hidden. `if` builds and drops
-  an instance when it flips, so something that flips at tick rate (a playhead,
-  a step highlight) keeps one element and changes its colour or position.
+  `visible:` to a 0x0 clip item that still exists and keeps its bindings live,
+  so an element that isn't built is cheaper than one that is hidden. `if`
+  builds and drops an instance when it flips, so something that flips at tick
+  rate (a playhead, a step highlight) keeps one element and changes its colour
+  or position.
 
 If any answer is wrong, the UI is not done.
