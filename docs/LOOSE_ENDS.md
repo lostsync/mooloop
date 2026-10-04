@@ -1,752 +1,265 @@
 # Loose Ends
 
-Small known gaps that agents flagged when handing work back, gathered into one
-place so they stop living in chat scrollback. The file and line named is where
-to start.
-
-Everything here as of **2026-09-06** was re-verified against the tree that
-day, and a second pass on **2026-09-14** re-read about a third of the file --
-enough to find six entries that had stopped being true, or had never been.
-Entries added since carry their own date, and entries older than the sweep
-that covered them have not been checked against the tree since — the spike
-list below was still claiming thirty-nine unpushed commits on `main` a day
-after `main` was pushed, which is what this paragraph is now careful about.
-
-**An entry goes stale three ways and only one of them is loud.** Three of the
-six on 2026-09-14 had been fixed by work that never came back to delete the
-row: the preamp grew the per-band display that the entry beside it had
-*designed*, `Project` grew `pattern_meta`, and `BUFFER_ENGINE.md` grew the
-caveat the entry said it lacked. Two were never about the tree at all -- a
-screenshot that had been retaken and a branch list that had moved -- and those
-are the ones a reader has no way to doubt.
-
-The sixth is the one worth reading the code for. It described a real
-`continue` skipping a real publish, and the state it produces **cannot be
-reached**: nothing can subscribe to a sampler channel, so a sampler channel
-never enters that branch. An entry can be accurate about the source and wrong
-about the program. So: **check the claim before you act on it, and delete the
-row in the commit that makes it false.**
-
-This is not a roadmap and not a bug list. Everything here was a deliberate
-stopping point rather than an oversight, and none of it blocks the sequence in
-`FOCUS.md`. It exists so that a thing already known does not get rediscovered
-as a surprise, and so an idle half hour has somewhere to look.
-
-Scope rule: an item belongs here if it is **small, specific, and true of the
-code right now**. A gap large enough to need a plan belongs in `docs/plans/`;
-a wish belongs in `ENHANCEMENTS.md`; a described behaviour gap belongs in
-`CURRENT.md`. When an item is fixed, delete the row — do not annotate it.
-
-**This file takes no new rows as of 2026-09-22.** Linear is where work is
-tracked now (`AGENTS.md`, *Tracking work: Linear*): a new gap is an issue, in
-the `Loose ends` project unless a feature owns it. The rows below stay until
-they are fixed or filed, and filing one as an issue deletes its row here, in
-the same sitting, so that it is written down once.
+Small verified gaps recorded before Linear took over tracking (`AGENTS.md`,
+*Tracking work: Linear*). This file takes no new rows. Check a row against the
+code before acting on it, and delete it in the commit that fixes it or files
+it as an issue.
 
 ---
 
 ## Wrong-looking UI over correct behaviour
 
-**Every structural edit stops the song.** Found 2026-09-16, while answering
-why a mixer reorder should touch audio at all. Adding, removing, pasting,
-cloning or moving a channel; adding, removing or moving a track; cloning,
-clearing or removing a pattern; loading an effect preset; and any undo or
-redo -- all go through `ProjectEdit` and `EngineHandle::install_project`,
-which builds a **new** `RenderState` and swaps it in whole
-(`executor.rs`, `RealtimeCommand::InstallProject`). `RenderState::load_project`
-calls `transport.stop()`, every effect node is rebuilt from scratch by
-`EffectRack::load` whether or not its chain changed, and
-`install_project_in_ui` sets `playing` false and the playhead to zero. So
-during playback the song stops and rewinds, and every voice, tail, delay line
-and compensation ring in the project is emptied -- including on tracks the
-edit never touched. Read from the code, not yet heard; the live check of the
-track reorder was made with the transport stopped.
-
-A reorder makes it conspicuous because a reorder is **presentation**: the
-audio graph is the same graph with different labels. The engine cannot tell,
-because it matches `project.buses[i]` and `project.channels[i]` to its own
-strips **by position**, and so do the sequencer, the meter cells, the audio
-tap plan and `EngineHandle::sample_slots` / `slice_slots`.
-`docs/plans/archive/console/01-a-channel-can-be-moved.md` found this and
-chose the snapshot path for consistency, recording an incremental rotate as
-a separate improvement; nobody wrote down then that the snapshot path stops
-the transport.
-
-The real fix is identity, not a rotate: strips keyed by a durable channel and
-track id, so an install that finds the same id with the same chain keeps its
-node, and a move is a relabel the audio thread never sees. That is the
-`EffectTarget` unification both `ChannelEdit` and `TrackEdit` defer to. A
-cheaper interim step is to carry the transport state and position across an
-install, which would stop the rewind and leave the cut tails.
-
-**Planned 2026-09-17 as `plans/archive/channel-identity/`**: step 04 is the interim
-fix and step 05 is the real one. It is also a prerequisite of plugin hosting,
-which would otherwise reload every plugin in the song on any channel edit.
-
-**Half done, 2026-09-17 (step 04).** The song no longer stops or rewinds. A
-`ProjectEdit` carries the transport across the install: the executor copies
-the outgoing renderer's playing state, position and frame count into the
-incoming one **at the moment it swaps**, which is the only place the current
-position exists -- the song goes on playing while the install is prepared on
-the control thread, so a position captured earlier would step the song back by
-the length of its own install. Opening a document still stops and rewinds,
-which is what opening a document means. A generator, channel-preset or kit
-load no longer does, since 2026-09-22 (MOO-95): each edits the song that is
-playing, and installs the way a `ProjectEdit` does.
-
-**Closed for channels, 2026-09-17 (step 05).** An install carries the live
-strip of any channel it did not change -- matched by `ChannelId` and
-`ChannelSetup` equality on the control thread -- so a move, a paste, a delete
-or an undo keeps every voice, tail and delay line on every channel it is not
-about. The channel the edit *was* about is rebuilt and still cuts, which is
-the one place a discontinuity is not surprising.
-
-**Half closed for tracks, 2026-09-18.** A track edit carries every *channel*
-strip now, including the ones routed to a track that moved or went: the
-carry ignores `channel.bus`, which a track edit renumbers, and re-reads the
-destination from the incoming project the way it already re-reads the
-compensation delay (`carry_plan`'s `same_strip`, `mooloop-engine`).
-
-**Closed for tracks too, the same day** (`incremental-structure/` 01-02). A
-track has a `TrackId`, and an install carries every track whose id and setup
-survived -- its chain, its strip's filter and envelope state, its fader, its
-tails -- at its new seat, the way it carries channels. Where a track sends
-its audio is not compared, for the reason a channel's `bus` is not: the bus
-graph, the send bank, the solo verdict and the compensation lengths are
-compiled from the incoming project whole.
-
-**And the rings, the same day** (`incremental-structure/05`). A swap
-used to empty every compensation ring and every send's ring, because those are
-compiled from the whole project and the session resends them after every
-install. The engine now keeps any live ring the arriving one would only
-duplicate in length -- across an install, a `SetCompensation` and a send bank
--- so a structural edit empties nothing it is not about.
-
-**The swap itself stays**, by decision rather than neglect: Adam asked on
-2026-09-17 why there is a swap at all for something as cheap as adding a
-track, and `incremental-structure/05` records the answer -- incremental
-commands would renumber twenty structures on the audio thread to save a
-control-thread cost nobody hears. Read it before reopening this.
-
-
 **A mixer drag does not scroll the mixer, and a turned strip stays at its
-seat.** Both came in with the track reorder on 2026-09-16. Seventeen strips at
-96px are wider than most panes, so moving a track far takes a drag, a scroll
-and another drag; the channel rack has the same limit and nobody has asked
-for more. Separately, a strip's SENDS/STRIP page is private to the strip
-instance and a `for` reuses instances by seat, so a track dragged off a
+seat.** Moving a track far takes a drag, a scroll and another drag; the
+channel rack has the same limit. A strip's SENDS/STRIP page is private to the
+strip instance and a `for` reuses instances by seat, so a track dragged off a
 turned strip arrives on its fader face, and whichever track slides into the
-old seat shows that page. Fixing the second means moving the page into
+old seat shows that page. Fixing that means moving the page into
 `MixerStripRow`. The held strip is also drawn under the strip to its right
-while it passes over it, because Slint 1.17 wanted `z` as a literal; the
-channel and device racks have the same limit. Slint 1.18 (MOO-268) lifted it:
-`z` may now be a binding, and siblings re-sort at runtime, so the held row
-could simply take a higher `z`. That limit has a workaround
-nobody has used for a reorder yet: an overlay declared *after* the row, which
-Slint draws on top by declaration order, holding a copy of the held strip
-while the real one goes transparent -- the layer-promotion idiom, and the
-same trick the pane drop tint in `main.slint` already relies on.
+while it passes over it (the channel and device racks too); since Slint 1.18
+(MOO-268) `z` may be a binding, so the held row could take a higher `z`.
 
 **A shelf's Q knob stops steepening above 2 and the face does not say so.**
 `Biquad::shelf_slope` clamps the slope to 0.1..2.0, where the cookbook's
-radicand goes negative; a seven-band EQ band's Q descriptor runs to 18, because
-the same id has to serve that band as a bell. So **the top 46% of the knob's
-travel** does nothing while the band is a shelf -- measured 2026-09-15 and
-pinned by `the_shelf_q_knob_saturates_a_little_past_half_its_travel`; this
-entry said "four-fifths" until then, which was estimated and nearly twice the
-truth. That is better than
-2026-09-14, when *all* of it did nothing (`Biquad::shelf` took no Q at all),
-and is still a control showing a number the filter is not using. The channel
-strip avoids this by giving its two shelf-capable bands a narrower Q range, and
-that answer is not available here: every band can be any kind, so the range
-would depend on a *value*, and a descriptor is static per id. Same shape as the
-rest of `eq-v2` -- a parameter model that cannot express a condition. The
-response plot does not hide it any more: since 2026-09-15 the curve is the
-bank's own coefficients evaluated, so a shelf's drawn slope stops moving at
-the same place its sound does. Found 2026-09-14.
+radicand goes negative; a seven-band EQ band's Q descriptor runs to 18,
+because the same id has to serve that band as a bell. So **the top 46% of the
+knob's travel** does nothing while the band is a shelf, pinned by
+`the_shelf_q_knob_saturates_a_little_past_half_its_travel`. A narrower range
+for shelves is not available: every band can be any kind, and a descriptor is
+static per id.
 
 **`EqSlope`'s variant names are half the slope they name.** `Db6` runs one
 `Biquad::pass` stage, which is a second-order section and therefore 12 dB per
 octave, so the five variants are 12/24/36/48/72 and are spelled 6/12/18/24/36.
-The *face* was corrected on 2026-09-15 -- `EqSlope::db_per_octave` is the
-arithmetic and `eq_face.rs` holds the selector to it -- and the variants were
-left alone on purpose: `serde` writes them (`"db6"`), so renaming them either
-refuses every saved project or silently re-maps one slope to another, to
-correct a spelling nothing reads. Rename them on the next `FORMAT_VERSION`
-bump that happens for a reason worth having one, with serde aliases for the
-old names. Found 2026-09-14.
-
-**The automation destination menu now offers fifty rows for one EQ.** That is
-what per-band addressing means and it is not a defect -- "EQ 1 / B3 Freq" is
-the thing a lane should be able to name, and the channel strip has contributed
-twenty-eight rows since 2026-09-11 without anyone minding. It does make the
-menu long enough that finding a destination by scrolling stops being pleasant,
-which is an argument for filtering it, not for fewer ids. Recorded so the next
-person to open that popup knows it was foreseen. Found 2026-09-14.
-
+The face is right (`EqSlope::db_per_octave`, held by `eq_face.rs`); the
+variants were left because `serde` writes them (`"db6"`). Rename them on the
+next `FORMAT_VERSION` bump that happens for a reason worth having one, with
+serde aliases for the old names.
 
 **The oscillator Level knob works in dB; its descriptor is linear 0–1.**
-`device-oscillator.slint:95` drives the knob through `GainMath.linear-to-db`,
-while `generator.rs:75`'s `unit()` helper declares the parameter as a linear
-`0.0..1.0`. A modulation depth is a fraction of the *descriptor's* range, so
-the drawn excursion arc on that one knob is in dB-space and misrepresents its
-own width. Assignment and the audible result are both correct. Fixing it
-properly means giving Level a gain curve, which touches automation and project
-files — which is why it was left.
+`device-oscillator.slint` drives the knob through `GainMath.linear-to-db`,
+while `generator.rs`'s `unit()` helper declares the parameter as a linear
+`0.0..1.0`. A modulation depth is a fraction of the descriptor's range, so the
+drawn excursion arc on that knob is in dB-space and misrepresents its own
+width. Assignment and the audible result are both correct. Fixing it properly
+means giving Level a gain curve, which touches automation and project files.
 
-**~~Reverse and ping-pong refuse to stretch, and slice mode does too.~~**
-Closed 2026-09-08. `mooloop-dsp/src/sampler.rs:495` still gates
-`stretch_is_active` on `!reverse`, `loop_mode != Pingpong` and
-`play_mode != Slice` — the behaviour is unchanged and correct. What was
-missing was the explanation: the stretch toggle names which of the three it
-is, and says to commit, in the status bar. The recorded fix was a
-`hover-hint` property threaded through `main.slint`; `StatusHint` made it a
-line on the toggle instead.
+**The drop gap cannot show which side of a container's edge it lands on.** At
+a run's last row, "just inside the box" and "just after the box" are the same
+index and the gap is drawn in the same place either way. `move_effect` in
+`mooloop-session` decides which; `main.slint`'s cell works the box out from
+`depth` and `children` alone. Showing the answer needs the session to publish
+the depth a drop at index N would produce -- one `int` property and a
+callback on each target change.
 
----
-
-**The drop gap cannot show which side of a container's edge it lands on.**
-The rack opens a one-row gap where a dragged device will land, and the gap
-falls inside a container's box when the landing is inside it -- except at a
-run's last row, where "just inside the box" and "just after the box" are the
-same index and the gap is drawn in the same place either way. Which one a drop
-means is decided by `move_effect` in `mooloop-session`, and the rack does not
-know that rule: `main.slint`'s cell works the box out from `depth` and
-`children` alone. Showing the resolved answer needs the session to publish the
-depth a drop at index N would produce -- one `int` property and a callback on
-each target change, not a redesign. Everything else about the drag is visible;
-this one case still asks for trust.
-
-**Dragging a container opens a one-row gap, not a run-sized one.** The rack's
-drop gap is the width of the row being dragged, and dragging a container
-moves its whole run -- so the gap it opens is right for a leaf and too small
-for a box, and the devices inside the box do not travel with its face while
-the pointer is down. `move_effect` does the right thing on release; it is the
-picture during the gesture that is wrong. The cell publishes its own width
-into `RackDrag.source-width` (`main.slint`), and a run-sized figure would have
-to come from the session, which is the only thing that knows where the run
-ends.
+**Dragging a container opens a one-row gap, not a run-sized one,** and the
+devices inside the box do not travel with its face while the pointer is down.
+`move_effect` does the right thing on release; only the picture during the
+gesture is wrong. The cell publishes its own width into
+`RackDrag.source-width` (`main.slint`); a run-sized figure has to come from
+the session, which is the only thing that knows where the run ends.
 
 ## Wired but unreachable
 
-**Spectrum subscriptions are still keyed by slot index; they are now
-re-stated after every rack edit.** The orphan is gone. The walk that syncs
-them said `true` or `false` for each device that *is* an analyzer, so a stage
-an analyzer had moved off was never mentioned and kept its subscription --
-the engine ran a Goertzel bank every hop for a display nobody drew, whatever
-took that slot number drew a flat line behind a lit button, and the orphan
-held one of the sixty-four `SPECTRUM_SLOTS` until the project was reloaded.
-It now walks *stages* and states the answer for each, one past the end of the
-chain, and `UiState::sync_effects` -- the one function every rack edit already
-calls -- raises a flag the pump consumes on its next tick.
-
-Two things about the fix worth knowing before touching it. **One past the end
-is only enough because of an invariant**: nothing above a chain's length can
-be subscribed when the sync returns, and a project install, the one edit that
-shortens a chain by more than one, calls `DeviceTelemetry::clear_spectra`
-first. And it deliberately does *not* clear before re-stating, because
-re-stating a correct subscription is an early return in
-`set_spectrum_enabled` while a clear zeroes the bins -- which would make every
-open analyzer in the program blink on an unrelated device drag.
-
-What is unchanged is the keying, which was the third and largest of the
-options the entry named: a subscription is still `(target, slot)` rather than
-the device's durable id. Nothing drifts now, because nothing outlives the
-tick that renumbered it, but an id-keyed subscription would not need the
-re-sync at all. `spectrum_subscription_plan` has a test; the flag and the
-pump's consumption of it do not, and could not without driving the
-application. Found 2026-09-13, fixed 2026-09-14.
-
 **A generator's internal route amounts are a working automation destination
-no picker can reach.** The engine resolves `ParamOwner::SourceRoute` lanes per
-control tick and emits `Event::SourceRouteAmount` for them
-(`render.rs:4468`), `restore_base_param` has an arm for them, `integrity`
-validates them, there is an engine test named for them
-(`removing_a_route_lane_restores_the_authored_depth`), and
-`Session::automation_descriptor` has an arm to turn their breakpoints into a
-readout. `automation_destinations` never produces one -- it emits generator
-and effect descriptors and nothing else -- and `open_automation_lane(index)`
-indexes that list, which is the only path in from the app. So the descriptor
-arm is unreachable code, and a file that *already* holds such a lane is worse
-off than one that does not: `refresh_automation` clears a target it cannot
-find in `destinations`, so the lane plays, persists, and cannot be seen,
-edited or deleted. This is the exact mirror of the container-Mix item above --
-there the picker offers what the engine cannot read; here the engine reads
-what the picker does not offer. Not small because a route row is not a device
-row: the descriptors come from `route_descriptors()` and each needs the
-route's durable id, so the picker's rows need a label naming the *route*,
-which is a naming decision on ML-P8's internal matrix rather than a loop over
-a table. Either extend `automation_destinations` to walk
-`base.internal_routes()` the way the engine does, or -- if route automation is
-not wanted -- delete the engine's route pass and the dead descriptor arm,
-rather than leaving a destination reachable only by hand-edited files. Found
-2026-09-13.
+no picker can reach.** The engine resolves `ParamOwner::SourceRoute` lanes and
+emits `Event::SourceRouteAmount` for them (`render.rs`), `restore_base_param`,
+`integrity` and `Session::automation_descriptor` handle them, and
+`removing_a_route_lane_restores_the_authored_depth` tests them. But
+`automation_destinations` never produces one, so a file that already holds
+such a lane plays and persists it while `refresh_automation` drops it from
+view: it cannot be seen, edited or deleted. Either extend
+`automation_destinations` to walk `base.internal_routes()` (each row needs a
+label naming the route, from `route_descriptors()` and the route's durable
+id), or delete the engine's route pass and the dead descriptor arm.
 
 **A container's Mix is offered as an automation destination the engine
-cannot read.** `automation_destinations` (`session.rs:485`) walks every
-slot's `kind.descriptors()` with no filter, and `EffectKind::Chain`'s table is
-one entry, `Mix`. So "Chain 3 - Mix" lists in the lane picker, a curve draws
-on it, it persists as an ordinary `ParamAddr` and it survives load and
-reorder. The engine never reads it: the container branch in
-`EffectChain::process` clears `state.events` and `continue`s without calling
+cannot read.** `automation_destinations` (`session.rs`) walks every slot's
+`kind.descriptors()` with no filter, so "Chain 3 - Mix" takes a lane that
+draws, persists and survives load and reorder. The container branch in
+`EffectChain::process` clears `state.events` without calling
 `control_events_for_slot`, and `close_run` takes the mix from
-`state.base_params`, which only `SetEffectParam`, `install` and `load` write.
-The playhead crosses the curve and the audio does not move.
-
-The contrast that makes it an oversight rather than a policy: **modulation is
-not reachable the same way.** `ContainerDeviceFace` does not bind
-`modulation-depths`, `modulation-allowed`, `modulation-offsets` or
-`modulation-route-counts`, where every other face does -- so the Mix knob has
-no depth ring and no drop target. Somebody decided that for modulation and
-the automation picker never heard about it. Not small either way: filtering it
-out matches the face but silently deletes any lane already drawn on one
-(`refresh_automation` drops targets not in `destinations`), and making the
-engine read it means a slot with no node has to carry a resolved parameter,
-which today every device receives as a `ParamValue` event and a container has
-nothing to hand one to. That is question 4 in
-`docs/plans/archive/containers/README.md`. Found 2026-09-13.
-
-**Input trim and output trim on a container row are inert.** Both are read
-only inside the leaf branch, past the container's `continue`, and both are
-enabled unconditionally in markup -- including the output trim on the
-*detached* tail rail (`main.slint:4544`), which is wired specifically to the
-container, so somebody deliberately gave a box its own output trim and the
-engine does not apply it. Unlike the shell's wet/dry, which was removed from
-container rows on 2026-09-13 because a box has no node to be wet with, there
-is nothing wrong with the idea: a gain going into a box and a gain coming out
-of it are both meaningful, and the output one falls naturally out of
-`close_run`. So this is apply-them or hide-them, not a deletion. If they are
-applied, the input trim has to land *before* the dry copy is taken, or the
-blend stops nulling at mix 0 and
-`a_container_at_zero_mix_is_its_input_delayed_by_its_run` is what breaks.
-Found 2026-09-13.
+`state.base_params`, so the audio never moves. Modulation already leaves it
+out: `ContainerDeviceFace` binds none of the `modulation-*` properties.
+Filtering it from the picker silently deletes any lane already drawn
+(`refresh_automation` drops targets not in `destinations`); making the engine
+read it means a slot with no node carrying a resolved parameter (question 4 in
+`docs/plans/archive/containers/README.md`).
 
 **The channel strip's processing parameters are not automation or modulation
-destinations.** Every one has a stable id (`mooloop_core::strip`) and the
-engine applies them by id, so the values are addressable. The reason given
-here until 2026-09-22 -- that a lane's target is an `EffectTarget` plus a
-*slot*, and a strip is not a slot -- has gone: a lane's target is a
-`ParamAddr`, and `ParamOwner::Strip` is one. What is missing now is that the
+destinations.** Every one has a stable id (`mooloop_core::strip`), the engine
+applies them by id, and a lane's target can be `ParamOwner::Strip`. But the
 engine resolves only `STRIP_DESCRIPTORS` (the fader and pan,
-`resolve_strip_segments`), and the picker lists only those; the fader and pan
-became pickable on 2026-09-22. The processing ids start at 16 for this:
-`modulation::STRIP_PARAM_VOLUME` and `STRIP_PARAM_PAN` are 0 and 1 of what is
-conceptually the same strip, so the two tables can become one without
-renumbering anything automation has persisted. Recorded 2026-09-11 with
-step 03.
+`resolve_strip_segments`), and the picker lists only those. The processing ids
+start at 16 so that the two tables can become one without renumbering
+anything automation has persisted.
 
 **Buffer MIDI mapping has no UI.** `EngineHandle::set_buffer_midi_map`
-(`mooloop-engine/src/lib.rs:622`) is the only way to install one, and neither
-`mooloop-ui` nor `mooloop-session` calls it. MIDI is decoded and routed; it is
-just not reachable from the app.
+(`mooloop-engine/src/lib.rs`) is the only way to install one, and neither
+`mooloop-ui` nor `mooloop-session` calls it.
 
-**A mapped control carries no mark of its own.** As of 2026-09-15 the only
-place a binding is visible is Preferences > MIDI: the knob it moves looks
-exactly like an unmapped one. Drawing the mark is not hard, it is *wide* -- it
-needs a per-parameter `[bool]` on every device face, beside the
-`modulation-route-counts` model that already goes to all of them, which is a
-line in fifty markup files and a `main.slint` crossing for each face that is
-missed. `docs/plans/archive/midi-control/04-interface.md` records the same thing as
-the one piece of step 04 deliberately left out.
+**A mapped control carries no mark of its own.** The only place a binding is
+visible is Preferences > MIDI. The mark needs a per-parameter `[bool]` on
+every device face, beside the `modulation-route-counts` model: a line in fifty
+markup files and a `main.slint` crossing for each face
+(`docs/plans/archive/midi-control/04-interface.md`).
 
 **`ParameterFader` cannot be learned, and neither can it be modulated.** The
-learn gesture rides on `modulation-edit-started`, so its reach is exactly
-modulation's reach, and the inline fader rows have never carried that
-callback. Nothing is inconsistent between the two features; both simply stop
-at the same place.
+learn gesture rides on `modulation-edit-started`, and the inline fader rows
+have never carried that callback.
 
-~~**The Core MIDI driver's port ids have never been compiled.**~~ **Closed
-2026-09-20**: `cargo check -p mooloop-engine --all-targets` on the Mac is
-clean, and `cargo test -p mooloop-engine` is green, so the port threaded
-through `MidiBytes`, the `Listening` struct and the narrowed `Ignore` flags all
-compile and the driver's own tests run. Compiled is not played -- a keyboard
-through Core MIDI is still the MIDI-control entry above -- but the mechanical
-half is checked now.
-
-**There is no way to hear a track before its own fader.** Solo is in place
-as of 2026-09-11, which silences the others rather than opening a monitor
-path, so a soloed track is still heard through its fader, its pan and its
-analog-sum switch. `archive/MIXER_PLAN.md` records the AFL tap as later work and
-names what it needs: the tap points that pre-fader sends also want. The
-channel solo added 2026-09-22 is in place for the same reason and has the
-same gap, one level down: a soloed channel is heard through its own volume,
-its pan and the track it feeds.
+**There is no way to hear a track before its own fader.** Solo silences the
+others rather than opening a monitor path, so a soloed track is heard through
+its fader, its pan and its analog-sum switch, and a soloed channel through its
+own volume, its pan and the track it feeds. `archive/MIXER_PLAN.md` records
+the AFL tap as later work; it needs the tap points that pre-fader sends also
+want.
 
 ---
 
 ## Focus
 
-**A text field is left with Enter or Escape, and clicking away still leaves
-the caret in it.** Escape is the exit, added 2026-09-14: the rename field, the
-tempo entry and the knob's two numeric entries all take it, and
-`every_editable_text_field_has_a_way_out` fails the next field that does not.
-For the tempo and the numeric entries it is also a cancel, because those
-commit only on `accepted`; for a rename it is not, because `NameField`
-reports every keystroke as it happens and the application already has them.
-
-What is unchanged is the click. Slint has no click-outside for a focused
-input, so leaving one by clicking on something that is not a control still
-leaves the caret where it was, and Space still types a space until Escape or
-Tab. Closing that means a focus-owning surface above the whole work area,
-which is a change to what takes focus rather than a handler on a field.
-
-A `read-only` `TextInput` is not a field and has no exit: that is the
-selectable label `save-error-dialog.slint` and the Developer page's log path
-use so a reason or a path can be lifted out by hand. They sit in dialogs,
-where the transport is not reachable anyway.
+**Clicking away from a text field leaves the caret in it.** Enter or Escape
+leaves a field (`every_editable_text_field_has_a_way_out` guards Escape), but
+Slint has no click-outside for a focused input, so clicking on something that
+is not a control leaves the caret where it was, and Space types a space until
+Escape or Tab. Closing that means a focus-owning surface above the whole work
+area.
 
 **A name is renamed where its subject is edited, and nowhere nearer to it.**
-A channel is renamed on the `DEVICES` toolbar and a track on its own device
-face, so renaming either means opening the view that owns it. The obvious
-alternative — double-clicking the rack plate or the mixer strip — was not
-built: the plate already carries a press that selects, a drag that reorders
-and a right-click that opens a menu, and a fourth gesture on it needs a
-decision about which one loses rather than an implementation. Nothing is
-blocked by this; it is one more click than a user coming from FL will expect
-(`main.slint`, the `NameField` beside `CHANNEL PRESET`).
+A channel is renamed on the `DEVICES` toolbar (`main.slint`, the `NameField`
+beside `CHANNEL PRESET`) and a track on its own device face. Double-clicking
+the rack plate or the mixer strip was not built: the plate already carries a
+press that selects, a drag that reorders and a right-click that opens a menu,
+and a fourth gesture needs a decision about which one loses.
 
 ## Edits that do not undo
 
-**Removing a track does the silent orphan repair `archive/MIXER_PLAN.md` says must
-not happen interactively.** The plan is explicit: deleting a non-master slot
-"is an explicit structural operation", the confirmation "names them and offers
-an explicit replacement destination (Master by default)", and **"There is no
-invisible orphan repair in an interactive edit."** What happens is
-`queue_track_remove` with no confirmation, no naming and no picker:
+**Removing a track does the silent orphan repair `archive/MIXER_PLAN.md` says
+must not happen interactively** ("There is no invisible orphan repair in an
+interactive edit"). `queue_track_remove` has no confirmation, and
 `rescope_tracks_after` silently re-points every inbound output to the master
-and silently **drops** every send that named the track -- two different
-repairs, neither reported. `CURRENT.md` mentions the first and not the send
-drop. Undo does restore the snapshot, which is the half the plan asked for and
-got. Not small because it needs a confirmation surface that counts and names
-inbound routes and sends, plus a destination threaded into `remove_track`,
-which today takes an index and hard-codes the master. Options: build it as
-specified; or keep the silent repair and *report* it in the status bar, which
-is much cheaper and shares the diagnostic channel `sanitize_bank`'s entry
-already wants; or narrow the plan to what undo buys. Either of the last two
-still needs the send-drop sentence adding to `CURRENT.md`. Found 2026-09-13.
+and silently drops every send that named the track. Undo restores the
+snapshot. Options: build the specified confirmation, which counts and names
+inbound routes and sends and threads a destination into `remove_track` (today
+it hard-codes the master); or keep the silent repair and report it in the
+status bar; or narrow the plan to what undo buys. Either of the last two still
+needs the send drop adding to `CURRENT.md`.
 
-**A song-mode clip boundary still leaves its destination stuck at the last
-value the outgoing clip wrote.** The command half was fixed 2026-09-14:
-`SetCurrentPattern`, `SetPlaybackMode` and `Seek` now walk the lanes of the
-patterns covering the position they are *leaving* and hand back every
-destination the incoming position does not cover. That closes the reachable
-pattern-mode case -- pattern 1 sweeps a cutoff down to 200 Hz, pattern 2 has
-no such lane, and the filter used to go on playing at 200 Hz while its knob
-and its face both read 1 kHz.
+**A song-mode clip boundary leaves its destination stuck at the last value
+the outgoing clip wrote.** `SetCurrentPattern`, `SetPlaybackMode` and `Seek`
+hand back every destination the new position does not cover, but a clip
+boundary or the song wrap is not a command: `has_automation_at` answers false,
+`control_events_for_slot` takes its early return, and nothing writes again.
+It bites only destinations that are automated and not modulated. Fix: the
+engine carries which destinations had a curve last block and no longer do
+(per-channel state on the audio thread, where `AutomationBlock` is "a
+read-only view"); or declare that automation latches, say so in `CURRENT.md`,
+and reconcile `restore_base_param`'s callers with that.
 
-A clip boundary in song mode is not a command. The playhead simply moves out
-from under a lane, `has_automation_at` answers false on the next block,
-`control_events_for_slot` takes its early return, and nothing ever writes
-again. The same is true of the song wrap. Closing it needs what the original
-entry named as the only complete answer: the engine carrying which
-destinations had a curve last block and no longer do, which is per-channel
-state across blocks on the audio thread, where `AutomationBlock` is
-deliberately "a read-only view". The alternative is to declare that
-automation latches and say so in `CURRENT.md` -- a defensible DAW convention,
-which would then make `restore_base_param`'s five callers the inconsistency.
-
-It bites only destinations that are automated and *not* modulated: a
-modulated one takes `base_normalized = knob_normalized` when the curve is
-`None` and so restores the knob every block by accident. Found 2026-09-13,
-half-fixed 2026-09-14.
-
-**Shortening a pattern hides automation points that still shape the sound --
-the opposite of what it does to notes.** `refresh_automation_points` filters
-the drawn points to `point.tick <= length_ticks`; the engine applies no such
-filter, folding the position into `[0, length_ticks)` and interpolating
-between whichever pair brackets it, which for a shortened pattern is the last
-visible point and an invisible one past the end. Draw a ramp 0 to 1 across 16
-steps and shorten to 8: the lane draws as a single point at 0 with a flat line
-at 0.0, and plays a ramp from 0.0 to 0.5. Nothing on screen accounts for the
-movement. For *notes*, past the new end means hidden **and silent** (the
-stranded-NoteOff entry above); for automation points it means hidden and
-**audible** -- the two banks in one clip answer the same question opposite
-ways, and only one of them is written down. Not small because the three fixes
-are three different products: ignore points past the end (matches the note
-rule, but a lane briefly dragged short loses its tail on the way back); draw
-them, which needs a way to show a point outside the roll's own width; or crop
-on shorten, which destroys authored work and needs the same drag-release
-gesture the `set_pattern_length` entry already needs. Found 2026-09-13.
+**Shortening a pattern hides automation points that still shape the sound.**
+`refresh_automation_points` draws only points with `point.tick <=
+length_ticks`; the engine folds the position into `[0, length_ticks)` and
+interpolates towards the invisible point past the end. A ramp 0 to 1 across 16
+steps, shortened to 8, draws flat at 0.0 and plays 0.0 to 0.5. Notes past the
+end are hidden and silent, so the two banks in one clip disagree. Options:
+ignore points past the end (a lane briefly dragged short loses its tail on the
+way back); draw them outside the roll's own width; or crop on shorten, which
+needs the same drag-release gesture as the sounding-note row below.
 
 **The gesture global has no owner, so two controls can close each other's
-gesture.** `Gesture.begin()`/`end()` (`controls.slint`) is a single global
-with no identity on it: whoever calls `end()` closes whatever is open. A name
-field brackets its editing session on focus, and a knob press steals that
-focus, so if the field's focus-loss arrives *after* the knob's `begin()` the
-field closes the knob's gesture and the drag then records one entry per
-pointer frame. That is the behaviour of the day before `gesture-undo/`
-landed rather than a corruption -- nothing is lost, the history is just
-noisier -- and it needs a caret parked in a field when a knob is grabbed.
-The fix is an id on the pair so `end()` can be ignored when it names a
-gesture that has already been replaced, which is a small change and was not
-worth making on a hazard nobody has hit. Found 2026-09-21, building
-`docs/plans/archive/gesture-undo/`.
+gesture.** `Gesture.begin()`/`end()` (`controls.slint`) carries no identity. A
+name field brackets its editing on focus and a knob press steals that focus,
+so if the field's focus-loss arrives after the knob's `begin()`, the field
+closes the knob's gesture and the drag records one history entry per pointer
+frame. Fix: an id on the pair, so an `end()` naming a replaced gesture is
+ignored.
 
 **Nothing checks that `apply_engine_message` still reads
-`EngineCommand::edits_document`.** The "not an edit" rule is one predicate now
-(`mooloop-core/src/bridge.rs`), and four tests in `edits_document_tests` pin
-what it answers. All four call the predicate directly. Its only production
-reader is `Session::apply_engine_message`'s `Command` arm
-(`mooloop-session/src/engine.rs`), and **no test reaches it**: nothing in the
-tree pushes a `PendingEngineMessage::Command` through that function and
-asserts `session.dirty`. So the reader reverting to an inline
-`!matches!(command, Play | Pause | Stop)` -- which is the exact expression the
-fix replaced -- would restore the defect with the whole suite green. This is
-`AGENTS.md`'s own question in its narrowest form: *does anything read the copy
-the test checks?*
+`EngineCommand::edits_document`.** The four `edits_document_tests` call the
+predicate directly. No test pushes a `PendingEngineMessage::Command` through
+`Session::apply_engine_message` (`mooloop-session/src/engine.rs`) and asserts
+`session.dirty`, so the arm reverting to an inline `!matches!(command, Play |
+Pause | Stop)` would pass the whole suite. The function takes a concrete
+`&mut EngineHandle`; `CommandSink` covers only three of its ten arms.
 
-The test was not written there because it cannot be, cheaply:
-`apply_engine_message` takes a concrete `&mut EngineHandle`, and an
-`EngineHandle` cannot be built without opening an audio driver. `CommandSink`
-(`mooloop-engine/src/lib.rs`) exists for precisely this reason and
-`mooloop-session/tests/delivery.rs` uses it. Three of the ten arms would
-already fit the trait -- `Command` (`send`), `Structural` (`send_structural`)
-and the `ProjectEdit`/`Audio` arm, which touches no handle at all -- but the
-other seven each call an `EngineHandle` method the trait does not carry
-(`set_preview_gain`, `set_midi_routing`, `set_audio_input_routing`,
-`replace_buffer`, `add_channel`, `set_effect_spectrum_enabled`), which is why
-the parameter is concrete. So the seam is real but it is a signature change,
-not a test. Found 2026-09-22, closing MOO-58.
+**Add Channel frees one allocation on the audio thread:** the seat's
+`ModRack`, replaced by `set_channel_modulation(channel, ModRack::default())`
+in the `AddChannel` arm (`render.rs`) and dropped where it stands. The fix is
+to send it through the reclaim ring. `adding_a_channel_frees_no_lane_on_the_callback`
+measures a difference rather than zero for this reason, and will start failing
+usefully the day the rack goes through the ring.
 
-**A refused one-shot command is reported once per process and then never.**
-`Session::report_refused_command` (`mooloop-session/src/engine.rs:788-800`)
-latches `engine_queue_refused` (`session.rs:192`) and nothing clears it, so a
-second full ring -- on a later song -- diverges the document from the engine
-silently. The window and session copies are written before the send in every
-caller and nothing rolls them back. Cheapest honest fix: clear the latch when
-the queue drains, or per document in `replace_project`. Found 2026-09-21,
-`reports/fable-2026-09-21.md` finding 8.
+**Opening a lane still allocates when the pool is empty.** A slot that has
+never held a lane takes a spare point vector from `LanePool`, which
+`Sequencer::load_project` refills to 32 off the audio thread; the 33rd new
+lane between two installs allocates on the callback. Preallocating per slot
+is 6 GiB (`CAPACITY_POLICY.md`), and refusing would be a user-facing cap. The
+answer is for the session to send the storage with the command, the way
+`StructuralCommand` sends a routing table, and take the vacated one back
+through the reclaim ring. `EngineCommand` is `Copy` in a POD ring, so lane
+opening moves to the structural channel and the two queues need an agreed
+order. Adam's call: do it with automation recording, not before.
 
-**Add Channel frees one allocation on the audio thread.** Not the automation
-lanes any more (`reports/fable-2026-09-21.md`, finding 1, fixed): what is
-left is the seat's `ModRack`, replaced by `set_channel_modulation(channel,
-ModRack::default())` in the `AddChannel` arm (`engine/src/render.rs:4369`),
-whose predecessor is dropped where it stands. One free rather than the 2048
-that used to be possible, and the same shape as every reclaim the ring
-already carries, so the fix is to send it there.
-`adding_a_channel_frees_no_lane_on_the_callback` measures the difference
-rather than zero for exactly this reason, and will start failing usefully
-the day the rack goes through the ring. Found 2026-09-21.
-
-**Opening a lane still allocates when the pool is empty.** A lane's point
-vector is 12 KB and the lane bank is 256 patterns by 256 channels by eight
-slots, so preallocating one per slot is 6 GiB and `CAPACITY_POLICY.md`
-forbids it. Closing a lane now keeps its vector in the slot -- no free, ever
--- and a slot that has never held one takes a spare from `LanePool`, which
-`Sequencer::load_project` refills to 32 off the audio thread. Draw more than
-32 new lanes between two installs and the 33rd allocates on the callback, as
-every lane did before. Refusing instead would be a user-facing cap on a
-thing the user creates, which the policy forbids in the other direction; the
-answer that needs neither is for the session to send the storage with the
-command, the way `StructuralCommand` sends a routing table, and hand the
-vacated one back through the reclaim ring. Found 2026-09-21.
-
-**Sequenced 2026-09-21, Adam's call: do it with automation recording, not
-before.** The remaining case is rare enough to wait -- 33 destinations drawn
-for the first time with no undo, redo or structural edit in between -- and
-the proper fix has real design in it, because `EngineCommand` is `Copy` in a
-POD ring and cannot carry a box, so lane opening moves to the structural
-channel and the two queues then have an ordering to agree on (a point can
-arrive before the lane it belongs to). Recording a knob movement into a lane
-is the feature that makes the audio thread a *writer* of lane points, which
-is what that design should be shaped by; the report's architecture section
-says the same thing the other way round -- the storage has to be settled
-before that writer exists, not after.
-
-**Three callback costs that grow with the song rather than the block**, from
-`reports/fable-2026-09-21.md` finding 5. **All three closed** (MOO-73); what
-is left is a measurement, filed separately.
-
-- Song-mode automation lookup walked the whole playlist per destination per
-  block. **Closed** by Plan A (`abfd7995`): `automation_lane_at` searches
-  `playlist_by_start` with two `partition_point`s, bounded to the placements
-  that can cover the position, so it is logarithmic in the playlist.
-- The control pass used to emit one event per control tick per driven
-  destination into a 256-event list, so at 512 frames sixteen routes and
-  eight lanes on one channel (384 events) filled it: one destination froze
-  mid-block and every later one got nothing. Plan D
-  (`docs/plans/automation-curves/`) moved a driven parameter into a
-  per-destination curve row, and the EQ reads those natively. **Closed
-  2026-09-23 for everything else**: `AudioNode::apply_curves`'s default
-  fallback, which every other device still uses, thins every curve evenly
-  when they would not fit (`fallback_stride` in `dsp/src/node.rs`). Every
-  destination keeps moving and ends the block on its curve's last value. It
-  moves in coarser steps only in a block that asks for more than the list
-  holds. Pinned by
-  `the_default_fallback_thins_rather_than_starving_later_destinations` and
-  `a_full_modulation_rack_on_a_generator_refuses_nothing_at_1024_frames`.
-  Every `EventList` now counts its own refusals (`EventList::refused`), so the
-  sequencer's note and choke pushes are in `RenderState::refused_events` too.
-  Only export reads that total. Showing it live belongs with MOO-130.
-- `Sequencer::set_playlist_placement` did `push` then `sort_unstable` on the
-  callback per placement toggle. **Closed 2026-09-22**: it inserts at
-  `partition_point`, which answers the duplicate check in the same binary
-  search, so painting a range costs one search and one memmove per cell
-  rather than a sort of up to 512 placements. What that changed beyond the
-  cost is that the playlist's sortedness used to be a *consequence* of the
-  function and is now something it *depends* on -- `load_project` is the
-  other place that establishes it -- so the invariant is named in the doc
-  comment and guarded by
-  `playlist_stays_sorted_and_deduplicated_however_it_is_painted`, which was
-  validated by moving the insert index and watching it fail.
-
-`defer_command`'s `debug_assert!(false, "... {command:?}")` formatted an
-`EngineCommand` and panicked from the callback. **Closed 2026-09-23**: a
-refused deferred command is counted in `RenderState::refused_events`
-instead.
-
-**Two preset producers mutate the live session before queueing, so a refused
-install leaves the document and the engine disagreeing.**
-`on_effect_preset_selected` (`lib.rs:8076`) and `append_effect_preset`
-(`lib.rs:12205`) apply the preset to the live session, take `after` from it,
-and only then queue -- where every sibling (`queue_channel_insert`,
-`queue_pattern_clone`) clones `before.project`, mutates the clone, and leaves
-the session untouched until the pump installs it. When `install_project_in_ui`
-returns false because the 1024-slot realtime queue is full, the pump prints
-"Channel edit is waiting for audio" and **drops the edit** -- nothing retries
--- so the rack draws the new device while the engine keeps playing the old
-one, and the edit is in no history entry. Not small because
-`load_effect_preset` is a `Session` method that also writes
-`effect_preset_names`, so it cannot run against a detached `Project` clone
-without splitting the name-setting out. Options: split it and follow the
-`queue_channel_insert` shape; or have the pump's failure branch roll the
-session back, which needs the pre-edit snapshot it currently discards; or make
-the failure retriable by parking the edit and re-sending next tick -- which
-also makes the status message true, since "waiting for audio" describes
-behaviour nothing implements. Found 2026-09-13.
-
-**Shortening a pattern hides a sounding note rather than releasing it.**
-`sequencer.rs:698` (and `:761` in song mode) filters notes by
-`note.start_tick < pattern_ticks`, which is what implements "a shortened
-pattern keeps its notes" -- but the filter is applied to *both* edges. A note
-already sounding whose start is now past the new end stops being scheduled at
-all, so its NoteOff never arrives and the voice holds until Stop. Same root as
-the pattern-switch bug fixed 2026-09-12, and the one-line fix there does not
-transfer: `Session::set_pattern_length` returns `Some` on every value a drag
-crosses, so reusing the seek release would fire a full-rack choke twelve times
-on a drag from 16 steps to 4. Three options. Release only on a *decrease*, and
-only for channels with a note in the vacated range -- which needs the
-sequencer to answer "was anything sounding past here", and it cannot today.
-Or make the length command fire once on drag release, which changes what the
-control means during the drag. Or keep scheduling the off edge for filtered
-notes while suppressing their on edge, which strands nothing and chokes
-nothing but needs a decision about what a hidden note's NoteOff means on the
-second pass. Found 2026-09-12.
+**Shortening a pattern hides a sounding note rather than releasing it.** The
+sequencer filters notes by `note.start_tick < pattern_ticks` on both edges
+(`sequencer.rs`), so a note already sounding whose start is now past the new
+end never gets its NoteOff and holds until Stop. Releasing on every change
+does not work: `Session::set_pattern_length` returns `Some` on every value a
+drag crosses, so a drag from 16 steps to 4 would choke the rack twelve times.
+Options: release only on a decrease, for channels with a note in the vacated
+range (the sequencer cannot answer that today); make the length command fire
+once on drag release; or keep scheduling the off edge for filtered notes while
+suppressing their on edge.
 
 **A pattern-length change can create the overlapping placements the editor
-refuses to create.** `session/transport.rs:213` guards
-`add_playlist_placement` against overlap, correctly and half-open, and it is
-the only place the invariant exists: `set_pattern_length` rewrites the length
-with no revalidation, `Sequencer::set_playlist_placement` has no overlap
+refuses to create.** `add_playlist_placement` (`session/transport.rs`) guards
+against overlap and is the only place the invariant exists: `set_pattern_length`
+does not revalidate, `Sequencer::set_playlist_placement` has no overlap
 notion, and `integrity::check_playlist` checks only the pattern index and the
-start tick. Place pattern 0 at ticks 0 and 384 at 16 steps -- accepted, they
-abut exactly -- then set it to 32 steps, and the first clip covers the second.
-Both are scheduled: `instance_offset` differs, so the voice ids differ, and
-**every note fires twice 384 ticks apart at doubled amplitude**.
-
-**The clip is at least reachable now.** `placement_covering` took the first
-match on a list sorted by `(pattern, start_tick)`, so a click in the overlap
-always answered with the earlier clip and the buried one could not be removed,
-moved or undone by any gesture. It takes the **latest-starting** cover as of
-2026-09-14, which is the rule `Sequencer::automation_lane_at` already states
-one layer down for lanes. So the state is escapable rather than permanent.
-
-What is still open is whether the overlap should exist. The invariant has no
-owner: enforcing it in `set_pattern_length` means deciding what a length
-increase does to the clips it now swallows, and the same decision has to be
-made in `integrity` for files that already carry the overlap -- a `Doctor`
-entry and a `PROJECT_FORMAT.md` change across two crates. Options: clamp the
-length change to the largest value that keeps the pattern's placements
-disjoint; or make the overlap legal everywhere, drop the guard in
-`add_playlist_placement`, and say in `CURRENT.md` that a doubled clip is a
-layer; or drop the covered placements and report them, which is the only one
-that also needs a repair path on load. Found 2026-09-12, made escapable
-2026-09-14.
+start tick. Two abutting 16-step clips of one pattern, set to 32 steps,
+overlap, and every note fires twice at doubled amplitude. `placement_covering`
+takes the latest-starting cover, so the buried clip can still be reached.
+Options: clamp the length change to keep the pattern's placements disjoint; or
+make the overlap legal everywhere, drop the guard and say in `CURRENT.md` that
+a doubled clip is a layer; or drop the covered placements and report them,
+which also needs a repair path on load (`Doctor`, `PROJECT_FORMAT.md`).
 
 **Send edits and the bus output pick do not go through `ProjectEdit`.**
-`add_send`, `remove_send`, `set_send_level`, `set_send_tap` and
-`set_send_enabled` in `mooloop-session/src/mixer.rs` mark the document
-dirty and return an `EngineCommand`, the same shape `set_bus_output`
-beside them has always had. All of them record an undo entry from the
-caller now, so the behaviour a user sees is uniform; what is still split
-is the *path*, and a routing edit that joined `ProjectEdit` would be one
-mechanism instead of two. Not a per-callback patch.
+`add_send`, `remove_send`, `set_send_level`, `set_send_tap`,
+`set_send_enabled` and `set_bus_output` in `mooloop-session/src/mixer.rs` mark
+the document dirty and return an `EngineCommand`. All of them record an undo
+entry, so the behaviour is uniform; the path is two mechanisms where one
+would do.
 
 ---
 
 ## Ceilings and one-shots
 
-**A chain nested past `MAX_CONTAINER_DEPTH` still loads unreported, and the
-integrity pass has no way to say so.** The gesture half was fixed 2026-09-14:
-`can_wrap`, `can_insert_into_container` and `can_move_into_container` refuse a
-wrap, an insert and a drag that would put a box past the cap; the index
-primitives `insert_effect`, `insert_run` (paste) and `move_effect` (a drop on
-a row) got the same check on 2026-09-30 (MOO-363), having asked nothing
-until then. The rack's wrap
-button asks the same function rather than comparing a depth of its own, and
-`the_rack_draws_a_band_for_every_level_the_engine_blends` holds `main.slint`'s
-four literal chrome levels to the constant. Before that, five clicks reached a
-box whose Mix does nothing at any value and which the rack draws no chrome
-for -- inert and invisible at the same time.
+**A chain nested past `MAX_CONTAINER_DEPTH` still loads unreported.** Every
+gesture and index primitive refuses to go past the cap (MOO-363), but
+`integrity` has no depth check. **`Doctor` has two severities and this needs
+a third**: `correct` repairs, and `refuse` and `block` set `repaired: false`,
+which `Issue::is_blocking` reads as "do not open this document", so reporting
+a deep chain would stop a song opening that opens today. Unwrapping is not a
+safe repair, because a box past the cap still bypasses and removing it would
+unmute whatever it was muting. Options: give `Doctor` a tolerated severity,
+which the report, the status bar count and `Diagnosis::blocking` all have to
+learn; or accept that the format does not check depth, which `structure.rs`,
+`CAPACITY_POLICY.md` and `docs/plans/archive/containers/02-...md` already say.
 
-The format half is not a missing check, which is why it did not land with the
-rest. **`Doctor` has two severities and this needs a third.** `correct`
-repairs, and every other method -- `refuse`, `block` -- sets `repaired: false`,
-which `Issue::is_blocking` reads as "do not open this document". So reporting
-a deep chain the way an over-long one is reported would stop a song opening
-that opens today, which is the brick this file has already been asked about
-once, under a different name. And there is no safe repair to reach for
-instead: unwrapping looks free, since a box past the cap contributes no blend,
-but its **bypass still works** (fixed 2026-09-13), so removing it would unmute
-whatever it was muting.
-
-So the options are: give `Doctor` a tolerated severity -- an issue worth
-telling the user about that stops nothing, which the report, the status bar
-count and `Diagnosis::blocking` all have to learn; or accept that the format
-does not check depth and say so, which `structure.rs`, `CAPACITY_POLICY.md`
-and `docs/plans/archive/containers/02-...md` now do rather than claiming otherwise.
-Found 2026-09-13, gesture half fixed 2026-09-14.
-
-**`MAX_AUTOMATION_LANES_PER_CHANNEL` is 8, and raising it is not free.** The
-ninth lane no longer draws and plays nothing -- `check_lanes` truncates and
-reports as of 2026-09-14, so the document, the editor and the engine all keep
-the same eight, and `PROJECT_FORMAT.md` states the cap. What was not decided
-is whether eight is the right number. It is low for a song automating a
-channel and two buses, and `CAPACITY_POLICY.md` says "it was easier to
-preallocate" is not a sufficient reason -- but the preallocation is real here
-in a way it is not for most caps. `Pattern::with_steps` builds
-`MAX_CHANNELS` channel patterns each holding a
-`Vec::with_capacity(MAX_AUTOMATION_LANES_PER_CHANNEL)`, and the sequencer
+**`MAX_AUTOMATION_LANES_PER_CHANNEL` is 8, and raising it is not free.**
+`check_lanes` truncates and reports past eight, and `PROJECT_FORMAT.md` states
+the cap; whether eight is right was not decided. It is low for a song
+automating a channel and two buses, but `Pattern::with_steps` builds
+`MAX_CHANNELS` channel patterns each reserving the cap, and the sequencer
 builds `MAX_PATTERNS` of those, so the cap is multiplied by 65,536 before it
-is paid. Measure that before changing it. Found 2026-09-13, half-closed
-2026-09-14.
+is paid. Measure that before changing it.
 
-**And the *inner* vector is not preallocated at all -- it is minted on the
-audio thread.** `AutomationLane::new` (`automation.rs:69-75`) is
-`Vec::with_capacity(MAX_AUTOMATION_POINTS_PER_LANE)`, 1024 points of 12 bytes
-= 12 KB, and `open_lane` pushes one from the callback: `OpenAutomationLane`
-and the first `UpsertAutomationPoint` on a fresh destination both reach it.
-Three paths free one there. `automation.rs:9-10` and `pattern.rs:165-167` both
-say this never happens, and they are true of the outer vector only. MOO-61,
-found 2026-09-21.
-
-**The trap, for whoever fixes it:** filling all eight lanes with
-points-reserved lanes at construction is 65,536 x 8 x 12,288 bytes = 6 GiB in
-524,288 `malloc`s per `RenderState` -- the multiplier this entry is about,
-walked into from the other direction. A vacancy scheme has to keep capacity 0
-until a lane opens and hand the opened lane over as a structural command (the
-`a576f17` routing-table shape), or reserve only the
-`active_patterns x active_channels` window off-thread. `ParamAddr::NONE` does
-not exist for the vacant marker; `DeviceId::UNASSIGNED` (`effect.rs:3354-3358`)
-is the sentinel this codebase already has. And "the lane set is full" is
-already two predicates -- `lanes.len() >= MAX_...` in the session
-(`session/automation.rs:58`) and `lanes.len() == lanes.capacity()` in the
-engine (`pattern.rs:172`) -- which a vacancy scheme silently breaks.
-
-**`MAX_MOD_ROUTES_PER_CHANNEL` is 16** (`modulation.rs:1290`) — two routes per
-module across eight slots. It was left there deliberately, to be raised once
-the modulator grid has been lived in. The price of raising it is now measured
-and linear, so this is a one-line decision when the answer is known.
+**`MAX_MOD_ROUTES_PER_CHANNEL` is 16** (`modulation.rs`) — two routes per
+module across eight slots, left there to be raised once the modulator grid has
+been lived in. The price of raising it is measured and linear, so this is a
+one-line decision when the answer is known.
 
 **Factory banks self-seed once and can never update.**
 `mooloop-project/src/factory.rs` writes `.factory-v1` (and `.ml1-factory-v1`)
@@ -756,870 +269,292 @@ in `effect_factory.rs`, `ds01_factory.rs`, `mlm1_factory.rs` or
 marker or the directory under `presets/` is deleted by hand.
 
 **Per-slice loop points do not exist.** `loop_mode` sits on `SamplerParams`
-(`sampler.rs:552`), so looping is all slices or none. Explicitly deferred.
+(`sampler.rs`), so looping is all slices or none. Explicitly deferred.
 
 ---
 
 ## Meter and time
 
-**Device meters are drained only for the chain currently on screen.** Fixed
-2026-09-14 by the first of the three options this entry named, which it
-already called the correct one: one `last_device_target` local in the pump,
-and `DeviceMeters::clear_target` emptying whatever the rack has just moved
-off. Before that, every other channel's and bus's stage cells were `fetch_max`
-holds that nothing ever emptied, so switching the rack to a channel last
-viewed ten minutes ago drew that ten-minute maximum for one 8 ms tick before
-the next read cleared it.
-
-What is *not* done is the same thing for the two cells the rack does not read
-at all. Nothing here drains a target the rack has never been pointed at, so
-the first tick after opening a chain for the first time still shows whatever
-that chain's loudest block was -- which is a shorter window than before and
-the same shape. Draining every target every tick is
-`(MAX_CHANNELS + MAX_BUSES) x (MAX_EFFECTS+1) x 6` atomic swaps at 125 Hz,
-which is the cost the spectrum pool exists to avoid in the analogous case; a
-slow secondary timer is the option left on the table. Found 2026-09-13,
-fixed for the reachable case 2026-09-14.
+**Device meters are not drained for a chain the rack has never shown.** The
+pump reads the chain on screen and `DeviceMeters::clear_target` empties the
+one the rack has just left (`last_device_target`), but the first tick after
+opening a chain for the first time shows that chain's loudest block so far.
+Draining every target every tick is `(MAX_CHANNELS + MAX_BUSES) x
+(MAX_EFFECTS+1) x 6` atomic swaps at 125 Hz; a slow secondary timer is the
+option left.
 
 **A bus clip latch is cleared by any project edit, which is broader than the
-problem it fixes.** Removing a track shifts every later one down an index and
-the per-bus `MeterBallistics` are keyed by that index, so old track 4 would
-open as track 3 wearing track 3's latched clip -- permanently, because a
-latch has no timer and only a click releases one. That is fixed: a project
-install raises `UiState::bus_meters_stale` and the pump resets every
-non-master pair on its next tick, which is the bluntest of the three options
-the entry named and the only one that also handles undo, redo and reorder
-without being told the edit's shape.
-
-What it costs is a false *clear*: a legitimately lit lamp on a track nobody
-touched goes out when the user adds a channel or clones a pattern. That was
-chosen deliberately -- for an alarm, losing one is an inconvenience and
-showing one nobody earned is the meter lying -- but it is broader than it
-needs to be, and the narrow version is still available. The bank's shape is
-in hand at the install, so resetting only when the track count changed, or
-only the indices at or after a removal, would both work. Neither was done
-because a project install is already a rare, deliberate act and the extra
-machinery would need the edit's shape threaded to a place that currently
-knows only "something was installed". The master is exempt: it is always
-track 0, so its meter never reads somebody else's audio.
-
-Peak hold and decay are reset by the same call, which is right for the same
-reason and invisible anyway -- they wash out in under two seconds.
-`MeterBallistics::reset` has a test; the wiring that calls it does not, and
-could not without driving the application. Found 2026-09-13, fixed
-2026-09-14.
+problem it fixes.** A project install raises `UiState::bus_meters_stale` and
+the pump resets every non-master `MeterBallistics` pair (they are keyed by
+track index, which a removal shifts). So a legitimately lit lamp on a track
+nobody touched goes out when the user adds a channel or clones a pattern.
+Resetting only when the track count changed, or only the indices at or after
+a removal, would both work, and need the edit's shape threaded to a place
+that currently knows only "something was installed".
 
 **`EngineEvent::Metering` is a per-block ring push that only
-`engine-selftest` reads.** The master used to be metered *twice*, through two
-transports and with two clip latches: `executor.rs` pushes the event every
-block and `render.rs` publishes the same two numbers into `BusMeters` cell 0,
-the toolbar read the event and the mixer's master strip read the cell. The
-event push is `let _ = evt_tx.push(..)`, so under ring pressure the
-always-visible meter was the lossy one while the atomic cell cannot drop a
-block, and clicking one clip lamp did not clear the other.
-
-Fixed 2026-09-14 by the second of the two options this entry named: both faces
-read bus 0 through one `MeterBallistics` pair, so the latch is shared and the
-toolbar is no longer the lossy reader. The first option -- dropping the event
-outright -- was **not** taken because `engine-selftest` is built on counting
-it, and it is the only thing that reports whether the *callback* produced
-audio: a held cell says the loudest it ever was, which cannot tell silence
-from a callback that never ran.
-
-So what is left is a per-block push on the audio thread serving one
-diagnostic. Cheap, and worth knowing it is not free: dropping it means giving
-`engine-selftest` another way to ask the same question, not deleting a
-duplicate. Found 2026-09-13, unified 2026-09-14.
+`engine-selftest` reads.** Both master meters read bus 0 through one
+`MeterBallistics` pair, so what is left is a per-block push on the audio
+thread serving one diagnostic. Dropping it means giving `engine-selftest`
+another way to ask whether the callback produced audio: a held meter cell
+cannot tell silence from a callback that never ran.
 
 **A muted channel that something taps meters silent while its audio flows.**
-There are two mute paths for a channel. The one where nobody taps it skips the
-render, so silence is honest. The other -- muted, but an Aux In reads this
-channel -- runs `strip.process`, so the audio *is* heard through the Aux In,
-and then `continue`s before the device-meter publish. The source rail reads
-silent for a signal that is reaching the master. Adjacent to the solo entry
-above but the opposite sign: there a silenced track meters live, here an
-audible one meters dead. Whoever rules on the solo entry should rule on this
-one too.
-
-**The playhead half of this entry was wrong and the reason is worth keeping.**
-It said the sampler playhead stopped at the mute and never moved again,
-because the `continue` skips that publish too. It does -- and the state is
-unreachable. `AudioGraph::produces` is "does any tap name this channel", a tap
-names an *audio outlet*, and the sampler publishes **no outlets at all**
-(`outlet.rs` asserts exactly that for Sampler, DrumSynth, MonoSynth,
-PolySynth and ML-M1). So nothing can subscribe to a sampler channel, a sampler
-channel never reaches this branch, and the only channels that do -- ML-P8 and
-DS-01 -- have an idle `strip.sampler` whose `voice_positions()` are all `NaN`,
-which `PlayheadMeters::read` filters out. Publishing it there is a no-op, and
-it was written and then reverted on 2026-09-14 rather than shipped as one.
-Found 2026-09-13, half of it withdrawn 2026-09-14.
+Muted, but read by an Aux In, the channel runs `strip.process`, so the audio
+is heard through the Aux In, and then `continue`s before the device-meter
+publish, so the source rail reads silent. The opposite sign of the solo row
+below; whoever rules on that one should rule on this one too.
 
 **A track silenced by someone else's solo still meters, and can still latch
 its clip lamp.** `render.rs` computes `let muted = strip.output.muted ||
-strip.solo_silenced` and governs the sends, the summing and the send emission
-with it -- then twenty-four lines later the meter alone re-reads
-`strip.output.muted`. So under a solo, a silenced track's strip meter, its
-peak hold and its clip latch all report a signal nobody can hear, while the
-comment directly above that line says the meter shows "what is heard rather
-than what is running" and `archive/MIXER_PLAN.md` says the strip shows **audible**
-post-fader output.
+strip.solo_silenced` and governs the sends and the summing with it, then the
+meter alone re-reads `strip.output.muted` -- against the comment above it
+(the meter shows "what is heard rather than what is running") and
+`archive/MIXER_PLAN.md` (the strip shows audible post-fader output). On the
+other side, `MixerStripRow.solo_silenced` dims a silenced strip's name rather
+than showing it muted, and a live meter under a dimmed name is arguably the
+same statement. Options: meter it silent, matching the two documents; or keep
+it live and change both documents, with a separate ruling on the clip latch;
+or publish a third state drawn in the dimmed treatment. A channel silenced by
+another channel's solo already meters silent.
 
-There is a real argument on the other side, which is why this is a note rather
-than a one-word fix: `MixerStripRow.solo_silenced` exists so a silenced
-strip's name plate *dims* rather than looking muted -- "it is set up and
-waiting" -- and a live meter under a dimmed name is arguably the same
-statement. What is not defensible is the current split, where `muted` means
-one thing for audio and another for the meter in the block that computes it.
-Options: meter it silent, matching the two documents; or keep it live and
-change both documents, which then needs a separate ruling on the clip latch,
-since latching a clip on a track that produced no audible sample is the
-hardest part to defend either way; or publish it as a third state and draw it
-in the dimmed treatment the name already uses. Found 2026-09-13.
-
-A **channel** silenced by another channel's solo does not have this split, and
-that is deliberate rather than an inconsistency waiting to be levelled. The
-channel loop asks the question once -- `let muted = output.muted ||
-solo_silenced` at the top -- and everything below it, metering included, is
-inside that one branch, so there is no second reading of `output.muted` to
-disagree with the first. Added 2026-09-22 with channel solo. Whichever way
-the track's is settled, the channel's is already on the "meter it silent"
-side of it.
-
-**The project is 4/4 end to end.** Still true, and since 2026-09-15 it is
-true in one place: `time::BEATS_PER_BAR`, where it used to be nine anonymous
-fours across six crates (`docs/plans/archive/musical-time/`). `integrity.rs` still
-rewrites any other meter back on load with a doctor message, and
-`Project.beats_per_bar` is still a persisted field the audio thread never
-sees — its doc comment says so now, and `scripts/dupe-audit bar-arithmetic`
-fails the day a tenth spelling appears. **A 3/4 project is still not a
-thing**, and what stands between here and one is threading a signature to the
-audio thread, not finding the constants.
+**The project is 4/4 end to end.** The meter is `time::BEATS_PER_BAR`;
+`integrity.rs` rewrites any other meter on load with a doctor message, and
+`Project.beats_per_bar` is a persisted field the audio thread never sees. A
+3/4 project needs a signature threaded to the audio thread.
 
 **`position_ticks` is an accumulator, not derived from `frames_played`**
-(`mooloop-engine/src/transport.rs:24`). `archive/ARCHITECTURE_REVIEW.md`'s action
-table calls this out and says to fix it *with* the tempo map, not before.
-Recorded so the deferral stays deliberate.
+(`mooloop-engine/src/transport.rs`). `archive/ARCHITECTURE_REVIEW.md`'s action
+table says to fix it *with* the tempo map, not before.
 
 ---
 
 ## Decisions whose reason expired
 
 **A song's embedded samples can never be turned back into references.** The
-guard is **necessary** and is not the problem: without it `replace_song_file`
-would delete the sidecar the new reference points at, destroying the only
-copy. What was wrong was everything around it, and the cheap half of that was
-fixed 2026-09-14. Unticking "Embed assets" and saving now produces a per-sample
-warning -- "sample stays embedded: the bundle holds the only copy of it" --
-instead of no warning, no status message and no change; and the checkbox
-follows the **per-sample flags** rather than the document-level `asset_mode`,
-so a bundle whose samples are all embedded no longer reopens showing the box
-unticked, which is what stopped the state ever converging.
-
-What is left is that un-embedding does not exist. Doing it for real means
-copying the bundle-owned samples out to a folder the user chooses first, which
-is a new user-facing gesture and a new dialog. Until then the manifest still
-records `asset_mode = "referenced"` beside `embedded = true` on every sample,
-which is now merely redundant rather than a lie nobody is told about, and
-`CURRENT.md` says what a referenced save of an embedded song actually does.
-Found 2026-09-13, made honest 2026-09-14.
+guard in `replace_song_file` is necessary: without it the sidecar the new
+reference points at would be deleted. Unticking "Embed assets" warns per
+sample, and the checkbox follows the per-sample flags. What is missing is
+un-embedding itself: copying the bundle-owned samples out to a folder the user
+chooses, which is a new gesture and a new dialog. Until then the manifest
+records `asset_mode = "referenced"` beside `embedded = true` on every sample.
 
 ---
 
 ## Cannot currently be tested
 
-**Three popups still close before they report, and nobody has clicked them.**
-`scripts/dupe-audit popup-close-order` lists them: the automation lane menu
-(`main.slint`, three handlers) and the two device insert menus
-(`device-rack.slint:387` and `:816`). Each does `<menu>.close()` and *then*
-calls the window, which is the exact sequence that made the add-channel menu
-add nothing (MOO-53, fixed 2026-09-20) and the preset menu load nothing before
-it.
+**The automation lane menu closes before it reports, and nobody has clicked
+it.** `scripts/dupe-audit popup-close-order` lists its three handlers in
+`main.slint`: each does `lane-menu.close()` and *then* calls the window, the
+sequence that made the add-channel menu add nothing (MOO-53). The failure
+needs a repeater item to tear down, and the lane menu's rows are repeated one
+component inwards -- the `for` is in `AutomationLaneMenu` and the `close()`
+in `MainWindow`'s handler for its callback -- which none of the known cases
+had. `scripts/mooloop-mcp` cannot click inside a `PopupWindow`; moving the
+menu out of `MainWindow` into a component a harness can import, as was done
+for `channel-rack.slint` and `tests/add_source_menu.rs`, would answer it.
+Until then: **report first, close second**, in any popup row you touch.
 
-They are probably fine, and that is the whole difficulty. The rows of all
-three are written out rather than repeated, and the failure needs a repeater
-item to tear down -- `DeviceAddSlot`'s insert menu is the standing evidence,
-since it closes first and works. But the lane menu's rows *are* repeated, one
-component inwards: the `for` is in `AutomationLaneMenu` and the `close()` is in
-`MainWindow`'s handler for its callback, which is a third arrangement none of
-the four known cases had. Nobody has established which side of the line it
-falls on.
-
-The obstacle is reach. `scripts/mooloop-mcp` cannot click inside a
-`PopupWindow` at all (`OPERATIONS.md` says so, and it fails identically on a
-control known to work), and a pointer-event test needs the menu to be a
-component a harness can import -- which is why the add-channel menu was moved
-into `channel-rack.slint` before `tests/add_source_menu.rs` could click it.
-The lane menu is still nested inside `MainWindow`. Doing the same to it is an
-afternoon, and it would answer the question rather than guess at it. Until
-then: **report first, close second**, in any popup row you touch.
-
-**A muted track's frozen send rings could not be shown failing.** Fixed
-2026-09-13 -- `SendBank::reset` now drains them on every path that skips
-`emit` -- but the fix went in on symmetry (with `emit`'s own reset for a
-disabled send, and the track's own compensation ring, which resets on the same
-mute) rather than against a failing test, which is not the standard the rest
-of this sweep held to.
-
-The obstacle is worth writing down. A muted track also goes to *sleep*, so the
-frozen ring contributes nothing at the destination until that track wakes
-again -- an attempt that muted, idled for forty-eight blocks and unmuted
-measures exactly zero with the fix and without it. Observing it needs a second
-note after the unmute so the producer wakes, and then a differential render
-against an unmuted control to tell the stale frames from the new ones, since
-both arrive in the same block. Worth building if the send path is touched
-again; the setup also has to put the latency-declaring device in the
-*project*, because `RenderState::from_project` computes the compensation plan
-and an effect installed afterwards leaves the send with no ring at all --
-which is how the first attempt at this test came to pass without the fix.
-
-**Acceptance test 8 — RT hygiene, no allocations or locks in the audio
-callback — has a harness now, and it covers one block.** Amended 2026-09-15 by
-`control-plane-seams/04`; what this entry said before was that no harness in
-the tree could express it, and the reason given was right about every
-allocator it named.
-
-The instrument turned out to be a small addition to `mooloop-engine`'s own
-`#[cfg(test)]` `CountingAllocator`, which the entry above had overlooked
-because it only named the session crate's. It counts *live bytes*, and a net
-byte figure cannot see an allocation paired with a free inside one block —
-which is exactly what a `Vec` growing on the callback thread looks like. It
-now also carries `allocations()`: a count of `alloc` and `realloc` calls that
-never decreases, held in a `const`-initialised thread-local so that reading it
-from inside `alloc` cannot itself allocate, and so that two tests running in
-parallel do not measure each other the way `block_cost`'s module doc records
-happening with `live()`. `realloc` is counted explicitly, because `System`
-implements it with `mremap` rather than alloc-copy-dealloc.
-
-`a_block_that_retires_a_preview_does_not_allocate` uses it, and was validated
-against the defect it was written for: with `preview_retired` put back to a
-`Vec::new()` it reports one allocation and fails.
-
-**The Buffer half closed 2026-09-16.**
-`no_buffer_operation_allocates_on_the_callback` covers ten blocks -- every
-state the head can be in and each transition between them: following, the
-`Offset` chase, a gesture with a window and a repeat count, free-run at
-`Rate`, held at zero, frozen, thawed, and a hand scrub. Zero allocations, and
-validated the same way the preview test was: with a `vec!` put inside
-`freeze` it reports one and names the block.
-
-**Channel-slot reuse joined it 2026-09-17.**
-`reusing_a_populated_spare_channel_reclaims_its_effects_without_allocating`
-runs a structural `AddChannel` over a spare slot that still holds an effect,
-through the executor. On the unfixed tree it counted three allocations and
-reclaimed no node: `RenderState::reclaim` was an undrained `Vec::new()`
-(`reports/fable-2026-09-17.md`, finding 3). Two of the three were something
-else: `MlP8::reset` rebuilt its chorus delay line, and the UI's
-`SetChannelSource` reaches that same reset in production. Both are fixed.
-
-**The locks half got its instrument 2026-09-29** (MOO-173), and it sees less
-than the allocation half does. `mooloop_core::lock_check::Mutex` is
-`std::sync::Mutex` with a per-thread count of `lock` and `try_lock` attempts,
-built the same way as `allocations()` and compiled out without
-`debug_assertions`. The soak and the three hosted-plugin executor tests read
-it around every block beside the allocation count. Validated the same way:
-with a `try_lock` on a `lock_check::Mutex` put at the top of
-`RenderState::process_block_inner`, the soak fails on block 0 ("took a lock 1
-times on the callback"), and so do six of the plugin tests.
-
-What it cannot see is a lock on a type we do not own. An uncontended
-`std::sync::Mutex` is a compare-and-swap in user space, and nothing outside
-`std` can observe it: the same temporary `try_lock` on a `std::sync::Mutex`
-passes the soak. The same goes for `stderr().lock()` inside an `eprintln!`,
-and for a lock inside a hosted plugin's own code. A lock on the render path
-is checked only if it is a `lock_check::Mutex`. No lock on the render path
-is known. The one suspected here, `HostShared`'s plugin log, belongs to the
-spike host alone. The engine's host, `ClapShared`, counts a plugin's
-audio-thread log lines and drops them, and
-`a_plugin_that_logs_from_process_costs_the_callback_nothing` holds that to
-zero allocations, frees and locks per block (MOO-324). It runs on a thread
-std spawned, as every engine test does; a callback thread std did not
-create is open as MOO-336.
+**The muted-track send-ring fix has no failing test.** `SendBank::reset`
+(`render.rs`) drains a track's send rings on every path that skips `emit`, but
+went in on symmetry rather than against a failing test. A muted track also
+goes to sleep, so a test that mutes, idles and unmutes measures zero with the
+fix and without it. Observing it needs a second note after the unmute, a
+differential render against an unmuted control, and the latency-declaring
+device in the *project*, because `RenderState::from_project` computes the
+compensation plan and an effect installed afterwards leaves the send with no
+ring.
 
 ---
 
 ## Consistency questions, not bugs
 
-**The ML-M1's Acid filter is really quiet.** Adam, 2026-09-18, closing
-`mono-synth-v2/`: *"cutoff is fine but for some reason that filter is really
-quiet."* Heard, not yet measured. The plan's own open finding was that Acid's
-cutoff compensation constant is load-bearing (0.41x nominal against the other
-two models' 0.65-0.68x), so the first thing to check is whether the level
+**The ML-M1's Acid filter is really quiet.** Adam, 2026-09-18: *"cutoff is
+fine but for some reason that filter is really quiet."* Heard, not yet
+measured. Acid's cutoff compensation constant is load-bearing (0.41x nominal
+against the other two models' 0.65-0.68x), so check first whether the level
 drop comes from the same place -- a model voiced by moving its corner that
 never had its output level matched to the other two.
 
-**Three things left over when Buffer closed, 2026-09-18.** None blocked
-closing `plans/archive/buffer-implementation/`, and all three were
-listed only in its status until it was archived. (A fourth, the locks half of
-acceptance test 8, has its own entry under "Cannot currently be tested", and
-has had an instrument since MOO-173.)
+**Two things left over when Buffer closed.**
 
 - **A quantized Buffer press starts two frames behind the newest frame.**
   A press landing on a frame's end reads `now` after that frame is written and
-  before the writer advances; `a_frozen_buffer_played_in_reverse_is_the_ring_
-  backward` measures the lag as 2. Inaudible, and unfixed.
+  before the writer advances;
+  `a_frozen_buffer_played_in_reverse_is_the_ring_backward` measures the lag as
+  2. Inaudible, and unfixed.
 - **`BufferMidiMap` on `ParamAddr` is a second source-to-destination system**
   beside the general control map (`02-control-and-modulation.md`, step 5).
-  Two ways of saying "this note drives that parameter" is this codebase's
-  characteristic fault waiting for a reason to diverge.
-- **The modulation shelf has no source chip, and a modulated knob draws no
-  arc** (`02`, step 4). Neither is Buffer-specific; Buffer is only where they
-  were first wanted.
+  Two ways of saying "this note drives that parameter".
 
 **Song-mode swing follows pattern phase, and only a test name says so.**
-`swing_offset_ticks` (`sequencer.rs:867`) takes the offbeat parity from a
-note's position *inside its pattern*, so a clip placed at an odd number of
-steps swings on the opposite sixteenths from every other clip.
-`song_swing_uses_pattern_phase_not_playlist_position` (`sequencer.rs:993`)
-asserts exactly this, so it is deliberate -- but the editor makes the
-conflicting case easy to reach, because `main.slint:820`'s snap table bottoms
-out at 6 ticks and will place a clip at tick 6, 12, 18 or 24. At 66% swing two
-copies of one pattern a step apart play their offbeats 16 ticks apart in
-opposite directions, about 40 ms at 120 BPM. Whether swing belongs to the
-pattern or to the song grid is a decision rather than a defect; if it stays as
-it is, it belongs in `CURRENT.md` where a user would find it and not only in a
-test name. Found 2026-09-12.
+`swing_offset_ticks` (`sequencer.rs`) takes the offbeat parity from a note's
+position *inside its pattern*, so a clip placed at an odd number of steps
+swings on the opposite sixteenths from every other clip;
+`song_swing_uses_pattern_phase_not_playlist_position` asserts it. The
+playlist snap places clips at 6-tick steps, so at 66% swing two copies of one
+pattern a step apart play their offbeats 16 ticks apart in opposite
+directions. Whether swing belongs to the pattern or the song grid is a
+decision; if it stays, it belongs in `CURRENT.md`.
 
 **Automation does not follow a fold inside the block that contains it.**
-Raised unconfirmed 2026-09-12 and **confirmed 2026-09-13**, with a condition
-the first pass did not have and a second trigger it did not know about.
-
-`AutomationBlock` is built once per block from `spans[0].start_tick`
-(`render.rs:4315`), `curve_for` resolves the lane at that pre-fold position,
-and `value_at` advances linearly across the whole block, folding only on
-`curve.length_ticks` -- the *pattern's* length. The transport meanwhile cuts
-the block into spans at the fold and schedules notes span by span. For a
-frame past the split the computed tick exceeds the true one by exactly the
-loop length `L`, so the lane is read at `(true_local + L) mod P`:
-
-> **The read is correct iff `L` is an exact multiple of the covering
-> pattern's length `P`.** That is the whole condition.
-
-Worked case. 48 kHz, 120 BPM, PPQ 96, one 16-step pattern (384 ticks) at song
-tick 0, `LoopRange { 0, 192 }` -- two beats, on the editor's own snap grid --
-a lane ramping 0 to 1 across the pattern, 512-frame period. The block starting
-at tick 191.5 splits at frame 125, and frames 128-511 read the lane **192
-ticks ahead of the playhead, half the pattern**: the cutoff sits at 0.50
-normalized where it should be 0.0. That is 8 ms on every pass, twice a second,
-and up to 170 ms at the 8192-frame maximum. The next block resolves fresh, so
-it is a periodic blip rather than a drift.
-
-Two things the first pass missed. **A loop range is not required** -- in song
-mode the song itself repeats by `wrap_tick(song_tick, song_length_ticks())`,
-which is bar-rounded, so the block straddling the song repeat reads the
-outgoing clip's lane too. And **notes are handled correctly**:
-`schedule_note_edge` walks `absolute_tick += period` across the whole block,
-so automation's linear advance is the only reader of a folded position that
-does not fold. What bounds it: `process_once_block` passes `looping = false`,
-so **an offline export is correct and only realtime monitoring is wrong** --
-which is exactly when someone is looping a section.
-
-Not small, because the once-per-block hoisting is load-bearing:
-`has_automation_at` exists to be asked once, and `curve_for` walks every
-active channel's lanes for every descriptor of every device. Options, cheapest
-first. **(1) One line, strictly better than today:** when `span_count > 1`,
-clamp `AutomationBlock::ticks` to the control ticks inside span 0, so the
-destination *holds* across the fold instead of jumping half a pattern away --
-stale for at most one block, and the audible blip is gone. **(2)** Give
-`AutomationBlock` the span list and map a control tick's frame to its span
-before computing the position, keeping one resolved curve; fixes the position
-error and the common case, but not the case where the fold lands in a
-*different* placement. **(3)** Build one `AutomationBlock` per span and
-re-resolve per span -- complete, and a fold is rare enough that the amortised
-cost is near zero; the cost is structural rather than cyclic.
-
-Whichever is taken, `render.rs:543`'s comment must go with it: it claims this
-case is handled, and recomputing per tick is what makes the *pattern* wrap
-correct while saying nothing about the loop or the song wrap.
+`AutomationBlock` is built once per block from the block's start tick
+(`render.rs`), and `value_at` advances linearly across the block, folding only
+on the pattern's length, while the transport cuts the block into spans at a
+loop or song wrap. Past the split the lane is read at `(true_local + L) mod
+P`, which is correct only when the loop length `L` is a multiple of the
+covering pattern's length `P`. A two-beat loop over a 16-step pattern reads
+half a pattern ahead for the rest of the block, up to 170 ms at 8192 frames,
+on every pass. Notes are scheduled correctly, and an offline export
+(`process_once_block` passes `looping = false`) is unaffected. Options,
+cheapest first: **(1)** when `span_count > 1`, clamp `AutomationBlock::ticks`
+to span 0 so the destination holds across the fold; **(2)** give
+`AutomationBlock` the span list and map each control tick to its span (misses
+a fold into a different placement); **(3)** one `AutomationBlock` per span,
+re-resolved. The `render.rs` comment that claims this case is handled must go
+with the fix.
 
 **A departed producer and a departed device are handled oppositely.** Aux In
 sends a subscription whose source channel was deleted to `DEPARTED_SOURCE`
-(`aux_in.rs:147`), keeping it inert and inspectable. The modulation rack drops
-routes whose device is gone (`modulation.rs:1875`) while keeping *illegal*
-routes inert (`modulation.rs:1932`). Both behaviours were chosen on purpose in
-their own passes; nobody has decided whether they should match.
+(`aux_in.rs`), keeping it inert and inspectable. The modulation rack drops
+routes whose device is gone (`modulation.rs`) while keeping *illegal* routes
+inert. Nobody has decided whether they should match.
 
 ---
 
 ## One name, two policies
 
 **An embedded sample that is a symlink escapes the bundle, is read, and is
-copied into the next bundle saved from it.** `embedded_bundle_path` is purely
-lexical and `resolve_setup_asset` then does `is_file()` and reads, so a shared
-`.mooloop-channel` or kit bundle can make the app read an arbitrary local file
-as audio -- and, the part that matters, **re-saving that preset stages the
-symlink target's bytes into the new bundle**, which the user may then share.
-`PROJECT_FORMAT.md` says embedded paths "must remain below the document's
-`samples/` directory", which reads as a containment guarantee the check does
-not provide; the doc overstates and the code under-delivers. Not small because
-the fix is a decision about how much the loader may touch the filesystem:
-canonicalising and re-checking containment costs a syscall per sample and
-changes behaviour for anyone deliberately symlinking a shared sample library
-into a bundle. Options: canonicalise both sides and require containment for
-embedded references only; refuse a symlink under `samples/` outright; or
-accept it and correct `PROJECT_FORMAT.md` to say the check is lexical. Found
-2026-09-13.
+copied into the next bundle saved from it.** `embedded_bundle_path`
+(`mooloop-project/src/lib.rs`) is purely lexical and `resolve_setup_asset`
+then reads the file, so a shared `.mooloop-channel` or kit bundle can make the
+app read an arbitrary local file as audio, and **re-saving that preset stages
+the symlink target's bytes into the new bundle**, which the user may then
+share. Options: canonicalise both sides and require containment for embedded
+references (a syscall per sample, and it changes behaviour for anyone
+deliberately symlinking a shared sample library into a bundle); or refuse a
+symlink under `samples/` outright.
 
-**The compensation plan is still derived twice, in two crates, but the
-policy in it is not.** The divergence the row here described is fixed: the
-send half's guard -- a bank whose routing does not sort has no compensable
-sends, because a send compiled against an order that is not the one being
-walked arrives a block late -- was in `RenderState::install_compensation` and
-not in `Session::latency_plan`, so the session would have handed over a full
-`SendBank` compiled against a default order's arrival numbers. It is now
-`mixer::sends_are_compensable` and `mixer::compensable_send_edges`, which both
-call sites read, and `mooloop-core` and `mooloop-session` each have a test on
-it.
-
-What is left is the *shape*: both sides still walk their own channels and
-buses to build `channel_latency`, `channel_bus` and `bus_latency` before
-calling `compile_latency`. They cannot share that walk as it stands, because
-the engine reads `ProjectChannel.setup` and the session reads its own channel
-type -- the arithmetic is identical and the iteration is not. Extracting it
-means a shared input type or a trait, which is a bigger change than the one
-the drift called for. The same shape one size down still holds for
-`Session::console_plan` against `RenderState::install_console`, where nothing
-has diverged and nothing is checked.
-
-`an_offline_render_compiles_the_same_compensation_as_a_live_one` still does
-not read the session's derivation -- both sides of that comparison go through
-`install_compensation` -- so the two new tests are what hold the policy, not
-that one. Found 2026-09-13, half-fixed 2026-09-14.
+**The compensation plan's inputs are still derived twice, in two crates.**
+The policy is shared (`mixer::sends_are_compensable`,
+`mixer::compensable_send_edges`), but `RenderState::install_compensation` and
+`Session::latency_plan` each walk their own channels and buses to build
+`channel_latency`, `channel_bus` and `bus_latency` before `compile_latency`,
+because the engine reads `ProjectChannel.setup` and the session its own
+channel type. Sharing the walk means a shared input type or a trait.
+`Session::console_plan` against `RenderState::install_console` is the same
+shape, and nothing checks it. `an_offline_render_compiles_the_same_compensation_as_a_live_one`
+does not read the session's derivation.
 
 **Load silently deletes authored modulation the spec says to keep as an
 orphan, and the mechanism built for keeping it is unreachable.**
-`ModRack::deserialize` drops four things with no diagnostic: a slot whose
-index is past `MAX_MODULATORS_PER_CHANNEL` (`modulation.rs:1510`), a route
-whose source id names no surviving slot (`:1543`) -- which is exactly what a
-capacity truncation produces -- a route whose `to_local_slot` fails (`:1536`),
-and every route past `MAX_MOD_ROUTES_PER_CHANNEL`, because `apply_route`'s
-`None` is discarded into `let _` (`:1548`). `MODULATION.md` says
-the opposite: "project persistence retains it as an inspectable orphan rather
-than silently deleting authored work." The truncation itself is the accepted
-design -- `AGENTS.md` records both constants as engine constants rather than
-format fields -- and it is *coherent*, in that a route naming a module that
-did not survive is dropped rather than re-aimed at a survivor. The silence is
-the divergence.
-
-`UNRESOLVED_SLOT` was built for this and **no reachable path parks anything
-on it.** Its own doc comment (`modulation.rs:1386`) describes behaviour
-nothing implements: `add_route` stamps from an occupied slot, `apply_route`
-refuses an unheld id, `clear` removes routes both ways, `move_module` and
-`swap_slots` never drop a module, and the deserializer drops rather than
-parks. The only producer is an out-of-range generator outlet, and that is
-refused at the door. Two tests were asserting this correctly while their own
-comments claimed the spec's behaviour; the comments were corrected 2026-09-13
-and the behaviour was left alone, because changing it is this entry.
-
-Options: implement the spec -- park un-sourced routes and report the
-truncation through `mooloop-project`'s `Doctor`, so the user is told rather
-than surprised; or keep the deletion and have the `Doctor` report *that*,
-which is the cheap honest half; or amend the spec to say load-time truncation
-deletes. Whoever decides this should also decide the departed-producer versus
-departed-device inconsistency above, which is the same question at a
-different site. Found 2026-09-13.
-
-**Reordering the modulator grid used to restart or cross-wire every moved
-module's running state.** Fixed 2026-09-14 by the first of the three options
-this entry named: `ModRack::move_module_mapped` returns the permutation it
-applied, `ModulatorRack::permute` carries each module's running state through
-it, and `MoveModulator` has its own handler ahead of the params diff.
-
-Two things about the fix worth knowing before touching it. The permutation is
-**not enough on its own**: `retarget` may rewrite a Math module's
-`input_slot`, which lives in its params, so the handler still runs a params
-pass afterwards -- against the *permuted* previous params, which is what keeps
-it to the Math modules. A `MathSource` is its params and rebuilds for nothing,
-where rebuilding an LFO is the whole defect. And `permute` clears before it
-writes, so a slot the permutation does not name is emptied rather than left
-holding a module that has moved away; an in-place swap would lose that
-silently, which is why there is a test for it.
-
-The option **not** taken was keying the DSP rack by `ModSourceId` rather than
-by slot, which removes the class rather than this instance of it. The diff by
-slot number is what makes every other narrow command cheap, and a reorder is
-the one edit that owes it a permutation instead -- but a second edit that a
-diff cannot see would be the argument for the bigger change. Found
-2026-09-13, fixed 2026-09-14.
+`ModRack::deserialize` (`modulation.rs`) drops four things with no
+diagnostic: a slot past `MAX_MODULATORS_PER_CHANNEL`, a route whose source id
+names no surviving slot, a route whose `to_local_slot` fails, and every route
+past `MAX_MOD_ROUTES_PER_CHANNEL` (`apply_route`'s `None` is discarded into
+`let _`). `MODULATION.md` says the opposite: persistence "retains it as an
+inspectable orphan rather than silently deleting authored work."
+`UNRESOLVED_SLOT`'s doc comment describes parking that no reachable path
+does. Options: implement the spec (park un-sourced routes and report the
+truncation through `mooloop-project`'s `Doctor`); or keep the deletion and
+have the `Doctor` report it; or amend the spec to say load-time truncation
+deletes. Decide the departed-producer row above with it.
 
 **A unipolar route from a *fading-in* LFO rises from half the module's depth
-rather than from the floor.** The steady-state half of this was fixed
-2026-09-14: `offset_for`'s lift now stands on `ModRack::wire_span`, the span
-the module's params say it reaches, so an LFO at half depth rests on the base
-instead of a quarter of the route's depth above it, and one at depth zero
-contributes nothing instead of half a depth of silent offset. What the span
-cannot see is `fade`, because that is DSP state in `Lfo` rather than a
-parameter, and reading it per control tick means a second
-`[[f32; 8]; 256]` table per channel beside `ControlOutputs` -- 8 KB a live
-channel, doubling the control capture, for a transient on a parameter that
-defaults to zero seconds. So during a fade the lift is anchored on the
-unfaded depth and the route rises from `depth * 0.5` to its floor. Exact from
-the moment the fade completes. Found 2026-09-13, mostly fixed 2026-09-14.
+rather than from the floor.** `offset_for`'s lift stands on
+`ModRack::wire_span`, the span the module's params say it reaches, which
+cannot see `fade`, DSP state in `Lfo`. Reading it per control tick means a
+second `[[f32; 8]; 256]` table per channel beside `ControlOutputs` -- 8 KB a
+live channel -- for a parameter that defaults to zero seconds. Exact from the
+moment the fade completes.
 
 **A Math module's `input_slot` follows a reorder but not a removal.**
-`retarget` (`modulation.rs:1767`) goes out of its way to carry the input
-across a `move_module`, and `clear` (`:1678`) does not touch it -- although
-`clear`'s own comment is explicit that "a destination left on an emptied slot
-would be inherited by whatever module is installed there next", which is
-precisely what happens here. Remove the LFO in slot 0 that a Math in slot 1
-reads, and the Math correctly reads 0.0; install anything else, `free_slot`
-returns 0, and the Math is silently multiplying the new module. The rack has
-`a_new_module_never_inherits_a_removed_ones_routes` for this hazard on the
-route side and the math input is outside it. Compaction has the same hole:
-`move_module` fills `remap` only for occupied slots, so an input pointing at
-an empty slot is left alone while a different module compacts into that
-number. Rated lower confidence than the rest because `input_slot` is half
-visible -- it is `MATH_PARAM_INPUT_SLOT`, a persisted stepped parameter drawn
-as the shelf's INPUT selector showing a slot *number*, so "it points at slot 1
-and slot 1 changed" is a defensible reading. Options: give Math a
-`ModSourceId` input the way a route has one, which is what the code's own
-comment (`:952`) anticipates but changes a persisted field's meaning; or park
-a dependent input out of range on `clear` and map empty-slot references in
-`move_module`, which is small but leaves the INPUT selector showing a position
-it cannot represent; or decide the slot number is the contract and delete the
-`retarget` remap so the three behaviours at least agree. Found 2026-09-13.
+`retarget` (`modulation.rs`) carries the input across a `move_module`, and
+`clear` does not touch it, although `clear`'s own comment warns that a
+destination left on an emptied slot is inherited by the next module installed
+there. Remove the LFO a Math reads, install anything else, and the Math is
+silently multiplying the new module. `move_module`'s compaction has the same
+hole: `remap` is filled only for occupied slots.
+`a_new_module_never_inherits_a_removed_ones_routes` covers routes, not this.
+Lower confidence: `input_slot` is `MATH_PARAM_INPUT_SLOT`, a persisted stepped
+parameter drawn as a slot *number*, so "it points at slot 1 and slot 1
+changed" is a defensible reading. Options: give Math a `ModSourceId` input the
+way a route has one (changes a persisted field's meaning); or park a dependent
+input out of range on `clear` and map empty-slot references in `move_module`;
+or decide the slot number is the contract and delete the `retarget` remap.
 
 **The bus-bank repair is logged, not reported, and `load_bundle` on its own
-still hands back an unsanitised bank.** Two of the four consequences this
-entry described are fixed as of 2026-09-14. The cycle branch no longer clears
-`sends` on every track: `break_cycles` removes only edges that are genuinely
-on a loop, sends before outputs, so one bad `output` edge in a hand-edited
-file costs that edge rather than a whole bank's aux routing. And
-`sanitize_bank` returns a `BankRepair` per correction, which
-`Session::replace_project` writes to the log.
-
-What is left is where those repairs *go*. They are not in
-`LoadReport::repairs`, so the status bar's count, the repair log's load line
-and the copyable `Diagnosis::report()` still omit them -- and the sanitized
-bank is still what the next save writes, so a repair is an edit to the user's
-file that only the log mentions. Folding them into the report means moving the
-sanitise into `integrity::check_buses`, which needs `mooloop-project` to call
-`compile_bus_graph` itself and changes *when* it runs relative to what
-`Session::replace_project` assumes about the bank it is handed -- and that
-function runs on every project install, an undo included, not only on a load.
-The narrow alternative is a second entry point used only by the load path.
-
-Separately, `load_bundle` on its own returns an unsanitised bank, so anything
-driving the loader directly -- an offline render, a headless measurement loop
--- gets a graph `compile_bus_graph` will refuse. Found 2026-09-12, half-fixed
-2026-09-14.
+still hands back an unsanitised bank.** `sanitize_bank` returns a `BankRepair`
+per correction, which `Session::replace_project` writes only to the log: they
+are not in `LoadReport::repairs`, so the status bar's count, the repair log's
+load line and `Diagnosis::report()` omit them, though the next save writes the
+sanitised bank. Moving the sanitise into `integrity::check_buses` needs
+`mooloop-project` to call `compile_bus_graph` itself and changes when it runs
+relative to `Session::replace_project`, which runs on every install, an undo
+included; the narrow alternative is a second entry point used only by the
+load path. Separately, anything driving `load_bundle` directly -- an offline
+render, a headless measurement loop -- gets a graph `compile_bus_graph` will
+refuse.
 
 **`from_index` answers out-of-range input two different ways depending on
-which enum you ask, and nothing currently reaches it.** Forty-five enums
-convert a selector index to a variant under one name, in two conventions: the
-`Self::ALL.get(index.clamp(0, len - 1))` body, thirteen times, clamps to the
-nearest end; a hand-written `match` with a `_ =>` arm, thirty-one times,
-falls through to the default variant. `NotePriority::from_index(99)` is
-variant 0 where an ML-P8 enum's is its last.
-
-**This was recorded as more dangerous than it is, earlier the same day, and
-the correction is the useful part.** Every parameter path runs through a
-`set` that calls `descriptor.clamp_natural` first, so an out-of-range index
-never reaches `from_index` from automation, modulation, a project file or the
-UI. All thirty-one hand-written pairs were checked and every one round-trips.
-The divergence is real and unreachable, which makes unifying the forty-five
-bodies churn rather than a fix -- and is why the pass that found it wrote a
-test instead.
-
-What the two conventions do cost is a reader: the same call means two things
-depending on the enum, and neither says so. A sentence on each, or one shared
-trait, would settle it whenever one of these files is open anyway.
-
-**The five generators each split their own block at note events, and this was
-read and left alone.** `mlm1.rs:572`, `monosynth.rs:314`, `polysynth.rs:393`,
-`drumsynth.rs:437` and `mlp8.rs:2494` carry the loop the twelve effects carried
-until `effects::process_param_split` replaced it. The entry that recorded this
-said it needed all five read before anyone decided; they were, on 2026-09-12,
-and the answer is **no**:
-
-- **mlm1, monosynth and polysynth are byte-identical.** Three real copies.
-- **drumsynth shares the loop and not the handler.** Note-on triggers without
-  an id, note-off ends nothing because drums are one-shot, and a stopped
-  transport chokes rather than releasing. Those are the device, not an
-  oversight.
-- **mlp8 cannot participate at all.** Its `render_range` also takes `ctx.bpm`
-  and `&mut AudioTaps`, so it cannot match a trait method shaped like the
-  others, and the alternative -- holding the taps in a field across the call --
-  is what `AUDIO_ARCHITECTURE.md` forbids ("a node must not retain a borrowed
-  bus reference received at construction").
-
-So it is four copies with two principled exceptions, where the effects case was
-twelve copies of a loop whose handler was *identical*. Unifying these needs a
-trait plus a per-device `handle_event`, which is net-neutral in lines and adds a
-hop to follow. The two clamps the loop carries are now tested once, in
-`effects::mod`, and they are the same two here -- so if this is ever revisited,
-the reason to do it is sharing those tests, not the line count.
+which enum you ask.** Forty-five enums convert a selector index to a variant
+under one name: the `Self::ALL.get(index.clamp(0, len - 1))` body clamps to
+the nearest end, and a hand-written `match` with a `_ =>` arm falls through to
+the default variant (`NotePriority::from_index(99)` is variant 0 where an
+ML-P8 enum's is its last). Unreachable, because every parameter path runs
+through `descriptor.clamp_natural` first, so unifying the bodies is churn. A
+sentence on each, or one shared trait, would settle it whenever one of these
+files is open anyway.
 
 ## Numbers nothing is watching
 
-**Two spellings of the meter floor are kept as literals on purpose, and the
-reason is a guard that wants them that way.** The floor moved into
-`GainMath.min-db` on 2026-09-13 and fifty literal `-60`s across ten `.slint`
-files became references to it. `device-displays.slint`'s `threshold-min-db`
-and `floor-db` did not, because `strip_face.rs` holds them to
-`gain::MIN_DB` by *parsing the number out of the declaration* -- so replacing
-the number with a property reference takes the guard off rather than improves
-it. `no_face_spells_the_floor_for_itself` skips that one file and says why.
-
-Fixing it properly means teaching `strip_face.rs` to resolve
-`GainMath.min-db` instead of reading a literal, which is a second parser for
-one file's two lines. Left as a note rather than done, because the copy is
-currently the safer of the two arrangements: it is the only one anything
-checks.
-
-**Nothing outside `modulation.rs` read the five modulator descriptor tables
-until 2026-09-14.** `LFO_`, `ENVELOPE_`, `STEP_`, `RANDOM_` and
-`MATH_DESCRIPTORS` are all `pub`, all exported from `mooloop-core`'s root, and
-`grep` found no reader anywhere else -- so the shelf's twenty-one ranges and
-forty-two parameter ids were mirrored by hand against tables the program never
-consulted. `shelf_agreement.rs` is their first reader and now holds all three
-mirrors: the ids, the ranges, and the two scales.
-
-What that had cost was one real disagreement, found the day the check was
-written. The LFO's and the Random module's Rate knobs are drawn
-`ValueScale.logarithmic` and their descriptors said `ParamCurve::Linear` --
-the same law from the two ends, disagreeing. Fixed to `Exponential`, and the
-check reproduces it against the tree as it stood the day before.
-
-The remaining question is whether the shelf should read these tables rather
-than be checked against them, as DS-01's face reads its defaults at run time.
-That is a bigger change than a test, and the test is what was missing.
-
-**One device face still spells a number the descriptor table already
-states.** `scripts/dupe-audit unchecked-face` names it. The count was eight
-faces and twenty-three numbers when the check was written on 2026-09-12; it is
-`bus-device.slint` and four numbers now. The test's parser became block-based
--- which is what the entry here said had to come first -- and its list then
-grew to take `modulation-device`, `eq-device`, `filter-device`,
-`buffer-device` and `container-device`. `aux-in-device`
-followed on 2026-09-13, and needed a test of its own rather than a longer
-list, because Aux In is not an `EffectKind`. DS-01 is still absent and still
-correctly so: its paged face reads the table at run time
-(`default-value: root.defaults[root.param]`), which is a copy of nothing.
-
-`device-oscillator` was **claimed by this entry and absent from the test**
-until 2026-09-18, when `reports/fable-2026-09-18.md` finding 3 read the list
-and found it had never been there -- a claim the source did not support,
-sitting in the document whose job is to be trusted about exactly this. It is
-in the test now, and so is the rest of the shape behind it:
-
-- `-48..48` semitones and `-100..100` cents were spelled four times, in
-  `generator.rs`, `mlp8.rs`, `device-oscillator.slint` and
-  `mlp8-device.slint`, with no test on any pair. The two Rust copies are one
-  constant now (`generator::OSC_SEMITONE_RANGE`, `OSC_CENT_RANGE`), and
-  `every_oscillator_knob_agrees_with_its_table` holds both faces to it.
-- **Why the check could not see it, which is the part worth remembering.**
-  `unchecked-face` keyed on `default-value:` literals, and the oscillator
-  knobs read their defaults from the table (`root.param-defaults[..]`) while
-  spelling their *bounds* inline. The one property the face did not copy was
-  the only one being searched for, so a face holding four literal numbers
-  looked clean. The check now reads `minimum:`/`maximum:` too, and counts
-  every match on a line rather than the first -- these faces put a knob's
-  whole control block on one line, so a search for `minimum:` had been
-  stopping before the `maximum:` beside it.
-
-What is left may not be worth it. `bus-device`'s four numbers are a
+**One device face still spells numbers the check cannot reach.**
+`scripts/dupe-audit unchecked-face` names `bus-device.slint`'s four: a
 `MiniKnob`'s pan range (`-1..1`, resting at `0`) and a `MixerFader`'s
-`default-value: 1.0`, whose `maximum` already reads `GainMath.fader-db[0]`
-rather than spelling one. `face_knobs` walks `ParameterKnob` blocks and
-nothing else, so neither is reachable -- and neither is descriptor-backed, so
-there is no table entry for a widened parser to compare them against. Unity
-and centre are the kind of literal that has nowhere else to live.
-
-**A smaller copy found on the way and left alone:** `mlp8.rs:207-211` declares
-its own `OSC_OFFSET_WAVE .. OSC_OFFSET_PULSE_WIDTH`, the same five values
-`generator.rs:384-388` declares. They are offsets into a device's own block
-rather than a shared address space, so the two being equal is a coincidence
-the devices are entitled to break; a merge would state a relationship that
-does not exist. Recorded because the next reader will see it too.
+`default-value: 1.0`. `face_knobs` walks `ParameterKnob` blocks and nothing
+else, and neither is descriptor-backed, so there is no table entry to compare
+them against. It may not be worth fixing.
 
 ## Housekeeping
 
 **Tempo and swing live only in the Slint window, and a few flags are read
-back from it.** Found 2026-09-16, checking what a Qt or egui view would still
-have to take over after `session-layer-extraction/`. BPM and swing are song
-data, but `Session` has no field for either: `Session::project_snapshot`
-takes them as arguments, and `lib.rs` reads `get_bpm` 19 times and
-`get_swing_percent` 9. Smaller, and the same shape: `editing-bus` and
-`editing-bus-index` duplicate `Session::effect_target` (the track move and
-solo/mute shortcuts read the window copy), and `playing`, `pattern-length`
-and `selected-channel` are also read back rather than asked of the session.
-Each is a property a new view would have to reproduce instead of query.
-Moving tempo and swing onto `Session` is the one worth doing before any view
-rewrite. Pane layout and appearance preferences are read from the window too,
-which is fine: that is view state. The full list is in
+back from it.** `Session` has no field for BPM or swing:
+`Session::project_snapshot` takes them as arguments, and `lib.rs` reads
+`get_bpm` and `get_swing_percent` throughout. Smaller, and the same shape:
+`editing-bus` and `editing-bus-index` duplicate `Session::effect_target` (the
+track move and solo/mute shortcuts read the window copy), and `playing`,
+`pattern-length` and `selected-channel` are read back rather than asked of the
+session. Moving tempo and swing onto `Session` is the one worth doing before
+any view rewrite. The full list is in
 `docs/plans/archive/egui-view-layer/00-status.md`.
 
-**`mooloop-ui` had never been linted, and two things had ridden in on that.**
-Fixed 2026-09-07, recorded because the *shape* of it will recur: `cargo
-clippy` walks the dependency graph, `mooloop-core` had been failing since
-`df52933`, and a run that dies there never reaches the crate you were asking
-about. The two it was hiding were a redundant rebinding and — the one that
-mattered — a `#[test]` attribute that had come adrift from its function, so
-`effect_rack_scrolls_horizontally_to_reach_a_long_chain` had stopped being a
-test. **A disabled test does not fail; it stops existing**, and `dead_code`
-was the only thing that could have said so. When clippy is red anywhere,
-nothing downstream of it is being checked at all.
+**A rack unit is two different widths.** An effect slot is `unit-width *
+units + half-gap * (units - 1) + rail-width * 2`; the source device is
+`unit-width * units + half-gap + rail-width * 2` (both in `main.slint`), with
+the gap term not multiplied. They agree only at two units: a three-unit source
+is 724px where a three-unit effect is 728px, and a four-unit source is 944px
+against 952px. Nothing is visibly misaligned. Which is wrong is a design call:
+the majority use `* (units - 1)`, but `JOURNAL.md` records the three-unit
+source face at its inner 664px as measured and deliberate, so correcting the
+source formula widens signed-off faces by 4px or 8px.
 
-**The division list is spelled three times, and all three are now checked.**
-`main.slint:820`'s `snap-ticks(index)` gives eleven divisions in ticks,
-`mooloop-ui`'s `MUSICAL_DIVISIONS` gives the same eleven with their names, and
-`controls.slint`'s `Divisions` gives twenty-one in beats, mirroring
-`ModTimeDivision::beats`. Every one of those numbers is a division of
-`TICKS_PER_STEP` or of a beat, so a single source is imaginable.
+**The desktop entry claims less than it could** (`packaging/mooloop.desktop`).
 
-What made this worth recording was that **none of the mirrors was held to
-anything** -- the test named for the snap table compared it with a literal copy
-of itself, and the beats table had no test at all. Both were fixed on
-2026-09-12 and both were mutation-checked, so what is left is tidiness rather
-than drift risk: three spellings that cannot part without a test naming which
-one moved.
-
-The remaining question is whether they should be one, and it is a real design
-question rather than a missing constant. The snap list is the *roll's* eleven,
-`ModTimeDivision` is the *modulator's* twenty-one, and they are different
-vocabularies that happen to overlap -- the roll offers no `1/2D` and the
-modulator offers no `1 Bar` under that name. Collapsing them means deciding
-whether the roll's picker should grow to twenty-one entries, which is a question
-about the interface and not about duplication. Worth leaving alone until
-somebody wants dotted snaps.
-
-**A rack unit is two different widths.** A device's total width -- face plus
-both rails -- is computed twice and not the same way. An effect slot uses
-`unit-width * units + half-gap * (units - 1) + rail-width * 2`
-(`main.slint:3806`); the source device uses `unit-width * units + half-gap +
-rail-width * 2` (`main.slint:3283`), with the gap term not multiplied. They
-agree only at two units. A three-unit source is 724px where a three-unit
-effect is 728px, and a four-unit source is 944px against 952px -- so
-"3U" on a sampler and "3U" on a delay are not the same measurement.
-
-Nothing is visibly misaligned: the two sit side by side rather than stacked,
-and the drag hit-tests each row from its own `absolute-position + width`
-(`main.slint:3838`), which is what `CURRENT.md` means by "measured from that
-row's own bounds". The cost is only that the unit is not a unit.
-
-Which one is wrong is a design call rather than a reading of the code, which
-is why this is a note. Two of the three sites that size a face use
-`* (units - 1)`, so it has the majority. But `JOURNAL.md` records the
-three-unit source face at its inner 664px -- exactly what the source formula
-gives -- as measured and deliberate, and ML-P8 moved to four units on the
-finding that three had "no slack anywhere". Correcting the source formula
-widens every three-unit source face by 4px and every four-unit one by 8px,
-against faces that were sized by eye and signed off. Found 2026-09-10.
-
-**The desktop entry describes an app that cannot be launched from a file
-manager.** The window's app id is set as of 2026-09-15 (`AppUi::new`), which
-was the loud half -- Hyprland reported `class: ""` until then, so no window
-rule, taskbar grouping or icon lookup could match it. What is left is quieter
-and mostly one shape: `packaging/mooloop.desktop` claims less than it could,
-and one of its omissions is not the desktop file's fault.
-
-- **`.mooloop` has no MIME type and `Exec=mooloop` has no `%F`**, so
-  double-clicking a song opens nothing and a song file has no icon. The
-  prerequisite is the real item: `crates/mooloop-app/src/main.rs` parses no
-  arguments at all, so the binary cannot open a path it is handed. Registering
-  the type before that is worse than not registering it -- the file manager
-  would hand mooloop a song and mooloop would open empty.
-- **No AppStream metainfo**, so KDE Discover and GNOME Software show a name
-  and nothing else, and Flathub would refuse the submission.
+- **`.mooloop` has no MIME type**, so double-clicking a song opens nothing and
+  a song file has no icon.
 - **No `StartupNotify`, deliberately.** winit consumes an activation token
   only when asked (`with_activation_token`), and Slint's winit backend never
-  asks -- there is no mention of it in `i-slint-backend-winit 1.17.1`. Setting
-  the key advertises support that is not there, which costs a launcher
-  spinner that never resolves. This one wants the backend to grow the feature,
-  not the desktop file to grow a line.
-- **One 256x256 icon**, already flagged as a placeholder wordmark in
-  `packaging/README.md`. Worth reading that note before adding sizes: a
-  scalable entry and the small hicolor sizes are what a 24px taskbar wants,
-  and the wordmark will not survive the downscale whatever sizes exist.
+  asks (`i-slint-backend-winit 1.17.1`). Setting the key costs a launcher
+  spinner that never resolves; this wants the backend to grow the feature.
+- **One 256x256 icon**, flagged as a placeholder wordmark in
+  `packaging/README.md`. Read that note before adding sizes.
 
 **Nothing inhibits idle while the transport is playing**, so the screen can
-blank and the lock screen can take the display in the middle of a take.
-`hyprctl clients` reports `inhibitingIdle: false` for the mooloop window and
-no crate mentions idle inhibition. The policy question is what counts as busy:
+blank and the lock screen can take the display in the middle of a take; no
+crate mentions idle inhibition. The policy question is what counts as busy:
 transport running is the obvious answer, and an armed recording or a held note
-is the one that would actually annoy somebody if it were missed. Found
-2026-09-15.
-
-~~**A take has no owner at four edges, and the issue tracking it is marked
-Done.**~~ **Closed 2026-09-21**, all four. This entry said MOO-55 was marked
-Done with no fix in the tree, and it was right about what it could see: the
-fix was committed locally and had not been pushed, so `git log` and a
-repo-wide grep for `finish_all` both found nothing. Two of the four were then
-fixed a second time, independently, before the branch landed.
-
-- ~~**Quit loses a live take.**~~ `TakeRecorder::finish_all` ends every live
-  take and joins every drain against a bounded deadline, silently:
-  `AppUi::finish_takes` runs it once the event loop returns and `impl Drop for
-  TakeRecorder` backs it up. A wait that times out removes the partial file.
-  `TakeStatus::end` is the one control-side phase write, needed because at
-  quit the engine may already be going away and the drain's exit condition
-  could otherwise never be met.
-- ~~**A failed write leaves a partial file.**~~ Both routes remove it, through
-  one `failed()` helper that also says so in the message.
-- ~~**A take lands on a channel that stopped being a sampler.**~~
-  `Session::take_target` answers `TakeMiss`, so the rule has one home and one
-  wording. The inline copy fixed the same day was removed as unreachable when
-  the two met.
-- ~~**Arming does not check the input still exists.**~~ `record_press` takes
-  the hardware input's label and asks the picker -- deliberately the picker's
-  rule and not `AudioInputSource::resolve`'s, which calls the hardware input
-  present whatever the driver offers -- and answers `SourceGone` or
-  `NoInputDevice`, whose advice is the opposite of `NoInput`'s and, between
-  them, points at two different places to go and fix it.
-
-**Adam settled the last two on 2026-09-21** as open questions 9 and 10
-(`plans/archive/audio-recording/00-status.md` -- *open questions*, not the decisions
-list, which separately has a 9 and a 10 meaning other things). Both are built.
-Quit **finishes the take with no prompt** -- what is outstanding is a fraction
-of a second rather than something worth a dialog -- on a bounded wait that
-removes the partial file if it times out. Arming on a missing input
-**refuses and names the cause**, `SourceGone` or `NoInputDevice`, because a
-deleted source channel and an absent input device need different fixes from
-the user.
-
-**The lesson worth keeping is the gap between the tracker and `origin`.** Two
-consecutive review runs reported these four because neither the plan status
-nor this file remembered them, which is the fault this file exists to prevent.
-Then a third run found the issue closed against a tree that did not contain
-its fix and redid two of them: **an issue is not done until its fix is
-pushed**, and closing it earlier costs somebody else the same work twice.
-Found 2026-09-20 (`reports/fable-2026-09-20.md` finding 2), re-confirmed
-2026-09-21 (`reports/fable-2026-09-21.md` finding 3), closed the same day.
+is the one that would annoy somebody if it were missed.
 
 There is `claude/device-identity-rack-addressing-99yt4o` on the remote, one
 commit that is not in `origin/main` and has no local branch. Nobody has said
 whether it is wanted.
-
----
-
-## Closed since being raised
-
-Kept briefly so the same thing is not re-reported. Delete freely once stale.
-
-- Buffer had no parameter descriptors and could not be automated — it has
-  `BUFFER_DESCRIPTORS` now (`effect.rs:119`).
-- The oscillator Semis descriptor disagreed with its knob's travel — both are
-  `-48..48`, with a comment saying why (`generator.rs:428`).
-- Clear Pattern and Select All were disabled menu rows — both are wired
-  (`main.slint:1485`, `main.slint:1508`).
-- The v1 mono synth shipped alongside "Mono 2" — the picker shows one Mono
-  (`main.slint:2555`).
-- The last recorded listening pass was stale at ML-M1 / 2026-08-31 —
-  `FOCUS.md:337` now records DS-01 and ML-P8.
-- Whether `BufferParams` references audio, which would have forced effect
-  presets down the asset-collection path — it is three scalars
-  (`effect.rs:1785`), so it does not.
-- `scripts/antibox` refilling with caches for checkouts that no longer exist —
-  `--prune` and `--prune-age` exist.
-- Stray remote-tracking refs and empty `mooloop-worktrees/` directories — gone.
-- The limiter's doc comment claimed lookahead was blocked on delay
-  compensation that shipped 2026-09-05 — corrected to match `CURRENT.md`'s
-  "open decision, not a settled no" (`dynamics.rs`).
-- The device rack's and channel rack's rows in `main.slint` each spelled the
-  reorder slide rule inline instead of calling `ReorderMath.shift` — both now
-  call it, matching the mixer (`reorder.slint`, `main.slint`).
-- "Not an edit" was written down four times with one copy read, so record
-  arm, input monitoring and seek each dirtied the document against a comment
-  saying they must not — one `EngineCommand::edits_document` decides it now
-  (`bridge.rs`), and the refusal latch is cleared per document rather than
-  per process (`session.rs`).
