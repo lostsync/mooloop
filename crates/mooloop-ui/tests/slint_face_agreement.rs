@@ -1094,7 +1094,7 @@ fn every_unrouted_face_knob_agrees_with_its_table() {
 ///
 /// Its Level knob is the pilot for the generator row struct finding 4 of
 /// `reports/fable-2026-09-22.md` asks for
-/// (`docs/plans/generator-face-rows/`): as of that pilot it works in
+/// (`docs/plans/archive/generator-face-rows/`): as of that pilot it works in
 /// normalized space, like every effect knob with no stated range, rather
 /// than the dB-derived natural range it used before. The check follows —
 /// `every_effect_face_knob_agrees_with_its_table`'s `(None, None)` branch is

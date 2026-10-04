@@ -351,7 +351,7 @@ device that has not opted into a native curve path never has to. Events with
 sample offsets stay for what they are for -- notes, and the boundary a
 future hosted plugin's parameter queue is built from -- and a curve becomes
 events only there, or for a device that has not opted in.
-`docs/plans/automation-curves/00-status.md`.
+`docs/plans/archive/automation-curves/00-status.md`.
 
 ### Base value plus offset
 

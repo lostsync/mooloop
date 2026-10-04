@@ -7,7 +7,7 @@
 //! Snow Storm; the real Snow Storm is four hex strings.
 //!
 //! Two are homages, Platinum and Impulse, which carry a shape as well as a
-//! palette (`docs/plans/theming/05-authoring-a-theme.md`).
+//! palette (`docs/plans/archive/theming/05-authoring-a-theme.md`).
 //!
 //! Four are the seed schemes Appearance shipped before a theme could be a
 //! ramp, kept byte-identical so that nobody's stored choice moved.
@@ -84,7 +84,7 @@ fn seed_theme(
 }
 
 /// A theme that is a look as well as a palette: the homages of
-/// `docs/plans/theming/05-authoring-a-theme.md`, which cannot look like
+/// `docs/plans/archive/theming/05-authoring-a-theme.md`, which cannot look like
 /// themselves without square corners and a bevel.
 fn with_style(theme: ThemeDefinition, style: ThemeStyle) -> ThemeDefinition {
     ThemeDefinition { style, ..theme }

@@ -1040,7 +1040,7 @@ const MAX_SOURCE_CURVE_DESTINATIONS: usize = mooloop_core::ds01::DESCRIPTORS.len
 
 /// One node's driven destinations for one block, captured from resolved
 /// modulation/automation instead of pushed as `Event::ParamValue`s onto a
-/// shared, capacity-256 `EventList` -- `docs/plans/automation-curves/00-status.md`,
+/// shared, capacity-256 `EventList` -- `docs/plans/archive/automation-curves/00-status.md`,
 /// written against `reports/fable-2026-09-22.md` finding 3: "one destination
 /// emits 256 events and fills the list alone; a second is silently dropped."
 ///
@@ -10792,7 +10792,7 @@ impl RenderState {
                 // reconstruct the latter -- folding this in too would mean
                 // deciding what a curve *means* for a non-descriptor
                 // destination, which this pass leaves for the next one.
-                // `docs/plans/automation-curves/00-status.md` records it as
+                // `docs/plans/archive/automation-curves/00-status.md` records it as
                 // not done rather than silently unaddressed.
                 let internal: Option<mooloop_core::MlP8Routes> =
                     base.internal_routes().copied();
@@ -19782,7 +19782,7 @@ mod footprint {
         // pays only the pointer. Eight more is the count of events its lists
         // had no room for, which is what lets an export say it lost some.
         //
-        // `docs/plans/automation-curves/` added sixteen: a pointer to
+        // `docs/plans/archive/automation-curves/` added sixteen: a pointer to
         // `curve_scratch` (`Box<CurvePool<50>>`, the boxed reason next to
         // `EffectSlot`'s own applies here too -- fifty rows of two hundred
         // and fifty-six ticks is real size, and a chain with nothing driven
@@ -19853,7 +19853,7 @@ mod footprint {
         // *buffer* is 64 KB and is allocated only when somebody subscribes,
         // which is the whole shape of that plan.
         // Grew by 64 since this figure was last written, from
-        // `docs/plans/filter-coeffs/` (`reports/fable-2026-09-22.md`
+        // `docs/plans/archive/filter-coeffs/` (`reports/fable-2026-09-22.md`
         // finding 2 / Plan B, landed concurrently with
         // `automation-curves/` and not this plan's doing): each voice
         // keeps a per-sample cutoff equality cache so its filter can still
@@ -20018,7 +20018,7 @@ mod footprint {
         // count of events its lists refused, so an export can say it lost
         // some rather than quietly dropping a parameter.
         //
-        // `docs/plans/automation-curves/` moved this by eighty: a strip
+        // `docs/plans/archive/automation-curves/` moved this by eighty: a strip
         // holds one `EffectChain` by value, not by pointer, so
         // `curve_scratch`'s pointer and refusal counter (sixteen of it, the
         // same sixteen `EffectChain` moved by above) are paid here too; the
@@ -20116,7 +20116,7 @@ mod footprint {
         // The sampler's retired-sample ring is 152 of this, a take's pointer
         // 8, and the effect chain's refused-event count 8.
         //
-        // `docs/plans/automation-curves/` added `SourceCurvePool` itself,
+        // `docs/plans/archive/automation-curves/` added `SourceCurvePool` itself,
         // 94,592 of this: ninety-two rows (`DS_01`'s own descriptor count,
         // the widest generator table, so it is the one bound has to cover)
         // of two hundred fifty-six ticks each, the same per-destination
@@ -20221,7 +20221,7 @@ mod footprint {
         // The sampler's retired-sample ring added 152 a live channel, so
         // that a note-on never frees a buffer: 2.4 KiB across sixteen.
         //
-        // `docs/plans/automation-curves/` is the one that moved this
+        // `docs/plans/archive/automation-curves/` is the one that moved this
         // figure by more than a rounding error: `SourceCurvePool` alone is
         // 92.4 KiB a live channel, 1,478 KiB across sixteen -- almost all
         // of the difference between 1,437 and 2,916. `N` is sized to
@@ -20236,7 +20236,7 @@ mod footprint {
         // whether the bound belongs somewhere narrower than "the widest
         // generator's whole table", is a product question this run did not
         // have standing to answer and is recorded rather than decided in
-        // `docs/plans/automation-curves/00-status.md`.
+        // `docs/plans/archive/automation-curves/00-status.md`.
         //
         // Crossed one more KiB boundary with `per_live` above: the phaser's
         // tilt table is 768 bytes across sixteen live channels (Plan C

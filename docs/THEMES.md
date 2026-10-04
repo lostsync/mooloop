@@ -154,7 +154,7 @@ Platinum and Impulse, carry one. The bevel is drawn by `ToolButton` and
 everything built on it, the knobs' caps, the device plate and header, the
 folded device, the panes, the toolbar, the status bar and the sidebars;
 dividers, rails and the inside of device faces stay flat, because a bevel on
-every container is a parody of the look (`docs/plans/theming/02-relief.md`).
+every container is a parody of the look (`docs/plans/archive/theming/02-relief.md`).
 
 `density` multiplies control heights and the padding-and-spacing ramp. It is
 the control to reach for if the interface is too tight to hit rather than too

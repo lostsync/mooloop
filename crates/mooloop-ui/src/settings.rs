@@ -63,7 +63,7 @@ pub(crate) const MAX_FONT_WEIGHT: i32 = 900;
 ///
 /// **Kept only so that saved ones survive.** `UiSettings::load_from` writes
 /// every entry out as a theme file and clears the list, so a config written
-/// today has no `user-schemes` key at all. `docs/plans/theming/00-status.md`
+/// today has no `user-schemes` key at all. `docs/plans/archive/theming/00-status.md`
 /// records the migration.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]

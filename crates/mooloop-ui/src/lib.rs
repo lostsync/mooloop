@@ -6925,7 +6925,7 @@ impl UiState {
                 .into(),
         );
 
-        // The pilot row (`docs/plans/generator-face-rows/`): `p2` carries
+        // The pilot row (`docs/plans/archive/generator-face-rows/`): `p2` carries
         // Level -- `aux_in::PARAM_LEVEL` -- normalized, the same way
         // `effect_slot_row` fills `p0..p17`.
         let level_normalized = aux_in::descriptor(aux_in::PARAM_LEVEL)
@@ -15715,7 +15715,7 @@ impl AppUi {
         // The value that goes on the wire is still the descriptor's, so a
         // lane and a knob agree. Level, the one continuous parameter, is the
         // pilot for `on_source_param_changed` below
-        // (`docs/plans/generator-face-rows/`) and has no closure here.
+        // (`docs/plans/archive/generator-face-rows/`) and has no closure here.
         {
             let commands = command_state.clone();
             let tx = cmd_tx.clone();
@@ -15817,7 +15817,7 @@ impl AppUi {
             });
         }
         // The pilot for the shared generator-row callback finding 4 asks for
-        // (`docs/plans/generator-face-rows/`): `main.slint` sends the
+        // (`docs/plans/archive/generator-face-rows/`): `main.slint` sends the
         // descriptor id and a normalized position for every parameter drawn
         // from `source.pK`, exactly as `on_effect_param_changed` does for
         // `EffectSlotRow`, and DS-01's `on_ds01_value_changed` above already

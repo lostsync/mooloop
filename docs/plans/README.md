@@ -19,9 +19,6 @@ reopening it. A plan's own `00-status.md` says how it got where it is.
 - `icon-pass/` (planned 2026-09-26) — one registry, `icons.slint`, and one
   `Icon` component for every icon. Read its README for the survey, and
   `00-status.md` for Adam's four rulings.
-- `theming/` (unparked by Adam 2026-09-15) — skins rather than colour
-  schemes. **The reason to build it is accessibility rather than the
-  homage.** Its `README.md` has the survey.
 - `extract-mid-level-dsp-blocks/` — only step 03 is left: `device-displays.slint`
   holds eight visualizers with no shared canvas. `00-status.md` explains why
   step 02 is cancelled.
@@ -44,6 +41,14 @@ the answer.
 reading before reopening the area it covers, because several record *why* a
 tempting change was rejected:
 
+- `theming/` (done 2026-10-04, on Adam's word) — skins rather than colour
+  schemes, built for accessibility rather than the homage. What it left open
+  (MOO-154, MOO-157, MOO-205) is in Polish backlog.
+- The Fable 2026-09-22 plans, each landed in one pass that day:
+  `sequencer-cursor/` (A), `filter-coeffs/` (B; its measurement is MOO-505),
+  `block-constant-work/` (C), `automation-curves/` (D; Plate, Reverb and the
+  generators' curve paths are MOO-502 and MOO-503) and `generator-face-rows/`
+  (E, a pilot on Aux In; the other seven faces are MOO-504).
 - `containers/` (finished 2026-09-23) — a container is a device that holds a
   run of devices, blends it, and saves as one preset; a layer is drawn after
   Bitwig's FX Layer. Selectors stay unbuilt and priced (step 06).

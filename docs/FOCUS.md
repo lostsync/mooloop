@@ -76,8 +76,8 @@ branch.
 - **Playlist clip manipulation, richer missing-sample relinking, a metronome
   (a take's count-in is still a silent bar), and the graph editor.**
 
-Everything else in 0.2.0 is in `SCOPE.md` and in Linear (Rendering, Theming,
-Polish backlog, Song automation, Sampler V2). None of it is deferred. It gets
+Everything else in 0.2.0 is in `SCOPE.md` and in Linear (Rendering, Polish
+backlog, Song automation, Sampler V2). None of it is deferred. It gets
 worked when Adam asks for it.
 
 ## Standing judgements

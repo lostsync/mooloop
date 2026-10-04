@@ -1,5 +1,7 @@
 # theming — status
 
+> Archived 2026-10-04: Adam, *"themeing is done"*. What it left open is MOO-154, MOO-157 and MOO-205, now in Linear's Polish backlog.
+
 Linear: project [Theming](https://linear.app/mooloop/project/theming-beb2299b6232).
 What is left is MOO-154 (the rest of 04), MOO-157 (the padding literals)
 and MOO-205 (boxes that don't grow with the type). 02 (MOO-153), 05's

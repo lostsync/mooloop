@@ -6,7 +6,7 @@ A lane today is straight lines only:
 - `value_at` interpolates linearly (`:294`);
 - the UI draws `LineTo`.
 
-`docs/plans/automation-curves/` is a different thing: the engine's
+`docs/plans/archive/automation-curves/` is a different thing: the engine's
 per-control-tick delivery path. That path is what makes a curved lane cheap
 to play, because the engine already evaluates the lane every 32 frames, not
 once a block.

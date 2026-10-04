@@ -1,4 +1,4 @@
-//! The relief adopters (`docs/plans/theming/02-relief.md`, MOO-153): under a
+//! The relief adopters (`docs/plans/archive/theming/02-relief.md`, MOO-153): under a
 //! bevelled theme the knob caps, the device header, the rack row's plate,
 //! the panes and the panels are lit from the top-left, and pressed means lit
 //! from the other side. Under a flat theme each draws exactly what it drew

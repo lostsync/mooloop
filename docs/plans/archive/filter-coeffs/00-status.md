@@ -1,5 +1,7 @@
 # Filter coeffs status
 
+> Archived 2026-10-04. The before/after measurement it could not take is MOO-505.
+
 Plan B of `reports/fable-2026-09-22.md` (finding 2): the SVF took a cutoff
 and re-derived its coefficient set -- `tan()`, a divide, three products --
 on every sample, every stage, every voice, for values that mostly change

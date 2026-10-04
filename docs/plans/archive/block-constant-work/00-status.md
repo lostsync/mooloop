@@ -1,5 +1,7 @@
 # Block-constant work status
 
+> Archived 2026-10-04: landed 2026-09-22, nothing owed.
+
 Plan C of `reports/fable-2026-09-22.md` (finding 2's phaser/compressor/
 sampler items, and finding 6, FTZ on aarch64). Implemented and verified
 2026-09-22 on `claude/sharp-hypatia-hy7frr`, on top of Plans A, B and D

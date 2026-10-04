@@ -1,5 +1,7 @@
 # Sequencer cursor status
 
+> Archived 2026-10-04: landed 2026-09-22, nothing owed.
+
 Plan A of `reports/fable-2026-09-22.md` (finding 1) landed
 2026-09-22: the sequencer reads its notes as the sorted store they already
 are, instead of walking every note of the song on every block.

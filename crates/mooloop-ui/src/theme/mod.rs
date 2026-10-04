@@ -199,7 +199,7 @@ pub(crate) struct ThemeStyle {
     pub font_weight: Option<i32>,
     pub density: Option<f32>,
     pub contrast: Option<f32>,
-    /// A drawing rather than a value (`docs/plans/theming/02-relief.md`):
+    /// A drawing rather than a value (`docs/plans/archive/theming/02-relief.md`):
     /// whether surfaces are flat, lit blocks, or sunk ones.
     pub relief: Option<Relief>,
     /// How far a bevel's edges depart from the fill they are derived from.

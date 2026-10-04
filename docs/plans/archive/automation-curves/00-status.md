@@ -1,5 +1,7 @@
 # Automation curves: status
 
+> Archived 2026-10-04. What it deferred is in Linear: MOO-502 (Plate and Reverb's curve path), MOO-503 (every generator's, and ML-P8's route amounts) and MOO-170 (the `block_cost.rs` case).
+
 Plan D from `reports/fable-2026-09-22.md` (finding 3, deepening 09-21's
 finding 5). Worked in a single pass by a Sonnet-class agent, 2026-09-22, in a
 worktree alongside four other concurrent agents each owning disjoint files.
@@ -217,7 +219,7 @@ A project builder, next to `filtered_project`:
 /// [`loaded_project`], with an EQ on every channel and `destinations`
 /// distinct band-gain parameters under continuous LFO modulation each --
 /// the case `reports/fable-2026-09-22.md` finding 3 and
-/// `docs/plans/automation-curves/00-status.md` are about: several
+/// `docs/plans/archive/automation-curves/00-status.md` are about: several
 /// simultaneously driven destinations on one slot, which the old event
 /// path made compete for one 256-slot list and the curve pool does not.
 fn automated_eq_project(count: usize, destinations: usize) -> Project {
@@ -459,7 +461,7 @@ the seven failures was one symptom of this:
   needed updating for real, deliberate size changes (`EffectChain` +16,
   `ChannelStrip` +80, `SourceCurvePool` added at 94,592 bytes a live
   channel) plus one unrelated, already-landed concurrent change
-  (`MlP8` +64 from `docs/plans/filter-coeffs/`, not this plan).
+  (`MlP8` +64 from `docs/plans/archive/filter-coeffs/`, not this plan).
 
 **The fix.** One line at each site, moved to run unconditionally before the
 "is anything driving this at all" gate rather than after it:
@@ -500,7 +502,7 @@ plan's own code introduced, and one `derivable_impls` on `ControlCurve`'s
 hand-written `Default` -- now `#[derive(Default)]`). It still fails on one
 pre-existing `needless_range_loop` in `crates/mooloop-dsp/src/effects/filter.rs:465`,
 inside a test helper, unrelated to automation curves and outside every file
-this round was allowed to touch (`docs/plans/filter-coeffs/` owns it).
+this round was allowed to touch (`docs/plans/archive/filter-coeffs/` owns it).
 Reported here so it is not lost, not fixed here.
 
 **Final test results**, both full suites, after the fix:

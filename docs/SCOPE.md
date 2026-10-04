@@ -180,14 +180,12 @@ additions:
   pull in: MIDI output is now *in* (item 2), but controller mapping beyond it,
   multiple time signatures and tempo maps, groove extraction, the
   text/algebraic pattern view and the node-based patcher are all out.
-- **`theming/`, `pattern-bank-floor/`, `device-registry/`** — parked by
-  `FOCUS.md` on 2026-09-12, each with a recorded reason and a recorded unpark
-  condition. A toolkit swap is out altogether: Adam, 2026-09-22, archiving
+- **`pattern-bank-floor/` and `device-registry/`** — parked by `FOCUS.md` on
+  2026-09-12, each with a recorded reason and a recorded unpark condition. A
+  toolkit swap is out altogether: Adam, 2026-09-22, archiving
   `egui-view-layer/`: *"we can archive. i think QT would be better than egui
-  if we do switch toolkits"*. Note that `theming/` gets *cheaper to defer and
-  more expensive to do*, and that its real argument is accessibility: the
-  working type size is 7–11px and is not adjustable. That reason does not
-  expire, so it is out for 0.2 and should not stay out forever.
+  if we do switch toolkits"*. (Theming, once parked here, was unparked on
+  2026-09-15 and is done: Adam, 2026-10-04.)
 - **Windows and macOS as release targets** (#23, #24, #25). macOS builds and
   runs for development; signing and notarization are out. `PRODUCT.md` is
   unambiguous that Linux is the platform. **Amended 2026-09-18 (Adam):** from

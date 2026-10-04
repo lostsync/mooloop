@@ -52,7 +52,7 @@ pub type HostedNode = Box<dyn AudioNode + Send>;
 /// (`docs/MODULATION.md`'s "32 or 64 frames"). `mooloop-engine`'s own
 /// per-block tables used to recompute this same division privately; it now
 /// imports this constant instead; see
-/// `docs/plans/automation-curves/00-status.md`.
+/// `docs/plans/archive/automation-curves/00-status.md`.
 pub const MAX_CONTROL_TICKS_PER_BLOCK: usize =
     crate::bus::MAX_BLOCK_SIZE / crate::modulator::CONTROL_RATE_FRAMES;
 
@@ -616,7 +616,7 @@ pub trait AudioNode {
     /// `fallback: &mut EventList` parameter is the minimal addition that
     /// makes the default above implementable at all; the destinations, the
     /// timing, and the "safe default" behaviour are exactly as specified.
-    /// See `docs/plans/automation-curves/00-status.md`.
+    /// See `docs/plans/archive/automation-curves/00-status.md`.
     ///
     /// Returns how many events `fallback` had no room for, so the engine can
     /// count them in `RenderState::refused_events` the way it counts its own

@@ -1,5 +1,7 @@
 # Generator face rows status
 
+> Archived 2026-10-04. Carrying the pilot to the other seven faces is MOO-504.
+
 Plan E of `reports/fable-2026-09-22.md` (finding 4), landed as a pilot on one
 face: Aux In, the smallest generator. Written from a Claude Code web
 container, where the hard constraint was no Cargo command at all -- another
