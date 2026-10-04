@@ -31,7 +31,8 @@ table of which document to read for which task. Start there, not here.
 | Document | Job |
 | --- | --- |
 | [PRODUCT.md](PRODUCT.md) | Scope, pillars, non-goals, and the decisions firm enough to build against. |
-| [FOCUS.md](FOCUS.md) | The active working sequence and what must not interrupt it. Rewritten when the sequence is exhausted. |
+| [FOCUS.md](FOCUS.md) | One page: what is next, and what must not interrupt it. Rewritten, not appended to, when the sequence is exhausted. |
+| [LISTENING.md](LISTENING.md) | The queue of renders to hear and things to look at that only Adam can judge, each with its command. Delete an item once it is heard. |
 | [SCOPE.md](SCOPE.md) | Everything left before the feature freeze, sized against the source, with the 0.2.0 line drawn. Says *what and how big*; the linked document says how. |
 | [CAPACITY_POLICY.md](CAPACITY_POLICY.md) | Why user-facing collections do not get small caps, and why a ceiling is not a reservation. |
 | [ENHANCEMENTS.md](ENHANCEMENTS.md) | Adam's standing wish list, in his words, annotated with what has landed. |

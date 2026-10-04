@@ -11,7 +11,7 @@ Confirmed 2026-09-16. This repository already records most of what a first
 read of the code turns up, and a finding that is already written down is not
 a finding. Read, in this order, before drafting a report:
 
-- `docs/LOOSE_ENDS.md` (about 1,200 lines) — the catalogue of known, deliberate
+- `docs/LOOSE_ENDS.md` — the catalogue of known, deliberate
   stopping points, each with a file and line.
 - `docs/SCOPE.md` §5 — the four verified blockers between the code and CLAP
   hosting, the absence of any audio input path, and the fact that

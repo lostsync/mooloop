@@ -125,7 +125,7 @@ Linear: project **Icon pass**.
 - **Displays are not icons**: knob arcs, envelopes, response curves, meters,
   lamps. Nor are the modulation tiles, which are *"parameter-derived previews,
   not generic type icons"* (`UI_DESIGN.md:519`).
-- **Not the desktop app icon** (`LOOSE_ENDS.md:1508`), and not the mockup or
+- **Not the desktop app icon** (`LOOSE_ENDS.md`, the desktop-entry row), and not the mockup or
   `device-concepts.slint` files.
 - **No icon without a tooltip.** *"Familiar icon buttons receive tooltips"*
   (`UI_DESIGN.md:980`). The pass adds the two that are missing.
