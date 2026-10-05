@@ -80,4 +80,4 @@ for the meanings it needs, and doesn't draw its own.
 - No icon lacks a tooltip.
 - Rung 4 on antibox, and the snapshots that changed have been looked at.
 
-0.1.7. Milestone: **One family, one meaning.**
+0.1.8. Milestone: **One family, one meaning.**
