@@ -82,6 +82,12 @@ Differences from the plan, each picked to keep this step small:
 - **Paste** copies the routes into the copied channel and re-aims the ones
   from its own outlets and keyboard at the new channel. Routes whose module
   is gone are dropped and the status line says so.
+- **A Math module still reads its input by rack slot**
+  (`ModMathParams::input_slot`). Converted modules keep their slots, so a
+  converted Math reads what it read. A guest landing in the empty slot a
+  Math points at would be read by it; nothing in this step makes that
+  likely. Rekeying the input to a module id (`InputSource::Module`) is
+  left for 02, where the engine stops reading racks by slot.
 - Selection and arming are held by `ModSourceRef` and survive a channel
   change; the shelf shows a selected module only on a channel whose rack
   holds it.
