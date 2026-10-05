@@ -44,7 +44,11 @@ come before every destination by construction.
   (`gate_ticks`, `:1251`), not the owning channel.
 - **Math** reads lower-listed modules in the same tick and higher ones a tick
   late (`math_reads_lower_slots_now_and_higher_slots_one_tick_late`). Keep
-  that rule over the song list.
+  that rule over the song list, with the input resolved from its
+  `ModSourceId` (step 01) to a list position once per edit, off the audio
+  thread. The canvas will later order modules by their wires; list order is
+  only this push's rule, so don't write it into the save format beyond the
+  module list itself.
 - **While here, MOO-373:** the Step module and a synced Random module run on
   wall-clock time, so they don't start on the downbeat and a bounce differs
   from playback. The LFO was fixed for this (MOO-127). This step rewrites

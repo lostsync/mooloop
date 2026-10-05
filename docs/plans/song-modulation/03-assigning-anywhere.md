@@ -44,6 +44,12 @@ four kinds that take notes: **None**, then every channel by name. It writes
 gates, not from the channel list, so the next kind of gate source joins it
 without a new picker.
 
+The Math module's input uses the same picker, built from the outlets that
+send a control value: **None**, then every other module in the song by
+name. It writes `set_module_input` with `InputSource::Module` (step 01) and
+replaces the slot selector on Math's surface
+(`modulation-shelf.slint:1108`).
+
 ## Done when
 
 - A module on the song set can be assigned, by the ordinary drag, to a knob

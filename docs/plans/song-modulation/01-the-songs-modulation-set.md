@@ -32,6 +32,19 @@ a list of outlets sending compatible events"*): an `InputSource` that is
 That is the canvas's inlet in its first form; keep the type open to more
 variants rather than a bare channel id.
 
+**The Math module's input is a slot today.** `ModMathParams.input_slot`
+(`modulation.rs:1344`) is an index into its channel's rack, clamped to the
+eight slots (`:1517`) and exposed as a parameter (`MATH_PARAM_INPUT_SLOT`,
+`:1439`). In a song-wide set an index is meaningless. Make it an input
+naming an outlet too: `InputSource::Module(ModSourceId)`, the canvas's
+module-to-module wire in its first form. Its field comment already expects
+this. Conversion maps the old slot to that module's new song id. Its
+parameter descriptor goes, and so does the slot remap in
+`ModRack::retarget` (`:2262`) and `render.rs:7887`, because an id never
+moves. `ParamOwner::Modulator { slot }` also names a module by slot. Nothing
+authors one, so rekey it to a `ModSourceId` now with no migration. The
+canvas's wire into a module's rate will then need no format change.
+
 **The Random module's seed** comes from its slot index today
 (`dsp/modulator.rs:725`). Seed it from its `ModSourceId` instead, so a song
 plays the same random sequence whatever order its modules are listed in.
@@ -87,6 +100,8 @@ same way.
   - each module gets a fresh song-wide id, and its routes follow it;
   - an outlet or performance source gets its channel's `ChannelId`;
   - LFO, Step and Random note inputs get their old channel's notes;
+  - a Math module's `input_slot` becomes the song id of the module that
+    sat in that slot (an empty slot becomes `None`);
   - a route with a `Channel` scope keeps it (`rescope_modulation` already
     pointed it at its own channel);
   - each module is named `<channel name> <kind> <n>`, so the pane can tell
@@ -106,7 +121,7 @@ same way.
     that rule (`integrity.rs:1676`) and its test
     `a_route_stranded_on_another_channels_index_is_pointed_home`, and check
     the address exists wherever it points;
-  - an input naming a channel that is gone becomes `None`;
+  - an input naming a channel or module that is gone becomes `None`;
   - non-finite depths are fitted, as `check_modulation` does (`:1764`).
 
 ## Session verbs
