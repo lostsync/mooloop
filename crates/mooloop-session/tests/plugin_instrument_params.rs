@@ -247,7 +247,7 @@ fn an_automated_modulated_instrument_saves_reopens_and_survives_going_missing() 
     let automated = export(&mut session, dir.path(), "automated.wav");
     assert_ne!(automated, plain, "the lane is heard");
 
-    session.add_modulation_source(ModulatorKind::Lfo).expect("room for a modulator");
+    assert!(!session.add_modulation_source(ModulatorKind::Lfo).is_empty(), "room for a modulator");
     assert!(session.toggle_modulation_assignment().is_some(), "the LFO is armed");
     assert!(
         matches!(session.arm_modulation_route(level, 0.5), ArmedRoute::Added(_)),
@@ -280,7 +280,7 @@ fn an_automated_modulated_instrument_saves_reopens_and_survives_going_missing() 
     assert_eq!(kept.channels[0].setup.source, saved.channels[0].setup.source);
     assert_eq!(kept.channels[0].setup.source_device, saved.channels[0].setup.source_device);
     assert_eq!(kept.channels[0].automation, saved.channels[0].automation, "and the lane");
-    assert_eq!(kept.channels[0].setup.modulation, saved.channels[0].setup.modulation, "and the route");
+    assert_eq!(kept.modulation, saved.modulation, "and the route");
 
     // Back: the same export.
     let mut back = session_with(found(&library), &kept);

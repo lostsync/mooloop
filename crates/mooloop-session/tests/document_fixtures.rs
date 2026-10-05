@@ -174,7 +174,7 @@ fn maximal_project() -> Project {
     let _ = lane.upsert(AutomationPoint::new(point, 96, 0.75));
     // One modulator of each kind, each routed to a source parameter, half
     // of them unipolar.
-    let rack = &mut project.channels[first].setup.modulation;
+    project.edit_channel_rack(first, |rack| {
     for (slot, kind) in ModulatorKind::ALL.into_iter().enumerate() {
         rack.install(slot, kind.default_params())
             .expect("the rack has a slot for one of each kind");
@@ -191,6 +191,7 @@ fn maximal_project() -> Project {
         rack.add_route(ModRoute::to_slot(slot as u8, destination, 0.2 + 0.1 * slot as f32, polarity))
             .expect("the rack has room for the route");
     }
+    });
     project.channels[first].automation[0].push(lane.clone());
     project.channels[first].automation[2].push(lane);
     // A MIDI binding in each mode that has a setting of its own, on the

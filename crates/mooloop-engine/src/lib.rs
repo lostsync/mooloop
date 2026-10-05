@@ -1218,7 +1218,12 @@ pub(crate) fn carry_plan(
         ) else {
             continue;
         };
-        let rechained = same_strip_but_effects(&held.setup, &now.setup);
+        let rechained = same_strip_but_effects(
+            &held.setup,
+            &live.channel_rack(usize::from(from)),
+            &now.setup,
+            &incoming.channel_rack(usize::from(to)),
+        );
         if rechained {
             plan.rechained_channels.push((from, to));
         }
@@ -1302,11 +1307,16 @@ fn carry_channels(
         if !channel.id.is_assigned() {
             continue;
         }
+        let rack = incoming.channel_rack(to);
         let Some(from) = live
             .channels
             .iter()
             .take(MAX_CHANNELS)
-            .position(|held| held.id == channel.id && same_strip(&held.setup, &channel.setup))
+            .enumerate()
+            .position(|(from, held)| {
+                held.id == channel.id
+                    && same_strip(&held.setup, &live.channel_rack(from), &channel.setup, &rack)
+            })
         else {
             continue;
         };
@@ -1403,8 +1413,18 @@ fn same_track_but_effects(held: &mooloop_core::BusSetup, incoming: &mooloop_core
 /// Destructured rather than compared through a clone with the bus zeroed, so
 /// that a field added to either struct fails to compile here until somebody
 /// decides whether it belongs to the strip.
-fn same_strip(held: &mooloop_core::ChannelSetup, incoming: &mooloop_core::ChannelSetup) -> bool {
-    same_strip_but_effects(held, incoming)
+///
+/// The racks are compared beside the setups because a channel no longer
+/// holds one: the song does, and each channel's is built from it
+/// ([`mooloop_core::Project::channel_rack`]) until the engine runs the
+/// song's set itself (`docs/plans/song-modulation/` step 02).
+fn same_strip(
+    held: &mooloop_core::ChannelSetup,
+    held_rack: &mooloop_core::ModRack,
+    incoming: &mooloop_core::ChannelSetup,
+    incoming_rack: &mooloop_core::ModRack,
+) -> bool {
+    same_strip_but_effects(held, held_rack, incoming, incoming_rack)
         && held.effects == incoming.effects
         && held.next_device_id == incoming.next_device_id
 }
@@ -1414,13 +1434,17 @@ fn same_strip(held: &mooloop_core::ChannelSetup, incoming: &mooloop_core::Channe
 /// (MOO-137, [`CarryPlan::rechained_channels`]).
 fn same_strip_but_effects(
     held: &mooloop_core::ChannelSetup,
+    held_rack: &mooloop_core::ModRack,
     incoming: &mooloop_core::ChannelSetup,
+    incoming_rack: &mooloop_core::ModRack,
 ) -> bool {
     let mooloop_core::ChannelSetup {
         channel,
         source,
         effects: _,
-        modulation,
+        // Always `None` in a song: what a preset carries is lifted into the
+        // song's set on the way in, and compared below as the rack.
+        preset_modulation: _,
         next_device_id: _,
         // The plugin instrument's identity (MOO-312): compared, so a strip
         // is never carried across a change of the device its lanes and
@@ -1460,7 +1484,7 @@ fn same_strip_but_effects(
         && *color == other.color
         && *midi_input == other.midi_input
         && *source == incoming.source
-        && *modulation == incoming.modulation
+        && held_rack == incoming_rack
         && *source_device == incoming.source_device
 }
 

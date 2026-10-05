@@ -29,7 +29,8 @@ fn song() -> Project {
         next_channel_id: 2,
         ..Project::default()
     };
-    for (index, channel) in project.channels.iter_mut().enumerate() {
+    for index in 0..project.channels.len() {
+        let channel = &mut project.channels[index];
         let kind = channel.setup.source.kind();
         let here = EffectTarget::Channel(index as u8);
         let mut ids = kind.descriptors().iter().map(|descriptor| descriptor.id);
@@ -37,15 +38,16 @@ fn song() -> Project {
         let mut lane = AutomationLane::new(ParamAddr::source(here, kind, lane_id));
         assert!(lane.upsert(AutomationPoint::new(1, 0, 0.25)));
         channel.automation[0].push(lane);
-        let rack = &mut channel.setup.modulation;
-        rack.install(0, ModulatorKind::Lfo.default_params()).unwrap();
-        rack.add_route(ModRoute::to_slot(
-            0,
-            ParamAddr::source(here, kind, route_id),
-            0.5,
-            ModPolarity::Bipolar,
-        ))
-        .unwrap();
+        project.edit_channel_rack(index, |rack| {
+            rack.install(0, ModulatorKind::Lfo.default_params()).unwrap();
+            rack.add_route(ModRoute::to_slot(
+                0,
+                ParamAddr::source(here, kind, route_id),
+                0.5,
+                ModPolarity::Bipolar,
+            ))
+            .unwrap();
+        });
     }
     for index in 0..2u8 {
         let kind = project.channels[usize::from(index)].setup.source.kind();
@@ -72,9 +74,11 @@ fn source_owners(project: &Project) -> Vec<(ParamOwner, DeviceKind)> {
         for lane in channel.automation.iter().flatten() {
             found.push((lane.target.owner, kind));
         }
-        for route in channel.setup.modulation.routes.iter().flatten() {
-            found.push((route.destination.owner, kind));
-        }
+    }
+    for route in &project.modulation.routes {
+        let EffectTarget::Channel(seat) = route.destination.scope else { continue };
+        let kind = project.channels[usize::from(seat)].setup.source.kind();
+        found.push((route.destination.owner, kind));
     }
     for binding in &project.control_map.bindings {
         let ControlTarget::Param(key) = binding.target else { continue };

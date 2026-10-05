@@ -1550,7 +1550,7 @@ fn device_cost() {
         ];
         for (name, params) in kinds {
             let (mut project, device) = filtered();
-            let rack = &mut project.channels[0].setup.modulation;
+            let rack = project.channels[0].setup.carried_modulation_mut();
             rack.install(0, ModulatorParams::Lfo(ModLfoParams::default()));
             rack.install(1, params);
             rack.add_route(ModRoute::to_slot(
@@ -1560,6 +1560,7 @@ fn device_cost() {
                 ModPolarity::Bipolar,
             ))
             .expect("room in the matrix");
+            project.lift_channel_modulation();
             add(
                 &mut rows,
                 format!("LFO + 1 {name} -> filter cutoff"),
@@ -1572,7 +1573,7 @@ fn device_cost() {
         // until the matrix is full: the widest a channel's control pass gets.
         {
             let (mut project, device) = filtered();
-            let rack = &mut project.channels[0].setup.modulation;
+            let rack = project.channels[0].setup.carried_modulation_mut();
             let slots = mooloop_core::modulation::MAX_MODULATORS_PER_CHANNEL;
             for slot in 0..slots {
                 rack.install(
@@ -1598,6 +1599,7 @@ fn device_cost() {
                     routes += 1;
                 }
             }
+            project.lift_channel_modulation();
             add(
                 &mut rows,
                 format!("{slots} LFOs, {routes} routes -> filter"),

@@ -408,12 +408,14 @@ fn render_audition(
                 velocity,
             ));
         }
-        let project = Project {
+        let mut project = Project {
             bpm: 120,
             channels: vec![channel],
             pattern_lengths: vec![AUDITION_STEPS as u16],
             ..Project::default()
         };
+        // A channel preset's modulation lands in the song, as a load does.
+        project.lift_channel_modulation();
         // A render writes a file, so the audition goes through one in the
         // temporary directory and is read straight back.
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

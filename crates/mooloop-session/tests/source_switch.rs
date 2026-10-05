@@ -121,20 +121,23 @@ fn replacing_a_plugin_instrument_forgets_its_lanes_and_routes() {
         let on_instrument = ParamAddr::plugin_param(here, instrument, 7);
         let on_generator =
             ParamAddr::source(here, DeviceKind::Sampler, mooloop_core::SAMPLER_PARAM_DRIVE);
-        let channel = &mut session.channels[0];
-        channel.modulation.install(0, ModulatorParams::Lfo(ModLfoParams::default()));
+        session
+            .edit_channel_rack(0, |rack| {
+                rack.install(0, ModulatorParams::Lfo(ModLfoParams::default()));
+                for destination in [on_instrument, on_generator] {
+                    rack.add_route(ModRoute::to_slot(0, destination, 0.5, ModPolarity::Bipolar))?;
+                }
+                Some(())
+            })
+            .unwrap();
         for destination in [on_instrument, on_generator] {
-            channel
-                .modulation
-                .add_route(ModRoute::to_slot(0, destination, 0.5, ModPolarity::Bipolar))
-                .unwrap();
-            channel.automation[0].push(AutomationLane::new(destination));
+            session.channels[0].automation[0].push(AutomationLane::new(destination));
         }
 
         session.reset_channel_source(0, next);
         let channel = &session.channels[0];
         let routes: Vec<ParamAddr> =
-            channel.modulation.routes.iter().flatten().map(|route| route.destination).collect();
+            session.modulation.routes.iter().map(|route| route.destination).collect();
         let lanes: Vec<ParamAddr> = channel.automation[0].iter().map(|lane| lane.target).collect();
         assert_eq!(routes, [on_generator], "{next:?}: routes");
         assert_eq!(lanes, [on_generator], "{next:?}: lanes");

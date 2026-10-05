@@ -2388,6 +2388,13 @@ fn queue_channel_insert(
     };
     // The session builds the pasted song (clearing the copy's input picks)
     // and takes in the key-zone audio the clipboard carries (MOO-242).
+    // A copied assignment whose module the song no longer has is dropped,
+    // and the status line says so.
+    let status = if clipboard.routes_without_module(&before.project.modulation) > 0 {
+        "Channel pasted; assignments from removed modulators were dropped"
+    } else {
+        status
+    };
     let Some((pasted, index)) = state.borrow_mut().session.paste_channel(&before, after, clipboard)
     else {
         return false;
@@ -5769,8 +5776,9 @@ impl UiState {
         // callers raising it too costs nothing -- and a preset can carry an
         // analyzer flag, so some of them need it anyway.
         self.effect_spectra_stale.set(true);
-        let armed = self.session.modulation_armed_slot.get();
+        let armed = self.session.modulation_armed_slot();
         let selected = self.session.selected_device_slot();
+        let rack = self.session.selected_rack();
         let rows: Vec<EffectSlotRow> = match self.session.effect_target {
             // Modulation state belongs to the selected channel, so an insert
             // rack pointed at a bus -- or at another channel -- renders its
@@ -5809,7 +5817,7 @@ impl UiState {
                             let allowed = descriptor_policy_flags(descriptors);
                             let offsets = self.session.destination_offsets(descriptors, address);
                             let counts =
-                                descriptor_route_count_slots(&state.modulation, descriptors, address);
+                                descriptor_route_count_slots(&rack, descriptors, address);
                             // A plugin has no descriptor table: its overlays
                             // are by dense index, the face's own numbering
                             // (MOO-228). The EQ's seven controls are a view
@@ -6032,26 +6040,17 @@ impl UiState {
         refresh
     }
 
-    /// Rebuild the channel-owned source collection and destination inspector.
-    /// Selection and assignment are transient UI state: project reloads and
-    /// channel changes never leave an invisible armed slot behind.
+    /// Rebuild the selected channel's view of the song's modulation and the
+    /// destination inspector. Selection and assignment are transient UI
+    /// state held by source, so they follow a module the song keeps across
+    /// channel changes, and a project reload clears them.
     fn refresh_modulation(&self, window: &MainWindow) {
-        // By identity, so switching to a channel that happens to occupy the
-        // seat the last one did still clears the arm -- which is what the
-        // field's own comment has always claimed and what a `usize` seat
-        // could not deliver.
-        let selected_id = self.session.channel_id(self.session.selected);
-        if self.session.modulation_ui_channel.get() != selected_id {
-            self.session.modulation_ui_channel.set(selected_id);
-            self.session.modulation_selected_slot.set(None);
-            self.session.modulation_armed_slot.set(None);
-        }
         let Some(channel) = self.session.channels.get(self.session.selected) else {
             self.modulation_source_model.set_vec(Vec::new());
             self.modulation_outlet_model.set_vec(Vec::new());
             self.modulation_route_model.set_vec(Vec::new());
-            self.session.modulation_selected_slot.set(None);
-            self.session.modulation_armed_slot.set(None);
+            self.session.set_modulation_selected_slot(None);
+            self.session.set_modulation_armed_slot(None);
             window.set_modulation_selected_slot(-1);
             window.set_modulation_armed_slot(-1);
             window.set_modulation_armed_name(Default::default());
@@ -6066,22 +6065,19 @@ impl UiState {
         // control outlet this generator still publishes -- and the second is
         // why a channel that swaps its ML-P8 for a sampler drops a selection
         // pointed at `Trigger` instead of keeping an invisible one.
-        let selected = self
-            .session
-            .modulation_selected_slot
-            .get()
-            .filter(|slot| self.session.control_source_exists(*slot));
-        let armed = self
-            .session
-            .modulation_armed_slot
-            .get()
-            .filter(|slot| self.session.control_source_exists(*slot));
-        self.session.modulation_selected_slot.set(selected);
-        self.session.modulation_armed_slot.set(armed);
+        let gone = |slot: Option<u8>| slot.is_some_and(|slot| !self.session.control_source_exists(slot));
+        if gone(self.session.modulation_selected_slot()) {
+            self.session.set_modulation_selected_slot(None);
+        }
+        if gone(self.session.modulation_armed_slot()) {
+            self.session.set_modulation_armed_slot(None);
+        }
+        let selected = self.session.modulation_selected_slot();
+        let armed = self.session.modulation_armed_slot();
         let bpm = f64::from(window.get_bpm().max(1));
         let outputs = self.session.modulation_outputs.get();
-        let sources: Vec<ModulationSourceRow> = channel
-            .modulation
+        let rack = self.session.selected_rack();
+        let sources: Vec<ModulationSourceRow> = rack
             .slots
             .iter()
             .enumerate()
@@ -6163,8 +6159,7 @@ impl UiState {
         // A plugin parameter has no descriptor, so the shelf names it from the
         // plugin's own list, missing ones included (MOO-228).
         let plugin_destinations = self.session.plugin_destinations();
-        let routes: Vec<ModulationRouteRow> = channel
-            .modulation
+        let routes: Vec<ModulationRouteRow> = rack
             .routes
             .iter()
             .enumerate()
@@ -6345,7 +6340,7 @@ impl UiState {
         // rather than "3"; the length comes from the protocol constant, so
         // raising capacity never needs a matching UI edit.
         let slot_names: Vec<slint::SharedString> = (0..MAX_MODULATORS_PER_CHANNEL)
-            .map(|slot| match channel.modulation.params(slot) {
+            .map(|slot| match rack.params(slot) {
                 Some(params) => {
                     format!("{} · {} {}", slot + 1, params.kind().badge(), slot + 1)
                 }
@@ -6358,7 +6353,7 @@ impl UiState {
         // The selected source's own controls. One editor is shown, so the shelf
         // reads scalars rather than searching the source rows for the
         // selected one.
-        let selected_params = selected.and_then(|slot| channel.modulation.params(slot as usize));
+        let selected_params = selected.and_then(|slot| rack.params(slot as usize));
         let selected_lfo = selected_params.and_then(|params| match params {
             ModulatorParams::Lfo(lfo) => Some(lfo),
             _ => None,
@@ -6461,7 +6456,7 @@ impl UiState {
             |param| ParamAddr::source(scope, generator, param),
         ));
         window.set_source_modulation_route_counts(descriptor_route_counts(
-            &channel.modulation,
+            &rack,
             generator.descriptors(),
             |param| ParamAddr::source(scope, generator, param),
         ));
@@ -6495,9 +6490,11 @@ impl UiState {
         &mut self,
         window: &MainWindow,
         tx: &EngineCommandSender,
-        command: EngineCommand,
+        commands: Vec<EngineCommand>,
     ) {
-        let _ = tx.send(command);
+        for command in commands {
+            let _ = tx.send(command);
+        }
         self.session.mark_dirty();
         self.update_document_title(window);
         self.refresh_modulation(window);
@@ -6706,7 +6703,7 @@ impl UiState {
             }
             ArmedRoute::Added(route) => {
                 let channel = self.session.selected as u8;
-                self.send_modulation(window, tx, EngineCommand::SetModRoute { channel, route });
+                self.send_modulation(window, tx, vec![EngineCommand::SetModRoute { channel, route }]);
                 true
             }
         }
@@ -7988,11 +7985,14 @@ impl AppUi {
                 let snapshot = st
                     .borrow()
                     .session.project_snapshot(window.get_bpm(), window.get_swing_percent());
+                // Each channel with the song's modulation that plays on it.
                 let kit = Kit {
-                    channels: snapshot
-                        .channels
-                        .into_iter()
-                        .map(|channel| channel.setup)
+                    channels: (0..snapshot.channels.len())
+                        .map(|index| {
+                            let mut setup = snapshot.channels[index].setup.clone();
+                            setup.preset_modulation = snapshot.preset_rack(index);
+                            setup
+                        })
                         .collect(),
                 };
                 let mode = asset_mode_from_window(&window);
@@ -8030,9 +8030,9 @@ impl AppUi {
                 let snapshot = st
                     .borrow()
                     .session.project_snapshot(window.get_bpm(), window.get_swing_percent());
-                let channel = snapshot.channels[snapshot.selected_index()]
-                    .setup
-                    .clone();
+                let selected = snapshot.selected_index();
+                let mut channel = snapshot.channels[selected].setup.clone();
+                channel.preset_modulation = snapshot.preset_rack(selected);
                 let mode = asset_mode_from_window(&window);
                 if !begin_document_operation(&window, "Saving channel...") {
                     return;
@@ -12437,10 +12437,11 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 {
                     let mut state = st.borrow_mut();
-                    let Some(command) = state.session.move_modulation_source(slot, target) else {
+                    let sent = state.session.move_modulation_source(slot, target);
+                    if sent.is_empty() {
                         return;
-                    };
-                    state.send_modulation(&window, &tx, command);
+                    }
+                    state.send_modulation(&window, &tx, sent);
                 }
                 record_project_history(&commands, before, &st, &window, "Module moved");
             });
@@ -12477,10 +12478,11 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 {
                     let mut state = st.borrow_mut();
-                    let Some(command) = state.session.add_modulation_source(kind) else {
+                    let sent = state.session.add_modulation_source(kind);
+                    if sent.is_empty() {
                         return;
-                    };
-                    state.send_modulation(&window, &tx, command);
+                    }
+                    state.send_modulation(&window, &tx, sent);
                 }
                 // History labels are `&'static str`, so the per-kind wording is a
                 // match rather than a format.
@@ -12534,10 +12536,11 @@ impl AppUi {
                 // spell that rule out; it is the general one now.
                 with_gesture_history(&st, &commands, &window, "Modulator edited", || {
                     let mut state = st.borrow_mut();
-                    let Some(command) = state.session.set_modulator_param(slot, id, value) else {
+                    let sent = state.session.set_modulator_param(slot, id, value);
+                    if sent.is_empty() {
                         return false;
-                    };
-                    state.send_modulation(&window, &tx, command);
+                    }
+                    state.send_modulation(&window, &tx, sent);
                     true
                 });
             });
@@ -12567,10 +12570,11 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 {
                     let mut state = st.borrow_mut();
-                    let Some(command) = state.session.remove_modulation_source(slot) else {
+                    let sent = state.session.remove_modulation_source(slot);
+                    if sent.is_empty() {
                         return;
-                    };
-                    state.send_modulation(&window, &tx, command);
+                    }
+                    state.send_modulation(&window, &tx, sent);
                 }
                 record_project_history(&commands, before, &st, &window, "Modulator removed");
             });
@@ -12582,13 +12586,23 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_modulation_envelope_input_channel_changed(move |slot, channel| {
                 let Some(window) = weak.upgrade() else { return };
-                with_gesture_history(&st, &commands, &window, "Envelope input", || {                    let mut state = st.borrow_mut();
+                with_gesture_history(&st, &commands, &window, "Envelope input", || {
+                    let mut state = st.borrow_mut();
                     // The gate is a jack rather than a descriptor id, so there is no
                     // parameter to name: the module travels entire.
-                    let Some(command) = state.session.set_envelope_input_channel(slot, channel) else {
+                    let (Some(id), Some(channel)) = (
+                        state.session.module_in_slot(slot),
+                        usize::try_from(channel).ok().and_then(|seat| state.session.channel_id(seat)),
+                    ) else {
                         return false;
                     };
-                    state.send_modulation(&window, &tx, command);
+                    let sent = state
+                        .session
+                        .set_module_input(id, mooloop_core::InputSource::ChannelNotes(channel));
+                    if sent.is_empty() {
+                        return false;
+                    }
+                    state.send_modulation(&window, &tx, sent);
                     true
                 });
             });
@@ -12603,10 +12617,11 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 {
                     let mut state = st.borrow_mut();
-                    let Some(command) = state.session.set_route_polarity(index, polarity) else {
+                    let sent = state.session.set_route_polarity(index, polarity);
+                    if sent.is_empty() {
                         return;
-                    };
-                    state.send_modulation(&window, &tx, command);
+                    }
+                    state.send_modulation(&window, &tx, sent);
                 }
                 record_project_history(
                     &commands,
@@ -12627,10 +12642,11 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 {
                     let mut state = st.borrow_mut();
-                    let Some(command) = state.session.remove_route(index) else {
+                    let sent = state.session.remove_route(index);
+                    if sent.is_empty() {
                         return;
-                    };
-                    state.send_modulation(&window, &tx, command);
+                    }
+                    state.send_modulation(&window, &tx, sent);
                 }
                 record_project_history(&commands, before, &st, &window, "Modulation route removed");
             });
@@ -19030,12 +19046,9 @@ impl AppUi {
                     // descriptors -- not a per-parameter feed.
                     let state = st.borrow();
                     let outputs = handle.modulator_outputs(selected_channel);
-                    let routed = state
-                        .session.channels
-                        .get(selected_channel)
-                        .is_some_and(|channel| {
-                            channel.modulation.routes.iter().flatten().next().is_some()
-                        });
+                    let routed = state.session.modulation.routes.iter().any(|route| {
+                        route.destination.scope == EffectTarget::Channel(selected_channel as u8)
+                    });
                     // An unrouted channel has nothing to animate, and once the
                     // outputs stop moving the arcs are already where they
                     // belong -- so neither case is worth a model write.
@@ -20385,14 +20398,18 @@ fn merge_loaded_document(
             }
             let mut project = current.clone();
             let mut next_channel_id = project.next_channel_id;
+            // A kit replaces every channel, and with them all the song's
+            // modulation, as it replaced every channel's rack when the
+            // channels held them. The mint carries on, so no id is reused.
+            project.modulation = mooloop_core::SongModulation {
+                next_source_id: project.modulation.next_source_id,
+                ..Default::default()
+            };
             project.channels = kit
                 .channels
                 .into_iter()
                 .enumerate()
-                .map(|(index, mut setup)| {
-                    // A kit entry's routes name the channel they were saved
-                    // from; they mean this one.
-                    setup.rescope_modulation(index as u8);
+                .map(|(index, setup)| {
                     if let Some(mut channel) = current.channels.get(index).cloned() {
                         channel.setup = setup;
                         channel
@@ -20414,6 +20431,9 @@ fn merge_loaded_document(
                 })
                 .collect();
             project.next_channel_id = next_channel_id;
+            // Each entry's modulation lands in the song, seated on the
+            // channel it came in on, its routes aimed there.
+            project.lift_channel_modulation();
             // A kit can be shorter than the song, so the selected channel may
             // be one of the ones it dropped.
             if project.channel_index(project.selected_channel).is_none() {
@@ -20434,14 +20454,9 @@ fn merge_loaded_document(
         (LoadTarget::Channel, LoadedDocument::Channel(setup)) => {
             let mut project = current;
             let selected = project.selected_index();
-            project.channels[selected].setup = *setup;
-            // A saved rack still names the channel it was authored on. Point
-            // it at this one, or a preset saved from channel 3 would modulate
-            // channel 3 from wherever it landed.
-            mooloop_project::rescope_modulation(
-                &mut project.channels[selected].setup,
-                selected as u8,
-            );
+            // The preset's modules join the song as new ones, their routes
+            // aimed at this channel wherever the preset was saved from.
+            project.replace_channel_setup(selected, *setup);
             let mut samples = current_samples;
             samples[selected] = loaded_samples.into_iter().next().flatten();
             Ok((project, samples))

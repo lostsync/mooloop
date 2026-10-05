@@ -1,25 +1,81 @@
-//! Modulation-shelf edits: sources, routes, and the assignment gesture.
+//! Modulation edits: sources, routes, and the assignment gesture.
 //!
-//! All of these act on the selected channel's `ModRack`. What they have in
-//! common, and what makes them worth stating once, is that selection and
-//! arming follow a *module* rather than the slot it happens to occupy -- a
-//! reorder that retargeted the assignment gesture would be silent and wrong.
+//! The song owns the modulation set (`docs/plans/song-modulation/`), and
+//! these verbs edit it. Until the engine runs the song's set itself (step
+//! 02), it still runs one rack per channel, built from the set by
+//! [`mooloop_core::SongModulation::channel_rack`]; the shelf shows the
+//! selected channel's, and addresses a module by its slot there. So every
+//! verb here is the same three moves: build the racks, edit the selected one
+//! as a rack, write it back to the song, and tell the engine what changed in
+//! **every** channel's rack -- a module can sit in more than one, as a guest
+//! where a pasted channel's routes reach it.
 //!
-//! A channel has a second kind of source beside its rack: the control outlets
-//! its generator publishes. Those live in the upper half of the same flat
-//! slot space (`mooloop_core::modulation`), which is what lets one selection,
-//! one arming, and one assignment gesture serve both. What differs is that an
-//! outlet is not owned by the rack -- nothing mints it, nothing reorders it,
-//! and it cannot be removed -- so the places below that ask "does this slot
-//! still name something" ask [`Session::control_source_exists`] rather than
-//! looking in the rack.
+//! Selection and arming name a source -- a module by its durable id, an
+//! outlet or the keyboard by its channel -- never a slot, so a reorder cannot
+//! retarget the assignment gesture and a channel change does not lose it.
+//!
+//! A channel has a second kind of source beside its modules: the control
+//! outlets its generator publishes. Those live in the upper half of the same
+//! flat slot space (`mooloop_core::modulation`), which is what lets one
+//! selection, one arming, and one assignment gesture serve both. What differs
+//! is that an outlet is not a module -- nothing mints it, nothing reorders
+//! it, and it cannot be removed -- so the places below that ask "does this
+//! slot still name something" ask [`Session::control_source_exists`] rather
+//! than looking in the rack.
 
 use crate::session::Session;
-use mooloop_core::modulation::{outlet_of_slot, performance_descriptor, performance_of_slot};
-use mooloop_core::{
-    EngineCommand, ModPolarity, ModSourceId, ModulatorKind, ModulatorParams, OutletDescriptor,
-    PublishesOutlets,
+use mooloop_core::modulation::{
+    outlet_of_slot, performance_descriptor, performance_of_slot, MAX_MODULATORS_PER_CHANNEL,
 };
+use mooloop_core::{
+    EngineCommand, InputSource, ModPolarity, ModRack, ModSourceId, ModSourceRef, ModulatorKind,
+    ModulatorParams, OutletDescriptor, PublishesOutlets,
+};
+
+/// What the engine has to be told so its rack for `channel` goes from
+/// `before` to `after`: modules first, so a route never arrives ahead of the
+/// module it names, then the routes that went, then the ones that came or
+/// changed.
+fn rack_commands(channel: u8, before: &ModRack, after: &ModRack) -> Vec<EngineCommand> {
+    let mut commands = Vec::new();
+    for slot in 0..MAX_MODULATORS_PER_CHANNEL {
+        let (was, now) = (before.slots[slot], after.slots[slot]);
+        if was == now {
+            continue;
+        }
+        commands.push(match now {
+            None => EngineCommand::ClearModulator {
+                channel,
+                slot: slot as u8,
+            },
+            Some(entry) => EngineCommand::InstallModulator {
+                channel,
+                slot: slot as u8,
+                source: entry.id,
+                params: entry.params,
+            },
+        });
+    }
+    let key = |route: &mooloop_core::ModRoute| (route.source, route.destination);
+    for route in before.routes.iter().flatten() {
+        if !after.routes.iter().flatten().any(|kept| key(kept) == key(route)) {
+            commands.push(EngineCommand::RemoveModRoute {
+                channel,
+                source: route.source,
+                destination: route.destination,
+            });
+        }
+    }
+    for route in after.routes.iter().flatten() {
+        if !before.routes.iter().flatten().any(|held| held == route) {
+            commands.push(EngineCommand::SetModRoute {
+                channel,
+                route: *route,
+            });
+        }
+    }
+    commands
+}
 
 impl Session {
     /// The address of the selected channel's generator parameter `param`, as
@@ -37,10 +93,132 @@ impl Session {
         ))
     }
 
-    /// The selected channel's modulation rack, when there is one.
-    fn rack_mut(&mut self) -> Option<&mut mooloop_core::ModRack> {
-        let selected = self.selected;
-        Some(&mut self.channels.get_mut(selected)?.modulation)
+    /// The rack the engine runs for the channel at `seat`, built from the
+    /// song's set. The shim song-modulation step 02 removes.
+    pub fn channel_rack(&self, seat: usize) -> ModRack {
+        let Some(channel) = self.channels.get(seat) else {
+            return ModRack::default();
+        };
+        self.modulation.channel_rack(channel.id, seat as u8, |id| {
+            self.channel_index(id).and_then(|seat| u8::try_from(seat).ok())
+        })
+    }
+
+    /// The selected channel's rack, as the shelf shows it.
+    pub fn selected_rack(&self) -> ModRack {
+        self.channel_rack(self.selected)
+    }
+
+    fn all_racks(&self) -> Vec<ModRack> {
+        (0..self.channels.len()).map(|seat| self.channel_rack(seat)).collect()
+    }
+
+    /// What changed between two sets of racks, as commands.
+    fn racks_commands(before: &[ModRack], after: &[ModRack]) -> Vec<EngineCommand> {
+        before
+            .iter()
+            .zip(after)
+            .enumerate()
+            .flat_map(|(seat, (before, after))| rack_commands(seat as u8, before, after))
+            .collect()
+    }
+
+    /// Edit the selected channel's rack as a rack, write it back into the
+    /// song's set, and return what `edit` returned with the commands that
+    /// bring the engine along. `edit` returning `None` changes nothing.
+    pub fn edit_selected_rack<R>(
+        &mut self,
+        edit: impl FnOnce(&mut ModRack) -> Option<R>,
+    ) -> Option<(R, Vec<EngineCommand>)> {
+        self.edit_channel_rack(self.selected, edit)
+    }
+
+    /// [`Self::edit_selected_rack`] for the channel at `seat`.
+    pub fn edit_channel_rack<R>(
+        &mut self,
+        seat: usize,
+        edit: impl FnOnce(&mut ModRack) -> Option<R>,
+    ) -> Option<(R, Vec<EngineCommand>)> {
+        let channel = self.channels.get(seat)?;
+        let (id, name) = (channel.id, channel.name.clone());
+        let before_all = self.all_racks();
+        let before = before_all[seat];
+        let mut after = before;
+        let result = edit(&mut after)?;
+        self.modulation.store_channel_rack(id, &name, &before, &after);
+        let commands = Self::racks_commands(&before_all, &self.all_racks());
+        Some((result, commands))
+    }
+
+    /// Edit the song's set directly, returning the commands that bring every
+    /// channel's rack along.
+    fn edit_song_modulation(
+        &mut self,
+        edit: impl FnOnce(&mut mooloop_core::SongModulation) -> bool,
+    ) -> Vec<EngineCommand> {
+        let before = self.all_racks();
+        if !edit(&mut self.modulation) {
+            return Vec::new();
+        }
+        Self::racks_commands(&before, &self.all_racks())
+    }
+
+    /// The source a slot of the selected channel's rack names: a module by
+    /// its id, an outlet or the keyboard by this channel.
+    fn source_at(&self, slot: u8) -> Option<ModSourceRef> {
+        let channel = self.channel_id(self.selected)?;
+        if let Some(source) = performance_of_slot(slot) {
+            return Some(ModSourceRef::Performance { channel, source });
+        }
+        if let Some(outlet) = outlet_of_slot(slot) {
+            return Some(ModSourceRef::GeneratorOutlet { channel, outlet });
+        }
+        self.selected_rack()
+            .source_id(slot as usize)
+            .map(ModSourceRef::Id)
+    }
+
+    /// Where `source` sits in the selected channel's rack, if it is there.
+    fn slot_of_source(&self, source: ModSourceRef) -> Option<u8> {
+        match source {
+            ModSourceRef::Id(id) => self.selected_rack().slot_of(id),
+            ModSourceRef::GeneratorOutlet { channel, outlet } => (Some(channel)
+                == self.channel_id(self.selected))
+            .then(|| mooloop_core::modulation::outlet_slot(outlet)),
+            ModSourceRef::Performance { channel, source } => (Some(channel)
+                == self.channel_id(self.selected))
+            .then(|| mooloop_core::modulation::performance_slot(source)),
+            ModSourceRef::LocalSlot(_) => None,
+        }
+    }
+
+    /// The selected source's slot in the selected channel's rack. `None`
+    /// when nothing is selected, or what is selected is not on this channel.
+    pub fn modulation_selected_slot(&self) -> Option<u8> {
+        self.modulation_selected
+            .get()
+            .and_then(|source| self.slot_of_source(source))
+    }
+
+    /// The armed source's slot in the selected channel's rack, as
+    /// [`Self::modulation_selected_slot`].
+    pub fn modulation_armed_slot(&self) -> Option<u8> {
+        self.modulation_armed
+            .get()
+            .and_then(|source| self.slot_of_source(source))
+    }
+
+    /// Select the source in `slot` of the selected channel's rack, or clear
+    /// the selection.
+    pub fn set_modulation_selected_slot(&self, slot: Option<u8>) {
+        self.modulation_selected
+            .set(slot.and_then(|slot| self.source_at(slot)));
+    }
+
+    /// Arm the source in `slot` of the selected channel's rack, or disarm.
+    pub fn set_modulation_armed_slot(&self, slot: Option<u8>) {
+        self.modulation_armed
+            .set(slot.and_then(|slot| self.source_at(slot)));
     }
 
     /// The control outlet `slot` names on the selected channel, if its
@@ -66,9 +244,7 @@ impl Session {
     /// Whether `slot` names a source the selected channel actually has: an
     /// occupied rack slot, or a published control outlet.
     pub fn control_source_exists(&self, slot: u8) -> bool {
-        self.channels
-            .get(self.selected)
-            .is_some_and(|channel| channel.modulation.params(slot as usize).is_some())
+        self.selected_rack().params(slot as usize).is_some()
             || self.selected_channel_outlet(slot).is_some()
     }
 
@@ -82,24 +258,8 @@ impl Session {
         if let Some(outlet) = self.selected_channel_outlet(slot) {
             return Some(outlet.name.to_string());
         }
-        let params = self.channels.get(self.selected)?.modulation.params(slot as usize)?;
+        let params = self.selected_rack().params(slot as usize)?;
         Some(format!("{} {}", params.kind().badge(), slot + 1))
-    }
-
-    /// The command that reinstalls one modulator slot whole.
-    ///
-    /// Used wherever the change is not addressable by descriptor id -- an
-    /// envelope's gate is a jack, not a parameter -- so the module travels
-    /// entire rather than as a parameter update.
-    pub fn install_modulator_command(&self, slot: usize) -> Option<EngineCommand> {
-        let rack = self.channels.get(self.selected)?.modulation;
-        let (source, params) = (rack.source_id(slot)?, rack.params(slot)?);
-        Some(EngineCommand::InstallModulator {
-            channel: self.selected as u8,
-            slot: slot as u8,
-            source,
-            params,
-        })
     }
 
     /// Whether a direct modulation-knob gesture is currently open.
@@ -130,9 +290,9 @@ impl Session {
         if !self.control_source_exists(slot) {
             return false;
         }
-        self.modulation_selected_slot.set(Some(slot));
-        if self.modulation_armed_slot.get().is_some() {
-            self.modulation_armed_slot.set(Some(slot));
+        self.set_modulation_selected_slot(Some(slot));
+        if self.modulation_armed.get().is_some() {
+            self.set_modulation_armed_slot(Some(slot));
         }
         self.modulation_shelf_open = true;
         true
@@ -140,45 +300,37 @@ impl Session {
 
     /// Reorders two modulator slots.
     ///
-    /// Selection and arming are re-derived from the modules' durable ids, so
-    /// they follow the module rather than the slot number. Both racks run the
-    /// same permutation, so the engine's copy carries routes and a math
-    /// module's input slot across the move exactly as this one does.
-    pub fn move_modulation_source(&mut self, slot: i32, target: i32) -> Option<EngineCommand> {
-        let (slot, target) = (usize::try_from(slot).ok()?, usize::try_from(target).ok()?);
-        let channel = self.selected;
-        let selected_slot = self.modulation_selected_slot.get();
-        let armed_slot = self.modulation_armed_slot.get();
-        let rack = self.rack_mut()?;
-        let source_of =
-            |rack: &mooloop_core::ModRack, slot: Option<u8>| {
-                slot.and_then(|slot| rack.source_id(slot as usize))
-            };
-        let selected_id = source_of(rack, selected_slot);
-        let armed_id = source_of(rack, armed_slot);
-        if !rack.move_module(slot, target) {
-            return None;
-        }
-        // A module follows its durable id across the move. An outlet is not
-        // in the rack, does not move, and keeps the slot it had -- otherwise
-        // reordering two LFOs would silently disarm a Trigger the gesture was
-        // pointed at, which is the same silent retargeting the id lookup
-        // exists to prevent.
-        let follow = |rack: &mooloop_core::ModRack, was: Option<u8>, id: Option<ModSourceId>| match was {
-            Some(slot) if outlet_of_slot(slot).is_some() || performance_of_slot(slot).is_some() => {
-                Some(slot)
-            }
-            _ => id.and_then(|id| rack.slot_of(id)),
+    /// Selection and arming name modules by durable id, so they follow the
+    /// module rather than the slot number. The engine runs the same
+    /// permutation, so its copy carries routes, a math module's input slot,
+    /// and every module's running state across the move exactly as this one
+    /// does.
+    pub fn move_modulation_source(&mut self, slot: i32, target: i32) -> Vec<EngineCommand> {
+        let (Ok(slot), Ok(target)) = (usize::try_from(slot), usize::try_from(target)) else {
+            return Vec::new();
         };
-        let next_selected = follow(rack, selected_slot, selected_id);
-        let next_armed = follow(rack, armed_slot, armed_id);
-        self.modulation_selected_slot.set(next_selected);
-        self.modulation_armed_slot.set(next_armed);
-        Some(EngineCommand::MoveModulator {
-            channel: channel as u8,
+        let Some(channel) = self.channels.get(self.selected) else {
+            return Vec::new();
+        };
+        let (id, name) = (channel.id, channel.name.clone());
+        let mut before_all = self.all_racks();
+        let before = before_all[self.selected];
+        let mut after = before;
+        if !after.move_module(slot, target) {
+            return Vec::new();
+        }
+        self.modulation.store_channel_rack(id, &name, &before, &after);
+        // The engine runs the move itself, so what is left to diff is
+        // everything else the move touched: a guest seated by slot number
+        // elsewhere, which nothing a user does in this step makes.
+        let mut commands = vec![EngineCommand::MoveModulator {
+            channel: self.selected as u8,
             from: slot as u8,
             to: target as u8,
-        })
+        }];
+        before_all[self.selected].move_module(slot, target);
+        commands.extend(Self::racks_commands(&before_all, &self.all_racks()));
+        commands
     }
 
     /// Arms or disarms the assignment gesture.
@@ -186,137 +338,174 @@ impl Session {
     /// Returns the armed source's badge, or `None` when assignment is now off
     /// -- which is also the answer when nothing was selected to arm.
     pub fn toggle_modulation_assignment(&mut self) -> Option<String> {
-        let next = if self.modulation_armed_slot.get().is_some() {
+        let next = if self.modulation_armed.get().is_some() {
             None
         } else {
-            self.modulation_selected_slot.get()
+            self.modulation_selected.get()
         };
-        self.modulation_armed_slot.set(next);
+        self.modulation_armed.set(next);
         self.modulation_shelf_open = true;
-        self.control_source_name(next?)
+        self.control_source_name(self.modulation_armed_slot()?)
     }
 
-    /// Installs a new modulator in the first free slot.
-    pub fn add_modulation_source(&mut self, kind: ModulatorKind) -> Option<EngineCommand> {
+    /// Adds a new module to the song, on the selected channel's rack.
+    ///
+    /// Its input defaults to the selected channel's notes, so an Envelope
+    /// added with a channel selected gates from that channel as it always
+    /// did, and an LFO retriggers from it.
+    pub fn add_modulation_source(&mut self, kind: ModulatorKind) -> Vec<EngineCommand> {
         let selected = self.selected;
-        let selected_id = self.channel_id(selected).unwrap_or_default();
-        let rack = self.rack_mut()?;
-        let slot = rack.free_slot()?;
-        let mut params = kind.default_params();
-        // The envelope's gate is a jack rather than a descriptor id, so its
-        // only sensible default is set here.
-        if let ModulatorParams::Envelope(envelope) = &mut params {
-            envelope.input_channel = selected as u8;
-            envelope.input_channel_id = selected_id;
-        }
-        rack.install(slot, params);
-        self.modulation_selected_slot.set(Some(slot as u8));
-        self.modulation_armed_slot.set(None);
+        let Some(selected_id) = self.channel_id(selected) else {
+            return Vec::new();
+        };
+        let added = self.edit_selected_rack(|rack| {
+            let slot = rack.free_slot()?;
+            let mut params = kind.default_params();
+            // The envelope's gate is a jack rather than a descriptor id, so
+            // its only sensible default is set here.
+            if let ModulatorParams::Envelope(envelope) = &mut params {
+                envelope.input_channel = selected as u8;
+                envelope.input_channel_id = selected_id;
+            }
+            rack.install(slot, params).map(|id| (slot, id))
+        });
+        let Some(((slot, id), commands)) = added else {
+            return Vec::new();
+        };
+        debug_assert!(self.modulation.module(id).is_some());
+        self.set_modulation_selected_slot(Some(slot as u8));
+        self.modulation_armed.set(None);
         self.modulation_shelf_open = true;
-        self.install_modulator_command(slot)
+        commands
     }
 
-    /// Sets one parameter of one modulator, or `None` when nothing moved.
+    /// Sets one parameter of one modulator. Empty when nothing moved.
     ///
     /// A change inside an open knob gesture is marked so the gesture's own
-    /// undo entry is recorded on release rather than one per frame.
-    pub fn set_modulator_param(&mut self, slot: i32, id: i32, value: f32) -> Option<EngineCommand> {
-        let (slot, id) = (usize::try_from(slot).ok()?, u32::try_from(id).ok()?);
-        let channel = self.selected;
-        let in_gesture = self.gesture_open();
-        let params = self.rack_mut()?.params_mut(slot)?;
-        let previous = params.get(id);
-        params.set(id, value);
-        if params.get(id) == previous {
-            return None;
+    /// undo entry is recorded on release rather than one per frame. Sent as
+    /// one fact to every rack the module sits in, rather than as a reinstall,
+    /// because a knob drag sends one of these a frame.
+    pub fn set_modulator_param(&mut self, slot: i32, id: i32, value: f32) -> Vec<EngineCommand> {
+        let (Ok(slot), Ok(id)) = (usize::try_from(slot), u32::try_from(id)) else {
+            return Vec::new();
+        };
+        let Some(source) = self.selected_rack().source_id(slot) else {
+            return Vec::new();
+        };
+        let Some(module) = self.modulation.module_mut(source) else {
+            return Vec::new();
+        };
+        let previous = module.params.get(id);
+        module.params.set(id, value);
+        if module.params.get(id) == previous {
+            return Vec::new();
         }
-        if in_gesture {
+        if self.gesture_open() {
             self.gesture_changed = true;
         }
-        Some(EngineCommand::SetModulatorParam {
-            channel: channel as u8,
-            slot: slot as u8,
-            id,
-            value,
+        self.all_racks()
+            .iter()
+            .enumerate()
+            .filter_map(|(seat, rack)| {
+                Some(EngineCommand::SetModulatorParam {
+                    channel: seat as u8,
+                    slot: rack.slot_of(source)?,
+                    id,
+                    value,
+                })
+            })
+            .collect()
+    }
+
+    /// Removes a module from the song and everything routed from it.
+    pub fn remove_modulation_source(&mut self, slot: i32) -> Vec<EngineCommand> {
+        let Ok(slot) = u8::try_from(slot) else {
+            return Vec::new();
+        };
+        let Some(source) = self.selected_rack().source_id(slot as usize) else {
+            return Vec::new();
+        };
+        let commands = self.edit_song_modulation(|modulation| modulation.remove_module(source));
+        if commands.is_empty() {
+            return commands;
+        }
+        let gone = Some(ModSourceRef::Id(source));
+        if self.modulation_selected.get() == gone {
+            self.modulation_selected.set(None);
+        }
+        if self.modulation_armed.get() == gone {
+            self.modulation_armed.set(None);
+        }
+        commands
+    }
+
+    /// Points a module's note input at an outlet: the Envelope's gate, the
+    /// LFO's retrigger, the Step's advance, the Random's trigger.
+    ///
+    /// Replaces the Envelope-only gate picker. A Math module reads another
+    /// module, not notes, and takes none; nor does an input naming a channel
+    /// the song does not have.
+    pub fn set_module_input(&mut self, id: ModSourceId, input: InputSource) -> Vec<EngineCommand> {
+        if input
+            .channel()
+            .is_some_and(|channel| self.channel_index(channel).is_none())
+        {
+            return Vec::new();
+        }
+        self.edit_song_modulation(|modulation| {
+            let Some(module) = modulation.module_mut(id) else {
+                return false;
+            };
+            if matches!(module.params, ModulatorParams::Math(_)) || module.input == input {
+                return false;
+            }
+            module.input = input;
+            true
         })
     }
 
-    /// Removes a modulator and everything routed from it.
-    ///
-    /// The rack drops the module's routes by identity, so a route aimed at a
-    /// different module that later occupied the same slot cannot be caught up
-    /// in the removal.
-    pub fn remove_modulation_source(&mut self, slot: i32) -> Option<EngineCommand> {
-        let slot = u8::try_from(slot).ok()?;
-        let channel = self.selected;
-        if !self.rack_mut()?.clear(slot as usize) {
-            return None;
-        }
-        if self.modulation_selected_slot.get() == Some(slot) {
-            self.modulation_selected_slot.set(None);
-        }
-        if self.modulation_armed_slot.get() == Some(slot) {
-            self.modulation_armed_slot.set(None);
-        }
-        Some(EngineCommand::ClearModulator {
-            channel: channel as u8,
-            slot,
-        })
+    /// The module in `slot` of the selected channel's rack, by identity.
+    pub fn module_in_slot(&self, slot: i32) -> Option<ModSourceId> {
+        self.selected_rack().source_id(usize::try_from(slot).ok()?)
     }
 
-    /// Points an envelope's gate at a channel.
-    ///
-    /// The picker names a seat, because that is what a row in a list is. Both
-    /// fields are written here: the identity is what survives a structural
-    /// edit, the seat is what the DSP reads, and the one place they are
-    /// allowed to be set is the one place that can see both.
-    pub fn set_envelope_input_channel(&mut self, slot: i32, channel: i32) -> Option<EngineCommand> {
-        let slot = usize::try_from(slot).ok()?;
-        let channel = u8::try_from(channel).ok()?;
-        let id = self.channel_id(usize::from(channel))?;
-        let envelope = self.modulation_envelope_mut(slot)?;
-        envelope.input_channel = channel;
-        envelope.input_channel_id = id;
-        self.install_modulator_command(slot)
-    }
-
-    /// Sets a route's polarity, or `None` when it is already that.
-    pub fn set_route_polarity(&mut self, index: i32, polarity: i32) -> Option<EngineCommand> {
-        let index = usize::try_from(index).ok()?;
-        let channel = self.selected;
-        let route = self
-            .rack_mut()?
-            .routes
-            .get_mut(index)
-            .and_then(Option::as_mut)?;
+    /// Sets a route's polarity. Empty when it is already that.
+    pub fn set_route_polarity(&mut self, index: i32, polarity: i32) -> Vec<EngineCommand> {
+        let Ok(index) = usize::try_from(index) else {
+            return Vec::new();
+        };
         let next = if polarity == 1 {
             ModPolarity::Unipolar
         } else {
             ModPolarity::Bipolar
         };
-        if route.polarity == next {
-            return None;
-        }
-        route.polarity = next;
-        Some(EngineCommand::SetModRoute {
-            channel: channel as u8,
-            route: *route,
+        self.edit_selected_rack(|rack| {
+            let route = rack.routes.get_mut(index)?.as_mut()?;
+            if route.polarity == next {
+                return None;
+            }
+            route.polarity = next;
+            Some(())
         })
+        .map(|((), commands)| commands)
+        .unwrap_or_default()
     }
 
-    /// Removes one route.
-    ///
-    /// The row's durable source is read before it is taken, so the engine is
-    /// told which assignment ended rather than which matrix position emptied,
-    /// and the two racks cannot drift into removing different routes.
-    pub fn remove_route(&mut self, index: i32) -> Option<EngineCommand> {
-        let index = usize::try_from(index).ok()?;
-        let channel = self.selected;
-        let removed = self.rack_mut()?.routes.get_mut(index)?.take()?;
-        Some(EngineCommand::RemoveModRoute {
-            channel: channel as u8,
-            source: removed.source,
-            destination: removed.destination,
+    /// Removes one route, by its source and destination rather than by its
+    /// row, so every rack it is in lets go of the same one.
+    pub fn remove_route(&mut self, index: i32) -> Vec<EngineCommand> {
+        let Ok(index) = usize::try_from(index) else {
+            return Vec::new();
+        };
+        let Some(removed) = self.selected_rack().routes.get(index).copied().flatten() else {
+            return Vec::new();
+        };
+        self.edit_song_modulation(|modulation| {
+            let before = modulation.routes.len();
+            modulation.routes.retain(|route| {
+                !(route.source == removed.source && route.destination == removed.destination)
+            });
+            modulation.routes.len() != before
         })
     }
 }
@@ -329,9 +518,10 @@ mod tests {
 
     fn armed_lfo() -> Session {
         let mut session = Session::default();
-        session
-            .add_modulation_source(ModulatorKind::Lfo)
-            .expect("an empty rack has a free slot");
+        assert!(
+            !session.add_modulation_source(ModulatorKind::Lfo).is_empty(),
+            "an empty rack has a free slot"
+        );
         session
     }
 
@@ -341,26 +531,28 @@ mod tests {
     #[test]
     fn reordering_sources_carries_selection_and_arming_with_the_module() {
         let mut session = armed_lfo();
-        session
-            .add_modulation_source(ModulatorKind::Envelope)
-            .expect("rack has room");
+        assert!(
+            !session.add_modulation_source(ModulatorKind::Envelope).is_empty(),
+            "rack has room"
+        );
         // Slot 1 holds the envelope and is both selected and armed.
-        assert_eq!(session.modulation_selected_slot.get(), Some(1));
+        assert_eq!(session.modulation_selected_slot(), Some(1));
         session.toggle_modulation_assignment();
-        assert_eq!(session.modulation_armed_slot.get(), Some(1));
+        assert_eq!(session.modulation_armed_slot(), Some(1));
 
-        session
-            .move_modulation_source(1, 0)
-            .expect("both slots are occupied");
+        assert!(
+            !session.move_modulation_source(1, 0).is_empty(),
+            "both slots are occupied"
+        );
 
         assert_eq!(
-            session.modulation_selected_slot.get(),
+            session.modulation_selected_slot(),
             Some(0),
             "selection stayed on the slot instead of following the module"
         );
-        assert_eq!(session.modulation_armed_slot.get(), Some(0));
+        assert_eq!(session.modulation_armed_slot(), Some(0));
         assert!(matches!(
-            session.channels[0].modulation.params(0),
+            session.channel_rack(0).params(0),
             Some(ModulatorParams::Envelope(_))
         ));
     }
@@ -373,19 +565,34 @@ mod tests {
         session.add_channel(mooloop_core::DeviceKind::Sampler);
         assert_eq!(session.selected, 1);
 
-        session
-            .add_modulation_source(ModulatorKind::Envelope)
-            .expect("rack has room");
+        assert!(
+            !session.add_modulation_source(ModulatorKind::Envelope).is_empty(),
+            "rack has room"
+        );
 
-        let Some(ModulatorParams::Envelope(envelope)) = session.channels[1].modulation.params(0)
-        else {
+        let Some(ModulatorParams::Envelope(envelope)) = session.channel_rack(1).params(0) else {
             panic!("the envelope was not installed");
         };
         assert_eq!(envelope.input_channel, 1);
+        let id = session.module_in_slot(0).expect("slot 0 holds the envelope");
+        assert_eq!(
+            session.modulation.module(id).map(|module| module.input),
+            session.channel_id(1).map(InputSource::ChannelNotes)
+        );
 
-        // A gate pointed at a channel that does not exist is refused.
-        assert!(session.set_envelope_input_channel(0, 9).is_none());
-        assert!(session.set_envelope_input_channel(0, 0).is_some());
+        // A gate pointed at a channel the song does not have is refused.
+        let stranger = mooloop_core::ChannelId(999);
+        assert!(session
+            .set_module_input(id, InputSource::ChannelNotes(stranger))
+            .is_empty());
+        let first = session.channel_id(0).expect("the song has a first channel");
+        assert!(!session
+            .set_module_input(id, InputSource::ChannelNotes(first))
+            .is_empty());
+        let Some(ModulatorParams::Envelope(envelope)) = session.channel_rack(1).params(0) else {
+            panic!("the envelope left its channel");
+        };
+        assert_eq!(envelope.input_channel, 0);
     }
 
     /// Arming toggles, and reports the badge the status bar names.
@@ -397,10 +604,10 @@ mod tests {
             .toggle_modulation_assignment()
             .expect("a source is selected");
         assert!(armed.ends_with(" 1"), "{armed}");
-        assert_eq!(session.modulation_armed_slot.get(), Some(0));
+        assert_eq!(session.modulation_armed_slot(), Some(0));
 
         assert_eq!(session.toggle_modulation_assignment(), None);
-        assert_eq!(session.modulation_armed_slot.get(), None);
+        assert_eq!(session.modulation_armed_slot(), None);
     }
 
     /// A parameter set to the value it already holds is not an edit, so it
@@ -411,11 +618,11 @@ mod tests {
         let id = 0;
 
         let first = session.set_modulator_param(0, id, 0.25);
-        assert!(first.is_some());
-        assert!(session.set_modulator_param(0, id, 0.25).is_none());
+        assert!(!first.is_empty());
+        assert!(session.set_modulator_param(0, id, 0.25).is_empty());
 
-        assert!(session.set_modulator_param(9, id, 0.5).is_none());
-        assert!(session.set_modulator_param(-1, id, 0.5).is_none());
+        assert!(session.set_modulator_param(9, id, 0.5).is_empty());
+        assert!(session.set_modulator_param(-1, id, 0.5).is_empty());
     }
 
     /// Removing a source clears the selection and arming that pointed at it,
@@ -425,23 +632,21 @@ mod tests {
         let mut session = armed_lfo();
         session.toggle_modulation_assignment();
         let destination = ParamAddr::strip(EffectTarget::Channel(0), STRIP_PARAM_VOLUME);
-        session.channels[0]
-            .modulation
-            .add_route(ModRoute::to_slot(0, destination, 0.5, ModPolarity::Bipolar))
+        session
+            .edit_selected_rack(|rack| {
+                rack.add_route(ModRoute::to_slot(0, destination, 0.5, ModPolarity::Bipolar))
+            })
             .expect("the matrix is empty");
 
-        session
-            .remove_modulation_source(0)
-            .expect("slot 0 is occupied");
+        assert!(
+            !session.remove_modulation_source(0).is_empty(),
+            "slot 0 is occupied"
+        );
 
-        assert_eq!(session.modulation_selected_slot.get(), None);
-        assert_eq!(session.modulation_armed_slot.get(), None);
-        assert!(session.channels[0]
-            .modulation
-            .routes
-            .iter()
-            .all(Option::is_none));
-        assert!(session.remove_modulation_source(0).is_none());
+        assert_eq!(session.modulation_selected_slot(), None);
+        assert_eq!(session.modulation_armed_slot(), None);
+        assert!(session.modulation.routes.is_empty());
+        assert!(session.remove_modulation_source(0).is_empty());
     }
 
     /// The keyboard's mod wheel is a source on every channel, whatever its
@@ -467,7 +672,10 @@ mod tests {
         };
         assert_eq!(
             route.source,
-            mooloop_core::ModSourceRef::Performance(mooloop_core::modulation::PERFORMANCE_MOD_WHEEL)
+            mooloop_core::ModSourceRef::Performance {
+                channel: session.channels[0].id,
+                source: mooloop_core::modulation::PERFORMANCE_MOD_WHEEL,
+            }
         );
         assert_eq!(route.source_slot, wheel);
     }
@@ -488,13 +696,13 @@ mod tests {
         let gate = outlet_slot(mooloop_core::mlp8::OUTLET_GATE);
 
         assert!(session.select_modulation_source(gate.into()));
-        assert_eq!(session.modulation_selected_slot.get(), Some(gate));
+        assert_eq!(session.modulation_selected_slot(), Some(gate));
         assert_eq!(
             session.toggle_modulation_assignment().as_deref(),
             Some("Gate"),
             "the badge showed a slot number instead of the outlet"
         );
-        assert_eq!(session.modulation_armed_slot.get(), Some(gate));
+        assert_eq!(session.modulation_armed_slot(), Some(gate));
     }
 
     /// An outlet belongs to whichever generator the channel holds. A sampler
@@ -509,7 +717,7 @@ mod tests {
             assert!(!session.control_source_exists(slot));
             assert!(!session.select_modulation_source(slot.into()));
         }
-        assert_eq!(session.modulation_selected_slot.get(), None);
+        assert_eq!(session.modulation_selected_slot(), None);
 
         // Nor does an audio outlet become selectable by living in the same
         // table as the control ones: ML-P8 publishes fourteen and offers
@@ -543,7 +751,10 @@ mod tests {
         };
         assert_eq!(
             gate.source,
-            mooloop_core::ModSourceRef::GeneratorOutlet(mooloop_core::mlp8::OUTLET_GATE)
+            mooloop_core::ModSourceRef::GeneratorOutlet {
+                channel: session.channels[0].id,
+                outlet: mooloop_core::mlp8::OUTLET_GATE,
+            }
         );
         assert_eq!(gate.source_slot, outlet_slot(mooloop_core::mlp8::OUTLET_GATE));
         assert_eq!(gate.polarity, ModPolarity::Bipolar);
@@ -557,13 +768,16 @@ mod tests {
         assert_eq!(lfo.polarity, ModPolarity::Bipolar);
         assert_eq!(
             lfo.source,
-            mooloop_core::ModSourceRef::GeneratorOutlet(mooloop_core::mlp8::OUTLET_LFO)
+            mooloop_core::ModSourceRef::GeneratorOutlet {
+                channel: session.channels[0].id,
+                outlet: mooloop_core::mlp8::OUTLET_LFO,
+            }
         );
 
         // Two rows, one per outlet: an outlet route dedupes on its source the
         // way a module's does, rather than stacking.
         session.arm_modulation_route(destination, 0.6);
-        let rows = session.channels[0].modulation.routes.iter().flatten().count();
+        let rows = session.modulation.routes.len();
         assert_eq!(rows, 2);
     }
 
@@ -584,11 +798,7 @@ mod tests {
             session.arm_modulation_route(destination, 0.4),
             crate::session::ArmedRoute::Unchanged
         ));
-        assert!(session.channels[0]
-            .modulation
-            .routes
-            .iter()
-            .all(Option::is_none));
+        assert!(session.modulation.routes.is_empty());
     }
 
     /// A reorder moves modules. An outlet is not in the rack and does not
@@ -597,21 +807,24 @@ mod tests {
     #[test]
     fn reordering_modules_leaves_an_armed_outlet_alone() {
         let mut session = mlp8_channel();
-        session
-            .add_modulation_source(ModulatorKind::Lfo)
-            .expect("an empty rack has a free slot");
-        session
-            .add_modulation_source(ModulatorKind::Envelope)
-            .expect("rack has room");
+        assert!(
+            !session.add_modulation_source(ModulatorKind::Lfo).is_empty(),
+            "an empty rack has a free slot"
+        );
+        assert!(
+            !session.add_modulation_source(ModulatorKind::Envelope).is_empty(),
+            "rack has room"
+        );
         let trigger = outlet_slot(mooloop_core::mlp8::OUTLET_TRIGGER);
         session.select_modulation_source(trigger.into());
         session.toggle_modulation_assignment();
 
-        session
-            .move_modulation_source(1, 0)
-            .expect("both slots are occupied");
+        assert!(
+            !session.move_modulation_source(1, 0).is_empty(),
+            "both slots are occupied"
+        );
 
-        assert_eq!(session.modulation_selected_slot.get(), Some(trigger));
-        assert_eq!(session.modulation_armed_slot.get(), Some(trigger));
+        assert_eq!(session.modulation_selected_slot(), Some(trigger));
+        assert_eq!(session.modulation_armed_slot(), Some(trigger));
     }
 }

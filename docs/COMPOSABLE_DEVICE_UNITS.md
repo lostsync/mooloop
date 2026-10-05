@@ -117,7 +117,9 @@ topology is fine; fused topology is not.
 Anything a fragment might be saved and reloaded elsewhere must not name its
 neighbours by index. `ModRoute` named its destination channel absolutely, so a
 channel preset saved from channel 3 modulated channel 3 wherever it was
-loaded; `rescope_modulation` exists to undo that. Assume any unit may be moved.
+loaded; `rescope_modulation` existed to undo that, and loading a preset now
+aims its routes at the receiving channel as it adds them to the song. Assume
+any unit may be moved.
 
 None of the three is a bet on a node editor. They are ordinary hygiene, they
 make the code better if no graph view is ever built, and they are the reason

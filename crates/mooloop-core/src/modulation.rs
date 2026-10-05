@@ -1673,13 +1673,14 @@ impl ModRoute {
     /// already durable, so the route is complete as authored and its runtime
     /// locator is a function of the id rather than a lookup in the rack.
     pub const fn from_outlet(
+        channel: crate::ChannelId,
         outlet: u16,
         destination: ParamAddr,
         depth: f32,
         polarity: ModPolarity,
     ) -> Self {
         Self {
-            source: ModSourceRef::GeneratorOutlet(outlet),
+            source: ModSourceRef::GeneratorOutlet { channel, outlet },
             source_slot: outlet_slot(outlet),
             destination,
             depth,
@@ -1690,13 +1691,14 @@ impl ModRoute {
     /// A route driven by the keyboard's mod wheel or aftertouch. Complete as
     /// authored, like an outlet route: the source id is durable.
     pub const fn from_performance(
+        channel: crate::ChannelId,
         source: u16,
         destination: ParamAddr,
         depth: f32,
         polarity: ModPolarity,
     ) -> Self {
         Self {
-            source: ModSourceRef::Performance(source),
+            source: ModSourceRef::Performance { channel, source },
             source_slot: performance_slot(source),
             destination,
             depth,
@@ -1942,8 +1944,8 @@ impl serde::Serialize for ModRack {
                 // nothing, because the id already is the durable form.
                 let (source, outlet, performance) = match route.source {
                     ModSourceRef::Id(id) => (Some(id.0), None, None),
-                    ModSourceRef::GeneratorOutlet(outlet) => (None, Some(outlet), None),
-                    ModSourceRef::Performance(source) => (None, None, Some(source)),
+                    ModSourceRef::GeneratorOutlet { outlet, .. } => (None, Some(outlet), None),
+                    ModSourceRef::Performance { source, .. } => (None, None, Some(source)),
                     // Only an unstamped route is still a bare slot, and
                     // `add_route` is the only way in. Saving one would write
                     // a reference that means something different next load.
@@ -1993,10 +1995,17 @@ impl<'de> serde::Deserialize<'de> for ModRack {
                 saved_route.source,
                 saved_route.source_slot,
             ) {
-                _ if saved_route.performance.is_some() => {
-                    ModSourceRef::Performance(saved_route.performance.unwrap_or_default())
-                }
-                (Some(outlet), _, _) => ModSourceRef::GeneratorOutlet(outlet),
+                // A rack names no channel: it was one channel's, and that
+                // channel is whichever one it is lifted onto
+                // ([`SongModulation::lift_rack`]).
+                _ if saved_route.performance.is_some() => ModSourceRef::Performance {
+                    channel: crate::ChannelId::UNASSIGNED,
+                    source: saved_route.performance.unwrap_or_default(),
+                },
+                (Some(outlet), _, _) => ModSourceRef::GeneratorOutlet {
+                    channel: crate::ChannelId::UNASSIGNED,
+                    outlet,
+                },
                 (None, Some(id), _) => ModSourceRef::Id(ModSourceId(id)),
                 (None, None, Some(slot)) => ModSourceRef::LocalSlot(slot),
                 (None, None, None) => continue,
@@ -2007,8 +2016,7 @@ impl<'de> serde::Deserialize<'de> for ModRack {
             // A module route resolves to the identity now in that slot; an
             // outlet route is already durable and needs no lookup.
             let source = match reference {
-                ModSourceRef::GeneratorOutlet(outlet) => ModSourceRef::GeneratorOutlet(outlet),
-                ModSourceRef::Performance(source) => ModSourceRef::Performance(source),
+                ModSourceRef::GeneratorOutlet { .. } | ModSourceRef::Performance { .. } => reference,
                 _ => match rack.source_id(source_slot as usize) {
                     Some(id) => ModSourceRef::Id(id),
                     None => continue,
@@ -2077,10 +2085,10 @@ impl ModRack {
         match source {
             ModSourceRef::Id(id) => self.slot_of(id),
             ModSourceRef::LocalSlot(slot) => Some(slot),
-            ModSourceRef::GeneratorOutlet(outlet) => {
+            ModSourceRef::GeneratorOutlet { outlet, .. } => {
                 (usize::from(outlet) < MAX_GENERATOR_OUTLETS).then(|| outlet_slot(outlet))
             }
-            ModSourceRef::Performance(source) => {
+            ModSourceRef::Performance { source, .. } => {
                 (usize::from(source) < PERFORMANCE_SOURCES).then(|| performance_slot(source))
             }
         }
@@ -2320,7 +2328,7 @@ impl ModRack {
     pub fn add_route(&mut self, route: ModRoute) -> Option<usize> {
         // An outlet route arrives already durable: there is no slot to read
         // an identity out of, and stamping one would be inventing a module.
-        if let ModSourceRef::GeneratorOutlet(_) | ModSourceRef::Performance(_) = route.source {
+        if let ModSourceRef::GeneratorOutlet { .. } | ModSourceRef::Performance { .. } = route.source {
             return self.apply_route(route);
         }
         let source = ModSourceRef::Id(self.source_id(route.source_slot as usize)?);
@@ -2654,6 +2662,700 @@ impl ModRack {
     }
 }
 
+/// What a module's note input listens to: the Envelope's gate, the LFO's
+/// retrigger, the Step's advance and the Random's trigger.
+///
+/// An input names an **outlet that sends compatible events** (Adam,
+/// 2026-10-05: *"you pick the input from a list of outlets sending compatible
+/// events"*). A channel's notes is the only such outlet today; this is the
+/// song patch canvas's inlet in its first form, so it is an enum to grow
+/// rather than a bare channel id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputSource {
+    /// Listening to nothing: an Envelope that never opens, an LFO that never
+    /// retriggers.
+    #[default]
+    None,
+    /// The scheduled Note On and Note Off stream of one channel, by durable
+    /// identity, so a channel move does not touch it.
+    ChannelNotes(crate::ChannelId),
+}
+
+impl InputSource {
+    pub const fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
+
+    /// The channel this input names, if it names one.
+    pub const fn channel(self) -> Option<crate::ChannelId> {
+        match self {
+            Self::ChannelNotes(channel) => Some(channel),
+            Self::None => None,
+        }
+    }
+}
+
+/// Where the engine runs a module until it runs the song's set itself.
+///
+/// **A shim, and step 02 of `docs/plans/song-modulation/` deletes it.** The
+/// engine still keeps one rack per channel; until it stops, each module has
+/// to sit in one of them, at one slot. A converted song keeps exactly the
+/// seat each module had, so the engine is handed the same racks it was
+/// handed before and plays the same thing -- slot order included, which a
+/// Math module and a Random module's seed both read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RackSeat {
+    pub channel: crate::ChannelId,
+    pub slot: u8,
+}
+
+/// One module in the song's modulation set: what a rack slot was, plus the
+/// identity and name a song-wide list needs.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SongModule {
+    /// Unique in the song, minted from [`SongModulation::next_source_id`].
+    pub id: ModSourceId,
+    /// What the module is called in a list of every module in the song, so
+    /// two LFOs can be told apart.
+    #[serde(default)]
+    pub name: String,
+    /// What the module's random generator is seeded from.
+    ///
+    /// A Random module took its seed from its slot index, so reordering a
+    /// song's modules would change its sequence. A converted module records
+    /// the slot it had and plays the sequence it played; a new one records
+    /// its id. The engine still seeds from the rack slot until step 02, which
+    /// [`RackSeat`] keeps equal for every converted module.
+    #[serde(default)]
+    pub seed: u32,
+    /// What the module's note input listens to. The Envelope's gate lived in
+    /// its params as a channel; every kind that reads notes now names its
+    /// input here instead. A Math module reads another module, not notes, and
+    /// has none.
+    #[serde(default, skip_serializing_if = "InputSource::is_none")]
+    pub input: InputSource,
+    /// See [`RackSeat`]. `None` for a module whose channel has gone: it stays
+    /// in the song (a module with no route is still one the user made), and
+    /// the engine does not run it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rack: Option<RackSeat>,
+    pub params: ModulatorParams,
+}
+
+impl SongModule {
+    /// The params as a channel rack runs them: the Envelope's gate seat and
+    /// identity written from [`Self::input`], which is where the song keeps
+    /// them.
+    fn rack_params(&self, seat_of: &impl Fn(crate::ChannelId) -> Option<u8>) -> ModulatorParams {
+        let mut params = self.params;
+        if let ModulatorParams::Envelope(envelope) = &mut params {
+            match self.input.channel() {
+                Some(channel) => {
+                    envelope.input_channel = seat_of(channel).unwrap_or(u8::MAX);
+                    envelope.input_channel_id = channel;
+                }
+                None => {
+                    envelope.input_channel = u8::MAX;
+                    envelope.input_channel_id = crate::ChannelId::UNASSIGNED;
+                }
+            }
+        }
+        params
+    }
+}
+
+/// The params as the song stores them: the Envelope's own gate fields reset,
+/// because [`SongModule::input`] holds the gate and two copies of one fact
+/// drift.
+fn song_params(mut params: ModulatorParams) -> ModulatorParams {
+    if let ModulatorParams::Envelope(envelope) = &mut params {
+        let defaults = ModEnvelopeParams::default();
+        envelope.input_channel = defaults.input_channel;
+        envelope.input_channel_id = defaults.input_channel_id;
+    }
+    params
+}
+
+/// The input a module of `params` reads, as a channel rack states it: the
+/// Envelope's gate field, or the rack's own channel for the kinds that took
+/// the owning channel's notes and for a gate that names no channel by
+/// identity.
+fn rack_input(params: &ModulatorParams, channel: crate::ChannelId) -> InputSource {
+    match params {
+        ModulatorParams::Envelope(envelope) if envelope.input_channel_id.is_assigned() => {
+            InputSource::ChannelNotes(envelope.input_channel_id)
+        }
+        // Parked: its channel is gone.
+        ModulatorParams::Envelope(envelope) if envelope.input_channel == u8::MAX => InputSource::None,
+        ModulatorParams::Math(_) => InputSource::None,
+        // A seat with no identity: a preset's gate on its own channel's notes
+        // (`Project::preset_rack`), which means the channel it lands on.
+        ModulatorParams::Envelope(_)
+        | ModulatorParams::Lfo(_)
+        | ModulatorParams::Step(_)
+        | ModulatorParams::Random(_) => {
+            if channel.is_assigned() {
+                InputSource::ChannelNotes(channel)
+            } else {
+                InputSource::None
+            }
+        }
+    }
+}
+
+/// The song's modulation: every module, and every route from a source to a
+/// parameter anywhere in the song (`docs/plans/song-modulation/`).
+///
+/// Held by [`crate::Project::modulation`]. **Not `Copy`, and no fixed
+/// array**: a channel's rack was eight slots and sixteen routes because it
+/// rode the command ring by value; the song's set is sized from the song, and
+/// there is no count a user meets (Adam: *"all of them"*). The engine's
+/// ceiling is the engine's to set.
+///
+/// A route's `source_slot` means nothing here -- it is a channel rack's
+/// runtime locator -- and is derived whenever a rack is built from the set
+/// ([`Self::channel_rack`]).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SongModulation {
+    pub modules: Vec<SongModule>,
+    pub routes: Vec<ModRoute>,
+    /// Next identity to mint. Monotonic, so removing a module and adding
+    /// another never hands the newcomer a departed module's routes.
+    pub next_source_id: u32,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SavedSongModulation {
+    #[serde(default, skip_serializing_if = "is_zero")]
+    next_source_id: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    modules: Vec<SongModule>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    routes: Vec<SavedSongRoute>,
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
+
+/// A song route's persisted form: exactly one of `source`, `outlet` and
+/// `performance`, and `channel` beside the last two.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SavedSongRoute {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    outlet: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    performance: Option<u16>,
+    #[serde(default, skip_serializing_if = "crate::effect::channel_id_is_unassigned")]
+    channel: crate::ChannelId,
+    destination: ParamAddr,
+    depth: f32,
+    polarity: ModPolarity,
+}
+
+impl serde::Serialize for SongModulation {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let routes = self
+            .routes
+            .iter()
+            .filter_map(|route| {
+                let (source, outlet, performance, channel) = match route.source {
+                    ModSourceRef::Id(id) => (Some(id.0), None, None, crate::ChannelId::UNASSIGNED),
+                    ModSourceRef::GeneratorOutlet { channel, outlet } => {
+                        (None, Some(outlet), None, channel)
+                    }
+                    ModSourceRef::Performance { channel, source } => {
+                        (None, None, Some(source), channel)
+                    }
+                    // Never in a song's set: a bare slot means something only
+                    // inside one rack.
+                    ModSourceRef::LocalSlot(_) => return None,
+                };
+                Some(SavedSongRoute {
+                    source,
+                    outlet,
+                    performance,
+                    channel,
+                    destination: route.destination,
+                    depth: route.depth,
+                    polarity: route.polarity,
+                })
+            })
+            .collect();
+        SavedSongModulation {
+            next_source_id: self.next_source_id,
+            modules: self.modules.clone(),
+            routes,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SongModulation {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let saved = SavedSongModulation::deserialize(deserializer)?;
+        let routes = saved
+            .routes
+            .into_iter()
+            .filter_map(|route| {
+                let source = match (route.source, route.outlet, route.performance) {
+                    (Some(id), None, None) => ModSourceRef::Id(ModSourceId(id)),
+                    (None, Some(outlet), None) => ModSourceRef::GeneratorOutlet {
+                        channel: route.channel,
+                        outlet,
+                    },
+                    (None, None, Some(source)) => ModSourceRef::Performance {
+                        channel: route.channel,
+                        source,
+                    },
+                    // Names no source, or more than one: nothing it could
+                    // mean is safer than a guess.
+                    _ => return None,
+                };
+                Some(ModRoute {
+                    source,
+                    source_slot: UNRESOLVED_SLOT,
+                    destination: route.destination,
+                    depth: route.depth,
+                    polarity: route.polarity,
+                })
+            })
+            .collect();
+        let mut modulation = Self {
+            modules: saved.modules,
+            routes,
+            next_source_id: saved.next_source_id,
+        };
+        modulation.next_source_id = modulation.next_source_id.max(modulation.mint_floor());
+        Ok(modulation)
+    }
+}
+
+impl SongModulation {
+    /// Whether the song has no modules and no routes, which is when it saves
+    /// no `modulation` table at all.
+    pub fn is_empty(&self) -> bool {
+        self.modules.is_empty() && self.routes.is_empty()
+    }
+
+    pub fn module(&self, id: ModSourceId) -> Option<&SongModule> {
+        self.modules.iter().find(|module| module.id == id)
+    }
+
+    pub fn module_mut(&mut self, id: ModSourceId) -> Option<&mut SongModule> {
+        self.modules.iter_mut().find(|module| module.id == id)
+    }
+
+    /// The highest id in use, plus one.
+    fn mint_floor(&self) -> u32 {
+        self.modules
+            .iter()
+            .map(|module| module.id.0.wrapping_add(1))
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn mint(&mut self) -> ModSourceId {
+        let floor = self.mint_floor();
+        let id = ModSourceId(self.next_source_id.max(floor));
+        self.next_source_id = id.0.wrapping_add(1);
+        id
+    }
+
+    /// Remove a module and every route it drove. Returns whether it was there.
+    pub fn remove_module(&mut self, id: ModSourceId) -> bool {
+        let before = self.modules.len();
+        self.modules.retain(|module| module.id != id);
+        if self.modules.len() == before {
+            return false;
+        }
+        self.routes.retain(|route| route.source != ModSourceRef::Id(id));
+        true
+    }
+
+    /// The name the next module of `kind` on `channel` takes:
+    /// `<channel name> <kind> <n>`, counting the modules of that kind the
+    /// channel's rack already holds.
+    fn next_name(&self, channel: crate::ChannelId, channel_name: &str, kind: ModulatorKind) -> String {
+        let held = self
+            .modules
+            .iter()
+            .filter(|module| {
+                module.params.kind() == kind
+                    && module.rack.is_some_and(|seat| seat.channel == channel)
+            })
+            .count();
+        format!("{channel_name} {} {}", kind.label(), held + 1)
+    }
+
+    /// Lift one channel's rack into the song: every module under a fresh
+    /// song-wide id, named `<channel name> <kind> <n>`, seated where it sat,
+    /// and every route following its module.
+    ///
+    /// The conversion a 0.1.6 song goes through on load, and the way a
+    /// channel preset, a kit entry or an ML-M1 factory patch -- all of which
+    /// still carry a rack -- lands its modulation on the channel that
+    /// received it. A source that meant "my channel" (an outlet, the mod
+    /// wheel, an LFO's retrigger) is given `channel`; a route scoped to a
+    /// channel is aimed at `seat`, where `channel` sits.
+    pub fn lift_rack(
+        &mut self,
+        channel: crate::ChannelId,
+        seat: u8,
+        channel_name: &str,
+        rack: &ModRack,
+    ) {
+        let mut ids = [None; MAX_MODULATORS_PER_CHANNEL];
+        for (slot, entry) in rack.occupied() {
+            let id = self.mint();
+            ids[slot] = Some((entry.id, id));
+            let kind = entry.params.kind();
+            let name = self.next_name(channel, channel_name, kind);
+            self.modules.push(SongModule {
+                id,
+                name,
+                seed: slot as u32,
+                input: rack_input(&entry.params, channel),
+                rack: Some(RackSeat {
+                    channel,
+                    slot: slot as u8,
+                }),
+                params: song_params(entry.params),
+            });
+        }
+        for route in rack.routes.iter().flatten() {
+            let source = match route.source {
+                ModSourceRef::Id(old) => {
+                    match ids.iter().flatten().find(|(was, _)| *was == old) {
+                        Some((_, id)) => ModSourceRef::Id(*id),
+                        // A route the rack kept inert because its module was
+                        // gone: there is nothing in the song for it to name.
+                        None => continue,
+                    }
+                }
+                ModSourceRef::LocalSlot(_) => continue,
+                other => other.on_channel(channel),
+            };
+            let mut destination = route.destination;
+            if matches!(destination.scope, EffectTarget::Channel(_)) {
+                destination.scope = EffectTarget::Channel(seat);
+            }
+            self.routes.push(ModRoute {
+                source,
+                source_slot: UNRESOLVED_SLOT,
+                destination,
+                ..*route
+            });
+        }
+    }
+
+    /// The rack the engine runs for the channel wearing `channel`, at `seat`.
+    ///
+    /// **The shim** (see [`RackSeat`]). It holds:
+    /// - every module seated on this channel, at its seat;
+    /// - every route those modules drive, wherever it lands;
+    /// - every route landing on this channel from a module seated elsewhere
+    ///   -- what a pasted channel's copied routes are -- with that module as a
+    ///   guest in the first free slot, so the route sounds;
+    /// - this channel's outlet and performance routes.
+    ///
+    /// What does not fit in the rack's fixed eight slots and sixteen routes is
+    /// left out, which nothing a user can do in this step reaches.
+    pub fn channel_rack(
+        &self,
+        channel: crate::ChannelId,
+        seat: u8,
+        seat_of: impl Fn(crate::ChannelId) -> Option<u8>,
+    ) -> ModRack {
+        let mut rack = ModRack {
+            next_source_id: self.next_source_id.max(self.mint_floor()),
+            ..ModRack::default()
+        };
+        let place = |rack: &mut ModRack, preferred: Option<u8>, module: &SongModule| {
+            let slot = preferred
+                .map(usize::from)
+                .filter(|slot| rack.slots.get(*slot).is_some_and(Option::is_none))
+                .or_else(|| rack.free_slot())?;
+            rack.slots[slot] = Some(ModSlot {
+                id: module.id,
+                params: module.rack_params(&seat_of),
+            });
+            Some(slot)
+        };
+        let seated = |module: &SongModule| module.rack.is_some_and(|seat| seat.channel == channel);
+        if channel.is_assigned() {
+            for module in self.modules.iter().filter(|module| seated(module)) {
+                let _ = place(&mut rack, module.rack.map(|seat| seat.slot), module);
+            }
+        }
+        for route in &self.routes {
+            let carried = match route.source {
+                ModSourceRef::Id(id) => {
+                    if rack.slot_of(id).is_some() {
+                        true
+                    } else if route.destination.scope == EffectTarget::Channel(seat) {
+                        match self.module(id) {
+                            Some(module) if !seated(module) => {
+                                place(&mut rack, None, module).is_some()
+                            }
+                            _ => false,
+                        }
+                    } else {
+                        false
+                    }
+                }
+                ModSourceRef::GeneratorOutlet { channel: owner, .. }
+                | ModSourceRef::Performance { channel: owner, .. } => {
+                    owner == channel && channel.is_assigned()
+                }
+                ModSourceRef::LocalSlot(_) => false,
+            };
+            if !carried {
+                continue;
+            }
+            let Some(free) = rack.routes.iter().position(Option::is_none) else {
+                break;
+            };
+            rack.routes[free] = Some(*route);
+        }
+        rack.resolve_routes();
+        rack
+    }
+
+    /// Write an edited channel rack back into the song: what
+    /// [`Self::channel_rack`] built as `before`, and the same rack after an
+    /// edit as `after`.
+    ///
+    /// The other half of the shim, and what lets every rack-shaped edit --
+    /// the session's verbs, the assignment gesture, a test that installs an
+    /// LFO in slot 0 -- keep working against the song's set:
+    /// - a module in `after` takes its params and, if seated here, its slot;
+    ///   one the song has not seen is added, seated here and named for the
+    ///   channel;
+    /// - a module seated here that `after` no longer holds is removed with
+    ///   every route it drove; a guest that left is only no longer a guest;
+    /// - the routes `before` held are replaced by those `after` holds, in
+    ///   place where a route kept its source and destination.
+    pub fn store_channel_rack(
+        &mut self,
+        channel: crate::ChannelId,
+        channel_name: &str,
+        before: &ModRack,
+        after: &ModRack,
+    ) {
+        for (slot, entry) in after.occupied() {
+            let input = rack_input(&entry.params, channel);
+            match self.module_mut(entry.id) {
+                Some(module) => {
+                    // An Envelope's gate is edited in its params; the other
+                    // kinds' inputs are not in a rack at all.
+                    if matches!(entry.params, ModulatorParams::Envelope(_)) {
+                        module.input = input;
+                    }
+                    module.params = song_params(entry.params);
+                    if let Some(seat) = module.rack.as_mut().filter(|seat| seat.channel == channel)
+                    {
+                        seat.slot = slot as u8;
+                    }
+                }
+                None => {
+                    let name = self.next_name(channel, channel_name, entry.params.kind());
+                    self.modules.push(SongModule {
+                        id: entry.id,
+                        name,
+                        seed: entry.id.0,
+                        input,
+                        rack: Some(RackSeat {
+                            channel,
+                            slot: slot as u8,
+                        }),
+                        params: song_params(entry.params),
+                    });
+                }
+            }
+        }
+        for (_, entry) in before.occupied() {
+            if after.slot_of(entry.id).is_some() {
+                continue;
+            }
+            let seated_here = self
+                .module(entry.id)
+                .is_some_and(|module| module.rack.is_some_and(|seat| seat.channel == channel));
+            if seated_here {
+                self.remove_module(entry.id);
+            }
+        }
+
+        let key = |route: &ModRoute| (route.source, route.destination);
+        let was: Vec<_> = before.routes.iter().flatten().map(key).collect();
+        let now: Vec<ModRoute> = after.routes.iter().flatten().copied().collect();
+        let mut kept = Vec::with_capacity(self.routes.len() + now.len());
+        for route in self.routes.drain(..) {
+            if !was.contains(&key(&route)) {
+                kept.push(route);
+                continue;
+            }
+            if let Some(edited) = now.iter().find(|edited| key(edited) == key(&route)) {
+                kept.push(ModRoute {
+                    source_slot: UNRESOLVED_SLOT,
+                    ..*edited
+                });
+            }
+        }
+        for route in &now {
+            if !kept.iter().any(|held| key(held) == key(route)) {
+                kept.push(ModRoute {
+                    source_slot: UNRESOLVED_SLOT,
+                    ..*route
+                });
+            }
+        }
+        // A route whose module the edit removed went with it above, unless
+        // it was not in this rack: drop those too.
+        kept.retain(|route| match route.source {
+            ModSourceRef::Id(id) => self.modules.iter().any(|module| module.id == id),
+            _ => true,
+        });
+        self.routes = kept;
+        self.next_source_id = self.next_source_id.max(after.next_source_id);
+    }
+
+    /// Re-scope every channel-addressed route after a channel edit, dropping
+    /// the routes whose channel is gone. Inputs and seats name channels by
+    /// identity and need nothing. Returns whether anything changed.
+    pub fn rescope_channels(&mut self, edit: crate::structure::ChannelEdit) -> bool {
+        let before = self.routes.len();
+        let mut changed = false;
+        self.routes.retain_mut(|route| match edit.address(route.destination) {
+            Some(destination) => {
+                changed |= destination != route.destination;
+                route.destination = destination;
+                true
+            }
+            None => false,
+        });
+        changed || self.routes.len() != before
+    }
+
+    /// Re-scope every track-addressed route after a track edit, dropping
+    /// those whose track is gone. The twin of [`Self::rescope_channels`].
+    pub fn rescope_tracks(&mut self, edit: crate::structure::TrackEdit) -> bool {
+        let before = self.routes.len();
+        let mut changed = false;
+        self.routes.retain_mut(|route| match edit.address(route.destination) {
+            Some(destination) => {
+                changed |= destination != route.destination;
+                route.destination = destination;
+                true
+            }
+            None => false,
+        });
+        changed || self.routes.len() != before
+    }
+
+    /// Let go of a channel that has left the song: the routes its outlets and
+    /// keyboard drove go, as its routes in went with the rescope.
+    ///
+    /// An input that listened to it and a module seated on it are **kept**,
+    /// naming it by identity: while it is gone the input hears nothing and the
+    /// module does not run, and a document that brings the same channel back
+    /// brings them back with it, which is how an envelope's gate has always
+    /// behaved. The integrity pass is what lets go of them in a saved song.
+    pub fn forget_channel(&mut self, channel: crate::ChannelId) {
+        self.routes
+            .retain(|route| route.source.channel() != Some(channel));
+    }
+
+    /// Drop every route onto `device` in `scope`, because that device has
+    /// been removed. Returns whether anything changed.
+    pub fn forget_device(&mut self, scope: EffectTarget, device: DeviceId) -> bool {
+        let before = self.routes.len();
+        self.routes.retain(|route| {
+            !(route.destination.scope == scope && route.destination.device() == Some(device))
+        });
+        self.routes.len() != before
+    }
+
+    /// Give every route onto a generator saved without its kind the kind of
+    /// the generator in the chain it is scoped to (MOO-135).
+    pub fn identify_source_kinds(&mut self, kind_at: impl Fn(EffectTarget) -> Option<DeviceKind>) {
+        for route in &mut self.routes {
+            if let Some(kind) = kind_at(route.destination.scope) {
+                route.destination.owner.identify_source(kind);
+            }
+        }
+    }
+
+    /// Whether any route onto a generator still names no kind.
+    pub fn has_unidentified_source_kinds(&self) -> bool {
+        self.routes
+            .iter()
+            .any(|route| route.destination.owner.is_unidentified_source())
+    }
+
+    /// The routes landing on the channel at `seat`: what a copied channel
+    /// carries to its paste.
+    pub fn routes_into(&self, seat: u8) -> Vec<ModRoute> {
+        self.routes
+            .iter()
+            .filter(|route| route.destination.scope == EffectTarget::Channel(seat))
+            .copied()
+            .collect()
+    }
+
+    /// Add routes copied off the channel wearing `copied`, aimed at the
+    /// channel wearing `channel`, at `seat`, **from the same modules** (Adam:
+    /// *"assignments would copy/paste"*). The copied channel's own outlets
+    /// and keyboard become the new channel's; another channel's stay its.
+    /// Returns how many routes were dropped because the module they named is
+    /// gone.
+    pub fn paste_routes(
+        &mut self,
+        copied: crate::ChannelId,
+        channel: crate::ChannelId,
+        seat: u8,
+        routes: &[ModRoute],
+    ) -> usize {
+        let mut dropped = 0;
+        for route in routes {
+            let source = match route.source {
+                ModSourceRef::Id(id) if self.module(id).is_some() => route.source,
+                ModSourceRef::Id(_) | ModSourceRef::LocalSlot(_) => {
+                    dropped += 1;
+                    continue;
+                }
+                other if other.channel() == Some(copied) => other.on_channel(channel),
+                other => other,
+            };
+            let mut destination = route.destination;
+            destination.scope = EffectTarget::Channel(seat);
+            if self
+                .routes
+                .iter()
+                .any(|held| held.source == source && held.destination == destination)
+            {
+                continue;
+            }
+            self.routes.push(ModRoute {
+                source,
+                source_slot: UNRESOLVED_SLOT,
+                destination,
+                ..*route
+            });
+        }
+        dropped
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2938,7 +3640,7 @@ retrigger = true
                 ..ModLfoParams::default()
             }),
         );
-        rack.add_route(ModRoute::from_outlet(0, addr(1), 1.0, ModPolarity::Unipolar));
+        rack.add_route(ModRoute::from_outlet(crate::ChannelId::UNASSIGNED, 0, addr(1), 1.0, ModPolarity::Unipolar));
 
         let mut outputs = [0.0; CONTROL_SOURCE_SLOTS];
         outputs[MAX_MODULATORS_PER_CHANNEL] = -1.0;
@@ -3195,7 +3897,7 @@ retrigger = true
     fn an_outlet_route_round_trips_without_a_rack_to_resolve_against() {
         let mut rack = ModRack::default();
         assert!(rack
-            .add_route(ModRoute::from_outlet(1, addr(3), -0.6, ModPolarity::Unipolar))
+            .add_route(ModRoute::from_outlet(crate::ChannelId::UNASSIGNED, 1, addr(3), -0.6, ModPolarity::Unipolar))
             .is_some());
 
         let text = toml::to_string(&rack).expect("a rack serializes");
@@ -3206,7 +3908,7 @@ retrigger = true
             .flatten()
             .next()
             .expect("the route survived");
-        assert_eq!(route.source, ModSourceRef::GeneratorOutlet(1));
+        assert_eq!(route.source, ModSourceRef::GeneratorOutlet { channel: crate::ChannelId::UNASSIGNED, outlet: 1 });
         assert_eq!(route.destination, addr(3));
         assert_eq!(route.depth, -0.6);
         // Resolved into the outlet band rather than onto a module slot,
@@ -3273,7 +3975,7 @@ param = 8
     #[test]
     fn a_performance_route_round_trips_and_reads_the_band() {
         let mut rack = ModRack::default();
-        rack.add_route(ModRoute::from_performance(
+        rack.add_route(ModRoute::from_performance(crate::ChannelId::UNASSIGNED, 
             PERFORMANCE_MOD_WHEEL,
             addr(3),
             0.5,
@@ -3285,7 +3987,7 @@ param = 8
         let decoded: ModRack = toml::from_str(&text).unwrap();
         assert_eq!(decoded, rack);
         let route = decoded.routes[0].unwrap();
-        assert_eq!(route.source, ModSourceRef::Performance(PERFORMANCE_MOD_WHEEL));
+        assert_eq!(route.source, ModSourceRef::Performance { channel: crate::ChannelId::UNASSIGNED, source: PERFORMANCE_MOD_WHEEL });
         assert_eq!(route.source_slot, performance_slot(PERFORMANCE_MOD_WHEEL));
 
         let mut row = [0.0; CONTROL_SOURCE_SLOTS];
@@ -3304,7 +4006,7 @@ param = 8
             .add_route(ModRoute::to_slot(0, addr(1), 0.5, ModPolarity::Bipolar))
             .is_some());
         assert!(rack
-            .add_route(ModRoute::from_outlet(0, addr(1), 0.25, ModPolarity::Bipolar))
+            .add_route(ModRoute::from_outlet(crate::ChannelId::UNASSIGNED, 0, addr(1), 0.25, ModPolarity::Bipolar))
             .is_some());
 
         let mut outputs = [0.0; CONTROL_SOURCE_SLOTS];
@@ -3326,7 +4028,7 @@ param = 8
     fn an_out_of_range_outlet_is_refused_rather_than_misaimed() {
         let mut rack = ModRack::default();
         assert!(rack
-            .add_route(ModRoute::from_outlet(
+            .add_route(ModRoute::from_outlet(crate::ChannelId::UNASSIGNED, 
                 MAX_GENERATOR_OUTLETS as u16,
                 addr(1),
                 1.0,

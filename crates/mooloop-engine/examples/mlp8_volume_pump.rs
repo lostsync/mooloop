@@ -57,7 +57,7 @@ fn song(pumped: bool) -> Project {
     }
     pad.setup.channel.volume = 1.0;
     if pumped {
-        let rack = &mut pad.setup.modulation;
+        let rack = pad.setup.carried_modulation_mut();
         rack.install(
             0,
             ModulatorParams::Lfo(ModLfoParams {
@@ -82,12 +82,14 @@ fn song(pumped: bool) -> Project {
         })
         .expect("Volume is a legal destination");
     }
-    Project {
+    let mut project = Project {
         bpm: 120,
         channels: vec![pad],
         pattern_lengths: vec![(BARS * 16) as u16],
         ..Project::default()
-    }
+    };
+    project.lift_channel_modulation();
+    project
 }
 
 fn save_and_reopen(project: &Project, path: &Path) -> Project {

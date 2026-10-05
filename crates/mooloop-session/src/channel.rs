@@ -8,7 +8,7 @@ use mooloop_core::{
     AutomationLane, AuxInParams, ChannelId, DeviceKind, Ds01Params, EffectSlotState,
     GeneratorParams,
     MlM1Params,
-    MlP8Params, ModRack, MonoSynthParams, NoteEvent, NoteId, PolySynthParams, Project,
+    MlP8Params, MonoSynthParams, NoteEvent, NoteId, PolySynthParams, Project,
     ProjectChannel, SampleCommit, SampleReference, SamplerParams, SliceMap, DrumSynthParams,
     MASTER_BUS, MAX_CHANNELS, MAX_NOTES_PER_CHANNEL_PATTERN,
 };
@@ -151,7 +151,6 @@ pub struct ChannelState {
     /// `DeviceId::UNASSIGNED` for every native source. Mirrors
     /// `ChannelSetup::source_device` (MOO-312).
     pub source_device: mooloop_core::DeviceId,
-    pub modulation: ModRack,
     /// Mixer bus this channel feeds; 0 is the master.
     pub bus: u8,
 }
@@ -248,7 +247,6 @@ impl ChannelState {
             effects: Vec::new(),
             next_device_id: 0,
             source_device: mooloop_core::DeviceId::UNASSIGNED,
-            modulation: ModRack::default(),
             bus: MASTER_BUS,
         }
     }
@@ -315,9 +313,27 @@ pub struct ChannelClipboard {
     /// paste mints each a slot of its own from this. A slot the song did not
     /// have is absent.
     pub plugins: mooloop_core::PluginSlots,
+    /// The song's modulation routes that land on the copied channel. A paste
+    /// adds them again, aimed at the new channel, from the same modules: a
+    /// module is the song's, not the channel's, so none is duplicated.
+    pub routes: Vec<mooloop_core::ModRoute>,
 }
 
 impl ChannelClipboard {
+    /// How many of the copied routes a paste into `song` would drop because
+    /// the module they come from is gone (deleted since the copy, or the copy
+    /// came from another song).
+    pub fn routes_without_module(&self, song: &mooloop_core::SongModulation) -> usize {
+        self.routes
+            .iter()
+            .filter(|route| match route.source {
+                mooloop_core::ModSourceRef::Id(id) => song.module(id).is_none(),
+                mooloop_core::ModSourceRef::LocalSlot(_) => true,
+                _ => false,
+            })
+            .count()
+    }
+
     /// Every plugin slot `channel` names: its source's, and each plugin
     /// row's on its chain. A container's rows sit on the chain after it, so
     /// they are among them.
@@ -357,6 +373,7 @@ impl crate::session::Session {
             return None;
         }
         let mut channel = clipboard.channel;
+        let copied = channel.id;
         // **A paste carries no foreign input picks.** Both fields name
         // something in the document the channel was copied *from*: paste
         // into another song and the same numbers name whatever that song
@@ -414,6 +431,9 @@ impl crate::session::Session {
         // audio is filed under, so the sample table needs no insert.
         let pasted = project.channels[index].id;
         project.selected_channel = pasted;
+        // The copy's assignments come along, from the same modules. A module
+        // whose input is the copied channel's notes stays listening to it.
+        project.modulation.paste_routes(copied, pasted, index as u8, &clipboard.routes);
         if let Some(sample) = clipboard.sample {
             samples.insert(pasted, sample);
         }
@@ -771,5 +791,55 @@ mod paste_tests {
         let eighth = bar / 8;
         assert!(loudest(0, eighth) > 0.05, "the first zone is silent");
         assert!(loudest(bar / 2, bar / 2 + eighth) > 0.05, "the second zone is silent");
+    }
+
+    /// **A pasted channel's assignments come from the same modules**
+    /// (song-modulation step 01; Adam: *"assignments would copy/paste"*).
+    /// One LFO drives the original and the copy, and no module is
+    /// duplicated. A copy whose module was deleted before the paste drops
+    /// that route, and says so.
+    #[test]
+    fn a_paste_shares_the_copied_channels_modules() {
+        use mooloop_core::{ModPolarity, ModRoute, ModulatorKind, ParamAddr, STRIP_PARAM_VOLUME};
+        let mut session = Session::default();
+        assert!(!session.add_modulation_source(ModulatorKind::Lfo).is_empty());
+        let volume = |seat| ParamAddr::strip(mooloop_core::EffectTarget::Channel(seat), STRIP_PARAM_VOLUME);
+        session
+            .edit_selected_rack(|rack| rack.add_route(ModRoute::to_slot(0, volume(0), 0.5, ModPolarity::Bipolar)))
+            .expect("room for the route");
+        let lfo = session.module_in_slot(0).expect("the LFO");
+
+        let copy = session.channel_clipboard(0, 120, 0).expect("a channel to copy");
+        assert_eq!(copy.routes.len(), 1);
+        assert_eq!(copy.routes_without_module(&session.modulation), 0);
+        let (pasted, index) = session
+            .paste_channel(&snapshot(&session), 0, copy.clone())
+            .expect("room to paste");
+        assert_eq!(index, 1);
+        let song = &pasted.project.modulation;
+        assert_eq!(song.modules.len(), 1, "a module was duplicated");
+        let mut destinations: Vec<_> = song
+            .routes
+            .iter()
+            .map(|route| (route.source, route.destination))
+            .collect();
+        destinations.sort_by_key(|(_, destination)| format!("{destination:?}"));
+        assert_eq!(
+            destinations,
+            [
+                (mooloop_core::ModSourceRef::Id(lfo), volume(0)),
+                (mooloop_core::ModSourceRef::Id(lfo), volume(1)),
+            ]
+        );
+        // The copy hears it: its rack holds the LFO as a guest.
+        assert!(pasted.project.channel_rack(1).has_routes());
+
+        // Deleted since the copy: the route has nothing to come from.
+        assert!(!session.remove_modulation_source(0).is_empty());
+        assert_eq!(copy.routes_without_module(&session.modulation), 1);
+        let (pasted, _) = session
+            .paste_channel(&snapshot(&session), 0, copy)
+            .expect("room to paste");
+        assert!(pasted.project.modulation.routes.is_empty());
     }
 }

@@ -172,7 +172,7 @@ fn soak_project() -> Project {
         let channel = &mut project.channels[1];
         let target = EffectTarget::Channel(1);
         let device = channel.setup.effects[0].id;
-        channel.setup.modulation.install(
+        channel.setup.carried_modulation_mut().install(
             0,
             ModulatorParams::Lfo(ModLfoParams {
                 rate_hz: 3.0,
@@ -182,10 +182,11 @@ fn soak_project() -> Project {
         for destination in [ParamAddr::effect(target, device, 0), ParamAddr::strip(target, 0)] {
             channel
                 .setup
-                .modulation
+                .carried_modulation_mut()
                 .add_route(ModRoute::to_slot(0, destination, 0.4, ModPolarity::Bipolar))
                 .expect("room in the matrix");
         }
+        project.lift_channel_modulation();
     }
 
     // An automation lane on channel 2's first effect, sweeping across the bar.

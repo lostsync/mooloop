@@ -992,9 +992,10 @@ pub(crate) fn plugin_overlays(
     let Some(saved) = session.plugins.get(&slot) else {
         return PluginOverlays::default();
     };
-    let Some(channel) = session.channels.get(session.selected) else {
+    if session.channels.get(session.selected).is_none() {
         return PluginOverlays::default();
-    };
+    }
+    let rack = session.selected_rack();
     let scope = EffectTarget::Channel(session.selected as u8);
     let mut overlays = PluginOverlays {
         offsets: session.plugin_destination_offsets(device, slot),
@@ -1011,9 +1012,7 @@ pub(crate) fn plugin_overlays(
         // Every route, allowed or not, as a native knob counts them: an
         // assignment is authored work the user can see and remove.
         overlays.counts.push(
-            channel
-                .modulation
-                .destinations()
+            rack.destinations()
                 .filter(|destination| *destination == address)
                 .count() as i32,
         );

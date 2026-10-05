@@ -443,7 +443,7 @@ fn aux_in_level_takes_a_lane_and_a_route() {
 
     // And a route from an LFO on the consumer's own rack.
     let mut routed = base.clone();
-    let rack = &mut routed.channels[1].setup.modulation;
+    let rack = routed.channels[1].setup.carried_modulation_mut();
     rack.install(
         0,
         ModulatorParams::Lfo(ModLfoParams {
@@ -453,6 +453,7 @@ fn aux_in_level_takes_a_lane_and_a_route() {
     );
     rack.add_route(ModRoute::to_slot(0, level, 0.9, ModPolarity::Bipolar))
         .expect("Level is a legal destination");
+    routed.lift_channel_modulation();
     let routed = render_blocks(&routed, 0.5, 256);
     assert!(
         routed
@@ -473,7 +474,7 @@ fn aux_in_level_takes_a_lane_and_a_route() {
 #[test]
 fn an_edge_does_not_move_a_modulator_phase() {
     let mut consumer = aux_in_channel(1, None);
-    consumer.setup.modulation.install(
+    consumer.setup.carried_modulation_mut().install(
         0,
         ModulatorParams::Lfo(ModLfoParams {
             rate_hz: 3.0,
@@ -482,7 +483,7 @@ fn an_edge_does_not_move_a_modulator_phase() {
     );
     consumer
         .setup
-        .modulation
+        .carried_modulation_mut()
         .add_route(ModRoute::to_slot(
             0,
             ParamAddr::strip(EffectTarget::Channel(1), STRIP_PARAM_PAN),
@@ -491,10 +492,11 @@ fn an_edge_does_not_move_a_modulator_phase() {
         ))
         .expect("the route is legal");
 
-    let unsubscribed = Project {
+    let mut unsubscribed = Project {
         channels: vec![muted_osc3_producer(), consumer.clone()],
         ..Project::default()
     };
+    unsubscribed.lift_channel_modulation();
     let mut subscribed = unsubscribed.clone();
     if let Some(state) = subscribed.channels[1].setup.source.aux_in_state_mut() {
         // Level zero: the edge exists and is scheduled, and contributes no

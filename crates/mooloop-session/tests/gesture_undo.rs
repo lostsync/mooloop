@@ -71,9 +71,10 @@ fn a_device_parameter_undoes_to_what_it_was() {
 #[test]
 fn a_modulated_parameter_undoes_to_its_base_and_keeps_its_route() {
     let mut session = Session::default();
-    session
-        .add_modulation_source(ModulatorKind::Lfo)
-        .expect("an empty rack has a free slot");
+    assert!(
+        !session.add_modulation_source(ModulatorKind::Lfo).is_empty(),
+        "an empty rack has a free slot"
+    );
     session.toggle_modulation_assignment();
     let destination = ParamAddr::strip(EffectTarget::Channel(0), STRIP_PARAM_VOLUME);
     let ArmedRoute::Added(_) = session.arm_modulation_route(destination, 0.4) else {
@@ -82,7 +83,7 @@ fn a_modulated_parameter_undoes_to_its_base_and_keeps_its_route() {
 
     set_volume(&mut session, 0.25);
     let before = snapshot(&session);
-    let routes_before = session.channels[0].modulation.routes.iter().flatten().count();
+    let routes_before = session.modulation.routes.len();
     assert_eq!(routes_before, 1, "the route this test needs is not there");
 
     set_volume(&mut session, 0.75);
@@ -93,7 +94,7 @@ fn a_modulated_parameter_undoes_to_its_base_and_keeps_its_route() {
         "undo restored something other than the base value"
     );
     assert_eq!(
-        session.channels[0].modulation.routes.iter().flatten().count(),
+        session.modulation.routes.len(),
         routes_before,
         "undoing a parameter edit stranded the route driving it"
     );
