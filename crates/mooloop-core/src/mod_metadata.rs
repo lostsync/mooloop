@@ -325,16 +325,49 @@ pub enum ModSourceRef {
     /// the rack. Replacing the generator therefore leaves this route
     /// authored and unresolved rather than silently re-aimed, which is the
     /// same fate a route naming a departed module gets.
-    GeneratorOutlet(u16),
+    ///
+    /// Names its channel, by durable identity, since the song owns the
+    /// modulation set (song-modulation step 01): an outlet used to mean "my
+    /// channel's generator", and a song-wide set has no "my".
+    GeneratorOutlet {
+        channel: crate::ChannelId,
+        outlet: u16,
+    },
     /// The keyboard's mod wheel or aftertouch, by its performance id
-    /// (`modulation::PERFORMANCE_MOD_WHEEL`, `PERFORMANCE_AFTERTOUCH`).
+    /// (`modulation::PERFORMANCE_MOD_WHEEL`, `PERFORMANCE_AFTERTOUCH`), on
+    /// the channel it names.
     ///
     /// Durable like an outlet: fixed ids at a fixed place in the address
     /// space, owned by neither the rack nor the generator (MOO-128).
-    Performance(u16),
+    Performance {
+        channel: crate::ChannelId,
+        source: u16,
+    },
 }
 
 impl ModSourceRef {
+    /// The channel an outlet or a performance source belongs to. A module
+    /// belongs to the song, so it has none.
+    pub const fn channel(self) -> Option<crate::ChannelId> {
+        match self {
+            Self::GeneratorOutlet { channel, .. } | Self::Performance { channel, .. } => {
+                Some(channel)
+            }
+            Self::LocalSlot(_) | Self::Id(_) => None,
+        }
+    }
+
+    /// The same source on `channel`: what a channel's own outlet or keyboard
+    /// becomes when its routes are aimed somewhere new. A module is the
+    /// song's and is returned unchanged.
+    pub const fn on_channel(self, channel: crate::ChannelId) -> Self {
+        match self {
+            Self::GeneratorOutlet { outlet, .. } => Self::GeneratorOutlet { channel, outlet },
+            Self::Performance { source, .. } => Self::Performance { channel, source },
+            other => other,
+        }
+    }
+
     /// Resolve to the bounded runtime slot, off the audio thread. Local
     /// slots are their own locator; durable ids look the source table up
     /// and fail closed when the source is gone. The table carries each
@@ -352,10 +385,10 @@ impl ModSourceRef {
             // fixed offset, so there is no table for it to fall out of.
             // Whether the *generator* actually publishes it is a separate
             // question, and the one the route surface asks.
-            Self::GeneratorOutlet(outlet) => (usize::from(outlet)
+            Self::GeneratorOutlet { outlet, .. } => (usize::from(outlet)
                 < crate::modulation::MAX_GENERATOR_OUTLETS)
                 .then(|| crate::modulation::outlet_slot(outlet)),
-            Self::Performance(source) => (usize::from(source)
+            Self::Performance { source, .. } => (usize::from(source)
                 < crate::modulation::PERFORMANCE_SOURCES)
                 .then(|| crate::modulation::performance_slot(source)),
         }

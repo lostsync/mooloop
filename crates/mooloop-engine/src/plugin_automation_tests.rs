@@ -170,7 +170,7 @@ fn a_route_on_a_plugin_parameter_offsets_the_plugins_own_value() {
     let (mut project, slots) = drum_loop(1, &[0]);
     let slot = slots[0];
     let gain = address(&project, test_plugin::PARAM_GAIN);
-    let rack = &mut project.channels[0].setup.modulation;
+    let rack = project.channels[0].setup.carried_modulation_mut();
     rack.install(
         0,
         ModulatorParams::Lfo(ModLfoParams {
@@ -180,6 +180,7 @@ fn a_route_on_a_plugin_parameter_offsets_the_plugins_own_value() {
     );
     rack.add_route(ModRoute::to_slot(0, gain, 0.25, ModPolarity::Bipolar))
         .expect("a route has room");
+    project.lift_channel_modulation();
 
     let base = export(&project, BTreeMap::new());
     let mut instance = open_gain(-6.0, 0);

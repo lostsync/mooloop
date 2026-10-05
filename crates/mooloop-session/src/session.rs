@@ -20,7 +20,7 @@ use mooloop_core::{
     ChannelSetup, DeviceId,
     AuxInState, ChannelSource, DeviceKind, DrumSynthState, Ds01State, GeneratorParams,
     EffectParams, EffectSlotState, EffectTarget, MlM1State, MlP8State,
-    LoopRange, ModDestinationDescriptor, ModEnvelopeParams, ModPolarity, ModRoute, ModulatorParams,
+    LoopRange, ModDestinationDescriptor, ModPolarity, ModRoute, ModulatorParams,
     MonoSynthState, NoteId, ParamAddr,
     ParamDescriptor, ParamOwner, PatternMeta, PatternPlacement, PlaybackMode, PointId,
     PolySynthState, Project, ProjectChannel, SampleReference, SamplerState,
@@ -92,10 +92,15 @@ pub struct Session {
     /// releases with is then a different slice's.
     pub slice_audition: Option<(ChannelId, u8)>,
     pub modulation_shelf_open: bool,
-    /// Source whose editor is open in the shelf. Selection is intentionally
-    /// separate from assignment: looking at an LFO must not hijack knob
-    /// gestures throughout the rack.
-    pub modulation_selected_slot: Cell<Option<u8>>,
+    /// Source whose editor is open in the shelf, by identity: a module by
+    /// its id, an outlet or the keyboard by its channel. Selection is
+    /// intentionally separate from assignment: looking at an LFO must not
+    /// hijack knob gestures throughout the rack.
+    ///
+    /// A module is the song's, so selecting another channel does not lose it
+    /// (`docs/plans/song-modulation/`); read it as a slot of the selected
+    /// channel's rack with [`Self::modulation_selected_slot`].
+    pub modulation_selected: Cell<Option<mooloop_core::ModSourceRef>>,
     /// The rack device the keyboard acts on, as an identity rather than a
     /// position.
     ///
@@ -124,15 +129,13 @@ pub struct Session {
     /// Scoped to an `EffectTarget` for the same reason the device selection
     /// is, and only ever a `Channel`: a bus has no generator.
     pub selected_source: Option<EffectTarget>,
-    pub modulation_armed_slot: Cell<Option<u8>>,
+    /// The source the assignment gesture is armed with, named as
+    /// [`Self::modulation_selected`] is.
+    pub modulation_armed: Cell<Option<mooloop_core::ModSourceRef>>,
     /// The selected channel's latest modulator outputs, refreshed from the
     /// engine on the pump tick. Held here rather than recomputed per knob
     /// so one read of the audio thread's cells feeds every destination.
     pub modulation_outputs: Cell<[f32; CONTROL_SOURCE_SLOTS]>,
-    /// Channel that owns the transient selection/assignment state. Changing
-    /// channels clears both even when the new channel happens to occupy the
-    /// same runtime slot.
-    pub modulation_ui_channel: Cell<Option<ChannelId>>,
     /// The compensation the engine has been told about, so the pump's
     /// reconcile can send only what changed. Not document state: it is a
     /// record of what has been said to the audio thread, and a fresh session
@@ -254,6 +257,11 @@ pub struct Session {
     /// past the end.
     pub pattern_meta: Vec<PatternMeta>,
     pub playlist: Vec<PatternPlacement>,
+    /// The song's modulation: every module and every route
+    /// (`docs/plans/song-modulation/`). Channels own none; the rack a channel
+    /// shows and the engine runs is built from this
+    /// ([`Self::channel_rack`]).
+    pub modulation: mooloop_core::SongModulation,
     /// The section of the arrangement the transport repeats. Document state,
     /// not a session gesture: a loop is set around the part being worked on
     /// and is worth reopening the song to.
@@ -357,12 +365,11 @@ impl Default for Session {
             automation_selected_point: Cell::new(None),
             slice_audition: None,
             modulation_shelf_open: false,
-            modulation_selected_slot: Cell::new(None),
+            modulation_selected: Cell::new(None),
             selected_device: None,
             selected_source: None,
-            modulation_armed_slot: Cell::new(None),
+            modulation_armed: Cell::new(None),
             modulation_outputs: Cell::new([0.0; CONTROL_SOURCE_SLOTS]),
-            modulation_ui_channel: Cell::new(None),
             compensation_sent: crate::engine::CompensationSent::default(),
             console_sums_sent: [false; MAX_BUSES],
             solo_silenced_sent: [false; MAX_BUSES],
@@ -387,6 +394,7 @@ impl Default for Session {
             pattern_lengths: vec![DEFAULT_STEPS as usize],
             pattern_meta: vec![PatternMeta::default()],
             playlist: Vec::with_capacity(MAX_PLAYLIST_PLACEMENTS),
+            modulation: mooloop_core::SongModulation::default(),
             loop_range: LoopRange::default(),
             control_map: mooloop_core::ControlMap::default(),
             plugins: mooloop_core::PluginSlots::new(),
@@ -651,7 +659,7 @@ impl Session {
                         },
                         source,
                         effects: channel.effects.clone(),
-                        modulation: channel.modulation,
+                        preset_modulation: None,
                         next_device_id: channel.next_device_id,
                         source_device: channel.source_device,
                     },
@@ -694,6 +702,7 @@ impl Session {
                 .collect(),
             pattern_meta: trim_pattern_meta(&self.pattern_meta),
             playlist: self.playlist.clone(),
+            modulation: self.modulation.clone(),
             loop_range: self.loop_range,
             control_map: self.control_map.clone(),
             plugins: self.plugins.clone(),
@@ -1054,8 +1063,8 @@ impl Session {
         // back and its preset labels come back with it, where the old walk
         // had already thrown them away.
         //
-        // `source_preset_names`, `sample_request`, `slice_audition` and
-        // `modulation_ui_channel` used to be rewritten here and are not any
+        // `source_preset_names`, `sample_request` and `slice_audition` used
+        // to be rewritten here and are not any
         // more: they are keyed by `ChannelId`, so a structural edit is not an
         // event any of them can observe. An in-flight load whose channel is
         // *gone* no longer resolves and its completion is dropped, which is
@@ -1152,8 +1161,8 @@ impl Session {
             // A bus chain can be automated from any channel's clip.
             EffectTarget::Bus(_) => &mut self.channels,
         };
+        self.modulation.forget_device(target, device);
         for channel in channels {
-            channel.modulation.forget_device(target, device);
             for lanes in &mut channel.automation {
                 drop_lanes_for_device(lanes, target, device);
             }
@@ -1236,27 +1245,12 @@ impl Session {
     }
 
     pub fn modulation_depth_for(&self, source_slot: u8, destination: ParamAddr) -> f32 {
-        self.channels
-            .get(self.selected)
-            .and_then(|channel| {
-                channel.modulation.routes.iter().flatten().find(|route| {
-                    route.source_slot == source_slot && route.destination == destination
-                })
-            })
+        self.selected_rack()
+            .routes
+            .iter()
+            .flatten()
+            .find(|route| route.source_slot == source_slot && route.destination == destination)
             .map_or(0.0, |route| route.depth)
-    }
-
-    pub fn modulation_envelope_mut(&mut self, slot: usize) -> Option<&mut ModEnvelopeParams> {
-        let selected = self.selected;
-        let params = self
-            .channels
-            .get_mut(selected)?
-            .modulation
-            .params_mut(slot)?;
-        match params {
-            ModulatorParams::Envelope(envelope) => Some(envelope),
-            _ => None,
-        }
     }
 
     /// The modulation shelf may address only the selected channel's own
@@ -1600,7 +1594,6 @@ impl Session {
                     effects: setup.effects.clone(),
                     next_device_id: setup.next_device_id,
                     source_device: setup.source_device,
-                    modulation: setup.modulation,
                     bus: setup.channel.bus,
                 }
             })
@@ -1638,6 +1631,7 @@ impl Session {
         self.pattern_meta = project.pattern_meta.clone();
         self.pattern_meta.resize(self.pattern_lengths.len(), PatternMeta::default());
         self.playlist = project.playlist.clone();
+        self.modulation = project.modulation.clone();
         self.loop_range = project.loop_range;
         self.control_map = project.control_map.clone();
         let outgoing_plugins = std::mem::replace(&mut self.plugins, project.plugins.clone());
@@ -1659,9 +1653,9 @@ impl Session {
         self.current_pattern = project.current_pattern as usize;
         self.selected = project.selected_index();
         // Modulation source selection and assignment are session gestures,
-        // never document state. A newly loaded project must start unarmed
-        // even if it selects the same channel index as the previous one.
-        self.modulation_ui_channel.set(None);
+        // never document state. A newly loaded project must start unarmed.
+        self.modulation_selected.set(None);
+        self.modulation_armed.set(None);
         // The engine's state is replaced wholesale by a load, and
         // `RenderState::load_project` installs its own compensation. Forget
         // what this side thinks was sent so the next reconcile re-derives
@@ -1724,7 +1718,7 @@ impl Session {
     /// full matrix is a refusal the user has to be told about, and telling
     /// them is the view's job.
     pub fn arm_modulation_route(&mut self, destination: ParamAddr, depth: f32) -> ArmedRoute {
-        let Some(source_slot) = self.modulation_armed_slot.get() else {
+        let Some(source_slot) = self.modulation_armed_slot() else {
             return ArmedRoute::Unchanged;
         };
         // Native or a hosted plugin's parameter (MOO-82): the same question
@@ -1745,9 +1739,10 @@ impl Session {
         if outlet.is_none() && mooloop_core::modulation::outlet_of_slot(source_slot).is_some() {
             return ArmedRoute::Unchanged;
         }
-        let Some(channel) = self.channels.get_mut(self.selected) else {
+        let Some(channel_id) = self.channel_id(self.selected) else {
             return ArmedRoute::Unchanged;
         };
+        let rack = self.selected_rack();
         let default_polarity = match outlet {
             // An outlet takes the destination's own default, whatever shape
             // it declares, and the reason is that the two kinds of source
@@ -1763,7 +1758,7 @@ impl Session {
             // a depth above the base with nothing playing, and give it only
             // half the swing when something did.
             Some(_) => policy.default_polarity,
-            None => match channel.modulation.params(source_slot as usize) {
+            None => match rack.params(source_slot as usize) {
                 // Sources that only ever swing one way default to a unipolar
                 // route, so their resting value is the destination's base.
                 Some(ModulatorParams::Envelope(_)) => ModPolarity::Unipolar,
@@ -1771,8 +1766,7 @@ impl Session {
                 _ => policy.default_polarity,
             },
         };
-        let current = channel
-            .modulation
+        let current = rack
             .routes
             .iter()
             .flatten()
@@ -1787,28 +1781,31 @@ impl Session {
             // The mod wheel and aftertouch are declared as outlets but are
             // the keyboard's, not the generator's (MOO-128).
             Some(performance) if mooloop_core::modulation::performance_of_slot(source_slot).is_some() => {
-                ModRoute::from_performance(performance.id, destination, depth, default_polarity)
+                ModRoute::from_performance(channel_id, performance.id, destination, depth, default_polarity)
             }
             Some(outlet) => {
-                ModRoute::from_outlet(outlet.id, destination, depth, default_polarity)
+                ModRoute::from_outlet(channel_id, outlet.id, destination, depth, default_polarity)
             }
             None => ModRoute::to_slot(source_slot, destination, depth, default_polarity),
         };
-        let Some(index) = channel.modulation.add_route(authored) else {
-            // Both authored forms resolve: the module slot was checked above
-            // and an outlet's locator is bounded arithmetic on an id this
-            // generator publishes. So the only way the rack refuses is a full
-            // matrix.
-            return ArmedRoute::Full;
-        };
-        // The rack stamped the durable source id on the way in; that stamped
+        // The rack stamps the durable source id on the way in; that stamped
         // row is what travels, so the engine resolves the route against the
-        // module the gesture meant rather than against a slot number.
-        let Some(route) = channel.modulation.routes[index] else {
-            return ArmedRoute::Unchanged;
-        };
-        self.gesture_changed = true;
-        ArmedRoute::Added(route)
+        // module the gesture meant rather than against a slot number. Both
+        // authored forms resolve: the module slot was checked above and an
+        // outlet's locator is bounded arithmetic on an id this generator
+        // publishes. So the only way the rack refuses is a full matrix.
+        let added = self.edit_selected_rack(|rack| {
+            let index = rack.add_route(authored);
+            Some(index.and_then(|index| rack.routes[index]))
+        });
+        match added {
+            Some((Some(route), _)) => {
+                self.gesture_changed = true;
+                ArmedRoute::Added(route)
+            }
+            Some((None, _)) => ArmedRoute::Full,
+            None => ArmedRoute::Unchanged,
+        }
     }
 
     /// Depth the armed source drives each destination in `descriptors` at.
@@ -1852,17 +1849,16 @@ impl Session {
         address: impl Fn(u32) -> ParamAddr,
     ) -> Vec<f32> {
         let mut offsets = vec![0.0; descriptor_slots(descriptors)];
-        let Some(channel) = self.channels.get(self.selected) else {
+        if self.channels.get(self.selected).is_none() {
             return offsets;
-        };
+        }
+        let rack = self.selected_rack();
         let outputs = self.modulation_outputs.get();
         let sources = Self::control_sources(&outputs);
         for descriptor in descriptors {
             let policy = ModDestinationDescriptor::for_param(descriptor);
             offsets[descriptor.id as usize] =
-                channel
-                    .modulation
-                    .offset_for(address(descriptor.id), sources, &policy);
+                rack.offset_for(address(descriptor.id), sources, &policy);
         }
         offsets
     }
@@ -1986,6 +1982,7 @@ impl Session {
             sample: self.sample_snapshots().get(index)?.clone(),
             zones,
             plugins,
+            routes: project.modulation.routes_into(index as u8),
         })
     }
 }

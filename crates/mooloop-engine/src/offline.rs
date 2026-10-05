@@ -2079,7 +2079,7 @@ mod tests {
         };
         let swept = channel.setup.push_effect(filter(1_500.0)).expect("pushed");
         let automated = channel.setup.push_effect(filter(8_000.0)).expect("pushed");
-        channel.setup.modulation.install(
+        channel.setup.carried_modulation_mut().install(
             0,
             ModulatorParams::Lfo(ModLfoParams {
                 tempo_sync: true,
@@ -2091,13 +2091,14 @@ mod tests {
         let cutoff = |device| ParamAddr::effect(EffectTarget::Channel(0), device, FILTER_PARAM_CUTOFF_HZ);
         assert!(channel
             .setup
-            .modulation
+            .carried_modulation_mut()
             .add_route(ModRoute::to_slot(0, cutoff(swept), 0.4, ModPolarity::Bipolar))
             .is_some());
         let mut lane = AutomationLane::new(cutoff(automated));
         lane.upsert(AutomationPoint::new(1, 0, 0.95));
         lane.upsert(AutomationPoint::new(2, 4 * BAR, 0.55));
         channel.automation[0].push(lane);
+        project.lift_channel_modulation();
         // A bright tone, so where the cutoffs sit is the level.
         let sample = long_sample(4 * 96_000, |index| {
             0.5 * (index as f32 * std::f32::consts::TAU * 2_000.0 / 48_000.0).sin()

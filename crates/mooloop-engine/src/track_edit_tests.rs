@@ -114,7 +114,7 @@ fn song(solo: bool, routed: bool) -> Project {
         project.channels[0].automation[0].push(lane);
     }
     if routed {
-        let rack = &mut project.channels[1].setup.modulation;
+        let rack = project.channels[1].setup.carried_modulation_mut();
         rack.install(
             0,
             ModulatorParams::Lfo(ModLfoParams {
@@ -124,6 +124,7 @@ fn song(solo: bool, routed: bool) -> Project {
         );
         rack.add_route(ModRoute::to_slot(0, on_delay, 0.4, ModPolarity::Bipolar))
             .expect("room in the matrix");
+        project.lift_channel_modulation();
     }
     project
 }
@@ -365,10 +366,10 @@ fn a_track_edit_rescopes_every_route_to_a_track() {
     for (edit, incoming) in edits(&project) {
         let mut live = playing(&project);
         assert!(reseat(&mut live, edit, &incoming).applied(), "{edit:?} was refused");
-        for (seat, channel) in incoming.channels.iter().enumerate() {
+        for seat in 0..incoming.channels.len() {
             assert_eq!(
                 live.mod_rack(seat),
-                channel.setup.modulation,
+                incoming.channel_rack(seat),
                 "{edit:?}: channel {seat}'s matrix is not the incoming project's"
             );
         }

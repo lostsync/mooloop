@@ -260,7 +260,7 @@ fn a_lane_on_a_plugin_instruments_parameter_lands_on_every_control_tick() {
 fn a_route_on_a_plugin_instruments_parameter_is_an_offset_and_is_zeroed_when_it_goes() {
     let (plain, slot, level) = sine_song();
     let mut project = plain.clone();
-    let rack = &mut project.channels[0].setup.modulation;
+    let rack = project.channels[0].setup.carried_modulation_mut();
     rack.install(
         0,
         ModulatorParams::Lfo(ModLfoParams {
@@ -270,7 +270,8 @@ fn a_route_on_a_plugin_instruments_parameter_is_an_offset_and_is_zeroed_when_it_
     );
     rack.add_route(ModRoute::to_slot(0, level, 0.25, ModPolarity::Bipolar))
         .expect("a route has room");
-    let source = rack.routes.iter().flatten().next().expect("the route").source;
+    project.lift_channel_modulation();
+    let source = project.channel_rack(0).routes.iter().flatten().next().expect("the route").source;
 
     let mut instance = open_sine();
     let lifeline = Lifeline::new();

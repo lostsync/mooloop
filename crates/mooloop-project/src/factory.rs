@@ -295,7 +295,9 @@ pub fn seed_mlp8_bank(dir: &Path) -> Result<usize, Error> {
 fn channel_setup(patch: &FactoryPatch) -> ChannelSetup {
 
     let mut setup = ChannelSetup::mlm1_with_params(patch.name, patch.params);
-    setup.modulation = patch.modulation;
+    // A patch's modulators travel with it as a preset's do, and land in the
+    // song as new modules wherever it is loaded.
+    setup.preset_modulation = (!patch.modulation.is_empty()).then_some(patch.modulation);
     setup
 }
 
@@ -305,14 +307,6 @@ fn preset_info(patch: &FactoryPatch) -> PresetInfo {
         category: patch.category.to_string(),
         tags: patch.tags.iter().map(|tag| (*tag).to_string()).collect(),
     }
-}
-
-/// Points every channel-scoped modulation route in `setup` at `channel`.
-/// Kept as the name the factory bank and its tests use; the rewrite itself
-/// is [`ChannelSetup::rescope_modulation`], because loading is only one of
-/// the places a setup lands on a new channel.
-pub fn rescope_modulation(setup: &mut ChannelSetup, channel: u8) {
-    setup.rescope_modulation(channel);
 }
 
 #[cfg(test)]
@@ -357,7 +351,8 @@ mod tests {
             };
             assert_eq!(state.params, patch.params, "{} changed on disk", patch.name);
             assert_eq!(
-                setup.modulation, patch.modulation,
+                setup.preset_modulation.unwrap_or_default(),
+                patch.modulation,
                 "{}'s rack changed on disk",
                 patch.name
             );
@@ -542,12 +537,15 @@ mod tests {
     }
 
     /// A preset describes an instrument and has no business claiming a
-    /// channel number, but a route stores one. Loading is where that gets
-    /// reconciled.
+    /// channel number, but a route stores one. Landing it in a song is where
+    /// that gets reconciled: its modules join the song, and its channel
+    /// routes are aimed at the channel that received it.
     #[test]
     fn loading_points_a_saved_rack_at_the_channel_it_lands_on() {
         let mut setup = ChannelSetup::mlm1("test");
-        setup.modulation.routes[0] = Some(ModRoute::to_slot(
+        let mut rack = mooloop_core::ModRack::default();
+        rack.install(0, mooloop_core::ModulatorParams::Lfo(Default::default()));
+        rack.add_route(ModRoute::to_slot(
             0,
             ParamAddr {
                 scope: EffectTarget::Channel(3),
@@ -559,7 +557,7 @@ mod tests {
         ));
         // A bus destination is shared state that exists whatever channel
         // loaded the preset, so it must be left where it points.
-        setup.modulation.routes[1] = Some(ModRoute::to_slot(
+        rack.add_route(ModRoute::to_slot(
             0,
             ParamAddr {
                 scope: EffectTarget::Bus(1),
@@ -569,17 +567,19 @@ mod tests {
             0.5,
             ModPolarity::Bipolar,
         ));
+        setup.preset_modulation = Some(rack);
 
-        rescope_modulation(&mut setup, 7);
+        let mut project = mooloop_core::Project::default();
+        for _ in 0..7 {
+            project.insert_channel(0, mooloop_core::ProjectChannel::sampler(0, 1));
+        }
+        project.replace_channel_setup(7, setup);
 
-        assert_eq!(
-            setup.modulation.routes[0].unwrap().destination.scope,
-            EffectTarget::Channel(7)
-        );
-        assert_eq!(
-            setup.modulation.routes[1].unwrap().destination.scope,
-            EffectTarget::Bus(1)
-        );
+        let routes = &project.modulation.routes;
+        assert_eq!(routes.len(), 2);
+        assert_eq!(routes[0].destination.scope, EffectTarget::Channel(7));
+        assert_eq!(routes[1].destination.scope, EffectTarget::Bus(1));
+        assert!(project.channels[7].setup.preset_modulation.is_none(), "landed, not kept");
     }
 
     /// Sequence Bleep is the patch that motivated the rescoping, so it is the
@@ -594,18 +594,27 @@ mod tests {
             .into_iter()
             .find(|found| found.name == "Sequence Bleep")
             .expect("Sequence Bleep was not seeded");
-        let LoadedDocument::Channel(mut setup) = load_bundle(&summary.path).unwrap().document
+        let LoadedDocument::Channel(setup) = load_bundle(&summary.path).unwrap().document
         else {
             panic!("Sequence Bleep did not load as a channel");
         };
+        let rack = setup.preset_modulation.expect("the patch carries its rack");
+        assert_eq!(rack.slots.iter().flatten().count(), 2);
+        assert_eq!(rack.routes.iter().flatten().count(), 2);
 
-        assert_eq!(setup.modulation.slots.iter().flatten().count(), 2);
-        assert_eq!(setup.modulation.routes.iter().flatten().count(), 2);
-
-        rescope_modulation(&mut setup, 5);
-        for route in setup.modulation.routes.iter().flatten() {
+        let mut project = mooloop_core::Project::default();
+        for _ in 0..5 {
+            project.insert_channel(0, mooloop_core::ProjectChannel::sampler(0, 1));
+        }
+        project.replace_channel_setup(5, *setup);
+        assert_eq!(project.modulation.modules.len(), 2);
+        for route in &project.modulation.routes {
             assert_eq!(route.destination.scope, EffectTarget::Channel(5));
         }
+        // And the engine's rack for that channel runs both, with both routes.
+        let rack = project.channel_rack(5);
+        assert_eq!(rack.slots.iter().flatten().count(), 2);
+        assert_eq!(rack.routes.iter().flatten().count(), 2);
     }
 
     // --- Effect banks --------------------------------------------------------

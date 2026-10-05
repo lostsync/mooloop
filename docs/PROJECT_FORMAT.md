@@ -692,15 +692,43 @@ before any of them existed still loads:
   level rather than at the level it used to play at, which is deliberate:
   the saved value is what the knob showed, and silently resetting it would
   change the file behind the face.
-- `channels[].setup.modulation` is that channel's `ModRack`. Only occupied
-  slots are written, each with its slot index, its durable `id`, and its
-  module parameters. Routes persist their durable `source` id alone; the
-  runtime slot is derived on load, so a saved project cannot disagree with
-  itself about where a module lives. A project written before durable
-  identities existed carries `source_slot` instead, and its slot number
-  becomes its id, which keeps its routes resolving to exactly what they
-  meant. A route whose source or destination no longer resolves is dropped
-  at load rather than parked.
+- `modulation` is **the song's** modulation set (song-modulation step 01,
+  0.1.7): every modulator module, and every route from a source to a
+  parameter anywhere in the song. A channel holds none. The table is left
+  out when the song has no modulation, so such a song writes nothing new.
+  - `modulation.modules[]`: each module's song-wide `id`, its `name`
+    (`<channel name> <kind> <n>` when made), its random `seed`, its `input`
+    (`{ channel_notes = <ChannelId> }`, left out for none), and its `params`
+    as a rack slot wrote them. Until step 02 a module also writes `rack`
+    (`{ channel, slot }`): the channel identity and slot the engine still
+    runs it in. Step 02 removes it.
+  - `modulation.routes[]`: one of `source` (a module id), `outlet` or
+    `performance` (with `channel`, the identity of the channel whose
+    generator or keyboard it is), then `destination`, `depth` and
+    `polarity`. A route has no slot; the runtime one is derived on load. A
+    route whose source or destination no longer resolves is dropped at load
+    rather than parked.
+  - `modulation.next_source_id` is the id mint, left out at zero.
+- **A song written by 0.1.6 or earlier** carries a `ModRack` per channel at
+  `channels[].setup.modulation`. Loading lifts every rack into the song's
+  set, in channel order: each module gets a fresh song-wide id and its
+  routes follow it; it is seated on the channel it came from, at its old
+  slot, so the engine runs exactly the racks it ran before; an LFO, Step or
+  Random listens to its old channel's notes and an Envelope to the channel
+  its gate named; a route's channel scope and an outlet or keyboard route's
+  channel are its old channel's. The song saves in the new shape and writes
+  no per-channel rack again. Inside a rack, only occupied slots are
+  written, each with its slot index, its durable `id` and its parameters,
+  and routes persist their durable `source` id alone; a rack written before
+  durable identities carries `source_slot` instead, and its slot number
+  becomes its id.
+- **A song written now, opened by 0.1.6**, opens without its modulation:
+  0.1.6 ignores the unknown table, plays with no modulators, and drops the
+  table on its next save. 0.1.6 checks `contains` only on effect presets and
+  validates a song's envelope alone, so nothing this build writes can make
+  it refuse the song. This is a known case of MOO-379 (*a song saved by a
+  newer build opens silently in an older one*), to be fixed there in
+  general.
 - Automation lanes live inside the pattern lane that drew them — per
   (pattern, channel), at most one lane per destination — and address a
   `ParamAddr`, which may name a bus.
@@ -741,9 +769,14 @@ the old unkinded one, so there a lane recorded for another kind drives the
 current device's control with the same id. That is their old behaviour, and
 only a song whose device was changed after the lane was made can show it.
 
-Because a channel index is a position, loading runs an integrity pass: a route
-or lane stranded on another channel's index is pointed back at its own
-channel, and one naming a device or control that is not present is dropped.
+Because a channel index is a position, loading runs an integrity pass: a lane
+stranded on another channel's index is pointed back at its own channel, and a
+route or lane naming a device or control that is not present is dropped. A
+route belongs to the song, not to a channel, so one aimed at another channel
+is checked where it points rather than pointed home. The song's set is
+checked too: module ids are unique, a route naming a module the song does not
+have is dropped, an input naming a channel the song does not have becomes
+none, and a depth that is not finite is fitted.
 A generator address is judged against the table of the kind it *names*, not
 the kind the channel runs, so only a control that kind never had is dropped.
 Addresses on a generator kind that has no descriptor table yet are left
@@ -1018,10 +1051,16 @@ while retaining that channel's notes. Sampler presets include parameters and a
 sample reference; every generated source's preset is its generator parameters
 and requires no audio asset.
 
-A channel document's modulation routes are rescoped as they load. A route
-names its destination channel absolutely, so a preset saved from channel 3
-would otherwise modulate channel 3 wherever it landed; `rescope_modulation`
-rewrites those addresses onto the receiving channel. This is the concrete
+**A channel document, and each kit entry, carries the song modulation that
+plays on its channel** as a `ModRack` under the setup's `modulation` key: the
+key 0.1.6 read, so a preset saved now opens there with its modulation. An
+Envelope gated by the channel's own notes is written with no gate identity,
+meaning the channel it lands on. Loading a channel preset drops the song's
+routes into the receiving channel and from its outlets and keyboard, then
+**adds** the preset's modules to the song as new ones, seated on that channel
+with their routes aimed at it, wherever the preset was saved from. The song's
+other modules stay. Loading a kit replaces every channel and so all the
+song's modulation, then lands each entry's the same way. This is the concrete
 case behind `COMPOSABLE_DEVICE_UNITS.md`'s rule that a saveable fragment must
 not name its neighbours by index.
 

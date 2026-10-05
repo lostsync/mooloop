@@ -88,6 +88,7 @@ pub use mlm1_factory::FactoryPatch;
 pub use modulation::{
     step_value_index, strip_descriptor, ModEnvelopeParams, ModLfoParams, ModLfoWaveform,
     ModMathOp, ModMathParams, ModPolarity, ModRack, ModRandomParams, ModRandomTrigger, ModRoute,
+    InputSource, RackSeat, SongModulation, SongModule,
     ModStepParams, ModStepTrigger, ModTimeDivision, ModulatorKind, ModulatorParams, ParamAddr,
     ParamKey, ParamOwner,
     ENVELOPE_DESCRIPTORS, ENV_PARAM_AMOUNT, ENV_PARAM_ATTACK_DIVISION, ENV_PARAM_ATTACK_S,

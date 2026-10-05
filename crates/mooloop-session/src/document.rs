@@ -727,11 +727,10 @@ impl Session {
     pub fn take_preset_save(&mut self, bpm: i32, swing_percent: i32) -> Option<PresetSource> {
         let target = self.pending_preset_save.take()?;
         let snapshot = self.project_snapshot(bpm, swing_percent);
-        let setup = snapshot
-            .channels
-            .get(snapshot.selected_index())?
-            .setup
-            .clone();
+        let selected = snapshot.selected_index();
+        let mut setup = snapshot.channels.get(selected)?.setup.clone();
+        // The song's modulation that plays on the channel goes with it.
+        setup.preset_modulation = snapshot.preset_rack(selected);
         let effect = match target {
             PresetSaveTarget::Effect {
                 target: chain,

@@ -27,8 +27,8 @@ use crate::{
 ///
 /// Routes name their destination channel absolutely, so a stored rack is only
 /// correct on the channel it was saved from. The bank picks channel 0 and the
-/// loader re-scopes on the way in; see [`ModRack`] and
-/// `mooloop_project::rescope_modulation`.
+/// loader aims them at the receiving channel as it lands the rack in the
+/// song; see [`crate::SongModulation::lift_rack`].
 const AUTHORED_SCOPE: EffectTarget = EffectTarget::Channel(0);
 
 /// One factory patch: presentation metadata plus the complete channel-level

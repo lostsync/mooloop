@@ -28,14 +28,16 @@ fn session_with_routes() -> Session {
         session.effect_target = EffectTarget::Channel(channel as u8);
         session.insert_effect_at(EffectKind::Delay, 0).expect("room");
         session.insert_effect_at(EffectKind::Filter, 1).expect("room");
-        session
-            .add_modulation_source(ModulatorKind::Lfo)
-            .expect("an empty rack has a free slot");
+        assert!(
+            !session.add_modulation_source(ModulatorKind::Lfo).is_empty(),
+            "an empty rack has a free slot"
+        );
 
         let destination = filter_param(&session, channel);
-        session.channels[channel]
-            .modulation
-            .add_route(ModRoute::to_slot(0, destination, 0.5, ModPolarity::Bipolar))
+        session
+            .edit_selected_rack(|rack| {
+                rack.add_route(ModRoute::to_slot(0, destination, 0.5, ModPolarity::Bipolar))
+            })
             .expect("the matrix is empty");
         session.automation_target.set(Some(destination));
         session
@@ -79,8 +81,8 @@ type SlotParam = (DeviceId, u32);
 
 /// Every route and lane on `channel`, by the device and parameter they name.
 fn addresses(session: &Session, channel: usize) -> (Vec<SlotParam>, Vec<SlotParam>) {
-    let routes = session.channels[channel]
-        .modulation
+    let routes = session
+        .channel_rack(channel)
         .routes
         .iter()
         .flatten()
@@ -150,10 +152,10 @@ fn a_reorder_does_not_change_one_byte_of_the_saved_addresses() {
     fn saved_addresses(session: &Session) -> String {
         let project = session.project_snapshot(120, 50);
         let mut out = String::new();
+        for route in &project.modulation.routes {
+            out.push_str(&format!("{:?}\n", route.destination));
+        }
         for channel in &project.channels {
-            for route in channel.setup.modulation.routes.iter().flatten() {
-                out.push_str(&format!("{:?}\n", route.destination));
-            }
             for lanes in &channel.automation {
                 for lane in lanes {
                     out.push_str(&format!("{:?}\n", lane.target));
@@ -183,9 +185,10 @@ fn removing_an_effect_drops_what_named_it_and_disturbs_nothing_else() {
     // survive alongside the one that must not.
     let delay_param = device_param(&session, 0, EffectKind::Delay);
     let filter_address = filter_param(&session, 0);
-    session.channels[0]
-        .modulation
-        .add_route(ModRoute::to_slot(0, delay_param, 0.25, ModPolarity::Bipolar))
+    session
+        .edit_channel_rack(0, |rack| {
+            rack.add_route(ModRoute::to_slot(0, delay_param, 0.25, ModPolarity::Bipolar))
+        })
         .expect("the matrix has room");
 
     // Drop the *filter*, which is what both the original route and the lane
@@ -639,10 +642,9 @@ fn a_channel_identity_survives_the_session_round_trip() {
 /// the same shape as before and the mechanism underneath it is the opposite
 /// one.
 ///
-/// `modulation_ui_channel` in particular now does what its own comment always
-/// claimed -- "changing channels clears both even when the new channel
-/// happens to occupy the same runtime slot" is a statement about identity,
-/// and it was written against a `usize` seat.
+/// The other of the two, `modulation_ui_channel`, is gone: the modulation
+/// selection is held by source, which the song owns, so it has no channel to
+/// follow.
 #[test]
 fn the_last_two_keyed_fields_follow_a_move() {
     let mut session = Session::default();
@@ -652,7 +654,6 @@ fn the_last_two_keyed_fields_follow_a_move() {
 
     let third = session.channel_id(3).expect("four channels");
     session.slice_audition = Some((third, 60));
-    session.modulation_ui_channel.set(Some(third));
 
     let moved = session.channels.remove(3);
     session.channels.insert(0, moved);
@@ -663,11 +664,6 @@ fn the_last_two_keyed_fields_follow_a_move() {
         session.slice_audition.map(|(channel, note)| (session.channel_index(channel), note)),
         Some((Some(0), 60)),
         "the held slice still names the channel it was struck on"
-    );
-    assert_eq!(
-        session.modulation_ui_channel.get().and_then(|id| session.channel_index(id)),
-        Some(0),
-        "the armed rack still names its channel"
     );
 
     // And a removal: the channel is gone, so neither resolves to anything

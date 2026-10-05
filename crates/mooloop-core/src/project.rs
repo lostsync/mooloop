@@ -320,10 +320,22 @@ pub struct ChannelSetup {
     /// `MonoSynthParams.lfo`).
     #[serde(default)]
     pub effects: Vec<crate::EffectSlotState>,
-    /// Per-channel modulator slots and their matrix routes. The default keeps
-    /// projects written before modulation was added completely compatible.
-    #[serde(default)]
-    pub modulation: ModRack,
+    /// The modulation a setup carries **outside a song**: a channel preset, a
+    /// kit entry, a copied channel's preset, an ML-M1 factory patch. Always
+    /// `None` inside a song, whose channels own no modulators
+    /// (`docs/plans/song-modulation/`): the song's set holds them.
+    ///
+    /// Whatever lands a setup in a song lifts this into the song's set as new
+    /// modules ([`crate::SongModulation::lift_rack`]) and leaves `None`
+    /// behind. That is also how a song written by 0.1.6, which kept a rack on
+    /// every channel under this same key, is converted on the way in
+    /// ([`Project::lift_channel_modulation`]).
+    ///
+    /// Written under the key a channel's rack always had, so a preset saved
+    /// by this build reads the same as one saved by 0.1.6 and opens in it
+    /// with its modulation.
+    #[serde(default, rename = "modulation", skip_serializing_if = "Option::is_none")]
+    pub preset_modulation: Option<ModRack>,
     /// Next device identity to mint for `effects`. Monotonic, so removing a
     /// device and adding another never hands the newcomer the departed
     /// device's routes. Defaults to zero and is raised past whatever the
@@ -348,12 +360,19 @@ pub struct ChannelSetup {
 }
 
 impl ChannelSetup {
+    /// The rack this setup carries into a song, made empty if it has none:
+    /// how a preset's modulation, or a channel's built outside a song, is
+    /// written before [`Project::lift_channel_modulation`] lands it.
+    pub fn carried_modulation_mut(&mut self) -> &mut ModRack {
+        self.preset_modulation.get_or_insert_with(ModRack::default)
+    }
+
     pub fn sampler(name: impl Into<String>) -> Self {
         Self {
             channel: Channel::new(name, DeviceKind::Sampler),
             source: ChannelSource::default(),
             effects: Vec::new(),
-            modulation: ModRack::default(),
+            preset_modulation: None,
             next_device_id: 0,
             source_device: crate::DeviceId::UNASSIGNED,
         }
@@ -368,7 +387,7 @@ impl ChannelSetup {
             channel: Channel::new(name, DeviceKind::DrumSynth),
             source: ChannelSource::DrumSynth(DrumSynthState { params }),
             effects: Vec::new(),
-            modulation: ModRack::default(),
+            preset_modulation: None,
             next_device_id: 0,
             source_device: crate::DeviceId::UNASSIGNED,
         }
@@ -383,7 +402,7 @@ impl ChannelSetup {
             channel: Channel::new(name, DeviceKind::MonoSynth),
             source: ChannelSource::MonoSynth(MonoSynthState { params }),
             effects: Vec::new(),
-            modulation: ModRack::default(),
+            preset_modulation: None,
             next_device_id: 0,
             source_device: crate::DeviceId::UNASSIGNED,
         }
@@ -398,7 +417,7 @@ impl ChannelSetup {
             channel: Channel::new(name, DeviceKind::MlM1),
             source: ChannelSource::MlM1(MlM1State { params }),
             effects: Vec::new(),
-            modulation: ModRack::default(),
+            preset_modulation: None,
             next_device_id: 0,
             source_device: crate::DeviceId::UNASSIGNED,
         }
@@ -413,7 +432,7 @@ impl ChannelSetup {
             channel: Channel::new(name, DeviceKind::MlP8),
             source: ChannelSource::MlP8(MlP8State { params }),
             effects: Vec::new(),
-            modulation: ModRack::default(),
+            preset_modulation: None,
             next_device_id: 0,
             source_device: crate::DeviceId::UNASSIGNED,
         }
@@ -428,7 +447,7 @@ impl ChannelSetup {
             channel: Channel::new(name, DeviceKind::Ds01),
             source: ChannelSource::Ds01(Ds01State { params }),
             effects: Vec::new(),
-            modulation: ModRack::default(),
+            preset_modulation: None,
             next_device_id: 0,
             source_device: crate::DeviceId::UNASSIGNED,
         }
@@ -443,7 +462,7 @@ impl ChannelSetup {
             channel: Channel::new(name, DeviceKind::AuxIn),
             source: ChannelSource::AuxIn(AuxInState { params }),
             effects: Vec::new(),
-            modulation: ModRack::default(),
+            preset_modulation: None,
             next_device_id: 0,
             source_device: crate::DeviceId::UNASSIGNED,
         }
@@ -458,7 +477,7 @@ impl ChannelSetup {
             channel: Channel::new(name, DeviceKind::PolySynth),
             source: ChannelSource::PolySynth(PolySynthState { params }),
             effects: Vec::new(),
-            modulation: ModRack::default(),
+            preset_modulation: None,
             next_device_id: 0,
             source_device: crate::DeviceId::UNASSIGNED,
         }
@@ -468,16 +487,6 @@ impl ChannelSetup {
         self.source.kind()
     }
 
-    /// Points every channel-scoped modulation route in this setup at
-    /// `channel`.
-    ///
-    /// A route names its destination channel absolutely, so a rack is only
-    /// correct on the channel it was authored on. That is right for a project
-    /// -- the scope is what will let one channel modulate another -- and wrong
-    /// for a preset, a kit entry, or a pasted channel, none of which has any
-    /// business claiming a channel number. Wherever a setup lands somewhere
-    /// new is where the rewrite belongs. Bus-scoped routes are left alone: a
-    /// bus exists independently of which channel loaded the setup.
     /// Append `effect` to the chain, minting it an identity.
     ///
     /// The way to add a device to a chain in code. Pushing onto `effects`
@@ -501,7 +510,9 @@ impl ChannelSetup {
     pub fn assign_device_ids(&mut self) {
         crate::assign_device_ids(&mut self.effects, &mut self.next_device_id);
         self.assign_source_device_id();
-        self.modulation.identify_source_kinds(self.source.kind());
+        if let Some(rack) = &mut self.preset_modulation {
+            rack.identify_source_kinds(self.source.kind());
+        }
     }
 
     /// Give every bare device in this channel's layers a Chain of its own,
@@ -534,14 +545,6 @@ impl ChannelSetup {
             self.source_device = crate::mint_device_id(&mut self.next_device_id);
         } else {
             self.source_device = crate::DeviceId::UNASSIGNED;
-        }
-    }
-
-    pub fn rescope_modulation(&mut self, channel: u8) {
-        for route in self.modulation.routes.iter_mut().flatten() {
-            if matches!(route.destination.scope, EffectTarget::Channel(_)) {
-                route.destination.scope = EffectTarget::Channel(channel);
-            }
         }
     }
 
@@ -764,7 +767,6 @@ impl ProjectChannel {
     /// `channel`: its routes, and every lane in every pattern. What a
     /// pasted or loaded channel needs before it can live at a new index.
     pub fn rescope(&mut self, channel: u8) {
-        self.setup.rescope_modulation(channel);
         for lanes in &mut self.automation {
             for lane in lanes.iter_mut() {
                 if matches!(lane.target.scope, EffectTarget::Channel(_)) {
@@ -929,6 +931,15 @@ pub struct Project {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pattern_meta: Vec<PatternMeta>,
     pub playlist: Vec<PatternPlacement>,
+    /// The song's modulation: every modulator and every route
+    /// (`docs/plans/song-modulation/`). Channels own none.
+    ///
+    /// Defaulted and skipped when empty, so a song with no modulation saves
+    /// no `modulation` table. A song written before this table carries each
+    /// channel's rack instead, and [`Self::lift_channel_modulation`]
+    /// converts it on the way in.
+    #[serde(default, skip_serializing_if = "crate::SongModulation::is_empty")]
+    pub modulation: crate::SongModulation,
     /// The repeating section of the arrangement. Defaulted on load, so a song
     /// written before looping existed opens with the loop off and its points
     /// at the origin rather than failing to decode.
@@ -1146,6 +1157,7 @@ impl Default for Project {
             // in and `trim_pattern_meta` trims it on the way out.
             pattern_meta: Vec::new(),
             playlist: Vec::new(),
+            modulation: crate::SongModulation::default(),
             loop_range: LoopRange::default(),
             control_map: crate::control::ControlMap::default(),
             plugins: crate::plugin::PluginSlots::new(),
@@ -1303,8 +1315,132 @@ impl Project {
         // ids and forgot to identify the references would leave the
         // references positional and silently so.
         self.identify_channel_references();
+        // A 0.1.6 song's racks name channels by seat and their gates by the
+        // identities just adopted, so the lift waits for both.
+        self.lift_channel_modulation();
         // Bindings name their channel by id, so this waits for the ids too.
         self.identify_source_kinds();
+    }
+
+    /// The channel-to-seat lookup everything that resolves a channel identity
+    /// in the song's modulation set needs.
+    fn seats(&self) -> Vec<(ChannelId, u8)> {
+        self.channels
+            .iter()
+            .enumerate()
+            .filter_map(|(index, channel)| Some((channel.id, u8::try_from(index).ok()?)))
+            .collect()
+    }
+
+    /// The modulation rack the engine runs for the channel at `index`: the
+    /// song's modules seated there and the routes they and that channel take
+    /// part in. See [`crate::SongModulation::channel_rack`]; this is the shim
+    /// song-modulation step 02 removes.
+    pub fn channel_rack(&self, index: usize) -> ModRack {
+        let Some(channel) = self.channels.get(index) else {
+            return ModRack::default();
+        };
+        let seats = self.seats();
+        self.modulation.channel_rack(channel.id, index as u8, |id| {
+            seats.iter().find(|(held, _)| *held == id).map(|(_, seat)| *seat)
+        })
+    }
+
+    /// The modulation a preset or kit entry saved from the channel at `index`
+    /// carries: the channel's rack, with an envelope gated by the channel's
+    /// own notes saying so rather than naming this song's channel, so it
+    /// gates from whichever channel loads it. `None` when the channel has no
+    /// modulation.
+    pub fn preset_rack(&self, index: usize) -> Option<ModRack> {
+        let own = self.channels.get(index)?.id;
+        let mut rack = self.channel_rack(index);
+        if rack.is_empty() {
+            return None;
+        }
+        for entry in rack.slots.iter_mut().flatten() {
+            if let crate::ModulatorParams::Envelope(envelope) = &mut entry.params {
+                if envelope.input_channel_id == own {
+                    envelope.input_channel_id = crate::ChannelId::UNASSIGNED;
+                }
+            }
+        }
+        Some(rack)
+    }
+
+    /// Edit the channel at `index`'s rack as a rack, and write the result
+    /// back into the song's set ([`crate::SongModulation::store_channel_rack`]).
+    /// `None` when there is no such channel.
+    ///
+    /// Gives the song's channels identities first if they have none, because
+    /// a module is seated on a channel by identity.
+    pub fn edit_channel_rack<R>(
+        &mut self,
+        index: usize,
+        edit: impl FnOnce(&mut ModRack) -> R,
+    ) -> Option<R> {
+        if !self.channels.get(index)?.id.is_assigned() {
+            self.assign_channel_ids();
+        }
+        let before = self.channel_rack(index);
+        let mut after = before;
+        let result = edit(&mut after);
+        let channel = &self.channels[index];
+        let (id, name) = (channel.id, channel.setup.channel.name.clone());
+        self.modulation.store_channel_rack(id, &name, &before, &after);
+        Some(result)
+    }
+
+    /// Put `setup` on the channel at `index`, as loading a channel preset or
+    /// a kit entry does, and land the modulation it carries in the song.
+    ///
+    /// The setup replaces what the channel plays, so the song's routes into
+    /// the channel and from its outlets and keyboard go first, as the
+    /// channel's whole rack used to be replaced. The modules stay: they are
+    /// the song's, and give up their seat on this channel, so one still
+    /// feeding another channel shows there. What the setup carries is
+    /// **added** as new modules, seated on this channel, with its routes
+    /// aimed here.
+    pub fn replace_channel_setup(&mut self, index: usize, setup: ChannelSetup) {
+        let Some(channel) = self.channels.get_mut(index) else {
+            return;
+        };
+        channel.setup = setup;
+        let id = channel.id;
+        let seat = crate::EffectTarget::Channel(index as u8);
+        self.modulation.routes.retain(|route| {
+            route.destination.scope != seat && (route.source.channel() != Some(id) || !id.is_assigned())
+        });
+        for module in &mut self.modulation.modules {
+            if module.rack.is_some_and(|rack| rack.channel == id) {
+                module.rack = None;
+            }
+        }
+        self.lift_channel_modulation();
+    }
+
+    /// Lift every channel's carried rack into the song's set, in channel
+    /// order: what converts a song written before the song owned its
+    /// modulation, and what lands a channel that arrived carrying one.
+    /// Idempotent: a lifted channel carries nothing.
+    pub fn lift_channel_modulation(&mut self) {
+        // A module is seated on a channel by identity, so a channel with none
+        // has to be given one first -- which lifts, with it.
+        if self
+            .channels
+            .iter()
+            .any(|channel| channel.setup.preset_modulation.is_some() && !channel.id.is_assigned())
+        {
+            self.assign_channel_ids();
+            return;
+        }
+        for index in 0..self.channels.len() {
+            let Some(rack) = self.channels[index].setup.preset_modulation.take() else {
+                continue;
+            };
+            let channel = &self.channels[index];
+            let (id, name) = (channel.id, channel.setup.channel.name.clone());
+            self.modulation.lift_rack(id, index as u8, &name, &rack);
+        }
     }
 
     /// Give every lane, route and control binding onto a generator that was
@@ -1317,9 +1453,20 @@ impl Project {
     /// channel this song does not have stays unidentified, and it resolves to
     /// nothing anyway.
     pub fn identify_source_kinds(&mut self) {
+        let kinds_by_seat: Vec<DeviceKind> = self
+            .channels
+            .iter()
+            .map(|channel| channel.setup.source.kind())
+            .collect();
+        self.modulation.identify_source_kinds(|scope| match scope {
+            crate::EffectTarget::Channel(seat) => kinds_by_seat.get(usize::from(seat)).copied(),
+            crate::EffectTarget::Bus(_) => None,
+        });
         for channel in &mut self.channels {
             let kind = channel.setup.source.kind();
-            channel.setup.modulation.identify_source_kinds(kind);
+            if let Some(rack) = &mut channel.setup.preset_modulation {
+                rack.identify_source_kinds(kind);
+            }
             for lane in channel.automation.iter_mut().flatten() {
                 lane.target.owner.identify_source(kind);
             }
@@ -1348,8 +1495,12 @@ impl Project {
     /// Bindings on a channel the song does not have are not counted; they
     /// name nothing either way.
     pub fn has_unidentified_source_kinds(&self) -> bool {
-        self.channels.iter().any(|channel| {
-            channel.setup.modulation.has_unidentified_source_kinds()
+        self.modulation.has_unidentified_source_kinds()
+            || self.channels.iter().any(|channel| {
+            channel
+                .setup
+                .preset_modulation
+                .is_some_and(|rack| rack.has_unidentified_source_kinds())
                 || channel
                     .automation
                     .iter()
@@ -1417,7 +1568,9 @@ impl Project {
             if let Some(state) = channel.setup.source.aux_in_state_mut() {
                 state.params.identify(id_at);
             }
-            channel.setup.modulation.identify_gates(id_at);
+            if let Some(rack) = &mut channel.setup.preset_modulation {
+                rack.identify_gates(id_at);
+            }
         }
     }
 
@@ -1450,7 +1603,9 @@ impl Project {
             if let Some(state) = channel.setup.source.aux_in_state_mut() {
                 changed |= state.params.reseat(seat_of);
             }
-            changed |= channel.setup.modulation.reseat_gates(seat_of);
+            if let Some(rack) = &mut channel.setup.preset_modulation {
+                changed |= rack.reseat_gates(seat_of);
+            }
         }
         changed
     }
@@ -1571,28 +1726,22 @@ impl Project {
                 }
             }
         };
-        let mut depths: Vec<(usize, usize, f32)> = Vec::new();
-        for (channel_index, channel) in self.channels.iter().enumerate() {
-            for (route_index, route) in channel.setup.modulation.routes.iter().enumerate() {
-                let Some(route) = route else { continue };
-                if !is_volume(route.destination.owner, route.destination.param) {
-                    continue;
-                }
-                let base = volume_at(self, route.destination.scope)
-                    .unwrap_or(crate::DEFAULT_CHANNEL_VOLUME)
-                    .clamp(0.0, crate::gain::MAX_LINEAR_GAIN);
-                let reached = (base + route.depth * crate::gain::MAX_LINEAR_GAIN)
-                    .clamp(0.0, crate::gain::MAX_LINEAR_GAIN);
-                let depth = crate::gain::fader_gain_to_position(reached)
-                    - crate::gain::fader_gain_to_position(base);
-                depths.push((channel_index, route_index, depth.clamp(-1.0, 1.0)));
+        let mut depths: Vec<(usize, f32)> = Vec::new();
+        for (route_index, route) in self.modulation.routes.iter().enumerate() {
+            if !is_volume(route.destination.owner, route.destination.param) {
+                continue;
             }
+            let base = volume_at(self, route.destination.scope)
+                .unwrap_or(crate::DEFAULT_CHANNEL_VOLUME)
+                .clamp(0.0, crate::gain::MAX_LINEAR_GAIN);
+            let reached = (base + route.depth * crate::gain::MAX_LINEAR_GAIN)
+                .clamp(0.0, crate::gain::MAX_LINEAR_GAIN);
+            let depth = crate::gain::fader_gain_to_position(reached)
+                - crate::gain::fader_gain_to_position(base);
+            depths.push((route_index, depth.clamp(-1.0, 1.0)));
         }
-        for (channel_index, route_index, depth) in depths {
-            if let Some(route) = &mut self.channels[channel_index].setup.modulation.routes[route_index]
-            {
-                route.depth = depth;
-            }
+        for (route_index, depth) in depths {
+            self.modulation.routes[route_index].depth = depth;
         }
 
         for binding in &mut self.control_map.bindings {
@@ -1666,21 +1815,18 @@ impl Project {
                 }
             }
         }
-        let mut route_conversions: Vec<(usize, usize, f32)> = Vec::new();
-        for (channel_index, channel) in self.channels.iter().enumerate() {
-            for (route_index, route) in channel.setup.modulation.routes.iter().enumerate() {
-                let Some(route) = route else { continue };
-                if route.destination.param != crate::BUFFER_PARAM_OFFSET_BEATS {
-                    continue;
-                }
-                let crate::ParamOwner::Effect { device } = route.destination.owner else {
-                    continue;
-                };
-                let Some(bars) = bars_for(route.destination.scope, device) else {
-                    continue;
-                };
-                route_conversions.push((channel_index, route_index, history_beats(bars)));
+        let mut route_conversions: Vec<(usize, f32)> = Vec::new();
+        for (route_index, route) in self.modulation.routes.iter().enumerate() {
+            if route.destination.param != crate::BUFFER_PARAM_OFFSET_BEATS {
+                continue;
             }
+            let crate::ParamOwner::Effect { device } = route.destination.owner else {
+                continue;
+            };
+            let Some(bars) = bars_for(route.destination.scope, device) else {
+                continue;
+            };
+            route_conversions.push((route_index, history_beats(bars)));
         }
 
         for (channel_index, pattern, lane_index, history) in lane_conversions {
@@ -1696,12 +1842,8 @@ impl Project {
                 .collect();
             lane.reset_points(points);
         }
-        for (channel_index, route_index, history) in route_conversions {
-            let Some(route) =
-                &mut self.channels[channel_index].setup.modulation.routes[route_index]
-            else {
-                continue;
-            };
+        for (route_index, history) in route_conversions {
+            let route = &mut self.modulation.routes[route_index];
             route.destination.param = crate::BUFFER_PARAM_POSITION;
             // Negated: more offset was further back, and more position is
             // further forward.
@@ -1720,6 +1862,9 @@ impl Project {
             return None;
         }
         let removed = self.channels.remove(index);
+        // Its routes go with it in the rescope below; its inputs and seats
+        // name it by identity, so they are let go of here.
+        self.modulation.forget_channel(removed.id);
         self.rescope_after(ChannelEdit::Removed(index as u8));
         // The selection names a channel rather than a seat, so removing any
         // *other* channel leaves it exactly where it was. Only losing the
@@ -1756,6 +1901,9 @@ impl Project {
         // somebody else and has to follow the same shift everyone else did.
         channel.setup.source.rescope_subscription(edit);
         self.channels.insert(index, channel);
+        // A channel that arrives carrying modulation -- from a preset, a kit
+        // -- lands it in the song, seated on the newcomer.
+        self.lift_channel_modulation();
         Some(index)
     }
 
@@ -1886,11 +2034,11 @@ impl Project {
         }
         for channel in &mut self.channels {
             channel.setup.channel.bus = edit.destination(channel.setup.channel.bus);
-            channel.setup.modulation.rescope_tracks(edit);
             for lanes in &mut channel.automation {
                 rescope_lanes_for_track(lanes, edit);
             }
         }
+        self.modulation.rescope_tracks(edit);
         self.control_map.rescope_tracks(edit);
         // A track that fed the removed one, or the removed one itself, may
         // have left the graph in a shape that no longer sorts.
@@ -1931,11 +2079,11 @@ impl Project {
             // moves through this pass rather than growing a repair path of
             // its own.
             channel.setup.source.rescope_subscription(edit);
-            channel.setup.modulation.rescope_channels(edit);
             for lanes in &mut channel.automation {
                 rescope_lanes(lanes, edit);
             }
         }
+        self.modulation.rescope_channels(edit);
         // The control map is deliberately *not* walked here. A binding names
         // its channel by `ChannelId`, so a channel edit cannot move one;
         // `rescope_tracks_after` still calls its track twin, because a track
@@ -2400,8 +2548,10 @@ mod tests {
         // which stamps a durable source identity out of an installed module.
         // The migration does not look at a route's source, and giving this
         // one a module would be setting up the half that is not under test.
-        project.channels[0].setup.modulation.routes[0] =
-            Some(ModRoute::to_slot(0, address, 0.5, ModPolarity::Bipolar));
+        project
+            .modulation
+            .routes
+            .push(ModRoute::to_slot(0, address, 0.5, ModPolarity::Bipolar));
 
         project.migrate_retired_buffer_offset();
 
@@ -2422,8 +2572,7 @@ mod tests {
              more position is further forward"
         );
 
-        let route = project.channels[0].setup.modulation.routes[0]
-            .expect("the route is still there");
+        let route = *project.modulation.routes.first().expect("the route is still there");
         assert_eq!(route.destination.param, crate::BUFFER_PARAM_POSITION);
         // Half of sixteen beats is eight, and eight of thirty-two is a
         // quarter -- pointing the other way.
@@ -2469,8 +2618,10 @@ mod tests {
             AutomationPoint::new(4, 72, 1.0),
         ]);
         project.channels[0].automation[0].push(lane);
-        project.channels[0].setup.modulation.routes[0] =
-            Some(ModRoute::to_slot(0, address, 0.25, ModPolarity::Bipolar));
+        project
+            .modulation
+            .routes
+            .push(ModRoute::to_slot(0, address, 0.25, ModPolarity::Bipolar));
         project.control_map.bind(ControlBinding::new(
             ControlSource::Cc {
                 port: MidiPortFilter::Any,
@@ -2507,7 +2658,7 @@ mod tests {
 
         // The route reached unity + 1.0 (a quarter of 4.0), about +6 dB,
         // which is the whole quarter of travel above unity.
-        let route = project.channels[0].setup.modulation.routes[0].unwrap();
+        let route = project.modulation.routes[0];
         assert!((route.depth - 0.25).abs() < 1e-3, "depth became {}", route.depth);
 
         let binding = &project.control_map.bindings[0];
@@ -2616,13 +2767,14 @@ mod tests {
         };
         for index in 0..4u8 {
             let learned = fader(&project, index);
-            let channel = &mut project.channels[index as usize];
-            channel.setup.modulation.install(0, crate::ModulatorParams::Lfo(Default::default()));
-            channel
-                .setup
-                .modulation
-                .add_route(crate::ModRoute::to_slot(0, strip(index), 0.5, Default::default()))
+            project
+                .edit_channel_rack(index as usize, |rack| {
+                    rack.install(0, crate::ModulatorParams::Lfo(Default::default()));
+                    rack.add_route(crate::ModRoute::to_slot(0, strip(index), 0.5, Default::default()))
+                        .unwrap();
+                })
                 .unwrap();
+            let channel = &mut project.channels[index as usize];
             channel.automation[0].push(AutomationLane::new(strip(index)));
             channel.automation[0].push(AutomationLane::new(bus));
             // A desk fader per channel, told apart by its controller number,
@@ -2670,16 +2822,18 @@ mod tests {
             );
         };
 
+        // The song's routes, by the channel each one's module is seated on.
+        let route_of = |project: &Project, seat: usize| {
+            project.channel_rack(seat).routes.iter().flatten().next().map(|route| route.destination)
+        };
         let removed = project.remove_channel(1).expect("channel 1 exists");
         assert_eq!(project.channels.len(), 3);
-        assert_eq!(removed.setup.modulation.routes[0].unwrap().destination, strip(1));
+        // Its route went with it; its module is the song's and stays.
+        assert_eq!(project.modulation.routes.len(), 3);
+        assert_eq!(project.modulation.modules.len(), 4);
         for index in 0..3u8 {
             let channel = &project.channels[index as usize];
-            assert_eq!(
-                channel.setup.modulation.routes[0].unwrap().destination,
-                strip(index),
-                "route on channel {index}"
-            );
+            assert_eq!(route_of(&project, index as usize), Some(strip(index)), "route on channel {index}");
             assert_eq!(channel.automation[0][0].target, strip(index), "lane on channel {index}");
             assert_eq!(channel.automation[0][1].target, bus, "bus lane on channel {index}");
         }
@@ -2687,12 +2841,14 @@ mod tests {
 
         // Putting it back at the front renumbers everyone again, and the
         // newcomer's addresses point at its new seat rather than its old one.
+        // The newcomer is minted a new identity, so it carries no route.
         assert_eq!(project.insert_channel(0, removed), Some(0));
-        for index in 0..4u8 {
+        assert_eq!(route_of(&project, 0), None);
+        for index in 1..4u8 {
             let channel = &project.channels[index as usize];
             assert_eq!(
-                channel.setup.modulation.routes[0].unwrap().destination,
-                strip(index),
+                route_of(&project, index as usize),
+                Some(strip(index)),
                 "route on channel {index} after insert"
             );
             assert_eq!(channel.automation[0][0].target, strip(index));
@@ -2720,11 +2876,13 @@ mod tests {
         assert_eq!(project.channels[1].setup.channel.name, moved);
         for index in 0..4u8 {
             let channel = &project.channels[index as usize];
-            assert_eq!(
-                channel.setup.modulation.routes[0].unwrap().destination,
-                strip(index),
-                "route on channel {index} after move"
-            );
+            if channel.setup.channel.name != "ch1" {
+                assert_eq!(
+                    route_of(&project, index as usize),
+                    Some(strip(index)),
+                    "route on channel {index} after move"
+                );
+            }
             assert_eq!(channel.automation[0][0].target, strip(index));
             assert_eq!(channel.automation[0][1].target, bus);
         }
@@ -2778,10 +2936,9 @@ mod tests {
             input_channel: 3,
             ..Default::default()
         };
-        project.channels[0]
-            .setup
-            .modulation
-            .install(0, crate::ModulatorParams::Envelope(gate));
+        let mut rack = crate::ModRack::default();
+        rack.install(0, crate::ModulatorParams::Envelope(gate));
+        project.channels[0].setup.preset_modulation = Some(rack);
         // A second envelope, parked. `u8::MAX` is the marker for "the channel
         // this named is gone" and is *also* an ordinary `ChannelId`, so it
         // must not be reread as one.
@@ -2789,10 +2946,9 @@ mod tests {
             input_channel: u8::MAX,
             ..Default::default()
         };
-        project.channels[1]
-            .setup
-            .modulation
-            .install(0, crate::ModulatorParams::Envelope(parked));
+        let mut rack = crate::ModRack::default();
+        rack.install(0, crate::ModulatorParams::Envelope(parked));
+        project.channels[1].setup.preset_modulation = Some(rack);
 
         project.assign_channel_ids();
         let id_of = |project: &Project, seat: usize| project.channels[seat].id;
@@ -2805,7 +2961,7 @@ mod tests {
                 .params
         };
         let gate_of = |project: &Project, seat: usize| {
-            match project.channels[seat].setup.modulation.params(0) {
+            match project.channel_rack(seat).params(0) {
                 Some(crate::ModulatorParams::Envelope(envelope)) => envelope,
                 other => panic!("slot 0 of channel {seat} is {other:?}"),
             }
@@ -2905,11 +3061,12 @@ mod tests {
         project.buses[4].sends.push(crate::AuxSend::new(2));
         project.channels[0].automation[0].push(AutomationLane::new(volume(3)));
         project.channels[1].automation[0].push(AutomationLane::new(volume(1)));
-        let rack = &mut project.channels[0].setup.modulation;
-        rack.install(0, crate::ModulatorParams::Lfo(Default::default()));
-        rack.add_route(crate::ModRoute::to_slot(0, volume(3), 0.5, Default::default()))
-            .unwrap();
         project.assign_channel_ids();
+        project.edit_channel_rack(0, |rack| {
+            rack.install(0, crate::ModulatorParams::Lfo(Default::default()));
+            rack.add_route(crate::ModRoute::to_slot(0, volume(3), 0.5, Default::default()))
+                .unwrap();
+        });
         let track_fader = |track: u8| {
             crate::ParamKey::strip(crate::ChainKey::Bus(track), crate::STRIP_PARAM_VOLUME)
         };
@@ -2958,7 +3115,7 @@ mod tests {
             "Bus 1"
         );
         assert!(
-            bus_3(scope_of(project.channels[0].setup.modulation.routes[0].unwrap().destination)),
+            bus_3(scope_of(project.modulation.routes[0].destination)),
             "a route on it"
         );
         for binding in &project.control_map.bindings {
@@ -2996,7 +3153,7 @@ mod tests {
             name_of(&project, scope_of(project.channels[1].automation[0][0].target)),
             "Bus 1"
         );
-        assert!(project.channels[0].setup.modulation.routes[0].is_none(), "its route goes");
+        assert!(project.modulation.routes.is_empty(), "its route goes");
         let mut learned: Vec<u8> = project.control_map.bindings.iter().map(controller_of).collect();
         learned.sort_unstable();
         assert_eq!(learned, [1, 100], "its binding goes");
@@ -3028,29 +3185,100 @@ mod tests {
         assert!(project.move_track(1, 3).is_some());
     }
 
+    /// **A channel preset lands its modules on the channel that loads it**
+    /// (song-modulation step 01): added to the song as new modules, its
+    /// routes aimed at the receiving seat, and an Envelope that listened to
+    /// the preset's own channel listening to the receiving one.
     #[test]
-    fn project_round_trip_keeps_channel_modulation() {
+    fn a_channel_preset_lands_its_modules_on_the_receiving_channel() {
+        use crate::{InputSource, ModEnvelopeParams, ModLfoParams, ModPolarity, ModRoute, ModulatorParams};
+        let song = |count| {
+            let mut song = Project {
+                channels: (0..count).map(|index| ProjectChannel::sampler(index, 1)).collect(),
+                ..Project::default()
+            };
+            song.assign_channel_ids();
+            song
+        };
+        let mut saved = song(3);
+        let own = saved.channels[2].id;
+        let volume = |seat| crate::ParamAddr::strip(EffectTarget::Channel(seat), crate::STRIP_PARAM_VOLUME);
+        saved.edit_channel_rack(2, |rack| {
+            rack.install(0, ModulatorParams::Lfo(ModLfoParams::default()));
+            rack.install(
+                1,
+                ModulatorParams::Envelope(ModEnvelopeParams {
+                    input_channel: 2,
+                    input_channel_id: own,
+                    ..ModEnvelopeParams::default()
+                }),
+            );
+            rack.add_route(ModRoute::to_slot(0, volume(2), 0.5, ModPolarity::Bipolar));
+            rack.add_route(ModRoute::to_slot(1, volume(2), 0.25, ModPolarity::Unipolar));
+        });
+        let mut setup = saved.channels[2].setup.clone();
+        setup.preset_modulation = saved.preset_rack(2);
+        let Some(ModulatorParams::Envelope(gate)) =
+            setup.preset_modulation.as_ref().and_then(|rack| rack.params(1))
+        else {
+            panic!("the preset lost its envelope");
+        };
+        assert!(!gate.input_channel_id.is_assigned(), "the preset names the song it came from");
+
+        let mut loading = song(2);
+        loading.replace_channel_setup(0, setup);
+        let here = loading.channels[0].id;
+        assert!(loading.channels[0].setup.preset_modulation.is_none());
+        assert_eq!(loading.modulation.modules.len(), 2);
+        for module in &loading.modulation.modules {
+            assert_eq!(module.rack.map(|seat| seat.channel), Some(here));
+            assert_eq!(module.input, InputSource::ChannelNotes(here));
+        }
+        assert_eq!(loading.modulation.routes.len(), 2);
+        assert!(loading.modulation.routes.iter().all(|route| route.destination == volume(0)));
+        assert_eq!(loading.channel_rack(0).routes.iter().flatten().count(), 2);
+
+        // Loaded again, the first two go and the song keeps both modules,
+        // unseated, beside the two new ones.
+        let mut again = loading.channels[0].setup.clone();
+        again.preset_modulation = saved.preset_rack(2);
+        loading.replace_channel_setup(0, again);
+        assert_eq!(loading.modulation.modules.len(), 4);
+        assert_eq!(loading.modulation.routes.len(), 2);
+        assert_eq!(loading.channel_rack(0).occupied().count(), 2);
+    }
+
+    #[test]
+    fn project_round_trip_keeps_song_modulation() {
         let mut project = Project::default();
-        let rack = &mut project.channels[0].setup.modulation;
-        rack.install(0, crate::ModulatorParams::Lfo(crate::ModLfoParams {
-            rate_hz: 2.5,
-            ..crate::ModLfoParams::default()
-        }));
-        assert!(rack
-            .add_route(crate::ModRoute::to_slot(
-                0,
-                crate::ParamAddr::effect(
-                    crate::EffectTarget::Channel(0),
-                    crate::DeviceId(0),
-                    crate::FILTER_PARAM_CUTOFF_HZ,
-                ),
-                0.3,
-                crate::ModPolarity::Bipolar,
-            ))
-            .is_some());
+        project.edit_channel_rack(0, |rack| {
+            rack.install(0, crate::ModulatorParams::Lfo(crate::ModLfoParams {
+                rate_hz: 2.5,
+                ..crate::ModLfoParams::default()
+            }));
+            assert!(rack
+                .add_route(crate::ModRoute::to_slot(
+                    0,
+                    crate::ParamAddr::effect(
+                        crate::EffectTarget::Channel(0),
+                        crate::DeviceId(0),
+                        crate::FILTER_PARAM_CUTOFF_HZ,
+                    ),
+                    0.3,
+                    crate::ModPolarity::Bipolar,
+                ))
+                .is_some());
+        });
+        assert_eq!(project.modulation.modules.len(), 1);
 
         let text = toml::to_string(&project).unwrap();
+        assert!(text.contains("[modulation]"), "the song's set is a table of its own:\n{text}");
+        assert!(!text.contains("[channels.setup.modulation]"), "and no channel carries a rack");
         assert_eq!(toml::from_str::<Project>(&text).unwrap(), project);
+
+        // And a song with none writes none.
+        let text = toml::to_string(&Project::default()).unwrap();
+        assert!(!text.contains("modulation"), "{text}");
     }
 
     /// An Aux In's subscription is the one generator parameter that names

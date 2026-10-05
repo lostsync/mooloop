@@ -4712,11 +4712,7 @@ impl ChannelReseat {
                         solo_silenced.get(at).copied().unwrap_or(false),
                     )
                 });
-                let rack = project
-                    .channels
-                    .get(at)
-                    .map(|channel| channel.setup.modulation)
-                    .unwrap_or_default();
+                let rack = project.channel_rack(at);
                 (storage, crate::sequencer::Sequencer::channel_patterns(project, at), rack)
             }
             _ => (None, Vec::new(), ModRack::default()),
@@ -7502,13 +7498,10 @@ impl RenderState {
                 ));
             }
         }
+        // Each channel's rack, built from the song's set until the engine
+        // runs that set itself (`docs/plans/song-modulation/` step 02).
         for index in 0..MAX_CHANNELS {
-            let modulation = project
-                .channels
-                .get(index)
-                .map(|channel| channel.setup.modulation)
-                .unwrap_or_default();
-            self.set_channel_modulation(index, modulation);
+            self.set_channel_modulation(index, project.channel_rack(index));
         }
         for (index, strip) in self.buses.iter_mut().enumerate() {
             match project.buses.get(index) {
@@ -11986,6 +11979,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 render.apply_command(EngineCommand::SetModRoute {
                     channel: 0,
                     route: ModRoute::from_performance(
+                        project.channels[0].id,
                         source,
                         ParamAddr {
                             scope: EffectTarget::Channel(0),
@@ -12066,7 +12060,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         let channel = &mut project.channels[0];
         channel
             .setup
-            .modulation
+            .carried_modulation_mut()
             .install(
                 0,
                 ModulatorParams::Lfo(ModLfoParams {
@@ -12080,7 +12074,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             .expect("slot 0 accepts a module");
         channel
             .setup
-            .modulation
+            .carried_modulation_mut()
             .add_route(ModRoute::to_slot(
                 0,
                 ParamAddr::source(here, DeviceKind::Sampler, cutoff),
@@ -12092,6 +12086,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         assert!(lane.upsert(AutomationPoint::new(1, 0, 1.0)));
         channel.automation[0].push(lane);
         let sampler_source = channel.setup.source.clone();
+        project.lift_channel_modulation();
 
         // On the sampler: the route moves Cutoff, and the lane holds Drive.
         let on_sampler = run(&project);
@@ -12119,7 +12114,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             on_drum.iter().map(|(id, _)| id).collect::<Vec<_>>()
         );
         // Kept, not dropped: the rack and the lane are exactly as they were.
-        assert!(project.channels[0].setup.modulation.has_routes());
+        assert!(project.channel_rack(0).has_routes());
         assert_eq!(project.channels[0].automation[0].len(), 1);
 
         // And back: both work again.
@@ -14224,6 +14219,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             ..full_bank_project()
         };
         project.channels[0].notes[0].push(NoteEvent::new(1, 0, 96, 60, 127));
+        project.lift_channel_modulation();
         project
     }
 
@@ -14600,7 +14596,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
     #[test]
     fn strip_modulation_reaches_the_rendered_block() {
         let mut channel = ProjectChannel::sampler(0, 1);
-        channel.setup.modulation.install(0, mooloop_core::ModulatorParams::Lfo(
+        channel.setup.carried_modulation_mut().install(0, mooloop_core::ModulatorParams::Lfo(
             mooloop_core::ModLfoParams {
                 // A quarter-cycle per 32-frame subdivision at 48 kHz.
                 rate_hz: 375.0,
@@ -14608,16 +14604,15 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 ..mooloop_core::ModLfoParams::default()
             },
         ));
-        channel.setup.modulation = {
+        channel.setup.preset_modulation = Some({
             let mut rack = strip_route(mooloop_core::STRIP_PARAM_VOLUME, 0.5);
-            rack.slots = channel.setup.modulation.slots;
+            rack.slots = channel.setup.carried_modulation_mut().slots;
             rack
-        };
+        });
         let project = synth_project(channel);
 
         let mut flat_project = project.clone();
-        flat_project.channels[0].setup.modulation.routes =
-            [None; mooloop_core::MAX_MOD_ROUTES_PER_CHANNEL];
+        flat_project.modulation.routes.clear();
         let mut flat = RenderState::from_project(48_000, &flat_project, &[]);
         flat.play();
         flat.process_block(256);
@@ -14717,7 +14712,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             mooloop_core::ModPolarity::Bipolar,
         ))
         .expect("the second route fits the matrix");
-        channel.setup.modulation = rack;
+        channel.setup.preset_modulation = Some(rack);
 
         let project = synth_project(channel);
         let mut render = RenderState::from_project(48_000, &project, &[]);
@@ -14789,7 +14784,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             mooloop_core::ModPolarity::Bipolar,
         ))
         .expect("the second route fits the matrix");
-        channel.setup.modulation = rack;
+        channel.setup.preset_modulation = Some(rack);
 
         let project = synth_project(channel);
         let mut render = RenderState::from_project(48_000, &project, &[]);
@@ -14867,7 +14862,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             ))
             .expect("sixteen routes fit the matrix");
         }
-        channel.setup.modulation = rack;
+        channel.setup.preset_modulation = Some(rack);
 
         let project = synth_project(channel);
         let mut render = RenderState::from_project(48_000, &project, &[]);
@@ -14886,7 +14881,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
     #[test]
     fn a_channel_note_trigger_restarts_its_played_lfo_on_the_control_tick() {
         let mut channel = ProjectChannel::sampler(0, 1);
-        channel.setup.modulation.install(0, mooloop_core::ModulatorParams::Lfo(
+        channel.setup.carried_modulation_mut().install(0, mooloop_core::ModulatorParams::Lfo(
             mooloop_core::ModLfoParams {
                 rate_hz: 375.0,
                 waveform: mooloop_core::ModLfoWaveform::Saw,
@@ -14920,7 +14915,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
     fn a_synced_lfo_follows_the_song_position_through_stop_and_seek() {
         const BLOCK: usize = 480;
         let mut channel = ProjectChannel::sampler(0, 1);
-        channel.setup.modulation.install(0, mooloop_core::ModulatorParams::Lfo(
+        channel.setup.carried_modulation_mut().install(0, mooloop_core::ModulatorParams::Lfo(
             mooloop_core::ModLfoParams {
                 tempo_sync: true,
                 // Three beats: a cycle the bar does not divide, so no
@@ -14977,7 +14972,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
     #[test]
     fn an_envelope_can_subscribe_to_another_channels_note_gate() {
         let mut target = ProjectChannel::sampler(0, 1);
-        target.setup.modulation.install(0, mooloop_core::ModulatorParams::Envelope(
+        target.setup.carried_modulation_mut().install(0, mooloop_core::ModulatorParams::Envelope(
             mooloop_core::ModEnvelopeParams {
                 input_channel: 1,
                 attack_seconds: 0.0,
@@ -14987,7 +14982,10 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             },
         ));
         let mut project = synth_project(target);
-        project.channels.push(ProjectChannel::sampler(1, 1));
+        project.insert_channel(1, ProjectChannel::sampler(1, 1));
+        // The song's module listens to the second channel by identity.
+        project.modulation.modules[0].input =
+            mooloop_core::InputSource::ChannelNotes(project.channels[1].id);
         let mut render = RenderState::from_project(48_000, &project, &[]);
         render.gate_ticks[0][1].note_ons = 1;
 
@@ -15008,7 +15006,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 mooloop_core::EffectKind::Eq,
             ))
             .expect("pushed");
-        channel.setup.modulation.install(0, mooloop_core::ModulatorParams::Lfo(
+        channel.setup.carried_modulation_mut().install(0, mooloop_core::ModulatorParams::Lfo(
             mooloop_core::ModLfoParams {
                 rate_hz: 375.0,
                 ..mooloop_core::ModLfoParams::default()
@@ -15021,7 +15019,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         let stepped = ParamAddr::effect(EffectTarget::Channel(0), eq, stepped_id);
         assert!(channel
             .setup
-            .modulation
+            .carried_modulation_mut()
             .add_route(mooloop_core::ModRoute::to_slot(
                 0,
                 stepped,
@@ -15064,7 +15062,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                     ..mooloop_core::FilterParams::default()
                 },
             ));
-        channel.setup.modulation.install(0, mooloop_core::ModulatorParams::Lfo(
+        channel.setup.carried_modulation_mut().install(0, mooloop_core::ModulatorParams::Lfo(
             mooloop_core::ModLfoParams {
                 // 32 frames advance the LFO by a quarter-cycle at 48 kHz,
                 // giving this block four clear control-rate landmarks.
@@ -15074,7 +15072,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         ));
         assert!(channel
             .setup
-            .modulation
+            .carried_modulation_mut()
             .add_route(mooloop_core::ModRoute::to_slot(
                 0,
                 ParamAddr::effect(
@@ -15089,7 +15087,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
 
         let project = synth_project(channel);
         let mut fixed_project = project.clone();
-        fixed_project.channels[0].setup.modulation = ModRack::default();
+        fixed_project.modulation = mooloop_core::SongModulation::default();
         let mut fixed = RenderState::from_project(48_000, &fixed_project, &[]);
         fixed.play();
         fixed.process_block(128);
@@ -15198,9 +15196,9 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
     /// so the tests below can address the module the way the UI does.
     fn lfo_on_cutoff(depth: f32) -> (mooloop_core::Project, mooloop_core::ModSourceId) {
         let mut channel = filter_channel(1_000.0);
-        let source = channel
+        channel
             .setup
-            .modulation
+            .carried_modulation_mut()
             .install(
                 0,
                 mooloop_core::ModulatorParams::Lfo(mooloop_core::ModLfoParams {
@@ -15213,7 +15211,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             .expect("slot 0 accepts a module");
         assert!(channel
             .setup
-            .modulation
+            .carried_modulation_mut()
             .add_route(mooloop_core::ModRoute::to_slot(
                 0,
                 CUTOFF,
@@ -15221,7 +15219,10 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 mooloop_core::ModPolarity::Bipolar,
             ))
             .is_some());
-        (synth_project(channel), source)
+        // The song mints the module its own identity as it lands.
+        let project = synth_project(channel);
+        let source = project.channel_rack(0).source_id(0).expect("the LFO landed");
+        (project, source)
     }
 
     /// A generator outlet reaching another device's parameter: the whole
@@ -15242,8 +15243,9 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         channel.setup.source = mooloop_core::ChannelSource::MlP8(mooloop_core::MlP8State::default());
         assert!(channel
             .setup
-            .modulation
+            .carried_modulation_mut()
             .add_route(mooloop_core::ModRoute::from_outlet(
+                mooloop_core::ChannelId::UNASSIGNED,
                 OUTLET_GATE,
                 CUTOFF,
                 0.4,
@@ -15255,6 +15257,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             channels: vec![channel],
             ..mooloop_core::Project::default()
         };
+        project.lift_channel_modulation();
         // One long note from the top of the pattern, so the gate goes high on
         // the first block and stays there.
         project.channels[0].notes[0].push(NoteEvent::new(1, 0, 384, 60, 127));
@@ -15303,8 +15306,9 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         channel.setup.source = mooloop_core::ChannelSource::Ds01(mooloop_core::Ds01State::default());
         assert!(channel
             .setup
-            .modulation
+            .carried_modulation_mut()
             .add_route(mooloop_core::ModRoute::from_outlet(
+                mooloop_core::ChannelId::UNASSIGNED,
                 DS01_OUTLET_TRIGGER,
                 CUTOFF,
                 0.4,
@@ -15319,6 +15323,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             channels: vec![channel],
             ..mooloop_core::Project::default()
         };
+        project.lift_channel_modulation();
         // One hit at the top of the pattern. Its length does not matter: a
         // DS-01 one-shot ignores the note-off, and `Trigger` is about the
         // start either way.
@@ -15831,7 +15836,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
     #[test]
     fn a_lane_supplies_the_base_that_modulation_then_offsets() {
         let mut channel = filter_channel(1_000.0);
-        channel.setup.modulation.install(0, mooloop_core::ModulatorParams::Lfo(
+        channel.setup.carried_modulation_mut().install(0, mooloop_core::ModulatorParams::Lfo(
             mooloop_core::ModLfoParams {
                 rate_hz: 375.0,
                 ..mooloop_core::ModLfoParams::default()
@@ -15839,7 +15844,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         ));
         assert!(channel
             .setup
-            .modulation
+            .carried_modulation_mut()
             .add_route(mooloop_core::ModRoute::to_slot(
                 0,
                 CUTOFF,
@@ -16700,7 +16705,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             .mode = mooloop_core::DrumMode::Snare;
         let source = channel
             .setup
-            .modulation
+            .carried_modulation_mut()
             .install(
                 0,
                 mooloop_core::ModulatorParams::Lfo(mooloop_core::ModLfoParams {
@@ -16716,7 +16721,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         };
         assert!(channel
             .setup
-            .modulation
+            .carried_modulation_mut()
             .add_route(mooloop_core::ModRoute::to_slot(
                 0,
                 punch,

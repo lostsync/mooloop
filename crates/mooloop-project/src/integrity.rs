@@ -24,7 +24,7 @@ use mooloop_core::{
     mint_channel_id, mint_track_id, sanitize_route, strip_descriptor, BusSetup, ChannelId, ChannelSetup,
     ChannelSource, DeviceId, DeviceKind,
     ds01, Ds01Params, DrumSynthParams, EffectKind, EffectSlotState, EffectTarget, MlM1Params,
-    MlP8Params, ModRack,
+    MlP8Params, ModRack, ModSourceRef,
     ModulatorKind, MonoSynthParams, NoteId, ParamAddr, ParamOwner, PolySynthParams, Project,
     ProjectChannel,
     SamplerParams, BEATS_PER_BAR, DEFAULT_STEPS, MASTER_BUS, MAX_AUTOMATION_LANES_PER_CHANNEL,
@@ -342,8 +342,11 @@ fn walk_setups(document: DocumentKind, setups: &mut [ChannelSetup], apply: bool)
         // and cannot see the buses it will meet there: only what it names
         // inside itself is checkable here.
         let who = channel_name(index, setup);
-        let shape = ChainShape::of(setup);
-        check_route_addresses(&mut doctor, &who, &shape, None, None, &mut setup.modulation);
+        let shape = ChainShape::of(setup, setup.preset_modulation.as_ref());
+        if let Some(rack) = &mut setup.preset_modulation {
+            check_modulation(&mut doctor, &who, rack);
+            check_route_addresses(&mut doctor, &who, &shape, rack);
+        }
     }
     Diagnosis {
         document,
@@ -726,13 +729,16 @@ fn check_project(doctor: &mut Doctor, project: &mut Project) {
                 .collect()
         })
         .collect();
+    let shapes: Vec<ChainShape> = (0..project.channels.len())
+        .map(|index| ChainShape::of(&project.channels[index].setup, Some(&project.channel_rack(index))))
+        .collect();
+    check_song_modulation(doctor, project, &shapes, &buses);
     for (index, channel) in project.channels.iter_mut().enumerate() {
         let who = channel_name(index, &channel.setup);
-        let shape = ChainShape::of(&channel.setup);
-        check_route_addresses(doctor, &who, &shape, Some(index as u8), Some(&buses), &mut channel.setup.modulation);
+        let shape = &shapes[index];
         for (pattern, lanes) in channel.automation.iter_mut().enumerate() {
             let where_ = format!("{who}, pattern {}", pattern + 1);
-            check_lane_addresses(doctor, &where_, &shape, index as u8, &buses, lanes);
+            check_lane_addresses(doctor, &where_, shape, index as u8, &buses, lanes);
         }
     }
 }
@@ -1351,7 +1357,6 @@ fn check_setup(doctor: &mut Doctor, index: usize, setup: &mut ChannelSetup) {
     for (slot, effect) in setup.effects.iter_mut().enumerate() {
         check_effect(doctor, &who, slot, effect);
     }
-    check_modulation(doctor, &who, &mut setup.modulation);
     check_source(doctor, &who, &mut setup.source);
 }
 
@@ -1460,7 +1465,10 @@ struct ChainShape {
 }
 
 impl ChainShape {
-    fn of(setup: &ChannelSetup) -> Self {
+    /// The shape of `setup`'s chain, with `rack` as the modulators a
+    /// `Modulator` address on it is judged against: the channel's rack as the
+    /// engine runs it, in a song, or the rack a preset carries.
+    fn of(setup: &ChannelSetup, rack: Option<&ModRack>) -> Self {
         Self {
             source: setup.source.kind(),
             source_routes: setup
@@ -1474,12 +1482,14 @@ impl ChainShape {
                 .map(|effect| (effect.id, effect.kind()))
                 .collect(),
             source_device: setup.source_device,
-            modulators: setup
-                .modulation
-                .slots
-                .iter()
-                .map(|slot| slot.map(|slot| slot.params.kind()))
-                .collect(),
+            modulators: rack
+                .map(|rack| {
+                    rack.slots
+                        .iter()
+                        .map(|slot| slot.map(|slot| slot.params.kind()))
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
     }
 
@@ -1657,11 +1667,11 @@ fn address_problem(
     }
 }
 
-/// A channel-scoped address authored on channel `own` can only mean that
-/// channel: the editor offers nothing else, and the engine evaluates a rack
-/// only against its own channel. One that names another channel is what a
-/// channel deletion used to leave behind, so it is pointed home rather than
-/// dropped.
+/// A channel-scoped lane authored on channel `own` can only mean that
+/// channel: the editor offers nothing else. One that names another channel is
+/// what a channel deletion used to leave behind, so it is pointed home rather
+/// than dropped. A modulation route is no longer held to this: it belongs to
+/// the song and may be aimed at any channel.
 fn rescoped_home(address: ParamAddr, own: Option<u8>) -> Option<ParamAddr> {
     let own = own?;
     match address.scope {
@@ -1673,34 +1683,14 @@ fn rescoped_home(address: ParamAddr, own: Option<u8>) -> Option<ParamAddr> {
     }
 }
 
-fn check_route_addresses(
-    doctor: &mut Doctor,
-    who: &str,
-    own: &ChainShape,
-    own_index: Option<u8>,
-    buses: Option<&[Vec<(DeviceId, EffectKind)>]>,
-    rack: &mut ModRack,
-) {
+/// A preset's or kit entry's carried rack: every route is checked against
+/// the chain it travels with. It cannot see the buses it will meet where it
+/// lands, so a bus address is taken on trust.
+fn check_route_addresses(doctor: &mut Doctor, who: &str, own: &ChainShape, rack: &mut ModRack) {
     for (index, entry) in rack.routes.iter_mut().enumerate() {
         let Some(route) = entry else { continue };
         let where_ = format!("{who}, modulation route {}", index + 1);
-        if let Some(home) = rescoped_home(route.destination, own_index) {
-            let EffectTarget::Channel(foreign) = route.destination.scope else {
-                unreachable!()
-            };
-            if doctor.correct(
-                "modulation.route.scope",
-                &where_,
-                format!(
-                    "it is addressed to channel {}, but a route can only drive the channel it lives on",
-                    foreign + 1
-                ),
-                "point it at this channel".into(),
-            ) {
-                route.destination = home;
-            }
-        }
-        if let Some(problem) = address_problem(route.destination, own, buses) {
+        if let Some(problem) = address_problem(route.destination, own, None) {
             if doctor.correct(
                 "modulation.route.destination",
                 &where_,
@@ -1710,6 +1700,118 @@ fn check_route_addresses(
                 *entry = None;
             }
         }
+    }
+}
+
+/// The song's modulation set (`docs/plans/song-modulation/`).
+///
+/// A route may be aimed at any channel or track in the song, so it is
+/// checked wherever it points; the rule that pointed a route on another
+/// channel back home went with the per-channel rack. What is checked:
+/// module identities are unique; a route names a module, outlet or keyboard
+/// the song has; an input or a seat names a channel the song has; a depth is
+/// a number.
+fn check_song_modulation(
+    doctor: &mut Doctor,
+    project: &mut Project,
+    shapes: &[ChainShape],
+    buses: &[Vec<(DeviceId, EffectKind)>],
+) {
+    const WHO: &str = "Song modulation";
+    let channels: Vec<mooloop_core::ChannelId> =
+        project.channels.iter().map(|channel| channel.id).collect();
+    let modulation = &mut project.modulation;
+
+    let mut seen = Vec::new();
+    let mut duplicates = Vec::new();
+    for (index, module) in modulation.modules.iter().enumerate() {
+        if seen.contains(&module.id) {
+            duplicates.push(index);
+        } else {
+            seen.push(module.id);
+        }
+    }
+    for index in duplicates.into_iter().rev() {
+        let module = &modulation.modules[index];
+        if doctor.correct(
+            "modulation.module.id",
+            WHO,
+            format!(
+                "module {} ({}) wears identity {}, which another module already has",
+                index + 1,
+                module.name,
+                module.id.0
+            ),
+            "drop the second one".into(),
+        ) {
+            modulation.modules.remove(index);
+        }
+    }
+
+    for (index, module) in modulation.modules.iter_mut().enumerate() {
+        let where_ = format!("{WHO}, module {} ({})", index + 1, module.name);
+        if let Some(channel) = module.input.channel() {
+            if !channels.contains(&channel)
+                && doctor.correct(
+                    "modulation.module.input",
+                    &where_,
+                    format!("its input listens to channel {}, which this song does not have", channel.0),
+                    "listen to nothing".into(),
+                )
+            {
+                module.input = mooloop_core::InputSource::None;
+            }
+        }
+        if let Some(seat) = module.rack {
+            if !channels.contains(&seat.channel)
+                && doctor.correct(
+                    "modulation.module.rack",
+                    &where_,
+                    format!("it runs on channel {}, which this song does not have", seat.channel.0),
+                    "keep it in the song without running it".into(),
+                )
+            {
+                module.rack = None;
+            }
+        }
+    }
+
+    let modules: Vec<_> = modulation.modules.iter().map(|module| module.id).collect();
+    let mut drop = Vec::new();
+    for (index, route) in modulation.routes.iter_mut().enumerate() {
+        let where_ = format!("{WHO}, route {}", index + 1);
+        doctor.fit_finite("modulation.depth", &where_, "its depth", &mut route.depth, 0.0);
+        let missing = match route.source {
+            ModSourceRef::Id(id) => (!modules.contains(&id))
+                .then(|| format!("it is driven by module {}, which this song does not have", id.0)),
+            ModSourceRef::GeneratorOutlet { channel, .. } | ModSourceRef::Performance { channel, .. } => {
+                (!channels.contains(&channel)).then(|| {
+                    format!("it is driven from channel {}, which this song does not have", channel.0)
+                })
+            }
+            ModSourceRef::LocalSlot(slot) => {
+                Some(format!("it is driven by slot {slot} of no rack in particular"))
+            }
+        };
+        let problem = missing.or_else(|| match route.destination.scope {
+            EffectTarget::Channel(seat) => match shapes.get(usize::from(seat)) {
+                Some(shape) => address_problem(route.destination, shape, Some(buses)),
+                None => Some(format!("it drives channel {}, which does not exist", seat + 1)),
+            },
+            // A bus address is judged against the bank alone; the shape
+            // passed is never read for one.
+            EffectTarget::Bus(_) => shapes
+                .first()
+                .and_then(|shape| address_problem(route.destination, shape, Some(buses))),
+        });
+        if let Some(problem) = problem {
+            if doctor.correct("modulation.route.destination", &where_, problem, "drop the route".into()) {
+                drop.push(index);
+            }
+        }
+    }
+    for index in drop.into_iter().rev() {
+        modulation.routes.remove(index);
     }
 }
 
@@ -2984,18 +3086,15 @@ mod tests {
         );
         let here = EffectTarget::Channel(0);
         let mut project = Project::default();
-        let mut setup = ChannelSetup::drum_synth("Drum");
-        setup
-            .modulation
-            .install(0, ModulatorKind::Lfo.default_params())
-            .unwrap();
+        let setup = ChannelSetup::drum_synth("Drum");
         let on_sampler = ParamAddr::source(here, DeviceKind::Sampler, cutoff);
         let on_drum = ParamAddr::source(here, DeviceKind::DrumSynth, cutoff);
-        setup
-            .modulation
-            .add_route(ModRoute::to_slot(0, on_sampler, 0.5, ModPolarity::Bipolar))
-            .unwrap();
         project.channels[0].setup = setup;
+        project.edit_channel_rack(0, |rack| {
+            rack.install(0, ModulatorKind::Lfo.default_params()).unwrap();
+            rack.add_route(ModRoute::to_slot(0, on_sampler, 0.5, ModPolarity::Bipolar))
+                .unwrap();
+        });
         let lane = |target| {
             let mut lane = AutomationLane::new(target);
             assert!(lane.upsert(AutomationPoint::new(1, 0, 0.5)));
@@ -3396,39 +3495,104 @@ mod tests {
         assert_eq!(project.buses.len(), MAX_BUSES);
     }
 
+    /// A channel carrying one LFO, as a preset would: putting it in a song
+    /// and adding a route with [`route_from_lfo`] lands the LFO in the song.
     fn lfo_channel(name: &str) -> ChannelSetup {
         let mut setup = ChannelSetup::mlm1(name);
-        setup
-            .modulation
-            .install(0, mooloop_core::ModulatorParams::Lfo(Default::default()));
+        let mut rack = ModRack::default();
+        rack.install(0, mooloop_core::ModulatorParams::Lfo(Default::default()));
+        setup.preset_modulation = Some(rack);
         setup
     }
 
-    /// What a channel deletion used to leave behind: every later channel's
-    /// routes still stamped with its old index, silently inert. The repair
-    /// points them home rather than deleting the user's assignments.
+    /// A route from the LFO channel 0 carries to `destination`, in the song.
+    fn route_from_lfo(project: &mut Project, destination: ParamAddr) {
+        project.lift_channel_modulation();
+        project
+            .edit_channel_rack(0, |rack| {
+                rack.add_route(mooloop_core::ModRoute::to_slot(
+                    0,
+                    destination,
+                    0.5,
+                    mooloop_core::ModPolarity::Bipolar,
+                ))
+                .expect("the rack has room")
+            })
+            .expect("channel 0");
+    }
+
+    /// Where the song's routes land, in order.
+    fn song_routes(project: &Project) -> Vec<ParamAddr> {
+        project.modulation.routes.iter().map(|route| route.destination).collect()
+    }
+
+    /// A route belongs to the song, so one aimed at another channel is an
+    /// ordinary route and is checked where it points -- the rule that pointed
+    /// it home went with the per-channel rack. One aimed at a channel the song
+    /// does not have names nothing and goes.
     #[test]
-    fn a_route_stranded_on_another_channels_index_is_pointed_home() {
+    fn a_route_on_another_channel_is_checked_where_it_points() {
         let mut project = Project::default();
         project.channels[0].setup = lfo_channel("Lead");
-        project.channels[0]
-            .setup
-            .modulation
-            .add_route(mooloop_core::ModRoute::to_slot(
-                0,
-                ParamAddr {
-                    scope: EffectTarget::Channel(3),
-                    owner: ParamOwner::Strip,
-                    param: mooloop_core::STRIP_PARAM_VOLUME,
-                },
-                0.5,
-                mooloop_core::ModPolarity::Bipolar,
-            ))
-            .unwrap();
+        project.channels.push(ProjectChannel::mlm1(1, 1));
+        project.assign_channel_ids();
+        let volume = |channel: u8| ParamAddr {
+            scope: EffectTarget::Channel(channel),
+            owner: ParamOwner::Strip,
+            param: mooloop_core::STRIP_PARAM_VOLUME,
+        };
+        route_from_lfo(&mut project, volume(1));
+        route_from_lfo(&mut project, volume(3));
         let diagnosis = repair_project(&mut project);
-        assert_eq!(codes(&diagnosis), ["modulation.route.scope"]);
-        let route = project.channels[0].setup.modulation.routes[0].unwrap();
-        assert_eq!(route.destination.scope, EffectTarget::Channel(0));
+        assert_eq!(codes(&diagnosis), ["modulation.route.destination"]);
+        assert_eq!(song_routes(&project), [volume(1)]);
+    }
+
+    /// The song's set checks what it names: a module identity worn twice, a
+    /// route from a module or a channel the song does not have, an input on a
+    /// channel that has gone, and a depth that is not a number.
+    #[test]
+    fn the_songs_modulation_names_only_what_the_song_has() {
+        use mooloop_core::{InputSource, ModSourceId, ModSourceRef};
+        let mut project = Project::default();
+        project.channels[0].setup = lfo_channel("Lead");
+        let volume = ParamAddr::strip(EffectTarget::Channel(0), mooloop_core::STRIP_PARAM_VOLUME);
+        route_from_lfo(&mut project, volume);
+        let lfo = project.modulation.modules[0].clone();
+        assert_eq!(lfo.input, InputSource::ChannelNotes(project.channels[0].id));
+
+        let mut twin = lfo.clone();
+        twin.name = "Twin".into();
+        project.modulation.modules.push(twin);
+        project.modulation.modules[0].input = InputSource::ChannelNotes(mooloop_core::ChannelId(40));
+        let mut gone = project.modulation.routes[0];
+        gone.source = ModSourceRef::Id(ModSourceId(99));
+        let mut stranger = project.modulation.routes[0];
+        stranger.source = ModSourceRef::GeneratorOutlet {
+            channel: mooloop_core::ChannelId(40),
+            outlet: 0,
+        };
+        project.modulation.routes.push(gone);
+        project.modulation.routes.push(stranger);
+        project.modulation.routes[0].depth = f32::NAN;
+
+        let diagnosis = repair_project(&mut project);
+        let mut found = codes(&diagnosis);
+        found.sort_unstable();
+        assert_eq!(
+            found,
+            [
+                "modulation.depth",
+                "modulation.module.id",
+                "modulation.module.input",
+                "modulation.route.destination",
+                "modulation.route.destination",
+            ]
+        );
+        assert_eq!(project.modulation.modules.len(), 1);
+        assert_eq!(project.modulation.modules[0].input, InputSource::None);
+        assert_eq!(project.modulation.routes.len(), 1);
+        assert_eq!(project.modulation.routes[0].depth, 0.0);
     }
 
     /// MOO-74's C.6, and Adam's ruling on it: nothing about a plugin
@@ -3458,15 +3622,8 @@ mod tests {
             ParamAddr::effect(here, plugin, 1000),
         ];
         let dropped = ParamAddr::plugin_param(here, filter, 7);
-        let rack = &mut project.channels[0].setup.modulation;
         for destination in kept.into_iter().chain([dropped]) {
-            rack.add_route(mooloop_core::ModRoute::to_slot(
-                0,
-                destination,
-                0.5,
-                mooloop_core::ModPolarity::Bipolar,
-            ))
-            .unwrap();
+            route_from_lfo(&mut project, destination);
         }
         project.channels[0].automation[0]
             .push(mooloop_core::AutomationLane::new(ParamAddr::plugin_param(here, plugin, 4_000_000_000)));
@@ -3478,15 +3635,7 @@ mod tests {
             "{}",
             diagnosis.issues[0].problem
         );
-        let surviving: Vec<ParamAddr> = project.channels[0]
-            .setup
-            .modulation
-            .routes
-            .iter()
-            .flatten()
-            .map(|route| route.destination)
-            .collect();
-        assert_eq!(surviving, kept);
+        assert_eq!(song_routes(&project), kept);
         assert_eq!(project.channels[0].automation[0].len(), 1, "the lane was dropped");
     }
 
@@ -3515,15 +3664,8 @@ mod tests {
             ParamAddr::plugin_param(here, source, 7),
             ParamAddr::plugin_param(here, source, 123_456),
         ];
-        let rack = &mut project.channels[0].setup.modulation;
         for destination in kept.into_iter().chain([ParamAddr::plugin_param(here, nowhere, 7)]) {
-            rack.add_route(mooloop_core::ModRoute::to_slot(
-                0,
-                destination,
-                0.5,
-                mooloop_core::ModPolarity::Bipolar,
-            ))
-            .unwrap();
+            route_from_lfo(&mut project, destination);
         }
         let lanes = &mut project.channels[0].automation[0];
         lanes.push(mooloop_core::AutomationLane::new(ParamAddr::plugin_param(here, source, 123_456)));
@@ -3533,15 +3675,7 @@ mod tests {
         let mut found = codes(&diagnosis);
         found.sort_unstable();
         assert_eq!(found, ["channel.automation.destination", "modulation.route.destination"]);
-        let surviving: Vec<ParamAddr> = project.channels[0]
-            .setup
-            .modulation
-            .routes
-            .iter()
-            .flatten()
-            .map(|route| route.destination)
-            .collect();
-        assert_eq!(surviving, kept);
+        assert_eq!(song_routes(&project), kept);
         let lanes: Vec<ParamAddr> =
             project.channels[0].automation[0].iter().map(|lane| lane.target).collect();
         assert_eq!(lanes, [ParamAddr::plugin_param(here, source, 123_456)]);
@@ -3554,33 +3688,17 @@ mod tests {
         project.channels[0]
             .setup
             .push_effect(EffectSlotState::of_kind(EffectKind::Filter));
-        let rack = &mut project.channels[0].setup.modulation;
         // Device 1 was never minted; device 0's filter has no control 99.
-        rack.add_route(mooloop_core::ModRoute::to_slot(
-            0,
-            ParamAddr::effect(EffectTarget::Channel(0), DeviceId(1), 0),
-            0.5,
-            mooloop_core::ModPolarity::Bipolar,
-        ))
-        .unwrap();
-        rack.add_route(mooloop_core::ModRoute::to_slot(
-            0,
-            ParamAddr::effect(EffectTarget::Channel(0), DeviceId(0), 99),
-            0.5,
-            mooloop_core::ModPolarity::Bipolar,
-        ))
-        .unwrap();
-        rack.add_route(mooloop_core::ModRoute::to_slot(
-            0,
+        route_from_lfo(&mut project, ParamAddr::effect(EffectTarget::Channel(0), DeviceId(1), 0));
+        route_from_lfo(&mut project, ParamAddr::effect(EffectTarget::Channel(0), DeviceId(0), 99));
+        route_from_lfo(
+            &mut project,
             ParamAddr::effect(
                 EffectTarget::Channel(0),
                 DeviceId(0),
                 mooloop_core::FILTER_PARAM_CUTOFF_HZ,
             ),
-            0.5,
-            mooloop_core::ModPolarity::Bipolar,
-        ))
-        .unwrap();
+        );
         let diagnosis = repair_project(&mut project);
         assert_eq!(
             codes(&diagnosis),
@@ -3598,15 +3716,9 @@ mod tests {
         // The second still names a slot, because that address does resolve
         // and the slot is how a human finds the row.
         assert!(diagnosis.issues[1].problem.contains("slot 1"), "{}", diagnosis.issues[1].problem);
-        let surviving: Vec<_> = project.channels[0]
-            .setup
-            .modulation
-            .routes
-            .iter()
-            .flatten()
-            .collect();
+        let surviving = song_routes(&project);
         assert_eq!(surviving.len(), 1);
-        assert_eq!(surviving[0].destination.param, mooloop_core::FILTER_PARAM_CUTOFF_HZ);
+        assert_eq!(surviving[0].param, mooloop_core::FILTER_PARAM_CUTOFF_HZ);
     }
 
     /// The dangerous one: the engine looks a lane up by its address across

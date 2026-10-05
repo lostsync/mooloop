@@ -368,12 +368,13 @@ impl Session {
         }
         // The ids something still names and the list does not: every
         // pattern's lanes and every route, in the order they are found.
+        let rack = self.selected_rack();
         let named = channel
             .automation
             .iter()
             .flatten()
             .map(|lane| lane.target)
-            .chain(channel.modulation.destinations());
+            .chain(rack.destinations());
         for address in named {
             let ParamOwner::PluginParam { device: owner } = address.owner else {
                 continue;
@@ -414,16 +415,17 @@ impl Session {
             return Vec::new();
         };
         let mut offsets = vec![0.0; saved.params.len()];
-        let Some(channel) = self.channels.get(self.selected) else {
+        if self.channels.get(self.selected).is_none() {
             return offsets;
-        };
+        }
+        let rack = self.selected_rack();
         let scope = EffectTarget::Channel(self.selected as u8);
         let outputs = self.modulation_outputs.get();
         let sources = Self::control_sources(&outputs);
         for (index, info) in saved.params.iter().enumerate() {
             let policy =
                 ModDestinationDescriptor::for_plugin_param(info.id, info.stepped.is_some(), info.modulatable);
-            offsets[index] = channel.modulation.offset_for(
+            offsets[index] = rack.offset_for(
                 ParamAddr::plugin_param(scope, device, info.id),
                 sources,
                 &policy,
@@ -626,21 +628,22 @@ mod tests {
     #[test]
     fn a_plugin_parameter_reads_the_same_offset_a_native_one_does() {
         let (mut session, slot, device) = session_with(vec![nudge(), gain()]);
-        session
+        assert!(!session
             .add_modulation_source(mooloop_core::ModulatorKind::Lfo)
-            .expect("room for a modulator");
+            .is_empty(), "room for a modulator");
         let scope = EffectTarget::Channel(0);
         let volume = ParamAddr::strip(scope, mooloop_core::STRIP_PARAM_VOLUME);
         let gain = ParamAddr::plugin_param(scope, device, 10);
         for destination in [volume, gain] {
-            session.channels[0]
-                .modulation
-                .add_route(mooloop_core::ModRoute::to_slot(
-                    0,
-                    destination,
-                    0.5,
-                    mooloop_core::ModPolarity::Bipolar,
-                ))
+            session
+                .edit_selected_rack(|rack| {
+                    rack.add_route(mooloop_core::ModRoute::to_slot(
+                        0,
+                        destination,
+                        0.5,
+                        mooloop_core::ModPolarity::Bipolar,
+                    ))
+                })
                 .expect("room for a route");
         }
         let mut outputs = session.modulation_outputs.get();

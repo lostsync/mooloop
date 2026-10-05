@@ -98,7 +98,7 @@ fn a_channel_lfo_sweeps_ds01s_filter() {
     let channel = &mut project.channels[0];
     channel
         .setup
-        .modulation
+        .carried_modulation_mut()
         .install(
             0,
             ModulatorParams::Lfo(ModLfoParams {
@@ -111,7 +111,7 @@ fn a_channel_lfo_sweeps_ds01s_filter() {
         .expect("a fresh rack has a free slot");
     channel
         .setup
-        .modulation
+        .carried_modulation_mut()
         .add_route(ModRoute {
             // `add_route` stamps the durable id from the slot, so the one
             // written here is a placeholder rather than an authored value.
@@ -126,6 +126,7 @@ fn a_channel_lfo_sweeps_ds01s_filter() {
             polarity: ModPolarity::Bipolar,
         })
         .expect("the destination is a legal one");
+    project.lift_channel_modulation();
     let swept = render_blocks(&project, 1.0, 256);
 
     assert_ne!(plain, swept, "the LFO did not reach the filter");

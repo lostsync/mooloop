@@ -23,9 +23,10 @@ fn routed_rack() -> (MainWindow, UiState) {
     install_backend();
     let window = MainWindow::new().expect("the testing backend builds a window");
     let mut st = UiState::new(None, 48_000, &window);
-    st.session
-        .add_modulation_source(ModulatorKind::Lfo)
-        .expect("an empty rack has a free slot");
+    assert!(
+        !st.session.add_modulation_source(ModulatorKind::Lfo).is_empty(),
+        "an empty rack has a free slot"
+    );
     st.session
         .insert_effect_at(EffectKind::Filter, 0)
         .expect("a filter inserts into an empty rack");
@@ -34,14 +35,15 @@ fn routed_rack() -> (MainWindow, UiState) {
         .expect("a drive inserts after it");
     let scope = EffectTarget::Channel(0);
     let routed = st.session.channels[0].effects[0].id;
-    st.session.channels[0]
-        .modulation
-        .add_route(ModRoute::to_slot(
-            0,
-            ParamAddr::effect(scope, routed, 0),
-            0.5,
-            ModPolarity::Bipolar,
-        ))
+    st.session
+        .edit_selected_rack(|rack| {
+            rack.add_route(ModRoute::to_slot(
+                0,
+                ParamAddr::effect(scope, routed, 0),
+                0.5,
+                ModPolarity::Bipolar,
+            ))
+        })
         .expect("the matrix is empty");
     st.sync_effects();
     st.refresh_modulation(&window);

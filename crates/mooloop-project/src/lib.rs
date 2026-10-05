@@ -32,7 +32,7 @@ fn forget_audio_input(setup: &mut mooloop_core::ChannelSetup) {
 mod io_cost;
 
 pub use factory::{
-    rescope_modulation, seed_ds01_bank, seed_effect_bank, seed_effect_run_bank, seed_mlm1_bank,
+    seed_ds01_bank, seed_effect_bank, seed_effect_run_bank, seed_mlm1_bank,
     seed_mlp8_bank,
 };
 pub use integrity::{Diagnosis, Issue, Remedy};
@@ -177,6 +177,11 @@ pub struct SaveReport {
     pub repairs: Vec<Issue>,
 }
 
+// A song is most of what is ever loaded, and a loaded document is made once
+// per load and moved once into its install, so boxing it buys a size ratio
+// nobody measures at the cost of a hundred match arms. It crossed the line
+// when the song took its modulation (song-modulation step 01).
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum LoadedDocument {
     Song(Project),
@@ -4772,26 +4777,23 @@ id = "default_kick"
         let temp = tempdir().unwrap();
         let bundle = temp.path().join("plugin-lanes.mooloop");
         let mut project = song_with_a_plugin();
-        let setup = &mut project.channels[0].setup;
-        setup
-            .modulation
-            .install(0, mooloop_core::ModulatorParams::Lfo(Default::default()));
-        let device = setup.effects.last().unwrap().id;
+        let device = project.channels[0].setup.effects.last().unwrap().id;
         assert!(device.is_assigned(), "test setup: the plugin device has no id");
         let here = mooloop_core::EffectTarget::Channel(0);
         let reported = mooloop_core::ParamAddr::plugin_param(here, device, 4_000_000_000);
         let unknown = mooloop_core::ParamAddr::plugin_param(here, device, 123_456);
-        for destination in [reported, unknown] {
-            setup
-                .modulation
-                .add_route(mooloop_core::ModRoute::to_slot(
+        project.edit_channel_rack(0, |rack| {
+            rack.install(0, mooloop_core::ModulatorParams::Lfo(Default::default()));
+            for destination in [reported, unknown] {
+                rack.add_route(mooloop_core::ModRoute::to_slot(
                     0,
                     destination,
                     0.5,
                     mooloop_core::ModPolarity::Bipolar,
                 ))
                 .unwrap();
-        }
+            }
+        });
         project.channels[0].automation[0].push(mooloop_core::AutomationLane::new(unknown));
 
         save_song(&bundle, &project, AssetMode::Embedded).unwrap();

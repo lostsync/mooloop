@@ -482,6 +482,7 @@ mod tests {
                 sample: None,
                 zones: Vec::new(),
                 plugins: Default::default(),
+                routes: Vec::new(),
             }),
             ..Default::default()
         };
