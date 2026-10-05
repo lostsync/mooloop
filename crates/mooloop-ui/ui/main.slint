@@ -27,7 +27,9 @@ import { AboutDialog } from "about-dialog.slint";
 import { QuestionDialog } from "question-dialog.slint";
 import { TakesDialog, TakeRow } from "takes-dialog.slint";
 import { ExportDialog, ExportTrackRow } from "export-dialog.slint";
-import { MenuBar, MenuBarItem, MenuRow, MenuSeparator } from "menubar.slint";
+// Renamed on import: `MenuBar` and `MenuSeparator` are also Slint built-ins,
+// and the macOS menu bar in `MainWindow` is the built-in one.
+import { MenuBar as InWindowMenuBar, MenuBarItem, MenuRow, MenuSeparator as MenuRowSeparator } from "menubar.slint";
 import { PianoGrid, NoteCell, NoteHit, GestureMod, PianoGestures, RollMetrics } from "piano-grid.slint";
 import {
     CollapsedDevice, ContainerEnclosure, DeviceFrame, DeviceHeader, DeviceJoin, DeviceOutputRail,
@@ -972,7 +974,7 @@ component PaneTabs inherits Rectangle {
                             enabled: root.slot != 2 && root.can-leave;
                             selected => { root.move-requested(view, 2); }
                         }
-                        MenuSeparator {}
+                        MenuRowSeparator {}
                         MenuRow {
                             text: root.zoomed ? "Restore Pane" : "Zoom Pane";
                             shortcut: "Ctrl+Shift+\\";
@@ -1293,6 +1295,9 @@ export component MainWindow inherits Window {
 
     // ---- about ----
     in-out property <bool> about-open;
+    // True where the menus are the system menu bar's (macOS) rather than
+    // the in-window bar's. Set once by Rust at startup.
+    in property <bool> native-menubar: false;
     in property <string> app-version;
 
     // ---- channels / patterns ----
@@ -3018,6 +3023,180 @@ export component MainWindow inherits Window {
     public function focus-root() {
         keys.focus();
     }
+    // ===== The macOS menu bar =====
+    //
+    // The same seven menus as the in-window `menu-bar` below, declared with
+    // Slint's own `MenuBar`, which on macOS becomes the system menu bar at
+    // the top of the screen. Rust turns it on there, and only there
+    // (`native-menubar`); everywhere else it stays hidden and the
+    // in-window bar is the menu, because on Linux Slint would draw this one
+    // in its own style instead. Keep the two in step: a row added to one
+    // belongs in the other.
+    //
+    // No row names a `shortcut`. A shortcut here would be a macOS key
+    // equivalent, which the system takes before the window sees the key --
+    // so it would ignore a rebinding in Preferences, run "Copy Channel" on
+    // a Cmd+C meant for the piano roll's notes, and take Cmd+C away from a
+    // text field. The keyboard stays `keys`'s, as on every other platform.
+    MenuBar {
+        visible: root.native-menubar;
+
+        Menu {
+            title: "File";
+            enabled: !root.document-busy;
+            MenuItem { title: "New Song"; activated => { root.new-song(); } }
+            MenuItem { title: "Open Song..."; activated => { root.open-song(); } }
+            MenuItem { title: "Save Song"; activated => { root.save-song(); } }
+            MenuItem { title: "Save Song As..."; activated => { root.save-song-as(); } }
+            MenuSeparator {}
+            MenuItem { title: "Load Kit..."; activated => { root.load-kit(); } }
+            MenuItem { title: "Save Kit..."; activated => { root.save-kit(); } }
+            MenuItem { title: "Load Channel..."; activated => { root.load-channel(); } }
+            MenuItem { title: "Save Channel..."; activated => { root.save-channel(); } }
+            MenuSeparator {}
+            MenuItem {
+                title: "Embed samples";
+                checked: root.embed-assets;
+                activated => { root.embed-assets = !root.embed-assets; }
+            }
+            MenuSeparator {}
+            MenuItem { title: "Export Audio..."; activated => { root.export-audio(); } }
+            MenuItem { title: "Clean Up Takes..."; activated => { root.clean-up-takes(); } }
+            MenuSeparator {}
+            MenuItem { title: "Quit"; activated => { root.quit-requested(); } }
+        }
+
+        Menu {
+            title: "Edit";
+            MenuItem { title: "Undo"; enabled: root.can-undo; activated => { root.edit-command-requested(0, root.selected-channel); } }
+            MenuItem { title: "Redo"; enabled: root.can-redo; activated => { root.edit-command-requested(1, root.selected-channel); } }
+            MenuSeparator {}
+            MenuItem { title: "Cut Channel"; enabled: !root.project-edit-pending && root.channels.length > 1; activated => { root.edit-command-requested(2, root.selected-channel); } }
+            MenuItem { title: "Copy Channel"; activated => { root.edit-command-requested(3, root.selected-channel); } }
+            MenuItem { title: "Paste Channel"; enabled: !root.project-edit-pending && root.channel-clipboard-available && root.channels.length < root.max-channels; activated => { root.edit-command-requested(4, root.selected-channel); } }
+            MenuSeparator {}
+            MenuItem { title: "Select All Notes"; enabled: root.showing-notes && root.notes.length > 0; activated => { root.select-all-requested(); } }
+            MenuItem { title: "Delete Selected Notes"; enabled: root.has-note-selection; activated => { root.delete-selected-notes-requested(); } }
+        }
+
+        Menu {
+            title: "Pattern";
+            MenuItem {
+                title: "New Pattern";
+                enabled: !root.project-edit-pending && root.pattern-count < root.max-patterns;
+                activated => { root.add-pattern-clicked(); }
+            }
+            MenuItem {
+                title: "Clone Pattern";
+                enabled: !root.project-edit-pending && root.pattern-count < root.max-patterns;
+                activated => { root.pattern-clone-requested(); }
+            }
+            MenuSeparator {}
+            MenuItem { title: "Clear Pattern"; enabled: !root.project-edit-pending; activated => { root.pattern-clear-requested(); } }
+            MenuItem {
+                title: "Delete Pattern";
+                enabled: !root.project-edit-pending && root.pattern-count > 1;
+                activated => { root.pattern-remove-requested(); }
+            }
+        }
+
+        Menu {
+            title: "Channel";
+            MenuItem {
+                title: "Add Channel";
+                enabled: !root.project-edit-pending && root.channels.length < root.max-channels;
+                activated => { root.add-channel-clicked(0); }
+            }
+            MenuItem {
+                title: "Delete Selected Channel";
+                enabled: !root.project-edit-pending && root.channels.length > 1;
+                activated => { root.edit-command-requested(6, root.selected-channel); }
+            }
+            MenuSeparator {}
+            MenuItem { title: "Clone Channel"; enabled: !root.project-edit-pending && root.channels.length < root.max-channels; activated => { root.edit-command-requested(5, root.selected-channel); } }
+            MenuItem { title: "Copy Channel"; activated => { root.edit-command-requested(3, root.selected-channel); } }
+            MenuItem { title: "Paste Channel"; enabled: !root.project-edit-pending && root.channel-clipboard-available && root.channels.length < root.max-channels; activated => { root.edit-command-requested(4, root.selected-channel); } }
+        }
+
+        Menu {
+            title: "Track";
+            MenuItem {
+                title: "Add Track";
+                enabled: !root.project-edit-pending && root.can-add-track;
+                activated => { root.track-added(); }
+            }
+            MenuSeparator {}
+            MenuItem {
+                title: "Move " + (root.editing-bus ? root.editing-bus-name : "Track") + " Left";
+                enabled: !root.project-edit-pending && root.editing-bus
+                    && root.editing-bus-can-move-left;
+                activated => {
+                    root.track-reorder-requested(root.editing-bus-index, root.editing-bus-index - 1);
+                }
+            }
+            MenuItem {
+                title: "Move " + (root.editing-bus ? root.editing-bus-name : "Track") + " Right";
+                enabled: !root.project-edit-pending && root.editing-bus
+                    && root.editing-bus-can-move-right;
+                activated => {
+                    root.track-reorder-requested(root.editing-bus-index, root.editing-bus-index + 1);
+                }
+            }
+        }
+
+        Menu {
+            title: "View";
+            MenuItem { title: "Steps"; checked: root.showing-steps; activated => { root.show-view(PaneViews.steps); } }
+            MenuItem { title: "Mixer"; checked: root.showing-mixer; activated => { root.show-view(PaneViews.mixer); } }
+            MenuItem { title: "Devices"; checked: root.showing-devices; activated => { root.show-view(PaneViews.devices); } }
+            MenuItem { title: "Notes"; checked: root.showing-notes; activated => { root.show-view(PaneViews.notes); } }
+            MenuItem { title: "Playlist"; checked: root.showing-playlist; activated => { root.show-view(PaneViews.playlist); } }
+            MenuSeparator {}
+            MenuItem { title: "Channel Sidebar"; checked: root.channel-sidebar-visible; activated => { root.toggle-channel-sidebar(); } }
+            MenuItem {
+                title: "Split Top Pane";
+                checked: root.split-active >= 0;
+                enabled: root.split-active >= 0 || root.other-main-view() >= 0;
+                activated => { root.toggle-split(); }
+            }
+            MenuItem { title: "Zoom Pane"; checked: root.zoomed >= 0; activated => { root.toggle-zoom-active(); } }
+            MenuSeparator {}
+            MenuItem {
+                title: "Move " + PaneViews.names[root.slot-active(root.active-slot)] + " to Top Pane";
+                enabled: root.slot-active(root.active-slot) >= 0
+                    && root.active-slot != 0;
+                activated => { root.move-view(root.slot-active(root.active-slot), 0); }
+            }
+            MenuItem {
+                title: "Move " + PaneViews.names[root.slot-active(root.active-slot)] + " to Split";
+                enabled: root.slot-active(root.active-slot) >= 0
+                    && root.active-slot != 1
+                    && !(root.active-slot == 0 && root.main-view-count() <= 1);
+                activated => { root.move-view(root.slot-active(root.active-slot), 1); }
+            }
+            MenuItem {
+                title: "Move " + PaneViews.names[root.slot-active(root.active-slot)] + " to Bottom Pane";
+                enabled: root.slot-active(root.active-slot) >= 0
+                    && root.active-slot != 2
+                    && !(root.active-slot == 0 && root.main-view-count() <= 1);
+                activated => { root.move-view(root.slot-active(root.active-slot), 2); }
+            }
+            MenuSeparator {}
+            MenuItem {
+                title: "Preferences...";
+                activated => {
+                    root.preferences-opened();
+                    root.preferences-open = true;
+                }
+            }
+        }
+
+        Menu {
+            title: "Help";
+            MenuItem { title: "About mooloop"; activated => { root.about-open = true; } }
+        }
+    }
+
     forward-focus: keys;
     keys := FocusScope {
         // Deliberately does NOT take focus on click, even though it now
@@ -3190,7 +3369,11 @@ export component MainWindow inherits Window {
             // on the window plus one line. Rows whose feature does not exist
             // yet are kept disabled on purpose so the menu documents what is
             // being built toward.
-            menu-bar := MenuBar {
+            // Hidden, and no height, where the system menu bar above is the
+            // menu (`native-menubar`).
+            menu-bar := InWindowMenuBar {
+                visible: !root.native-menubar;
+                height: root.native-menubar ? 0px : 26px;
                 MenuBarItem {
                     title: "File";
                     menu-id: 0;
@@ -3221,18 +3404,18 @@ export component MainWindow inherits Window {
                         shortcut: "Ctrl+Shift+S";
                         selected => { root.save-song-as(); }
                     }
-                    MenuSeparator {}
+                    MenuRowSeparator {}
                     MenuRow { text: "Load Kit..."; selected => { root.load-kit(); } }
                     MenuRow { text: "Save Kit..."; selected => { root.save-kit(); } }
                     MenuRow { text: "Load Channel..."; selected => { root.load-channel(); } }
                     MenuRow { text: "Save Channel..."; selected => { root.save-channel(); } }
-                    MenuSeparator {}
+                    MenuRowSeparator {}
                     MenuRow {
                         text: "Embed samples";
                         checked: root.embed-assets;
                         selected => { root.embed-assets = !root.embed-assets; }
                     }
-                    MenuSeparator {}
+                    MenuRowSeparator {}
                     MenuRow {
                         text: "Export Audio...";
                         shortcut: "Ctrl+E";
@@ -3243,7 +3426,7 @@ export component MainWindow inherits Window {
                         text: "Clean Up Takes...";
                         selected => { root.clean-up-takes(); }
                     }
-                    MenuSeparator {}
+                    MenuRowSeparator {}
                     MenuRow {
                         text: "Quit";
                         shortcut: "Ctrl+Q";
@@ -3259,11 +3442,11 @@ export component MainWindow inherits Window {
                     bar-width: menu-bar.width;
                     MenuRow { text: "Undo"; shortcut: "Ctrl+Z"; enabled: root.can-undo; selected => { root.edit-command-requested(0, root.selected-channel); } }
                     MenuRow { text: "Redo"; shortcut: "Ctrl+Shift+Z"; enabled: root.can-redo; selected => { root.edit-command-requested(1, root.selected-channel); } }
-                    MenuSeparator {}
+                    MenuRowSeparator {}
                     MenuRow { text: "Cut Channel"; shortcut: "Ctrl+X"; enabled: !root.project-edit-pending && root.channels.length > 1; selected => { root.edit-command-requested(2, root.selected-channel); } }
                     MenuRow { text: "Copy Channel"; shortcut: "Ctrl+C"; selected => { root.edit-command-requested(3, root.selected-channel); } }
                     MenuRow { text: "Paste Channel"; shortcut: "Ctrl+V"; enabled: !root.project-edit-pending && root.channel-clipboard-available && root.channels.length < root.max-channels; selected => { root.edit-command-requested(4, root.selected-channel); } }
-                    MenuSeparator {}
+                    MenuRowSeparator {}
                     MenuRow { text: "Select All Notes"; shortcut: "Ctrl+A"; enabled: root.showing-notes && root.notes.length > 0; selected => { root.select-all-requested(); } }
                     MenuRow { text: "Delete Selected Notes"; shortcut: "Delete"; enabled: root.has-note-selection; selected => { root.delete-selected-notes-requested(); } }
                 }
@@ -3286,7 +3469,7 @@ export component MainWindow inherits Window {
                         enabled: !root.project-edit-pending && root.pattern-count < root.max-patterns;
                         selected => { root.pattern-clone-requested(); }
                     }
-                    MenuSeparator {}
+                    MenuRowSeparator {}
                     MenuRow { text: "Clear Pattern"; enabled: !root.project-edit-pending; selected => { root.pattern-clear-requested(); } }
                     MenuRow {
                         text: "Delete Pattern";
@@ -3312,7 +3495,7 @@ export component MainWindow inherits Window {
                         enabled: !root.project-edit-pending && root.channels.length > 1;
                         selected => { root.edit-command-requested(6, root.selected-channel); }
                     }
-                    MenuSeparator {}
+                    MenuRowSeparator {}
                     MenuRow { text: "Clone Channel"; enabled: !root.project-edit-pending && root.channels.length < root.max-channels; selected => { root.edit-command-requested(5, root.selected-channel); } }
                     MenuRow { text: "Copy Channel"; selected => { root.edit-command-requested(3, root.selected-channel); } }
                     MenuRow { text: "Paste Channel"; enabled: !root.project-edit-pending && root.channel-clipboard-available && root.channels.length < root.max-channels; selected => { root.edit-command-requested(4, root.selected-channel); } }
@@ -3332,7 +3515,7 @@ export component MainWindow inherits Window {
                         enabled: !root.project-edit-pending && root.can-add-track;
                         selected => { root.track-added(); }
                     }
-                    MenuSeparator {}
+                    MenuRowSeparator {}
                     MenuRow {
                         text: "Move " + (root.editing-bus ? root.editing-bus-name : "Track") + " Left";
                         enabled: !root.project-edit-pending && root.editing-bus
@@ -3392,7 +3575,7 @@ export component MainWindow inherits Window {
                         checked: root.showing-playlist;
                         selected => { root.show-view(PaneViews.playlist); }
                     }
-                    MenuSeparator {}
+                    MenuRowSeparator {}
                     MenuRow {
                         text: "Channel Sidebar";
                         shortcut: "Ctrl+[";
@@ -3412,7 +3595,7 @@ export component MainWindow inherits Window {
                         checked: root.zoomed >= 0;
                         selected => { root.toggle-zoom-active(); }
                     }
-                    MenuSeparator {}
+                    MenuRowSeparator {}
                     // Moving a view is a tab drag; these are the same
                     // operation for someone who has not discovered that, and
                     // the reason the drag is allowed to be a gesture. They
@@ -3446,7 +3629,7 @@ export component MainWindow inherits Window {
                             && !(root.active-slot == 0 && root.main-view-count() <= 1);
                         selected => { root.move-view(root.slot-active(root.active-slot), 2); }
                     }
-                    MenuSeparator {}
+                    MenuRowSeparator {}
                     MenuRow {
                         text: "Preferences...";
                         selected => {
@@ -4354,7 +4537,7 @@ export component MainWindow inherits Window {
                                                         MenuRow { text: "Cut Channel"; shortcut: "Ctrl+X"; enabled: !root.project-edit-pending && root.channels.length > 1; selected => { root.edit-command-requested(2, ch); } }
                                                         MenuRow { text: "Copy Channel"; shortcut: "Ctrl+C"; selected => { root.edit-command-requested(3, ch); } }
                                                         MenuRow { text: "Paste Channel"; shortcut: "Ctrl+V"; enabled: !root.project-edit-pending && root.channel-clipboard-available && root.channels.length < root.max-channels; selected => { root.edit-command-requested(4, ch); } }
-                                                        MenuSeparator {}
+                                                        MenuRowSeparator {}
                                                         MenuRow { text: "Clone Channel"; enabled: !root.project-edit-pending && root.channels.length < root.max-channels; selected => { root.edit-command-requested(5, ch); } }
                                                         MenuRow { text: "Delete Channel"; enabled: !root.project-edit-pending && root.channels.length > 1; selected => { root.edit-command-requested(6, ch); } }
                                                     }
@@ -7748,7 +7931,7 @@ export component MainWindow inherits Window {
                                                         padding: 4px;
                                                         MenuRow { text: "Clone Pattern"; shortcut: "Ctrl+Alt+D"; enabled: !root.project-edit-pending && root.pattern-count < root.max-patterns; selected => { root.pattern-clone-requested(); } }
                                                         MenuRow { text: "Clear Pattern"; enabled: !root.project-edit-pending; selected => { root.pattern-clear-requested(); } }
-                                                        MenuSeparator {}
+                                                        MenuRowSeparator {}
                                                         MenuRow { text: "Delete Pattern"; shortcut: "Ctrl+Shift+Delete"; enabled: !root.project-edit-pending && root.pattern-count > 1; selected => { root.pattern-remove-requested(); } }
                                                     }
                                                 }
