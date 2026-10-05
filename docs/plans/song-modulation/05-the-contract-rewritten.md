@@ -12,7 +12,7 @@ the old rule. Markdown only.
   song. *"A channel owns its modulation sources and routes"* becomes *"The
   song owns its modulation sources and routes"*. The device-local paragraph
   stays as it is. *"Patch cords and a full graph editor are deferred"*
-  stays, with a pointer to the Song Patch direction as a proposal.
+  stays, with a pointer to the Song Patch proposal in this plan's `README.md`.
 - **Channel collection** (`:141-160`): rewritten as the song collection,
   with the capacity rule (no cap a user meets; preallocated and grown by
   replacement) in place of `MAX_MODULATORS_PER_CHANNEL`.
@@ -34,7 +34,8 @@ the old rule. Markdown only.
 - `SCOPE.md` §4: move it from *Out* to *In*, dated, in Adam's words.
 - `TERMINOLOGY.md`: *module*, *route*, *input* as the pane uses them.
 - `IDEAS.md` and `ENHANCEMENTS.md` entries on the rack move: mark done, and
-  point at the Song Patch proposal for what is still open.
+  point at the Song Patch proposal (moved out of the plan's `README.md`
+  before it is archived) for what is still open.
 
 ## Done when
 
