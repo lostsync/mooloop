@@ -98,7 +98,7 @@ S&H", "SIN … SQR RND", "LP BP HP". The sampler's loop modes were Path icons in
 - **Our own drawings, on one grid**, in the hand of the MOO-273 sketch. No
   outside icon set and no licence notice.
 - **Steps 01 and 02 are 0.1.6** (MOO-273 is already there). Steps 03 to 05 are
-  0.1.7.
+  0.1.8.
 
 MOO-273's two remaining recommendations stand until Adam says otherwise. A
 plugin gets **one generic icon**, and a device's icon takes the **device
@@ -110,9 +110,9 @@ colour**, faint while bypassed.
 | --- | --- | --- |
 | [01](01-the-registry.md) | One `Icons` registry and one `Icon` component; the four existing sets moved into it unchanged; a check that counts every icon drawn outside it; the FemtoVG cost measured | 0.1.6 |
 | [02](02-device-kinds.md) | Every device kind has a filled icon, in the header and on the folded strip (MOO-273) | 0.1.6 |
-| [03](03-one-family.md) | The existing outline icons are redrawn filled, and the EQ has one set of shapes | 0.1.7 |
-| [04](04-one-meaning-one-icon.md) | Every text glyph that is an icon comes from the registry, one icon per meaning; the check reads zero | 0.1.7 |
-| [05](05-words-to-icons.md) | The letter selectors and worded buttons that are really shapes become icons, after Adam sees a sheet | 0.1.7 |
+| [03](03-one-family.md) | The existing outline icons are redrawn filled, and the EQ has one set of shapes | 0.1.8 |
+| [04](04-one-meaning-one-icon.md) | Every text glyph that is an icon comes from the registry, one icon per meaning; the check reads zero | 0.1.8 |
+| [05](05-words-to-icons.md) | The letter selectors and worded buttons that are really shapes become icons, after Adam sees a sheet | 0.1.8 |
 
 Linear: project **Icon pass**.
 

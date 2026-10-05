@@ -13,9 +13,12 @@ purpose. History goes in `JOURNAL.md`, the state of each issue is in Linear,
 - **0.1.6 was cut on 2026-10-02** (`v0.1.6` at `d7d86da0`). MOO-456 (Wrap
   in Layer) still carries the label, In Review: its fix shipped, and it waits
   on a look in the running app. Moving it on is Adam's call.
-- **0.1.7** is whatever carries the `0.1.7` label: `plans/song-modulation/`
-  (Adam, 2026-10-05: *"let's start by moving what we have and making it work
-  document-wide"*), and steps 03 to 05 of `plans/icon-pass/`. Before tagging, dispatch `release.yml` on `main`
+- **One push per release** (labels renumbered 2026-10-05): 0.1.7 modulator,
+  0.1.8 UI/UX, 0.1.9 devices, 0.1.10 content, 0.1.11 finalizing (RC/beta).
+  A release is whatever carries its label in Linear.
+- **0.1.7** is `plans/song-modulation/` (Adam, 2026-10-05: *"let's start by
+  moving what we have and making it work document-wide"*). Steps 03 to 05 of
+  `plans/icon-pass/` moved to 0.1.8. Before tagging, dispatch `release.yml` on `main`
   (`OPERATIONS.md`, *Releases And Tags*).
 - **Waiting on Adam:** the listening queue in [LISTENING.md](LISTENING.md),
   and MOO-456's look. The `Question` label in Linear is the complete list of

@@ -50,4 +50,4 @@ Interface draws. Each face's owner converts its selector:
 - Rung 4 on antibox, and the changed snapshots have been looked at.
 - `UI_DESIGN.md:95` no longer describes a wish.
 
-0.1.7.
+0.1.8.

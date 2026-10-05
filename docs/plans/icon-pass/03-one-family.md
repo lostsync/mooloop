@@ -45,4 +45,4 @@ at 1×.
   Adam has seen it.
 - Rung 4 on antibox, and every snapshot that changed has been looked at.
 
-Owner: **Interface**, with Mixer and Effects for the EQ shapes. 0.1.7.
+Owner: **Interface**, with Mixer and Effects for the EQ shapes. 0.1.8.

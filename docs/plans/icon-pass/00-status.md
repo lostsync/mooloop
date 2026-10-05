@@ -3,7 +3,7 @@
 Linear: project [Icon pass](https://linear.app/mooloop/project/icon-pass-2146c941d0d3).
 Steps: 01 is MOO-279, 02 is MOO-273, 03 is MOO-280, 04 is MOO-281, 05 is
 MOO-282. Milestones: **A device shows what it is** (01-02, 0.1.6) and **One
-family, one meaning** (03-05, 0.1.7).
+family, one meaning** (03-05, 0.1.8).
 
 Planned 2026-09-26. Step 01 (MOO-279) was done 2026-09-27 as a relay of four
 legs on one branch. Interface built the registry and moved its own icons in.
@@ -27,6 +27,8 @@ He then took the recommended answer to all four of the plan's questions:
 | How does the registry store icons? | **Path strings in one Slint global**, extending `ToolButton.icon`. Step 01 measures the FemtoVG cost first; SVG with `colorize` is the fallback, behind the same `Icon`. |
 | Who draws them? | **Our own, on one 16 px grid.** No outside set. |
 | How much is in 0.1.6? | **The registry and the device icons** (01, 02). Steps 03-05 are 0.1.7. |
+
+**2026-10-05:** steps 03-05 moved from 0.1.7 to 0.1.8, when the release labels were renumbered one push per release (0.1.7 modulator, 0.1.8 UI/UX).
 
 **2026-09-27, on MOO-273's kind sheet:** *"i love the sheet. iconts are
 10/10"*. No redraws. The sheet showed one generic plug for a plugin and every
