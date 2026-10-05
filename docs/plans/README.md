@@ -19,6 +19,10 @@ reopening it. A plan's own `00-status.md` says how it got where it is.
 - `icon-pass/` (planned 2026-09-26) — one registry, `icons.slint`, and one
   `Icon` component for every icon. Read its README for the survey, and
   `00-status.md` for Adam's four rulings.
+- `song-modulation/` (planned 2026-10-05, for 0.1.7) — modulators belong to
+  the song, not a channel, and get a pane of their own. The same five kinds;
+  the first stage of the Song Patch canvas, not the canvas. Read its README
+  for the survey and what it reverses in `MODULATION.md`.
 - `extract-mid-level-dsp-blocks/` — only step 03 is left: `device-displays.slint`
   holds eight visualizers with no shared canvas. `00-status.md` explains why
   step 02 is cancelled.

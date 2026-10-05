@@ -13,8 +13,9 @@ purpose. History goes in `JOURNAL.md`, the state of each issue is in Linear,
 - **0.1.6 was cut on 2026-10-02** (`v0.1.6` at `d7d86da0`). MOO-456 (Wrap
   in Layer) still carries the label, In Review: its fix shipped, and it waits
   on a look in the running app. Moving it on is Adam's call.
-- **0.1.7** is whatever carries the `0.1.7` label. So far that's steps 03 to
-  05 of `plans/icon-pass/`. Before tagging, dispatch `release.yml` on `main`
+- **0.1.7** is whatever carries the `0.1.7` label: `plans/song-modulation/`
+  (Adam, 2026-10-05: *"let's start by moving what we have and making it work
+  document-wide"*), and steps 03 to 05 of `plans/icon-pass/`. Before tagging, dispatch `release.yml` on `main`
   (`OPERATIONS.md`, *Releases And Tags*).
 - **Waiting on Adam:** the listening queue in [LISTENING.md](LISTENING.md),
   and MOO-456's look. The `Question` label in Linear is the complete list of
@@ -56,10 +57,10 @@ branch.
   parking it safe.
 - **A toolkit swap.** If the view layer ever leaves Slint, Qt is the
   candidate Adam named (MOO-146).
-- **The modulation rack's move, and the tracker idea** (MOO-159: an interest,
-  not a decision, and recorded in `IDEAS.md`). Settle whether they're one
-  design or two before planning either. Modulators inside containers
-  (MOO-160) come after 0.2.0.
+- **The tracker idea** (MOO-159: an interest, not a decision, recorded in
+  `IDEAS.md`), and **the Song Patch canvas** beyond `plans/song-modulation/`.
+  The rack's move itself is now planned (2026-10-05). Modulators inside
+  containers (MOO-160) come after 0.2.0.
 - **More effect kinds, or more modulator kinds.** The short-notes device
   ideas (mid/side, a gain/pan/width utility) get cheaper once the layer
   device has its gestures. A mid/side device is close to a two-branch layer
