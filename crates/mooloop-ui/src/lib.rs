@@ -4665,7 +4665,9 @@ impl UiState {
         let default_sample_duration = default_sample
             .map(sample_duration)
             .unwrap_or_default();
-        let first = ChannelState::new(0);
+        // With the identity `Session::default` gives its own first channel,
+        // so the song's modulation can seat a module on it.
+        let first = ChannelState::new(0).with_id(mooloop_core::ChannelId(0));
         let first_steps: Vec<StepCell> = (0..DEFAULT_STEPS as usize)
             .map(|step| rack_cell(&first.notes[0], step))
             .collect();
