@@ -11,10 +11,11 @@
 
 use std::path::Path;
 
-/// What the window may name from the host crate: the scanner's cache and
-/// the format-free instance contract.
-const NEUTRAL: [&str; 6] = [
+/// What the window may name from the host crate: the scanner's cache, the
+/// format-free instance contract, and the categories a plugin declares.
+const NEUTRAL: [&str; 7] = [
     "scan",
+    "category",
     "HostError",
     "HostedInstance",
     "PluginCache",
