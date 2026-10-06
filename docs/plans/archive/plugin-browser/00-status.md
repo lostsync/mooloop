@@ -17,6 +17,8 @@ Planned 2026-10-06.
 
 ## Built 2026-10-06, all five steps in one change
 
+Merged as 35907cc (PR #557); the plan moved to `archive/` the same day.
+
 The five steps share `plugin_ui::plugin_rows`, `BrowserRow` and the filter
 row in `main.slint`, so they landed together rather than one commit each.
 

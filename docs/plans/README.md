@@ -23,10 +23,6 @@ reopening it. A plan's own `00-status.md` says how it got where it is.
   the song, not a channel, and get a pane of their own. The same five kinds;
   the first stage of the Song Patch canvas, not the canvas. Read its README
   for the survey and what it reverses in `MODULATION.md`.
-- `plugin-browser/` (planned 2026-10-06, for 0.1.8) — the PLUGINS tab's
-  filter takes the keys, instruments and effects are listed apart, and
-  plugins can be filtered by format, category and a favourites star. Its
-  README says what each plugin format reports about a plugin's kind.
 - `extract-mid-level-dsp-blocks/` — only step 03 is left: `device-displays.slint`
   holds eight visualizers with no shared canvas. `00-status.md` explains why
   step 02 is cancelled.
@@ -49,6 +45,10 @@ the answer.
 reading before reopening the area it covers, because several record *why* a
 tempting change was rejected:
 
+- `plugin-browser/` (done 2026-10-06, for 0.1.8) — the PLUGINS tab's filter
+  takes the keys, instruments and effects are listed apart, and plugins filter
+  by format, category and a favourites star. Its README says what each plugin
+  format reports about a plugin's kind; VST3 categories wait on VST3 hosting.
 - `theming/` (done 2026-10-04, on Adam's word) — skins rather than colour
   schemes, built for accessibility rather than the homage. What it left open
   (MOO-154, MOO-157, MOO-205) is in Polish backlog.
