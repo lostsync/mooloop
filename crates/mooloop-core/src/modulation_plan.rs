@@ -117,7 +117,7 @@ impl CompiledModulation {
             .filter_map(|module| {
                 // A list position is a u16; a song with more modules than
                 // that runs the first 65,535.
-                u16::try_from(position_of(module.id)?).ok()?;
+                position_of(module.id)?;
                 let math = matches!(module.params, ModulatorParams::Math(_));
                 Some(CompiledModule {
                     id: module.id,

@@ -14887,7 +14887,6 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             glide: 0.3,
             length: 7,
             steps: core::array::from_fn(|step| step as f32 / 10.0 - 0.6),
-            ..ModStepParams::default()
         });
         let random = ModulatorParams::Random(ModRandomParams {
             trigger: ModRandomTrigger::Clock,
