@@ -14860,6 +14860,72 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         );
     }
 
+    /// **A clocked Step and a clocked, synced Random follow the song
+    /// position too** (MOO-373): the downbeat reads the first step and the
+    /// same draw after the module ran free, the same as a fresh render --
+    /// what an export builds -- and a whole bar played again from the top
+    /// reads what the first pass did, tick for tick.
+    ///
+    /// Shaped against the unfixed tree, where both ran on elapsed frames and
+    /// the second pass read wherever the free run had left them.
+    #[test]
+    fn a_clocked_step_and_a_synced_random_follow_the_song_position() {
+        use mooloop_core::{
+            ModRandomParams, ModRandomTrigger, ModStepParams, ModStepTrigger, ModTimeDivision,
+            ModulatorParams,
+        };
+        const BLOCK: usize = 480;
+        let step = ModulatorParams::Step(ModStepParams {
+            trigger: ModStepTrigger::Clock,
+            division: ModTimeDivision::Eighth,
+            glide: 0.3,
+            length: 7,
+            steps: core::array::from_fn(|step| step as f32 / 10.0 - 0.6),
+            ..ModStepParams::default()
+        });
+        let random = ModulatorParams::Random(ModRandomParams {
+            trigger: ModRandomTrigger::Clock,
+            tempo_sync: true,
+            rate_division: ModTimeDivision::Eighth,
+            ..ModRandomParams::default()
+        });
+        for params in [step, random] {
+            let mut channel = ProjectChannel::sampler(0, 1);
+            channel.setup.carried_modulation_mut().install(0, params);
+            let project = synth_project(channel);
+            let first_tick = |render: &RenderState| render.song_modulation.output(0, 0);
+            // A bar at 120 BPM and 48 kHz is two seconds: 200 blocks.
+            let bar = |render: &mut RenderState| {
+                (0..200)
+                    .map(|_| {
+                        render.process_block(BLOCK);
+                        first_tick(render)
+                    })
+                    .collect::<Vec<_>>()
+            };
+
+            let mut fresh = RenderState::from_project(48_000, &project, &[]);
+            fresh.play();
+            let exported = bar(&mut fresh);
+            if let ModulatorParams::Step(step) = params {
+                assert_eq!(exported[0], step.steps[0], "the first step on the downbeat");
+            }
+
+            let mut live = RenderState::from_project(48_000, &project, &[]);
+            for _ in 0..137 {
+                live.process_block(BLOCK);
+            }
+            live.play();
+            assert_eq!(bar(&mut live), exported, "{params:?}: play from the top");
+            live.apply_command(EngineCommand::Stop);
+            for _ in 0..61 {
+                live.process_block(BLOCK);
+            }
+            live.play();
+            assert_eq!(bar(&mut live), exported, "{params:?}: again after a stop");
+        }
+    }
+
     #[test]
     fn an_envelope_can_subscribe_to_another_channels_note_gate() {
         let mut target = ProjectChannel::sampler(0, 1);

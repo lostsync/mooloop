@@ -327,10 +327,20 @@ impl Envelope {
 /// A clocked pattern of control values. The step array is always sixteen
 /// wide and `length` decides how much of it plays, so shortening a pattern
 /// while it runs never loses the tail.
+///
+/// **A clocked pattern follows the song position** while the transport runs
+/// (MOO-373), by the LFO's rule (MOO-127): the step is the position over the
+/// division, wrapped to the length, so the first step lands on the downbeat
+/// and an export hears the steps playback did. Stopped, it runs on its own
+/// clock from wherever it was. One that advances on notes follows the notes.
 #[derive(Debug, Clone, Copy)]
 struct StepSequencer {
     params: ModStepParams,
     step: usize,
+    /// Whether the last tick took its step from the song position. A tick
+    /// that starts following lands where continuous playback would have,
+    /// rather than gliding in from wherever the free clock had got to.
+    following: bool,
     /// Seconds into the current step. Glide reads it even in note-advance
     /// mode, where nothing else does.
     elapsed: f32,
@@ -345,6 +355,7 @@ impl StepSequencer {
         let mut sequencer = Self {
             params,
             step: 0,
+            following: false,
             elapsed: 0.0,
             from: 0.0,
             output: 0.0,
@@ -421,13 +432,55 @@ impl StepSequencer {
             self.advance_step();
         }
     }
+
+    /// Whether this pattern's step is the song position's. See the type.
+    fn follows_song(&self) -> bool {
+        self.params.trigger == ModStepTrigger::Clock
+    }
+
+    /// Put the step, and how far into it, where `beats` into the song
+    /// implies.
+    fn follow_song(&mut self, beats: f64, bpm: f64) {
+        let division = f64::from(self.params.division.beats()).max(f64::from(f32::EPSILON));
+        let steps = beats / division;
+        let count = steps.floor();
+        let step = (count as i64).rem_euclid(self.length() as i64) as usize;
+        self.elapsed = (steps - count) as f32 * self.step_seconds(bpm);
+        if !self.following {
+            // Where continuous playback would be: gliding in from the step
+            // before, whose own glide, never longer than a step, has landed.
+            // The downbeat has no step before it.
+            self.step = if count >= 1.0 {
+                (step + self.length() - 1) % self.length()
+            } else {
+                step
+            };
+            self.from = self.target();
+            self.output = self.from;
+            self.step = step;
+        } else if step != self.step {
+            self.from = self.output;
+            self.step = step;
+        }
+        self.following = true;
+    }
 }
 
 /// Sample-and-hold with room to be musical: a due draw can be skipped by
 /// chance, snapped to a grid, or made to walk from the held value.
+///
+/// **A clocked, synced one follows the song position** while the transport
+/// runs (MOO-373), by the LFO's rule (MOO-127): it draws as the position
+/// crosses each division, from a generator seeded by its seed and the
+/// division's number, so the draw on the downbeat is the same in playback
+/// and in an export. Stopped, or unsynced, it runs on its own clock.
 #[derive(Debug, Clone, Copy)]
 struct RandomSource {
     params: ModRandomParams,
+    seed: u32,
+    /// The song-position division the held value was drawn for, while
+    /// following the song.
+    song_cycle: Option<i64>,
     /// The held value in the source's own range: `-1..1` when bipolar,
     /// `0..1` when not.
     held: f32,
@@ -444,6 +497,8 @@ impl RandomSource {
     fn new(params: ModRandomParams, seed: u32) -> Self {
         let mut source = Self {
             params,
+            seed,
+            song_cycle: None,
             held: 0.0,
             phase: 0.0,
             // Odd, so the xorshift state can never be zero and stick there.
@@ -553,6 +608,47 @@ impl RandomSource {
             self.draw();
         }
     }
+
+    /// Whether this source draws on the song position. See the type.
+    fn follows_song(&self) -> bool {
+        self.params.trigger == ModRandomTrigger::Clock && self.params.tempo_sync
+    }
+
+    /// Draw for the division `beats` into the song falls in, if it has not
+    /// drawn for it already.
+    fn follow_song(&mut self, beats: f64) {
+        let division = f64::from(self.params.rate_division.beats()).max(f64::from(f32::EPSILON));
+        let cycles = beats / division;
+        let cycle = cycles.floor();
+        self.phase = ((cycles - cycle) as f32).clamp(0.0, 1.0 - f32::EPSILON);
+        let cycle = cycle as i64;
+        if self.song_cycle != Some(cycle) {
+            let entering = self.song_cycle.is_none();
+            self.song_cycle = Some(cycle);
+            self.rng = cycle_seed(self.seed, cycle);
+            if entering {
+                // Play starting here hears what an export starting here
+                // does: a fresh draw, which neither chance nor a walk from
+                // whatever the free clock left held can keep out. The
+                // chance is still rolled, so a draw that would have landed
+                // anyway is the same draw.
+                self.next_unit();
+                self.held = self.fresh();
+            } else {
+                self.draw();
+            }
+        }
+    }
+}
+
+/// A random generator's state for division `cycle` of a module seeded with
+/// `seed`: splitmix64 over both, odd so xorshift cannot stick at zero.
+fn cycle_seed(seed: u32, cycle: i64) -> u32 {
+    let mut z = (u64::from(seed) << 32 ^ cycle as u64).wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    (z >> 32) as u32 | 1
 }
 
 /// The smallest divisor a math module will use. Division clamps its operand
@@ -768,7 +864,8 @@ impl ModulatorSet {
     /// channel, then evaluate every module for the coming `frames` and
     /// advance it. `song_beats` is how far into the song this tick starts,
     /// in quarter-note beats, `None` while the transport is stopped: a
-    /// tempo-synced LFO takes its phase from it (MOO-127).
+    /// tempo-synced LFO takes its phase from it (MOO-127), and a clocked
+    /// Step and a clocked, synced Random their steps and draws (MOO-373).
     ///
     /// Modules evaluate in list order within a control tick, so a Math
     /// module reading one listed before it sees this tick's value and one
@@ -829,13 +926,25 @@ impl ModulatorSet {
                     value
                 }
                 Source::Step(sequencer) => {
+                    match song_beats.filter(|_| sequencer.follows_song()) {
+                        Some(beats) => sequencer.follow_song(beats, bpm),
+                        None => sequencer.following = false,
+                    }
                     let value = sequencer.value(bpm);
-                    sequencer.advance(sample_rate, frames, bpm);
+                    if !sequencer.following {
+                        sequencer.advance(sample_rate, frames, bpm);
+                    }
                     value
                 }
                 Source::Random(random) => {
+                    match song_beats.filter(|_| random.follows_song()) {
+                        Some(beats) => random.follow_song(beats),
+                        None => random.song_cycle = None,
+                    }
                     let value = random.value();
-                    random.advance(sample_rate, frames, bpm);
+                    if random.song_cycle.is_none() {
+                        random.advance(sample_rate, frames, bpm);
+                    }
                     value
                 }
                 Source::Math(math) => {
@@ -1107,6 +1216,72 @@ mod tests {
             fresh.run_at(48_000, 32, 120.0, Some(8.0));
             assert_eq!(set.outputs()[0], continuous.outputs()[0], "{waveform:?}");
             assert_eq!(fresh.outputs()[0], continuous.outputs()[0], "{waveform:?}");
+        }
+    }
+
+    /// **A clocked Step and a clocked, synced Random follow the song
+    /// position** (MOO-373), by the synced LFO's rule: the downbeat reads the
+    /// first step and the same draw however long the module free-ran before
+    /// Play, and a seek, or a fresh set as an export builds, reads what
+    /// continuous playback read there.
+    #[test]
+    fn a_clocked_step_and_a_synced_random_land_where_the_song_position_implies() {
+        let step = ModulatorParams::Step(ModStepParams {
+            trigger: ModStepTrigger::Clock,
+            glide: 0.4,
+            length: 5,
+            steps: core::array::from_fn(|step| step as f32 / 8.0 - 0.5),
+            ..ModStepParams::default()
+        });
+        let random = |drunk| {
+            ModulatorParams::Random(ModRandomParams {
+                trigger: ModRandomTrigger::Clock,
+                tempo_sync: true,
+                drunk,
+                ..ModRandomParams::default()
+            })
+        };
+        for params in [step, random(false), random(true)] {
+            let mut set = set_of(&[params]);
+            set.run_at(48_000, 32, 120.0, Some(0.0));
+            let downbeat = set.outputs()[0];
+            if let ModulatorParams::Step(step) = params {
+                assert_eq!(downbeat, step.steps[0], "the first step on the downbeat");
+            }
+            for _ in 0..7_777 {
+                set.run_at(48_000, 32, 120.0, None);
+            }
+            set.run_at(48_000, 32, 120.0, Some(0.0));
+            assert_eq!(set.outputs()[0], downbeat, "{params:?}");
+
+            let mut continuous = set_of(&[params]);
+            let mut played = Vec::new();
+            let mut beats = 0.0;
+            while beats < 8.0 {
+                continuous.run_at(48_000, 32, 120.0, Some(beats));
+                played.push(continuous.outputs()[0]);
+                beats += 32.0 / 24_000.0;
+            }
+            continuous.run_at(48_000, 32, 120.0, Some(8.0));
+            let mut fresh = set_of(&[params]);
+            fresh.run_at(48_000, 32, 120.0, Some(8.0));
+            if !matches!(params, ModulatorParams::Random(ModRandomParams { drunk: true, .. })) {
+                // A drunk walk starts from what it held, so only playback
+                // from the same place can promise the same walk.
+                assert_eq!(fresh.outputs()[0], continuous.outputs()[0], "{params:?}");
+            }
+
+            // Playback from the top again, after a stop, reads every value
+            // the first pass did: a bounce matches playback.
+            for _ in 0..333 {
+                continuous.run_at(48_000, 32, 120.0, None);
+            }
+            let mut beats = 0.0;
+            for (tick, value) in played.iter().enumerate() {
+                continuous.run_at(48_000, 32, 120.0, Some(beats));
+                assert_eq!(continuous.outputs()[0], *value, "{params:?} at tick {tick}");
+                beats += 32.0 / 24_000.0;
+            }
         }
     }
 
