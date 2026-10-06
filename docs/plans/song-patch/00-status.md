@@ -1,7 +1,8 @@
 # song-patch — status
 
-Linear: project [Song patch](https://linear.app/mooloop/project/song-patch-3daef6dfe896). Release label: Adam's call (asked
-2026-10-06, see below).
+Linear: project [Song patch](https://linear.app/mooloop/project/song-patch-3daef6dfe896).
+Release label `0.1.7` (Adam, 2026-10-06: keep it in 0.1.7; 0.1.7 is tagged
+when the patch lands).
 
 | Step | Issue | Milestone |
 | --- | --- | --- |
@@ -33,6 +34,7 @@ Planned 2026-10-06. Nothing built.
 | 2026-09-27 | Keep today's Assign gesture; math boxes scale. |
 | 2026-09-27, on the prototype | `select` takes a count; cable bends move by hand; cable activity is tunable. Otherwise *"i dont even know what i'd change from a design standpoint."* |
 | 2026-10-06 | *"everything worked as intended. you can go ahead and do the plan."* |
+| 2026-10-06 | The patch stays in 0.1.7, rather than tagging 0.1.7 now and giving the patch its own release. |
 
 ## Defaults the plan picked, open to Adam
 
@@ -57,10 +59,6 @@ Each is a call the prototype or the September conversation left open.
 - **`chance` is seeded**, so a bounce plays what playback did (step 08).
 - **The pattern tag in Song mode reads the topmost playlist row** playing
   at the time (step 06).
-- **Which release this is.** 0.1.7 was the first stage of the modulator
-  push and is done. This plan could stay under 0.1.7 (tagged when the patch
-  lands) or become its own release, with 0.1.7 tagged now and the later
-  labels moving up one. Asked 2026-10-06.
 
 ## Open from September, not decided
 
