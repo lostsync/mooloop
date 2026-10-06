@@ -19,6 +19,11 @@ reopening it. A plan's own `00-status.md` says how it got where it is.
 - `icon-pass/` (planned 2026-09-26) — one registry, `icons.slint`, and one
   `Icon` component for every icon. Read its README for the survey, and
   `00-status.md` for Adam's four rulings.
+- `song-patch/` (planned 2026-10-06) — the Modulation pane becomes one
+  patching canvas for the song: typed boxes, control and note wires, and
+  the song's sources and destinations as tags. Read its README for Adam's
+  words, the survey and what it reverses, and `00-status.md` for the
+  defaults it picked that he can overturn.
 - `extract-mid-level-dsp-blocks/` — only step 03 is left: `device-displays.slint`
   holds eight visualizers with no shared canvas. `00-status.md` explains why
   step 02 is cancelled.
@@ -27,12 +32,11 @@ reopening it. A plan's own `00-status.md` says how it got where it is.
 
 `device-registry/` is a survey with a status and no steps, because whether any
 of it is worth doing is a `FOCUS.md` question and writing steps would presume
-the answer. `song-patch/` is the same kind of thing: a proposal with no steps.
+the answer.
 
 | Plan | Why it is queued |
 | --- | --- |
 | `song-automation/` | Planned 2026-09-30, in for 0.2.0: automation lanes on the song's timeline, in a panel under the playlist. Read its README for the survey and what it reverses and keeps. |
-| `song-patch/` | **A proposal, not a work order**, moved out of `archive/song-modulation/`'s README when that plan was archived (2026-10-06): one song-wide patching canvas in its own pane, the direction song modulation was the first stage of. It keeps the prototype link and the points Adam agreed. |
 | `device-registry/` | **A survey, written 2026-09-11, not a work order. Parked 2026-09-12**, except for the face host component, which `FOCUS.md` says to take if a device step already has `main.slint` open. |
 | `pattern-bank-floor/` | Parked 2026-09-12 (`FOCUS.md`). Every project reserves 1.00 GiB of pattern storage before it holds anything. With per-track clips ruled out (2026-09-17), it is a prerequisite for raising `MAX_PATTERN_STEPS`; its `00-status.md` records that. |
 

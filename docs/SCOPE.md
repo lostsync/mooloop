@@ -179,14 +179,16 @@ additions:
   what we have and making it work document-wide"*. Modulation belongs to the
   song, a route reaches any channel or track, and the modules have the
   Modulation pane (`plans/archive/song-modulation/`). The Song Patch canvas
-  beyond it is a proposal (`plans/song-patch/`), not in.
+  beyond it is in, on Adam's word (2026-10-06), and planned in
+  `plans/song-patch/`.
 
 ### Out, explicitly
 
 - **Everything in `archive/ROADMAP.md`'s "Later, Not Scheduled"** that item 2 does not
   pull in: MIDI output is now *in* (item 2), but controller mapping beyond it,
-  multiple time signatures and tempo maps, groove extraction, the
-  text/algebraic pattern view and the node-based patcher are all out.
+  multiple time signatures and tempo maps, groove extraction and the
+  text/algebraic pattern view are all out. (The node-based patcher was on
+  this list; the song patch brings it in, `plans/song-patch/`.)
 - **`pattern-bank-floor/` and `device-registry/`** — parked by `FOCUS.md` on
   2026-09-12, each with a recorded reason and a recorded unpark condition. A
   toolkit swap is out altogether: Adam, 2026-09-22, archiving
