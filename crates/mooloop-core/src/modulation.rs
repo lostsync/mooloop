@@ -3050,6 +3050,48 @@ impl SongModulation {
         }
     }
 
+    /// Add a new module of `params` listening to `input`, made on the channel
+    /// `home` (called `home_name`), and return its id.
+    ///
+    /// Named `<channel name> <kind> <n>` like a converted module, seeded by
+    /// its id, and seated on `home` in the first seat free there, which is
+    /// what a channel preset saved from `home` carries; past eight it has no
+    /// seat and is the song's alone.
+    pub fn add_module(
+        &mut self,
+        params: ModulatorParams,
+        input: InputSource,
+        home: crate::ChannelId,
+        home_name: &str,
+    ) -> ModSourceId {
+        let id = self.mint();
+        let name = self.next_name(home, home_name, params.kind());
+        let seat = (0..MAX_MODULATORS_PER_CHANNEL as u8)
+            .map(|slot| RackSeat { channel: home, slot })
+            .find(|seat| !self.modules.iter().any(|module| module.rack == Some(*seat)))
+            .filter(|_| home.is_assigned());
+        self.modules.push(SongModule {
+            id,
+            name,
+            seed: id.0,
+            input,
+            rack: seat,
+            params: song_params(params),
+        });
+        id
+    }
+
+    /// Move the module at list position `from` to `to`: the order the engine
+    /// ticks them in, and so which modules a Math module reads this tick.
+    pub fn move_module(&mut self, from: usize, to: usize) -> bool {
+        if from >= self.modules.len() || to >= self.modules.len() || from == to {
+            return false;
+        }
+        let module = self.modules.remove(from);
+        self.modules.insert(to, module);
+        true
+    }
+
     /// Remove a module and every route it drove. Returns whether it was there.
     pub fn remove_module(&mut self, id: ModSourceId) -> bool {
         let before = self.modules.len();

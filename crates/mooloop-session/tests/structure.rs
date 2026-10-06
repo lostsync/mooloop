@@ -34,11 +34,11 @@ fn session_with_routes() -> Session {
         );
 
         let destination = filter_param(&session, channel);
+        let lfo = session.modulation.modules.last().expect("the LFO").id;
         session
-            .edit_selected_rack(|rack| {
-                rack.add_route(ModRoute::to_slot(0, destination, 0.5, ModPolarity::Bipolar))
-            })
-            .expect("the matrix is empty");
+            .modulation
+            .routes
+            .push(ModRoute::from_module(lfo, destination, 0.5, ModPolarity::Bipolar));
         session.automation_target.set(Some(destination));
         session
             .open_automation_lane_at(destination)
@@ -82,10 +82,10 @@ type SlotParam = (DeviceId, u32);
 /// Every route and lane on `channel`, by the device and parameter they name.
 fn addresses(session: &Session, channel: usize) -> (Vec<SlotParam>, Vec<SlotParam>) {
     let routes = session
-        .channel_rack(channel)
+        .modulation
         .routes
         .iter()
-        .flatten()
+        .filter(|route| route.destination.scope == EffectTarget::Channel(channel as u8))
         .filter_map(|route| slot_and_param(route.destination))
         .collect();
     let lanes = session.channels[channel].automation[0]
@@ -185,11 +185,11 @@ fn removing_an_effect_drops_what_named_it_and_disturbs_nothing_else() {
     // survive alongside the one that must not.
     let delay_param = device_param(&session, 0, EffectKind::Delay);
     let filter_address = filter_param(&session, 0);
+    let lfo = session.modulation.modules[0].id;
     session
-        .edit_channel_rack(0, |rack| {
-            rack.add_route(ModRoute::to_slot(0, delay_param, 0.25, ModPolarity::Bipolar))
-        })
-        .expect("the matrix has room");
+        .modulation
+        .routes
+        .push(ModRoute::from_module(lfo, delay_param, 0.25, ModPolarity::Bipolar));
 
     // Drop the *filter*, which is what both the original route and the lane
     // name, and which sits above the delay.

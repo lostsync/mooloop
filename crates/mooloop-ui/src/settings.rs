@@ -1136,6 +1136,8 @@ pub(crate) struct LayoutSettings {
     pub notes_dock_height: f32,
     #[serde(default = "default_playlist_dock_height")]
     pub playlist_dock_height: f32,
+    #[serde(default = "default_steps_dock_height")]
+    pub modulation_dock_height: f32,
     #[serde(default = "default_true")]
     pub bottom_pane_visible: bool,
     #[serde(default)]
@@ -1151,7 +1153,7 @@ pub(crate) struct LayoutSettings {
     pub channel_sidebar_width: f32,
 }
 
-pub(crate) const VIEW_COUNT: usize = 5;
+pub(crate) const VIEW_COUNT: usize = 6;
 pub(crate) const SLOT_COUNT: usize = 3;
 const MIN_DOCK_HEIGHT: f32 = 140.0;
 const MAX_DOCK_HEIGHT: f32 = 2000.0;
@@ -1161,7 +1163,7 @@ const MIN_SIDEBAR_WIDTH: f32 = 180.0;
 const MAX_SIDEBAR_WIDTH: f32 = 400.0;
 
 fn default_view_slots() -> Vec<i32> {
-    vec![0, 0, 2, 2, 2]
+    vec![0, 0, 2, 2, 2, 2]
 }
 fn default_slot_active() -> Vec<i32> {
     vec![0, -1, 2]
@@ -1195,6 +1197,7 @@ impl Default for LayoutSettings {
             mixer_dock_height: default_steps_dock_height(),
             notes_dock_height: default_notes_dock_height(),
             playlist_dock_height: default_playlist_dock_height(),
+            modulation_dock_height: default_steps_dock_height(),
             bottom_pane_visible: true,
             sidebar_visible: false,
             sidebar_width: default_sidebar_width(),
@@ -1211,6 +1214,16 @@ impl LayoutSettings {
     /// user may edit, and the failure this guards is a window with no pane in
     /// it and no way to get one back.
     pub(crate) fn sanitized(mut self) -> Self {
+        // 0.1.6 saved five views. Modulation is the sixth (song modulation
+        // step 04): it joins the bottom slot, not as its active view, so a
+        // saved arrangement opens as it was left.
+        if self.view_slots.len() == VIEW_COUNT - 1 {
+            self.view_slots.push(2);
+            // A bottom slot that held nothing has nothing else to show.
+            if self.slot_active.get(2) == Some(&-1) {
+                self.slot_active[2] = VIEW_COUNT as i32 - 1;
+            }
+        }
         let sane = self.view_slots.len() == VIEW_COUNT
             && self.view_slots.iter().all(|&s| (0..SLOT_COUNT as i32).contains(&s))
             && self.slot_active.len() == SLOT_COUNT
@@ -1250,6 +1263,7 @@ impl LayoutSettings {
             &mut self.mixer_dock_height,
             &mut self.notes_dock_height,
             &mut self.playlist_dock_height,
+            &mut self.modulation_dock_height,
         ] {
             *height = height.clamp(MIN_DOCK_HEIGHT, MAX_DOCK_HEIGHT);
         }
@@ -1950,7 +1964,7 @@ mod tests {
             (
                 "main slot empty",
                 LayoutSettings {
-                    view_slots: vec![2, 2, 2, 2, 2],
+                    view_slots: vec![2, 2, 2, 2, 2, 2],
                     slot_active: vec![-1, -1, 2],
                     ..default.clone()
                 },
@@ -1958,7 +1972,7 @@ mod tests {
             (
                 "active view lives in another slot",
                 LayoutSettings {
-                    view_slots: vec![0, 0, 2, 2, 2],
+                    view_slots: vec![0, 0, 2, 2, 2, 2],
                     slot_active: vec![2, -1, 2],
                     ..default.clone()
                 },
@@ -1966,7 +1980,7 @@ mod tests {
             (
                 "slot holds views but shows none",
                 LayoutSettings {
-                    view_slots: vec![0, 0, 2, 2, 2],
+                    view_slots: vec![0, 0, 2, 2, 2, 2],
                     slot_active: vec![0, -1, -1],
                     ..default.clone()
                 },
@@ -1974,7 +1988,7 @@ mod tests {
             (
                 "slot index out of range",
                 LayoutSettings {
-                    view_slots: vec![0, 0, 2, 2, 7],
+                    view_slots: vec![0, 0, 2, 2, 2, 7],
                     slot_active: vec![0, -1, 2],
                     ..default.clone()
                 },
@@ -2009,7 +2023,7 @@ mod tests {
         let moved = LayoutSettings {
             // The mixer in the dock and the playlist split off the top: the
             // arrangement Adam asked for by name.
-            view_slots: vec![0, 2, 2, 2, 1],
+            view_slots: vec![0, 2, 2, 2, 1, 2],
             slot_active: vec![0, 4, 1],
             split_fraction: 9.0,
             notes_dock_height: 5.0,
@@ -2022,6 +2036,30 @@ mod tests {
         assert_eq!(fixed.split_fraction, MAX_SPLIT_FRACTION);
         assert_eq!(fixed.notes_dock_height, MIN_DOCK_HEIGHT);
         assert_eq!(fixed.sidebar_width, MAX_SIDEBAR_WIDTH);
+    }
+
+    /// 0.1.6 saved five views. The sixth, Modulation, joins the bottom slot
+    /// behind whatever was showing there, and the rest of the arrangement
+    /// holds; a bottom slot that held nothing shows it.
+    #[test]
+    fn a_five_view_arrangement_opens_with_modulation_in_the_bottom_slot() {
+        let saved = LayoutSettings {
+            view_slots: vec![0, 2, 2, 2, 1],
+            slot_active: vec![0, 4, 1],
+            ..LayoutSettings::default()
+        };
+        let fixed = saved.sanitized();
+        assert_eq!(fixed.view_slots, vec![0, 2, 2, 2, 1, 2]);
+        assert_eq!(fixed.slot_active, vec![0, 4, 1]);
+
+        let empty_bottom = LayoutSettings {
+            view_slots: vec![0, 0, 0, 0, 1],
+            slot_active: vec![2, 4, -1],
+            ..LayoutSettings::default()
+        };
+        let fixed = empty_bottom.sanitized();
+        assert_eq!(fixed.view_slots, vec![0, 0, 0, 0, 1, 2]);
+        assert_eq!(fixed.slot_active, vec![2, 4, 5]);
     }
 
     #[test]
@@ -2289,7 +2327,7 @@ mod tests {
             // the playlist split off the top. A round trip through the
             // default would pass even if the section were never written.
             layout: LayoutSettings {
-                view_slots: vec![0, 2, 2, 2, 1],
+                view_slots: vec![0, 2, 2, 2, 1, 2],
                 slot_active: vec![0, 4, 1],
                 split_fraction: 0.62,
                 notes_dock_height: 380.0,

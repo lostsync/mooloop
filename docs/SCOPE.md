@@ -55,7 +55,7 @@ Items 3 (audio input), 5 (audio and MIDI recording) and 12 (EQ) are done:
 | # | Item | Where it stands | Size |
 | --- | --- | --- | --- |
 | 2 | **MIDI I/O** | **In landed 2026-09-15** (`plans/archive/midi-control/`). **Out does not exist** — the JACK driver registers `out_l`, `out_r`, `midi_in` and nothing else. | What is left of the input half is not construction -- **none of it has been run against a keyboard**. **MIDI output stays 0.2.0.** `docs/CONTROL_SURFACES.md`. |
-| 8 | **Full-size browser** | Does not exist. The view set is closed at five (`PaneViews`). | **Small, and the cheapest win on the list.** A sixth `PaneViews` entry, one `ViewSlot`/`PaneToolbar` block, a `view.pane-browser` action, a `VIEW_COUNT` bump and a settings migration. The `BrowserRow` model and row rendering transfer unchanged; what a full-size view adds is column layout, selection and search — which item 7 wants anyway. |
+| 8 | **Full-size browser** | Does not exist. The view set is closed at six (`PaneViews`); Modulation was the sixth (song modulation step 04), and the same steps add a seventh. | **Small, and the cheapest win on the list.** A seventh `PaneViews` entry, one `ViewSlot`/`PaneToolbar` block, a `view.pane-browser` action, a `VIEW_COUNT` bump and a settings migration. The `BrowserRow` model and row rendering transfer unchanged; what a full-size view adds is column layout, selection and search — which item 7 wants anyway. |
 | 9 | **CLAP effects + instruments** | `plans/plugin-hosting/`, planned 2026-09-16, which also outlines VST3 and AU after CLAP. | **The largest item on the list by a wide margin.** |
 
 ### Tier C — already built under another name. What is missing is a gesture, not a subsystem.

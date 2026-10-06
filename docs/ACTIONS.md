@@ -35,7 +35,7 @@ shortcut**, and the same applies to any future console/MCP command.
 ## What's registered today
 
 `actions.rs`'s `ACTIONS` table is the source of truth; read it rather than
-this document for the current list. **It holds 73 actions in 12 categories**
+this document for the current list. **It holds 74 actions in 12 categories**
 as of 2026-09-26, and a test in `actions.rs` reads that sentence and fails if
 either number stops being true.
 

@@ -1084,27 +1084,26 @@ fn nudge_index(h: &Harness) -> usize {
         .expect("the gain lists Nudge")
 }
 
-/// A modulator in slot 0 and a route from it to `destination`, written into
-/// the rack directly, as a song that carries one would: the shelf's own
-/// gesture refuses a destination that takes no modulation.
+/// A module and a route from it to `destination`, written into the song
+/// directly, as a song that carries one would: the pane's own gesture
+/// refuses a destination that takes no modulation. The module is selected,
+/// so the pane lists its routes.
 fn add_route(h: &Harness, destination: ParamAddr) {
     let mut st = h.state.borrow_mut();
-    if st.session.channel_rack(0).slots[0].is_none() {
+    if st.session.modulation.modules.is_empty() {
         assert!(
             st.session.add_modulation_source(mooloop_core::ModulatorKind::Lfo),
             "room for a modulator"
         );
     }
-    st.session
-        .edit_channel_rack(0, |rack| {
-            rack.add_route(mooloop_core::ModRoute::to_slot(
-                0,
-                destination,
-                0.5,
-                mooloop_core::ModPolarity::Bipolar,
-            ))
-        })
-        .expect("room for a route");
+    let lfo = st.session.module_at(0).expect("the LFO");
+    st.session.modulation.routes.push(mooloop_core::ModRoute::from_module(
+        lfo,
+        destination,
+        0.5,
+        mooloop_core::ModPolarity::Bipolar,
+    ));
+    st.session.set_modulation_selected_index(Some(0));
     st.refresh_modulation(&h.window);
 }
 
@@ -1121,7 +1120,8 @@ fn a_plugin_knob_arms_a_route_and_shows_its_ring() {
             st.session.add_modulation_source(mooloop_core::ModulatorKind::Lfo),
             "room for a modulator"
         );
-        st.session.set_modulation_armed_slot(Some(0));
+        st.session.set_modulation_selected_index(Some(0));
+        st.session.set_modulation_armed_index(Some(0));
         st.refresh_modulation(&h.window);
     }
     h.window.set_modulation_armed_slot(0);
@@ -1131,7 +1131,7 @@ fn a_plugin_knob_arms_a_route_and_shows_its_ring() {
 
     let gain_address = ParamAddr::plugin_param(EffectTarget::Channel(0), device, test_plugin::PARAM_GAIN);
     let st = h.state.borrow();
-    let routes: Vec<_> = st.session.channel_rack(0).destinations().collect();
+    let routes: Vec<_> = st.session.modulation.routes.iter().map(|route| route.destination).collect();
     assert_eq!(routes, [gain_address], "the wheel authored one route, on the plugin's id");
     let row = st.modulation_route_model.row_data(0).expect("the shelf lists it");
     assert!(row.destination.contains("Test Gain 1 · Gain"), "{}", row.destination);
@@ -1335,7 +1335,7 @@ fn a_missing_plugin_parameter_is_drawn_missing_and_reunited() {
     {
         let st = h.state.borrow();
         assert_eq!(st.session.automation_lanes().map(Vec::len), Some(1), "the lane is kept");
-        assert!(st.session.channel_rack(0).routes[0].is_some(), "the route is kept");
+        assert_eq!(st.session.modulation.routes.len(), 1, "the route is kept");
     }
 
     // Back in the list: the same rows, normal again.
