@@ -412,7 +412,7 @@ pub(crate) fn format_label(format: PluginFormat) -> &'static str {
 pub(crate) const INSTRUMENTS_GROUP: &str = "plugins:instruments";
 pub(crate) const EFFECTS_GROUP: &str = "plugins:effects";
 
-/// What the Type menu can pick (`docs/plans/plugin-browser/04-filter-by-category.md`).
+/// What the Type menu can pick (`docs/plans/archive/plugin-browser/04-filter-by-category.md`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum CategoryPick {
     /// Any plugin, whatever it declares.

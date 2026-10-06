@@ -1,5 +1,5 @@
 //! What kind of plugin a plugin says it is, beyond effect or instrument: the
-//! browser's **Type** filter (`docs/plans/plugin-browser/04-filter-by-category.md`).
+//! browser's **Type** filter (`docs/plans/archive/plugin-browser/04-filter-by-category.md`).
 //!
 //! A category is only ever what the plugin declares. CLAP plugins declare
 //! standard feature strings (`clap/plugin-features.h`), which the scan keeps
