@@ -606,8 +606,12 @@ fn sweep_column(
 /// ends 8px lower, and the strips fill it, so the corner came down 16px. The
 /// old (194, 291) was left of the button's new right edge and above its top,
 /// so the click turned nothing over.
+///
+/// Song modulation step 04 took the 30px modulation shelf out of the device
+/// rack, so the dock is 30px shorter, the top pane 30px taller, and the
+/// button 30px lower.
 const TURN_OVER_X: f32 = 182.0;
-const TURN_OVER_Y: f32 = 307.0;
+const TURN_OVER_Y: f32 = 337.0;
 
 /// Clicking a strip's name plate is the gesture that points the device rack at
 /// that bus. If it stops reporting, the mixer becomes a display.
