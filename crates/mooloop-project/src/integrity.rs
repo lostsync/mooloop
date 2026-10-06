@@ -1748,8 +1748,21 @@ fn check_song_modulation(
         }
     }
 
+    let modules: Vec<_> = modulation.modules.iter().map(|module| module.id).collect();
     for (index, module) in modulation.modules.iter_mut().enumerate() {
         let where_ = format!("{WHO}, module {} ({})", index + 1, module.name);
+        if let mooloop_core::InputSource::Module(read) = module.input {
+            if !modules.contains(&read)
+                && doctor.correct(
+                    "modulation.module.input",
+                    &where_,
+                    format!("its input reads module {}, which this song does not have", read.0),
+                    "read nothing".into(),
+                )
+            {
+                module.input = mooloop_core::InputSource::None;
+            }
+        }
         if let Some(channel) = module.input.channel() {
             if !channels.contains(&channel)
                 && doctor.correct(
@@ -1776,7 +1789,6 @@ fn check_song_modulation(
         }
     }
 
-    let modules: Vec<_> = modulation.modules.iter().map(|module| module.id).collect();
     let mut drop = Vec::new();
     for (index, route) in modulation.routes.iter_mut().enumerate() {
         let where_ = format!("{WHO}, route {}", index + 1);
@@ -3550,7 +3562,7 @@ mod tests {
 
     /// The song's set checks what it names: a module identity worn twice, a
     /// route from a module or a channel the song does not have, an input on a
-    /// channel that has gone, and a depth that is not a number.
+    /// channel or a module that has gone, and a depth that is not a number.
     #[test]
     fn the_songs_modulation_names_only_what_the_song_has() {
         use mooloop_core::{InputSource, ModSourceId, ModSourceRef};
@@ -3565,6 +3577,12 @@ mod tests {
         twin.name = "Twin".into();
         project.modulation.modules.push(twin);
         project.modulation.modules[0].input = InputSource::ChannelNotes(mooloop_core::ChannelId(40));
+        let mut math = lfo.clone();
+        math.id = ModSourceId(98);
+        math.name = "Math".into();
+        math.input = InputSource::Module(ModSourceId(97));
+        project.modulation.modules.push(math);
+        project.modulation.next_source_id = 99;
         let mut gone = project.modulation.routes[0];
         gone.source = ModSourceRef::Id(ModSourceId(99));
         let mut stranger = project.modulation.routes[0];
@@ -3585,12 +3603,14 @@ mod tests {
                 "modulation.depth",
                 "modulation.module.id",
                 "modulation.module.input",
+                "modulation.module.input",
                 "modulation.route.destination",
                 "modulation.route.destination",
             ]
         );
-        assert_eq!(project.modulation.modules.len(), 1);
+        assert_eq!(project.modulation.modules.len(), 2);
         assert_eq!(project.modulation.modules[0].input, InputSource::None);
+        assert_eq!(project.modulation.modules[1].input, InputSource::None, "a module that is not there");
         assert_eq!(project.modulation.routes.len(), 1);
         assert_eq!(project.modulation.routes[0].depth, 0.0);
     }
