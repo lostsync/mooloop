@@ -1,20 +1,20 @@
 # song-patch — status
 
-Linear: project **Song patch**. Release label: Adam's call (asked
+Linear: project [Song patch](https://linear.app/mooloop/project/song-patch-3daef6dfe896). Release label: Adam's call (asked
 2026-10-06, see below).
 
 | Step | Issue | Milestone |
 | --- | --- | --- |
-| 01 | | Boxes and wires |
-| 02 | | Boxes and wires |
-| 03 | | Boxes and wires |
-| 04 | | Boxes and wires |
-| 05 | | Boxes and wires |
-| 06 | | Boxes and wires |
-| 07 | | Note wires |
-| 08 | | Note wires |
-| 09 | | Patches you can keep |
-| 10 | | Patches you can keep |
+| 01 | MOO-520 | Boxes and wires |
+| 02 | MOO-521 | Boxes and wires |
+| 03 | MOO-522 | Boxes and wires |
+| 04 | MOO-523 | Boxes and wires |
+| 05 | MOO-524 | Boxes and wires |
+| 06 | MOO-525 | Boxes and wires |
+| 07 | MOO-526 | Note wires |
+| 08 | MOO-527 | Note wires |
+| 09 | MOO-528 | Patches you can keep |
+| 10 | MOO-529 | Patches you can keep |
 
 Each step is blocked by the one before it, except that 09 needs only 06.
 Step 02 carries MOO-170's owed measurement. Step 03 carries song
