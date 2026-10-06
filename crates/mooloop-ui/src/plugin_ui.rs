@@ -982,23 +982,19 @@ pub(crate) struct PluginOverlays {
 }
 
 /// The overlays for the plugin device `device`, whose slot is `slot`, on the
-/// selected channel's chain, with modulator `armed` (if any) assigning.
+/// chain `scope`, with source `armed` (if any) assigning.
 pub(crate) fn plugin_overlays(
     session: &Session,
-    armed: Option<u8>,
+    armed: Option<ModSourceRef>,
+    scope: EffectTarget,
     device: DeviceId,
     slot: PluginSlotId,
 ) -> PluginOverlays {
     let Some(saved) = session.plugins.get(&slot) else {
         return PluginOverlays::default();
     };
-    if session.channels.get(session.selected).is_none() {
-        return PluginOverlays::default();
-    }
-    let rack = session.selected_rack();
-    let scope = EffectTarget::Channel(session.selected as u8);
     let mut overlays = PluginOverlays {
-        offsets: session.plugin_destination_offsets(device, slot),
+        offsets: session.plugin_destination_offsets(scope, device, slot),
         ..PluginOverlays::default()
     };
     for info in &saved.params {
@@ -1011,11 +1007,7 @@ pub(crate) fn plugin_overlays(
             .push(session.modulation_policy(address).is_some_and(|policy| policy.allowed));
         // Every route, allowed or not, as a native knob counts them: an
         // assignment is authored work the user can see and remove.
-        overlays.counts.push(
-            rack.destinations()
-                .filter(|destination| *destination == address)
-                .count() as i32,
-        );
+        overlays.counts.push(session.route_count(address) as i32);
     }
     overlays
 }

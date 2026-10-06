@@ -535,3 +535,15 @@ already did (MOO-373). Then, while it plays, move a channel and paste one:
 the other channels' notes should carry on, and an LFO should not restart.
 Route an LFO to a track's insert and to a track's fader and listen for both
 moving.
+
+### 39. Assigning anywhere (MOO-512): in the app
+
+Add an LFO on one channel and arm Assign. Without leaving Assign, drag a
+knob on that channel's filter, then select another channel and drag one of
+its inserts, then open a track's rack and the master's and drag an insert on
+each. Every knob dragged should show its depth while armed, a dot once
+disarmed, and its arc swinging with the LFO while the song plays, whichever
+chain the rack shows. With MIDI learn armed, a press should still learn the
+knob rather than route it. Then pick another channel in an Envelope's input
+and play that channel: the Envelope should open on its notes. Point a Math
+module's input at a module seated on another channel and check it follows.

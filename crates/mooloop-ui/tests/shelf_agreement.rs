@@ -1,8 +1,18 @@
 //! The modulation shelf's numbers, held to the tables they come from.
 //!
-//! Three checks live here. The knob ids the editor sends edits under must be
+//! Four checks live here. The knob ids the editor sends edits under must be
 //! `mooloop-core`'s; every range the shelf states must be the descriptor's;
-//! and a knob and the caption under it must read the same.
+//! a knob and the caption under it must read the same; and a module's input
+//! is chosen from the song, not from a slot of one channel's rack.
+//!
+//! # The song owns the modules
+//!
+//! Since song modulation step 01 the modules are the song's, in one list
+//! with no slots, and a Math module reads another module by identity
+//! (`InputSource::Module`). The shelf used to pick a Math module's operand by
+//! sending a slot number under `MathParam.input-slot`, from a list of this
+//! channel's eight slots; that number no longer means anything. Every kind's
+//! input is now one picker the session fills from the whole song (step 03).
 //!
 //! # A knob and its caption are one value
 //!
@@ -144,7 +154,7 @@ use mooloop_core::{
 /// `SMOOTHING_S`. A derivation that papered over that would be deriving one
 /// side from the other, which is the thing being guarded against.
 #[rustfmt::skip]
-const SHELF_IDS: [(&str, &str, u32); 42] = [
+const SHELF_IDS: [(&str, &str, u32); 41] = [
     ("Lfo", "rate", mooloop_core::LFO_PARAM_RATE_HZ),
     ("Lfo", "depth", mooloop_core::LFO_PARAM_DEPTH),
     ("Lfo", "waveform", mooloop_core::LFO_PARAM_WAVEFORM),
@@ -182,7 +192,6 @@ const SHELF_IDS: [(&str, &str, u32); 42] = [
     ("Random", "quantize", mooloop_core::RANDOM_PARAM_QUANTIZE),
     ("Random", "drunk", mooloop_core::RANDOM_PARAM_DRUNK),
     ("Random", "walk", mooloop_core::RANDOM_PARAM_WALK),
-    ("Math", "input-slot", mooloop_core::MATH_PARAM_INPUT_SLOT),
     ("Math", "op", mooloop_core::MATH_PARAM_OP),
     ("Math", "operand", mooloop_core::MATH_PARAM_OPERAND),
     ("Math", "clamp-low", mooloop_core::MATH_PARAM_CLAMP_LOW),
@@ -436,4 +445,31 @@ fn every_shelf_knob_range_agrees_with_its_table() {
          stopped matching the markup it is meant to read",
         knobs.len()
     );
+}
+
+// ---------------------------------------------------------------------------
+// The input picker.
+// ---------------------------------------------------------------------------
+
+/// Every kind's input is one picker, bound to the list the session builds
+/// from the song, and its choice goes back as an index into that list. No
+/// control sends a Math module's operand as a slot of this channel's rack,
+/// and no list of slots is left for one to pick from.
+#[test]
+fn every_module_input_is_one_picker_over_the_song() {
+    let squashed = squash(SHELF);
+    let (_, _, _, picker) = body(SHELF, "input-picker := ComboBox", 0)
+        .expect("modulation-shelf.slint no longer declares the input picker");
+    let picker = squash(picker);
+    assert!(picker.contains("model: root.input-options;"), "{picker}");
+    assert!(picker.contains("current-index: root.selected-input;"), "{picker}");
+    assert!(
+        picker.contains("root.input-changed(root.selected-slot, input-picker.current-index)"),
+        "{picker}"
+    );
+    // One picker, not one per kind.
+    assert_eq!(SHELF.matches("ComboBox {").count(), 1);
+    for gone in ["MathParam.input-slot", "slot-names", "input-channels", "envelope-input"] {
+        assert!(!squashed.contains(gone), "the shelf still reads `{gone}`");
+    }
 }

@@ -24,7 +24,7 @@
 //! builds one when it builds a project. `PartialEq` is that comparison.
 
 use crate::mixer::{EffectTarget, MAX_BUSES};
-use crate::mod_metadata::{ModSourceId, ModSourceRef};
+use crate::mod_metadata::{ModDestinationDescriptor, ModSourceId, ModSourceRef};
 use crate::modulation::{
     InputSource, ModPolarity, ModulatorParams, ParamAddr, SongModulation, MAX_GENERATOR_OUTLETS,
     PERFORMANCE_SOURCES,
@@ -276,6 +276,35 @@ impl CompiledModulation {
             },
             CompiledSource::Outlet { .. } | CompiledSource::Performance { .. } => 1.0,
         }
+    }
+
+    /// Total signed offset on `destination`, as a fraction of its range,
+    /// given each source's current output (`level`): the sum the engine's
+    /// control pass makes, for the knobs to draw. A destination whose policy
+    /// refuses modulation takes nothing, each depth is clamped into the
+    /// declared limit, and a unipolar route is lifted onto its source's span.
+    pub fn offset_for(
+        &self,
+        destination: ParamAddr,
+        policy: &ModDestinationDescriptor,
+        level: impl Fn(CompiledSource) -> f32,
+    ) -> f32 {
+        if !policy.allowed {
+            return 0.0;
+        }
+        let mut total = 0.0;
+        for route in self.chain_routes(destination.scope) {
+            if route.destination != destination {
+                continue;
+            }
+            let output = level(route.resolved);
+            let shaped = match route.polarity {
+                ModPolarity::Bipolar => output,
+                ModPolarity::Unipolar => (output + self.wire_span(route.resolved)) * 0.5,
+            };
+            total += shaped * policy.clamp_depth(route.depth);
+        }
+        total
     }
 }
 

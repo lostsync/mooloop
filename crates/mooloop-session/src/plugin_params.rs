@@ -114,12 +114,6 @@ impl Session {
     /// whether a route is live.
     pub fn modulation_policy(&self, address: ParamAddr) -> Option<ModDestinationDescriptor> {
         if let ParamOwner::PluginParam { .. } = address.owner {
-            let EffectTarget::Channel(channel) = address.scope else {
-                return None;
-            };
-            if channel as usize != self.selected {
-                return None;
-            }
             let info = self.plugin_param_info(address)?;
             return Some(ModDestinationDescriptor::for_plugin_param(
                 info.id,
@@ -127,7 +121,7 @@ impl Session {
                 info.modulatable,
             ));
         }
-        self.channel_modulation_destination(address)
+        self.modulation_destination(address)
             .map(|(_, descriptor)| ModDestinationDescriptor::for_param(descriptor))
     }
 
@@ -368,13 +362,12 @@ impl Session {
         }
         // The ids something still names and the list does not: every
         // pattern's lanes and every route, in the order they are found.
-        let rack = self.selected_rack();
         let named = channel
             .automation
             .iter()
             .flatten()
             .map(|lane| lane.target)
-            .chain(rack.destinations());
+            .chain(self.modulation.routes.iter().map(|route| route.destination));
         for address in named {
             let ParamOwner::PluginParam { device: owner } = address.owner else {
                 continue;
@@ -403,35 +396,30 @@ impl Session {
     }
 
     /// The live modulation offset on each of `slot`'s parameters, by dense
-    /// index, for the device `device` on the selected channel: what a plugin
+    /// index, for the device `device` on the chain `scope`: what a plugin
     /// face's rings draw, on the same terms as
     /// [`Session::destination_offsets`] for a native face.
     pub fn plugin_destination_offsets(
         &self,
+        scope: EffectTarget,
         device: DeviceId,
         slot: PluginSlotId,
     ) -> Vec<f32> {
         let Some(saved) = self.plugins.get(&slot) else {
             return Vec::new();
         };
-        let mut offsets = vec![0.0; saved.params.len()];
-        if self.channels.get(self.selected).is_none() {
-            return offsets;
-        }
-        let rack = self.selected_rack();
-        let scope = EffectTarget::Channel(self.selected as u8);
-        let outputs = self.modulation_outputs.get();
-        let sources = Self::control_sources(&outputs);
-        for (index, info) in saved.params.iter().enumerate() {
-            let policy =
-                ModDestinationDescriptor::for_plugin_param(info.id, info.stepped.is_some(), info.modulatable);
-            offsets[index] = rack.offset_for(
-                ParamAddr::plugin_param(scope, device, info.id),
-                sources,
-                &policy,
-            );
-        }
-        offsets
+        saved
+            .params
+            .iter()
+            .map(|info| {
+                let policy = ModDestinationDescriptor::for_plugin_param(
+                    info.id,
+                    info.stepped.is_some(),
+                    info.modulatable,
+                );
+                self.live_offset(ParamAddr::plugin_param(scope, device, info.id), &policy)
+            })
+            .collect()
     }
 }
 
@@ -647,16 +635,15 @@ mod tests {
                 })
                 .expect("room for a route");
         }
-        let mut outputs = session.modulation_outputs.get();
-        outputs[0] = 0.4;
-        session.modulation_outputs.set(outputs);
+        session.modulation_sent = session.modulation_plan();
+        session.modulation_levels.borrow_mut().modules = vec![0.4];
 
         let native = session.destination_offsets(&mooloop_core::STRIP_DESCRIPTORS, |param| {
             ParamAddr::strip(scope, param)
         });
         assert!((native[mooloop_core::STRIP_PARAM_VOLUME as usize] - 0.2).abs() < 1e-6, "{native:?}");
         // Nudge takes no modulation and reads zero; Gain, index 1, reads the sum.
-        let plugin = session.plugin_destination_offsets(device, slot);
+        let plugin = session.plugin_destination_offsets(scope, device, slot);
         assert_eq!(plugin.len(), 2);
         assert_eq!(plugin[0], 0.0);
         assert!((plugin[1] - 0.2).abs() < 1e-6, "{plugin:?}");

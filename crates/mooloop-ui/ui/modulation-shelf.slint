@@ -181,8 +181,9 @@ global RandomParam {
     out property <int> walk: 8;
 }
 
+// Id 0 is the Math module's input slot, which the shelf no longer sends: a
+// Math module reads another module by identity, chosen in the input picker.
 global MathParam {
-    out property <int> input-slot: 0;
     out property <int> op: 1;
     out property <int> operand: 2;
     out property <int> clamp-low: 3;
@@ -665,17 +666,22 @@ export component ModulationShelf inherits Rectangle {
     in property <[float]> selected-values;
     in property <float> selected-preview-fade-cycles;
     in property <float> selected-preview-smoothing-cycles;
-    in property <[string]> input-channels;
-    in property <int> selected-envelope-input-channel;
+    // The selected module's input picker: None, then every outlet that sends
+    // what the module takes -- every channel's notes for the four kinds that
+    // hear notes, every other module in the song for Math. `input-note` is
+    // what is worth saying about the choice.
+    in property <[string]> input-options;
+    in property <int> selected-input;
+    in property <string> input-note;
     in property <float> selected-envelope-preview-attack;
     in property <float> selected-envelope-preview-decay;
     in property <float> selected-envelope-preview-release;
     // Capacity is an engine protocol boundary, not a UI layout constant
-    // (docs/MODULATION.md), so Rust reports it. The slot names the
-    // math jack picks from come from the same place, so growing the rack
-    // stays a protocol edit rather than a UI one.
+    // (docs/MODULATION.md), so Rust reports it.
     in property <int> max-sources: 0;
-    in property <[string]> slot-names;
+    // Whether the assignment gesture is armed with any source in the song,
+    // which a module seated on another channel is without a slot here.
+    in property <bool> assigning;
     // The channel generator's published control outlets, and what to call the
     // device that publishes them. Empty for a generator that publishes
     // nothing, and the band is then absent rather than empty: an outlet is
@@ -707,14 +713,13 @@ export component ModulationShelf inherits Rectangle {
     callback param-edit-started();
     callback param-edit-finished();
     callback source-removed(int);
-    // The envelope's gate input is an input jack bound to a dynamic channel
-    // list, not a descriptor id; it keeps its dedicated verb.
-    callback envelope-input-channel-changed(int, int);
+    // A module's input is a jack bound to a dynamic list, not a descriptor
+    // id: (slot, index into `input-options`).
+    callback input-changed(int, int);
     callback route-polarity-changed(int, int);
     callback route-removed(int);
 
     private property <bool> add-source-menu-open: false;
-    private property <bool> assigning: root.armed-slot >= 0;
 
     pure function kind-name(kind: int) -> string {
         return kind == 0 ? "LFO" : kind == 1 ? "ENVELOPE" : kind == 2 ? "STEP"
@@ -730,14 +735,6 @@ export component ModulationShelf inherits Rectangle {
     // it once it is connected.
     pure function jack-label(kind: int) -> string {
         return kind == 0 ? "RESET" : kind == 1 ? "GATE" : kind == 4 ? "INPUT" : "CLOCK";
-    }
-    pure function jack-note(kind: int) -> string {
-        if (kind == 1) { return "CHANNEL NOTE GATE"; }
-        if (kind == 4) {
-            return round(root.selected-values[MathParam.input-slot]) < root.selected-slot
-                ? "READS THIS TICK" : "READS THE PREVIOUS TICK";
-        }
-        return "";
     }
     pure function kind-badge(kind: int) -> string {
         return kind == 0 ? "LFO" : kind == 1 ? "ENV" : kind == 2 ? "STEP"
@@ -1074,13 +1071,6 @@ export component ModulationShelf inherits Rectangle {
                                         tooltip: "Input signal that restarts this LFO";
                                         selected(index) => { root.param-changed(root.selected-slot, LfoParam.retrigger, index); }
                                     }
-                                    if root.selected-kind == 1 : gate-input := ComboBox {
-                                        width: 150px;
-                                        height: 18px;
-                                        model: root.input-channels;
-                                        current-index: root.selected-envelope-input-channel;
-                                        selected(value) => { root.envelope-input-channel-changed(root.selected-slot, gate-input.current-index); }
-                                    }
                                     if root.selected-kind == 2 : SelectorBank {
                                         height: 16px;
                                         options: ["TRANSPORT", "NOTE ON"];
@@ -1097,19 +1087,19 @@ export component ModulationShelf inherits Rectangle {
                                         tooltip: "Draw on the clock, or once per note";
                                         selected(index) => { root.param-changed(root.selected-slot, RandomParam.trigger, index); }
                                     }
-                                    // A picker, not a bank of segments: it has
-                                    // to stay legible at any capacity, and a
-                                    // numbered choice into a grid of named
-                                    // modules was a puzzle even at eight.
-                                    if root.selected-kind == 4 : math-input := ComboBox {
-                                        width: 170px;
+                                    // One picker for every kind, not a bank
+                                    // of segments: it has to stay legible
+                                    // however many channels and modules the
+                                    // song has.
+                                    input-picker := ComboBox {
+                                        width: 150px;
                                         height: 18px;
-                                        model: root.slot-names;
-                                        current-index: round(root.selected-values[MathParam.input-slot]);
-                                        selected(value) => { root.param-changed(root.selected-slot, MathParam.input-slot, math-input.current-index); }
+                                        model: root.input-options;
+                                        current-index: root.selected-input;
+                                        selected(value) => { root.input-changed(root.selected-slot, input-picker.current-index); }
                                     }
                                     Text {
-                                        text: root.jack-note(root.selected-kind);
+                                        text: root.input-note;
                                         color: Theme.text-faint;
                                         font-size: Theme.text-xs;
                                         vertical-alignment: center;
@@ -1605,10 +1595,10 @@ export component ModulationShelf inherits Rectangle {
                             Text {
                                 height: 10px;
                                 text: round(root.selected-values[MathParam.op]) == MathOps.clamp-index
-                                    ? "SLOT " + (round(root.selected-values[MathParam.input-slot]) + 1)
+                                    ? root.input-options[root.selected-input]
                                         + " → " + round(root.selected-values[MathParam.clamp-low] * 100) / 100
                                         + "…" + round(root.selected-values[MathParam.clamp-high] * 100) / 100
-                                    : "SLOT " + (round(root.selected-values[MathParam.input-slot]) + 1)
+                                    : root.input-options[root.selected-input]
                                         + " " + MathOps.labels[round(root.selected-values[MathParam.op])]
                                         + " " + round(root.selected-values[MathParam.operand] * 100) / 100;
                                 color: Theme.accent;
