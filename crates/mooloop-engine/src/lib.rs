@@ -234,6 +234,8 @@ mod strip_tests;
 mod take_tests;
 #[cfg(test)]
 mod track_edit_tests;
+#[cfg(test)]
+mod song_modulation_tests;
 
 use executor::{Executor, ExecutorIo};
 #[cfg(target_os = "macos")]

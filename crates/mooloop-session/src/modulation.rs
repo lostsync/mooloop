@@ -437,6 +437,85 @@ mod tests {
     use mooloop_core::modulation::outlet_slot;
     use mooloop_core::{EffectTarget, ModRoute, ParamAddr, STRIP_PARAM_VOLUME};
 
+    /// What the reconciler sent, by kind.
+    #[derive(Default)]
+    struct Sink {
+        retuned: usize,
+        routes: usize,
+        sets: usize,
+    }
+
+    impl mooloop_engine::CommandSink for Sink {
+        fn send(&mut self, cmd: mooloop_core::EngineCommand) -> bool {
+            match cmd {
+                mooloop_core::EngineCommand::SetModulator { .. } => self.retuned += 1,
+                mooloop_core::EngineCommand::SetModRoute { .. } => self.routes += 1,
+                other => panic!("the reconciler sent {other:?}"),
+            }
+            true
+        }
+        fn send_structural(&mut self, cmd: mooloop_engine::StructuralCommand) -> bool {
+            assert!(matches!(cmd, mooloop_engine::StructuralCommand::SetModulation { .. }));
+            self.sets += 1;
+            true
+        }
+        fn send_deferred(
+            &mut self,
+            _: mooloop_core::EngineCommand,
+            _: mooloop_core::MusicalEdge,
+        ) -> bool {
+            false
+        }
+        fn sample_rate(&self) -> u32 {
+            48_000
+        }
+    }
+
+    impl Sink {
+        fn take(&mut self) -> (usize, usize, usize) {
+            let sent = (self.retuned, self.routes, self.sets);
+            *self = Self::default();
+            sent
+        }
+    }
+
+    /// **The pump's reconciler sends the engine what changed, and only
+    /// that** (song modulation step 02): a change of shape as a whole set, a
+    /// module's params and a route's depth as narrow retunes, and nothing at
+    /// all when nothing changed.
+    #[test]
+    fn the_reconciler_sends_a_set_for_shape_and_a_retune_for_values() {
+        let mut sink = Sink::default();
+        let mut session = armed_lfo();
+        session.sync_modulation(&mut sink);
+        assert_eq!(sink.take(), (0, 0, 1), "a module added is a new set");
+        session.sync_modulation(&mut sink);
+        assert_eq!(sink.take(), (0, 0, 0), "nothing changed, nothing sent");
+
+        assert!(session.set_modulator_param(0, mooloop_core::modulation::LFO_PARAM_RATE_HZ as i32, 0.7));
+        session.sync_modulation(&mut sink);
+        assert_eq!(sink.take(), (1, 0, 0), "a param is a retune");
+
+        session.toggle_modulation_assignment();
+        let fader = ParamAddr::strip(EffectTarget::Channel(0), STRIP_PARAM_VOLUME);
+        assert!(matches!(
+            session.arm_modulation_route(fader, 0.3),
+            crate::session::ArmedRoute::Added(_)
+        ));
+        session.sync_modulation(&mut sink);
+        assert_eq!(sink.take(), (0, 0, 1), "a route added is a new set");
+        assert!(matches!(
+            session.arm_modulation_route(fader, 0.6),
+            crate::session::ArmedRoute::Added(_)
+        ));
+        session.sync_modulation(&mut sink);
+        assert_eq!(sink.take(), (0, 1, 0), "a depth is a retune");
+
+        assert!(session.remove_modulation_source(0));
+        session.sync_modulation(&mut sink);
+        assert_eq!(sink.take(), (0, 0, 1), "a module removed is a new set");
+    }
+
     fn armed_lfo() -> Session {
         let mut session = Session::default();
         assert!(

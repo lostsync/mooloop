@@ -11344,6 +11344,12 @@ impl RenderState {
         self.skip_idle = enabled;
     }
 
+    /// Whether track `index` slept through the last block.
+    #[cfg(test)]
+    pub(crate) fn track_sleeping(&self, index: usize) -> bool {
+        self.buses.get(index).is_some_and(|strip| strip.sleeping)
+    }
+
     /// Take the output guard's limiter off, keeping its scrub, for a test
     /// that measures the *mix* above 0 dBFS. Not a user setting and not
     /// exposed as a command: `mooloop_dsp::OutputGuard::without_limit`
