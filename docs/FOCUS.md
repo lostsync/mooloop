@@ -16,7 +16,7 @@ purpose. History goes in `JOURNAL.md`, the state of each issue is in Linear,
 - **One push per release** (labels renumbered 2026-10-05): 0.1.7 modulator,
   0.1.8 UI/UX, 0.1.9 devices, 0.1.10 content, 0.1.11 finalizing (RC/beta).
   A release is whatever carries its label in Linear.
-- **0.1.7** was song modulation (Adam, 2026-10-05: *"let's start by moving
+- **0.1.7** is the modulator push. Its first stage was song modulation (Adam, 2026-10-05: *"let's start by moving
   what we have and making it work document-wide"*), done 2026-10-06 and
   archived at `plans/archive/song-modulation/`; what it left open is in its
   `00-status.md`. Steps 03 to 05 of
@@ -25,7 +25,8 @@ purpose. History goes in `JOURNAL.md`, the state of each issue is in Linear,
 - **Next: the song patch** (`plans/song-patch/`, planned 2026-10-06 on
   Adam's go after he tried song modulation: *"you can go ahead and do the
   plan"*). The Modulation pane becomes a patching canvas, in ten steps.
-  Which release label it carries is his call (its `00-status.md`).
+  It is the rest of 0.1.7 (Adam, 2026-10-06), so 0.1.7 is tagged when it
+  lands, not before.
 - **Waiting on Adam:** the listening queue in [LISTENING.md](LISTENING.md),
   and MOO-456's look. The `Question` label in Linear is the complete list of
   open questions.
