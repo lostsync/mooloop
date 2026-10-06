@@ -3,7 +3,8 @@
 //! default pitch zoom can be verified without a compositor.
 
 use mooloop_ui::{view, 
-    default_piano_gestures, note_hit_test, AutomationPointCell, AutomationTargetRow,
+    default_piano_gestures, note_hit_test, AutomationGridLine, AutomationLaneCell, AutomationPointCell,
+    AutomationTargetRow,
     MainWindow, NoteCell,
 };
 use slint::{ComponentHandle, LogicalSize, Model, ModelRc, VecModel};
@@ -132,9 +133,35 @@ fn render_piano_lanes_snapshot() {
             selected: false,
         },
     ]));
-    ui.set_automation_points(ModelRc::from(points.clone()));
-    ui.set_automation_lane_name("Filter 1 · Cutoff".into());
-    ui.set_automation_value_text("1.20 kHz".into());
+    let quarters = || {
+        ModelRc::from(Rc::new(VecModel::from(vec![
+            AutomationGridLine { value: 0.25, major: false },
+            AutomationGridLine { value: 0.5, major: true },
+            AutomationGridLine { value: 0.75, major: false },
+        ])))
+    };
+    // What `publish_automation_lanes_total` would say: header and body.
+    ui.set_automation_lanes_total(2.0 * (17.0 + 72.0));
+    ui.set_automation_lanes(ModelRc::from(Rc::new(VecModel::from(vec![
+        AutomationLaneCell {
+            name: "Filter 1 · Cutoff".into(),
+            missing: false,
+            focused: true,
+            value_text: "1.20 kHz".into(),
+            height: 72.0,
+            points: ModelRc::from(points.clone()),
+            grid: quarters(),
+        },
+        AutomationLaneCell {
+            name: "Filter 1 · Resonance".into(),
+            missing: false,
+            focused: false,
+            value_text: "".into(),
+            height: 72.0,
+            points: ModelRc::from(points.clone()),
+            grid: quarters(),
+        },
+    ]))));
     ui.set_automation_targets(ModelRc::from(Rc::new(VecModel::from(vec![
         AutomationTargetRow {
             param_name: "Cutoff".into(),
@@ -153,11 +180,12 @@ fn render_piano_lanes_snapshot() {
             missing: false,
         },
     ]))));
-    ui.on_automation_point_hit_test(move |tick, value, tolerance| {
+    ui.on_automation_point_hit_test(move |_, tick, value, tolerance, value_tolerance| {
         points
             .iter()
             .find(|point| {
-                (point.tick - tick).abs() <= tolerance && (point.value - value).abs() <= 0.12
+                (point.tick - tick).abs() <= tolerance
+                    && (point.value - value).abs() <= value_tolerance
             })
             .map(|point| point.id)
             .unwrap_or(-1)

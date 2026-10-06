@@ -896,7 +896,11 @@ impl Session {
     /// Descriptor for the currently shown lane, used to turn normalized
     /// breakpoints back into the natural units the readout displays.
     pub fn automation_descriptor(&self) -> Option<&'static ParamDescriptor> {
-        let target = self.automation_target.get()?;
+        self.lane_descriptor(self.automation_target.get()?)
+    }
+
+    /// Descriptor for the lane on `target`, shown or not.
+    pub fn lane_descriptor(&self, target: ParamAddr) -> Option<&'static ParamDescriptor> {
         match target.owner {
             // The kind the lane was drawn on, not the one the channel runs
             // now: a lane left behind by a device change is inert but still

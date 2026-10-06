@@ -12,7 +12,9 @@
 //! only appears after the SECOND move event. Invoking the callbacks directly,
 //! or dispatching a single move, passes even against the broken version.
 
-use mooloop_ui::{view, default_piano_gestures, note_hit_test, MainWindow, NoteCell};
+use mooloop_ui::{
+    view, default_piano_gestures, note_hit_test, AutomationLaneCell, MainWindow, NoteCell,
+};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, Model, ModelRc, VecModel};
 use std::cell::RefCell;
@@ -599,9 +601,19 @@ fn an_automation_point_drag_is_one_gesture() {
 
     let ui = harness(Vec::new());
     ui.set_automation_lane_visible(true);
-    ui.set_automation_lane_name("Filter 1 · Cutoff".into());
+    // What `publish_automation_lanes_total` would say: header and body.
+    ui.set_automation_lanes_total(1.0 * (17.0 + 72.0));
+    ui.set_automation_lanes(ModelRc::from(Rc::new(VecModel::from(vec![AutomationLaneCell {
+        name: "Filter 1 · Cutoff".into(),
+        missing: false,
+        focused: true,
+        value_text: "".into(),
+        height: 72.0,
+        points: ModelRc::default(),
+        grid: ModelRc::default(),
+    }]))));
     // No existing point anywhere, so every press on the lane creates one.
-    ui.on_automation_point_hit_test(|_, _, _| -1);
+    ui.on_automation_point_hit_test(|_, _, _, _, _| -1);
     let log = Rc::new(RefCell::new(Log::default()));
     {
         let log = log.clone();
@@ -615,14 +627,14 @@ fn an_automation_point_drag_is_one_gesture() {
     }
     {
         let log = log.clone();
-        ui.on_automation_point_created(move |_, _| {
+        ui.on_automation_point_created(move |_, _, _, _| {
             log.borrow_mut().created += 1;
             CREATED_ID
         });
     }
     {
         let log = log.clone();
-        ui.on_automation_point_moved(move |id, _, _| log.borrow_mut().moved_ids.push(id));
+        ui.on_automation_point_moved(move |_, id, _, _, _| log.borrow_mut().moved_ids.push(id));
     }
 
     let x = tick_x(8 * TICKS_PER_STEP);

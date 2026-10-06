@@ -121,7 +121,7 @@ area, and where each behaviour stops.
   destination latches until something touches it. That one is in
   `docs/LOOSE_ENDS.md`.
 
-- One automation lane is visible at a time (its picker is described under
-  the piano roll, in [sequencing.md](sequencing.md)): several lanes cannot be shown at once, the velocity lane
-  is a separate fixed lane rather than one entry in that list, and a pattern
-  holds at most eight lanes per channel.
+- Every open lane of the clip is shown, stacked under the roll (described in
+  [sequencing.md](sequencing.md)). The velocity lane is a separate fixed lane
+  rather than one entry in that stack, and a pattern holds at most eight
+  lanes per channel.

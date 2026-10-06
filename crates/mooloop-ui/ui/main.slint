@@ -128,6 +128,30 @@ struct AutomationPointCell {
     selected: bool,
 }
 
+// A value line across an automation lane, at a normalised value.
+struct AutomationGridLine {
+    value: float,
+    major: bool,
+}
+
+// One open automation lane in the piano roll.
+struct AutomationLaneCell {
+    // "Filter 1 · Cutoff".
+    name: string,
+    // The destination is no longer there to drive (see
+    // `AutomationTargetRow.missing`): drawn greyed. It can still be edited,
+    // cleared and removed, and it is saved; it plays nothing.
+    missing: bool,
+    // The lane last edited, whose selected point the readout shows.
+    focused: bool,
+    // Natural-units readout of the lane's selected point, e.g. "1.2 kHz".
+    value-text: string,
+    // The lane's drawing height. View state, kept per lane in Rust.
+    height: length,
+    points: [AutomationPointCell],
+    grid: [AutomationGridLine],
+}
+
 // One selectable automation destination in the lane picker. Rust builds the
 // whole catalogue — every param of every effect on the selected channel and on
 // every bus — because only Rust has the descriptor tables.
@@ -587,33 +611,13 @@ component AutomationMenuRow inherits Rectangle {
 }
 
 // The lane picker. Every parameter of every device the selected clip can
-// reach, grouped by device, with the lane-level actions on top when one is
-// already open.
+// reach, grouped by device. A lane already open is marked, and picking it
+// focuses it rather than opening a second one.
 component AutomationLaneMenu inherits VerticalLayout {
     in property <[AutomationTargetRow]> targets;
-    in property <bool> has-lane: false;
     callback picked(int);
-    callback cleared();
-    callback closed();
     padding: 4px;
     spacing: 1px;
-    if root.has-lane : AutomationMenuRow {
-        text: "Clear points";
-        selected => { root.cleared(); }
-    }
-    if root.has-lane : AutomationMenuRow {
-        text: "Remove lane";
-        selected => { root.closed(); }
-    }
-    if root.has-lane : Rectangle {
-        height: 5px;
-        Rectangle {
-            y: 2px;
-            height: 1px;
-            width: parent.width;
-            background: Theme.border;
-        }
-    }
     ScrollView {
         height: min(280px, list.preferred-height);
         width: max(170px, list.preferred-width);
@@ -2438,36 +2442,44 @@ export component MainWindow inherits Window {
     in-out property <bool> velocity-lane-visible: true;
     in-out property <bool> automation-lane-visible: false;
     in property <[AutomationTargetRow]> automation-targets;
-    in property <[AutomationPointCell]> automation-points;
-    // Empty when no lane is open, which is what makes the lane draw its
-    // "pick a destination" prompt instead of a curve.
-    in property <string> automation-lane-name;
-    // The lane shown names a destination that is no longer there (see
-    // `AutomationTargetRow.missing`): drawn greyed and hatched. It can still
-    // be edited, cleared and removed, and it is saved; it plays nothing.
-    in property <bool> automation-lane-missing;
-    // Natural-units readout of the point under the pointer, e.g. "1.2 kHz".
-    in property <string> automation-value-text;
+    // Every open lane of the clip, in the order the clip holds them.
+    in property <[AutomationLaneCell]> automation-lanes;
+    // Every lane's header and drawing height added up, from Rust.
+    in property <length> automation-lanes-total;
+    // The most the lane area takes from the roll before it scrolls. View
+    // state, set by dragging the area's top edge.
+    in-out property <length> automation-area-max: 260px;
+    pure function automation-area-shown() -> length {
+        return min(root.automation-area-max,
+            17px + (root.automation-lanes.length == 0 ? 40px : root.automation-lanes-total));
+    }
+    // lane, new drawing height, every lane (Shift held) or just this one.
+    callback automation-lane-resized(int, length, bool);
     // Index into `automation-targets`.
     // `-opened` and not `-selected`: this is an edit. It mutates the
     // document, marks it dirty and records undo history, and the session
     // method it calls is already `open_automation_lane`. The name is what
     // makes `scripts/dupe-audit navigation-sends` able to be clean --
     // a selection handler that sends is the shape MOO-57 had.
+    // Opening a lane that is already open focuses it.
     callback automation-lane-opened(int);
-    callback automation-lane-cleared();
-    callback automation-lane-closed();
-    // tick, normalised value -> stable point ID (-1 when the lane is full or
-    // no destination is open).
-    callback automation-point-created(int, float) -> int;
-    callback automation-point-moved(int, int, float);  // ID, tick, value
-    callback automation-point-removed(int);
+    // The rest take an index into `automation-lanes` first.
+    callback automation-lane-cleared(int);
+    callback automation-lane-closed(int);
+    // lane, tick, normalised value, free (Shift: no value snap) -> stable
+    // point ID (-1 when the lane is full).
+    callback automation-point-created(int, int, float, bool) -> int;
+    callback automation-point-moved(int, int, int, float, bool);  // lane, ID, tick, value, free
+    callback automation-point-removed(int, int);  // lane, ID
     // Point under a tick/value cell, if any. Same reason as the note hit test:
     // the scan needs a loop, which Slint's expression language cannot express.
-    // tick, normalised value, and the grab radius in ticks -> point ID, or -1.
-    // The radius comes from the view because only the view knows the current
-    // time zoom; Rust would otherwise guess at what "near" means on screen.
-    pure callback automation-point-hit-test(int, float, int) -> int;
+    // lane, tick, normalised value, and the grab radius in ticks and in value
+    // -> point ID, or -1. The radii come from the view because only the view
+    // knows the current time zoom and lane height; Rust would otherwise guess
+    // at what "near" means on screen.
+    pure callback automation-point-hit-test(int, int, float, int, float) -> int;
+    // lane, ID -> the point's normalised value, which a drag starts from.
+    pure callback automation-point-value(int, int) -> float;
 
     callback selected-note-changed(int);
     callback selected-velocity-changed(int);
@@ -7159,9 +7171,11 @@ export component MainWindow inherits Window {
                                             }
                                         }
                                         if root.automation-lane-visible : Rectangle {
-                                            height: 89px;
+                                            height: root.automation-area-shown();
                                             background: Theme.panel;
                                             Text {
+                                                y: 0px;
+                                                height: 17px;
                                                 text: "AUTO";
                                                 color: Theme.text-muted;
                                                 font-size: Theme.text-sm;
@@ -7391,240 +7405,423 @@ export component MainWindow inherits Window {
                                         }
                                     }
 
-                                    if root.automation-lane-visible : Rectangle {
-                                        height: 17px;
+                                    // Every open lane of the clip, stacked.
+                                    // The area is as tall as its lanes up to
+                                    // `automation-area-max`, and scrolls past
+                                    // that; its top edge sets the cap and each
+                                    // lane's bottom edge sets the lane height.
+                                    if root.automation-lane-visible : automation-area := Rectangle {
+                                        height: root.automation-area-shown();
                                         background: Theme.panel;
-                                        HorizontalLayout {
-                                            padding-left: 4px;
-                                            padding-right: 4px;
-                                            spacing: 6px;
-                                            alignment: start;
-                                            lane-picker := Rectangle {
-                                                width: 168px;
-                                                background: picker-touch.has-hover
-                                                    ? Theme.surface-raised : transparent;
+                                        VerticalLayout {
+                                            spacing: 0px;
+                                            Rectangle {
+                                                height: 17px;
+                                                background: Theme.panel;
+                                                HorizontalLayout {
+                                                    padding-left: 4px;
+                                                    padding-right: 4px;
+                                                    spacing: 6px;
+                                                    alignment: start;
+                                                    add-picker := Rectangle {
+                                                        width: 120px;
+                                                        background: add-touch.has-hover
+                                                            ? Theme.surface-raised : transparent;
+                                                        Text {
+                                                            text: "Add lane  ▾";
+                                                            color: Theme.text-muted;
+                                                            font-size: Theme.text-sm;
+                                                            x: 2px;
+                                                            vertical-alignment: center;
+                                                        }
+                                                        add-touch := TouchArea {
+                                                            mouse-cursor: pointer;
+                                                            clicked => { add-menu.show(); }
+                                                        }
+                                                        add-menu := PopupWindow {
+                                                            x: 0px;
+                                                            // Opens upward: the lanes sit at
+                                                            // the bottom of the window, so a
+                                                            // downward menu would be clipped.
+                                                            y: -add-content.preferred-height - 2px;
+                                                            width: add-content.preferred-width;
+                                                            height: add-content.preferred-height;
+                                                            close-policy: close-on-click-outside;
+                                                            Rectangle {
+                                                                background: Theme.surface;
+                                                                border-width: Theme.hairline;
+                                                                border-color: Theme.border;
+                                                                border-radius: Theme.radius-md;
+                                                                add-content := AutomationLaneMenu {
+                                                                    targets: root.automation-targets;
+                                                                    picked(index) => {
+                                                                        add-menu.close();
+                                                                        root.automation-lane-opened(index);
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                // The area's top edge: drag up for
+                                                // more lanes on screen, down for more
+                                                // piano roll.
+                                                area-grip := TouchArea {
+                                                    y: 0px;
+                                                    height: 4px;
+                                                    mouse-cursor: ns-resize;
+                                                    property <length> start-height;
+                                                    property <length> limit;
+                                                    pointer-event(e) => {
+                                                        if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                                            self.start-height = automation-area.height;
+                                                            // The roll keeps 80px.
+                                                            self.limit = automation-area.height
+                                                                + max(0px, piano-scroll.height - 80px);
+                                                        }
+                                                    }
+                                                    moved => {
+                                                        if (self.pressed) {
+                                                            root.automation-area-max = clamp(
+                                                                self.start-height + self.pressed-y - self.mouse-y,
+                                                                40px, max(40px, self.limit));
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            if root.automation-lanes.length == 0 : Rectangle {
+                                                height: 40px;
+                                                background: Theme.surface;
                                                 Text {
-                                                    text: root.automation-lane-name == ""
-                                                        ? "Pick a parameter  ▾"
-                                                        : root.automation-lane-name + "  ▾";
-                                                    color: root.automation-lane-name == ""
-                                                        ? Theme.text-faint : Theme.text;
-                                                    font-size: Theme.text-sm;
-                                                    x: 2px;
+                                                    x: 6px;
+                                                    text: "No lanes. Add one to draw automation.";
+                                                    color: Theme.text-faint;
+                                                    font-size: Theme.text-md;
                                                     vertical-alignment: center;
                                                 }
-                                                picker-touch := TouchArea {
-                                                    mouse-cursor: pointer;
-                                                    clicked => { lane-menu.show(); }
-                                                }
-                                                lane-menu := PopupWindow {
-                                                    x: 0px;
-                                                    // Opens upward: the lane sits at
-                                                    // the bottom of the window, so a
-                                                    // downward menu would be clipped.
-                                                    y: -menu-content.preferred-height - 2px;
-                                                    width: menu-content.preferred-width;
-                                                    height: menu-content.preferred-height;
-                                                    close-policy: close-on-click-outside;
-                                                    Rectangle {
-                                                        background: Theme.surface;
-                                                        border-width: Theme.hairline;
-                                                        border-color: Theme.border;
-                                                        border-radius: Theme.radius-md;
-                                                        menu-content := AutomationLaneMenu {
-                                                            targets: root.automation-targets;
-                                                            has-lane: root.automation-lane-name != "";
-                                                            picked(index) => {
-                                                                lane-menu.close();
-                                                                root.automation-lane-opened(index);
+                                            }
+
+                                            if root.automation-lanes.length > 0 : ScrollView {
+                                                vertical-stretch: 1;
+                                                horizontal-scrollbar-policy: always-off;
+                                                content-width: self.visible-width;
+                                                content-height: lane-stack.preferred-height;
+                                                lane-stack := VerticalLayout {
+                                                    spacing: 0px;
+                                                    for lane[lane-index] in root.automation-lanes : VerticalLayout {
+                                                        spacing: 0px;
+                                                        Rectangle {
+                                                            height: 17px;
+                                                            background: Theme.panel;
+                                                            HorizontalLayout {
+                                                                padding-left: 4px;
+                                                                padding-right: 4px;
+                                                                spacing: 6px;
+                                                                alignment: start;
+                                                                Rectangle {
+                                                                    width: 200px;
+                                                                    background: lane-touch.has-hover
+                                                                        ? Theme.surface-raised : transparent;
+                                                                    Text {
+                                                                        text: lane.name + "  ▾";
+                                                                        color: lane.missing ? Theme.text-muted
+                                                                            : lane.focused ? Theme.text : Theme.text-muted;
+                                                                        font-italic: lane.missing;
+                                                                        font-size: Theme.text-sm;
+                                                                        x: 2px;
+                                                                        vertical-alignment: center;
+                                                                        overflow: elide;
+                                                                        width: parent.width - 4px;
+                                                                    }
+                                                                    lane-touch := TouchArea {
+                                                                        mouse-cursor: pointer;
+                                                                        clicked => { lane-menu.show(); }
+                                                                    }
+                                                                    lane-menu := PopupWindow {
+                                                                        x: 0px;
+                                                                        y: -lane-content.preferred-height - 2px;
+                                                                        width: lane-content.preferred-width;
+                                                                        height: lane-content.preferred-height;
+                                                                        close-policy: close-on-click-outside;
+                                                                        Rectangle {
+                                                                            background: Theme.surface;
+                                                                            border-width: Theme.hairline;
+                                                                            border-color: Theme.border;
+                                                                            border-radius: Theme.radius-md;
+                                                                            lane-content := VerticalLayout {
+                                                                                padding: 4px;
+                                                                                spacing: 1px;
+                                                                                AutomationMenuRow {
+                                                                                    text: "Clear points";
+                                                                                    selected => {
+                                                                                        lane-menu.close();
+                                                                                        root.automation-lane-cleared(lane-index);
+                                                                                    }
+                                                                                }
+                                                                                AutomationMenuRow {
+                                                                                    text: "Remove lane";
+                                                                                    selected => {
+                                                                                        lane-menu.close();
+                                                                                        root.automation-lane-closed(lane-index);
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                                Text {
+                                                                    text: lane.value-text;
+                                                                    color: Theme.text-muted;
+                                                                    font-size: Theme.text-sm;
+                                                                    vertical-alignment: center;
+                                                                }
                                                             }
-                                                            cleared => {
-                                                                lane-menu.close();
-                                                                root.automation-lane-cleared();
+                                                        }
+
+                                                        Rectangle {
+                                                            height: lane.height;
+                                                            background: Theme.surface;
+                                                            clip: true;
+                                                            lane-body := Rectangle {
+                                                                x: -piano-scroll.content-x;
+                                                                width: root.pattern-length * root.piano-step-width;
+                                                                height: parent.height;
+                                                                background: transparent;
+                                                                // Points are drawn inset by half a head
+                                                                // so a point at 0 or 1 is still fully
+                                                                // visible and still grabbable.
+                                                                property <length> inset: 5px;
+                                                                pure function value-y(value: float) -> length {
+                                                                    return self.inset
+                                                                        + (self.height - self.inset * 2) * (1 - clamp(value, 0, 1));
+                                                                }
+                                                                pure function y-value(y: length) -> float {
+                                                                    return clamp(1 - (y - self.inset)
+                                                                        / max(1px, self.height - self.inset * 2), 0, 1);
+                                                                }
+                                                                pure function tick-x(tick: int) -> length {
+                                                                    return tick * root.piano-step-width / RollMetrics.ticks-per-step;
+                                                                }
+                                                                // Grab radius in ticks for a ~7px reach
+                                                                // at the current time zoom.
+                                                                pure function grab-ticks() -> int {
+                                                                    return max(1, round(7px * RollMetrics.ticks-per-step / root.piano-step-width));
+                                                                }
+                                                                // The same ~7px reach up and down, as a
+                                                                // fraction of the lane: a fixed fraction
+                                                                // grew with the lane, so a tall lane
+                                                                // grabbed points from a thumb's width away.
+                                                                pure function grab-value() -> float {
+                                                                    return 7px / max(1px, self.height - self.inset * 2);
+                                                                }
+                                                                // Grid-snapped tick under `x`, unless
+                                                                // `free` (Shift held), matching the note
+                                                                // grid's modifier.
+                                                                pure function snap(x: length, free: bool) -> int {
+                                                                    let tick = x * RollMetrics.ticks-per-step / root.piano-step-width;
+                                                                    let limit = root.pattern-length * RollMetrics.ticks-per-step;
+                                                                    if (free) {
+                                                                        return clamp(round(tick), 0, limit);
+                                                                    }
+                                                                    return clamp(round(tick / root.piano-snap-ticks)
+                                                                        * root.piano-snap-ticks, 0, limit);
+                                                                }
+
+                                                                for division in root.pattern-length * RollMetrics.ticks-per-step / root.piano-snap-ticks : Rectangle {
+                                                                    x: division * root.piano-snap-ticks
+                                                                        * root.piano-step-width / RollMetrics.ticks-per-step;
+                                                                    width: 1px;
+                                                                    height: parent.height;
+                                                                    background: mod(division * root.piano-snap-ticks, RollMetrics.ticks-per-step) == 0
+                                                                        ? Theme.text-faint : Theme.border;
+                                                                    opacity: mod(division * root.piano-snap-ticks, RollMetrics.ticks-per-step) == 0
+                                                                        ? 0.5 : 0.3;
+                                                                }
+
+                                                                // Value lines. Rust picks them per
+                                                                // destination: quarters with the middle
+                                                                // stronger, each position of a stepped
+                                                                // parameter, octaves on a semitone one.
+                                                                for line in lane.grid : Rectangle {
+                                                                    x: 0px;
+                                                                    y: lane-body.value-y(line.value);
+                                                                    width: parent.width;
+                                                                    height: 1px;
+                                                                    background: line.major ? Theme.text-faint : Theme.border;
+                                                                    opacity: line.major ? 0.5 : 0.35;
+                                                                }
+
+                                                                // One straight segment per adjacent pair.
+                                                                // A single Path over the whole lane is
+                                                                // not expressible: Slint's path elements
+                                                                // are static children, not a model.
+                                                                for point[i] in lane.points : Path {
+                                                                    visible: i > 0;
+                                                                    x: 0px;
+                                                                    y: 0px;
+                                                                    width: parent.width;
+                                                                    height: parent.height;
+                                                                    // Drawn in the lane's own pixels. The
+                                                                    // default `contain` fit shrinks the path
+                                                                    // by its stroke width and keeps the
+                                                                    // aspect ratio, which on a lane thousands
+                                                                    // of pixels wide and 72 tall squeezed the
+                                                                    // curve ~2% toward the middle, off the
+                                                                    // points it joins.
+                                                                    fit: preserve;
+                                                                    stroke: lane.missing ? Theme.text-faint : Theme.accent;
+                                                                    stroke-width: 1.5px;
+                                                                    MoveTo {
+                                                                        x: lane-body.tick-x(lane.points[max(0, i - 1)].tick) / 1px;
+                                                                        y: lane-body.value-y(lane.points[max(0, i - 1)].value) / 1px;
+                                                                    }
+                                                                    LineTo {
+                                                                        x: lane-body.tick-x(point.tick) / 1px;
+                                                                        y: lane-body.value-y(point.value) / 1px;
+                                                                    }
+                                                                }
+
+                                                                for point in lane.points : Rectangle {
+                                                                    x: lane-body.tick-x(point.tick) - 4px;
+                                                                    y: lane-body.value-y(point.value) - 4px;
+                                                                    width: 8px;
+                                                                    height: 8px;
+                                                                    border-radius: Theme.radius-lg;
+                                                                    background: point.selected ? Theme.focus
+                                                                        : lane.missing ? Theme.text-faint : Theme.accent;
+                                                                    border-width: Theme.hairline;
+                                                                    border-color: Theme.surface;
+                                                                }
+
+                                                                // One hit area for the whole lane, for
+                                                                // the same reason the note grid has one:
+                                                                // a per-point TouchArea moves out from
+                                                                // under the cursor on the first drag
+                                                                // update and the drag collapses.
+                                                                //
+                                                                // A drag moves the point by how far the
+                                                                // pointer travels rather than to where it
+                                                                // is, so Ctrl can slow it to a tenth for
+                                                                // the fine values a short lane cannot
+                                                                // reach -- the knobs' own fine drag.
+                                                                TouchArea {
+                                                                    property <int> grabbed-id: -1;
+                                                                    property <bool> gesture-open: false;
+                                                                    property <float> drag-value;
+                                                                    property <length> last-y;
+                                                                    mouse-cursor: root.automation-point-hit-test(
+                                                                            lane-index,
+                                                                            lane-body.snap(self.mouse-x, true),
+                                                                            lane-body.y-value(self.mouse-y),
+                                                                            lane-body.grab-ticks(),
+                                                                            lane-body.grab-value()) >= 0
+                                                                        ? move : crosshair;
+                                                                    pointer-event(e) => {
+                                                                        if (e.kind == PointerEventKind.down) {
+                                                                            let tick = lane-body.snap(self.mouse-x, e.modifiers.shift);
+                                                                            let value = lane-body.y-value(self.mouse-y);
+                                                                            let hit = root.automation-point-hit-test(
+                                                                                lane-index,
+                                                                                lane-body.snap(self.mouse-x, true),
+                                                                                value,
+                                                                                lane-body.grab-ticks(),
+                                                                                lane-body.grab-value());
+                                                                            if (e.button == PointerEventButton.right) {
+                                                                                if (hit >= 0) {
+                                                                                    root.automation-point-removed(lane-index, hit);
+                                                                                }
+                                                                            } else if (e.button == PointerEventButton.left) {
+                                                                                // One press, one undo entry: the
+                                                                                // point it creates and every move
+                                                                                // of the drag that follows land as
+                                                                                // a single edit, the way a knob's
+                                                                                // drag does. Opened before the
+                                                                                // create so a click-and-drag on
+                                                                                // empty lane is one entry too.
+                                                                                Gesture.begin();
+                                                                                self.gesture-open = true;
+                                                                                self.last-y = self.mouse-y;
+                                                                                if (hit >= 0) {
+                                                                                    self.grabbed-id = hit;
+                                                                                    self.drag-value = root.automation-point-value(lane-index, hit);
+                                                                                } else {
+                                                                                    self.drag-value = value;
+                                                                                    self.grabbed-id = root.automation-point-created(
+                                                                                        lane-index, tick, value, e.modifiers.shift);
+                                                                                }
+                                                                            }
+                                                                        } else if (e.kind == PointerEventKind.move
+                                                                                && self.pressed && self.grabbed-id >= 0) {
+                                                                            self.drag-value = clamp(self.drag-value
+                                                                                + (self.last-y - self.mouse-y)
+                                                                                    / max(1px, lane-body.height - lane-body.inset * 2)
+                                                                                    * (e.modifiers.control ? 0.1 : 1.0),
+                                                                                0, 1);
+                                                                            self.last-y = self.mouse-y;
+                                                                            root.automation-point-moved(
+                                                                                lane-index,
+                                                                                self.grabbed-id,
+                                                                                lane-body.snap(self.mouse-x, e.modifiers.shift),
+                                                                                self.drag-value,
+                                                                                e.modifiers.shift);
+                                                                        } else if (e.kind == PointerEventKind.up
+                                                                                || e.kind == PointerEventKind.cancel) {
+                                                                            self.grabbed-id = -1;
+                                                                            // Only the button that opened it
+                                                                            // closes it: a right-click's release
+                                                                            // has nothing open.
+                                                                            if (self.gesture-open) {
+                                                                                self.gesture-open = false;
+                                                                                Gesture.end();
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                    changed has-hover => {
+                                                                        root.hover-hint = self.has-hover
+                                                                            ? "Click to add a point, drag to move it, right-click to remove. Ctrl drags finely; Shift defeats snap."
+                                                                            : root.hover-hint == "Click to add a point, drag to move it, right-click to remove. Ctrl drags finely; Shift defeats snap."
+                                                                                ? "" : root.hover-hint;
+                                                                    }
+                                                                }
                                                             }
-                                                            closed => {
-                                                                lane-menu.close();
-                                                                root.automation-lane-closed();
+                                                            // The lane's bottom edge: drag to resize
+                                                            // this lane, Shift-drag to resize them all.
+                                                            // Re-anchored on the grab, as the dock
+                                                            // grips are, since the edge moves with
+                                                            // the pointer.
+                                                            TouchArea {
+                                                                y: parent.height - 4px;
+                                                                height: 4px;
+                                                                mouse-cursor: ns-resize;
+                                                                property <length> start-height;
+                                                                property <length> start-y;
+                                                                pointer-event(e) => {
+                                                                    if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                                                        self.start-height = lane.height;
+                                                                        self.start-y = self.absolute-position.y + self.mouse-y;
+                                                                    } else if (e.kind == PointerEventKind.move && self.pressed) {
+                                                                        let height = clamp(
+                                                                            self.start-height + self.absolute-position.y + self.mouse-y - self.start-y,
+                                                                            40px, 600px);
+                                                                        root.automation-lane-resized(lane-index, height, e.modifiers.shift);
+                                                                        // Give the area room for the lane
+                                                                        // being dragged, as far as the roll
+                                                                        // can spare it.
+                                                                        root.automation-area-max = max(root.automation-area-max,
+                                                                            min(17px + 17px + height,
+                                                                                automation-area.height + max(0px, piano-scroll.height - 80px)));
+                                                                    }
+                                                                }
+                                                                changed has-hover => {
+                                                                    root.hover-hint = self.has-hover
+                                                                        ? "Drag to resize this lane; Shift-drag resizes every lane."
+                                                                        : root.hover-hint == "Drag to resize this lane; Shift-drag resizes every lane."
+                                                                            ? "" : root.hover-hint;
+                                                                }
                                                             }
                                                         }
                                                     }
-                                                }
-                                            }
-                                            Text {
-                                                text: root.automation-value-text;
-                                                color: Theme.text-muted;
-                                                font-size: Theme.text-sm;
-                                                vertical-alignment: center;
-                                            }
-                                        }
-                                    }
-
-                                    if root.automation-lane-visible : Rectangle {
-                                        height: 72px;
-                                        background: Theme.surface;
-                                        clip: true;
-                                        automation-body := Rectangle {
-                                            x: -piano-scroll.content-x;
-                                            width: root.pattern-length * root.piano-step-width;
-                                            height: parent.height;
-                                            background: transparent;
-                                            // Points are drawn inset by half a head
-                                            // so a point at 0 or 1 is still fully
-                                            // visible and still grabbable.
-                                            property <length> inset: 5px;
-                                            pure function value-y(value: float) -> length {
-                                                return self.inset
-                                                    + (self.height - self.inset * 2) * (1 - clamp(value, 0, 1));
-                                            }
-                                            pure function y-value(y: length) -> float {
-                                                return clamp(1 - (y - self.inset)
-                                                    / max(1px, self.height - self.inset * 2), 0, 1);
-                                            }
-                                            pure function tick-x(tick: int) -> length {
-                                                return tick * root.piano-step-width / RollMetrics.ticks-per-step;
-                                            }
-                                            // Grid-snapped tick under `x`, unless
-                                            // `free` (Shift held), matching the note
-                                            // grid's modifier.
-                                            // Grab radius in ticks for a ~7px reach
-                                            // at the current time zoom.
-                                            pure function grab-ticks() -> int {
-                                                return max(1, round(7px * RollMetrics.ticks-per-step / root.piano-step-width));
-                                            }
-                                            pure function snap(x: length, free: bool) -> int {
-                                                let tick = x * RollMetrics.ticks-per-step / root.piano-step-width;
-                                                let limit = root.pattern-length * RollMetrics.ticks-per-step;
-                                                if (free) {
-                                                    return clamp(round(tick), 0, limit);
-                                                }
-                                                return clamp(round(tick / root.piano-snap-ticks)
-                                                    * root.piano-snap-ticks, 0, limit);
-                                            }
-
-                                            for division in root.pattern-length * RollMetrics.ticks-per-step / root.piano-snap-ticks : Rectangle {
-                                                x: division * root.piano-snap-ticks
-                                                    * root.piano-step-width / RollMetrics.ticks-per-step;
-                                                width: 1px;
-                                                height: parent.height;
-                                                background: mod(division * root.piano-snap-ticks, RollMetrics.ticks-per-step) == 0
-                                                    ? Theme.text-faint : Theme.border;
-                                                opacity: mod(division * root.piano-snap-ticks, RollMetrics.ticks-per-step) == 0
-                                                    ? 0.5 : 0.3;
-                                            }
-
-                                            // One straight segment per adjacent pair.
-                                            // A single Path over the whole lane is
-                                            // not expressible: Slint's path elements
-                                            // are static children, not a model.
-                                            for point[i] in root.automation-points : Path {
-                                                visible: i > 0;
-                                                width: parent.width;
-                                                height: parent.height;
-                                                // Without an explicit viewbox each
-                                                // Path scales its own commands to
-                                                // fill the element, so every segment
-                                                // would stretch across the whole
-                                                // lane and the curve would read as a
-                                                // sheaf of crossing lines.
-                                                viewbox-x: 0;
-                                                viewbox-y: 0;
-                                                viewbox-width: parent.width / 1px;
-                                                viewbox-height: parent.height / 1px;
-                                                stroke: root.automation-lane-missing ? Theme.text-faint : Theme.accent;
-                                                stroke-width: 1.5px;
-                                                MoveTo {
-                                                    x: automation-body.tick-x(root.automation-points[max(0, i - 1)].tick) / 1px;
-                                                    y: automation-body.value-y(root.automation-points[max(0, i - 1)].value) / 1px;
-                                                }
-                                                LineTo {
-                                                    x: automation-body.tick-x(point.tick) / 1px;
-                                                    y: automation-body.value-y(point.value) / 1px;
-                                                }
-                                            }
-
-                                            for point in root.automation-points : Rectangle {
-                                                x: parent.tick-x(point.tick) - 4px;
-                                                y: parent.value-y(point.value) - 4px;
-                                                width: 8px;
-                                                height: 8px;
-                                                border-radius: Theme.radius-lg;
-                                                background: point.selected ? Theme.focus
-                                                    : root.automation-lane-missing ? Theme.text-faint : Theme.accent;
-                                                border-width: Theme.hairline;
-                                                border-color: Theme.surface;
-                                            }
-
-                                            if root.automation-lane-name == "" : Text {
-                                                x: 6px;
-                                                text: "No parameter selected";
-                                                color: Theme.text-faint;
-                                                font-size: Theme.text-md;
-                                                vertical-alignment: center;
-                                            }
-
-                                            // One hit area for the whole lane, for
-                                            // the same reason the note grid has one:
-                                            // a per-point TouchArea moves out from
-                                            // under the cursor on the first drag
-                                            // update and the drag collapses.
-                                            automation-touch := TouchArea {
-                                                property <int> grabbed-id: -1;
-                                                property <bool> gesture-open: false;
-                                                enabled: root.automation-lane-name != "";
-                                                mouse-cursor: root.automation-point-hit-test(
-                                                        parent.snap(self.mouse-x, true),
-                                                        parent.y-value(self.mouse-y),
-                                                        parent.grab-ticks()) >= 0
-                                                    ? move : crosshair;
-                                                pointer-event(e) => {
-                                                    if (e.kind == PointerEventKind.down) {
-                                                        let tick = parent.snap(self.mouse-x, e.modifiers.shift);
-                                                        let value = parent.y-value(self.mouse-y);
-                                                        let hit = root.automation-point-hit-test(
-                                                            parent.snap(self.mouse-x, true),
-                                                            value,
-                                                            parent.grab-ticks());
-                                                        if (e.button == PointerEventButton.right) {
-                                                            if (hit >= 0) {
-                                                                root.automation-point-removed(hit);
-                                                            }
-                                                        } else if (e.button == PointerEventButton.left) {
-                                                            // One press, one undo entry: the
-                                                            // point it creates and every move
-                                                            // of the drag that follows land as
-                                                            // a single edit, the way a knob's
-                                                            // drag does. Opened before the
-                                                            // create so a click-and-drag on
-                                                            // empty lane is one entry too.
-                                                            Gesture.begin();
-                                                            self.gesture-open = true;
-                                                            self.grabbed-id = hit >= 0
-                                                                ? hit
-                                                                : root.automation-point-created(tick, value);
-                                                        }
-                                                    } else if (e.kind == PointerEventKind.move
-                                                            && self.pressed && self.grabbed-id >= 0) {
-                                                        root.automation-point-moved(
-                                                            self.grabbed-id,
-                                                            parent.snap(self.mouse-x, e.modifiers.shift),
-                                                            parent.y-value(self.mouse-y));
-                                                    } else if (e.kind == PointerEventKind.up
-                                                            || e.kind == PointerEventKind.cancel) {
-                                                        self.grabbed-id = -1;
-                                                        // Only the button that opened it
-                                                        // closes it: a right-click's release
-                                                        // has nothing open.
-                                                        if (self.gesture-open) {
-                                                            self.gesture-open = false;
-                                                            Gesture.end();
-                                                        }
-                                                    }
-                                                }
-                                                changed has-hover => {
-                                                    root.hover-hint = self.has-hover
-                                                        ? "Click to add a point, drag to move it, right-click to remove. Shift defeats snap."
-                                                        : root.hover-hint == "Click to add a point, drag to move it, right-click to remove. Shift defeats snap."
-                                                            ? "" : root.hover-hint;
                                                 }
                                             }
                                         }

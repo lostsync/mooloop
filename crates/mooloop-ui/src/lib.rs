@@ -3929,6 +3929,12 @@ fn format_param_value(descriptor: &ParamDescriptor, normalized: f32) -> String {
     }
 }
 
+/// A piano-roll automation lane's drawing height until it is dragged, and
+/// the header row above each lane, in logical pixels. The header matches
+/// `main.slint`'s 17px lane header.
+const AUTOMATION_LANE_HEIGHT: f32 = 72.0;
+const AUTOMATION_LANE_HEADER: f32 = 17.0;
+
 /// The DS-01 face's per-id arrays.
 ///
 /// The face is indexed by descriptor id rather than declaring a property per
@@ -4484,7 +4490,15 @@ struct UiState {
     rows: Rc<VecModel<ChannelRow>>,
     step_models: Vec<Rc<VecModel<StepCell>>>,
     note_model: Rc<VecModel<NoteCell>>,
-    automation_point_model: Rc<VecModel<AutomationPointCell>>,
+    automation_lane_model: Rc<VecModel<AutomationLaneCell>>,
+    /// The destination of each row of `automation_lane_model`, in order, so
+    /// a lane gesture's index names the lane it was made on.
+    automation_lane_targets: RefCell<Vec<ParamAddr>>,
+    /// Each lane's drawing height in logical pixels, where it was dragged
+    /// from the default. View state: not saved, nothing to undo.
+    automation_lane_heights: RefCell<HashMap<ParamAddr, f32>>,
+    /// The height a lane without its own takes; a Shift-drag sets it.
+    automation_lane_default_height: Cell<f32>,
     automation_target_model: Rc<VecModel<AutomationTargetRow>>,
     playlist_model: Rc<VecModel<PlaylistClip>>,
     waveform_model: Rc<VecModel<f32>>,
@@ -4686,7 +4700,7 @@ impl UiState {
             .collect();
         let step_model = Rc::new(VecModel::from(first_steps));
         let note_model = Rc::new(VecModel::from(Vec::<NoteCell>::new()));
-        let automation_point_model = Rc::new(VecModel::from(Vec::<AutomationPointCell>::new()));
+        let automation_lane_model = Rc::new(VecModel::from(Vec::<AutomationLaneCell>::new()));
         let automation_target_model = Rc::new(VecModel::from(Vec::<AutomationTargetRow>::new()));
         let playlist_model = Rc::new(VecModel::from(Vec::<PlaylistClip>::new()));
         let row = ChannelRow {
@@ -4728,7 +4742,7 @@ impl UiState {
         let browser_row_model = Rc::new(VecModel::from(Vec::<BrowserRow>::new()));
         window.set_channels(ModelRc::from(rows_model.clone()));
         window.set_notes(ModelRc::from(note_model.clone()));
-        window.set_automation_points(ModelRc::from(automation_point_model.clone()));
+        window.set_automation_lanes(ModelRc::from(automation_lane_model.clone()));
         window.set_automation_targets(ModelRc::from(automation_target_model.clone()));
         window.set_playlist_clips(ModelRc::from(playlist_model.clone()));
         window.set_waveform(ModelRc::from(waveform_model.clone()));
@@ -4803,7 +4817,10 @@ impl UiState {
             effect_spectra_synced_for: std::cell::Cell::new(None),
             layer_selection: HashMap::new(),
             bus_meters_stale: false,
-            automation_point_model,
+            automation_lane_model,
+            automation_lane_targets: RefCell::new(Vec::new()),
+            automation_lane_heights: RefCell::new(HashMap::new()),
+            automation_lane_default_height: Cell::new(AUTOMATION_LANE_HEIGHT),
             automation_target_model,
             audio_sample_rate,
             sampler_zone: (0, 0),
@@ -5089,10 +5106,11 @@ impl UiState {
         self.refresh_selected_note_controls(window);
     }
 
-    /// Rebuilds the lane picker, the drawn curve, and the header label.
+    /// Rebuilds the lane picker and every open lane: name, grid, points and
+    /// the focused lane's readout.
     ///
     /// A destination whose device has since been removed leaves its lane in
-    /// storage but drops it from the picker, and clears the visible lane. The
+    /// storage but drops it from the picker and from the lanes shown. The
     /// alternative -- silently deleting the automation -- loses work when a
     /// device is removed and re-added.
     fn refresh_automation(&self, window: &MainWindow) {
@@ -5128,52 +5146,153 @@ impl UiState {
             .collect();
         self.automation_target_model.set_vec(rows);
 
-        let shown = self
-            .session.automation_target
-            .get()
-            .and_then(|target| destinations.iter().find(|row| row.address == target));
-        let label = shown
-            .map(|row| format!("{} · {}", row.device, row.name))
-            .unwrap_or_default();
-        window.set_automation_lane_name(label.as_str().into());
-        window.set_automation_lane_missing(shown.is_some_and(|row| row.missing));
-        self.refresh_automation_points(window);
-    }
-
-    fn refresh_automation_points(&self, window: &MainWindow) {
-        let length_ticks = self.session.pattern_lengths[self.session.current_pattern] as u32 * TICKS_PER_STEP;
-        let selected = self.session.automation_selected_point.get();
-        let cells: Vec<AutomationPointCell> = self
-            .session.automation_lane()
-            .map(|lane| {
-                lane.points()
+        // Every open lane whose destination the picker still offers, in the
+        // order the clip holds them. A lane whose device was removed stays in
+        // storage and out of sight, as it always has.
+        let shown: Vec<ParamAddr> = self
+            .session
+            .automation_lanes()
+            .map(|lanes| {
+                lanes
                     .iter()
-                    .filter(|point| point.tick <= length_ticks)
-                    .map(|point| AutomationPointCell {
-                        id: point.id as i32,
-                        tick: point.tick as i32,
-                        value: point.value,
-                        selected: selected == Some(point.id),
-                    })
+                    .map(|lane| lane.target)
+                    .filter(|target| destinations.iter().any(|row| row.address == *target))
                     .collect()
             })
             .unwrap_or_default();
-        self.automation_point_model.set_vec(cells);
-
-        let readout = self
-            .session.automation_selected_point
-            .get()
-            .and_then(|id| {
-                let lane = self.session.automation_lane()?;
-                let point = lane.points().iter().find(|point| point.id == id)?;
-                // A plugin parameter reads in its own plain units (MOO-228).
-                match self.session.automation_descriptor() {
-                    Some(descriptor) => Some(format_param_value(descriptor, point.value)),
-                    None => plugin_ui::plugin_value_text(&self.session, lane.target, point.value),
+        let cells: Vec<AutomationLaneCell> = shown
+            .iter()
+            .map(|target| {
+                let row = destinations.iter().find(|row| row.address == *target);
+                let grid: Vec<AutomationGridLine> =
+                    mooloop_session::automation::lane_grid(self.session.lane_descriptor(*target))
+                        .into_iter()
+                        .map(|(value, major)| AutomationGridLine { value, major })
+                        .collect();
+                AutomationLaneCell {
+                    name: row
+                        .map(|row| format!("{} · {}", row.device, row.name))
+                        .unwrap_or_default()
+                        .as_str()
+                        .into(),
+                    missing: row.is_some_and(|row| row.missing),
+                    focused: false,
+                    value_text: SharedString::new(),
+                    height: self.automation_lane_height(*target),
+                    points: ModelRc::from(Rc::new(VecModel::from(Vec::<AutomationPointCell>::new()))),
+                    grid: ModelRc::from(Rc::new(VecModel::from(grid))),
                 }
             })
-            .unwrap_or_default();
-        window.set_automation_value_text(readout.as_str().into());
+            .collect();
+        self.automation_lane_model.set_vec(cells);
+        *self.automation_lane_targets.borrow_mut() = shown;
+        self.publish_automation_lanes_total(window);
+        self.refresh_automation_points(window);
+    }
+
+    fn automation_lane_height(&self, target: ParamAddr) -> f32 {
+        self.automation_lane_heights
+            .borrow()
+            .get(&target)
+            .copied()
+            .unwrap_or(self.automation_lane_default_height.get())
+    }
+
+    /// Every shown lane's header and drawing height, which is what the lane
+    /// area sizes itself to.
+    fn publish_automation_lanes_total(&self, window: &MainWindow) {
+        let total: f32 = self
+            .automation_lane_targets
+            .borrow()
+            .iter()
+            .map(|target| AUTOMATION_LANE_HEADER + self.automation_lane_height(*target))
+            .sum();
+        window.set_automation_lanes_total(total);
+    }
+
+    /// Resizes the lane at `index`, or every lane when `all` is set (which
+    /// also becomes the height of lanes opened later).
+    fn resize_automation_lane(&self, window: &MainWindow, index: i32, height: f32, all: bool) {
+        let height = height.clamp(40.0, 600.0);
+        let Some(target) = self.automation_lane_target(index) else {
+            return;
+        };
+        if all {
+            self.automation_lane_heights.borrow_mut().clear();
+            self.automation_lane_default_height.set(height);
+        } else {
+            self.automation_lane_heights.borrow_mut().insert(target, height);
+        }
+        for row in 0..self.automation_lane_model.row_count() {
+            let Some(mut cell) = self.automation_lane_model.row_data(row) else {
+                continue;
+            };
+            let Some(target) = self.automation_lane_targets.borrow().get(row).copied() else {
+                continue;
+            };
+            let height = self.automation_lane_height(target);
+            if cell.height != height {
+                cell.height = height;
+                self.automation_lane_model.set_row_data(row, cell);
+            }
+        }
+        self.publish_automation_lanes_total(window);
+    }
+
+    /// The lane a gesture's index names, if it still names one.
+    fn automation_lane_target(&self, index: i32) -> Option<ParamAddr> {
+        self.automation_lane_targets
+            .borrow()
+            .get(usize::try_from(index).ok()?)
+            .copied()
+    }
+
+    /// Refills every lane's points, focus and readout. Cheap enough to run on
+    /// every frame of a drag: rows are replaced in place, so the lanes
+    /// themselves are not rebuilt under the pointer.
+    fn refresh_automation_points(&self, _window: &MainWindow) {
+        let length_ticks = self.session.pattern_lengths[self.session.current_pattern] as u32 * TICKS_PER_STEP;
+        let selected = self.session.automation_selected_point.get();
+        let focused = self.session.automation_target.get();
+        let lanes = self.session.automation_lanes();
+        for (row, target) in self.automation_lane_targets.borrow().iter().enumerate() {
+            let Some(mut cell) = self.automation_lane_model.row_data(row) else {
+                continue;
+            };
+            let lane = lanes.and_then(|lanes| lanes.iter().find(|lane| lane.target == *target));
+            let is_focused = focused == Some(*target);
+            let points: Vec<AutomationPointCell> = lane
+                .map(|lane| {
+                    lane.points()
+                        .iter()
+                        .filter(|point| point.tick <= length_ticks)
+                        .map(|point| AutomationPointCell {
+                            id: point.id as i32,
+                            tick: point.tick as i32,
+                            value: point.value,
+                            selected: is_focused && selected == Some(point.id),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let readout = is_focused
+                .then(|| {
+                    let id = selected?;
+                    let lane = lane?;
+                    let point = lane.points().iter().find(|point| point.id == id)?;
+                    // A plugin parameter reads in its own plain units (MOO-228).
+                    match self.session.lane_descriptor(*target) {
+                        Some(descriptor) => Some(format_param_value(descriptor, point.value)),
+                        None => plugin_ui::plugin_value_text(&self.session, *target, point.value),
+                    }
+                })
+                .flatten()
+                .unwrap_or_default();
+            cell.focused = is_focused;
+            cell.value_text = readout.as_str().into();
+            cell.points = ModelRc::from(Rc::new(VecModel::from(points)));
+            self.automation_lane_model.set_row_data(row, cell);
+        }
     }
 
     /// The selection's bounding box in ticks and MIDI notes, which is what
@@ -10413,10 +10532,12 @@ impl AppUi {
             let history_state = state.clone();
             let commands = command_state.clone();
             let weak = window.as_weak();
-            window.on_automation_lane_cleared(move || {
+            window.on_automation_lane_cleared(move |lane| {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
+                let Some(target) = st.automation_lane_target(lane) else { return };
+                st.session.focus_automation_lane(target);
                 let Some(command) = st.session.clear_automation_lane() else {
                     return;
                 };
@@ -10432,10 +10553,12 @@ impl AppUi {
             let history_state = state.clone();
             let commands = command_state.clone();
             let weak = window.as_weak();
-            window.on_automation_lane_closed(move || {
+            window.on_automation_lane_closed(move |lane| {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
+                let Some(target) = st.automation_lane_target(lane) else { return };
+                st.session.focus_automation_lane(target);
                 let Some(command) = st.session.close_automation_lane() else {
                     return;
                 };
@@ -10453,11 +10576,40 @@ impl AppUi {
         }
         {
             let st = state.clone();
-            window.on_automation_point_hit_test(move |tick, value, tolerance| {
-                st.borrow()
-                    .session
-                    .automation_point_at(tick, value, tolerance)
+            window.on_automation_point_hit_test(move |lane, tick, value, tolerance, value_tolerance| {
+                let st = st.borrow();
+                st.automation_lane_target(lane)
+                    .and_then(|target| {
+                        st.session
+                            .automation_point_at(target, tick, value, tolerance, value_tolerance)
+                    })
                     .map_or(-1, |id| id as i32)
+            });
+        }
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            let resize_state = state.clone();
+            window.on_automation_lane_resized(move |lane, height, all| {
+                let Some(window) = weak.upgrade() else { return };
+                resize_state
+                    .borrow()
+                    .resize_automation_lane(&window, lane, height, all);
+            });
+            window.on_automation_point_value(move |lane, id| {
+                let st = st.borrow();
+                st.automation_lane_target(lane)
+                    .and_then(|target| {
+                        st.session
+                            .automation_lanes()?
+                            .iter()
+                            .find(|lane| lane.target == target)?
+                            .points()
+                            .iter()
+                            .find(|point| point.id as i32 == id)
+                            .map(|point| point.value)
+                    })
+                    .unwrap_or(0.0)
             });
         }
         {
@@ -10468,7 +10620,7 @@ impl AppUi {
             let weak = window.as_weak();
             // Inside the lane's press-to-release gesture, so a point created
             // and then dragged is one entry named for the creation.
-            window.on_automation_point_created(move |tick, value| {
+            window.on_automation_point_created(move |lane, tick, value, free| {
                 let Some(window) = weak.upgrade() else {
                     return -1;
                 };
@@ -10480,6 +10632,11 @@ impl AppUi {
                     "Automation point added",
                     || {
                         let mut st = st.borrow_mut();
+                        let Some(target) = st.automation_lane_target(lane) else {
+                            return false;
+                        };
+                        st.session.focus_automation_lane(target);
+                        let value = if free { value } else { st.session.snap_automation_value(value) };
                         let Some((id, command)) = st.session.create_automation_point(tick, value)
                         else {
                             return false;
@@ -10503,7 +10660,7 @@ impl AppUi {
             // gesture on the press, so the whole drag is one undo entry
             // rather than one per frame -- which also kept a single drag from
             // spending most of a heavy song's history.
-            window.on_automation_point_moved(move |id, tick, value| {
+            window.on_automation_point_moved(move |lane, id, tick, value, free| {
                 let Some(window) = weak.upgrade() else { return };
                 with_gesture_history(
                     &history_state,
@@ -10512,6 +10669,11 @@ impl AppUi {
                     "Automation point moved",
                     || {
                         let mut st = st.borrow_mut();
+                        let Some(target) = st.automation_lane_target(lane) else {
+                            return false;
+                        };
+                        st.session.focus_automation_lane(target);
+                        let value = if free { value } else { st.session.snap_automation_value(value) };
                         let Some(command) = st
                             .session
                             .move_automation_point(id.max(0) as PointId, tick, value)
@@ -10531,10 +10693,12 @@ impl AppUi {
             let history_state = state.clone();
             let commands = command_state.clone();
             let weak = window.as_weak();
-            window.on_automation_point_removed(move |id| {
+            window.on_automation_point_removed(move |lane, id| {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
+                let Some(target) = st.automation_lane_target(lane) else { return };
+                st.session.focus_automation_lane(target);
                 let Some(command) = st.session.remove_automation_point(id.max(0) as PointId) else {
                     return;
                 };
