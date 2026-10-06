@@ -9,18 +9,18 @@ use mooloop_core::{
     CompiledAudioGraph, CompiledBusGraph, DeviceKind, OutletDescriptor, PublishesOutlets,
     Ds01Params, DrumSynthParams, EffectTarget, EngineCommand, GeneratorParams,
     LoopRange, ModDestinationDescriptor, MusicalEdge, PlaybackMode,
-    ModRack, MonoSynthParams, MlM1Params, MlP8Params, ParamAddr, ParamOwner, PolySynthParams,
+    CompiledRoute, CompiledSource, ModPolarity, MonoSynthParams, MlM1Params, MlP8Params, ParamAddr, ParamOwner, PolySynthParams,
     Project,
     SamplerParams, SendTap,
     clamp_bus, compensable_send_edges, compile_latency,
     sends_are_compensable, DEFAULT_STEPS, MAX_CONTAINER_DEPTH, MAX_SAMPLER_VOICES, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN,
-    MAX_AUTOMATION_LANES_PER_CHANNEL, MAX_MODULATORS_PER_CHANNEL, STRIP_DESCRIPTORS,
+    MAX_AUTOMATION_LANES_PER_CHANNEL, STRIP_DESCRIPTORS,
     STRIP_PARAM_VOLUME,
 };
 use mooloop_core::mixer::{StripPin, STRIP_PIN};
 use mooloop_core::strip::StripParams;
 use mooloop_core::modulation::{
-    CONTROL_SOURCE_SLOTS, MAX_GENERATOR_OUTLETS, PERFORMANCE_AFTERTOUCH, PERFORMANCE_MOD_WHEEL,
+    MAX_GENERATOR_OUTLETS, PERFORMANCE_AFTERTOUCH, PERFORMANCE_MOD_WHEEL,
     PERFORMANCE_SOURCES,
 };
 use mooloop_dsp::console;
@@ -31,7 +31,7 @@ use mooloop_dsp::sampler::ZoneAudio;
 use mooloop_dsp::{
     balance_gains, buffer_allocation_key, build_effect_at_tempo, pan_gains, AudioNode, Ds01,
     Discontinuity, DrumSynth,
-    AudioTaps, AuxIn, HostedSource, IntegerDelay, Event, EventList, ModulatorRack, MonoSynth,
+    AudioTaps, AuxIn, HostedSource, IntegerDelay, Event, EventList, MonoSynth,
     MlM1, MlP8,
     NoteGateEvents, OutputGuard, PolySynth,
     ChannelAudioSnapshot,
@@ -46,6 +46,7 @@ use mooloop_dsp::strip::Strip;
 
 use crate::meters::{BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters};
 use crate::sequencer::Sequencer;
+use crate::song_modulation::SongModulator;
 use crate::site_times::SiteTimes;
 use crate::transport::{BlockSpan, Transport};
 use crate::{PreviewCommand, StructuralCommand, StructuralReclaim};
@@ -1177,7 +1178,7 @@ fn resolve_plugin_curves<const N: usize, Node: AudioNode + ?Sized>(
             count += 1;
         };
         if let Some(modulation) = modulation {
-            modulation.rack.destinations().for_each(&mut note);
+            modulation.destinations().for_each(&mut note);
         }
         if let Some(automation) = automation {
             automation.visit_targets(&mut note);
@@ -1214,16 +1215,14 @@ fn resolve_plugin_curves<const N: usize, Node: AudioNode + ?Sized>(
         let destination = ParamAddr::plugin_param(scope, device, id);
         let policy =
             ModDestinationDescriptor::for_plugin_param(id, param.steps.is_some(), param.modulatable);
-        let routed = modulation.filter(|modulation| modulation.rack.modulates(destination, &policy));
+        let routed = modulation.filter(|modulation| modulation.modulates(destination, &policy));
         if let Some(modulation) = routed {
             let Some(row) = pool.begin(id) else {
                 refused += 1;
                 continue;
             };
             for (tick, cell) in row.iter_mut().enumerate().take(ticks) {
-                let offset = modulation
-                    .rack
-                    .offset_for(destination, modulation.sources(tick), &policy);
+                let offset = modulation.offset_for(destination, tick, &policy);
                 *cell = param.plain_offset(offset);
             }
         }
@@ -1231,15 +1230,6 @@ fn resolve_plugin_curves<const N: usize, Node: AudioNode + ?Sized>(
     refused
 }
 
-/// One channel's modulator outputs for one block, captured at each control
-/// subdivision.
-///
-/// Only the rack: a generator's outlets are published once a block, so they
-/// ride beside this table rather than in it. Copying eight block-constant
-/// values into all 256 tick rows would be 8 KB a live channel for numbers
-/// that do not change, and `ControlSources` is what puts the two halves back
-/// into one flat address space at the point a route reads them.
-type ControlOutputs = [[f32; MAX_MODULATORS_PER_CHANNEL]; MAX_CONTROL_TICKS_PER_BLOCK];
 
 /// Every channel's note gates at every control subdivision of one block, for
 /// the modulators that key off them.
@@ -1272,30 +1262,114 @@ struct PendingEffectParams {
     events: [Option<TimedEvent>; MAX_PENDING_EFFECT_PARAMS],
 }
 
-/// The already-ticked control signal for one channel's current block. It is
-/// deliberately a read-only view: only `RenderState` advances modulators, so
-/// graph order cannot accidentally change their phase.
+/// Every channel's generator outlets, as published at the end of the block
+/// before this one, and every channel's mod wheel and aftertouch: the two
+/// kinds of source a route can name besides a module. Copied once a block,
+/// before anything renders, so a route on any chain reads any channel's and
+/// none can read a publication from this block.
+struct ChannelSources {
+    outlets: [[f32; MAX_GENERATOR_OUTLETS]; MAX_CHANNELS],
+    performance: [[f32; PERFORMANCE_SOURCES]; MAX_CHANNELS],
+}
+
+/// The already-ticked control signal for one chain's current block: the
+/// song's set, and the routes filed under this chain. It is deliberately a
+/// read-only view: only `RenderState` advances modulators, so graph order
+/// cannot accidentally change their phase.
 struct ModulationBlock<'a> {
-    rack: &'a ModRack,
-    outputs: &'a ControlOutputs,
-    /// What this channel's generator published at the end of the *previous*
-    /// block, constant for the whole of this one. Held here rather than in
-    /// `outputs` because it is per block, not per tick.
-    outlets: &'a [f32; MAX_GENERATOR_OUTLETS],
-    /// The keyboard's mod wheel and aftertouch on this channel, constant
-    /// for the block: they change between blocks, in `apply_midi`.
-    performance: &'a [f32; PERFORMANCE_SOURCES],
+    song: &'a SongModulator,
+    /// The routes landing on this chain, in the song's order
+    /// ([`mooloop_core::CompiledModulation::chain_routes`]).
+    routes: &'a [CompiledRoute],
+    sources: &'a ChannelSources,
     ticks: usize,
 }
 
-impl ModulationBlock<'_> {
-    /// The channel's control sources at one tick, as one flat address space.
-    fn sources(&self, tick: usize) -> mooloop_core::modulation::ControlSources<'_> {
-        mooloop_core::modulation::ControlSources {
-            modulators: &self.outputs[tick],
-            outlets: self.outlets,
-            performance: self.performance,
+impl<'a> ModulationBlock<'a> {
+    fn of(
+        song: &'a SongModulator,
+        sources: &'a ChannelSources,
+        scope: EffectTarget,
+        ticks: usize,
+    ) -> Self {
+        Self {
+            song,
+            routes: song.plan().chain_routes(scope),
+            sources,
+            ticks,
         }
+    }
+
+    /// Whether any route lands on this chain at all, whatever it drives.
+    ///
+    /// [`Self::modulates`] is asked once for every descriptor of every device
+    /// on every live chain, once a block; this is that answer for the chain
+    /// rather than for one destination, so a chain with no routes can skip the
+    /// question instead of asking it two hundred times.
+    fn has_routes(&self) -> bool {
+        !self.routes.is_empty()
+    }
+
+    /// Every destination on this chain a route drives, including ones whose
+    /// destination refuses modulation.
+    fn destinations(&self) -> impl Iterator<Item = ParamAddr> + '_ {
+        self.routes.iter().map(|route| route.destination)
+    }
+
+    /// Whether a control signal will actually resolve `destination` this
+    /// block. Must agree with [`Self::offset_for`]: the engine uses it to
+    /// decide whether to suppress a knob's base write, and a route parked on
+    /// a destination that refuses modulation must not hold that knob hostage.
+    fn modulates(&self, destination: ParamAddr, policy: &ModDestinationDescriptor) -> bool {
+        policy.allowed && self.routes.iter().any(|route| route.destination == destination)
+    }
+
+    /// A route's source at control tick `tick`.
+    #[inline]
+    fn source(&self, source: CompiledSource, tick: usize) -> f32 {
+        match source {
+            CompiledSource::Module(at) => self.song.output(tick, at),
+            CompiledSource::Outlet { seat, outlet } => self.sources.outlets[usize::from(seat)]
+                .get(usize::from(outlet))
+                .copied()
+                .unwrap_or(0.0),
+            CompiledSource::Performance { seat, source } => self.sources.performance
+                [usize::from(seat)]
+            .get(usize::from(source))
+            .copied()
+            .unwrap_or(0.0),
+        }
+    }
+
+    /// Total signed offset applied to `destination` at control tick `tick`,
+    /// as a fraction of its range, under the destination's declared policy:
+    /// one that refuses modulation takes nothing however many routes name
+    /// it, and each route's depth is clamped into the declared limit before
+    /// it sums. A unipolar route is lifted onto its source's own span so the
+    /// base is the floor ([`mooloop_core::CompiledModulation::wire_span`]).
+    /// Routes sum in the song's order, the order a channel's rack summed them.
+    fn offset_for(
+        &self,
+        destination: ParamAddr,
+        tick: usize,
+        policy: &ModDestinationDescriptor,
+    ) -> f32 {
+        if !policy.allowed {
+            return 0.0;
+        }
+        let mut total = 0.0;
+        for route in self.routes {
+            if route.destination != destination {
+                continue;
+            }
+            let output = self.source(route.resolved, tick);
+            let shaped = match route.polarity {
+                ModPolarity::Bipolar => output,
+                ModPolarity::Unipolar => (output + self.song.wire_span(route.resolved)) * 0.5,
+            };
+            total += shaped * policy.clamp_depth(route.depth);
+        }
+        total
     }
 }
 
@@ -2831,7 +2905,7 @@ impl EffectChain {
         // nothing below can be driven. Both are facts about the channel, not
         // the device, so they are asked once, before `driven_positions` looks
         // for what on this device is.
-        if !modulation.is_some_and(|modulation| modulation.rack.has_routes())
+        if !modulation.is_some_and(|modulation| modulation.has_routes())
             && automation.is_none()
         {
             return 0;
@@ -2866,7 +2940,7 @@ impl EffectChain {
             table,
             scope,
             ParamOwner::Effect { device },
-            modulation.map(|modulation| modulation.rack),
+            modulation,
             automation,
             &mut positions,
         );
@@ -2878,7 +2952,7 @@ impl EffectChain {
             // lane is explicit authored intent, not a continuous signal.
             let policy = ModDestinationDescriptor::for_param(descriptor);
             let modulated = modulation
-                .is_some_and(|modulation| modulation.rack.modulates(destination, &policy));
+                .is_some_and(|modulation| modulation.modulates(destination, &policy));
             let curve = automation.and_then(|automation| automation.curve_for(destination));
             if !modulated && curve.is_none() {
                 continue;
@@ -2906,9 +2980,7 @@ impl EffectChain {
                     .unwrap_or(knob_normalized);
                 let offset_normalized = match (modulated, modulation) {
                     (true, Some(modulation)) => {
-                        modulation
-                            .rack
-                            .offset_for(destination, modulation.sources(tick), &policy)
+                        modulation.offset_for(destination, tick, &policy)
                     }
                     _ => 0.0,
                 };
@@ -4153,7 +4225,7 @@ fn driven_positions<const N: usize>(
     table: &[mooloop_core::ParamDescriptor],
     scope: EffectTarget,
     owner: ParamOwner,
-    rack: Option<&ModRack>,
+    modulation: Option<&ModulationBlock<'_>>,
     automation: Option<&AutomationBlock<'_>>,
     positions: &mut [usize; N],
 ) -> usize {
@@ -4171,8 +4243,8 @@ fn driven_positions<const N: usize>(
             count += 1;
         }
     };
-    if let Some(rack) = rack {
-        rack.destinations().for_each(&mut note);
+    if let Some(modulation) = modulation {
+        modulation.destinations().for_each(&mut note);
     }
     if let Some(automation) = automation {
         automation.visit_targets(&mut note);
@@ -4199,7 +4271,7 @@ fn resolve_strip_segments(
     // kilobytes, every byte of it written by the initializer below, and a
     // channel with an empty rack and no lane throws all of it away -- which
     // is every channel on a song nobody has automated or routed.
-    if !modulation.rack.has_routes() && automation.is_none() {
+    if !modulation.has_routes() && automation.is_none() {
         return None;
     }
     let mut segments = StripSegments {
@@ -4210,7 +4282,7 @@ fn resolve_strip_segments(
     for descriptor in STRIP_DESCRIPTORS.iter() {
         let destination = ParamAddr::strip(scope, descriptor.id);
         let policy = ModDestinationDescriptor::for_param(descriptor);
-        let modulated = modulation.rack.modulates(destination, &policy);
+        let modulated = modulation.modulates(destination, &policy);
         let curve = automation.and_then(|automation| automation.curve_for(destination));
         if !modulated && curve.is_none() {
             continue;
@@ -4229,9 +4301,7 @@ fn resolve_strip_segments(
                 .and_then(|(curve, automation)| automation.value_at(curve, tick))
                 .unwrap_or(knob_normalized);
             let offset_normalized = if modulated {
-                modulation
-                    .rack
-                    .offset_for(destination, modulation.sources(tick), &policy)
+                modulation.offset_for(destination, tick, &policy)
             } else {
                 0.0
             };
@@ -4647,9 +4717,10 @@ impl BusStrip {
 
 /// What [`crate::StructuralCommand::ReseatChannels`] hands the audio thread:
 /// the channel edit, everything the project it produced derives across the
-/// whole bank, and for an insertion the arriving channel itself -- its
-/// storage, its notes and lanes and its modulation rack -- all built on the
-/// control thread so the callback only moves, rotates and swaps.
+/// whole bank -- the song's modulation set among them, its routes and inputs
+/// in the new seats' terms -- and for an insertion the arriving channel
+/// itself, its storage and its notes and lanes, all built on the control
+/// thread so the callback only moves, rotates and swaps.
 ///
 /// The same box comes back as [`crate::StructuralReclaim::ChannelsReseated`],
 /// holding what it displaced -- a removed channel's storage, the empty lanes
@@ -4668,14 +4739,14 @@ pub struct ChannelReseat {
     /// one's on the way out.
     strip: Option<Box<ChannelStrip>>,
     events: Option<Box<EventList>>,
-    control_outputs: Option<Box<ControlOutputs>>,
     source_curves: Option<Box<SourceCurvePool>>,
     /// An inserted channel's notes and lanes, one per pattern; afterwards
     /// the empty ones its seat had.
     patterns: Vec<mooloop_core::ChannelPattern>,
-    /// An inserted channel's modulation rack, already in its new seat's
-    /// terms.
-    rack: ModRack,
+    /// The song's modulation set as the edited project resolves it: every
+    /// route and input re-seated at once. Carries the running set's state
+    /// in, and comes back holding the set it replaced.
+    modulation: Option<Box<SongModulator>>,
 }
 
 impl ChannelReseat {
@@ -4700,7 +4771,7 @@ impl ChannelReseat {
         let solo_silenced = mooloop_core::channel::solo_silenced(
             project.channels.iter().map(|channel| channel.setup.channel.solo),
         );
-        let (storage, patterns, rack) = match edit {
+        let (storage, patterns) = match edit {
             ChannelEdit::Inserted(at) => {
                 let at = usize::from(at);
                 let storage = audio_slots.get(at).and_then(|slot| {
@@ -4712,22 +4783,20 @@ impl ChannelReseat {
                         solo_silenced.get(at).copied().unwrap_or(false),
                     )
                 });
-                let rack = project.channel_rack(at);
-                (storage, crate::sequencer::Sequencer::channel_patterns(project, at), rack)
+                (storage, crate::sequencer::Sequencer::channel_patterns(project, at))
             }
-            _ => (None, Vec::new(), ModRack::default()),
+            _ => (None, Vec::new()),
         };
-        let (strip, events, control_outputs, source_curves) = match storage {
+        let (strip, events, source_curves) = match storage {
             Some(storage) => {
                 let ChannelStorage {
                     strip,
                     events,
-                    control_outputs,
                     source_curves,
                 } = *storage;
-                (Some(strip), Some(events), Some(control_outputs), Some(source_curves))
+                (Some(strip), Some(events), Some(source_curves))
             }
-            None => (None, None, None, None),
+            None => (None, None, None),
         };
         Box::new(Self {
             edit,
@@ -4744,10 +4813,9 @@ impl ChannelReseat {
             monitor,
             strip,
             events,
-            control_outputs,
             source_curves,
             patterns,
-            rack,
+            modulation: Some(SongModulator::of_project(project)),
         })
     }
 
@@ -4808,6 +4876,9 @@ pub struct TrackReseat {
     midi_routing: Box<MidiRouting>,
     audio_input_routing: Box<AudioInputRouting>,
     monitor: [bool; MAX_CHANNELS],
+    /// The song's modulation set with its routes onto tracks filed under
+    /// their new seats; afterwards the set it replaced.
+    modulation: Option<Box<SongModulator>>,
 }
 
 impl TrackReseat {
@@ -4897,6 +4968,7 @@ impl TrackReseat {
                 taps: input.audio_input,
             }),
             monitor,
+            modulation: Some(SongModulator::of_project(project)),
         })
     }
 
@@ -4929,7 +5001,6 @@ impl TrackReseat {
 pub struct ChannelStorage {
     strip: Box<ChannelStrip>,
     events: Box<EventList>,
-    control_outputs: Box<ControlOutputs>,
     source_curves: Box<SourceCurvePool>,
 }
 
@@ -6074,7 +6145,7 @@ pub(crate) struct RenderState {
     /// `AudioNode::apply_curves` instead of being pushed onto `events` as
     /// `ParamValue`s -- see the loop this replaced, once at
     /// `control_events_for_slot`'s doc comment for the effect-slot half of
-    /// the same change. Boxed for the reason `control_outputs` below is:
+    /// the same change. Boxed because
     /// `MAX_SOURCE_CURVE_DESTINATIONS` rows of `MAX_CONTROL_TICKS_PER_BLOCK`
     /// ticks is real size, and one addressable channel should cost a
     /// pointer until it exists.
@@ -6082,15 +6153,14 @@ pub(crate) struct RenderState {
     /// Destinations a channel's source could not fit into its curve pool at
     /// once, counted the way `EffectChain::curve_refusals` is.
     source_curve_refusals: u64,
-    /// The saved matrix and the runnable sources are deliberately separate:
-    /// the former is editable/persisted configuration; the latter contains
-    /// LFO phase and other realtime-only state.
-    modulation: Vec<ModRack>,
-    modulators: Vec<ModulatorRack>,
-    /// A full block of resolved control signal is 8 KiB; reserving one for
-    /// every addressable channel cost 2 MiB before a project existed
-    /// (`docs/plans/archive/modulator-capacity/`).
-    control_outputs: Vec<Box<ControlOutputs>>,
+    /// The song's modulation set: its modules' running state, their outputs
+    /// across this block, and its routes filed by the chain they land on
+    /// (`docs/plans/song-modulation/02-the-engine-runs-one-set.md`).
+    /// Replaced whole by `StructuralCommand::SetModulation`.
+    song_modulation: Box<SongModulator>,
+    /// Every channel's outlets and keyboard, as this block's routes read
+    /// them. See [`ChannelSources`].
+    channel_sources: Box<ChannelSources>,
     /// This block's note gates, kept rather than rebuilt. See [`GateTable`].
     gate_ticks: Box<GateTable>,
     sample_rate: u32,
@@ -6409,11 +6479,11 @@ impl RenderState {
             events: Vec::with_capacity(MAX_CHANNELS),
             source_curves: Vec::with_capacity(MAX_CHANNELS),
             source_curve_refusals: 0,
-            // Small enough that reserving the addressable length outright
-            // costs 433 KiB and saves boxing every control-path access.
-            modulation: (0..MAX_CHANNELS).map(|_| ModRack::default()).collect(),
-            modulators: (0..MAX_CHANNELS).map(|_| ModulatorRack::new()).collect(),
-            control_outputs: Vec::with_capacity(MAX_CHANNELS),
+            song_modulation: Box::default(),
+            channel_sources: Box::new(ChannelSources {
+                outlets: [[0.0; MAX_GENERATOR_OUTLETS]; MAX_CHANNELS],
+                performance: [[0.0; PERFORMANCE_SOURCES]; MAX_CHANNELS],
+            }),
             gate_ticks: Box::new([[NoteGateEvents::default(); MAX_CHANNELS];
                 MAX_CONTROL_TICKS_PER_BLOCK]),
             sample_rate,
@@ -6695,9 +6765,6 @@ impl RenderState {
         Box::new(ChannelStorage {
             strip: Box::new(ChannelStrip::new(source, sample_rate)),
             events: Box::new(EventList::empty()),
-            control_outputs: Box::new(
-                [[0.0; MAX_MODULATORS_PER_CHANNEL]; MAX_CONTROL_TICKS_PER_BLOCK],
-            ),
             source_curves: Box::new(SourceCurvePool::empty()),
         })
     }
@@ -6710,12 +6777,10 @@ impl RenderState {
         let ChannelStorage {
             strip,
             events,
-            control_outputs,
             source_curves,
         } = *storage;
         self.strips.push(strip);
         self.events.push(events);
-        self.control_outputs.push(control_outputs);
         self.source_curves.push(source_curves);
     }
 
@@ -6741,8 +6806,7 @@ impl RenderState {
             return;
         }
         let edit = reseat.edit;
-        // How many channels there are afterwards.
-        let seats = match edit {
+        match edit {
             ChannelEdit::Removed(channel) => {
                 let channel = usize::from(channel);
                 if channel >= live || live <= 1 {
@@ -6750,21 +6814,16 @@ impl RenderState {
                 }
                 reseat.strip = Some(self.strips.remove(channel));
                 reseat.events = Some(self.events.remove(channel));
-                reseat.control_outputs = Some(self.control_outputs.remove(channel));
                 reseat.source_curves = Some(self.source_curves.remove(channel));
                 // Every per-seat array moves down with the strips, so the
                 // departed channel's entry lands on the vacated last seat and
                 // is reset there.
                 let vacated = live - 1;
-                self.modulation[channel..live].rotate_left(1);
-                self.modulators[channel..live].rotate_left(1);
                 self.expression[channel..live].rotate_left(1);
                 self.channels_heard[channel..live].rotate_left(1);
                 self.expression[vacated] = ChannelExpression::REST;
                 self.channels_heard[vacated] = false;
-                self.write_mod_rack(vacated, ModRack::default());
                 self.sequencer.remove_channel(channel);
-                vacated
             }
             ChannelEdit::Moved { from, to } => {
                 let (from, to) = (usize::from(from), usize::from(to));
@@ -6773,14 +6832,10 @@ impl RenderState {
                 }
                 rotate_seat(&mut self.strips, from, to);
                 rotate_seat(&mut self.events, from, to);
-                rotate_seat(&mut self.control_outputs, from, to);
                 rotate_seat(&mut self.source_curves, from, to);
-                rotate_seat(&mut self.modulation, from, to);
-                rotate_seat(&mut self.modulators, from, to);
                 rotate_seat(&mut self.expression, from, to);
                 rotate_seat(&mut self.channels_heard, from, to);
                 self.sequencer.move_channel(from, to);
-                live
             }
             ChannelEdit::Inserted(at) => {
                 let at = usize::from(at);
@@ -6791,50 +6846,33 @@ impl RenderState {
                     || live >= MAX_CHANNELS
                     || reseat.strip.is_none()
                     || reseat.events.is_none()
-                    || reseat.control_outputs.is_none()
                     || reseat.source_curves.is_none()
                     || !self.sequencer.insert_channel(at, &mut reseat.patterns)
                 {
                     return;
                 }
-                let (Some(strip), Some(events), Some(control_outputs), Some(source_curves)) = (
+                let (Some(strip), Some(events), Some(source_curves)) = (
                     reseat.strip.take(),
                     reseat.events.take(),
-                    reseat.control_outputs.take(),
                     reseat.source_curves.take(),
                 ) else {
                     return;
                 };
                 self.strips.insert(at, strip);
                 self.events.insert(at, events);
-                self.control_outputs.insert(at, control_outputs);
                 self.source_curves.insert(at, source_curves);
-                self.modulation[at..=live].rotate_right(1);
-                self.modulators[at..=live].rotate_right(1);
                 self.expression[at..=live].rotate_right(1);
                 self.channels_heard[at..=live].rotate_right(1);
                 self.expression[at] = ChannelExpression::REST;
                 self.channels_heard[at] = false;
-                live + 1
-            }
-        };
-        reseat.applied = true;
-        // The racks' own addresses -- a route's destination, an envelope's
-        // gated channel -- follow the edit. A route into a removed channel
-        // has nothing left to restore. An inserted channel's rack arrives in
-        // its new seat's terms and is written over the vacant seat's.
-        let arrived = match edit {
-            ChannelEdit::Inserted(at) => Some(usize::from(at)),
-            _ => None,
-        };
-        for seat in (0..seats).filter(|&seat| Some(seat) != arrived) {
-            let mut rack = self.modulation[seat];
-            if rack.rescope_channels(edit) {
-                self.write_mod_rack(seat, rack);
             }
         }
-        if let Some(at) = arrived {
-            self.write_mod_rack(at, reseat.rack);
+        reseat.applied = true;
+        // The song's routes and inputs follow the edit, all at once: the set
+        // arrived re-seated, and takes the running modules' state with it.
+        // A route into a removed channel has nothing left to restore.
+        if let Some(set) = reseat.modulation.take() {
+            reseat.modulation = Some(self.install_modulation(set, false));
         }
         for note in self.recording.iter_mut() {
             if let Some(held) = note {
@@ -6930,11 +6968,10 @@ impl RenderState {
             }
         }
         reseat.applied = true;
-        for seat in 0..self.live_channels() {
-            let mut rack = self.modulation[seat];
-            if rack.rescope_tracks(edit) {
-                self.write_mod_rack(seat, rack);
-            }
+        // The routes onto tracks follow the edit, filed again under their
+        // new seats; the running modules carry across.
+        if let Some(set) = reseat.modulation.take() {
+            reseat.modulation = Some(self.install_modulation(set, false));
         }
         self.sequencer.rescope_tracks(edit);
         for (seat, strip) in self.strips.iter_mut().enumerate() {
@@ -6975,20 +7012,36 @@ impl RenderState {
         std::mem::swap(&mut self.audio_input_routing, &mut reseat.audio_input_routing);
     }
 
-    /// Put `rack` at `seat` and tell the running modulators which slots
-    /// changed. Written directly rather than through `edit_modulation`, whose
-    /// destination diff would restore base values at seats that, mid
-    /// reseat, hold other channels.
-    fn write_mod_rack(&mut self, seat: usize, rack: ModRack) {
-        let previous = std::mem::replace(&mut self.modulation[seat], rack);
-        if let Some(runtime) = self.modulators.get_mut(seat) {
-            for (slot, entry) in rack.slots.iter().enumerate() {
-                let params = entry.map(|entry| entry.params);
-                if previous.slots[slot].map(|entry| entry.params) != params {
-                    runtime.set_slot(slot, params);
+    /// Run `set` as the song's modulation set from the next block, carrying
+    /// every module it shares with the running set across by identity, and
+    /// hand back the set it replaced, to be dropped off this thread. With
+    /// `restore`, a destination the old set drove and the new one does not
+    /// goes back to its base; a reseat passes `false`, because mid reseat a
+    /// destination's address may name a seat that now holds another channel.
+    ///
+    /// Audio thread: compares, copies and swaps, allocating nothing.
+    fn install_modulation(
+        &mut self,
+        mut set: Box<SongModulator>,
+        restore: bool,
+    ) -> Box<SongModulator> {
+        set.carry_from(&self.song_modulation);
+        let previous = std::mem::replace(&mut self.song_modulation, set);
+        if restore {
+            for route in &previous.plan().routes {
+                let destination = route.destination;
+                let kept = self
+                    .song_modulation
+                    .plan()
+                    .chain_routes(destination.scope)
+                    .iter()
+                    .any(|route| route.destination == destination);
+                if !kept {
+                    self.restore_base_param(destination);
                 }
             }
         }
+        previous
     }
 
     /// Channels that both exist to the sequencer and have storage behind
@@ -7065,6 +7118,13 @@ impl RenderState {
     /// path from silence -- [`keep_live_ring`]. The sends' rings follow the
     /// same rule, matched through `carry`'s seat maps.
     pub fn carry_strips_from(&mut self, outgoing: &mut Self, carry: &crate::CarryPlan) {
+        // The song's modulators are the other half of "still sounding": a
+        // free-running LFO that restarted its phase would step every
+        // destination it drives at the moment of an unrelated edit. They
+        // belong to the song, not to a strip, so they carry whole, each
+        // matched by identity, whatever the plan carried of the strips; a
+        // module that changed takes its new params onto its running state.
+        self.song_modulation.carry_from(&outgoing.song_modulation);
         for &(from, to) in carry.channels.iter().chain(&carry.rechained_channels) {
             let (from, to) = (usize::from(from), usize::from(to));
             let Some(live) = outgoing.strips.get_mut(from) else {
@@ -7137,17 +7197,6 @@ impl RenderState {
             // owed a different answer because somebody else pressed solo.
             // The fresh strip holds what `install_solo` just derived.
             std::mem::swap(&mut fresh.solo_silenced, &mut live.solo_silenced);
-            // The modulator rack is the other half of "still sounding": a
-            // free-running LFO that restarted its phase would step every
-            // destination it drives at the moment of an unrelated edit. Its
-            // *configuration* is equal -- the channel's setup matched -- so
-            // only the phase travels.
-            if let (Some(live_rack), Some(fresh_rack)) = (
-                outgoing.modulators.get_mut(from),
-                self.modulators.get_mut(to),
-            ) {
-                std::mem::swap(live_rack, fresh_rack);
-            }
             // The voices came across with the strip, and so did the table
             // naming them. One whose note the incoming song no longer has,
             // or has at another pitch, will never see its note-off (MOO-99).
@@ -7292,10 +7341,17 @@ impl RenderState {
         self.buses[seat].bus.l.as_ptr() as usize
     }
 
-    /// The modulation matrix the channel at `seat` runs.
+    /// The song's modulation set as this renderer runs it.
     #[cfg(test)]
-    pub(crate) fn mod_rack(&self, seat: usize) -> ModRack {
-        self.modulation[seat]
+    pub(crate) fn song_modulation(&self) -> &SongModulator {
+        &self.song_modulation
+    }
+
+    /// Run `project`'s modulation set from the next block, as the session's
+    /// reconciler sends it (`StructuralCommand::SetModulation`).
+    #[cfg(test)]
+    pub(crate) fn set_modulation(&mut self, project: &Project) {
+        drop(self.install_modulation(SongModulator::of_project(project), true));
     }
 
     /// How many tracks hold a console accumulator.
@@ -7498,11 +7554,9 @@ impl RenderState {
                 ));
             }
         }
-        // Each channel's rack, built from the song's set until the engine
-        // runs that set itself (`docs/plans/song-modulation/` step 02).
-        for index in 0..MAX_CHANNELS {
-            self.set_channel_modulation(index, project.channel_rack(index));
-        }
+        // The song's modulation set, resolved against this song's seats. A
+        // render loaded twice keeps the modules both songs share running.
+        drop(self.install_modulation(SongModulator::of_project(project), true));
         for (index, strip) in self.buses.iter_mut().enumerate() {
             match project.buses.get(index) {
                 Some(setup) => strip.load_setup(
@@ -7793,33 +7847,22 @@ impl RenderState {
         Self::chain_for(&mut self.strips, &mut self.buses, target)
     }
 
-    /// Drop every route and every lane driving `device` in `target`, because
-    /// that device has just been removed.
+    /// Drop every lane driving `device` in `target`, because that device has
+    /// just been removed.
     ///
     /// All that is left of what used to run on every chain edit. A reorder is
     /// no longer an addressing event on either side: the devices move with
     /// their base values, event queues and host controls, and the addresses
     /// naming them were never positions to begin with.
     ///
-    /// A channel's routes can only address that channel, so a channel edit
-    /// touches one rack. A bus chain can be addressed from any channel's
-    /// clip, so a bus edit walks them all -- a few thousand comparisons, on a
-    /// gesture that happens by hand.
+    /// A route onto the device is left in the song's set: it names a device
+    /// by identity that the chain no longer holds, so it resolves nothing,
+    /// and the set the session derives from the edited document next arrives
+    /// without it -- or with it, live again, after an undo puts the device
+    /// back.
     fn forget_device(&mut self, target: EffectTarget, device: mooloop_core::DeviceId) {
         if !device.is_assigned() {
             return;
-        }
-        match target {
-            EffectTarget::Channel(channel) => {
-                if let Some(rack) = self.modulation.get_mut(channel as usize) {
-                    rack.forget_device(target, device);
-                }
-            }
-            EffectTarget::Bus(_) => {
-                for rack in self.modulation.iter_mut() {
-                    rack.forget_device(target, device);
-                }
-            }
         }
         self.sequencer.forget_device(target, device);
     }
@@ -7831,121 +7874,18 @@ impl RenderState {
         }
     }
 
-    /// Install a complete saved rack while retaining a same-kind LFO's phase.
-    /// Copying the small matrix is realtime-safe; `ModulatorRack::set_slot`
-    /// owns the phase-preserving detail.
-    /// Replace one channel's whole rack. Used where a rack genuinely arrives
-    /// entire — project load, and a channel added or removed — not for
-    /// ordinary edits, which name one fact each through `edit_modulation`.
-    fn set_channel_modulation(&mut self, channel: usize, modulation: ModRack) {
-        self.edit_modulation(channel, |rack| {
-            *rack = modulation;
-            true
-        });
+    /// Retune one module of the song's set in place, by identity
+    /// (`EngineCommand::SetModulator`). A module the set does not hold, or
+    /// one whose kind changed, is a change of shape and arrives as a set.
+    fn retune_modulator(&mut self, source: mooloop_core::ModSourceId, params: mooloop_core::ModulatorParams) {
+        self.song_modulation.retune(source, params);
     }
 
-    /// Apply one edit to a channel's rack and put everything that depends on
-    /// it back in step.
-    ///
-    /// Every modulation command is this shape: change one fact in the saved
-    /// rack, mirror the slots whose behaviour actually moved into the DSP
-    /// rack, and hand back any destination that just lost its last route.
-    /// The diff lives here rather than at each call site because it is the
-    /// only part a narrow command can get *wrong* rather than merely
-    /// expensive: without it, a removed route leaves the device holding
-    /// whatever the control signal last resolved, until someone happens to
-    /// touch that knob again.
-    ///
-    /// `edit` reports whether it changed anything, so a command that names a
-    /// slot or a route this rack does not hold costs a comparison and stops.
-    /// Reorder one channel's modulator grid, carrying every module's running
-    /// state to its new slot.
-    ///
-    /// Its own handler rather than an `edit_modulation` closure, because
-    /// `edit_modulation` mirrors an edit as a **params diff by slot number**
-    /// and a reorder is exactly what that cannot see: every moved position
-    /// reads as "the params changed". Different kinds swapped were rebuilt
-    /// from scratch -- an envelope dragged to the front restarted at level 0
-    /// stage `Idle`, dropping a held note's contour to zero mid-sustain, and a
-    /// Random module was reseeded, so a realtime take and an offline render of
-    /// the same song stopped matching. Same kinds **cross-wired**, because
-    /// `set_slot` retunes in place: two LFOs dragged past each other kept
-    /// their own phase, smoothing and fade position and took the other's
-    /// params, so both jumped and nothing said why.
-    ///
-    /// The diff is what makes every *other* narrow command cheap, so it stays;
-    /// this is the one edit that owes it a permutation instead.
-    ///
-    /// The params pass afterwards is not belt and braces. `retarget` may
-    /// rewrite a Math module's `input_slot`, which lives in its params, so the
-    /// permuted runtime can be holding a module whose params moved underneath
-    /// it. Comparing against the *permuted* previous params is what makes that
-    /// the only thing it touches -- a `MathSource` is its params and rebuilds
-    /// for nothing, where rebuilding an LFO is the defect above.
-    fn move_modulator(&mut self, channel: usize, from: usize, to: usize) {
-        let Some(saved) = self.modulation.get_mut(channel) else {
-            return;
-        };
-        let before = saved.slots;
-        let Some(remap) = saved.move_module_mapped(from, to) else {
-            return;
-        };
-        let after = saved.slots;
-        let Some(runtime) = self.modulators.get_mut(channel) else {
-            return;
-        };
-        runtime.permute(&remap);
-
-        // What the runtime now holds: the old params, in their new places.
-        let mut carried = [None; MAX_MODULATORS_PER_CHANNEL];
-        for (old, new) in remap.iter().enumerate() {
-            let new = *new as usize;
-            if new < MAX_MODULATORS_PER_CHANNEL {
-                carried[new] = before[old].map(|entry| entry.params);
-            }
-        }
-        for (slot, carried) in carried.into_iter().enumerate() {
-            let params = after[slot].map(|entry| entry.params);
-            if carried == params {
-                continue;
-            }
-            runtime.set_slot(slot, params);
-        }
-    }
-
-    fn edit_modulation(&mut self, channel: usize, edit: impl FnOnce(&mut ModRack) -> bool) {
-        let Some(saved) = self.modulation.get_mut(channel) else {
-            return;
-        };
-        let previous = *saved;
-        if !edit(saved) {
-            return;
-        }
-        let modulation = *saved;
-        // The runtime rack holds behaviour, not identity: it is addressed by
-        // slot, and the durable ids stay on the control side where routes are
-        // resolved. Only a slot whose parameters moved is re-set, so turning
-        // one knob does not touch the seven modules beside it -- and a module
-        // that keeps its kind keeps its phase, cursor and envelope stage
-        // because `set_slot` retunes in place.
-        if let Some(runtime) = self.modulators.get_mut(channel) {
-            for (slot, entry) in modulation.slots.into_iter().enumerate() {
-                let params = entry.map(|entry| entry.params);
-                if previous.slots[slot].map(|entry| entry.params) == params {
-                    continue;
-                }
-                runtime.set_slot(slot, params);
-            }
-        }
-        for destination in previous.destinations() {
-            if modulation
-                .destinations()
-                .any(|current| current == destination)
-            {
-                continue;
-            }
-            self.restore_base_param(destination);
-        }
+    /// Retune one route's depth and polarity in place
+    /// (`EngineCommand::SetModRoute`). A route the set does not hold is a
+    /// change of shape and arrives as a set.
+    fn retune_route(&mut self, route: &mooloop_core::ModRoute) {
+        self.song_modulation.set_route(route);
     }
 
     /// Where the automation pass is reading right now.
@@ -8077,9 +8017,10 @@ impl RenderState {
     ///   `AutomationBlock::curve_for` also calls -- finds one at the position
     ///   the next block starts from. Playing or stopped does not matter;
     ///   lanes resolve either way. Channel and bus chains both carry lanes.
-    /// - a route counts only on a channel, and only when the destination
-    ///   accepts modulation: a route aimed at one that refuses it resolves to
-    ///   nothing, so the knob must still reach the device.
+    /// - a route counts on any chain, a track's as well as a channel's, and
+    ///   only when the destination accepts modulation: a route aimed at one
+    ///   that refuses it resolves to nothing, so the knob must still reach
+    ///   the device.
     fn effect_is_driven(&self, target: EffectTarget, slot: u8, id: u32) -> bool {
         let Some(state) = self.chain(target).and_then(|chain| chain.slot(slot as usize)) else {
             return false;
@@ -8093,13 +8034,14 @@ impl RenderState {
         {
             return true;
         }
-        let EffectTarget::Channel(channel) = target else {
-            return false;
-        };
         let policy = ModDestinationDescriptor::for_param(descriptor);
-        self.modulation
-            .get(channel as usize)
-            .is_some_and(|rack| rack.modulates(destination, &policy))
+        policy.allowed
+            && self
+                .song_modulation
+                .plan()
+                .chain_routes(target)
+                .iter()
+                .any(|route| route.destination == destination)
     }
 
     /// Change the stored base, then queue it for the next block only if
@@ -8139,62 +8081,15 @@ impl RenderState {
         }
     }
 
-    /// Tick one channel's source rack for every 32-frame subdivision and
-    /// capture each output before advancing it. The final subdivision can be
-    /// shorter; its event still starts at its exact frame offset.
-    ///
-    /// Takes the two tables it advances rather than `&mut self`, because the
-    /// gate table it reads is now a field too and only field-level borrows
-    /// can see that the three are disjoint.
-    #[allow(clippy::too_many_arguments)]
-    fn tick_channel_modulators(
-        modulators: &mut [ModulatorRack],
-        control_outputs: &mut [Box<ControlOutputs>],
-        sample_rate: u32,
-        bpm: f64,
-        channel: usize,
-        frames: usize,
-        gate_ticks: &GateTable,
-        song_beats: &SongBeats,
-    ) -> usize {
-        let Some(runtime) = modulators.get_mut(channel) else {
-            return 0;
-        };
-        let Some(outputs) = control_outputs.get_mut(channel) else {
-            return 0;
-        };
-
-        let mut tick = 0;
-        for offset in (0..frames).step_by(CONTROL_RATE_FRAMES) {
-            let span = (frames - offset).min(CONTROL_RATE_FRAMES);
-            runtime.tick_with_note_gates(
-                sample_rate,
-                span,
-                bpm,
-                song_beats[tick],
-                channel,
-                &gate_ticks[tick],
-            );
-            outputs[tick] = *runtime.outputs();
-            tick += 1;
-        }
-        tick
-    }
-
-    /// The block path's call to [`Self::tick_channel_modulators`], reading the
-    /// gate table the tests set up on the state itself. Only the borrow
-    /// splitting differs; the arguments are the ones `process_block_inner`
-    /// passes.
+    /// The block path's tick of the song's set, reading the gate table the
+    /// tests set up on the state itself, with the transport stopped.
     #[cfg(test)]
-    fn tick_modulators_from_gate_table(&mut self, channel: usize, frames: usize) -> usize {
-        Self::tick_channel_modulators(
-            &mut self.modulators,
-            &mut self.control_outputs,
+    fn tick_modulators_from_gate_table(&mut self, frames: usize) -> usize {
+        self.song_modulation.tick_block(
             self.sample_rate,
             self.transport.bpm,
-            channel,
             frames,
-            &self.gate_ticks,
+            &self.gate_ticks[..],
             &[None; MAX_CONTROL_TICKS_PER_BLOCK],
         )
     }
@@ -8439,7 +8334,6 @@ impl RenderState {
                 if let Some(strip) = self.strips.get_mut(channel) {
                     strip.reset_slot(&mut self.reclaim);
                 }
-                self.set_channel_modulation(channel, ModRack::default());
                 self.sequencer.clear_channel(channel);
                 self.sequencer.set_active_channels(channel + 1);
                 returned
@@ -8668,6 +8562,9 @@ impl RenderState {
                 self.edit_pattern(&mut change);
                 Some(StructuralReclaim::PatternEdited(change))
             }
+            StructuralCommand::SetModulation { set } => Some(StructuralReclaim::Modulation(
+                self.install_modulation(set, true),
+            )),
         }
     }
 
@@ -9517,45 +9414,10 @@ impl RenderState {
             // runs behind each of them, so a route that disappears here
             // returns its destination to its knob value at the next block
             // exactly as it did when the whole rack travelled.
-            EngineCommand::SetModulatorParam {
-                channel,
-                slot,
-                id,
-                value,
-            } => self.edit_modulation(channel as usize, |rack| {
-                let Some(params) = rack.params_mut(slot as usize) else {
-                    return false;
-                };
-                params.set(id, value);
-                true
-            }),
-            EngineCommand::InstallModulator {
-                channel,
-                slot,
-                source,
-                params,
-            } => self.edit_modulation(channel as usize, |rack| {
-                rack.install_with_id(slot as usize, source, params)
-            }),
-            EngineCommand::ClearModulator { channel, slot } => {
-                self.edit_modulation(channel as usize, |rack| rack.clear(slot as usize))
+            EngineCommand::SetModulator { source, params } => {
+                self.retune_modulator(source, params)
             }
-            EngineCommand::MoveModulator { channel, from, to } => {
-                self.move_modulator(channel as usize, from as usize, to as usize)
-            }
-            // A route names its source by durable id, so one that arrives
-            // before (or after) the module it names is refused rather than
-            // aimed at whatever else occupies that slot.
-            EngineCommand::SetModRoute { channel, route } => {
-                self.edit_modulation(channel as usize, |rack| rack.apply_route(route).is_some())
-            }
-            EngineCommand::RemoveModRoute {
-                channel,
-                source,
-                destination,
-            } => self.edit_modulation(channel as usize, |rack| {
-                rack.remove_route_by_source(source, destination)
-            }),
+            EngineCommand::SetModRoute { route } => self.retune_route(&route),
             EngineCommand::TriggerBuffer {
                 target,
                 slot,
@@ -10408,10 +10270,9 @@ impl RenderState {
             position_frames,
         };
         // Modulators must all advance before anything borrows the sequencer for
-        // automation, and every channel's rack advances even while muted so
-        // unmuting does not restart its phase.
+        // automation, and the song's set advances whatever is muted so
+        // unmuting does not restart a phase.
         let active_channels = self.live_channels();
-        let mut modulator_ticks = [0usize; MAX_CHANNELS];
         // The gate table is sized for the largest block the engine accepts,
         // which is 8192 frames and so 256 control ticks of 256 channels. That
         // is 192 KB, and it used to be a local: every block began by zeroing
@@ -10454,19 +10315,33 @@ impl RenderState {
             frames,
             f64::from(self.transport.ppq.ticks_per_beat()),
         );
-        // Field-by-field rather than through `self`, so the gate table stays
-        // borrowable while the racks it feeds are advanced.
-        for (index, ticks) in modulator_ticks.iter_mut().enumerate().take(active_channels) {
-            *ticks = Self::tick_channel_modulators(
-                &mut self.modulators,
-                &mut self.control_outputs,
-                self.sample_rate,
-                self.transport.bpm,
-                index,
-                frames,
-                &self.gate_ticks,
-                &song_beats,
-            );
+        // The song's set, once for the whole song, before anything renders:
+        // every source is ahead of every destination by construction.
+        let ticks = self.song_modulation.tick_block(
+            self.sample_rate,
+            self.transport.bpm,
+            frames,
+            &self.gate_ticks[..],
+            &song_beats,
+        );
+        // Every channel's outlets as published at the end of the block before
+        // this one, and its keyboard, for a route on any chain to read. Taken
+        // before anything renders, so nothing in this block can read a
+        // publication from it and the one declared block of latency is a
+        // fact about the order rather than a rule. Published for the view
+        // with the modules' last outputs: one snapshot a block, so a knob
+        // driven by an outlet animates as well as one driven by a module.
+        for index in 0..active_channels {
+            let outlets = self.strips[index].published_outlets;
+            let performance = self.expression[index].performance;
+            self.channel_sources.outlets[index] = outlets;
+            self.channel_sources.performance[index] = performance;
+            if ticks > 0 {
+                self.modulator_meters.publish_channel(index, &outlets, &performance);
+            }
+        }
+        if ticks > 0 {
+            self.modulator_meters.publish_modules(self.song_modulation.outputs());
         }
         // Lanes resolve whether or not the transport is running: stopped, the
         // playhead simply holds still and the destination sits at the value
@@ -10535,27 +10410,6 @@ impl RenderState {
             // This channel's time runs from here to the next site's lap.
             self.site_times
                 .lap(Some(crate::load::Site::Channel(index as u8)));
-            let ticks = modulator_ticks[index];
-            // Published before the mute check: a muted channel's modulators
-            // still run, so its knobs should still animate rather than freeze
-            // on whatever the last audible block left behind.
-            // The generator's outlets, as published at the end of the block
-            // before this one. Taken before the strip renders, so nothing in
-            // this block can read its own publication and the one declared
-            // block of latency is a fact about the order rather than a rule.
-            let outlets = self.strips[index].published_outlets;
-            if ticks > 0 {
-                let mut row = [0.0; CONTROL_SOURCE_SLOTS];
-                let (modulators, rest) = row.split_at_mut(MAX_MODULATORS_PER_CHANNEL);
-                let (published, performance) = rest.split_at_mut(MAX_GENERATOR_OUTLETS);
-                modulators.copy_from_slice(&self.control_outputs[index][ticks - 1]);
-                published.copy_from_slice(&outlets);
-                performance.copy_from_slice(&self.expression[index].performance);
-                // The whole row, so the view can resolve a knob driven by an
-                // outlet as well as one driven by a module. One snapshot a
-                // block, unlike the per-tick table this is taken from.
-                self.modulator_meters.publish(index, &row);
-            }
             // Mute and solo are one question here and two fields everywhere
             // else, the way the track loop below puts it: a channel silenced
             // by someone else's solo behaves exactly as a muted one, down to
@@ -10591,14 +10445,12 @@ impl RenderState {
                 && !self.strips[index].source_node().is_at_rest();
             // Built ahead of the skip below, which a chain still ringing out
             // needs it for.
-            let performance = self.expression[index].performance;
-            let modulation = ModulationBlock {
-                rack: &self.modulation[index],
-                outputs: &self.control_outputs[index],
-                outlets: &outlets,
-                performance: &performance,
+            let modulation = ModulationBlock::of(
+                &self.song_modulation,
+                &self.channel_sources,
+                producer,
                 ticks,
-            };
+            );
             if faded && !self.audio.produces(index) && !owes_a_release {
                 // A muted channel renders nothing, so its compensation ring
                 // would still be holding the audio from before the mute and
@@ -10671,7 +10523,7 @@ impl RenderState {
             // starts. Asked per descriptor instead, a device the size of
             // ML-P8 pays two hundred route-table walks a block to be told
             // what one walk already said.
-            if modulation.rack.has_routes() || automation.is_some() {
+            if modulation.has_routes() || automation.is_some() {
                 let base = self.strips[index].source_base;
                 let scope = EffectTarget::Channel(index as u8);
                 // Shared by every descriptor below, and by `curve_scratch`'s
@@ -10722,7 +10574,7 @@ impl RenderState {
                     table,
                     scope,
                     owner,
-                    Some(modulation.rack),
+                    Some(&modulation),
                     automation.as_ref(),
                     &mut positions,
                 );
@@ -10733,7 +10585,7 @@ impl RenderState {
                         param: descriptor.id,
                     };
                     let policy = ModDestinationDescriptor::for_param(descriptor);
-                    let modulated = modulation.rack.modulates(destination, &policy);
+                    let modulated = modulation.modulates(destination, &policy);
                     let curve = automation
                         .as_ref()
                         .and_then(|automation| automation.curve_for(destination));
@@ -10759,11 +10611,7 @@ impl RenderState {
                             .and_then(|(curve, automation)| automation.value_at(curve, tick))
                             .unwrap_or(knob_normalized);
                         let offset_normalized = if modulated {
-                            modulation.rack.offset_for(
-                                destination,
-                                modulation.sources(tick),
-                                &policy,
-                            )
+                            modulation.offset_for(destination, tick, &policy)
                         } else {
                             0.0
                         };
@@ -10809,7 +10657,7 @@ impl RenderState {
                             param: descriptor.id,
                         };
                         let policy = ModDestinationDescriptor::for_param(descriptor);
-                        let modulated = modulation.rack.modulates(destination, &policy);
+                        let modulated = modulation.modulates(destination, &policy);
                         let curve = automation
                             .as_ref()
                             .and_then(|automation| automation.curve_for(destination));
@@ -10829,11 +10677,7 @@ impl RenderState {
                                 .and_then(|(curve, automation)| automation.value_at(curve, tick))
                                 .unwrap_or(knob_normalized);
                             let offset_normalized = if modulated {
-                                modulation.rack.offset_for(
-                                    destination,
-                                    modulation.sources(tick),
-                                    &policy,
-                                )
+                                modulation.offset_for(destination, tick, &policy)
                             } else {
                                 0.0
                             };
@@ -11178,6 +11022,15 @@ impl RenderState {
             if let Some(frame) = strip.strip.dynamics_frame() {
                 self.meters.publish_reduction(index, frame.reduction_db);
             }
+            // A track's chain takes the routes onto it, as a channel's does
+            // (MOO-497). A sleeping track resolved nothing above; it reads
+            // each route's value now, not where it left off.
+            let modulation = ModulationBlock::of(
+                &self.song_modulation,
+                &self.channel_sources,
+                EffectTarget::Bus(index as u8),
+                ticks,
+            );
             strip.effects.process(
                 &context,
                 &mut strip.bus,
@@ -11187,7 +11040,7 @@ impl RenderState {
                     &self.device_telemetry,
                     MAX_CHANNELS + index,
                 )),
-                None,
+                Some(&modulation),
                 automation.as_ref(),
                 skip_idle,
             );
@@ -11232,7 +11085,18 @@ impl RenderState {
                 self.sends
                     .capture(producer, SendTap::PreFader, &strip.bus, frames);
             }
-            strip.output.apply(&mut strip.bus, frames);
+            // The fader and the pan, driven by a route or a lane as a
+            // channel's are (`docs/plans/song-modulation/02`, MOO-419).
+            let segments = resolve_strip_segments(
+                strip.output.gain,
+                strip.output.pan,
+                producer,
+                &modulation,
+                automation.as_ref(),
+            );
+            strip
+                .output
+                .apply_segments(&mut strip.bus, frames, segments.as_ref(), muted);
             if !faded {
                 self.sends
                     .capture(producer, SendTap::PostFader, &strip.bus, frames);
@@ -11630,6 +11494,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
     full_bank_project().buses
 }
     use super::*;
+    use mooloop_core::ModRack;
     use mooloop_core::{NoteEvent, ProjectChannel};
 
     fn test_strip() -> ChannelStrip {
@@ -11930,7 +11795,6 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
     /// panic puts it back to rest.
     #[test]
     fn the_mod_wheel_and_aftertouch_modulate_every_source() {
-        use mooloop_core::modulation::performance_slot;
         use mooloop_core::{DeviceKind, MidiKind, ModPolarity, ModRoute, ParamOwner};
 
         let kinds = [
@@ -11976,20 +11840,19 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 // Towards the far end of the knob, so the offset is not
                 // clamped away.
                 let depth = if knob > 0.5 { -0.5 } else { 0.5 };
-                render.apply_command(EngineCommand::SetModRoute {
-                    channel: 0,
-                    route: ModRoute::from_performance(
-                        project.channels[0].id,
-                        source,
-                        ParamAddr {
-                            scope: EffectTarget::Channel(0),
-                            owner: ParamOwner::source(kind),
-                            param: descriptor.id,
-                        },
-                        depth,
-                        ModPolarity::Bipolar,
-                    ),
-                });
+                let mut routed = project.clone();
+                routed.modulation.routes.push(ModRoute::from_performance(
+                    project.channels[0].id,
+                    source,
+                    ParamAddr {
+                        scope: EffectTarget::Channel(0),
+                        owner: ParamOwner::source(kind),
+                        param: descriptor.id,
+                    },
+                    depth,
+                    ModPolarity::Bipolar,
+                ));
+                render.set_modulation(&routed);
                 render.process_block(128);
                 let at_rest = driven(&render, descriptor.id).expect("a routed parameter is driven");
 
@@ -12002,7 +11865,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                     descriptor.name
                 );
                 assert_eq!(
-                    render.modulator_meters.read(0)[usize::from(performance_slot(source))],
+                    render.modulator_meters.channel(0).1[usize::from(source)],
                     1.0,
                     "the shelf's meter shows the band"
                 );
@@ -14536,6 +14399,40 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         rack
     }
 
+    /// One LFO, module 1, driving `destination` at `depth`, with its output
+    /// at each tick set to `outputs`.
+    fn one_route(destination: ParamAddr, depth: f32, outputs: &[f32]) -> Box<SongModulator> {
+        let song = mooloop_core::SongModulation {
+            modules: vec![mooloop_core::SongModule {
+                id: mooloop_core::ModSourceId(1),
+                name: String::new(),
+                seed: 0,
+                input: mooloop_core::InputSource::None,
+                rack: None,
+                params: mooloop_core::ModulatorParams::Lfo(mooloop_core::ModLfoParams::default()),
+            }],
+            routes: vec![mooloop_core::ModRoute::from_module(
+                mooloop_core::ModSourceId(1),
+                destination,
+                depth,
+                ModPolarity::Bipolar,
+            )],
+            next_source_id: 2,
+        };
+        let mut set = SongModulator::new(mooloop_core::CompiledModulation::compile(&song, |_| Some(0)));
+        for (tick, value) in outputs.iter().enumerate() {
+            set.set_output(tick, 0, *value);
+        }
+        set
+    }
+
+    fn no_channel_sources() -> Box<ChannelSources> {
+        Box::new(ChannelSources {
+            outlets: [[0.0; MAX_GENERATOR_OUTLETS]; MAX_CHANNELS],
+            performance: [[0.0; PERFORMANCE_SOURCES]; MAX_CHANNELS],
+        })
+    }
+
     /// The strip's fader is an ordinary destination: a source resolves it into
     /// one gain per control subdivision, centred on the knob value, and leaves
     /// pan untouched. The offset sums in normalized space and clamps there, so
@@ -14543,18 +14440,13 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
     /// than a negative gain.
     #[test]
     fn a_source_resolves_the_strip_fader_into_control_rate_segments() {
-        let rack = strip_route(mooloop_core::STRIP_PARAM_VOLUME, 0.25);
-        let mut outputs: ControlOutputs =
-            [[0.0; MAX_MODULATORS_PER_CHANNEL]; MAX_CONTROL_TICKS_PER_BLOCK];
-        outputs[0][0] = 1.0;
-        outputs[1][0] = -1.0;
-        let modulation = ModulationBlock {
-            rack: &rack,
-            outputs: &outputs,
-            outlets: &[0.0; MAX_GENERATOR_OUTLETS],
-            performance: &[0.0; PERFORMANCE_SOURCES],
-            ticks: 2,
-        };
+        let set = one_route(
+            ParamAddr::strip(EffectTarget::Channel(0), mooloop_core::STRIP_PARAM_VOLUME),
+            0.25,
+            &[1.0, -1.0],
+        );
+        let sources = no_channel_sources();
+        let modulation = ModulationBlock::of(&set, &sources, EffectTarget::Channel(0), 2);
 
         let segments =
             resolve_strip_segments(0.8, 0.0, EffectTarget::Channel(0), &modulation, None)
@@ -14574,17 +14466,16 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
 
     /// A still fader resolves to no segments at all, so the ordinary block
     /// stays a single pass over the bus rather than a per-subdivision walk.
+    /// A route onto another chain's fader does not drive this one.
     #[test]
     fn an_undriven_strip_resolves_to_no_segments() {
-        let outputs: ControlOutputs =
-            [[0.0; MAX_MODULATORS_PER_CHANNEL]; MAX_CONTROL_TICKS_PER_BLOCK];
-        let modulation = ModulationBlock {
-            rack: &ModRack::default(),
-            outputs: &outputs,
-            outlets: &[0.0; MAX_GENERATOR_OUTLETS],
-            performance: &[0.0; PERFORMANCE_SOURCES],
-            ticks: 2,
-        };
+        let set = one_route(
+            ParamAddr::strip(EffectTarget::Bus(1), mooloop_core::STRIP_PARAM_VOLUME),
+            0.25,
+            &[1.0, -1.0],
+        );
+        let sources = no_channel_sources();
+        let modulation = ModulationBlock::of(&set, &sources, EffectTarget::Channel(0), 2);
         assert!(
             resolve_strip_segments(0.8, 0.0, EffectTarget::Channel(0), &modulation, None).is_none()
         );
@@ -14891,17 +14782,17 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         ));
         let project = synth_project(channel);
         let mut render = RenderState::from_project(48_000, &project, &[]);
-        assert_eq!(render.tick_modulators_from_gate_table(0, 64), 2);
-        assert_eq!(render.control_outputs[0][0][0], -1.0);
-        assert_eq!(render.control_outputs[0][1][0], -0.5);
+        assert_eq!(render.tick_modulators_from_gate_table(64), 2);
+        assert_eq!(render.song_modulation.output(0, 0), -1.0);
+        assert_eq!(render.song_modulation.output(1, 0), -0.5);
 
         // `process_block_inner` builds this fixed bitmap from scheduled
         // NoteOn offsets. The tick method applies it before sampling, so the
         // destination sees the reset phase on that subdivision rather than
         // one control tick later.
         render.gate_ticks[0][0].note_ons = 1;
-        render.tick_modulators_from_gate_table(0, 32);
-        assert_eq!(render.control_outputs[0][0][0], -1.0);
+        render.tick_modulators_from_gate_table(32);
+        assert_eq!(render.song_modulation.output(0, 0), -1.0);
     }
 
     /// **A synced LFO follows the song position** (MOO-127): the downbeat
@@ -14926,7 +14817,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             },
         ));
         let project = synth_project(channel);
-        let first_tick = |render: &RenderState| render.control_outputs[0][0][0];
+        let first_tick = |render: &RenderState| render.song_modulation.output(0, 0);
 
         // What an export hears on the downbeat: a fresh state, played.
         let mut fresh = RenderState::from_project(48_000, &project, &[]);
@@ -14989,8 +14880,8 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         let mut render = RenderState::from_project(48_000, &project, &[]);
         render.gate_ticks[0][1].note_ons = 1;
 
-        render.tick_modulators_from_gate_table(0, 32);
-        assert_eq!(render.control_outputs[0][0][0], 1.0);
+        render.tick_modulators_from_gate_table(32);
+        assert_eq!(render.song_modulation.output(0, 0), 1.0);
     }
 
     /// A stepped parameter refuses modulation, so a route aimed at one is
@@ -15528,13 +15419,13 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         );
     }
 
-    /// The property a narrow command could get wrong rather than merely
-    /// cheap: dropping one route has to hand the device back its knob value.
+    /// The property a new set could get wrong rather than merely cheap:
+    /// dropping one route has to hand the device back its knob value.
     /// Without it the filter would hold whatever the LFO last resolved, until
     /// someone happened to touch that knob again.
     #[test]
-    fn a_narrow_route_removal_restores_the_destinations_base() {
-        let (project, source) = lfo_on_cutoff(0.25);
+    fn a_route_removed_from_the_set_restores_the_destinations_base() {
+        let (project, _) = lfo_on_cutoff(0.25);
         let mut render = RenderState::from_project(48_000, &project, &[]);
         render.play();
         render.process_block(128);
@@ -15549,11 +15440,9 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             "cutoff never left its base: {modulated:?}"
         );
 
-        render.apply_command(EngineCommand::RemoveModRoute {
-            channel: 0,
-            source: mooloop_core::ModSourceRef::Id(source),
-            destination: CUTOFF,
-        });
+        let mut unrouted = project.clone();
+        unrouted.modulation.routes.clear();
+        render.set_modulation(&unrouted);
         render.process_block(128);
 
         // One event, at the top of the block, carrying the knob value back.
@@ -15639,28 +15528,30 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             "the filter in slot 1 never left its base: {events:?}"
         );
 
-        // Removing the filter takes its route and its lane with it rather than
-        // leaving either parked on an empty slot for the next device to inherit.
+        // Removing the filter takes its lane with it rather than leaving it
+        // parked on an empty slot for the next device to inherit. Its route
+        // names the device that left, so it drives nothing, and the set the
+        // session derives next leaves it out.
         let _ = render.apply_structural(StructuralCommand::RemoveEffect {
             target: channel,
             slot: 1,
         });
-        assert_eq!(render.modulation[0].routes.iter().flatten().count(), 0);
+        assert!(!render.effect_is_driven(channel, 1, mooloop_core::FILTER_PARAM_CUTOFF_HZ));
         assert!(render.sequencer.automation_lane_at(CUTOFF, 0.0).is_none());
     }
 
-    /// Emptying a slot is the same fact stated once for every route it drove.
+    /// Removing a module is the same fact stated once for every route it
+    /// drove.
     #[test]
-    fn clearing_a_module_restores_what_it_was_driving() {
-        let (project, _) = lfo_on_cutoff(0.25);
+    fn removing_a_module_restores_what_it_was_driving() {
+        let (project, source) = lfo_on_cutoff(0.25);
         let mut render = RenderState::from_project(48_000, &project, &[]);
         render.play();
         render.process_block(128);
 
-        render.apply_command(EngineCommand::ClearModulator {
-            channel: 0,
-            slot: 0,
-        });
+        let mut removed = project.clone();
+        assert!(removed.modulation.remove_module(source));
+        render.set_modulation(&removed);
         render.process_block(128);
 
         let restored = cutoff_events(&render);
@@ -15676,17 +15567,14 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
     /// keeps running rather than being rebuilt around the new value.
     #[test]
     fn a_narrow_parameter_command_retunes_the_running_module() {
-        let (project, _) = lfo_on_cutoff(0.25);
+        let (project, source) = lfo_on_cutoff(0.25);
         let mut render = RenderState::from_project(48_000, &project, &[]);
         render.play();
         render.process_block(128);
 
-        render.apply_command(EngineCommand::SetModulatorParam {
-            channel: 0,
-            slot: 0,
-            id: mooloop_core::LFO_PARAM_DEPTH,
-            value: 0.0,
-        });
+        let mut params = project.modulation.module(source).expect("the LFO").params;
+        params.set(mooloop_core::LFO_PARAM_DEPTH, 0.0);
+        render.apply_command(EngineCommand::SetModulator { source, params });
         render.process_block(128);
 
         // Still resolving four times a block, because the route is intact --
@@ -15702,25 +15590,24 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         );
     }
 
-    /// The ordering trap this step had to avoid. Slot edits and route edits
-    /// arrive as separate ring entries, so a route may name a module the
-    /// engine does not hold. Because a route names a durable id and not a
-    /// slot number, that route is refused outright rather than aimed at
-    /// whatever else happens to occupy the slot.
+    /// A route may name a module the song does not hold. Because a route
+    /// names a durable id and not a position, that route is left out of the
+    /// set rather than aimed at whatever else sits where it points; and a
+    /// narrow retune of a route the set does not hold adds nothing.
     #[test]
     fn a_route_naming_an_absent_module_is_inert() {
-        let project = synth_project(filter_channel(1_000.0));
+        let mut project = synth_project(filter_channel(1_000.0));
+        let route = mooloop_core::ModRoute {
+            source: mooloop_core::ModSourceRef::Id(mooloop_core::ModSourceId(7)),
+            source_slot: 0,
+            destination: CUTOFF,
+            depth: 1.0,
+            polarity: mooloop_core::ModPolarity::Bipolar,
+        };
         let mut render = RenderState::from_project(48_000, &project, &[]);
-        render.apply_command(EngineCommand::SetModRoute {
-            channel: 0,
-            route: mooloop_core::ModRoute {
-                source: mooloop_core::ModSourceRef::Id(mooloop_core::ModSourceId(7)),
-                source_slot: 0,
-                destination: CUTOFF,
-                depth: 1.0,
-                polarity: mooloop_core::ModPolarity::Bipolar,
-            },
-        });
+        render.apply_command(EngineCommand::SetModRoute { route });
+        project.modulation.routes.push(route);
+        render.set_modulation(&project);
         render.play();
         render.process_block(128);
 
@@ -16264,30 +16151,20 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             .is_empty());
     }
 
-    /// **A reorder moves each module's running state with it**, which it did
-    /// not until 2026-09-14.
-    ///
-    /// `edit_modulation` mirrors a rack edit into the DSP rack as a params
-    /// diff by slot number, and a reorder is exactly the edit a diff by slot
-    /// number cannot see. Two LFOs dragged past each other cross-wired: each
-    /// kept its own phase, smoothing and fade position and took the *other's*
-    /// params, because `set_slot` retunes in place. Both jumped and nothing
-    /// said why. Different kinds swapped were worse in a different direction
-    /// -- both rebuilt from scratch, so an envelope restarted at level 0
-    /// mid-sustain and a Random module was reseeded, which also broke the
-    /// promise that an offline render matches a realtime take.
-    ///
-    /// Driven through `apply_command` rather than through the rack directly,
-    /// because the defect was in the mirroring and not in either rack.
+    /// **A reorder moves each module's running state with it** (2026-09-14),
+    /// now that a reorder is a new set: each module is carried by identity
+    /// to its new position, not rebuilt and not cross-wired with the one
+    /// that took its old place.
     #[test]
-    fn reordering_the_grid_carries_each_modules_running_state() {
-        let project = synth_project(ProjectChannel::sampler(0, 1));
-        let mut render = RenderState::from_project(48_000, &project, &[]);
-        for (slot, rate, phase) in [(0u8, 1.0f32, 0.0f32), (1, 7.0, 0.25)] {
-            render.apply_command(EngineCommand::InstallModulator {
-                channel: 0,
-                slot,
-                source: mooloop_core::ModSourceId(u32::from(slot)),
+    fn reordering_the_set_carries_each_modules_running_state() {
+        let mut project = synth_project(ProjectChannel::sampler(0, 1));
+        for (id, rate, phase) in [(0u32, 1.0f32, 0.0f32), (1, 7.0, 0.25)] {
+            project.modulation.modules.push(mooloop_core::SongModule {
+                id: mooloop_core::ModSourceId(id),
+                name: String::new(),
+                seed: id,
+                input: mooloop_core::InputSource::None,
+                rack: None,
                 params: mooloop_core::ModulatorParams::Lfo(mooloop_core::ModLfoParams {
                     rate_hz: rate,
                     phase,
@@ -16295,41 +16172,38 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 }),
             });
         }
+        let mut render = RenderState::from_project(48_000, &project, &[]);
         render.play();
         for _ in 0..8 {
             render.process_block(256);
         }
 
-        let before = *render.modulators[0].outputs();
+        let before = render.song_modulation.outputs().to_vec();
         assert!(
             (before[0] - before[1]).abs() > 0.05,
             "the two LFOs were indistinguishable to begin with: {before:?}"
         );
 
-        render.apply_command(EngineCommand::MoveModulator {
-            channel: 0,
-            from: 0,
-            to: 1,
-        });
+        project.modulation.modules.swap(0, 1);
+        render.set_modulation(&project);
 
-        let after = *render.modulators[0].outputs();
+        let after = render.song_modulation.outputs().to_vec();
         assert_eq!(
             (after[0], after[1]),
             (before[1], before[0]),
             "the swap rebuilt or cross-wired the modules rather than moving them"
         );
-        // The control rack agrees about which is which, so a route that
-        // followed the move reads the module it named.
-        let rates: Vec<f32> = render.modulation[0]
-            .slots
+        let rates: Vec<f32> = render
+            .song_modulation
+            .plan()
+            .modules
             .iter()
-            .flatten()
-            .map(|slot| match slot.params {
+            .map(|module| match module.params {
                 mooloop_core::ModulatorParams::Lfo(lfo) => lfo.rate_hz,
                 _ => f32::NAN,
             })
             .collect();
-        assert_eq!(rates, vec![7.0, 1.0], "the control rack did not permute");
+        assert_eq!(rates, vec![7.0, 1.0], "the plan did not follow the order");
     }
 
     /// A generator that has no internal routes ignores the commands entirely
@@ -20088,9 +19962,17 @@ mod footprint {
         // an address, 64 a channel's rack, 16 KiB across the reserved count.
         // The same price and the same argument as the two above, and it buys
         // the thing they bought one level out.
-        let fixed = (size_of::<ModRack>() + size_of::<ModulatorRack>()) * MAX_CHANNELS
-            + MAX_CHANNELS * size_of::<usize>() * 3;
-        assert_eq!(fixed / 1024, 487);
+        //
+        // Song modulation step 02 took the two small modulation vectors
+        // away, 481 KiB of this, and one of the three pointer vectors: the
+        // song's one set replaced a rack and a table per channel. What
+        // stays is the set, empty until a song has modules, and every
+        // channel's outlets and keyboard as this block's routes read them,
+        // 10 KiB.
+        let fixed = MAX_CHANNELS * size_of::<usize>() * 2
+            + size_of::<SongModulator>()
+            + size_of::<ChannelSources>();
+        assert_eq!(fixed / 1024, 14);
 
         // Paid per channel the project actually has. The source is boxed
         // since MOO-56, so it is not in `ChannelStrip`'s own size, and the
@@ -20113,7 +19995,6 @@ mod footprint {
         let per_live = size_of::<ChannelStrip>()
             + widest_source
             + size_of::<EventList>()
-            + size_of::<ControlOutputs>()
             + size_of::<SourceCurvePool>();
         // The sampler's retired-sample ring is 152 of this, a take's pointer
         // 8, and the effect chain's refused-event count 8.
@@ -20165,7 +20046,11 @@ mod footprint {
         // `DeviceId` and its waiting knob edits.
         //
         // And by 8 for MOO-401: the strip's `ring_silent_frames`.
-        assert_eq!(per_live, 143_744);
+        //
+        // Song modulation step 02 took 8,192 off: a channel's table of its
+        // rack's outputs at every control tick. The song's set keeps one
+        // table, sized to its modules.
+        assert_eq!(per_live, 135_552);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
@@ -20271,7 +20156,11 @@ mod footprint {
         //
         // MOO-401's ring silence count: 8 bytes a live channel, which
         // carried the total over one more KiB boundary.
-        assert_eq!((fixed + per_live * 16) / 1024, 2_733);
+        //
+        // Song modulation step 02: 483 KiB of reserved racks and pointers
+        // and 128 KiB of per-channel tables across sixteen gone, 10 KiB of
+        // channel sources come.
+        assert_eq!((fixed + per_live * 16) / 1024, 2_132);
     }
 
 }

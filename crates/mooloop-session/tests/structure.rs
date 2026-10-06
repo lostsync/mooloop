@@ -29,7 +29,7 @@ fn session_with_routes() -> Session {
         session.insert_effect_at(EffectKind::Delay, 0).expect("room");
         session.insert_effect_at(EffectKind::Filter, 1).expect("room");
         assert!(
-            !session.add_modulation_source(ModulatorKind::Lfo).is_empty(),
+            session.add_modulation_source(ModulatorKind::Lfo),
             "an empty rack has a free slot"
         );
 

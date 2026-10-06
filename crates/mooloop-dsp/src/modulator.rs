@@ -8,7 +8,7 @@
 use mooloop_core::{
     ModEnvelopeParams, ModLfoParams, ModLfoWaveform, ModMathOp, ModMathParams, ModRandomParams,
     ModRandomTrigger, ModStepParams, ModStepTrigger, ModulatorParams, MAX_CHANNELS,
-    MAX_MODULATORS_PER_CHANNEL, MOD_STEP_MAX_STEPS,
+    MOD_STEP_MAX_STEPS,
 };
 
 /// Frames between modulation updates. The plan allows 32 or 64; 32 keeps a
@@ -436,16 +436,18 @@ struct RandomSource {
 }
 
 impl RandomSource {
-    /// Seeded from the slot, so two random modules on one channel are
-    /// uncorrelated rather than identical, and still deterministic: an
-    /// offline render draws the same sequence a realtime one did.
-    fn new(params: ModRandomParams, slot: usize) -> Self {
+    /// Seeded from the module's seed ([`ModuleSpec::seed`]), so two random
+    /// modules are uncorrelated rather than identical, and still
+    /// deterministic: an offline render draws the same sequence a realtime
+    /// one did. A module converted from a 0.1.6 rack is seeded with its old
+    /// slot, which is what that rack seeded it with.
+    fn new(params: ModRandomParams, seed: u32) -> Self {
         let mut source = Self {
             params,
             held: 0.0,
             phase: 0.0,
             // Odd, so the xorshift state can never be zero and stick there.
-            rng: 0x9E37_79B9 ^ ((slot as u32).wrapping_add(1).wrapping_mul(0x85EB_CA6B) | 1),
+            rng: 0x9E37_79B9 ^ (seed.wrapping_add(1).wrapping_mul(0x85EB_CA6B) | 1),
         };
         source.held = source.fresh();
         source
@@ -559,7 +561,7 @@ impl RandomSource {
 const MATH_MIN_DIVISOR: f32 = 1.0e-3;
 
 /// Arithmetic over another slot's output. Stateless: the whole module is its
-/// params, and the slot-order rule lives in `ModulatorRack::tick`.
+/// params, and the list-order rule lives in `ModulatorSet::tick`.
 #[derive(Debug, Clone, Copy)]
 struct MathSource {
     params: ModMathParams,
@@ -609,71 +611,86 @@ enum Source {
     Math(MathSource),
 }
 
-/// One channel's modulator slots and their current outputs.
-///
-/// Deliberately inline rather than boxed nodes: no modulator kind allocates,
-/// so the install/reclaim machinery the effect chain needs buys nothing here
-/// and would put a `Box` drop on the path of every rack edit.
+/// What one module of a [`ModulatorSet`] is built from: the song's module,
+/// resolved to positions off the audio thread
+/// (`mooloop_core::CompiledModule`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ModuleSpec {
+    pub params: ModulatorParams,
+    /// What a Random module's generator starts from.
+    pub seed: u32,
+    /// The seat of the channel whose notes it hears: the Envelope's gate, the
+    /// LFO's retrigger, the Step's advance, the Random's trigger.
+    pub gate: Option<u8>,
+    /// The list position a Math module reads.
+    pub reads: Option<u16>,
+}
+
+impl ModuleSpec {
+    fn build(&self) -> Source {
+        match self.params {
+            ModulatorParams::Lfo(params) => Source::Lfo(Lfo::new(params)),
+            ModulatorParams::Envelope(params) => Source::Envelope(Envelope::new(params)),
+            ModulatorParams::Step(params) => Source::Step(StepSequencer::new(params)),
+            ModulatorParams::Random(params) => Source::Random(RandomSource::new(params, self.seed)),
+            ModulatorParams::Math(params) => Source::Math(MathSource { params }),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
-pub struct ModulatorRack {
-    slots: [Option<Source>; MAX_MODULATORS_PER_CHANNEL],
-    outputs: [f32; MAX_MODULATORS_PER_CHANNEL],
+struct Module {
+    spec: ModuleSpec,
+    source: Source,
 }
 
-impl Default for ModulatorRack {
-    fn default() -> Self {
-        Self::new()
-    }
+/// The song's modulators and their current outputs, in list order
+/// (`docs/plans/song-modulation/02-the-engine-runs-one-set.md`).
+///
+/// Built off the audio thread at the size of the song's set and never resized
+/// on it: a module added or removed arrives as a new set, which takes each
+/// surviving module's running state from the one it replaces
+/// ([`Self::carry`]). What a retune can change happens in place
+/// ([`Self::retune`]), and nothing here allocates once built: a module is
+/// `Copy`.
+#[derive(Debug, Clone, Default)]
+pub struct ModulatorSet {
+    modules: Vec<Module>,
+    outputs: Vec<f32>,
 }
 
-impl ModulatorRack {
-    pub const fn new() -> Self {
-        Self {
-            slots: [None; MAX_MODULATORS_PER_CHANNEL],
-            outputs: [0.0; MAX_MODULATORS_PER_CHANNEL],
-        }
+impl ModulatorSet {
+    /// Every module fresh, outputs at zero. Allocates.
+    pub fn new(specs: impl IntoIterator<Item = ModuleSpec>) -> Self {
+        let modules: Vec<Module> = specs
+            .into_iter()
+            .map(|spec| Module {
+                spec,
+                source: spec.build(),
+            })
+            .collect();
+        let outputs = vec![0.0; modules.len()];
+        Self { modules, outputs }
     }
 
-    /// Apply the permutation the control rack just applied to itself, moving
-    /// each module's **running state** with it.
-    ///
-    /// `remap[old] = new`, with [`mooloop_core::modulation::UNRESOLVED_SLOT`]
-    /// for a slot that held nothing -- exactly what `ModRack::move_module_mapped`
-    /// returns. Without this the engine mirrored a reorder as a params diff by
-    /// slot number, which cannot tell a permutation from a reconfiguration:
-    /// every moved position was rebuilt from scratch, so an envelope dragged
-    /// to the front restarted at level 0 mid-sustain and a Random module was
-    /// reseeded. Two modules of the *same kind* dragged past each other were
-    /// worse: `set_slot` retunes in place, so each kept its own phase and
-    /// smoothing and took the other's params.
-    ///
-    /// Everything is cleared first and then written, so a source in a slot the
-    /// permutation does not name is dropped rather than left behind. Nothing
-    /// allocates: a `Source` is `Copy`.
-    pub fn permute(&mut self, remap: &[u8; MAX_MODULATORS_PER_CHANNEL]) {
-        let slots = self.slots;
-        let outputs = self.outputs;
-        self.slots = [None; MAX_MODULATORS_PER_CHANNEL];
-        self.outputs = [0.0; MAX_MODULATORS_PER_CHANNEL];
-        for (old, new) in remap.iter().enumerate() {
-            let new = *new as usize;
-            if new >= MAX_MODULATORS_PER_CHANNEL {
-                continue;
-            }
-            self.slots[new] = slots[old];
-            self.outputs[new] = outputs[old];
-        }
+    pub fn len(&self) -> usize {
+        self.modules.len()
     }
 
-    /// Install or clear one slot. Reconfiguring a slot that already holds the
-    /// same kind keeps its phase, so retuning an LFO's rate does not restart
-    /// it mid-performance.
-    pub fn set_slot(&mut self, slot: usize, params: Option<ModulatorParams>) {
-        let Some(existing) = self.slots.get_mut(slot) else {
+    pub fn is_empty(&self) -> bool {
+        self.modules.is_empty()
+    }
+
+    /// Give the module at `at` new params. One that keeps its kind keeps its
+    /// running state, so retuning an LFO's rate does not restart it
+    /// mid-performance; a kind change rebuilds it.
+    pub fn retune(&mut self, at: usize, params: ModulatorParams) {
+        let Some(module) = self.modules.get_mut(at) else {
             return;
         };
-        match (params, existing.as_mut()) {
-            (Some(ModulatorParams::Lfo(next)), Some(Source::Lfo(lfo))) => {
+        module.spec.params = params;
+        match (params, &mut module.source) {
+            (ModulatorParams::Lfo(next), Source::Lfo(lfo)) => {
                 let fade_changed = lfo.params.fade_in_seconds != next.fade_in_seconds
                     || lfo.params.fade_in_tempo_sync != next.fade_in_tempo_sync
                     || lfo.params.fade_in_division != next.fade_in_division;
@@ -682,35 +699,24 @@ impl ModulatorRack {
                     lfo.fade_elapsed_seconds = 0.0;
                 }
             }
-            (Some(ModulatorParams::Lfo(next)), _) => *existing = Some(Source::Lfo(Lfo::new(next))),
-            (Some(ModulatorParams::Envelope(next)), Some(Source::Envelope(envelope))) => {
-                if envelope.params.input_channel != next.input_channel {
-                    envelope.held_notes = 0;
-                    envelope.begin(EnvelopeStage::Release);
-                }
+            (ModulatorParams::Envelope(next), Source::Envelope(envelope)) => {
                 envelope.params = next;
-            }
-            (Some(ModulatorParams::Envelope(next)), _) => {
-                *existing = Some(Source::Envelope(Envelope::new(next)))
             }
             // Retuning a running pattern keeps its position; a shortened
             // length folds the cursor back inside rather than stalling it
             // on a step that no longer plays.
-            (Some(ModulatorParams::Step(next)), Some(Source::Step(sequencer))) => {
+            (ModulatorParams::Step(next), Source::Step(sequencer)) => {
                 sequencer.params = next;
                 let length = sequencer.length();
                 if sequencer.step >= length {
                     sequencer.step %= length;
                 }
             }
-            (Some(ModulatorParams::Step(next)), _) => {
-                *existing = Some(Source::Step(StepSequencer::new(next)))
-            }
-            (Some(ModulatorParams::Random(next)), Some(Source::Random(random))) => {
+            (ModulatorParams::Random(next), Source::Random(random)) => {
                 // `held` is kept in the source's *own* range, so the Bipolar
                 // switch changes what the stored number means. Without the
                 // re-fold, a held -0.8 read back through the unipolar arm of
-                // `value` is -2.6 -- outside the -1..1 the rack is entitled
+                // `value` is -2.6 -- outside the -1..1 the set is entitled
                 // to assume, and nothing downstream clamps a source value.
                 // It would persist until the next draw, which never comes if
                 // the trigger is Note and no notes arrive, or if Chance is 0.
@@ -721,132 +727,135 @@ impl ModulatorRack {
                     random.held = random.held.clamp(floor, 1.0);
                 }
             }
-            (Some(ModulatorParams::Random(next)), _) => {
-                *existing = Some(Source::Random(RandomSource::new(next, slot)))
-            }
-            (Some(ModulatorParams::Math(next)), Some(Source::Math(math))) => math.params = next,
-            (Some(ModulatorParams::Math(next)), _) => {
-                *existing = Some(Source::Math(MathSource { params: next }))
-            }
-            (None, _) => {
-                *existing = None;
-                self.outputs[slot] = 0.0;
-            }
+            (ModulatorParams::Math(next), Source::Math(math)) => math.params = next,
+            _ => module.source = module.spec.build(),
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.slots.iter().all(Option::is_none)
+    /// Take the running state of `from`'s module at `from_at` into this set's
+    /// module at `at`, as the same module carried across a new set: its
+    /// phase, cursor, envelope stage and held draw, and its last output,
+    /// which a Math module listed before it reads this tick. Then this set's
+    /// params are retuned onto it by [`Self::retune`]'s rules. A module whose
+    /// kind changed is not carried, and an envelope whose input changed
+    /// releases, as one does when its gate is repointed.
+    pub fn carry(&mut self, at: usize, from: &ModulatorSet, from_at: usize, input_changed: bool) {
+        let (Some(module), Some(previous)) = (self.modules.get(at), from.modules.get(from_at))
+        else {
+            return;
+        };
+        if module.spec.params.kind() != previous.spec.params.kind() {
+            return;
+        }
+        let params = module.spec.params;
+        self.modules[at].source = previous.source;
+        self.outputs[at] = from.outputs[from_at];
+        if input_changed {
+            if let Source::Envelope(envelope) = &mut self.modules[at].source {
+                envelope.held_notes = 0;
+                envelope.begin(EnvelopeStage::Release);
+            }
+        }
+        self.retune(at, params);
     }
 
-    /// Current `-1..1` output of every slot. Empty slots read zero, so an
-    /// unassigned route contributes nothing rather than needing a guard.
-    pub fn outputs(&self) -> &[f32; MAX_MODULATORS_PER_CHANNEL] {
+    /// Current `-1..1` output of every module, in list order.
+    pub fn outputs(&self) -> &[f32] {
         &self.outputs
     }
 
-    /// Evaluate every slot for the coming `frames` and advance its phase.
+    /// Deliver this control tick's note gates to every module that hears a
+    /// channel, then evaluate every module for the coming `frames` and
+    /// advance it. `song_beats` is how far into the song this tick starts,
+    /// in quarter-note beats, `None` while the transport is stopped: a
+    /// tempo-synced LFO takes its phase from it (MOO-127).
     ///
-    /// Modules evaluate in slot order within a control tick, so a module
-    /// reading a lower slot sees this tick's value and one reading itself or
-    /// a higher slot sees the previous tick's. That single rule is what makes
-    /// a chain of modules deterministic, identical realtime and offline, and
-    /// bounded without any cycle machinery: `outputs` simply still holds last
-    /// tick's value everywhere this pass has not reached yet.
-    pub fn tick(&mut self, sample_rate: u32, frames: usize, bpm: f64) {
-        self.tick_at(sample_rate, frames, bpm, None);
-    }
-
-    /// [`Self::tick`] at `song_beats` into the song -- quarter-note beats at
-    /// the start of this control tick, `None` while the transport is
-    /// stopped -- which a tempo-synced LFO takes its phase from (MOO-127).
-    pub fn tick_at(&mut self, sample_rate: u32, frames: usize, bpm: f64, song_beats: Option<f64>) {
-        for (slot, source) in self.slots.iter_mut().enumerate() {
-            let Some(source) = source else { continue };
-            match source {
-                Source::Lfo(lfo) => {
-                    if let Some(beats) = song_beats.filter(|_| lfo.follows_song()) {
-                        lfo.follow_song(beats);
-                    }
-                    self.outputs[slot] = lfo.value(sample_rate, frames, bpm);
-                    lfo.advance(sample_rate, frames, bpm);
-                }
-                Source::Envelope(envelope) => {
-                    self.outputs[slot] = envelope.value();
-                    envelope.advance(sample_rate, frames, bpm);
-                }
-                Source::Step(sequencer) => {
-                    self.outputs[slot] = sequencer.value(bpm);
-                    sequencer.advance(sample_rate, frames, bpm);
-                }
-                Source::Random(random) => {
-                    self.outputs[slot] = random.value();
-                    random.advance(sample_rate, frames, bpm);
-                }
-                Source::Math(math) => {
-                    let input = self
-                        .outputs
-                        .get(math.params.input_slot as usize)
-                        .copied()
-                        .unwrap_or(0.0);
-                    self.outputs[slot] = math.value(input);
-                }
-            };
-        }
-    }
-
-    /// Deliver the current control tick's channel-note adapters, then
-    /// evaluate. The owning channel remains the LFO's legacy Note On input;
-    /// envelopes name their input channel explicitly.
-    pub fn tick_with_note_gates(
+    /// Modules evaluate in list order within a control tick, so a Math
+    /// module reading one listed before it sees this tick's value and one
+    /// reading itself or a module listed after it sees the previous tick's.
+    /// That single rule is what makes a chain of modules deterministic,
+    /// identical realtime and offline, and bounded without any cycle
+    /// machinery: `outputs` simply still holds last tick's value everywhere
+    /// this pass has not reached yet. It is the rule a channel's rack had
+    /// over its slots, and a converted song lists each rack's modules in
+    /// slot order.
+    pub fn tick(
         &mut self,
         sample_rate: u32,
         frames: usize,
         bpm: f64,
         song_beats: Option<f64>,
-        owning_channel: usize,
         gates: &[NoteGateEvents; MAX_CHANNELS],
     ) {
-        let owning_notes = gates
-            .get(owning_channel)
-            .map_or(0, |events| events.note_ons);
-        for source in self.slots.iter_mut().flatten() {
-            match source {
+        for module in &mut self.modules {
+            let Some(events) = module.spec.gate.and_then(|seat| gates.get(usize::from(seat))) else {
+                continue;
+            };
+            let notes = events.note_ons > 0;
+            match &mut module.source {
                 Source::Lfo(lfo) => {
-                    if owning_notes > 0 {
+                    if notes {
                         lfo.retrigger();
                     }
                 }
-                Source::Envelope(envelope) => {
-                    let input = usize::from(envelope.params.input_channel);
-                    if let Some(events) = gates.get(input).copied() {
-                        envelope.note_events(events);
-                    }
-                }
-                // Step and random modules take the owning channel's notes,
-                // the same legacy input the LFO's retrigger uses. Their own
-                // input jack arrives with the grid's explicit jacks.
+                Source::Envelope(envelope) => envelope.note_events(*events),
                 Source::Step(sequencer) => {
-                    if owning_notes > 0 {
+                    if notes {
                         sequencer.note_advance();
                     }
                 }
                 Source::Random(random) => {
-                    if owning_notes > 0 {
+                    if notes {
                         random.note_trigger();
                     }
                 }
                 Source::Math(_) => {}
             }
         }
-        self.tick_at(sample_rate, frames, bpm, song_beats);
+        for at in 0..self.modules.len() {
+            let module = &mut self.modules[at];
+            self.outputs[at] = match &mut module.source {
+                Source::Lfo(lfo) => {
+                    if let Some(beats) = song_beats.filter(|_| lfo.follows_song()) {
+                        lfo.follow_song(beats);
+                    }
+                    let value = lfo.value(sample_rate, frames, bpm);
+                    lfo.advance(sample_rate, frames, bpm);
+                    value
+                }
+                Source::Envelope(envelope) => {
+                    let value = envelope.value();
+                    envelope.advance(sample_rate, frames, bpm);
+                    value
+                }
+                Source::Step(sequencer) => {
+                    let value = sequencer.value(bpm);
+                    sequencer.advance(sample_rate, frames, bpm);
+                    value
+                }
+                Source::Random(random) => {
+                    let value = random.value();
+                    random.advance(sample_rate, frames, bpm);
+                    value
+                }
+                Source::Math(math) => {
+                    let input = module
+                        .spec
+                        .reads
+                        .and_then(|read| self.outputs.get(usize::from(read)))
+                        .copied()
+                        .unwrap_or(0.0);
+                    math.value(input)
+                }
+            };
+        }
     }
 
-    /// Move every slot that follows notes: an LFO restarts its phase, a step
-    /// pattern takes one step, a note-triggered random draws.
+    /// Move every module that follows notes: an LFO restarts its phase, a
+    /// step pattern takes one step, a note-triggered random draws.
     pub fn retrigger(&mut self) {
-        for source in self.slots.iter_mut().flatten() {
-            match source {
+        for module in &mut self.modules {
+            match &mut module.source {
                 Source::Lfo(lfo) => lfo.retrigger(),
                 Source::Step(sequencer) => sequencer.note_advance(),
                 Source::Random(random) => random.note_trigger(),
@@ -861,20 +870,53 @@ mod tests {
     use super::*;
     use mooloop_core::ModulatorParams;
 
-    fn lfo(params: ModLfoParams) -> ModulatorRack {
-        let mut rack = ModulatorRack::new();
-        rack.set_slot(0, Some(ModulatorParams::Lfo(params)));
-        rack
+    const NO_GATES: [NoteGateEvents; MAX_CHANNELS] = [NoteGateEvents {
+        note_ons: 0,
+        note_offs: 0,
+        choke: false,
+    }; MAX_CHANNELS];
+
+    /// A module as a converted rack's slot `at` would be: seeded with its
+    /// position, hearing channel 0, and a Math module reading the position
+    /// its `input_slot` names.
+    fn spec(at: usize, params: ModulatorParams) -> ModuleSpec {
+        ModuleSpec {
+            params,
+            seed: at as u32,
+            gate: Some(0),
+            reads: match params {
+                ModulatorParams::Math(math) => Some(u16::from(math.input_slot)),
+                _ => None,
+            },
+        }
+    }
+
+    fn set_of(modules: &[ModulatorParams]) -> ModulatorSet {
+        ModulatorSet::new(modules.iter().enumerate().map(|(at, params)| spec(at, *params)))
+    }
+
+    fn lfo(params: ModLfoParams) -> ModulatorSet {
+        set_of(&[ModulatorParams::Lfo(params)])
+    }
+
+    impl ModulatorSet {
+        fn run(&mut self, sample_rate: u32, frames: usize, bpm: f64) {
+            self.tick(sample_rate, frames, bpm, None, &NO_GATES);
+        }
+
+        fn run_at(&mut self, sample_rate: u32, frames: usize, bpm: f64, beats: Option<f64>) {
+            self.tick(sample_rate, frames, bpm, beats, &NO_GATES);
+        }
     }
 
     /// A Random module keeps its held value in the range its own Bipolar
     /// flag declares, so turning the flag off has to re-fold it. Without
     /// that, a held -0.8 read back through the unipolar arm of `value` is
-    /// -2.6 -- outside the -1..1 the rack is entitled to assume, and nothing
-    /// downstream clamps a source value: `offset_for` multiplies it by depth
-    /// and only the summed result meets a clamp. A depth-1.0 route would pin
-    /// its destination to the bottom of its range, and stay there until the
-    /// next draw, which never comes with Chance at 0.
+    /// -2.6 -- outside the -1..1 the set is entitled to assume, and nothing
+    /// downstream clamps a source value: a route multiplies it by depth and
+    /// only the summed result meets a clamp. A depth-1.0 route would pin its
+    /// destination to the bottom of its range, and stay there until the next
+    /// draw, which never comes with Chance at 0.
     #[test]
     fn a_random_module_refolds_its_held_value_when_bipolar_changes() {
         use mooloop_core::{ModRandomParams, ModRandomTrigger};
@@ -888,10 +930,9 @@ mod tests {
             ..ModRandomParams::default()
         };
 
-        let mut rack = ModulatorRack::new();
-        rack.set_slot(0, Some(ModulatorParams::Random(frozen(true))));
-        rack.tick(48_000, 64, 120.0);
-        let bipolar_value = rack.outputs()[0];
+        let mut set = set_of(&[ModulatorParams::Random(frozen(true))]);
+        set.run(48_000, 64, 120.0);
+        let bipolar_value = set.outputs()[0];
         // Stated rather than assumed: the re-fold only moves a *negative*
         // held value, so a seed that draws positive would make everything
         // below pass whether the fix is present or not. The seed is
@@ -900,12 +941,12 @@ mod tests {
         assert!(
             bipolar_value < 0.0,
             "this test needs a negative draw to mean anything; the seed now \
-             gives {bipolar_value}, so re-pick the slot or the params"
+             gives {bipolar_value}, so re-pick the seed or the params"
         );
 
-        rack.set_slot(0, Some(ModulatorParams::Random(frozen(false))));
-        rack.tick(48_000, 64, 120.0);
-        let after = rack.outputs()[0];
+        set.retune(0, ModulatorParams::Random(frozen(false)));
+        set.run(48_000, 64, 120.0);
+        let after = set.outputs()[0];
         assert!(
             (-1.0..=1.0).contains(&after),
             "the held value must be re-folded into the new range, got {after}"
@@ -914,109 +955,93 @@ mod tests {
 
     #[test]
     fn a_sine_lfo_completes_one_cycle_per_period() {
-        let mut rack = lfo(ModLfoParams {
+        let mut set = lfo(ModLfoParams {
             rate_hz: 1.0,
             ..ModLfoParams::default()
         });
         // `tick` reports the value for the frames it is about to cover, then
         // advances, so each reading is the phase *before* that step.
-        rack.tick(48_000, 12_000, 120.0);
-        assert!(rack.outputs()[0].abs() < 1e-6, "starts at zero");
+        set.run(48_000, 12_000, 120.0);
+        assert!(set.outputs()[0].abs() < 1e-6, "starts at zero");
         // A quarter second at 1 Hz is a quarter cycle: the sine peak.
-        rack.tick(48_000, 12_000, 120.0);
-        assert!(
-            (rack.outputs()[0] - 1.0).abs() < 1e-3,
-            "{}",
-            rack.outputs()[0]
-        );
-        rack.tick(48_000, 12_000, 120.0);
-        assert!(rack.outputs()[0].abs() < 1e-3, "back through zero");
+        set.run(48_000, 12_000, 120.0);
+        assert!((set.outputs()[0] - 1.0).abs() < 1e-3, "{}", set.outputs()[0]);
+        set.run(48_000, 12_000, 120.0);
+        assert!(set.outputs()[0].abs() < 1e-3, "back through zero");
     }
 
     #[test]
-    fn depth_scales_the_output_and_an_empty_slot_reads_zero() {
-        let mut rack = lfo(ModLfoParams {
+    fn depth_scales_the_output() {
+        let mut set = lfo(ModLfoParams {
             rate_hz: 1.0,
             depth: 0.5,
             waveform: ModLfoWaveform::Square,
             ..ModLfoParams::default()
         });
-        rack.tick(48_000, 0, 120.0);
-        assert_eq!(rack.outputs()[0], 0.5);
-        assert_eq!(rack.outputs()[1], 0.0);
-
-        rack.set_slot(0, None);
-        rack.tick(48_000, 0, 120.0);
-        assert_eq!(rack.outputs()[0], 0.0);
-        assert!(rack.is_empty());
+        set.run(48_000, 0, 120.0);
+        assert_eq!(set.outputs()[0], 0.5);
+        assert!(ModulatorSet::new([]).is_empty());
     }
 
     /// Retuning a running LFO must not restart it: an automated rate change
     /// mid-performance should bend the motion, not reset the phase.
     #[test]
-    fn reconfiguring_a_slot_keeps_its_phase() {
-        let mut rack = lfo(ModLfoParams {
+    fn retuning_a_module_keeps_its_phase() {
+        let mut set = lfo(ModLfoParams {
             rate_hz: 1.0,
             waveform: ModLfoWaveform::Saw,
             ..ModLfoParams::default()
         });
-        rack.tick(48_000, 12_000, 120.0);
-        let advanced = rack.outputs()[0];
-        rack.set_slot(
+        set.run(48_000, 12_000, 120.0);
+        let advanced = set.outputs()[0];
+        set.retune(
             0,
-            Some(ModulatorParams::Lfo(ModLfoParams {
+            ModulatorParams::Lfo(ModLfoParams {
                 rate_hz: 4.0,
                 waveform: ModLfoWaveform::Saw,
                 ..ModLfoParams::default()
-            })),
+            }),
         );
-        rack.tick(48_000, 0, 120.0);
-        assert!(
-            rack.outputs()[0] > advanced,
-            "phase restarted on reconfigure"
-        );
+        set.run(48_000, 0, 120.0);
+        assert!(set.outputs()[0] > advanced, "phase restarted on retune");
     }
 
     /// Sample-and-hold must hold. Regenerating every evaluation would be
     /// white noise at control rate rather than a stepped modulator.
     #[test]
     fn random_holds_its_value_across_a_cycle() {
-        let mut rack = lfo(ModLfoParams {
+        let mut set = lfo(ModLfoParams {
             rate_hz: 1.0,
             waveform: ModLfoWaveform::Random,
             ..ModLfoParams::default()
         });
-        rack.tick(48_000, 1_000, 120.0);
-        let held = rack.outputs()[0];
+        set.run(48_000, 1_000, 120.0);
+        let held = set.outputs()[0];
         assert!((-1.0..=1.0).contains(&held), "out of range: {held}");
         // Ten more evaluations well inside the same cycle.
         for _ in 0..10 {
-            rack.tick(48_000, 1_000, 120.0);
-            assert_eq!(rack.outputs()[0], held, "value changed mid-cycle");
+            set.run(48_000, 1_000, 120.0);
+            assert_eq!(set.outputs()[0], held, "value changed mid-cycle");
         }
         // Crossing the wrap draws a new one.
-        rack.tick(48_000, 48_000, 120.0);
-        rack.tick(48_000, 0, 120.0);
-        assert_ne!(rack.outputs()[0], held);
+        set.run(48_000, 48_000, 120.0);
+        set.run(48_000, 0, 120.0);
+        assert_ne!(set.outputs()[0], held);
     }
 
     #[test]
-    fn retrigger_only_resets_slots_that_asked_for_it() {
+    fn retrigger_only_resets_modules_that_asked_for_it() {
         let mut free = lfo(ModLfoParams {
             rate_hz: 1.0,
             waveform: ModLfoWaveform::Saw,
             retrigger: false,
             ..ModLfoParams::default()
         });
-        free.tick(48_000, 12_000, 120.0);
+        free.run(48_000, 12_000, 120.0);
         assert_eq!(free.outputs()[0], -1.0, "a saw starts at its floor");
         free.retrigger();
-        free.tick(48_000, 0, 120.0);
-        assert_eq!(
-            free.outputs()[0],
-            -0.5,
-            "a free-running LFO must ignore retrigger"
-        );
+        free.run(48_000, 0, 120.0);
+        assert_eq!(free.outputs()[0], -0.5, "a free-running LFO must ignore retrigger");
 
         let mut played = lfo(ModLfoParams {
             rate_hz: 1.0,
@@ -1024,24 +1049,24 @@ mod tests {
             retrigger: true,
             ..ModLfoParams::default()
         });
-        played.tick(48_000, 12_000, 120.0);
+        played.run(48_000, 12_000, 120.0);
         played.retrigger();
-        played.tick(48_000, 0, 120.0);
+        played.run(48_000, 0, 120.0);
         assert_eq!(played.outputs()[0], -1.0, "saw must restart at its floor");
     }
 
     #[test]
     fn tempo_synced_rate_follows_the_current_bpm() {
-        let mut rack = lfo(ModLfoParams {
+        let mut set = lfo(ModLfoParams {
             tempo_sync: true,
             rate_division: mooloop_core::ModTimeDivision::Quarter,
             ..ModLfoParams::default()
         });
         // At 120 BPM a quarter-note cycle is 0.5 seconds. One eighth of a
         // second advances to the sine peak.
-        rack.tick(48_000, 6_000, 120.0);
-        rack.tick(48_000, 0, 120.0);
-        assert!((rack.outputs()[0] - 1.0).abs() < 1e-3);
+        set.run(48_000, 6_000, 120.0);
+        set.run(48_000, 0, 120.0);
+        assert!((set.outputs()[0] - 1.0).abs() < 1e-3);
     }
 
     fn synced(waveform: ModLfoWaveform) -> ModLfoParams {
@@ -1054,37 +1079,33 @@ mod tests {
     }
 
     /// **A synced LFO's phase is the song position's** (MOO-127).
-    ///
-    /// Shaped against the unfixed rack, which advanced by elapsed frames
-    /// only: after running free, the downbeat read wherever the free run had
-    /// left the phase, not zero.
     #[test]
     fn a_synced_lfo_lands_on_the_phase_the_song_position_implies() {
         for waveform in [ModLfoWaveform::Sine, ModLfoWaveform::Saw, ModLfoWaveform::Random] {
-            let mut rack = lfo(synced(waveform));
-            rack.tick_at(48_000, 32, 120.0, Some(0.0));
-            let downbeat = rack.outputs()[0];
+            let mut set = lfo(synced(waveform));
+            set.run_at(48_000, 32, 120.0, Some(0.0));
+            let downbeat = set.outputs()[0];
             // Stopped for a while: it free-runs somewhere else.
             for _ in 0..777 {
-                rack.tick_at(48_000, 32, 120.0, None);
+                set.run_at(48_000, 32, 120.0, None);
             }
             // Play from the top again: the same value on the downbeat.
-            rack.tick_at(48_000, 32, 120.0, Some(0.0));
-            assert_eq!(rack.outputs()[0], downbeat, "{waveform:?}");
+            set.run_at(48_000, 32, 120.0, Some(0.0));
+            assert_eq!(set.outputs()[0], downbeat, "{waveform:?}");
 
             // A seek to bar 3 reads what continuous playback from bar 1 read
-            // there, and so does a fresh rack, which is what an export builds.
+            // there, and so does a fresh set, which is what an export builds.
             let mut continuous = lfo(synced(waveform));
             let mut beats = 0.0;
             while beats < 8.0 {
-                continuous.tick_at(48_000, 32, 120.0, Some(beats));
+                continuous.run_at(48_000, 32, 120.0, Some(beats));
                 beats += 32.0 / 24_000.0;
             }
-            continuous.tick_at(48_000, 32, 120.0, Some(8.0));
-            rack.tick_at(48_000, 32, 120.0, Some(8.0));
+            continuous.run_at(48_000, 32, 120.0, Some(8.0));
+            set.run_at(48_000, 32, 120.0, Some(8.0));
             let mut fresh = lfo(synced(waveform));
-            fresh.tick_at(48_000, 32, 120.0, Some(8.0));
-            assert_eq!(rack.outputs()[0], continuous.outputs()[0], "{waveform:?}");
+            fresh.run_at(48_000, 32, 120.0, Some(8.0));
+            assert_eq!(set.outputs()[0], continuous.outputs()[0], "{waveform:?}");
             assert_eq!(fresh.outputs()[0], continuous.outputs()[0], "{waveform:?}");
         }
     }
@@ -1093,10 +1114,10 @@ mod tests {
     /// wherever the free run had got to.
     #[test]
     fn a_synced_sine_follows_the_beat_it_is_told() {
-        let mut rack = lfo(synced(ModLfoWaveform::Sine));
-        rack.tick_at(48_000, 5_000, 90.0, None);
-        rack.tick_at(48_000, 32, 90.0, Some(1.0));
-        assert!((rack.outputs()[0] - 1.0).abs() < 1e-5, "{}", rack.outputs()[0]);
+        let mut set = lfo(synced(ModLfoWaveform::Sine));
+        set.run_at(48_000, 5_000, 90.0, None);
+        set.run_at(48_000, 32, 90.0, Some(1.0));
+        assert!((set.outputs()[0] - 1.0).abs() < 1e-5, "{}", set.outputs()[0]);
     }
 
     /// Unsynced, or retriggered by notes, it runs as it always did.
@@ -1112,8 +1133,8 @@ mod tests {
             let mut told = lfo(params);
             let mut free = lfo(params);
             for step in 0..100 {
-                told.tick_at(48_000, 32, 120.0, Some(f64::from(step) * 3.7));
-                free.tick(48_000, 32, 120.0);
+                told.run_at(48_000, 32, 120.0, Some(f64::from(step) * 3.7));
+                free.run(48_000, 32, 120.0);
                 assert_eq!(told.outputs()[0], free.outputs()[0]);
             }
         }
@@ -1121,137 +1142,114 @@ mod tests {
 
     #[test]
     fn fade_in_scales_output_and_restarts_with_a_note_trigger() {
-        let mut rack = lfo(ModLfoParams {
+        let mut set = lfo(ModLfoParams {
             waveform: ModLfoWaveform::Square,
             retrigger: true,
             fade_in_seconds: 1.0,
             ..ModLfoParams::default()
         });
-        rack.tick(48_000, 24_000, 120.0);
-        assert_eq!(rack.outputs()[0], 0.0);
-        rack.tick(48_000, 0, 120.0);
-        assert!((rack.outputs()[0].abs() - 0.5).abs() < 1e-6);
-        rack.retrigger();
-        rack.tick(48_000, 0, 120.0);
-        assert_eq!(rack.outputs()[0], 0.0);
+        set.run(48_000, 24_000, 120.0);
+        assert_eq!(set.outputs()[0], 0.0);
+        set.run(48_000, 0, 120.0);
+        assert!((set.outputs()[0].abs() - 0.5).abs() < 1e-6);
+        set.retrigger();
+        set.run(48_000, 0, 120.0);
+        assert_eq!(set.outputs()[0], 0.0);
 
-        rack.tick(48_000, 48_000, 120.0);
-        rack.set_slot(
+        set.run(48_000, 48_000, 120.0);
+        set.retune(
             0,
-            Some(ModulatorParams::Lfo(ModLfoParams {
+            ModulatorParams::Lfo(ModLfoParams {
                 waveform: ModLfoWaveform::Square,
                 retrigger: true,
                 fade_in_seconds: 2.0,
                 ..ModLfoParams::default()
-            })),
+            }),
         );
-        rack.tick(48_000, 0, 120.0);
-        assert_eq!(
-            rack.outputs()[0],
-            0.0,
-            "editing fade must audition a new ramp"
-        );
+        set.run(48_000, 0, 120.0);
+        assert_eq!(set.outputs()[0], 0.0, "editing fade must audition a new ramp");
     }
 
     #[test]
     fn pulse_width_moves_the_square_transition() {
-        let mut rack = lfo(ModLfoParams {
+        let mut set = lfo(ModLfoParams {
             rate_hz: 1.0,
             waveform: ModLfoWaveform::Square,
             pulse_width: 0.2,
             ..ModLfoParams::default()
         });
-        rack.tick(48_000, 12_000, 120.0);
-        rack.tick(48_000, 0, 120.0);
-        assert_eq!(rack.outputs()[0], -1.0, "25% phase is past a 20% pulse");
+        set.run(48_000, 12_000, 120.0);
+        set.run(48_000, 0, 120.0);
+        assert_eq!(set.outputs()[0], -1.0, "25% phase is past a 20% pulse");
     }
 
     #[test]
     fn smoothing_slews_instead_of_stepping_between_levels() {
-        let mut rack = lfo(ModLfoParams {
+        let mut set = lfo(ModLfoParams {
             rate_hz: 1.0,
             waveform: ModLfoWaveform::Square,
             pulse_width: 0.2,
             smoothing_seconds: 0.5,
             ..ModLfoParams::default()
         });
-        rack.tick(48_000, 12_000, 120.0);
-        assert_eq!(rack.outputs()[0], 1.0);
-        rack.tick(48_000, 4_800, 120.0);
+        set.run(48_000, 12_000, 120.0);
+        assert_eq!(set.outputs()[0], 1.0);
+        set.run(48_000, 4_800, 120.0);
         assert!(
-            (-1.0..1.0).contains(&rack.outputs()[0]),
+            (-1.0..1.0).contains(&set.outputs()[0]),
             "smoothed transition jumped to {}",
-            rack.outputs()[0]
+            set.outputs()[0]
         );
     }
 
+    fn envelope_on(seat: u8, params: ModEnvelopeParams) -> ModulatorSet {
+        ModulatorSet::new([ModuleSpec {
+            gate: Some(seat),
+            ..spec(0, ModulatorParams::Envelope(params))
+        }])
+    }
+
     #[test]
-    fn envelope_follows_its_selected_channel_gate_through_release() {
-        let mut rack = ModulatorRack::new();
-        rack.set_slot(
-            0,
-            Some(ModulatorParams::Envelope(ModEnvelopeParams {
-                input_channel: 2,
+    fn envelope_follows_its_input_channels_gate_through_release() {
+        let mut set = envelope_on(
+            2,
+            ModEnvelopeParams {
                 attack_seconds: 0.1,
                 decay_seconds: 0.0,
                 sustain: 1.0,
                 release_seconds: 0.1,
                 ..ModEnvelopeParams::default()
-            })),
+            },
         );
-        let mut gates = [NoteGateEvents::default(); MAX_CHANNELS];
+        let mut gates = NO_GATES;
         gates[2].note_ons = 1;
-        rack.tick_with_note_gates(48_000, 4_800, 120.0, None, 0, &gates);
-        assert_eq!(rack.outputs()[0], -1.0, "attack starts at the floor");
-        rack.tick_with_note_gates(
-            48_000,
-            0,
-            120.0,
-            None,
-            0,
-            &[NoteGateEvents::default(); MAX_CHANNELS],
-        );
-        assert_eq!(rack.outputs()[0], 1.0, "attack reaches the ceiling");
+        set.tick(48_000, 4_800, 120.0, None, &gates);
+        assert_eq!(set.outputs()[0], -1.0, "attack starts at the floor");
+        set.run(48_000, 0, 120.0);
+        assert_eq!(set.outputs()[0], 1.0, "attack reaches the ceiling");
 
-        gates = [NoteGateEvents::default(); MAX_CHANNELS];
+        gates = NO_GATES;
         gates[2].note_offs = 1;
-        rack.tick_with_note_gates(48_000, 4_800, 120.0, None, 0, &gates);
-        assert_eq!(rack.outputs()[0], 1.0, "release begins from the held level");
-        rack.tick_with_note_gates(
-            48_000,
-            0,
-            120.0,
-            None,
-            0,
-            &[NoteGateEvents::default(); MAX_CHANNELS],
-        );
-        assert_eq!(rack.outputs()[0], -1.0, "release returns to the floor");
+        set.tick(48_000, 4_800, 120.0, None, &gates);
+        assert_eq!(set.outputs()[0], 1.0, "release begins from the held level");
+        set.run(48_000, 0, 120.0);
+        assert_eq!(set.outputs()[0], -1.0, "release returns to the floor");
     }
 
     #[test]
-    fn envelope_ignores_unselected_channel_notes() {
-        let mut rack = ModulatorRack::new();
-        rack.set_slot(
-            0,
-            Some(ModulatorParams::Envelope(ModEnvelopeParams {
-                input_channel: 3,
+    fn envelope_ignores_other_channels_notes() {
+        let mut set = envelope_on(
+            3,
+            ModEnvelopeParams {
                 attack_seconds: 0.0,
                 ..ModEnvelopeParams::default()
-            })),
+            },
         );
-        let mut gates = [NoteGateEvents::default(); MAX_CHANNELS];
+        let mut gates = NO_GATES;
         gates[1].note_ons = 1;
-        rack.tick_with_note_gates(48_000, 32, 120.0, None, 0, &gates);
-        rack.tick(48_000, 0, 120.0);
-        assert_eq!(rack.outputs()[0], -1.0);
-    }
-
-    fn rack_with(slots: &[(usize, ModulatorParams)]) -> ModulatorRack {
-        let mut rack = ModulatorRack::new();
-        for (slot, params) in slots {
-            rack.set_slot(*slot, Some(*params));
-        }
-        rack
+        set.tick(48_000, 32, 120.0, None, &gates);
+        set.run(48_000, 0, 120.0);
+        assert_eq!(set.outputs()[0], -1.0);
     }
 
     /// A pattern whose every step is the same value, for wiring a
@@ -1276,18 +1274,15 @@ mod tests {
         // The tail is inside the array but outside `length`, so it must not
         // play: shortening a pattern hides steps rather than deleting them.
         steps[3] = 0.25;
-        let mut rack = rack_with(&[(
-            0,
-            ModulatorParams::Step(ModStepParams {
-                steps,
-                length: 3,
-                division: mooloop_core::ModTimeDivision::Sixteenth,
-                ..ModStepParams::default()
-            }),
-        )]);
+        let mut set = set_of(&[ModulatorParams::Step(ModStepParams {
+            steps,
+            length: 3,
+            division: mooloop_core::ModTimeDivision::Sixteenth,
+            ..ModStepParams::default()
+        })]);
         for expected in [1.0, -1.0, 0.5, 1.0, -1.0] {
-            rack.tick(48_000, STEP_FRAMES, 120.0);
-            assert_eq!(rack.outputs()[0], expected);
+            set.run(48_000, STEP_FRAMES, 120.0);
+            assert_eq!(set.outputs()[0], expected);
         }
     }
 
@@ -1306,79 +1301,77 @@ mod tests {
             glide: 1.0,
             ..ModStepParams::default()
         };
-        let mut rack = rack_with(&[(0, ModulatorParams::Step(params))]);
-        rack.tick(48_000, STEP_FRAMES, 120.0);
-        assert_eq!(rack.outputs()[0], 1.0, "the first step starts at its value");
-        rack.tick(48_000, STEP_FRAMES / 2, 120.0);
-        assert_eq!(rack.outputs()[0], 1.0, "a full glide leaves from the old value");
-        rack.tick(48_000, 0, 120.0);
+        let mut set = set_of(&[ModulatorParams::Step(params)]);
+        set.run(48_000, STEP_FRAMES, 120.0);
+        assert_eq!(set.outputs()[0], 1.0, "the first step starts at its value");
+        set.run(48_000, STEP_FRAMES / 2, 120.0);
+        assert_eq!(set.outputs()[0], 1.0, "a full glide leaves from the old value");
+        set.run(48_000, 0, 120.0);
         assert!(
-            rack.outputs()[0].abs() < 1e-6,
+            set.outputs()[0].abs() < 1e-6,
             "half a glide should be halfway: {}",
-            rack.outputs()[0]
+            set.outputs()[0]
         );
 
-        let mut hard = rack_with(&[(
-            0,
-            ModulatorParams::Step(ModStepParams {
-                glide: 0.0,
-                ..params
-            }),
-        )]);
-        hard.tick(48_000, STEP_FRAMES, 120.0);
-        hard.tick(48_000, STEP_FRAMES / 2, 120.0);
+        let mut hard = set_of(&[ModulatorParams::Step(ModStepParams {
+            glide: 0.0,
+            ..params
+        })]);
+        hard.run(48_000, STEP_FRAMES, 120.0);
+        hard.run(48_000, STEP_FRAMES / 2, 120.0);
         assert_eq!(hard.outputs()[0], -1.0, "no glide must step, not slide");
     }
 
     #[test]
-    fn a_note_advance_pattern_ignores_the_clock_and_moves_on_notes() {
+    fn a_note_advance_pattern_ignores_the_clock_and_moves_on_its_inputs_notes() {
         let mut steps = [0.0; MOD_STEP_MAX_STEPS];
         steps[0] = 1.0;
         steps[1] = -1.0;
-        let mut rack = rack_with(&[(
-            0,
-            ModulatorParams::Step(ModStepParams {
-                steps,
-                length: 2,
-                trigger: ModStepTrigger::NoteAdvance,
-                ..ModStepParams::default()
-            }),
-        )]);
+        let mut set = ModulatorSet::new([ModuleSpec {
+            gate: Some(1),
+            ..spec(
+                0,
+                ModulatorParams::Step(ModStepParams {
+                    steps,
+                    length: 2,
+                    trigger: ModStepTrigger::NoteAdvance,
+                    ..ModStepParams::default()
+                }),
+            )
+        }]);
         for _ in 0..8 {
-            rack.tick(48_000, STEP_FRAMES, 120.0);
-            assert_eq!(rack.outputs()[0], 1.0, "the clock must not advance it");
+            set.run(48_000, STEP_FRAMES, 120.0);
+            assert_eq!(set.outputs()[0], 1.0, "the clock must not advance it");
         }
-        let mut gates = [NoteGateEvents::default(); MAX_CHANNELS];
+        let mut gates = NO_GATES;
+        gates[0].note_ons = 1;
+        set.tick(48_000, 0, 120.0, None, &gates);
+        assert_eq!(set.outputs()[0], 1.0, "another channel's notes must not");
+        gates = NO_GATES;
         gates[1].note_ons = 1;
-        rack.tick_with_note_gates(48_000, 0, 120.0, None, 1, &gates);
-        assert_eq!(rack.outputs()[0], -1.0);
+        set.tick(48_000, 0, 120.0, None, &gates);
+        assert_eq!(set.outputs()[0], -1.0);
     }
 
     /// Probability is the whole musical point of the random module: at zero
     /// it freezes what it holds, at one it draws on every clock.
     #[test]
     fn probability_gates_whether_a_due_draw_lands() {
-        let mut frozen = rack_with(&[(
-            0,
-            ModulatorParams::Random(ModRandomParams {
-                probability: 0.0,
-                ..ModRandomParams::default()
-            }),
-        )]);
-        frozen.tick(48_000, 0, 120.0);
+        let mut frozen = set_of(&[ModulatorParams::Random(ModRandomParams {
+            probability: 0.0,
+            ..ModRandomParams::default()
+        })]);
+        frozen.run(48_000, 0, 120.0);
         let held = frozen.outputs()[0];
         for _ in 0..32 {
-            frozen.tick(48_000, 48_000, 120.0);
+            frozen.run(48_000, 48_000, 120.0);
             assert_eq!(frozen.outputs()[0], held, "chance zero must freeze");
         }
 
-        let mut always = rack_with(&[(
-            0,
-            ModulatorParams::Random(ModRandomParams::default()),
-        )]);
+        let mut always = set_of(&[ModulatorParams::Random(ModRandomParams::default())]);
         let mut seen = Vec::new();
         for _ in 0..32 {
-            always.tick(48_000, 48_000, 120.0);
+            always.run(48_000, 48_000, 120.0);
             let value = always.outputs()[0];
             assert!((-1.0..=1.0).contains(&value), "out of range: {value}");
             if !seen.contains(&value) {
@@ -1394,19 +1387,16 @@ mod tests {
     #[test]
     fn a_drunk_walk_stays_bounded_and_takes_small_steps() {
         let walk = 0.1;
-        let mut rack = rack_with(&[(
-            0,
-            ModulatorParams::Random(ModRandomParams {
-                drunk: true,
-                walk,
-                ..ModRandomParams::default()
-            }),
-        )]);
-        rack.tick(48_000, 0, 120.0);
-        let mut previous = rack.outputs()[0];
+        let mut set = set_of(&[ModulatorParams::Random(ModRandomParams {
+            drunk: true,
+            walk,
+            ..ModRandomParams::default()
+        })]);
+        set.run(48_000, 0, 120.0);
+        let mut previous = set.outputs()[0];
         for _ in 0..256 {
-            rack.tick(48_000, 48_000, 120.0);
-            let value = rack.outputs()[0];
+            set.run(48_000, 48_000, 120.0);
+            let value = set.outputs()[0];
             assert!((-1.0..=1.0).contains(&value), "escaped the range: {value}");
             assert!(
                 (value - previous).abs() <= walk + 1e-5,
@@ -1417,52 +1407,47 @@ mod tests {
         }
     }
 
-    /// Two random modules on one channel must not be the same random
-    /// module. Seeding from the slot decorrelates them without giving up
-    /// the determinism an offline render depends on.
+    /// Two random modules must not be the same random module. Seeding each
+    /// from its own seed decorrelates them without giving up the determinism
+    /// an offline render depends on.
     #[test]
-    fn random_slots_draw_independent_sequences() {
-        let mut rack = rack_with(&[
-            (0, ModulatorParams::Random(ModRandomParams::default())),
-            (1, ModulatorParams::Random(ModRandomParams::default())),
-        ]);
+    fn random_modules_draw_independent_sequences() {
+        let random = ModulatorParams::Random(ModRandomParams::default());
+        let mut set = set_of(&[random, random]);
         let mut differed = false;
         for _ in 0..16 {
-            rack.tick(48_000, 48_000, 120.0);
-            differed |= rack.outputs()[0] != rack.outputs()[1];
+            set.run(48_000, 48_000, 120.0);
+            differed |= set.outputs()[0] != set.outputs()[1];
         }
-        assert!(differed, "both slots drew the same sequence");
+        assert!(differed, "both modules drew the same sequence");
 
-        // Same rack, same ticks, same values: the sequence is reproducible.
-        let mut replay = rack_with(&[(0, ModulatorParams::Random(ModRandomParams::default()))]);
+        // Same seed, same ticks, same values: the sequence is reproducible.
+        let mut replay = set_of(&[random]);
         let mut first = Vec::new();
         for _ in 0..16 {
-            replay.tick(48_000, 48_000, 120.0);
+            replay.run(48_000, 48_000, 120.0);
             first.push(replay.outputs()[0]);
         }
-        let mut again = rack_with(&[(0, ModulatorParams::Random(ModRandomParams::default()))]);
+        let mut again = set_of(&[random]);
         for expected in first {
-            again.tick(48_000, 48_000, 120.0);
+            again.run(48_000, 48_000, 120.0);
             assert_eq!(again.outputs()[0], expected);
         }
     }
 
     #[test]
     fn quantized_draws_land_on_the_grid_and_unipolar_lifts_to_the_wire() {
-        let mut rack = rack_with(&[(
-            0,
-            ModulatorParams::Random(ModRandomParams {
-                bipolar: false,
-                quantize: 3,
-                ..ModRandomParams::default()
-            }),
-        )]);
+        let mut set = set_of(&[ModulatorParams::Random(ModRandomParams {
+            bipolar: false,
+            quantize: 3,
+            ..ModRandomParams::default()
+        })]);
         // Three levels across 0..1 are 0, 0.5 and 1, carried on the signed
         // wire as -1, 0 and 1 exactly as the envelope carries its unipolar
         // contour.
         for _ in 0..32 {
-            rack.tick(48_000, 48_000, 120.0);
-            let value = rack.outputs()[0];
+            set.run(48_000, 48_000, 120.0);
+            let value = set.outputs()[0];
             assert!(
                 [-1.0, 0.0, 1.0].iter().any(|level| (value - level).abs() < 1e-5),
                 "off the grid: {value}"
@@ -1470,41 +1455,29 @@ mod tests {
         }
     }
 
-    /// The slot-order rule, stated in both directions: a module reading a
-    /// lower slot sees this tick's value, and one reading a higher slot sees
-    /// the previous tick's.
+    fn math(input_slot: u8, op: ModMathOp, operand: f32) -> ModulatorParams {
+        ModulatorParams::Math(ModMathParams {
+            input_slot,
+            op,
+            operand,
+            ..ModMathParams::default()
+        })
+    }
+
+    /// The list-order rule, stated in both directions: a module reading one
+    /// listed before it sees this tick's value, and one reading a module
+    /// listed after it sees the previous tick's.
     #[test]
     fn math_reads_lower_slots_now_and_higher_slots_one_tick_late() {
-        let doubler = ModulatorParams::Math(ModMathParams {
-            input_slot: 0,
-            op: ModMathOp::Multiply,
-            operand: 2.0,
-            ..ModMathParams::default()
-        });
-        let mut forward = rack_with(&[(0, constant_step(0.25)), (1, doubler)]);
-        forward.tick(48_000, 0, 120.0);
+        let mut forward = set_of(&[constant_step(0.25), math(0, ModMathOp::Multiply, 2.0)]);
+        forward.run(48_000, 0, 120.0);
         assert_eq!(forward.outputs()[0], 0.25);
-        assert_eq!(forward.outputs()[1], 0.5, "a lower slot resolves this tick");
+        assert_eq!(forward.outputs()[1], 0.5, "an earlier module resolves this tick");
 
-        let mut backward = rack_with(&[
-            (
-                0,
-                ModulatorParams::Math(ModMathParams {
-                    input_slot: 2,
-                    op: ModMathOp::Multiply,
-                    operand: 2.0,
-                    ..ModMathParams::default()
-                }),
-            ),
-            (2, constant_step(0.25)),
-        ]);
-        backward.tick(48_000, 0, 120.0);
-        assert_eq!(
-            backward.outputs()[0],
-            0.0,
-            "a higher slot must still read last tick"
-        );
-        backward.tick(48_000, 0, 120.0);
+        let mut backward = set_of(&[math(1, ModMathOp::Multiply, 2.0), constant_step(0.25)]);
+        backward.run(48_000, 0, 120.0);
+        assert_eq!(backward.outputs()[0], 0.0, "a later module must still read last tick");
+        backward.run(48_000, 0, 120.0);
         assert_eq!(backward.outputs()[0], 0.5);
     }
 
@@ -1512,156 +1485,68 @@ mod tests {
     /// and the module's own output clamp keeps the feedback bounded.
     #[test]
     fn a_math_module_reading_itself_is_bounded_by_its_output_clamp() {
-        let mut rack = rack_with(&[(
-            0,
-            ModulatorParams::Math(ModMathParams {
-                input_slot: 0,
-                op: ModMathOp::Add,
-                operand: 0.25,
-                ..ModMathParams::default()
-            }),
-        )]);
+        let mut set = set_of(&[math(0, ModMathOp::Add, 0.25)]);
         for expected in [0.25, 0.5, 0.75, 1.0, 1.0, 1.0] {
-            rack.tick(48_000, 0, 120.0);
-            assert_eq!(rack.outputs()[0], expected);
+            set.run(48_000, 0, 120.0);
+            assert_eq!(set.outputs()[0], expected);
         }
     }
 
     #[test]
     fn math_refuses_to_divide_by_zero_or_to_invert_a_clamp() {
-        let mut divide = rack_with(&[
-            (0, constant_step(0.5)),
-            (
-                1,
-                ModulatorParams::Math(ModMathParams {
-                    input_slot: 0,
-                    op: ModMathOp::Divide,
-                    operand: 0.0,
-                    ..ModMathParams::default()
-                }),
-            ),
-        ]);
-        divide.tick(48_000, 0, 120.0);
+        let mut divide = set_of(&[constant_step(0.5), math(0, ModMathOp::Divide, 0.0)]);
+        divide.run(48_000, 0, 120.0);
         assert!(divide.outputs()[1].is_finite());
         assert_eq!(divide.outputs()[1], 1.0, "a tiny divisor still clamps");
 
-        let mut inverted = rack_with(&[
-            (0, constant_step(0.5)),
-            (
-                1,
-                ModulatorParams::Math(ModMathParams {
-                    input_slot: 0,
-                    op: ModMathOp::Clamp,
-                    clamp_low: 1.0,
-                    clamp_high: -1.0,
-                    ..ModMathParams::default()
-                }),
-            ),
+        let mut inverted = set_of(&[
+            constant_step(0.5),
+            ModulatorParams::Math(ModMathParams {
+                input_slot: 0,
+                op: ModMathOp::Clamp,
+                clamp_low: 1.0,
+                clamp_high: -1.0,
+                ..ModMathParams::default()
+            }),
         ]);
-        inverted.tick(48_000, 0, 120.0);
+        inverted.run(48_000, 0, 120.0);
         assert_eq!(inverted.outputs()[1], 0.5);
     }
-}
 
-#[cfg(test)]
-mod permute_tests {
-    use super::*;
-    use mooloop_core::modulation::UNRESOLVED_SLOT;
-    use mooloop_core::{ModLfoParams, ModRandomParams, ModulatorParams, MAX_MODULATORS_PER_CHANNEL};
-
-    fn identity() -> [u8; MAX_MODULATORS_PER_CHANNEL] {
-        let mut map = [UNRESOLVED_SLOT; MAX_MODULATORS_PER_CHANNEL];
-        for (slot, entry) in map.iter_mut().enumerate() {
-            *entry = slot as u8;
-        }
-        map
-    }
-
-    /// **Two modules of the same kind swapped keep their own running state.**
-    ///
-    /// This is the half of the reorder defect that is indefensible under any
-    /// reading. `set_slot` retunes an LFO in place, which is right for a rate
-    /// knob and wrong for a drag: the engine mirrored a reorder as a params
-    /// diff by slot number, so each LFO kept the phase it had and took the
-    /// *other's* params. Both jumped, and nothing on screen said why.
-    ///
-    /// Asserted through the outputs rather than through the phases, because
-    /// the output is what a route reads and what the user hears. The two LFOs
-    /// run at different rates and start a quarter cycle apart, so their
-    /// values stay distinguishable through the swap.
+    /// **A module carried into a new set keeps running as itself**, wherever
+    /// it lands in the list: a module added before it moves its position and
+    /// must not restart its phase, take its neighbour's, or reseed a Random.
     #[test]
-    fn swapping_two_lfos_carries_each_ones_phase_with_it() {
-        let mut rack = ModulatorRack::new();
-        rack.set_slot(
-            0,
-            Some(ModulatorParams::Lfo(ModLfoParams {
-                rate_hz: 1.0,
-                phase: 0.0,
-                ..ModLfoParams::default()
-            })),
-        );
-        rack.set_slot(
-            1,
-            Some(ModulatorParams::Lfo(ModLfoParams {
-                rate_hz: 7.0,
-                phase: 0.25,
-                ..ModLfoParams::default()
-            })),
-        );
-        // Run them apart.
+    fn a_carried_module_keeps_its_running_state_at_its_new_position() {
+        let slow = ModulatorParams::Lfo(ModLfoParams {
+            rate_hz: 1.0,
+            ..ModLfoParams::default()
+        });
+        let fast = ModulatorParams::Lfo(ModLfoParams {
+            rate_hz: 7.0,
+            phase: 0.25,
+            ..ModLfoParams::default()
+        });
+        let mut before = set_of(&[slow, fast]);
         for _ in 0..40 {
-            rack.tick(48_000, 32, 120.0);
+            before.run(48_000, 32, 120.0);
         }
-        let before = *rack.outputs();
-        assert!(
-            (before[0] - before[1]).abs() > 0.05,
-            "the two LFOs were indistinguishable to begin with: {before:?}"
-        );
+        let mut continued = before.clone();
+        continued.run(48_000, 32, 120.0);
 
-        let mut remap = identity();
-        remap[0] = 1;
-        remap[1] = 0;
-        rack.permute(&remap);
+        // The two swapped, with a new module in front of them.
+        let mut after = set_of(&[ModulatorParams::Random(ModRandomParams::default()), fast, slow]);
+        after.carry(1, &before, 1, false);
+        after.carry(2, &before, 0, false);
+        assert_eq!(after.outputs()[1], before.outputs()[1]);
+        after.run(48_000, 32, 120.0);
+        assert_eq!(after.outputs()[1], continued.outputs()[1]);
+        assert_eq!(after.outputs()[2], continued.outputs()[0]);
 
-        let after = *rack.outputs();
-        assert_eq!(after[0], before[1], "slot 0 did not receive slot 1's state");
-        assert_eq!(after[1], before[0], "slot 1 did not receive slot 0's state");
-
-        // And they go on running as themselves: one more tick must move each
-        // by the amount *its own* rate implies, not the other's.
-        rack.tick(48_000, 32, 120.0);
-        let stepped = *rack.outputs();
-        assert!(
-            (stepped[0] - after[0]).abs() > (stepped[1] - after[1]).abs(),
-            "the fast LFO is no longer in slot 0 after the swap: {stepped:?}"
-        );
-    }
-
-    /// A slot the permutation does not name is emptied rather than left
-    /// holding a module that has moved away. Written because clearing first
-    /// and writing second is the only reason that holds, and a later
-    /// in-place implementation would lose it silently.
-    #[test]
-    fn a_slot_the_permutation_does_not_name_is_left_empty() {
-        let mut rack = ModulatorRack::new();
-        rack.set_slot(0, Some(ModulatorParams::Lfo(ModLfoParams::default())));
-        rack.set_slot(
-            1,
-            Some(ModulatorParams::Random(ModRandomParams::default())),
-        );
-        rack.tick(48_000, 32, 120.0);
-        assert!(!rack.is_empty());
-
-        // Compaction: both modules move down to slot 0 and 1 is vacated.
-        let mut remap = [UNRESOLVED_SLOT; MAX_MODULATORS_PER_CHANNEL];
-        remap[1] = 0;
-        rack.permute(&remap);
-
-        rack.tick(48_000, 32, 120.0);
-        assert_eq!(
-            rack.outputs()[1],
-            0.0,
-            "the vacated slot still published a value"
-        );
+        // A kind change is not a carry.
+        let mut changed = set_of(&[constant_step(0.5)]);
+        changed.carry(0, &before, 0, false);
+        changed.run(48_000, 0, 120.0);
+        assert_eq!(changed.outputs()[0], 0.5);
     }
 }

@@ -748,6 +748,9 @@ impl Session {
         self.sampler_stretch_sent = mirrors.sampler_stretch;
         self.channel_solo_silenced_sent = self.channel_solo_silenced();
         self.audio_graph_sent = self.audio_graph_plan();
+        // The edit carried the edited document's set, re-seated, so the
+        // engine holds exactly this side's plan.
+        self.modulation_sent = self.modulation_plan();
     }
 
     /// What each producer must wait, from the project as it stands.
@@ -1078,6 +1081,69 @@ impl Session {
             return;
         }
         self.audio_graph_sent = plan;
+    }
+
+    /// The song's modulation set, resolved against this session's seats as
+    /// the engine runs it.
+    pub fn modulation_plan(&self) -> mooloop_core::CompiledModulation {
+        mooloop_core::CompiledModulation::compile(&self.modulation, |id| {
+            self.channel_index(id).and_then(|seat| u8::try_from(seat).ok())
+        })
+    }
+
+    /// Reconcile the engine's modulation set with the song's
+    /// (`docs/plans/song-modulation/02-the-engine-runs-one-set.md`).
+    ///
+    /// Called from the pump beside [`Self::sync_audio_graph`], for the same
+    /// reasons: every modulation verb only edits the document, and deriving
+    /// and diffing once a tick cannot be forgotten by one of them. What
+    /// differs only in a module's params or a route's depth or polarity --
+    /// a knob drag, a frame at a time -- goes as one small command per fact
+    /// that moved. Anything else changes the set's shape and goes whole, as
+    /// a set built here at its own size; the engine carries every module's
+    /// running state into it by identity. Does not mark the document dirty:
+    /// this is derived state.
+    pub fn sync_modulation(&mut self, handle: &mut impl CommandSink) {
+        let plan = self.modulation_plan();
+        if plan == self.modulation_sent {
+            return;
+        }
+        if plan.same_shape(&self.modulation_sent) {
+            let mut sent = true;
+            for (now, was) in plan.modules.iter().zip(&self.modulation_sent.modules) {
+                if now.params != was.params {
+                    sent &= handle.send(EngineCommand::SetModulator {
+                        source: now.id,
+                        params: now.params,
+                    });
+                }
+            }
+            for (now, was) in plan.routes.iter().zip(&self.modulation_sent.routes) {
+                if now.depth != was.depth || now.polarity != was.polarity {
+                    sent &= handle.send(EngineCommand::SetModRoute {
+                        route: mooloop_core::ModRoute {
+                            source: now.source,
+                            source_slot: mooloop_core::modulation::UNRESOLVED_SLOT,
+                            destination: now.destination,
+                            depth: now.depth,
+                            polarity: now.polarity,
+                        },
+                    });
+                }
+            }
+            // A refused retune is sent again next tick: each names its whole
+            // fact, so the ones that did land land again unchanged.
+            if !sent {
+                self.report_refused_command("modulation");
+                return;
+            }
+        } else if !handle.send_structural(StructuralCommand::SetModulation {
+            set: mooloop_engine::SongModulator::new(plan.clone()),
+        }) {
+            self.report_refused_command("modulation");
+            return;
+        }
+        self.modulation_sent = plan;
     }
 
     /// Applies one queued message that needs nothing but the engine handle.

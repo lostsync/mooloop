@@ -802,7 +802,7 @@ mod paste_tests {
     fn a_paste_shares_the_copied_channels_modules() {
         use mooloop_core::{ModPolarity, ModRoute, ModulatorKind, ParamAddr, STRIP_PARAM_VOLUME};
         let mut session = Session::default();
-        assert!(!session.add_modulation_source(ModulatorKind::Lfo).is_empty());
+        assert!(session.add_modulation_source(ModulatorKind::Lfo));
         let volume = |seat| ParamAddr::strip(mooloop_core::EffectTarget::Channel(seat), STRIP_PARAM_VOLUME);
         session
             .edit_selected_rack(|rack| rack.add_route(ModRoute::to_slot(0, volume(0), 0.5, ModPolarity::Bipolar)))
@@ -835,7 +835,7 @@ mod paste_tests {
         assert!(pasted.project.channel_rack(1).has_routes());
 
         // Deleted since the copy: the route has nothing to come from.
-        assert!(!session.remove_modulation_source(0).is_empty());
+        assert!(session.remove_modulation_source(0));
         assert_eq!(copy.routes_without_module(&session.modulation), 1);
         let (pasted, _) = session
             .paste_channel(&snapshot(&session), 0, copy)

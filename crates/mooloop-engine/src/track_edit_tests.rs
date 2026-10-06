@@ -356,23 +356,19 @@ fn a_track_edit_keeps_every_other_strip() {
     }
 }
 
-/// **Every channel's modulation matrix is the incoming project's**: a route
-/// to a moved track's device follows it, and one to a removed track's goes.
-/// Held to the matrix rather than to the sound, because the engine does not
-/// yet apply a channel's route to a track's chain, so no render can hear it.
+/// **The song's modulation set is the incoming project's**: a route to a
+/// moved track's device follows it, and one to a removed track's goes.
 #[test]
 fn a_track_edit_rescopes_every_route_to_a_track() {
     let project = song(false, true);
     for (edit, incoming) in edits(&project) {
         let mut live = playing(&project);
         assert!(reseat(&mut live, edit, &incoming).applied(), "{edit:?} was refused");
-        for seat in 0..incoming.channels.len() {
-            assert_eq!(
-                live.mod_rack(seat),
-                incoming.channel_rack(seat),
-                "{edit:?}: channel {seat}'s matrix is not the incoming project's"
-            );
-        }
+        assert_eq!(
+            *live.song_modulation().plan(),
+            crate::SongModulator::compile(&incoming),
+            "{edit:?}: the set is not the incoming project's"
+        );
     }
 }
 

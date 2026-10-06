@@ -72,7 +72,7 @@ fn a_device_parameter_undoes_to_what_it_was() {
 fn a_modulated_parameter_undoes_to_its_base_and_keeps_its_route() {
     let mut session = Session::default();
     assert!(
-        !session.add_modulation_source(ModulatorKind::Lfo).is_empty(),
+        session.add_modulation_source(ModulatorKind::Lfo),
         "an empty rack has a free slot"
     );
     session.toggle_modulation_assignment();

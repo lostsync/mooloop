@@ -171,6 +171,10 @@ pub struct Session {
     /// [`Self::compensation_sent`]: a record of what has been said to the
     /// audio thread, not document state.
     pub audio_graph_sent: mooloop_core::CompiledAudioGraph,
+    /// The song's modulation set as the engine has been told it, so the
+    /// pump's reconcile ([`Self::sync_modulation`]) sends only what changed.
+    /// Same status as [`Self::compensation_sent`].
+    pub modulation_sent: mooloop_core::CompiledModulation,
     /// The stretch pool size each sampler channel was last sent, parallel to
     /// [`Self::channels`], so the pump's reconcile resizes a pool only when
     /// Voices, the STRETCH switch or a lane on Voices changes what it wants
@@ -378,6 +382,7 @@ impl Default for Session {
             zone_audio: crate::sampler::ZoneAudioTable::default(),
             track_graph_sent: (mooloop_core::CompiledBusGraph::default(), Vec::new()),
             audio_graph_sent: mooloop_core::CompiledAudioGraph::default(),
+            modulation_sent: mooloop_core::CompiledModulation::default(),
             sample_request: HashMap::new(),
             sample_request_counter: 0,
             engine_queue_refused: false,
@@ -1687,6 +1692,11 @@ impl Session {
         // compiles and allocates its own bank, so this side must re-derive
         // rather than trust a plan for the document that just left.
         self.track_graph_sent = (mooloop_core::CompiledBusGraph::default(), Vec::new());
+        // The modulation set is the one exception: `RenderState::load_project`
+        // resolves the same document's set the same way, so what it holds is
+        // exactly this side's plan, and resending it would only carry every
+        // module into an identical copy of itself.
+        self.modulation_sent = self.modulation_plan();
         // A load points the device rack back at a channel; the bus the
         // previous document had open means nothing in this one.
         self.effect_target = EffectTarget::Channel(self.selected as u8);
@@ -1799,11 +1809,11 @@ impl Session {
             Some(index.and_then(|index| rack.routes[index]))
         });
         match added {
-            Some((Some(route), _)) => {
+            Some(Some(route)) => {
                 self.gesture_changed = true;
                 ArmedRoute::Added(route)
             }
-            Some((None, _)) => ArmedRoute::Full,
+            Some(None) => ArmedRoute::Full,
             None => ArmedRoute::Unchanged,
         }
     }

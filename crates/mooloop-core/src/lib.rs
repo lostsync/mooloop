@@ -22,6 +22,7 @@ pub mod input;
 pub mod lock_check;
 pub mod midi;
 pub mod modulation;
+pub mod modulation_plan;
 pub mod mixer;
 pub mod mod_metadata;
 pub mod mlm1;
@@ -85,6 +86,10 @@ pub use plugin::{
     PluginState, PluginStateChunk, PluginStateText,
 };
 pub use mlm1_factory::FactoryPatch;
+pub use modulation_plan::{
+    chain_index, CompiledModulation, CompiledModule, CompiledRoute, CompiledSource,
+    MODULATION_CHAINS,
+};
 pub use modulation::{
     step_value_index, strip_descriptor, ModEnvelopeParams, ModLfoParams, ModLfoWaveform,
     ModMathOp, ModMathParams, ModPolarity, ModRack, ModRandomParams, ModRandomTrigger, ModRoute,

@@ -908,7 +908,7 @@ fn add_route(h: &Harness, destination: ParamAddr) {
     let mut st = h.state.borrow_mut();
     if st.session.channel_rack(0).slots[0].is_none() {
         assert!(
-            !st.session.add_modulation_source(mooloop_core::ModulatorKind::Lfo).is_empty(),
+            st.session.add_modulation_source(mooloop_core::ModulatorKind::Lfo),
             "room for a modulator"
         );
     }
@@ -935,7 +935,7 @@ fn a_plugin_knob_arms_a_route_and_shows_its_ring() {
     {
         let mut st = h.state.borrow_mut();
         assert!(
-            !st.session.add_modulation_source(mooloop_core::ModulatorKind::Lfo).is_empty(),
+            st.session.add_modulation_source(mooloop_core::ModulatorKind::Lfo),
             "room for a modulator"
         );
         st.session.set_modulation_armed_slot(Some(0));

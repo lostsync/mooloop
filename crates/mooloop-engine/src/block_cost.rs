@@ -971,16 +971,7 @@ fn render_state_floor_by_component() {
     measure("DeviceTelemetry::new", crate::meters::DeviceTelemetry::new);
     measure("PlayheadMeters::new", crate::meters::PlayheadMeters::new);
     measure("ModulatorMeters::new", crate::meters::ModulatorMeters::new);
-    measure("256x ModRack::default", || {
-        (0..MAX_CHANNELS)
-            .map(|_| mooloop_core::modulation::ModRack::default())
-            .collect::<Vec<_>>()
-    });
-    measure("256x ModulatorRack::new", || {
-        (0..MAX_CHANNELS)
-            .map(|_| mooloop_dsp::ModulatorRack::new())
-            .collect::<Vec<_>>()
-    });
+    measure("SongModulator::default", crate::SongModulator::default);
     measure("Sequencer::new(1,1)", || {
         crate::sequencer::Sequencer::new(1, 1, 16, mooloop_core::Ppq::DEFAULT)
     });

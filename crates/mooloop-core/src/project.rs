@@ -1441,6 +1441,7 @@ impl Project {
             let (id, name) = (channel.id, channel.setup.channel.name.clone());
             self.modulation.lift_rack(id, index as u8, &name, &rack);
         }
+        self.modulation.resolve_math_inputs();
     }
 
     /// Give every lane, route and control binding onto a generator that was

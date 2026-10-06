@@ -1414,7 +1414,6 @@ fn face_press(state: &mut UiState, window: &MainWindow, binds_port: bool, site: 
 fn face_depth_changed(
     st: &Rc<RefCell<UiState>>,
     commands: &Rc<RefCell<CommandState>>,
-    tx: &EngineCommandSender,
     window: &MainWindow,
     site: FaceSite,
     index: usize,
@@ -1425,7 +1424,7 @@ fn face_depth_changed(
         let Some(destination) = face_param_address(&state.session, site, index) else {
             return false;
         };
-        if !state.set_armed_modulation_depth(window, tx, destination, depth) {
+        if !state.set_armed_modulation_depth(window, destination, depth) {
             state.refresh_modulation(window);
             return false;
         }
@@ -1513,7 +1512,6 @@ pub(crate) fn wire(
     {
         let st = state.clone();
         let commands = commands.clone();
-        let tx = tx.clone();
         let weak = window.as_weak();
         window.on_plugin_modulation_depth_changed(move |row, index, depth| {
             let (Some(window), Ok(row), Ok(index)) =
@@ -1521,19 +1519,18 @@ pub(crate) fn wire(
             else {
                 return;
             };
-            face_depth_changed(&st, &commands, &tx, &window, FaceSite::Chain(row), index, depth);
+            face_depth_changed(&st, &commands, &window, FaceSite::Chain(row), index, depth);
         });
     }
     {
         let st = state.clone();
         let commands = commands.clone();
-        let tx = tx.clone();
         let weak = window.as_weak();
         window.on_source_plugin_modulation_depth_changed(move |index, depth| {
             let (Some(window), Ok(index)) = (weak.upgrade(), usize::try_from(index)) else {
                 return;
             };
-            face_depth_changed(&st, &commands, &tx, &window, FaceSite::Source, index, depth);
+            face_depth_changed(&st, &commands, &window, FaceSite::Source, index, depth);
         });
     }
     {

@@ -628,9 +628,10 @@ mod tests {
     #[test]
     fn a_plugin_parameter_reads_the_same_offset_a_native_one_does() {
         let (mut session, slot, device) = session_with(vec![nudge(), gain()]);
-        assert!(!session
-            .add_modulation_source(mooloop_core::ModulatorKind::Lfo)
-            .is_empty(), "room for a modulator");
+        assert!(
+            session.add_modulation_source(mooloop_core::ModulatorKind::Lfo),
+            "room for a modulator"
+        );
         let scope = EffectTarget::Channel(0);
         let volume = ParamAddr::strip(scope, mooloop_core::STRIP_PARAM_VOLUME);
         let gain = ParamAddr::plugin_param(scope, device, 10);

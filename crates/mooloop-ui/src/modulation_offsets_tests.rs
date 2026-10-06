@@ -24,7 +24,7 @@ fn routed_rack() -> (MainWindow, UiState) {
     let window = MainWindow::new().expect("the testing backend builds a window");
     let mut st = UiState::new(None, 48_000, &window);
     assert!(
-        !st.session.add_modulation_source(ModulatorKind::Lfo).is_empty(),
+        st.session.add_modulation_source(ModulatorKind::Lfo),
         "an empty rack has a free slot"
     );
     st.session

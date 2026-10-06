@@ -17,7 +17,8 @@ use std::sync::Arc;
 
 use mooloop_core::MAX_BUSES;
 use mooloop_core::{
-    modulation::CONTROL_SOURCE_SLOTS, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_SAMPLER_VOICES,
+    modulation::{MAX_GENERATOR_OUTLETS, PERFORMANCE_SOURCES}, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL,
+    MAX_SAMPLER_VOICES,
 };
 use mooloop_core::gain::db_to_linear_unfloored;
 use mooloop_dsp::{BufferDisplay, DynamicsFrame, SPECTRUM_BINS, WAVEFORM_BINS};
@@ -743,8 +744,14 @@ impl PlayheadMeters {
     }
 }
 
-/// Each channel's modulator outputs as of the last control tick of the most
-/// recent block, so the UI can draw what modulation is doing right now.
+/// The song's modulator outputs, and each channel's outlets and keyboard, as
+/// of the last control tick of the most recent block, so the UI can draw what
+/// modulation is doing right now.
+///
+/// One cell per module of the song's set, by list position
+/// (`docs/plans/song-modulation/02`), up to [`MAX_METERED_MODULES`]: past
+/// that a module runs and is not drawn. The session knows which module sits
+/// at each position, because it sent the set.
 ///
 /// Latest-value rather than peak-held, for the same reason `PlayheadMeters`
 /// is: a moving LFO has no transient to protect, and a held peak would make
@@ -755,48 +762,77 @@ impl PlayheadMeters {
 /// repaints far slower than that, so the intermediate ticks would be
 /// overwritten unseen -- the audio thread should not pay to store them.
 pub struct ModulatorMeters {
-    cells: Vec<AtomicU32>,
+    modules: Vec<AtomicU32>,
+    /// `MAX_GENERATOR_OUTLETS + PERFORMANCE_SOURCES` cells per channel.
+    channels: Vec<AtomicU32>,
 }
+
+/// How many of the song's modules have a meter.
+pub const MAX_METERED_MODULES: usize = 1024;
+
+const CHANNEL_SOURCES: usize = MAX_GENERATOR_OUTLETS + PERFORMANCE_SOURCES;
 
 impl ModulatorMeters {
     pub fn new() -> Arc<Self> {
-        Arc::new(Self {
-            cells: (0..MAX_CHANNELS * CONTROL_SOURCE_SLOTS)
+        let cells = |count: usize| {
+            (0..count)
                 .map(|_| AtomicU32::new(0.0f32.to_bits()))
-                .collect(),
+                .collect()
+        };
+        Arc::new(Self {
+            modules: cells(MAX_METERED_MODULES),
+            channels: cells(MAX_CHANNELS * CHANNEL_SOURCES),
         })
     }
 
-    fn base(channel: usize) -> Option<usize> {
-        (channel < MAX_CHANNELS).then_some(channel * CONTROL_SOURCE_SLOTS)
+    /// Publish every module's output, in list order. Called on the audio
+    /// thread, once per block.
+    pub fn publish_modules(&self, outputs: &[f32]) {
+        for (cell, value) in self.modules.iter().zip(outputs) {
+            cell.store(value.to_bits(), Ordering::Relaxed);
+        }
     }
 
-    /// Publish `channel`'s control sources. Called on the audio thread, once
-    /// per block.
-    ///
-    /// The whole row, modulator slots and generator outlets alike, because
-    /// this is what the view resolves a knob's live modulation offset from:
-    /// carrying only the rack would leave a knob driven by an outlet sitting
-    /// still while it audibly moves.
-    pub fn publish(&self, channel: usize, outputs: &[f32; CONTROL_SOURCE_SLOTS]) {
-        let Some(base) = Self::base(channel) else {
+    /// Publish `channel`'s outlets and keyboard. Called on the audio thread,
+    /// once per block: a knob driven by an outlet must animate as well as
+    /// one driven by a module.
+    pub fn publish_channel(
+        &self,
+        channel: usize,
+        outlets: &[f32; MAX_GENERATOR_OUTLETS],
+        performance: &[f32; PERFORMANCE_SOURCES],
+    ) {
+        if channel >= MAX_CHANNELS {
             return;
-        };
-        for (offset, value) in outputs.iter().enumerate() {
-            self.cells[base + offset].store(value.to_bits(), Ordering::Relaxed);
+        }
+        let cells = &self.channels[channel * CHANNEL_SOURCES..(channel + 1) * CHANNEL_SOURCES];
+        for (cell, value) in cells.iter().zip(outlets.iter().chain(performance)) {
+            cell.store(value.to_bits(), Ordering::Relaxed);
         }
     }
 
-    /// `channel`'s latest control sources. Called on the GUI thread.
-    pub fn read(&self, channel: usize) -> [f32; CONTROL_SOURCE_SLOTS] {
-        let mut out = [0.0; CONTROL_SOURCE_SLOTS];
-        let Some(base) = Self::base(channel) else {
-            return out;
-        };
-        for (offset, value) in out.iter_mut().enumerate() {
-            *value = f32::from_bits(self.cells[base + offset].load(Ordering::Relaxed));
+    /// The latest output of the module at list position `at`. Called on the
+    /// GUI thread.
+    pub fn module(&self, at: usize) -> f32 {
+        self.modules
+            .get(at)
+            .map_or(0.0, |cell| f32::from_bits(cell.load(Ordering::Relaxed)))
+    }
+
+    /// `channel`'s latest outlets and keyboard. Called on the GUI thread.
+    pub fn channel(
+        &self,
+        channel: usize,
+    ) -> ([f32; MAX_GENERATOR_OUTLETS], [f32; PERFORMANCE_SOURCES]) {
+        let mut outlets = [0.0; MAX_GENERATOR_OUTLETS];
+        let mut performance = [0.0; PERFORMANCE_SOURCES];
+        if channel < MAX_CHANNELS {
+            let cells = &self.channels[channel * CHANNEL_SOURCES..(channel + 1) * CHANNEL_SOURCES];
+            for (value, cell) in outlets.iter_mut().chain(performance.iter_mut()).zip(cells) {
+                *value = f32::from_bits(cell.load(Ordering::Relaxed));
+            }
         }
-        out
+        (outlets, performance)
     }
 }
 
