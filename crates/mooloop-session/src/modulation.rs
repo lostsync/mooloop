@@ -1,6 +1,6 @@
 //! Modulation edits: sources, routes, and the assignment gesture.
 //!
-//! The song owns the modulation set (`docs/plans/song-modulation/`), and
+//! The song owns the modulation set (`docs/plans/archive/song-modulation/`), and
 //! these verbs edit it. Each returns whether it changed anything; none talks
 //! to the engine. The pump's reconciler ([`Session::sync_modulation`])
 //! resolves the song's set and sends what differs from what it last sent: a

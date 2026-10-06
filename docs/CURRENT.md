@@ -16,7 +16,7 @@ behaviour updates the area's file in the same commit (`AGENTS.md`,
 | [Sampler](current/sampler.md) | The sampler editor and key zones, loop seams, fit to tempo, slices, voice allocation, recording takes into it, and stretch, commit and REBAKE. |
 | [Devices](current/devices.md) | The device rack and its host, every effect kind, containers and layers, the Buffer, the generators and Aux In, and instrument DSP. |
 | [Mixer](current/mixer.md) | Tracks and their order, the channel strip, sends, solo and mute, analog sum, metering, and latency compensation. |
-| [Modulation](current/modulation.md) | Parameter addressing, the modulation shelf, published outlets, and automation lanes. |
+| [Modulation](current/modulation.md) | Parameter addressing, the song's modulation and its pane, published outlets, and automation lanes. |
 | [Plugins](current/plugins.md) | CLAP hosting: scanning, effects and instruments in a chain, faces, GUI windows, presets, lanes and routes. |
 | [MIDI](current/midi.md) | A keyboard playing the selected channel, per-channel MIDI input, controller mapping, transport control and MIDI recording. |
 | [Files](current/files.md) | Export, and songs, kits and presets on disk: saving, loading, missing samples, autosave and recovery. |

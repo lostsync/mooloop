@@ -692,22 +692,24 @@ before any of them existed still loads:
   level rather than at the level it used to play at, which is deliberate:
   the saved value is what the knob showed, and silently resetting it would
   change the file behind the face.
-- `modulation` is **the song's** modulation set (song-modulation step 01,
-  0.1.7): every modulator module, and every route from a source to a
-  parameter anywhere in the song. A channel holds none. The table is left
-  out when the song has no modulation, so such a song writes nothing new.
+- `modulation` is **the song's** modulation set (0.1.7): every modulator
+  module, and every route from a source to a parameter anywhere in the song.
+  A channel holds none. The table is left out when the song has no
+  modulation, so such a song writes nothing new.
   - `modulation.modules[]`: each module's song-wide `id`, its `name`
     (`<channel name> <kind> <n>` when made), its random `seed`, its `input`
     (`{ channel_notes = <ChannelId> }` for the notes an Envelope, LFO,
     Step or Random hears, `{ module = <id> }` for the module a Math module
     reads, left out for none), and its `params` as a rack slot wrote them.
     A Math module's `input_slot` param is written out of range (255): its
-    operand is its `input`. A Math module saved by step 01 kept its operand
-    as a slot of its rack, and loading gives it the module in that slot
-    (step 02). A module also writes `rack` (`{ channel, slot }`), the
-    channel and slot the modulation shelf shows it in; the engine no longer
-    reads it, and step 04's pane removes it. Modules run in list order, so
-    a Math module reading one listed before it reads that tick's value.
+    operand is its `input`. A Math module in a song saved before Math read
+    a module by id kept its operand as a slot, and loading gives it the
+    module seated in that slot. A module also writes `rack`
+    (`{ channel, slot }`), its home seat: the channel it was made on, and a
+    slot there, which a channel preset saved from that channel reads. It is
+    left out for a module with no seat; the engine does not read it.
+    Modules run in list order, so a Math module reading one listed before it
+    reads that tick's value.
   - `modulation.routes[]`: one of `source` (a module id), `outlet` or
     `performance` (with `channel`, the identity of the channel whose
     generator or keyboard it is), then `destination`, `depth` and
@@ -719,7 +721,7 @@ before any of them existed still loads:
   `channels[].setup.modulation`. Loading lifts every rack into the song's
   set, in channel order: each module gets a fresh song-wide id and its
   routes follow it; it is seated on the channel it came from, at its old
-  slot, so the engine runs exactly the racks it ran before; an LFO, Step or
+  slot, and seeded from that slot, so it plays what it played; an LFO, Step or
   Random listens to its old channel's notes and an Envelope to the channel
   its gate named; a route's channel scope and an outlet or keyboard route's
   channel are its old channel's. The song saves in the new shape and writes
@@ -1134,10 +1136,11 @@ audio file.
   their current engine limits.
 - Up to 256 effect slots per channel — the same complete `u8` space, for the
   same reason.
-- Up to `MAX_MODULATORS_PER_CHANNEL` (8) modules and
-  `MAX_MOD_ROUTES_PER_CHANNEL` (16) routes per channel. Both are engine
-  constants rather than format fields: a manifest carrying more is truncated
-  at load, not refused.
+- No limit on a song's modulation modules or routes. A channel preset's or
+  kit entry's rack, and a 0.1.6 song's per-channel rack, hold up to
+  `MAX_MODULATORS_PER_CHANNEL` (8) modules and `MAX_MOD_ROUTES_PER_CHANNEL`
+  (16) routes. Both are constants rather than format fields: a rack
+  carrying more is truncated at load, not refused.
 - Up to `MAX_AUTOMATION_LANES_PER_CHANNEL` (8) automation lanes per (pattern,
   channel), and at most one lane per destination. Also an engine constant, and
   truncated on the same terms: the integrity pass takes the same first eight

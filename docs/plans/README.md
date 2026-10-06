@@ -19,10 +19,6 @@ reopening it. A plan's own `00-status.md` says how it got where it is.
 - `icon-pass/` (planned 2026-09-26) — one registry, `icons.slint`, and one
   `Icon` component for every icon. Read its README for the survey, and
   `00-status.md` for Adam's four rulings.
-- `song-modulation/` (planned 2026-10-05, for 0.1.7) — modulators belong to
-  the song, not a channel, and get a pane of their own. The same five kinds;
-  the first stage of the Song Patch canvas, not the canvas. Read its README
-  for the survey and what it reverses in `MODULATION.md`.
 - `extract-mid-level-dsp-blocks/` — only step 03 is left: `device-displays.slint`
   holds eight visualizers with no shared canvas. `00-status.md` explains why
   step 02 is cancelled.
@@ -31,11 +27,12 @@ reopening it. A plan's own `00-status.md` says how it got where it is.
 
 `device-registry/` is a survey with a status and no steps, because whether any
 of it is worth doing is a `FOCUS.md` question and writing steps would presume
-the answer.
+the answer. `song-patch/` is the same kind of thing: a proposal with no steps.
 
 | Plan | Why it is queued |
 | --- | --- |
 | `song-automation/` | Planned 2026-09-30, in for 0.2.0: automation lanes on the song's timeline, in a panel under the playlist. Read its README for the survey and what it reverses and keeps. |
+| `song-patch/` | **A proposal, not a work order**, moved out of `archive/song-modulation/`'s README when that plan was archived (2026-10-06): one song-wide patching canvas in its own pane, the direction song modulation was the first stage of. It keeps the prototype link and the points Adam agreed. |
 | `device-registry/` | **A survey, written 2026-09-11, not a work order. Parked 2026-09-12**, except for the face host component, which `FOCUS.md` says to take if a device step already has `main.slint` open. |
 | `pattern-bank-floor/` | Parked 2026-09-12 (`FOCUS.md`). Every project reserves 1.00 GiB of pattern storage before it holds anything. With per-track clips ruled out (2026-09-17), it is a prerequisite for raising `MAX_PATTERN_STEPS`; its `00-status.md` records that. |
 
@@ -49,6 +46,11 @@ tempting change was rejected:
   takes the keys, instruments and effects are listed apart, and plugins filter
   by format, category and a favourites star. Its README says what each plugin
   format reports about a plugin's kind; VST3 categories wait on VST3 hosting.
+- `song-modulation/` (planned 2026-10-05, done 2026-10-06, for 0.1.7) —
+  modulators belong to the song, not a channel, and have the Modulation
+  pane. Read its README for what it reversed in `MODULATION.md`, and
+  `00-status.md` for where each step differed from the plan and the three
+  things still open.
 - `theming/` (done 2026-10-04, on Adam's word) — skins rather than colour
   schemes, built for accessibility rather than the homage. What it left open
   (MOO-154, MOO-157, MOO-205) is in Polish backlog.

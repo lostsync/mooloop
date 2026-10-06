@@ -741,7 +741,7 @@ struct Module {
 }
 
 /// The song's modulators and their current outputs, in list order
-/// (`docs/plans/song-modulation/02-the-engine-runs-one-set.md`).
+/// (`docs/plans/archive/song-modulation/02-the-engine-runs-one-set.md`).
 ///
 /// Built off the audio thread at the size of the song's set and never resized
 /// on it: a module added or removed arrives as a new set, which takes each

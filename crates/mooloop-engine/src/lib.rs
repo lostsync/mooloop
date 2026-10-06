@@ -528,7 +528,7 @@ pub enum StructuralCommand {
         change: Box<sequencer::PatternChange>,
     },
     /// Replace the song's modulation set with a new one, built off this
-    /// thread at the new set's size (`docs/plans/song-modulation/02`).
+    /// thread at the new set's size (`docs/plans/archive/song-modulation/02`).
     ///
     /// Structural because a set is sized from the song: a module or a route
     /// more, or one fewer, changes how much there is and where every route is

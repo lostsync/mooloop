@@ -96,7 +96,7 @@ pub struct Session {
     /// hijack knob gestures throughout the rack.
     ///
     /// A module is the song's, so selecting another channel does not lose it
-    /// (`docs/plans/song-modulation/`); read it as a slot of the selected
+    /// (`docs/plans/archive/song-modulation/`); read it as a slot of the selected
     /// channel's rack with [`Self::modulation_selected_slot`].
     pub modulation_selected: Cell<Option<mooloop_core::ModSourceRef>>,
     /// The rack device the keyboard acts on, as an identity rather than a
@@ -259,7 +259,7 @@ pub struct Session {
     pub pattern_meta: Vec<PatternMeta>,
     pub playlist: Vec<PatternPlacement>,
     /// The song's modulation: every module and every route
-    /// (`docs/plans/song-modulation/`). Channels own none; the engine runs
+    /// (`docs/plans/archive/song-modulation/`). Channels own none; the engine runs
     /// it as one set ([`Self::sync_modulation`]) and the modulation pane
     /// lists it whole.
     pub modulation: mooloop_core::SongModulation,

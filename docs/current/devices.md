@@ -360,8 +360,8 @@ area, and where each behaviour stops.
   the blend position as the mix knob moves. The run itself is not listed on
   the face -- it is the box immediately to the right of it. A container **saves and loads as one preset** — the box
   and everything in it, from the same rail every other device's presets live
-  on. The modulation driving a run does not travel with it, because a route's
-  source lives in the channel's rack rather than in the container; see
+  on. The modulation driving a run does not travel with it, because routes
+  and their modules belong to the song rather than to the container; see
   `docs/plans/archive/containers/00-status.md`.
 - A second container kind, **Layer**, sits under Chain in the insert menu and
   saves and reloads as its own kind. It holds a run, nests, wraps, bypasses

@@ -112,7 +112,7 @@ flowchart TB
     Midi["Decode MIDI in<br/>bounded at 256 a block"]
     Transport["Transport<br/>PPQ 96 ticks, song loop folded here"]
     Seq["Sequencer<br/>tick positions to sample offsets"]
-    Mods["ModulatorRack, per channel<br/>evaluated every 32 frames"]
+    Mods["The song's modulators, one set<br/>evaluated every 32 frames"]
     Events["EventList per target<br/>NoteOn, NoteOff, ParamValue"]
     Signal["The signal path below"]
     Publish["Publish meters, telemetry,<br/>load and position"]

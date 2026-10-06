@@ -1599,7 +1599,7 @@ fn device_cost() {
                 reference,
             );
         }
-        // The song-wide set (MOO-170, `docs/plans/song-modulation/02`): what
+        // The song-wide set (MOO-170, `docs/plans/archive/song-modulation/02`): what
         // a converted busy song becomes, and the case a song-wide set is for.
         // Each is read against the same song with nothing driven.
         //

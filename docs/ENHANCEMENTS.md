@@ -136,14 +136,14 @@ og drumsynth was simple but honestly sounded pretty good. why has simply updatin
   untouched and old projects load unchanged.
 
 i want to move and redesign the modulation rack. i have an image somewhere, a mockup from chatgpt. ah its here: reference/img/mooloop-1.0-mockup.png
-  DELIBERATELY NOT YET, and parked in `FOCUS.md` rather than queued. The
-  relocation itself is ready; what is not is the design question under it. The
-  mockup puts modulation in a
-  right-hand panel with PATTERN/CONTROL/PLAYBACK/MAPPING tabs, and draws the
-  modulator itself as a *tracker* — which is the same shape as the automation
-  idea already sitting in `IDEAS.md`. Whether those are one design or two is
-  the first thing to settle. `MODULATION.md` holds the contracts a
-  move must not break.
+  **MOVED, 2026-10-06** (`docs/plans/archive/song-modulation/`). Modulation
+  belongs to the song, a route reaches any channel or track, and the modules
+  have the Modulation pane (Ctrl+6), holding today's module grid. The
+  redesign is still open: the mockup's tracker-shaped modulator is the
+  `IDEAS.md` question (MOO-159), and the song-wide patching canvas Adam
+  prototyped since is the Song Patch proposal
+  (`docs/plans/song-patch/README.md`). `MODULATION.md` holds the contracts
+  either must not break.
 
 i want to make a sidebar on the left that lets you change channel settings like name, track color, input channel, etc. its also illustrated in the mockup
   IN THE SEQUENCE (`docs/plans/archive/interface-iteration/` step 03, which builds the

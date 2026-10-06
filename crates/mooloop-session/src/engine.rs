@@ -1092,7 +1092,7 @@ impl Session {
     }
 
     /// Reconcile the engine's modulation set with the song's
-    /// (`docs/plans/song-modulation/02-the-engine-runs-one-set.md`).
+    /// (`docs/plans/archive/song-modulation/02-the-engine-runs-one-set.md`).
     ///
     /// Called from the pump beside [`Self::sync_audio_graph`], for the same
     /// reasons: every modulation verb only edits the document, and deriving

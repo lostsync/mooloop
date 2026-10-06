@@ -1,5 +1,5 @@
 //! The engine running the song's one modulation set
-//! (`docs/plans/song-modulation/02`):
+//! (`docs/plans/archive/song-modulation/02`):
 //!
 //! - routes onto a track (MOO-497): a track's inserts and its fader take the
 //!   song's routes as a channel's do, in playback and in an export, and a

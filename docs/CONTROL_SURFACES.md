@@ -182,8 +182,7 @@ gestures apart from its own arm, which is a fact it already holds.
 **The arm reaches the controls through a Slint global**, `ControlAssign`,
 rather than a property threaded down. Modulation's `modulation-armed` *is*
 threaded down, and correctly: arming modulation is per-destination, since a
-source only reaches its own channel and a face has to say which parameters
-accept it. Learn reaches every parameter there is, so there is nothing
+face has to say which of its parameters accept a route. Learn reaches every parameter there is, so there is nothing
 per-control to say and nothing to thread.
 
 **Its reach is exactly modulation's reach**, and that is not a coincidence:

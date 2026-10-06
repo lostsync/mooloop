@@ -16,8 +16,10 @@ purpose. History goes in `JOURNAL.md`, the state of each issue is in Linear,
 - **One push per release** (labels renumbered 2026-10-05): 0.1.7 modulator,
   0.1.8 UI/UX, 0.1.9 devices, 0.1.10 content, 0.1.11 finalizing (RC/beta).
   A release is whatever carries its label in Linear.
-- **0.1.7** is `plans/song-modulation/` (Adam, 2026-10-05: *"let's start by
-  moving what we have and making it work document-wide"*). Steps 03 to 05 of
+- **0.1.7** was song modulation (Adam, 2026-10-05: *"let's start by moving
+  what we have and making it work document-wide"*), done 2026-10-06 and
+  archived at `plans/archive/song-modulation/`; what it left open is in its
+  `00-status.md`. Steps 03 to 05 of
   `plans/icon-pass/` moved to 0.1.8. Before tagging, dispatch `release.yml` on `main`
   (`OPERATIONS.md`, *Releases And Tags*).
 - **Waiting on Adam:** the listening queue in [LISTENING.md](LISTENING.md),
@@ -61,15 +63,12 @@ branch.
 - **A toolkit swap.** If the view layer ever leaves Slint, Qt is the
   candidate Adam named (MOO-146).
 - **The tracker idea** (MOO-159: an interest, not a decision, recorded in
-  `IDEAS.md`), and **the Song Patch canvas** beyond `plans/song-modulation/`.
-  The rack's move itself is now planned (2026-10-05). Modulators inside
-  containers (MOO-160) come after 0.2.0.
+  `IDEAS.md`), and **the Song Patch canvas** (`plans/song-patch/`, a
+  proposal). Modulators inside containers (MOO-160) come after 0.2.0.
 - **More effect kinds, or more modulator kinds.** The short-notes device
   ideas (mid/side, a gain/pan/width utility) get cheaper once the layer
   device has its gestures. A mid/side device is close to a two-branch layer
-  with an encode in front and a decode behind. Raising
-  `MAX_MODULATORS_PER_CHANNEL` is a one-line decision, and it's not an
-  invitation.
+  with an encode in front and a decode behind.
 - **Sidechain key inputs, and MIDI out.** Both are in 0.2.0, and neither is
   next. Sidechain needs a dependency edge that schedules a producer without
   summing it in, so read `archive/typed-audio-edges/` first. A layer's

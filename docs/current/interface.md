@@ -9,7 +9,7 @@ area, and where each behaviour stops.
   dock. The transport row carries play/stop, pattern-vs-song mode, a
   bar:beat:tick position readout, beat lamps, drag-or-type tempo, global
   sixteenth-note swing, and the master meter, and never changes.
-- **The work area is five views in three slots.** `main` and `split` divide
+- **The work area is six views in three slots.** `main` and `split` divide
   the top; `bottom` is the dock. A view lives in exactly one slot, and a
   slot's tab strip lists what it holds, so no strip can misreport what is on
   screen. Each slot's rectangle is computed rather than nested in layouts,
@@ -79,9 +79,11 @@ area, and where each behaviour stops.
   is where a tab says what can be done to it, since the drag and the
   double-click have no affordance of their own. This is how the mixer reaches
   the bottom pane.
-- **A view is revealed, not navigated to.** `Ctrl+1`..`Ctrl+5` and the `View`
-  menu name `Steps`, `Mixer`, `Devices`, `Notes` and `Playlist`, and each
-  shows that view wherever it lives.
+- **A view is revealed, not navigated to.** `Ctrl+1`..`Ctrl+6` and the `View`
+  menu name `Steps`, `Mixer`, `Devices`, `Notes`, `Playlist` and
+  `Modulation`, and each shows that view wherever it lives. Modulation is the
+  song's modules and routes ([modulation.md](modulation.md)); a layout saved
+  with five views opens with it added to the bottom slot.
 - **A view has exactly one toolbar row, and its slot's tab strip leads it.**
   With `STEPS` up it carries pattern selection, the cursor tools and pattern
   length; with `MIXER` up, nothing, because the mixer's controls are on its
@@ -323,7 +325,7 @@ area, and where each behaviour stops.
   band moves Freq, Gain and Q to that band, and undo, a preset load, a
   MIDI-mapped controller or automation moves a touched control along with the
   sound: on any insert face, the source output trims, the sidebar's volume
-  and pan, the mixer's faders and sends, the modulation shelf, and the
+  and pan, the mixer's faders and sends, the Modulation pane, and the
   pattern and snap fields. A knob's typed field (`KnobField`, `KnobStack`)
   shows the live value whenever it is not being typed into.
 - **A shortcut fires from wherever focus happens to be.** The root
@@ -419,10 +421,9 @@ area, and where each behaviour stops.
   **A pasted channel arrives with its MIDI and AUDIO inputs off**: the picks
   name something in the document the channel was copied from, and the
   clipboard outlives New Song and Open Song.
-  **The clipboard does not carry modulation routes or automation lanes**: a
-  route's source is a module in the channel's own rack, so it cannot follow a
-  device to another channel. That is the question `docs/plans/archive/containers/`
-  reserved rather than answered, and this inherits its answer.
+  **The device clipboard does not carry modulation routes or automation
+  lanes.** That is the question `docs/plans/archive/containers/` reserved
+  rather than answered, and this inherits its answer.
 - A canonical action registry drives the menu bar and rebindable shortcuts.
   Note multi-selection supports Select All and bulk deletion. **Undo covers
   every edit that changes the document**, on one project-snapshot undo/redo

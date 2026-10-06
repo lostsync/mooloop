@@ -1,5 +1,5 @@
 //! The song's modulation as the audio thread runs it
-//! (`docs/plans/song-modulation/02-the-engine-runs-one-set.md`).
+//! (`docs/plans/archive/song-modulation/02-the-engine-runs-one-set.md`).
 //!
 //! One set for the whole song, not a rack per channel: the modules tick once
 //! per control tick, in list order, before anything renders, and every chain

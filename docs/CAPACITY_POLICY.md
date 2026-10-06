@@ -232,13 +232,12 @@ engine, which is exactly the fault this document opens by naming.
 - The 16-insert mixer-bus bank is a legacy fixed-graph implementation detail,
   not a product decision. It is the next capacity-sweep candidate; do not use
   it as a precedent for new dynamic collections.
-- Modulation capacity — eight modules and sixteen routes a channel — is a
-  compile-time constant with a measured, linear price, deliberately rather
-  than a layout assumption: the grid's rows follow the constant and a test
-  renders the shelf at eight and at sixteen so a re-introduced literal fails.
-  Raising it is one edit. It stays a constant because a variable-length rack
-  on the realtime path buys a bounds check every tick and an allocation story
-  every edit, to save memory the reservation fix already recovered.
+- Modulation has no count a user meets (0.1.7). The song's set is sized from
+  the song, and any edit that changes its shape installs a whole new set
+  built off the audio thread, the old one dropped off it, which is this
+  policy's grow-by-replacement rule (`MODULATION.md`, *Song collection*).
+  Only a channel preset's rack keeps the old constants, eight modules and
+  sixteen routes, because it is the shape 0.1.6 reads.
 
 - Typed audio edges reserve nothing at all, which is the shape this policy
   asks for. A channel's subscription is one optional value; the *buffers* are

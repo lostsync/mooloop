@@ -62,25 +62,10 @@ it"** (`FOCUS.md`, `SCOPE.md` §4). He raised it.
 
 ## The later direction this is the first stage of
 
-Adam's *Song Patch* prototype (designed 2026-09-23 to 09-27, not in the
-repo): one song-wide patching canvas in its own pane, with typed boxes
-(`lfo`, `step`, `chance`, `chord`, `* -0.5` ...), control wires and note
-wires, and song inlets and outlets as tags. Prototype:
-https://claude.ai/artifact/BBYu543x1WZ8VAf2MrGCUY.
-
-**A proposal, not a ruling.** These are the points Adam agreed in that
-conversation. They are written here so that no step contradicts them, and
-none of them is built by this plan:
-- one canvas for the whole song, in its own pane;
-- a curated set of box kinds typed as text, not an open language (Pd itself
-  may come later as one box that runs a `.pd` file);
-- two kinds of wire: control (a value every control tick) and note (events,
-  with each NoteOff following its NoteOn through every box);
-- a box's face opens in place on the canvas;
-- song inlets and outlets are tags at the canvas edge. A preset keeps them
-  as empty slots ("kick goes here [ ]");
-- depth is set with today's Assign drag; math boxes do the scaling;
-- cable bends can be dragged, and cable activity is a setting.
+Adam's *Song Patch* prototype: one song-wide patching canvas in its own
+pane. The proposal, with the prototype link and the points Adam agreed, is
+in `docs/plans/song-patch/README.md`; it was moved there when this plan was
+archived. None of it is built by this plan.
 
 What this plan must not foreclose: module-to-module inputs by
 `ModSourceId` (step 01), evaluation order that is not part of the save

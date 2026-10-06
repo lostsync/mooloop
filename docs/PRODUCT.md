@@ -75,15 +75,16 @@ This is the proposed differentiator. It is still a product hypothesis and must
 pass the insert-device spike in `BUFFER_ENGINE.md` before the buffer contract
 is treated as permanent.
 
-### Channel-Owned Modulation
+### Song-Owned Modulation
 
-A channel also owns a modulation rack and its routes. That control system is
-not a property of the source, an insert, or the mixer strip even though it can
+The song owns its modulation modules and their routes (Adam, 2026-10-05:
+*"channels wont have modulators"*). That control system is not a property of
+a channel, the source, an insert, or the mixer strip even though it can
 address parameters in all of them. Devices declare their addressable
-parameters; the channel supplies bounded control signals and connects them to
-those parameters. One channel source can therefore affect its source, several
-inserts, and strip controls at once without being visually or architecturally
-attached to one device.
+parameters; the song supplies bounded control signals and connects them to
+those parameters. One module can therefore affect a channel's source, several
+inserts on several channels, and track and strip controls at once without
+being visually or architecturally attached to one device.
 
 Channel ownership of **general-purpose and cross-device** modulation does not
 forbid authored modulation inside an instrument. A synth should keep the
@@ -156,8 +157,9 @@ Mooloop should include:
 - A capable sampler and a small set of authored synthesis sources.
 - Insertable retained-audio buffer devices with sequencable capture and playback.
 - Parameter automation, channel inserts, sends, groups, and useful routing.
-- A channel-owned modulation rack with direct manipulation on ordinary device
-  controls, rather than a separate patching mode for routine use.
+- Song-owned modulation, in a pane of its own, with direct manipulation on
+  ordinary device controls, rather than a separate patching mode for routine
+  use.
 - Authored instruments that stand on their own and publish musically useful
   internal control/audio signals through typed device outlets.
 - Project and kit persistence with ordinary audio assets.

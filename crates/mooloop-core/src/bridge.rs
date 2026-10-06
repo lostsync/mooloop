@@ -35,7 +35,7 @@ use crate::{
 // has a reclaim path back off the audio thread: a set is sized from the song,
 // and adding a module or a route changes where every route is filed. See
 // `docs/plans/archive/modulator-capacity/03-per-slot-commands.md` and
-// `docs/plans/song-modulation/02-the-engine-runs-one-set.md`.
+// `docs/plans/archive/song-modulation/02-the-engine-runs-one-set.md`.
 /// When a deferred command should land.
 ///
 /// A command carries no offset and is applied at the top of the block that
