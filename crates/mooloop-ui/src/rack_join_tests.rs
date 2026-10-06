@@ -291,6 +291,7 @@ fn browser_with_a_preset(window: &MainWindow) -> Rc<RefCell<Vec<String>>> {
         detail: Default::default(),
         loadable: true,
         effect: true,
+        favourite: false,
     }]))));
     let dropped = Rc::new(RefCell::new(Vec::new()));
     {

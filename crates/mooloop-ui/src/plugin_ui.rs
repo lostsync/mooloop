@@ -20,7 +20,7 @@
 //! any `u32` and so cannot ride a Slint `int` (`session/src/plugin_params.rs`).
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::rc::Rc;
 
@@ -29,6 +29,8 @@ use mooloop_core::{
     ParamOwner, PluginParamInfo, PluginSlotId, PluginSlotState,
 };
 use mooloop_engine::{CommandSink, StructuralCommand};
+use mooloop_core::plugin::PluginFormat;
+use mooloop_plugin_host::category::PluginCategory;
 use mooloop_plugin_host::scan::{PluginCache, Refusal, ScannedPlugin};
 use mooloop_plugin_host::HostError;
 use mooloop_session::command::CommandState;
@@ -41,10 +43,10 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use mooloop_session::dialogs::{pick_folder_dialog, Picked};
 
 use crate::plugin_scan::{ScanProgress, ScanState};
-use crate::settings::{PluginSettings, UiSettings};
+use crate::settings::{FavouritePlugin, PluginSettings, UiSettings};
 use crate::{
-    BrowserRow, EffectSlotRow, MainWindow, PluginFaceRow, PluginFailureRow, PluginListRow, PluginParamRow,
-    UiState, BROWSER_PLUGIN,
+    BrowserRow, EffectSlotRow, FilterChip, MainWindow, PluginFaceRow, PluginFailureRow, PluginListRow,
+    PluginParamRow, UiState, BROWSER_GROUP, BROWSER_PLUGIN,
 };
 
 // ---------------------------------------------------------------------------
@@ -397,47 +399,268 @@ fn matches(filter: &str, text: &str) -> bool {
         .all(|word| text.contains(&word.to_lowercase()))
 }
 
-/// The PLUGINS tab's rows: every plugin, those that cannot be used greyed
-/// with the reason, then the files that yielded none. With
-/// `hide_unsupported` (the Plugins page's "Hide plugins mooloop can't use
-/// yet") a plugin refused as unsupported is left out; a failed plugin and a
-/// file that failed are shown either way.
-pub(crate) fn plugin_rows(catalog: &PluginCatalog, filter: &str, hide_unsupported: bool) -> Vec<BrowserRow> {
+/// The word the browser shows for a plugin format.
+pub(crate) fn format_label(format: PluginFormat) -> &'static str {
+    match format {
+        PluginFormat::Clap => "CLAP",
+        PluginFormat::Vst3 => "VST3",
+        PluginFormat::Au => "AU",
+    }
+}
+
+/// The PLUGINS tab's two groups, by the path their header row carries.
+pub(crate) const INSTRUMENTS_GROUP: &str = "plugins:instruments";
+pub(crate) const EFFECTS_GROUP: &str = "plugins:effects";
+
+/// What the Type menu can pick (`docs/plans/plugin-browser/04-filter-by-category.md`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum CategoryPick {
+    /// Any plugin, whatever it declares.
+    #[default]
+    Any,
+    /// A plugin that declares this category, among others or alone.
+    One(PluginCategory),
+    /// A plugin that declares none.
+    Other,
+}
+
+impl CategoryPick {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Any => "Any type",
+            Self::One(category) => category.label(),
+            Self::Other => "Other",
+        }
+    }
+
+    fn admits(self, categories: &[PluginCategory]) -> bool {
+        match self {
+            Self::Any => true,
+            Self::One(category) => categories.contains(&category),
+            Self::Other => categories.is_empty(),
+        }
+    }
+}
+
+/// How the PLUGINS tab is narrowed and folded, beyond the text in the field.
+/// The window's, not the song's: none of it is saved with a song, and the
+/// favourites it filters by are in the settings file.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PluginView {
+    /// The Instruments and Effects chips. Neither on means both.
+    pub instruments: bool,
+    pub effects: bool,
+    /// The format chips that are on. None means every format.
+    pub formats: Vec<PluginFormat>,
+    /// The Type menu.
+    pub category: CategoryPick,
+    /// The star chip: only starred plugins.
+    pub favourites_only: bool,
+    /// The group headers that are closed, by path.
+    pub collapsed: HashSet<String>,
+}
+
+impl PluginView {
+    /// Whether any chip or the Type menu narrows the list. A file that
+    /// failed to scan has no role, format or category, so it is left out
+    /// while one does.
+    pub(crate) fn narrows(&self) -> bool {
+        self.instruments
+            || self.effects
+            || !self.formats.is_empty()
+            || self.category != CategoryPick::Any
+            || self.favourites_only
+    }
+
+    /// Flips the chip `id` names ([`filter_chips`]). An id it does not know
+    /// changes nothing.
+    pub(crate) fn toggle_chip(&mut self, id: &str) {
+        match id {
+            "favourites" => self.favourites_only = !self.favourites_only,
+            "instruments" => self.instruments = !self.instruments,
+            "effects" => self.effects = !self.effects,
+            _ => {
+                let Some(format) = [PluginFormat::Clap, PluginFormat::Vst3, PluginFormat::Au]
+                    .into_iter()
+                    .find(|format| id.strip_prefix("format:") == Some(format_label(*format)))
+                else {
+                    return;
+                };
+                if let Some(at) = self.formats.iter().position(|f| *f == format) {
+                    self.formats.remove(at);
+                } else {
+                    self.formats.push(format);
+                }
+            }
+        }
+    }
+
+    /// Opens a closed group or closes an open one, by its header's path.
+    pub(crate) fn toggle_group(&mut self, path: &str) {
+        if !self.collapsed.remove(path) {
+            self.collapsed.insert(path.to_owned());
+        }
+    }
+}
+
+/// The filter row's chips, in order: the star, the two roles, then one per
+/// plugin format the catalogue holds, so a format appears when a plugin of
+/// it is scanned and not before.
+pub(crate) fn filter_chips(catalog: &PluginCatalog, view: &PluginView) -> Vec<FilterChip> {
+    let chip = |id: &str, label: &str, on: bool| FilterChip {
+        id: id.into(),
+        label: label.into(),
+        on,
+    };
+    let mut chips = vec![
+        chip("favourites", "★", view.favourites_only),
+        chip("instruments", "Instruments", view.instruments),
+        chip("effects", "Effects", view.effects),
+    ];
+    for format in [PluginFormat::Clap, PluginFormat::Vst3, PluginFormat::Au] {
+        if catalog.entries.iter().any(|entry| entry.plugin.plugin.format == format) {
+            let label = format_label(format);
+            chips.push(chip(&format!("format:{label}"), label, view.formats.contains(&format)));
+        }
+    }
+    chips
+}
+
+/// What the Type menu offers, in order: "Any type", each category at least
+/// one listed plugin declares, then "Other" when some plugin declares none.
+pub(crate) fn category_picks(catalog: &PluginCatalog) -> Vec<CategoryPick> {
+    let declared: Vec<Vec<PluginCategory>> =
+        catalog.entries.iter().map(|entry| entry.plugin.categories()).collect();
+    let mut picks = vec![CategoryPick::Any];
+    picks.extend(
+        PluginCategory::ALL
+            .into_iter()
+            .filter(|category| declared.iter().any(|found| found.contains(category)))
+            .map(CategoryPick::One),
+    );
+    if declared.iter().any(Vec::is_empty) {
+        picks.push(CategoryPick::Other);
+    }
+    picks
+}
+
+/// The Type menu's words for `picks`.
+pub(crate) fn category_labels(picks: &[CategoryPick]) -> Vec<SharedString> {
+    picks.iter().map(|pick| pick.label().into()).collect()
+}
+
+/// Everything the PLUGINS tab's rows are built from.
+pub(crate) struct PluginQuery<'a> {
+    /// The text in the filter field.
+    pub text: &'a str,
+    /// Preferences' "Hide plugins mooloop can't use yet".
+    pub hide_unsupported: bool,
+    pub view: &'a PluginView,
+    pub favourites: &'a [FavouritePlugin],
+}
+
+/// The PLUGINS tab's rows: an Instruments group and an Effects group, each
+/// a header and then its plugins by name, those that cannot be used greyed
+/// with the reason; then the files that yielded none. A group with nothing
+/// left in it is not shown, and a text filter opens every group it finds
+/// something in. With `hide_unsupported` (the Plugins page's "Hide plugins
+/// mooloop can't use yet") a plugin refused as unsupported is left out; a
+/// failed plugin and a file that failed are shown either way, unless a chip
+/// or the Type menu narrows the list, which a file has nothing to match.
+pub(crate) fn plugin_rows(catalog: &PluginCatalog, query: &PluginQuery) -> Vec<BrowserRow> {
+    let view = query.view;
     let mut rows = Vec::new();
-    for entry in &catalog.entries {
-        if hide_unsupported && entry.hideable() {
+    for (instruments, label, group) in [(true, "Instruments", INSTRUMENTS_GROUP), (false, "Effects", EFFECTS_GROUP)] {
+        if (view.instruments || view.effects) && !(if instruments { view.instruments } else { view.effects }) {
             continue;
         }
-        let plugin = &entry.plugin.plugin;
-        // An instrument plays no notes until step 10 (MOO-85); the row says
-        // so rather than let a silent channel be the first anyone hears of it.
-        let role = if entry.instrument { "Instrument" } else { "FX" };
-        let detail = match &entry.refusal {
-            Some(refusal) => refusal.reason().to_owned(),
-            None if plugin.vendor.is_empty() => role.to_string(),
-            None => format!("{} · {role}", plugin.vendor),
-        };
-        let haystack = format!("{} {} {} {}", plugin.name, plugin.vendor, plugin.id, detail);
-        if !matches(filter, &haystack) {
+        let mut members = Vec::new();
+        for entry in catalog.entries.iter().filter(|entry| entry.instrument == instruments) {
+            if query.hide_unsupported && entry.hideable() {
+                continue;
+            }
+            let plugin = &entry.plugin.plugin;
+            let favourite = query
+                .favourites
+                .iter()
+                .any(|f| f.format == plugin.format && f.id == plugin.id);
+            if view.favourites_only && !favourite {
+                continue;
+            }
+            if !view.formats.is_empty() && !view.formats.contains(&plugin.format) {
+                continue;
+            }
+            let categories = entry.plugin.categories();
+            if !view.category.admits(&categories) {
+                continue;
+            }
+            let format = format_label(plugin.format);
+            let detail = match &entry.refusal {
+                Some(refusal) => refusal.reason().to_owned(),
+                None => {
+                    let mut words: Vec<&str> = Vec::new();
+                    if !plugin.vendor.is_empty() {
+                        words.push(plugin.vendor.as_str());
+                    }
+                    if let [only] = categories.as_slice() {
+                        words.push(only.label());
+                    }
+                    words.push(format);
+                    words.join(" · ")
+                }
+            };
+            let named: Vec<&str> = categories.iter().map(|category| category.label()).collect();
+            let haystack = format!(
+                "{} {} {} {} {} {label}",
+                plugin.name,
+                plugin.vendor,
+                plugin.id,
+                detail,
+                named.join(" ")
+            );
+            if !matches(query.text, &haystack) {
+                continue;
+            }
+            members.push(BrowserRow {
+                depth: 1,
+                kind: BROWSER_PLUGIN,
+                name: plugin.name.as_str().into(),
+                path: plugin.id.as_str().into(),
+                expanded: false,
+                detail: detail.into(),
+                loadable: entry.refusal.is_none(),
+                effect: entry.refusal.is_none() && !entry.instrument,
+                favourite,
+            });
+        }
+        if members.is_empty() {
             continue;
         }
+        let expanded = !query.text.trim().is_empty() || !view.collapsed.contains(group);
         rows.push(BrowserRow {
             depth: 0,
-            kind: BROWSER_PLUGIN,
-            name: plugin.name.as_str().into(),
-            path: plugin.id.as_str().into(),
-            expanded: false,
-            detail: detail.into(),
-            loadable: entry.refusal.is_none(),
-            effect: entry.refusal.is_none() && !entry.instrument,
+            kind: BROWSER_GROUP,
+            name: label.into(),
+            path: group.into(),
+            expanded,
+            detail: members.len().to_string().into(),
+            loadable: false,
+            effect: false,
+            favourite: false,
         });
+        if expanded {
+            rows.extend(members);
+        }
+    }
+    if view.narrows() {
+        return rows;
     }
     for (name, refusal) in &catalog.failures {
-        if hide_unsupported && !refusal.is_failed() {
+        if query.hide_unsupported && !refusal.is_failed() {
             continue;
         }
         let reason = refusal.reason();
-        if !matches(filter, &format!("{name} {reason}")) {
+        if !matches(query.text, &format!("{name} {reason}")) {
             continue;
         }
         rows.push(BrowserRow {
@@ -449,9 +672,93 @@ pub(crate) fn plugin_rows(catalog: &PluginCatalog, filter: &str, hide_unsupporte
             detail: format!("failed to scan: {reason}").into(),
             loadable: false,
             effect: false,
+            favourite: false,
         });
     }
     rows
+}
+
+/// Rebuilds the PLUGINS tab from `st`: its rows, the filter row's chips, and
+/// the Type menu's options and selection. A category no plugin declares any
+/// more (after a rescan) filters as "Any type" until another is picked.
+pub(crate) fn refresh_plugin_rows(st: &UiState) {
+    let picks = category_picks(&st.plugin_catalog);
+    let index = picks.iter().position(|pick| *pick == st.plugin_view.category);
+    let mut view = st.plugin_view.clone();
+    if index.is_none() {
+        view.category = CategoryPick::Any;
+    }
+    st.browser_rows.set_vec(plugin_rows(
+        &st.plugin_catalog,
+        &PluginQuery {
+            text: &st.browser_filter,
+            hide_unsupported: st.hide_unsupported_plugins,
+            view: &view,
+            favourites: &st.plugin_favourites,
+        },
+    ));
+    st.plugin_filter_chips.set_vec(filter_chips(&st.plugin_catalog, &view));
+    st.plugin_category_labels.set_vec(category_labels(&picks));
+    if let Some(window) = st.browser_window.upgrade() {
+        window.set_plugin_category_index(index.map_or(0, |at| at as i32));
+        window.set_plugin_filter_active(view.narrows());
+    }
+}
+
+/// Wires the PLUGINS tab's filter row and its stars: the chips, the Type
+/// menu, and starring a plugin, which writes `PluginSettings::favourites`
+/// through `save` as it is flipped.
+pub(crate) fn wire_plugin_filters(
+    window: &MainWindow,
+    state: &Rc<RefCell<UiState>>,
+    settings: &Rc<RefCell<UiSettings>>,
+    save: SettingsSaver,
+) {
+    state.borrow_mut().plugin_favourites = settings.borrow().plugins.favourites.clone();
+    {
+        let (st, weak) = (state.clone(), window.as_weak());
+        window.on_plugin_filter_chip_toggled(move |id| {
+            let Some(window) = weak.upgrade() else { return };
+            let mut st = st.borrow_mut();
+            st.plugin_view.toggle_chip(&id);
+            window.set_browser_focus_index(-1);
+            crate::refresh_browser(&st);
+        });
+    }
+    {
+        let (st, weak) = (state.clone(), window.as_weak());
+        window.on_plugin_category_picked(move |index| {
+            let Some(window) = weak.upgrade() else { return };
+            let mut st = st.borrow_mut();
+            let picks = category_picks(&st.plugin_catalog);
+            st.plugin_view.category = usize::try_from(index)
+                .ok()
+                .and_then(|at| picks.get(at).copied())
+                .unwrap_or_default();
+            window.set_browser_focus_index(-1);
+            crate::refresh_browser(&st);
+        });
+    }
+    {
+        let (st, settings, weak) = (state.clone(), settings.clone(), window.as_weak());
+        window.on_browser_plugin_favourite_toggled(move |id| {
+            let Some(window) = weak.upgrade() else { return };
+            let mut st = st.borrow_mut();
+            let Some(format) = st.plugin_catalog.find(&id).map(|entry| entry.plugin.plugin.format) else {
+                return;
+            };
+            let mut settings = settings.borrow_mut();
+            settings.plugins.toggle_favourite(format, &id);
+            if let Err(error) = save(&settings) {
+                // Not kept: a star that is gone at the next start is worse
+                // than one that never appeared.
+                settings.plugins.toggle_favourite(format, &id);
+                window.set_status_message(format!("Could not save favourites: {error}").into());
+            }
+            st.plugin_favourites = settings.plugins.favourites.clone();
+            crate::refresh_browser(&st);
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1814,6 +2121,7 @@ pub(crate) fn wire_plugin_preferences(
         });
     }
     wire_hide_unsupported_toggle(window, state, settings, Rc::new(|settings: &UiSettings| settings.save()));
+    wire_plugin_filters(window, state, settings, Rc::new(|settings: &UiSettings| settings.save()));
     wire_xwayland_toggle(window, settings, Rc::new(|settings: &UiSettings| settings.save()));
     {
         // Rescan All: the failures forgotten and every file scanned again,

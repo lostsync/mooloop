@@ -51,7 +51,7 @@ guessed from its name.
   can remember. Up, Down, Left, Right, Enter, Ctrl+Enter and Esc still drive
   the rows from inside the field; **Space types a space** while the field has
   the keys, so it does not start the transport there.
-- **Sections are collapsible groups**, `INSTRUMENTS` then `EFFECTS`, the same
+- **Sections are collapsible groups**, **Instruments** then **Effects**, the same
   row shape the PRESETS tab's groups use, so Left and Right open and close
   them. They stay while a filter is on, with only the matching rows.
 - **One category menu** covers both roles: EQ, Dynamics, Reverb, Delay,

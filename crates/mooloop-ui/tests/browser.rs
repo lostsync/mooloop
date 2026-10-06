@@ -33,6 +33,7 @@ fn row(depth: i32, kind: i32, name: &str, path: &str, expanded: bool) -> Browser
         detail: Default::default(),
         loadable: true,
         effect: false,
+        favourite: false,
     }
 }
 

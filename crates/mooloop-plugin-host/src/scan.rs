@@ -288,6 +288,15 @@ impl ScannedPlugin {
         self.has_feature("audio-effect")
     }
 
+    /// The categories it declares ([`crate::category`]), empty when it
+    /// declares none. Only a CLAP plugin's features are read today.
+    pub fn categories(&self) -> Vec<crate::category::PluginCategory> {
+        match self.plugin.format {
+            PluginFormat::Clap => crate::category::categories(&self.features),
+            PluginFormat::Vst3 | PluginFormat::Au => Vec::new(),
+        }
+    }
+
     /// The main input's channel count, or `None` when it has no audio input
     /// (or a cache names a main input it does not have).
     pub fn main_input_channels(&self) -> Option<u32> {

@@ -1,6 +1,6 @@
 # 02 — instruments and effects apart
 
-The PLUGINS tab lists two groups, `INSTRUMENTS` and `EFFECTS`, each sorted by
+The PLUGINS tab lists two groups, **Instruments** and **Effects**, each sorted by
 name, filtered or not. Plugins that failed to scan stay at the bottom, under
 the effects.
 
