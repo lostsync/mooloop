@@ -26,7 +26,7 @@ use std::rc::Rc;
 
 use mooloop_core::{
     DeviceId, EffectParams, EffectSlotState, EffectTarget, EngineCommand, MusicalEdge, ParamAddr,
-    ParamOwner, PluginParamInfo, PluginSlotId, PluginSlotState,
+    ModSourceRef, ParamOwner, PluginParamInfo, PluginSlotId, PluginSlotState,
 };
 use mooloop_engine::{CommandSink, StructuralCommand};
 use mooloop_plugin_host::scan::{PluginCache, Refusal, ScannedPlugin};

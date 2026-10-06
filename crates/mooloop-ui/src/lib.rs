@@ -97,7 +97,7 @@ use mooloop_core::{
     EqParams, EQ_FACE_CONTROLS, FilterModel,
     GeneratorParams, GlideMode, HatCharacter,
     KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor,
-    ModPolarity, ModRack, ModRandomTrigger, ModStepTrigger,
+    ModPolarity, ModRandomTrigger, ModSourceRef, ModStepTrigger,
     ControlRate, ControlTarget, ModulatorKind, ModulatorParams, OutletDescriptor,
     PublishesOutlets, RecordFace, SendTap, Takeover, TransportControl,
     SignalShape,
@@ -113,7 +113,6 @@ use mooloop_core::{
     VoiceMode, MAX_SLICES,
     DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_BUSES,
     MAX_CHANNELS, MAX_MODULATORS_PER_CHANNEL,
-    MAX_MOD_ROUTES_PER_CHANNEL,
     MOD_STEP_MAX_STEPS,
     MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO,
     MIN_STRETCH_GRAIN, MIN_STRETCH_RATIO,
@@ -5882,7 +5881,7 @@ impl UiState {
     /// right now, indexed by descriptor id. Resolved here rather than
     /// published per parameter by the engine: a channel has at most four
     /// sources but many destinations, so the audio thread ships the four
-    /// outputs and the UI does the same sum `ModRack::offset_for` does on the
+    /// outputs and the UI does the same sum `CompiledModulation::offset_for` does on the
     /// realtime side, against the same declared policy.
     fn destination_offsets(
         &self,
