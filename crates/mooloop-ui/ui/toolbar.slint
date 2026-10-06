@@ -465,6 +465,18 @@ export component SearchField inherits Rectangle {
     in property <string> placeholder: "Filter";
     in property <string> tooltip: root.placeholder;
     callback edited(string);
+    // A field that filters a list it sits over: Up, Down, Page Up, Page Down
+    // and Return go to `navigation-key` instead of the text, and so do Left
+    // and Right while the field is empty, so the list can be walked without
+    // leaving the field. Off, the field is an ordinary text input.
+    in property <bool> forwards-navigation: false;
+    callback navigation-key(KeyEvent);
+    // Whether the text input holds the keyboard.
+    out property <bool> has-keys: search-input.has-focus;
+    // Gives the text input the keyboard.
+    public function take-keys() {
+        search-input.focus();
+    }
 
     height: 20px;
     border-radius: Theme.radius-md;
@@ -505,6 +517,18 @@ export component SearchField inherits Rectangle {
                 self.text = "";
                 root.edited("");
                 self.clear-focus();
+                return EventResult.accept;
+            }
+            // Accepted whether or not the list did anything with it: let
+            // through, Return would drop the field's focus and an arrow
+            // would only move the caret.
+            if (root.forwards-navigation
+                    && (event.text == Key.UpArrow || event.text == Key.DownArrow
+                        || event.text == Key.PageUp || event.text == Key.PageDown
+                        || event.text == Key.Return
+                        || (self.text == ""
+                            && (event.text == Key.LeftArrow || event.text == Key.RightArrow)))) {
+                root.navigation-key(event);
                 return EventResult.accept;
             }
             return EventResult.reject;

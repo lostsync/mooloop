@@ -341,7 +341,14 @@ area, and where each behaviour stops.
   there is no Escape-to-nowhere, because selecting a channel is the way back.
   Preferences > Shortcuts says which chords are contextual.
 - **The browser tree is reachable and drivable from the keyboard.** Ctrl+B
-  reveals the sidebar and aims the keys at it; Up/Down move a highlighted
+  reveals the sidebar and aims the keys at it. **Whenever the browser is the
+  focused pane** (Ctrl+B, a click on a tab, a row or a filter chip,
+  `browser.plugins`) **its filter field holds the keys**, on every tab, so
+  typing filters at once and Space types a space rather than playing. From
+  the field, Up, Down, Page Up, Page Down and Return still reach the rows
+  through their bindings, and so do Left and Right while the field is empty;
+  Esc clears the filter and hands the keys back. Focusing another pane takes
+  the keys out of the field. Up/Down move a highlighted
   row, Right opens a closed folder or steps into it, Left closes an open one
   or climbs to its parent, Enter does what clicking the row does, and
   Ctrl+Enter loads a sample or preset into the selected channel. **A move
@@ -352,8 +359,8 @@ area, and where each behaviour stops.
   must not install a device per keypress. An inspection decodes on a worker
   thread and several are in flight whenever the keys outrun a decode, so a
   reply about a sample the selection has already left is dropped rather than
-  landing on the pane and in the speakers over the row that replaced it. It
-  has no `FocusScope` of its own and deliberately does not get one — a nested
+  landing on the pane and in the speakers over the row that replaced it. The
+  tree has no `FocusScope` of its own and deliberately does not get one — a nested
   scope swallows the pointer press that focuses it, which is the
   two-clicks-per-control bug `tests/first_click.rs` exists for.
 - Keyboard note *selection* still does not exist: the arrow keys move an

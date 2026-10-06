@@ -25,6 +25,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 
+pub mod category;
 pub mod clap;
 pub mod gui;
 pub mod host_io;

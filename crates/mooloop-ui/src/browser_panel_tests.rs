@@ -149,6 +149,7 @@ fn browser_window() -> (MainWindow, Rc<RefCell<Vec<String>>>) {
         detail: Default::default(),
         loadable: true,
         effect,
+        favourite: false,
     };
     window.set_browser_rows(ModelRc::from(Rc::new(VecModel::from(vec![
         row(0, 2, "Delay", false),
@@ -209,4 +210,60 @@ fn dragging_a_preset_onto_the_rack_loads_it_and_elsewhere_does_nothing() {
     // Onto the rack, which is the main pane on the left of the window.
     drag_to((300.0, 400.0));
     assert_eq!(*heard.borrow(), ["load /presets/Slapback"]);
+}
+
+/// Focusing the browser puts the keys in its filter field, so typing filters
+/// without a click on the field; the arrows and Return still reach the rows'
+/// bindings, and Esc clears the filter and gives the keys back.
+#[test]
+fn typing_in_the_focused_browser_filters_and_the_arrows_still_walk_the_rows() {
+    let (window, _heard) = browser_window();
+    let filter = Rc::new(RefCell::new(Vec::<String>::new()));
+    {
+        let filter = filter.clone();
+        window.on_browser_filter_changed(move |text| filter.borrow_mut().push(text.to_string()));
+    }
+    let chords = Rc::new(RefCell::new(Vec::<String>::new()));
+    {
+        let chords = chords.clone();
+        window.on_shortcut_key(move |key, ctrl, _, _, _| {
+            chords.borrow_mut().push(format!("{}{key}", if ctrl { "ctrl+" } else { "" }));
+            true
+        });
+    }
+
+    // Ctrl+B's own path: the surface is aimed at, not the field clicked.
+    window.invoke_focus_surface("browser".into());
+    crate::window_probe::type_text(&window, "slap");
+    assert_eq!(filter.borrow().last().map(String::as_str), Some("slap"));
+    assert!(chords.borrow().is_empty(), "letters went to the shortcuts: {:?}", chords.borrow());
+
+    let press = |text: slint::SharedString| {
+        window.window().dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+        window.window().dispatch_event(WindowEvent::KeyReleased { text });
+    };
+    press(slint::platform::Key::DownArrow.into());
+    press(slint::platform::Key::Return.into());
+    // Left with text in the field moves the caret, not the tree.
+    press(slint::platform::Key::LeftArrow.into());
+    assert_eq!(*chords.borrow(), ["down", "return"]);
+
+    press(slint::platform::Key::Escape.into());
+    assert_eq!(filter.borrow().last().map(String::as_str), Some(""));
+}
+
+/// Leaving the browser for another pane takes the keys out of its field, so a
+/// letter meant for the roll does not land in the filter.
+#[test]
+fn focusing_another_pane_takes_the_keys_out_of_the_browser_filter() {
+    let (window, _heard) = browser_window();
+    let filter = Rc::new(RefCell::new(Vec::<String>::new()));
+    {
+        let filter = filter.clone();
+        window.on_browser_filter_changed(move |text| filter.borrow_mut().push(text.to_string()));
+    }
+    window.invoke_focus_surface("browser".into());
+    window.invoke_focus_surface("rack".into());
+    crate::window_probe::type_text(&window, "q");
+    assert!(filter.borrow().is_empty(), "typed into the filter: {:?}", filter.borrow());
 }

@@ -13,7 +13,7 @@
 //! it is Adam's to hear (FOCUS.md, "Listening is a step").
 
 use super::*;
-use crate::plugin_ui::{plugin_rows, PluginCatalog};
+use crate::plugin_ui::{plugin_rows, PluginCatalog, PluginQuery, PluginView};
 use crate::window_probe::{click, controls, install_backend, sliders, wheel, Control};
 use i_slint_core::items::AccessibleRole;
 use mooloop_core::{EffectParams, NoteEvent, PluginFormat, PluginRef, PluginSlotId, ProjectChannel};
@@ -319,7 +319,11 @@ fn a_plugin_goes_in_a_chain_from_the_window_and_its_knob_is_saved_and_exported()
     let sine = named("Test Sine").expect("the tab lists the instrument");
     assert!(sine.loadable, "an instrument is offered, for a new channel");
     assert!(!sine.effect, "but not as an effect");
-    assert!(sine.detail.contains("Instrument"), "{}", sine.detail);
+    let at = |name: &str| rows.iter().position(|row| row.name == name).expect(name);
+    assert!(
+        at("Instruments") < at("Test Sine") && at("Test Sine") < at("Effects") && at("Effects") < at("Test Gain"),
+        "the instrument is listed under Instruments and the effect under Effects"
+    );
     assert!(!sine.detail.contains("no notes"), "instruments play now (MOO-85): {}", sine.detail);
     let broken = named("broken.clap").expect("the tab lists the file that failed");
     assert!(broken.detail.contains("signal 11"), "{}", broken.detail);
@@ -475,20 +479,151 @@ fn a_missing_plugin_shows_its_face_and_says_it_is_missing() {
     assert!(h.engine.sent.is_empty(), "a missing plugin's knob sent {:?}", h.engine.sent);
 }
 
-/// The PLUGINS tab's filter, by name, vendor and what a row says.
+/// The PLUGINS tab's rows for `text`, with nothing on the filter row.
+fn rows_for(catalog: &PluginCatalog, text: &str, hide_unsupported: bool) -> Vec<BrowserRow> {
+    plugin_rows(
+        catalog,
+        &PluginQuery {
+            text,
+            hide_unsupported,
+            view: &PluginView::default(),
+            favourites: &[],
+        },
+    )
+}
+
+/// The PLUGINS tab's filter, by name, vendor and what a row says, and the
+/// group a plugin is in.
 #[test]
 fn the_plugin_filter_matches_names_vendors_and_reasons() {
     let cache = PluginCache::from_toml(&cache_text(Path::new("/x/test.clap"))).expect("a cache");
     let catalog = PluginCatalog::from_cache(&cache);
     let names = |filter: &str| -> Vec<String> {
-        plugin_rows(&catalog, filter, false).iter().map(|row| row.name.to_string()).collect()
+        rows_for(&catalog, filter, false).iter().map(|row| row.name.to_string()).collect()
     };
-    assert_eq!(names(""), ["Test Gain", "Test Sine", "broken.clap"]);
-    assert_eq!(names("gain"), ["Test Gain"]);
-    assert_eq!(names("mooloop sine"), ["Test Sine"]);
-    assert_eq!(names("instrument"), ["Test Sine"]);
+    assert_eq!(names(""), ["Instruments", "Test Sine", "Effects", "Test Gain", "broken.clap"]);
+    assert_eq!(names("gain"), ["Effects", "Test Gain"]);
+    assert_eq!(names("mooloop sine"), ["Instruments", "Test Sine"]);
+    assert_eq!(names("instrument"), ["Instruments", "Test Sine"]);
+    assert_eq!(names("clap gain"), ["Effects", "Test Gain"], "by format");
     assert_eq!(names("signal"), ["broken.clap"]);
     assert!(names("nothing like it").is_empty());
+}
+
+/// A cache with an EQ and a compressor from one vendor, a synth, and an
+/// effect that declares no category, beside [`cache_text`]'s two.
+fn categorised_cache_text(library: &Path) -> String {
+    let plugin = |id: &str, name: &str, features: &str, ports: &str| {
+        format!(
+            "[[file.plugin]]\npath = \"/usr/lib/clap/kit.clap\"\nformat = \"clap\"\nid = \"{id}\"\n\
+             name = \"{name}\"\nvendor = \"Kit\"\nfeatures = [{features}]\n{ports}\n"
+        )
+    };
+    let stereo = "audio-inputs = [2]\naudio-outputs = [2]\n";
+    format!(
+        "{}\n[[file]]\npath = \"/usr/lib/clap/kit.clap\"\nmodified-ns = 0\nsize = 0\n\n{}{}{}{}",
+        cache_text(library),
+        plugin("com.kit.eq", "Kit EQ", "\"audio-effect\", \"equalizer\"", stereo),
+        plugin("com.kit.comp", "Kit Comp", "\"audio-effect\", \"compressor\"", stereo),
+        plugin("com.kit.plain", "Kit Plain", "\"audio-effect\"", stereo),
+        plugin(
+            "com.kit.synth",
+            "Kit Synth",
+            "\"instrument\", \"synthesizer\"",
+            "audio-outputs = [2]\nnote-inputs = 1\n"
+        ),
+    )
+}
+
+/// **The filter row**: the roles, the formats the catalogue holds, the
+/// categories its plugins declare, and the star, each narrowing the rows;
+/// and a closed group keeps its header and hides its plugins.
+#[test]
+fn the_filter_row_narrows_by_role_format_category_and_star() {
+    use crate::plugin_ui::{category_picks, filter_chips, CategoryPick};
+    use crate::settings::FavouritePlugin;
+    use mooloop_plugin_host::category::PluginCategory;
+
+    let cache = PluginCache::from_toml(&categorised_cache_text(Path::new("/x/test.clap"))).expect("a cache");
+    let catalog = PluginCatalog::from_cache(&cache);
+    let starred = [FavouritePlugin {
+        format: PluginFormat::Clap,
+        id: "com.kit.comp".to_owned(),
+    }];
+    let names = |view: &PluginView| -> Vec<String> {
+        plugin_rows(
+            &catalog,
+            &PluginQuery {
+                text: "",
+                hide_unsupported: false,
+                view,
+                favourites: &starred,
+            },
+        )
+        .iter()
+        .map(|row| row.name.to_string())
+        .collect()
+    };
+
+    let chips: Vec<String> = filter_chips(&catalog, &PluginView::default())
+        .iter()
+        .map(|chip| chip.id.to_string())
+        .collect();
+    assert_eq!(chips, ["favourites", "instruments", "effects", "format:CLAP"], "one chip per installed format");
+
+    let mut view = PluginView::default();
+    view.toggle_chip("instruments");
+    assert_eq!(names(&view), ["Instruments", "Kit Synth", "Test Sine"], "and no failed file");
+    view.toggle_chip("effects");
+    assert_eq!(names(&view).len(), names(&PluginView::default()).len() - 1, "both on is all but the file");
+
+    let picks = category_picks(&catalog);
+    assert_eq!(
+        picks,
+        [
+            CategoryPick::Any,
+            CategoryPick::One(PluginCategory::Eq),
+            CategoryPick::One(PluginCategory::Dynamics),
+            CategoryPick::One(PluginCategory::Synth),
+            CategoryPick::Other,
+        ]
+    );
+    let mut view = PluginView {
+        category: CategoryPick::One(PluginCategory::Eq),
+        ..PluginView::default()
+    };
+    assert_eq!(names(&view), ["Effects", "Kit EQ"]);
+    view.category = CategoryPick::One(PluginCategory::Dynamics);
+    assert_eq!(names(&view), ["Effects", "Kit Comp"]);
+    view.category = CategoryPick::Other;
+    assert_eq!(names(&view), ["Instruments", "Test Sine", "Effects", "Kit Plain", "Test Gain"]);
+
+    let mut view = PluginView::default();
+    view.toggle_chip("format:CLAP");
+    assert_eq!(names(&view).len(), names(&PluginView::default()).len() - 1, "every plugin is CLAP");
+    view.toggle_chip("format:CLAP");
+    view.toggle_chip("favourites");
+    assert_eq!(names(&view), ["Effects", "Kit Comp"]);
+
+    let rows = plugin_rows(
+        &catalog,
+        &PluginQuery {
+            text: "",
+            hide_unsupported: false,
+            view: &PluginView::default(),
+            favourites: &starred,
+        },
+    );
+    let comp = rows.iter().find(|row| row.name == "Kit Comp").expect("listed");
+    assert!(comp.favourite, "the starred plugin's row is starred");
+    assert_eq!(comp.detail, "Kit · Dynamics · CLAP");
+    assert!(!rows.iter().any(|row| row.name == "Kit EQ" && row.favourite));
+
+    let mut view = PluginView::default();
+    view.toggle_group(crate::plugin_ui::EFFECTS_GROUP);
+    let closed = names(&view);
+    assert_eq!(&closed[..4], ["Instruments", "Kit Synth", "Test Sine", "Effects"], "the header stays");
+    assert_eq!(closed[4], "broken.clap", "and its plugins go");
 }
 
 /// [`cache_text`]'s file and broken file, and beside them a plugin mooloop
@@ -517,7 +652,7 @@ fn hiding_unsupported_plugins_never_hides_a_failed_one() {
     let cache = PluginCache::from_toml(&unusable_cache_text(Path::new("/x/test.clap"))).expect("a cache");
     let catalog = PluginCatalog::from_cache(&cache);
     let rows = |hide: bool| -> Vec<(String, bool, String)> {
-        plugin_rows(&catalog, "", hide)
+        rows_for(&catalog, "", hide)
             .iter()
             .map(|row| (row.name.to_string(), row.loadable, row.detail.to_string()))
             .collect()
@@ -538,13 +673,13 @@ fn hiding_unsupported_plugins_never_hides_a_failed_one() {
     };
 
     let shown = rows(false);
-    assert_eq!(usable(&shown), ["Test Gain", "Test Sine"]);
+    assert_eq!(usable(&shown), ["Test Sine", "Test Gain"], "the instrument's group comes first");
     for unusable in [&crashy, &quad, &broken] {
         assert!(shown.contains(unusable), "off: {unusable:?} is listed greyed, in {shown:?}");
     }
 
     let hidden = rows(true);
-    assert_eq!(usable(&hidden), ["Test Gain", "Test Sine"], "a usable plugin is never hidden");
+    assert_eq!(usable(&hidden), ["Test Sine", "Test Gain"], "a usable plugin is never hidden");
     assert!(hidden.contains(&crashy), "a plugin that failed stays, with its reason: {hidden:?}");
     assert!(hidden.contains(&broken), "and so does a file that failed: {hidden:?}");
     assert!(!hidden.iter().any(|row| row.0 == "Quad Bus"), "the unsupported one is gone: {hidden:?}");
@@ -622,6 +757,54 @@ fn the_hide_switch_is_saved_and_the_browser_follows_it() {
     assert!(h.window.get_preferences_plugin_hide_unsupported());
     assert!(!listed(&h).contains(&"Quad Bus".to_owned()));
     assert!(h.window.get_preferences_error().contains("read-only"));
+}
+
+/// **A star is saved as it is clicked, read back at the next start, and the
+/// star chip narrows the tab to it**; the chips and the Type menu are drawn
+/// from the catalogue.
+#[test]
+fn a_star_is_saved_and_the_star_chip_shows_only_starred_plugins() {
+    use crate::settings::UiSettings;
+    let h = harness_with(&drum_loop());
+    let cache = h.state.borrow().plugin_cache_path.clone();
+    std::fs::write(&cache, categorised_cache_text(&test_plugin_path())).expect("the cache is written");
+    h.state.borrow_mut().enter_browser_tab(BrowserTab::Plugins);
+    let file = h.dir.path().join("settings.toml");
+    let saver: plugin_ui::SettingsSaver = {
+        let file = file.clone();
+        Rc::new(move |settings: &UiSettings| settings.save_to(&file))
+    };
+    let settings = Rc::new(RefCell::new(UiSettings::default()));
+    plugin_ui::wire_plugin_filters(&h.window, &h.state, &settings, saver.clone());
+    let listed = |h: &Harness| -> Vec<String> {
+        let st = h.state.borrow();
+        crate::refresh_browser(&st);
+        st.browser_rows.iter().map(|row| row.name.to_string()).collect()
+    };
+    assert!(listed(&h).contains(&"Kit EQ".to_owned()));
+    assert_eq!(h.window.get_plugin_filter_chips().row_count(), 4);
+    assert_eq!(
+        h.window.get_plugin_category_options().iter().collect::<Vec<_>>(),
+        ["Any type", "EQ", "Dynamics", "Synth", "Other"]
+    );
+
+    h.window.invoke_browser_plugin_favourite_toggled("com.kit.eq".into());
+    h.window.invoke_plugin_filter_chip_toggled("favourites".into());
+    assert_eq!(listed(&h), ["Effects", "Kit EQ"]);
+    assert!(h.window.get_plugin_filter_active());
+
+    // The next start reads the star back.
+    let restarted = Rc::new(RefCell::new(UiSettings::load_or_default_from(&file)));
+    assert_eq!(restarted.borrow().plugins.favourites.len(), 1, "saved");
+    h.state.borrow_mut().plugin_favourites.clear();
+    plugin_ui::wire_plugin_filters(&h.window, &h.state, &restarted, saver);
+    assert_eq!(listed(&h), ["Effects", "Kit EQ"], "starred again after the restart");
+
+    // The Type menu, by its position in the options.
+    h.window.invoke_plugin_filter_chip_toggled("favourites".into());
+    h.window.invoke_plugin_category_picked(2);
+    assert_eq!(listed(&h), ["Effects", "Kit Comp"]);
+    assert_eq!(h.window.get_plugin_category_index(), 2);
 }
 
 /// A song naming a plugin this machine does not have, with the list of

@@ -1054,6 +1054,38 @@ pub struct PluginSettings {
     /// disappears from the list on upgrade.
     #[serde(default)]
     pub hide_unsupported: bool,
+    /// The plugins starred in the browser, in the order they were starred.
+    /// Kept by format and id rather than by file, so a star survives a
+    /// rescan, a move of the file, and an uninstall and reinstall; one whose
+    /// plugin is not installed is kept and shown nowhere.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub favourites: Vec<FavouritePlugin>,
+}
+
+/// One starred plugin (`PluginSettings::favourites`).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FavouritePlugin {
+    pub format: mooloop_core::plugin::PluginFormat,
+    pub id: String,
+}
+
+impl PluginSettings {
+    /// Whether the plugin `format`/`id` is starred.
+    pub fn is_favourite(&self, format: mooloop_core::plugin::PluginFormat, id: &str) -> bool {
+        self.favourites.iter().any(|f| f.format == format && f.id == id)
+    }
+
+    /// Stars the plugin, or unstars it if it was starred. Returns whether it
+    /// is starred now.
+    pub fn toggle_favourite(&mut self, format: mooloop_core::plugin::PluginFormat, id: &str) -> bool {
+        if let Some(at) = self.favourites.iter().position(|f| f.format == format && f.id == id) {
+            self.favourites.remove(at);
+            false
+        } else {
+            self.favourites.push(FavouritePlugin { format, id: id.to_owned() });
+            true
+        }
+    }
 }
 
 fn default_scan_timeout_s() -> u32 {
@@ -1068,6 +1100,7 @@ impl Default for PluginSettings {
             scan_on_startup: true,
             run_under_xwayland: false,
             hide_unsupported: false,
+            favourites: Vec::new(),
         }
     }
 }
@@ -2246,6 +2279,10 @@ mod tests {
                 scan_on_startup: false,
                 run_under_xwayland: true,
                 hide_unsupported: true,
+                favourites: vec![FavouritePlugin {
+                    format: mooloop_core::plugin::PluginFormat::Clap,
+                    id: "com.example.comp".to_owned(),
+                }],
             },
             // Deliberately not the default arrangement, and deliberately one
             // that `sanitized()` must leave alone: the mixer in the dock and
@@ -2289,6 +2326,18 @@ mod tests {
             UiSettings::load_from(&path).unwrap().layout,
             LayoutSettings::default()
         );
+    }
+
+    #[test]
+    fn starring_a_plugin_twice_unstars_it() {
+        use mooloop_core::plugin::PluginFormat;
+        let mut plugins = PluginSettings::default();
+        assert!(plugins.toggle_favourite(PluginFormat::Clap, "a"));
+        assert!(plugins.is_favourite(PluginFormat::Clap, "a"));
+        // The same id in another format is another plugin.
+        assert!(!plugins.is_favourite(PluginFormat::Vst3, "a"));
+        assert!(!plugins.toggle_favourite(PluginFormat::Clap, "a"));
+        assert!(plugins.favourites.is_empty());
     }
 
     #[test]

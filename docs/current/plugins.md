@@ -7,8 +7,22 @@ area, and where each behaviour stops.
   **Plugin…**, which opens the browser's third tab, **PLUGINS**, aimed at
   that join. The tab lists what the scanner found (`<config>/plugins.toml`,
   re-read whenever the tab is opened, which is how a scan that finished after
-  startup shows up), one row per plugin with its vendor, filtered like the
-  presets by name, vendor or what the row says. A plugin that cannot go in a
+  startup shows up), in two groups, **Instruments** then **Effects**, each
+  closed and opened like a preset group. A row names the plugin's vendor,
+  its category when it declares exactly one, and its format. The filter
+  field matches name, vendor, id, category and format. Under it a filter
+  row, on this tab only, has toggle chips for **★** (starred plugins only),
+  **Instruments**, **Effects** and each plugin format the scan found (only
+  CLAP is hosted, so one chip), and a **Type** menu listing each category a
+  listed plugin declares, plus **Other** for those declaring none. A category
+  is only what a CLAP plugin's standard feature strings say (`equalizer` is
+  EQ; `compressor`, `limiter`, `gate`, `expander`, `transient-shaper` and
+  `deesser` are Dynamics; ...); nothing is guessed from a name. While a chip
+  or the Type menu narrows the list, files that failed to scan are left out.
+  **A star** on a row (shown on the row under the pointer or the keyboard,
+  and always once starred), or the row's right-click menu, stars a plugin;
+  stars are saved in `settings.toml` (`[plugins] favourites`, by format and
+  id), so they are the same in every song and survive a rescan. A plugin that cannot go in a
   chain is greyed with the reason: an effect whose ports are not one input
   and one output of one or two channels, or one the factory could not
   create; so is each file that failed to scan, with why. **Preferences >

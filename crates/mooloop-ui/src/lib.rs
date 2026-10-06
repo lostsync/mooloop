@@ -4536,6 +4536,18 @@ struct UiState {
     /// Preferences > Plugins' "Hide plugins mooloop can't use yet"
     /// (`PluginSettings::hide_unsupported`), which the PLUGINS tab follows.
     hide_unsupported_plugins: bool,
+    /// How the PLUGINS tab's filter row narrows it, and which of its groups
+    /// are closed.
+    plugin_view: plugin_ui::PluginView,
+    /// The starred plugins (`PluginSettings::favourites`), which the PLUGINS
+    /// tab marks and its star chip filters by.
+    plugin_favourites: Vec<settings::FavouritePlugin>,
+    /// The filter row's chips and Type menu, rebuilt with the rows.
+    plugin_filter_chips: Rc<VecModel<FilterChip>>,
+    plugin_category_labels: Rc<VecModel<SharedString>>,
+    /// The window the browser's filter row is drawn in, for the Type menu's
+    /// selection, which is a property rather than a model.
+    browser_window: slint::Weak<MainWindow>,
     /// The cache file the PLUGINS tab reads: the scanner's, except in a test.
     plugin_cache_path: PathBuf,
     /// Where the insert menu's "Plugin…" aimed the next plugin picked in the
@@ -4730,6 +4742,10 @@ impl UiState {
         window.set_modulation_routes(ModelRc::from(modulation_route_model.clone()));
         window.set_mixer_strips(ModelRc::from(mixer_strip_model.clone()));
         window.set_browser_rows(ModelRc::from(browser_row_model.clone()));
+        let plugin_filter_chips = Rc::new(VecModel::<FilterChip>::default());
+        let plugin_category_labels = Rc::new(VecModel::<SharedString>::default());
+        window.set_plugin_filter_chips(ModelRc::from(plugin_filter_chips.clone()));
+        window.set_plugin_category_options(ModelRc::from(plugin_category_labels.clone()));
         window.set_pattern_count(1);
 
         Self {
@@ -4768,6 +4784,11 @@ impl UiState {
             preset_catalog: Vec::new(),
             plugin_catalog: plugin_ui::PluginCatalog::default(),
             hide_unsupported_plugins: false,
+            plugin_view: plugin_ui::PluginView::default(),
+            plugin_favourites: Vec::new(),
+            plugin_filter_chips,
+            plugin_category_labels,
+            browser_window: window.as_weak(),
             plugin_cache_path: plugin_cache_path(),
             plugin_place: None,
             plugin_faces: plugin_ui::PluginFaces::default(),
@@ -16457,8 +16478,12 @@ impl AppUi {
             let st = state.clone();
             window.on_browser_row_toggled(move |path| {
                 let mut st = st.borrow_mut();
-                st.session
-                    .toggle_browser_folder(PathBuf::from(path.to_string()));
+                if st.browser_tab == BrowserTab::Plugins {
+                    st.plugin_view.toggle_group(&path);
+                } else {
+                    st.session
+                        .toggle_browser_folder(PathBuf::from(path.to_string()));
+                }
                 refresh_browser(&st);
             });
         }
@@ -20561,6 +20586,7 @@ fn push_browser_rows(
         detail: Default::default(),
         loadable: true,
         effect: false,
+        favourite: false,
     });
     if !is_expanded {
         return;
@@ -20589,6 +20615,7 @@ fn push_browser_rows(
                 detail: Default::default(),
                 loadable: true,
                 effect: false,
+                favourite: false,
             });
         }
     }
@@ -20773,6 +20800,7 @@ fn filtered_sample_rows(locations: &[PathBuf], filter: &str) -> Vec<BrowserRow> 
             detail: matches.len().to_string().into(),
             loadable: true,
             effect: false,
+            favourite: false,
         });
         for file in matches {
             let folder = file
@@ -20789,6 +20817,7 @@ fn filtered_sample_rows(locations: &[PathBuf], filter: &str) -> Vec<BrowserRow> 
                 detail: folder.into(),
                 loadable: true,
                 effect: false,
+                favourite: false,
             });
         }
     }
@@ -20974,6 +21003,7 @@ fn build_preset_rows(
             detail: presets.len().to_string().into(),
             loadable: true,
             effect: false,
+            favourite: false,
         });
         if !is_expanded {
             continue;
@@ -20993,6 +21023,7 @@ fn build_preset_rows(
                 detail: preset_detail(preset, &group.names()).into(),
                 loadable,
                 effect,
+                favourite: false,
             });
         }
     }
@@ -21646,12 +21677,7 @@ fn copied_message(rows: usize) -> String {
 /// One row model serves both tabs, so this is also what switches them.
 fn refresh_browser(st: &UiState) {
     if st.browser_tab == BrowserTab::Plugins {
-        st.browser_rows
-            .set_vec(plugin_ui::plugin_rows(
-                &st.plugin_catalog,
-                &st.browser_filter,
-                st.hide_unsupported_plugins,
-            ));
+        plugin_ui::refresh_plugin_rows(st);
         return;
     }
     if st.browser_tab == BrowserTab::Presets {
