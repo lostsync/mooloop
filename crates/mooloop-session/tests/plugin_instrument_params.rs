@@ -247,7 +247,7 @@ fn an_automated_modulated_instrument_saves_reopens_and_survives_going_missing() 
     let automated = export(&mut session, dir.path(), "automated.wav");
     assert_ne!(automated, plain, "the lane is heard");
 
-    assert!(!session.add_modulation_source(ModulatorKind::Lfo).is_empty(), "room for a modulator");
+    assert!(session.add_modulation_source(ModulatorKind::Lfo), "room for a modulator");
     assert!(session.toggle_modulation_assignment().is_some(), "the LFO is armed");
     assert!(
         matches!(session.arm_modulation_route(level, 0.5), ArmedRoute::Added(_)),

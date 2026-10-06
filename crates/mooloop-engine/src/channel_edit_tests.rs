@@ -209,14 +209,14 @@ fn render(render: &mut RenderState, blocks: usize) -> Vec<f32> {
 /// playing song, one copy edited by the command and the other by prepare,
 /// carry and swap, renders the same samples for two seconds afterwards.
 ///
-/// Without modulation routes, because a route names its channel's seat: the
-/// install finds a renumbered route a changed setup and rebuilds that
-/// channel, cutting its voices, where the command keeps it sounding. The
-/// next test holds that channel to a song with no edit at all instead.
+/// With the LFO routed on channel 4, whose route the removal of an earlier
+/// channel renumbers. The install used to find that a changed setup and
+/// rebuild the channel, cutting its voices (MOO-487); the song's set is not
+/// strip content now, so the install carries it as the command does.
 #[test]
 fn removing_a_channel_renders_what_installing_the_result_renders() {
     for (solo, channel) in [(false, 1), (false, 2), (false, 4), (true, 1), (true, 4), (true, 5)] {
-        let project = song(solo, false);
+        let project = song(solo, true);
         let samples = samples(&project);
         let mut incoming = project.clone();
         incoming.remove_channel(channel).expect("a channel to remove");
@@ -391,14 +391,13 @@ fn move_to(live: &mut RenderState, from: usize, to: usize, incoming: &Project) -
     )
 }
 
-/// **A move sounds exactly like the install it replaces**, solo or not.
-/// Without routes, for the reason the removal's twin gives: the install
-/// rebuilds a channel whose route was renumbered.
+/// **A move sounds exactly like the install it replaces**, solo or not,
+/// the routed channel included (MOO-487).
 #[test]
 fn moving_a_channel_renders_what_installing_the_result_renders() {
     for solo in [false, true] {
         for (from, to) in MOVES {
-            let project = song(solo, false);
+            let project = song(solo, true);
             let samples = samples(&project);
             let mut incoming = project.clone();
             incoming.move_channel(from, to).expect("a channel to move");
@@ -472,13 +471,12 @@ fn a_move_keeps_every_strip() {
     }
 }
 
-/// **The install a move used to be rebuilds the routed channel** where the
-/// command keeps it: the reason the test above holds the command to a song
-/// with no edit rather than to the install. When this starts failing, the
-/// install has learned to carry a renumbered route, and the routed song can
-/// join the install parity test.
+/// **The install a move used to be carries the routed channel** (MOO-487).
+/// It used to rebuild it, cutting its notes: a channel's routes name its
+/// seat, so a move renumbered them and the install found a changed setup.
+/// The routes are the song's now, carried apart from the strips.
 #[test]
-fn the_install_still_rebuilds_a_channel_whose_route_was_renumbered() {
+fn the_install_carries_a_channel_whose_route_was_renumbered() {
     let project = song(false, true);
     let samples = samples(&project);
     let live = playing(&project, &samples);
@@ -488,7 +486,7 @@ fn the_install_still_rebuilds_a_channel_whose_route_was_renumbered() {
 
     let installed = install(live, &project, &incoming);
 
-    assert_ne!(installed.strip_identity(3), routed, "the install carried the routed channel");
+    assert_eq!(installed.strip_identity(3), routed, "the install rebuilt the routed channel");
 }
 
 /// **The callback allocates nothing, frees nothing and takes no lock**
@@ -557,13 +555,13 @@ fn paste(live: &mut RenderState, at: usize, incoming: &Project) -> Box<ChannelRe
 
 /// **A paste sounds exactly like the install it replaces**, solo or not,
 /// the pasted channel included: it arrives built as the install builds it,
-/// with its notes, lane, chain and audio, and plays from the same place.
-/// Without routes, for the reason the removal's twin gives.
+/// with its notes, lane, chain and audio, and plays from the same place,
+/// the routed channel renumbered by it included (MOO-487).
 #[test]
 fn pasting_a_channel_renders_what_installing_the_result_renders() {
     for solo in [false, true] {
         for (copied, at) in PASTES {
-            let project = song(solo, false);
+            let project = song(solo, true);
             let samples = samples(&project);
             let incoming = pasted(&project, copied, at, |_| {});
 

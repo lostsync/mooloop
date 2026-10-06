@@ -271,7 +271,6 @@ fn a_route_on_a_plugin_instruments_parameter_is_an_offset_and_is_zeroed_when_it_
     rack.add_route(ModRoute::to_slot(0, level, 0.25, ModPolarity::Bipolar))
         .expect("a route has room");
     project.lift_channel_modulation();
-    let source = project.channel_rack(0).routes.iter().flatten().next().expect("the route").source;
 
     let mut instance = open_sine();
     let lifeline = Lifeline::new();
@@ -318,10 +317,8 @@ fn a_route_on_a_plugin_instruments_parameter_is_an_offset_and_is_zeroed_when_it_
     // Removed a third of the way in, while the first notes ring.
     let block = 256;
     let removed_at = BAR / 3 / block;
-    let remove = RealtimeCommand::Engine(EngineCommand::RemoveModRoute {
-        channel: 0,
-        source,
-        destination: level,
+    let remove = RealtimeCommand::Structural(crate::StructuralCommand::SetModulation {
+        set: crate::SongModulator::of_project(&plain),
     });
     let routed = play(&project, slot, &mut instance, &lifeline, vec![(removed_at, remove)], BAR, block);
     let unrouted = play(&plain, slot, &mut instance, &lifeline, Vec::new(), BAR, block);

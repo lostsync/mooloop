@@ -19,7 +19,6 @@ use std::sync::Arc;
 
 use mooloop_core::{
     BufferParams, EffectKind, EffectParams, EffectTarget, EngineCommand, EngineEvent, MAX_CHANNELS,
-    modulation::CONTROL_SOURCE_SLOTS,
     CompiledBusGraph, DeviceKind, MusicalEdge,
 };
 use mooloop_dsp::{
@@ -169,6 +168,7 @@ mod offline;
 mod render;
 mod sequencer;
 mod site_times;
+mod song_modulation;
 mod take;
 mod transport;
 mod voices;
@@ -234,6 +234,8 @@ mod strip_tests;
 mod take_tests;
 #[cfg(test)]
 mod track_edit_tests;
+#[cfg(test)]
+mod song_modulation_tests;
 
 use executor::{Executor, ExecutorIo};
 #[cfg(target_os = "macos")]
@@ -250,6 +252,7 @@ pub use render::{
 pub use driver::{
     remember_output, AudioConfig, AudioState, DriverStatus, OutputTarget, REMEMBERED_OUTPUTS,
 };
+pub use song_modulation::SongModulator;
 pub use take::{Take, TakeFrame, TakePhase, TakeStatus};
 pub use meters::{
     BufferMarks, BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters,
@@ -524,6 +527,21 @@ pub enum StructuralCommand {
     EditPattern {
         change: Box<sequencer::PatternChange>,
     },
+    /// Replace the song's modulation set with a new one, built off this
+    /// thread at the new set's size (`docs/plans/song-modulation/02`).
+    ///
+    /// Structural because a set is sized from the song: a module or a route
+    /// more, or one fewer, changes how much there is and where every route is
+    /// filed, and the audio thread may neither allocate nor free. Each module
+    /// the old set ran carries its running state into the new one by
+    /// identity, so an edit elsewhere never restarts an LFO; the old set goes
+    /// back as [`StructuralReclaim::Modulation`]. A destination that lost its
+    /// last route goes back to its base. Retunes that change no shape stay
+    /// POD (`EngineCommand::SetModulator`, `EngineCommand::SetModRoute`).
+    ///
+    /// Derived from the document on every pump tick and sent only when it
+    /// differs, as [`Self::SetAudioGraph`] is.
+    SetModulation { set: Box<SongModulator> },
 }
 
 /// GUI -> audio for the sample browser's audition voice. Owned here rather
@@ -619,6 +637,9 @@ pub(crate) enum StructuralReclaim {
     /// bank: notes and lane points that must not be freed on the audio
     /// thread.
     PatternEdited(Box<sequencer::PatternChange>),
+    /// The song's modulation set a newer one replaced: its table is a block
+    /// of every module's outputs and must not be freed on the audio thread.
+    Modulation(Box<SongModulator>),
 }
 
 impl StructuralReclaim {
@@ -649,7 +670,8 @@ impl StructuralReclaim {
             | Self::ClaimedNotes(_)
             | Self::Container { .. }
             | Self::PanicPayload(_)
-            | Self::PatternEdited(_) => {}
+            | Self::PatternEdited(_)
+            | Self::Modulation(_) => {}
         }
     }
 }
@@ -1218,12 +1240,7 @@ pub(crate) fn carry_plan(
         ) else {
             continue;
         };
-        let rechained = same_strip_but_effects(
-            &held.setup,
-            &live.channel_rack(usize::from(from)),
-            &now.setup,
-            &incoming.channel_rack(usize::from(to)),
-        );
+        let rechained = same_strip_but_effects(&held.setup, &now.setup);
         if rechained {
             plan.rechained_channels.push((from, to));
         }
@@ -1307,16 +1324,11 @@ fn carry_channels(
         if !channel.id.is_assigned() {
             continue;
         }
-        let rack = incoming.channel_rack(to);
         let Some(from) = live
             .channels
             .iter()
             .take(MAX_CHANNELS)
-            .enumerate()
-            .position(|(from, held)| {
-                held.id == channel.id
-                    && same_strip(&held.setup, &live.channel_rack(from), &channel.setup, &rack)
-            })
+            .position(|held| held.id == channel.id && same_strip(&held.setup, &channel.setup))
         else {
             continue;
         };
@@ -1414,17 +1426,15 @@ fn same_track_but_effects(held: &mooloop_core::BusSetup, incoming: &mooloop_core
 /// that a field added to either struct fails to compile here until somebody
 /// decides whether it belongs to the strip.
 ///
-/// The racks are compared beside the setups because a channel no longer
-/// holds one: the song does, and each channel's is built from it
-/// ([`mooloop_core::Project::channel_rack`]) until the engine runs the
-/// song's set itself (`docs/plans/song-modulation/` step 02).
+/// Modulation is not strip content: the song's set is carried whole, by
+/// module identity, whatever happens to the strips
+/// (`RenderState::carry_strips_from`). So a route renumbered by a channel
+/// move no longer rebuilds the channel and cuts its notes (MOO-487).
 fn same_strip(
     held: &mooloop_core::ChannelSetup,
-    held_rack: &mooloop_core::ModRack,
     incoming: &mooloop_core::ChannelSetup,
-    incoming_rack: &mooloop_core::ModRack,
 ) -> bool {
-    same_strip_but_effects(held, held_rack, incoming, incoming_rack)
+    same_strip_but_effects(held, incoming)
         && held.effects == incoming.effects
         && held.next_device_id == incoming.next_device_id
 }
@@ -1434,16 +1444,14 @@ fn same_strip(
 /// (MOO-137, [`CarryPlan::rechained_channels`]).
 fn same_strip_but_effects(
     held: &mooloop_core::ChannelSetup,
-    held_rack: &mooloop_core::ModRack,
     incoming: &mooloop_core::ChannelSetup,
-    incoming_rack: &mooloop_core::ModRack,
 ) -> bool {
     let mooloop_core::ChannelSetup {
         channel,
         source,
         effects: _,
         // Always `None` in a song: what a preset carries is lifted into the
-        // song's set on the way in, and compared below as the rack.
+        // song's set on the way in, which is carried apart from the strips.
         preset_modulation: _,
         next_device_id: _,
         // The plugin instrument's identity (MOO-312): compared, so a strip
@@ -1484,7 +1492,6 @@ fn same_strip_but_effects(
         && *color == other.color
         && *midi_input == other.midi_input
         && *source == incoming.source
-        && held_rack == incoming_rack
         && *source_device == incoming.source_device
 }
 
@@ -1901,6 +1908,7 @@ impl EngineHandle {
                 }
                 StructuralReclaim::PanicPayload(payload) => drop(payload),
                 StructuralReclaim::PatternEdited(change) => drop(change),
+                StructuralReclaim::Modulation(set) => drop(set),
             }
         }
         loop {
@@ -2531,13 +2539,24 @@ impl EngineHandle {
         self.shared.playhead_meters.read(channel)
     }
 
-    /// The channel's modulator outputs as of the last control tick the audio
-    /// thread ran. The UI resolves these against the channel's routes to draw
-    /// each destination's live offset, rather than the engine publishing a
-    /// value per parameter: a channel has at most
-    /// `MAX_MODULATORS_PER_CHANNEL` sources but many more destinations.
-    pub fn modulator_outputs(&self, channel: usize) -> [f32; CONTROL_SOURCE_SLOTS] {
-        self.shared.modulator_meters.read(channel)
+    /// The output of the song's module at list position `at` as of the last
+    /// control tick the audio thread ran. The UI resolves these against the
+    /// routes to draw each destination's live offset, rather than the engine
+    /// publishing a value per parameter: there are far fewer sources than
+    /// destinations.
+    pub fn module_output(&self, at: usize) -> f32 {
+        self.shared.modulator_meters.module(at)
+    }
+
+    /// `channel`'s generator outlets and keyboard as of the last block.
+    pub fn channel_sources(
+        &self,
+        channel: usize,
+    ) -> (
+        [f32; mooloop_core::modulation::MAX_GENERATOR_OUTLETS],
+        [f32; mooloop_core::modulation::PERFORMANCE_SOURCES],
+    ) {
+        self.shared.modulator_meters.channel(channel)
     }
 
     /// Candidate output destinations as the driver discovers them -- under

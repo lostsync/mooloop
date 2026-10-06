@@ -698,10 +698,16 @@ before any of them existed still loads:
   out when the song has no modulation, so such a song writes nothing new.
   - `modulation.modules[]`: each module's song-wide `id`, its `name`
     (`<channel name> <kind> <n>` when made), its random `seed`, its `input`
-    (`{ channel_notes = <ChannelId> }`, left out for none), and its `params`
-    as a rack slot wrote them. Until step 02 a module also writes `rack`
-    (`{ channel, slot }`): the channel identity and slot the engine still
-    runs it in. Step 02 removes it.
+    (`{ channel_notes = <ChannelId> }` for the notes an Envelope, LFO,
+    Step or Random hears, `{ module = <id> }` for the module a Math module
+    reads, left out for none), and its `params` as a rack slot wrote them.
+    A Math module's `input_slot` param is written out of range (255): its
+    operand is its `input`. A Math module saved by step 01 kept its operand
+    as a slot of its rack, and loading gives it the module in that slot
+    (step 02). A module also writes `rack` (`{ channel, slot }`), the
+    channel and slot the modulation shelf shows it in; the engine no longer
+    reads it, and step 04's pane removes it. Modules run in list order, so
+    a Math module reading one listed before it reads that tick's value.
   - `modulation.routes[]`: one of `source` (a module id), `outlet` or
     `performance` (with `channel`, the identity of the channel whose
     generator or keyboard it is), then `destination`, `depth` and

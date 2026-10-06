@@ -6482,21 +6482,14 @@ impl UiState {
         self.sync_effects();
     }
 
-    /// Sends a modulation edit on and re-draws what it changed.
+    /// Re-draws what a modulation edit changed.
     ///
-    /// The session builds the command, since it is the thing that knows which
-    /// channel it is on; what is left here is the projection. Every
-    /// modulation gesture marks the document edited, and the shelf and the
-    /// title both have to show it.
-    fn send_modulation(
-        &mut self,
-        window: &MainWindow,
-        tx: &EngineCommandSender,
-        commands: Vec<EngineCommand>,
-    ) {
-        for command in commands {
-            let _ = tx.send(command);
-        }
+    /// The engine is not told here: the pump's `sync_modulation` holds the
+    /// song's set against what it last sent and sends the difference, the
+    /// way `sync_audio_graph` does for the graph. Every modulation gesture
+    /// marks the document edited, and the shelf and the title both have to
+    /// show it.
+    fn modulation_edited(&mut self, window: &MainWindow) {
         self.session.mark_dirty();
         self.update_document_title(window);
         self.refresh_modulation(window);
@@ -6679,12 +6672,11 @@ impl UiState {
     /// resolving the same authored base underneath it.
     /// Points the armed modulation source at `destination`.
     ///
-    /// The rack edit is the session's; refusing out loud when the matrix is
-    /// full, and sending the route on, are this layer's.
+    /// The rack edit is the session's, and so is telling the engine; refusing
+    /// out loud when the matrix is full is this layer's.
     fn set_armed_modulation_depth(
         &mut self,
         window: &MainWindow,
-        tx: &EngineCommandSender,
         destination: ParamAddr,
         depth: f32,
     ) -> bool {
@@ -6703,9 +6695,8 @@ impl UiState {
                 );
                 false
             }
-            ArmedRoute::Added(route) => {
-                let channel = self.session.selected as u8;
-                self.send_modulation(window, tx, vec![EngineCommand::SetModRoute { channel, route }]);
+            ArmedRoute::Added(_) => {
+                self.modulation_edited(window);
                 true
             }
         }
@@ -12432,7 +12423,6 @@ impl AppUi {
         {
             let st = state.clone();
             let commands = command_state.clone();
-            let tx = cmd_tx.clone();
             let weak = window.as_weak();
             window.on_modulation_source_moved(move |slot, target| {
                 let Some(window) = weak.upgrade() else { return };
@@ -12440,10 +12430,10 @@ impl AppUi {
                 {
                     let mut state = st.borrow_mut();
                     let sent = state.session.move_modulation_source(slot, target);
-                    if sent.is_empty() {
+                    if !sent {
                         return;
                     }
-                    state.send_modulation(&window, &tx, sent);
+                    state.modulation_edited(&window);
                 }
                 record_project_history(&commands, before, &st, &window, "Module moved");
             });
@@ -12471,7 +12461,6 @@ impl AppUi {
         {
             let st = state.clone();
             let commands = command_state.clone();
-            let tx = cmd_tx.clone();
             let weak = window.as_weak();
             window.on_modulation_source_added(move |kind| {
                 let (Some(window), Some(kind)) = (weak.upgrade(), ModulatorKind::from_index(kind)) else {
@@ -12481,10 +12470,10 @@ impl AppUi {
                 {
                     let mut state = st.borrow_mut();
                     let sent = state.session.add_modulation_source(kind);
-                    if sent.is_empty() {
+                    if !sent {
                         return;
                     }
-                    state.send_modulation(&window, &tx, sent);
+                    state.modulation_edited(&window);
                 }
                 // History labels are `&'static str`, so the per-kind wording is a
                 // match rather than a format.
@@ -12529,7 +12518,6 @@ impl AppUi {
         {
             let st = state.clone();
             let commands = command_state.clone();
-            let tx = cmd_tx.clone();
             let weak = window.as_weak();
             window.on_modulation_param_changed(move |slot, id, value| {
                 let Some(window) = weak.upgrade() else { return };
@@ -12539,10 +12527,10 @@ impl AppUi {
                 with_gesture_history(&st, &commands, &window, "Modulator edited", || {
                     let mut state = st.borrow_mut();
                     let sent = state.session.set_modulator_param(slot, id, value);
-                    if sent.is_empty() {
+                    if !sent {
                         return false;
                     }
-                    state.send_modulation(&window, &tx, sent);
+                    state.modulation_edited(&window);
                     true
                 });
             });
@@ -12565,7 +12553,6 @@ impl AppUi {
         {
             let st = state.clone();
             let commands = command_state.clone();
-            let tx = cmd_tx.clone();
             let weak = window.as_weak();
             window.on_modulation_source_removed(move |slot| {
                 let Some(window) = weak.upgrade() else { return };
@@ -12573,10 +12560,10 @@ impl AppUi {
                 {
                     let mut state = st.borrow_mut();
                     let sent = state.session.remove_modulation_source(slot);
-                    if sent.is_empty() {
+                    if !sent {
                         return;
                     }
-                    state.send_modulation(&window, &tx, sent);
+                    state.modulation_edited(&window);
                 }
                 record_project_history(&commands, before, &st, &window, "Modulator removed");
             });
@@ -12584,7 +12571,6 @@ impl AppUi {
         {
             let commands = command_state.clone();
             let st = state.clone();
-            let tx = cmd_tx.clone();
             let weak = window.as_weak();
             window.on_modulation_envelope_input_channel_changed(move |slot, channel| {
                 let Some(window) = weak.upgrade() else { return };
@@ -12601,10 +12587,10 @@ impl AppUi {
                     let sent = state
                         .session
                         .set_module_input(id, mooloop_core::InputSource::ChannelNotes(channel));
-                    if sent.is_empty() {
+                    if !sent {
                         return false;
                     }
-                    state.send_modulation(&window, &tx, sent);
+                    state.modulation_edited(&window);
                     true
                 });
             });
@@ -12612,7 +12598,6 @@ impl AppUi {
         {
             let st = state.clone();
             let commands = command_state.clone();
-            let tx = cmd_tx.clone();
             let weak = window.as_weak();
             window.on_modulation_route_polarity_changed(move |index, polarity| {
                 let Some(window) = weak.upgrade() else { return };
@@ -12620,10 +12605,10 @@ impl AppUi {
                 {
                     let mut state = st.borrow_mut();
                     let sent = state.session.set_route_polarity(index, polarity);
-                    if sent.is_empty() {
+                    if !sent {
                         return;
                     }
-                    state.send_modulation(&window, &tx, sent);
+                    state.modulation_edited(&window);
                 }
                 record_project_history(
                     &commands,
@@ -12637,7 +12622,6 @@ impl AppUi {
         {
             let st = state.clone();
             let commands = command_state.clone();
-            let tx = cmd_tx.clone();
             let weak = window.as_weak();
             window.on_modulation_route_removed(move |index| {
                 let Some(window) = weak.upgrade() else { return };
@@ -12645,10 +12629,10 @@ impl AppUi {
                 {
                     let mut state = st.borrow_mut();
                     let sent = state.session.remove_route(index);
-                    if sent.is_empty() {
+                    if !sent {
                         return;
                     }
-                    state.send_modulation(&window, &tx, sent);
+                    state.modulation_edited(&window);
                 }
                 record_project_history(&commands, before, &st, &window, "Modulation route removed");
             });
@@ -12688,7 +12672,6 @@ impl AppUi {
         {
             let commands = command_state.clone();
             let st = state.clone();
-            let tx = cmd_tx.clone();
             let weak = window.as_weak();
             window.on_source_modulation_depth_changed(move |param, depth| {
                 let (Some(window), Ok(param)) = (weak.upgrade(), u32::try_from(param)) else {
@@ -12699,7 +12682,7 @@ impl AppUi {
                     let Some(destination) = state.session.selected_source_address(param) else {
                         return false;
                     };
-                    if !state.set_armed_modulation_depth(&window, &tx, destination, depth) {
+                    if !state.set_armed_modulation_depth(&window, destination, depth) {
                         // A full matrix or invalid target must snap the
                         // transient UI depth back to persisted truth rather
                         // than pretending a parked route was written.
@@ -12752,7 +12735,6 @@ impl AppUi {
         {
             let commands = command_state.clone();
             let st = state.clone();
-            let tx = cmd_tx.clone();
             let weak = window.as_weak();
             window.on_strip_modulation_depth_changed(move |param, depth| {
                 let (Some(window), Ok(param)) = (weak.upgrade(), u32::try_from(param)) else {
@@ -12764,7 +12746,7 @@ impl AppUi {
                         EffectTarget::Channel(state.session.selected as u8),
                         param,
                     );
-                    if !state.set_armed_modulation_depth(&window, &tx, destination, depth) {
+                    if !state.set_armed_modulation_depth(&window, destination, depth) {
                         state.refresh_modulation(&window);
                         return false;
                     }
@@ -12839,7 +12821,6 @@ impl AppUi {
         {
             let commands = command_state.clone();
             let st = state.clone();
-            let tx = cmd_tx.clone();
             let weak = window.as_weak();
             window.on_effect_modulation_depth_changed(move |slot, param, depth| {
                 let (Some(window), Ok(slot), Ok(param)) =
@@ -12866,7 +12847,7 @@ impl AppUi {
                     let Some(destination) = destination else {
                         return false;
                     };
-                    if !state.set_armed_modulation_depth(&window, &tx, destination, depth) {
+                    if !state.set_armed_modulation_depth(&window, destination, depth) {
                         state.refresh_modulation(&window);
                         return false;
                     }
@@ -18330,6 +18311,11 @@ impl AppUi {
                 // can. Allocates the taps only when the plan says somebody is
                 // listening.
                 st.borrow_mut().session.sync_audio_graph(&mut handle);
+                // And the song's modulation set, for the same reason: every
+                // modulation verb edits only the document, and what the
+                // engine runs is derived and diffed here (song modulation
+                // step 02). A tick with nothing changed compares two plans.
+                st.borrow_mut().session.sync_modulation(&mut handle);
                 profile.borrow_mut().lap(pump_profile::Section::SyncAudioGraph);
                 // And beside both, for the third time and the same reason:
                 // which buses need a console accumulator is a property of
@@ -19041,13 +19027,19 @@ impl AppUi {
                     });
                 }
                 {
-                    // Live modulation on the knobs. The engine publishes the
-                    // channel's four modulator outputs; resolving those into a
+                    // Live modulation on the knobs. The engine publishes
+                    // every module's output and each channel's outlets and
+                    // keyboard; resolving the selected channel's into a
                     // per-destination offset is the UI's job, so this is a
-                    // read of four cells plus arithmetic over the visible
+                    // read of a few cells plus arithmetic over the visible
                     // descriptors -- not a per-parameter feed.
                     let state = st.borrow();
-                    let outputs = handle.modulator_outputs(selected_channel);
+                    let (outlets, performance) = handle.channel_sources(selected_channel);
+                    let outputs = state.session.selected_source_row(
+                        |at| handle.module_output(at),
+                        &outlets,
+                        &performance,
+                    );
                     let routed = state.session.modulation.routes.iter().any(|route| {
                         route.destination.scope == EffectTarget::Channel(selected_channel as u8)
                     });

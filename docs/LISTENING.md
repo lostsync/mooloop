@@ -523,3 +523,15 @@ drag tracks past each other, and remove an empty one. No tail should cut, no
 send should drop out, and nothing should click or shift in time. Then remove
 a track that has channels on it (they should carry on through the master),
 and undo each edit. The question is whether it feels instant.
+
+### 38. A busy 0.1.6 song's modulation, before and after (MOO-511): in the app
+
+Open a 0.1.6 song with modulation on several channels: LFOs on filters, an
+Envelope gated by another channel, a Step pattern, a Random, a Math module
+reading an LFO. Play it in 0.1.6 and in this build. It should sound the same;
+the one change on purpose is that a Step pattern and a tempo-synced Random
+now start on the downbeat and follow the song position, as a synced LFO
+already did (MOO-373). Then, while it plays, move a channel and paste one:
+the other channels' notes should carry on, and an LFO should not restart.
+Route an LFO to a track's insert and to a track's fader and listen for both
+moving.

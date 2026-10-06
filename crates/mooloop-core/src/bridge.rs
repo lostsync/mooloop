@@ -11,7 +11,7 @@
 
 use crate::{
     AutomationPoint, BufferEvent, DeviceKind, DrumSynthParams, EffectTarget,
-    LoopRange, MlP8Route, ModRoute, ModSourceId, ModSourceRef, ModulatorParams, MonoSynthParams,
+    LoopRange, MlP8Route, ModRoute, ModSourceId, ModulatorParams, MonoSynthParams,
     MlM1Params,
     NoteEvent,
     NoteId,
@@ -30,13 +30,12 @@ use crate::{
 // the channel, and the ring grew with modulator capacity. The modulation
 // variants below name one fact each instead.
 //
-// Nothing replaces a whole rack live. Project load, undo and the factory
-// bank all rebuild the renderer through `EngineHandle::install_project`, so
-// the wide command had no caller left once the gestures were narrowed. A
-// future channel-preset verb belongs on the structural ring rather than
-// here: that ring may carry a `Box` because it has a reclaim path back off
-// the audio thread. See
-// `docs/plans/archive/modulator-capacity/03-per-slot-commands.md`.
+// The song's whole modulation set is replaced on the structural ring
+// (`StructuralCommand::SetModulation`), which may carry a `Box` because it
+// has a reclaim path back off the audio thread: a set is sized from the song,
+// and adding a module or a route changes where every route is filed. See
+// `docs/plans/archive/modulator-capacity/03-per-slot-commands.md` and
+// `docs/plans/song-modulation/02-the-engine-runs-one-set.md`.
 /// When a deferred command should land.
 ///
 /// A command carries no offset and is applied at the top of the block that
@@ -415,47 +414,24 @@ pub enum EngineCommand {
         id: u32,
         value: f32,
     },
-    /// Set one modulator parameter by descriptor id. This is the ordinary
-    /// modulation edit — a knob drag, a selector click — and it names the
-    /// fact that changed rather than shipping the rack it lives in.
-    SetModulatorParam {
-        channel: u8,
-        slot: u8,
-        id: u32,
-        value: f32,
-    },
-    /// Put a module in one slot, under the identity the authoring rack
-    /// minted. Retuning a slot that already holds the same kind preserves its
-    /// running state (an LFO keeps its phase, a sequencer its cursor); a kind
-    /// change rebuilds it.
-    InstallModulator {
-        channel: u8,
-        slot: u8,
+    /// Retune one module of the song's modulation set, found by identity:
+    /// a knob drag, a selector click. The module keeps its running state (an
+    /// LFO its phase, a sequencer its cursor) unless its kind changed.
+    ///
+    /// The song's set is not a channel's, so neither is this. What changes
+    /// the set's shape -- a module or a route added, removed or reordered,
+    /// an input repointed -- replaces the whole set on the structural ring
+    /// (`StructuralCommand::SetModulation`), because the engine resolves
+    /// identities to positions off the audio thread. This is the edit that
+    /// happens a frame at a time, and it names the one fact that changed.
+    SetModulator {
         source: ModSourceId,
         params: ModulatorParams,
     },
-    /// Empty one slot and drop every route it drove, restoring each orphaned
-    /// destination to its base at the next block.
-    ClearModulator { channel: u8, slot: u8 },
-    /// Move a module to another grid position, compacting the rack. Both
-    /// racks run the same permutation, so routes and a math module's input
-    /// slot stay pointed at the same modules on either side.
-    MoveModulator { channel: u8, from: u8, to: u8 },
-    /// Add or retune one route. The route names its source by durable id, so
-    /// one that arrives before the module it names is inert rather than
-    /// misaimed at whatever occupies that slot.
-    SetModRoute { channel: u8, route: ModRoute },
-    /// Drop one route by identity and restore its destination's base at the
-    /// next block.
-    RemoveModRoute {
-        channel: u8,
-        /// What drove the route being removed. A reference rather than a
-        /// module id, because a route may name a generator outlet, and a
-        /// route that can be created and not deleted is worse than one that
-        /// cannot be created at all.
-        source: ModSourceRef,
-        destination: ParamAddr,
-    },
+    /// Retune one route's depth and polarity, found by its source and
+    /// destination. A route the set does not hold is ignored: adding one is a
+    /// change of shape, and arrives as a whole set.
+    SetModRoute { route: ModRoute },
     /// Fire one complete retained-audio edit at the start of the next block.
     /// The tuple is never split into parameter updates, so the read head sees
     /// one sample-accurate change.
