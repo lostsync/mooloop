@@ -1608,6 +1608,162 @@ fn device_cost() {
                 reference,
             );
         }
+        // The song-wide set (MOO-170, `docs/plans/song-modulation/02`): what
+        // a converted busy song becomes, and the case a song-wide set is for.
+        // Each is read against the same song with nothing driven.
+        //
+        // `count` ML-P8 + Filter channels holding the chord, spread over
+        // `tracks` tracks that each carry a Filter of their own.
+        let wide = |count: usize, tracks: usize| {
+            let mut project = Project::default();
+            project.channels.clear();
+            for index in 0..count {
+                let mut channel = ProjectChannel::mlp8(index, 1);
+                chord(&mut channel, &CHORD[..4], bar);
+                channel.rescope(index as u8);
+                channel
+                    .setup
+                    .push_effect(EffectSlotState::of_kind(EffectKind::Filter))
+                    .expect("room");
+                if tracks > 0 {
+                    channel.setup.channel.bus = (1 + index % tracks) as u8;
+                }
+                project.channels.push(channel);
+            }
+            for track in 1..=tracks {
+                let mut setup = mooloop_core::BusSetup::new(track);
+                setup.id = mooloop_core::TrackId(track as u32);
+                project.buses.push(setup);
+                project.next_track_id = track as u32 + 1;
+                let bus = &mut project.buses[track];
+                let at = bus.effects.len();
+                mooloop_core::insert_effect(
+                    &mut bus.effects,
+                    &mut bus.next_device_id,
+                    at,
+                    EffectSlotState::of_kind(EffectKind::Filter),
+                )
+                .expect("room");
+            }
+            project
+        };
+        // Cutoff, resonance and drive: the Filter's mode and slope are stepped
+        // and refuse modulation.
+        let filter_param = |index: usize| {
+            [
+                FILTER_PARAM_CUTOFF_HZ,
+                mooloop_core::effect::FILTER_PARAM_RESONANCE,
+                mooloop_core::effect::FILTER_PARAM_DRIVE,
+            ][index % 3]
+        };
+        {
+            const CHANNELS: usize = 8;
+            let reference = add(
+                &mut rows,
+                format!("({CHANNELS} x ML-P8 + Filter, nothing driven)"),
+                wide(CHANNELS, 0),
+                0,
+                0,
+            );
+            rows[reference].reference = reference;
+            let mut project = wide(CHANNELS, 0);
+            let slots = mooloop_core::modulation::MAX_MODULATORS_PER_CHANNEL;
+            let mut routes = 0;
+            for (index, channel) in project.channels.iter_mut().enumerate() {
+                let device = channel.setup.effects[0].id;
+                let rack = channel.setup.carried_modulation_mut();
+                for slot in 0..slots {
+                    rack.install(
+                        slot,
+                        ModulatorParams::Lfo(ModLfoParams {
+                            rate_hz: 0.5 + slot as f32,
+                            ..ModLfoParams::default()
+                        }),
+                    );
+                }
+                let target = EffectTarget::Channel(index as u8);
+                for route in 0..mooloop_core::modulation::MAX_MOD_ROUTES_PER_CHANNEL {
+                    rack.add_route(ModRoute::to_slot(
+                        (route % slots) as u8,
+                        ParamAddr::effect(target, device, filter_param(route)),
+                        0.1,
+                        ModPolarity::Bipolar,
+                    ))
+                    .expect("room in the matrix");
+                    routes += 1;
+                }
+            }
+            project.lift_channel_modulation();
+            add(
+                &mut rows,
+                format!("{CHANNELS} channels x {slots} LFOs, {routes} routes"),
+                project,
+                0,
+                reference,
+            );
+        }
+        {
+            const CHANNELS: usize = 32;
+            const TRACKS: usize = 4;
+            let reference = add(
+                &mut rows,
+                format!("({CHANNELS} x ML-P8 + Filter, {TRACKS} tracks, nothing driven)"),
+                wide(CHANNELS, TRACKS),
+                0,
+                0,
+            );
+            rows[reference].reference = reference;
+            // Two modules a channel, eight routes each: six onto the
+            // channel's own Filter and two onto its track's.
+            let mut project = wide(CHANNELS, TRACKS);
+            let (mut modules, mut routes) = (0, 0);
+            for (index, channel) in project.channels.iter_mut().enumerate() {
+                let device = channel.setup.effects[0].id;
+                let bus = channel.setup.channel.bus;
+                let rack = channel.setup.carried_modulation_mut();
+                for slot in 0..2 {
+                    rack.install(
+                        slot,
+                        ModulatorParams::Lfo(ModLfoParams {
+                            rate_hz: 0.5 + (index * 2 + slot) as f32 * 0.1,
+                            ..ModLfoParams::default()
+                        }),
+                    );
+                    modules += 1;
+                }
+                for route in 0..8 {
+                    let destination = if route < 6 {
+                        ParamAddr::effect(
+                            EffectTarget::Channel(index as u8),
+                            device,
+                            filter_param(route / 2),
+                        )
+                    } else {
+                        ParamAddr::effect(
+                            EffectTarget::Bus(bus),
+                            mooloop_core::DeviceId(0),
+                            filter_param(index + route),
+                        )
+                    };
+                    rack.add_route(ModRoute::to_slot(
+                        (route % 2) as u8,
+                        destination,
+                        0.1,
+                        ModPolarity::Bipolar,
+                    ))
+                    .expect("room in the matrix");
+                    routes += 1;
+                }
+            }
+            project.lift_channel_modulation();
+            add(
+                &mut rows,
+                format!("{modules} modules, {routes} routes, {CHANNELS} ch + {TRACKS} tracks"),
+                project,
+                0,
+                reference,
+            );
+        }
         // Automation: one lane per Filter parameter, each moving across the
         // bar.
         for lanes in [1usize, 4] {
