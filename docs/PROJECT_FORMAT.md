@@ -692,24 +692,39 @@ before any of them existed still loads:
   level rather than at the level it used to play at, which is deliberate:
   the saved value is what the knob showed, and silently resetting it would
   change the file behind the face.
-- `modulation` is **the song's** modulation set (0.1.7): every modulator
-  module, and every route from a source to a parameter anywhere in the song.
-  A channel holds none. The table is left out when the song has no
-  modulation, so such a song writes nothing new.
-  - `modulation.modules[]`: each module's song-wide `id`, its `name`
-    (`<channel name> <kind> <n>` when made), its random `seed`, its `input`
-    (`{ channel_notes = <ChannelId> }` for the notes an Envelope, LFO,
-    Step or Random hears, `{ module = <id> }` for the module a Math module
-    reads, left out for none), and its `params` as a rack slot wrote them.
-    A Math module's `input_slot` param is written out of range (255): its
-    operand is its `input`. A Math module in a song saved before Math read
-    a module by id kept its operand as a slot, and loading gives it the
-    module seated in that slot. A module also writes `rack`
-    (`{ channel, slot }`), its home seat: the channel it was made on, and a
-    slot there, which a channel preset saved from that channel reads. It is
-    left out for a module with no seat; the engine does not read it.
-    Modules run in list order, so a Math module reading one listed before it
-    reads that tick's value.
+- `modulation` is **the song's** modulation set (0.1.7), saved as a patch
+  (`plans/song-patch/`): boxes on a canvas, tags that bring the song's
+  sources in, the wires between them, and every route from a source to a
+  parameter anywhere in the song. A channel holds none. The table is left
+  out when the song has no modulation, so such a song writes nothing new.
+  - `modulation.modules[]`: the boxes. Each has its song-wide `id`, its
+    `name` (`<channel name> <kind> <n>` when made), its random `seed`, its
+    place on the canvas `at` (`{ x, y }`, whole canvas units), `open = true`
+    when its face is shown in place (left out when not), and its `params`
+    as a rack slot wrote them. A Math module's `input_slot` param is
+    written out of range (255): its operand is the wire into its `in`. A
+    module also writes `rack` (`{ channel, slot }`), its home seat: the
+    channel it was made on, and a slot there, which a channel preset saved
+    from that channel reads. It is left out for a module with no seat; the
+    engine does not read it. Modules run in list order, so a Math module
+    reading one listed before it reads that tick's value.
+  - `modulation.tags[]`: the tags, boxes with no face. Each has an `id`
+    from the same mint as the modules, its `at`, and `tag`, one of:
+    `inlet` with `bind = { gate = <ChannelId> }` (a channel's notes as a
+    gate); `notes_in` with `channel` and `take = true` when the patch takes
+    the notes rather than copying them; `notes_out` with `channel`. A tag
+    with no `bind` or `channel` is an empty `[ ]` slot.
+  - `modulation.wires[]`: `from` (an outlet) and `to` (an inlet), each
+    `{ node = <box or tag id>, port = <n> }`, and `bend` (`{ axis =
+    "horizontal" | "vertical", at }`) when a cable was bent by hand. Ports
+    count from 0 in the kind's jack table (`ModulatorKind::ports` in
+    `core/src/patch.rs`): LFO `rate`, `retrigger`; Envelope `gate`; Step
+    `advance`, `reset`; Random `trigger`; Math `in`; every box has one
+    outlet, `out`. An inlet takes at most one wire, and a wire joins two
+    jacks of one sort (control or notes). Loading drops a wire naming a box
+    or port the song does not have, a wire of the wrong sort and a second
+    wire into one inlet, and empties a tag naming a channel the song does
+    not have.
   - `modulation.routes[]`: one of `source` (a module id), `outlet` or
     `performance` (with `channel`, the identity of the channel whose
     generator or keyboard it is), then `destination`, `depth` and
@@ -717,6 +732,18 @@ before any of them existed still loads:
     route whose source or destination no longer resolves is dropped at load
     rather than parked.
   - `modulation.next_source_id` is the id mint, left out at zero.
+- **A song written by song modulation, before the patch** (0.1.7 builds
+  from 2026-10-05), gave each module an `input` and no `at`:
+  `{ channel_notes = <ChannelId> }` for the notes an Envelope, LFO, Step or
+  Random heard, `{ module = <id> }` for the module a Math module read.
+  Loading turns each input into a wire into the inlet it fed (the LFO's
+  `retrigger`, the Envelope's `gate`, the Step's `advance`, the Random's
+  `trigger`, Math's `in`). Every input naming one channel shares one
+  `inlet` tag bound to it, placed in a column at the canvas's left edge.
+  The boxes keep their list order and are laid out in a grid in that
+  order. A Math module in a song saved before Math read a module by id
+  kept its operand as a slot, and loading wires it to the module seated in
+  that slot. The song saves in the new shape and writes no `input` again.
 - **A song written by 0.1.6 or earlier** carries a `ModRack` per channel at
   `channels[].setup.modulation`. Loading lifts every rack into the song's
   set, in channel order: each module gets a fresh song-wide id and its

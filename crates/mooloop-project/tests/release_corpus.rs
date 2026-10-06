@@ -179,7 +179,7 @@ fn a_release_songs_channel_modulation_converts_and_round_trips() {
         .iter()
         .map(|module| {
             assert_eq!(module.rack.map(|seat| seat.channel), Some(own));
-            (module.rack.map(|seat| seat.slot), module.input)
+            (module.rack.map(|seat| seat.slot), converted.modulation.input_of(module.id))
         })
         .collect();
     assert_eq!(
@@ -190,6 +190,9 @@ fn a_release_songs_channel_modulation_converts_and_round_trips() {
             (Some(3), InputSource::ChannelNotes(own)),
         ]
     );
+    // As a patch: one gate tag per channel, shared, and a wire per input.
+    assert_eq!(converted.modulation.tags.len(), 2);
+    assert_eq!(converted.modulation.wires.len(), 3);
     assert_eq!(converted.modulation.routes.len(), 3);
     assert!(converted.modulation.routes.iter().any(|route| route.source
         == ModSourceRef::GeneratorOutlet {

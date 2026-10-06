@@ -2743,8 +2743,10 @@ pub struct RackSeat {
 }
 
 /// One module in the song's modulation set: what a rack slot was, plus the
-/// identity and name a song-wide list needs.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+/// identity and name a song-wide list needs, and its place on the patch
+/// canvas (`docs/plans/song-patch/`). What its inlets listen to is the
+/// song's wires ([`SongModulation::wires`]), not a field here.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SongModule {
     /// Unique in the song, minted from [`SongModulation::next_source_id`].
     pub id: ModSourceId,
@@ -2761,12 +2763,11 @@ pub struct SongModule {
     /// [`RackSeat`] keeps equal for every converted module.
     #[serde(default)]
     pub seed: u32,
-    /// What the module's input listens to. The Envelope's gate lived in its
-    /// params as a channel and the Math module's operand as a rack slot;
-    /// every kind now names its input here instead: a channel's notes for
-    /// the four that read notes, another module for Math.
-    #[serde(default, skip_serializing_if = "InputSource::is_none")]
-    pub input: InputSource,
+    /// Where the box sits on the patch canvas.
+    pub at: crate::patch::CanvasPoint,
+    /// Whether its face is shown in place on the canvas (step 05).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub open: bool,
     /// See [`RackSeat`]. `None` for a module whose channel has gone: it stays
     /// in the song (a module with no route is still one the user made), and
     /// the engine does not run it.
@@ -2777,12 +2778,16 @@ pub struct SongModule {
 
 impl SongModule {
     /// The params as a channel rack runs them: the Envelope's gate seat and
-    /// identity written from [`Self::input`], which is where the song keeps
-    /// them.
-    fn rack_params(&self, seat_of: &impl Fn(crate::ChannelId) -> Option<u8>) -> ModulatorParams {
+    /// identity written from its `input` ([`SongModulation::input_of`]),
+    /// which is where the song keeps them.
+    fn rack_params(
+        &self,
+        input: InputSource,
+        seat_of: &impl Fn(crate::ChannelId) -> Option<u8>,
+    ) -> ModulatorParams {
         let mut params = self.params;
         if let ModulatorParams::Envelope(envelope) = &mut params {
-            match self.input.channel() {
+            match input.channel() {
                 Some(channel) => {
                     envelope.input_channel = seat_of(channel).unwrap_or(u8::MAX);
                     envelope.input_channel_id = channel;
@@ -2798,7 +2803,7 @@ impl SongModule {
 }
 
 /// The params as the song stores them: the Envelope's own gate fields and the
-/// Math module's input slot reset, because [`SongModule::input`] holds both
+/// Math module's input slot reset, because the wire into its input holds both
 /// and two copies of one fact drift.
 fn song_params(mut params: ModulatorParams) -> ModulatorParams {
     match &mut params {
@@ -2863,21 +2868,56 @@ fn rack_input(
 /// ([`Self::channel_rack`]).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SongModulation {
+    /// The boxes, in the order the engine ticks them until step 02 of
+    /// `docs/plans/song-patch/` compiles the graph's order.
     pub modules: Vec<SongModule>,
+    /// The tags: the song's sources and channels on the canvas, as boxes
+    /// with no face. Their ids come from the same counter as the modules'.
+    pub tags: Vec<crate::patch::SongTag>,
+    /// Every wire, from an outlet to an inlet. An inlet takes one.
+    pub wires: Vec<crate::patch::Wire>,
     pub routes: Vec<ModRoute>,
     /// Next identity to mint. Monotonic, so removing a module and adding
     /// another never hands the newcomer a departed module's routes.
     pub next_source_id: u32,
 }
 
+/// The song's modulation as the file holds it: written with `M` a
+/// [`SongModule`], read with `M` a [`SavedSongModule`].
 #[derive(serde::Serialize, serde::Deserialize)]
-struct SavedSongModulation {
+struct SavedSongModulation<M> {
     #[serde(default, skip_serializing_if = "is_zero")]
     next_source_id: u32,
+    #[serde(default = "Vec::new", skip_serializing_if = "Vec::is_empty")]
+    modules: Vec<M>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    modules: Vec<SongModule>,
+    tags: Vec<crate::patch::SongTag>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    wires: Vec<crate::patch::Wire>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     routes: Vec<SavedSongRoute>,
+}
+
+/// A module as the file holds it. A song saved by song modulation, before
+/// the patch, has an `input` and no `at`; loading wires the input
+/// ([`SongModulation::set_input`]) and lays the boxes out in a grid in list
+/// order ([`crate::patch::grid_place`]). Nothing writes `input` now.
+#[derive(serde::Deserialize)]
+struct SavedSongModule {
+    id: ModSourceId,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    seed: u32,
+    #[serde(default)]
+    at: Option<crate::patch::CanvasPoint>,
+    #[serde(default)]
+    open: bool,
+    #[serde(default)]
+    input: InputSource,
+    #[serde(default)]
+    rack: Option<RackSeat>,
+    params: ModulatorParams,
 }
 
 fn is_zero(value: &u32) -> bool {
@@ -2935,7 +2975,9 @@ impl serde::Serialize for SongModulation {
             .collect();
         SavedSongModulation {
             next_source_id: self.next_source_id,
-            modules: self.modules.clone(),
+            modules: self.modules.iter().collect(),
+            tags: self.tags.clone(),
+            wires: self.wires.clone(),
             routes,
         }
         .serialize(serializer)
@@ -2947,7 +2989,7 @@ impl<'de> serde::Deserialize<'de> for SongModulation {
     where
         D: serde::Deserializer<'de>,
     {
-        let saved = SavedSongModulation::deserialize(deserializer)?;
+        let saved = SavedSongModulation::<SavedSongModule>::deserialize(deserializer)?;
         let routes = saved
             .routes
             .into_iter()
@@ -2975,12 +3017,46 @@ impl<'de> serde::Deserialize<'de> for SongModulation {
                 })
             })
             .collect();
+        let placed = saved.modules.iter().all(|module| module.at.is_some());
+        let mut inputs = Vec::new();
+        let modules = saved
+            .modules
+            .into_iter()
+            .enumerate()
+            .map(|(index, module)| {
+                inputs.push((module.id, module.input));
+                SongModule {
+                    id: module.id,
+                    name: module.name,
+                    seed: module.seed,
+                    // A song with every box placed keeps its places; one
+                    // saved before the canvas is laid out as the grid it
+                    // showed, in list order.
+                    at: module
+                        .at
+                        .filter(|_| placed)
+                        .unwrap_or_else(|| crate::patch::grid_place(index)),
+                    open: module.open,
+                    rack: module.rack,
+                    params: module.params,
+                }
+            })
+            .collect();
         let mut modulation = Self {
-            modules: saved.modules,
+            modules,
+            tags: saved.tags,
+            wires: saved.wires,
             routes,
             next_source_id: saved.next_source_id,
         };
         modulation.next_source_id = modulation.next_source_id.max(modulation.mint_floor());
+        // A song saved by song modulation: each input becomes a wire, and the
+        // inputs naming one channel share its gate tag.
+        for (id, input) in inputs {
+            if !input.is_none() {
+                modulation.set_input(id, input);
+            }
+        }
         Ok(modulation)
     }
 }
@@ -2989,7 +3065,7 @@ impl SongModulation {
     /// Whether the song has no modules and no routes, which is when it saves
     /// no `modulation` table at all.
     pub fn is_empty(&self) -> bool {
-        self.modules.is_empty() && self.routes.is_empty()
+        self.modules.is_empty() && self.tags.is_empty() && self.routes.is_empty()
     }
 
     pub fn module(&self, id: ModSourceId) -> Option<&SongModule> {
@@ -3000,16 +3076,18 @@ impl SongModulation {
         self.modules.iter_mut().find(|module| module.id == id)
     }
 
-    /// The highest id in use, plus one.
+    /// The highest id a box or tag wears, plus one.
     fn mint_floor(&self) -> u32 {
         self.modules
             .iter()
-            .map(|module| module.id.0.wrapping_add(1))
+            .map(|module| module.id)
+            .chain(self.tags.iter().map(|tag| tag.id))
+            .map(|id| id.0.wrapping_add(1))
             .max()
             .unwrap_or(0)
     }
 
-    fn mint(&mut self) -> ModSourceId {
+    pub(crate) fn mint(&mut self) -> ModSourceId {
         let floor = self.mint_floor();
         let id = ModSourceId(self.next_source_id.max(floor));
         self.next_source_id = id.0.wrapping_add(1);
@@ -3018,7 +3096,7 @@ impl SongModulation {
 
     /// Give each Math module saved by song modulation step 01, which kept its
     /// operand as a slot of its rack, the module in that slot. Idempotent: a
-    /// module saved since keeps its operand in [`SongModule::input`], with
+    /// module saved since keeps its operand as the wire into its `in`, with
     /// the slot out of range.
     pub fn resolve_math_inputs(&mut self) {
         for index in 0..self.modules.len() {
@@ -3029,7 +3107,7 @@ impl SongModulation {
             if math.input_slot == UNRESOLVED_SLOT {
                 continue;
             }
-            let read = module.input.is_none().then(|| {
+            let read = self.input_of(module.id).is_none().then(|| {
                 self.modules
                     .iter()
                     .find(|other| {
@@ -3042,10 +3120,11 @@ impl SongModulation {
                     })
                     .map(|other| other.id)
             });
-            let module = &mut self.modules[index];
-            if let Some(Some(id)) = read {
-                module.input = InputSource::Module(id);
+            let id = self.modules[index].id;
+            if let Some(Some(read)) = read {
+                self.set_input(id, InputSource::Module(read));
             }
+            let module = &mut self.modules[index];
             module.params = song_params(module.params);
         }
     }
@@ -3070,14 +3149,17 @@ impl SongModulation {
             .map(|slot| RackSeat { channel: home, slot })
             .find(|seat| !self.modules.iter().any(|module| module.rack == Some(*seat)))
             .filter(|_| home.is_assigned());
+        let at = self.free_place();
         self.modules.push(SongModule {
             id,
             name,
             seed: id.0,
-            input,
+            at,
+            open: false,
             rack: seat,
             params: song_params(params),
         });
+        self.set_input(id, input);
         id
     }
 
@@ -3100,12 +3182,8 @@ impl SongModulation {
             return false;
         }
         self.routes.retain(|route| route.source != ModSourceRef::Id(id));
-        // A Math module that read it reads nothing.
-        for module in &mut self.modules {
-            if module.input == InputSource::Module(id) {
-                module.input = InputSource::None;
-            }
-        }
+        // A box that read it reads nothing.
+        self.drop_wires_of(id);
         true
     }
 
@@ -3151,21 +3229,29 @@ impl SongModulation {
                 .flatten()
                 .map(|(_, id)| id)
         };
+        let mut inputs = Vec::new();
         for (slot, entry) in rack.occupied() {
             let Some((_, id)) = ids[slot] else { continue };
             let kind = entry.params.kind();
             let name = self.next_name(channel, channel_name, kind);
+            let at = self.free_place();
+            inputs.push((id, rack_input(&entry.params, channel, module_at)));
             self.modules.push(SongModule {
                 id,
                 name,
                 seed: slot as u32,
-                input: rack_input(&entry.params, channel, module_at),
+                at,
+                open: false,
                 rack: Some(RackSeat {
                     channel,
                     slot: slot as u8,
                 }),
                 params: song_params(entry.params),
             });
+        }
+        // After every module is in: a Math module may read a later slot.
+        for (id, input) in inputs {
+            self.set_input(id, input);
         }
         for route in rack.routes.iter().flatten() {
             let source = match route.source {
@@ -3222,7 +3308,7 @@ impl SongModulation {
                 .or_else(|| rack.free_slot())?;
             rack.slots[slot] = Some(ModSlot {
                 id: module.id,
-                params: module.rack_params(&seat_of),
+                params: module.rack_params(self.input_of(module.id), &seat_of),
             });
             Some(slot)
         };
@@ -3270,8 +3356,8 @@ impl SongModulation {
                 continue;
             }
             let read = self
-                .module(entry.id)
-                .and_then(|module| module.input.module())
+                .input_of(entry.id)
+                .module()
                 .and_then(|id| rack.slot_of(id))
                 .unwrap_or(UNRESOLVED_SLOT);
             if let Some(Some(ModSlot {
@@ -3307,8 +3393,13 @@ impl SongModulation {
         before: &ModRack,
         after: &ModRack,
     ) {
+        let mut inputs = Vec::new();
         for (slot, entry) in after.occupied() {
             let input = rack_input(&entry.params, channel, |slot| after.source_id(usize::from(slot)));
+            let at = match self.module(entry.id) {
+                Some(module) => module.at,
+                None => self.free_place(),
+            };
             match self.module_mut(entry.id) {
                 Some(module) => {
                     // An Envelope's gate and a Math module's input are edited
@@ -3321,7 +3412,7 @@ impl SongModulation {
                         _ => false,
                     };
                     if edited {
-                        module.input = input;
+                        inputs.push((entry.id, input));
                     }
                     module.params = song_params(entry.params);
                     if let Some(seat) = module.rack.as_mut().filter(|seat| seat.channel == channel)
@@ -3335,14 +3426,21 @@ impl SongModulation {
                         id: entry.id,
                         name,
                         seed: entry.id.0,
-                        input,
+                        at,
+                        open: false,
                         rack: Some(RackSeat {
                             channel,
                             slot: slot as u8,
                         }),
                         params: song_params(entry.params),
                     });
+                    inputs.push((entry.id, input));
                 }
+            }
+        }
+        for (id, input) in inputs {
+            if self.input_of(id) != input {
+                self.set_input(id, input);
             }
         }
         for (_, entry) in before.occupied() {
