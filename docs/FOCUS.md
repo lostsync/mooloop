@@ -22,6 +22,10 @@ purpose. History goes in `JOURNAL.md`, the state of each issue is in Linear,
   `00-status.md`. Steps 03 to 05 of
   `plans/icon-pass/` moved to 0.1.8. Before tagging, dispatch `release.yml` on `main`
   (`OPERATIONS.md`, *Releases And Tags*).
+- **Next: the song patch** (`plans/song-patch/`, planned 2026-10-06 on
+  Adam's go after he tried song modulation: *"you can go ahead and do the
+  plan"*). The Modulation pane becomes a patching canvas, in ten steps.
+  Which release label it carries is his call (its `00-status.md`).
 - **Waiting on Adam:** the listening queue in [LISTENING.md](LISTENING.md),
   and MOO-456's look. The `Question` label in Linear is the complete list of
   open questions.
@@ -63,8 +67,7 @@ branch.
 - **A toolkit swap.** If the view layer ever leaves Slint, Qt is the
   candidate Adam named (MOO-146).
 - **The tracker idea** (MOO-159: an interest, not a decision, recorded in
-  `IDEAS.md`), and **the Song Patch canvas** (`plans/song-patch/`, a
-  proposal). Modulators inside containers (MOO-160) come after 0.2.0.
+  `IDEAS.md`). Modulators inside containers (MOO-160) come after 0.2.0.
 - **More effect kinds, or more modulator kinds.** The short-notes device
   ideas (mid/side, a gain/pan/width utility) get cheaper once the layer
   device has its gestures. A mid/side device is close to a two-branch layer
