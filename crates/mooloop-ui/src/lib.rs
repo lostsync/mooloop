@@ -97,7 +97,7 @@ use mooloop_core::{
     EqParams, EQ_FACE_CONTROLS, FilterModel,
     GeneratorParams, GlideMode, HatCharacter,
     KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor,
-    ModPolarity, ModRack, ModRandomTrigger, ModStepTrigger,
+    ModPolarity, ModRandomTrigger, ModSourceRef, ModStepTrigger,
     ControlRate, ControlTarget, ModulatorKind, ModulatorParams, OutletDescriptor,
     PublishesOutlets, RecordFace, SendTap, Takeover, TransportControl,
     SignalShape,
@@ -113,7 +113,6 @@ use mooloop_core::{
     VoiceMode, MAX_SLICES,
     DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_BUSES,
     MAX_CHANNELS, MAX_MODULATORS_PER_CHANNEL,
-    MAX_MOD_ROUTES_PER_CHANNEL,
     MOD_STEP_MAX_STEPS,
     MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO,
     MIN_STRETCH_GRAIN, MIN_STRETCH_RATIO,
@@ -3675,26 +3674,23 @@ fn descriptor_policies(descriptors: &[ParamDescriptor]) -> ModelRc<bool> {
 /// destination currently refuses modulation: the assignment is still authored
 /// work the user made and can remove.
 fn descriptor_route_count_slots(
-    rack: &ModRack,
+    session: &Session,
     descriptors: &[ParamDescriptor],
     address: impl Fn(u32) -> ParamAddr,
 ) -> Vec<i32> {
     let mut counts = vec![0i32; descriptor_slots(descriptors)];
     for descriptor in descriptors {
-        counts[descriptor.id as usize] = rack
-            .destinations()
-            .filter(|destination| *destination == address(descriptor.id))
-            .count() as i32;
+        counts[descriptor.id as usize] = session.route_count(address(descriptor.id)) as i32;
     }
     counts
 }
 
 fn descriptor_route_counts(
-    rack: &ModRack,
+    session: &Session,
     descriptors: &[ParamDescriptor],
     address: impl Fn(u32) -> ParamAddr,
 ) -> ModelRc<i32> {
-    descriptor_route_count_slots(rack, descriptors, address)
+    descriptor_route_count_slots(session, descriptors, address)
         .as_slice()
         .into()
 }
@@ -5778,124 +5774,86 @@ impl UiState {
         // callers raising it too costs nothing -- and a preset can carry an
         // analyzer flag, so some of them need it anyway.
         self.effect_spectra_stale.set(true);
-        let armed = self.session.modulation_armed_slot();
+        let armed = self.session.modulation_armed.get();
         let selected = self.session.selected_device_slot();
-        let rack = self.session.selected_rack();
-        let rows: Vec<EffectSlotRow> = match self.session.effect_target {
-            // Modulation state belongs to the selected channel, so an insert
-            // rack pointed at a bus -- or at another channel -- renders its
-            // rows without overlays rather than borrowing this channel's.
-            EffectTarget::Channel(channel) if channel as usize == self.session.selected => self
-                .session.channels
-                .get(channel as usize)
-                .map(|state| {
-                    let views = self.rack_view(EffectTarget::Channel(channel), &state.effects);
-                    state
-                        .effects
-                        .iter()
-                        .enumerate()
-                        .map(|(slot, effect)| {
-                            let mut row = effect_slot_row(
-                                effect,
-                                &self.session.effect_presets,
-                                &self.session.plugins,
-                                self.session.effect_preset_name(
-                                    EffectTarget::Channel(channel),
+        // Every chain carries its overlays, a track's and an unselected
+        // channel's included: the song's routes reach any knob (song
+        // modulation step 03).
+        let target = self.session.effect_target;
+        let rows: Vec<EffectSlotRow> = self
+            .session
+            .effect_chain()
+            .map(|effects| {
+                let views = self.rack_view(target, effects);
+                effects
+                    .iter()
+                    .enumerate()
+                    .map(|(slot, effect)| {
+                        let mut row = effect_slot_row(
+                            effect,
+                            &self.session.effect_presets,
+                            &self.session.plugins,
+                            self.session.effect_preset_name(target, effect.id),
+                            RackPlacement {
+                                view: views[slot].clone(),
+                                selected: selected == Some(slot),
+                                wrap_enabled: wrap_enabled_at(effects, slot),
+                            },
+                            self.audio_sample_rate,
+                        );
+                        let descriptors = effect.kind().descriptors();
+                        let address = |param| ParamAddr::effect(target, effect.id, param);
+                        let depths = self.session.destination_depths(armed, descriptors, address);
+                        let allowed = descriptor_policy_flags(descriptors);
+                        let offsets = self.session.destination_offsets(descriptors, address);
+                        let counts = descriptor_route_count_slots(&self.session, descriptors, address);
+                        // A plugin has no descriptor table: its overlays are
+                        // by dense index, the face's own numbering
+                        // (MOO-228). The EQ's seven controls are a view over
+                        // fifty descriptors, so its overlays are gathered
+                        // down to what the face reads.
+                        let plugin = match effect.params {
+                            mooloop_core::EffectParams::Plugin(plugin) => Some(plugin),
+                            _ => None,
+                        };
+                        match (plugin, effect.params.eq()) {
+                            (Some(plugin), _) => {
+                                let overlays = plugin_ui::plugin_overlays(
+                                    &self.session,
+                                    armed,
+                                    target,
                                     effect.id,
-                                ),
-                                RackPlacement {
-                                    view: views[slot].clone(),
-                                    selected: selected == Some(slot),
-                                    wrap_enabled: wrap_enabled_at(&state.effects, slot),
-                                },
-                                self.audio_sample_rate,
-                            );
-                            let descriptors = effect.kind().descriptors();
-                            let address = |param| {
-                                ParamAddr::effect(EffectTarget::Channel(channel), effect.id, param)
-                            };
-                            let depths =
-                                self.session.destination_depths(armed, descriptors, address);
-                            let allowed = descriptor_policy_flags(descriptors);
-                            let offsets = self.session.destination_offsets(descriptors, address);
-                            let counts =
-                                descriptor_route_count_slots(&rack, descriptors, address);
-                            // A plugin has no descriptor table: its overlays
-                            // are by dense index, the face's own numbering
-                            // (MOO-228). The EQ's seven controls are a view
-                            // over fifty descriptors, so its overlays are
-                            // gathered down to what the face reads.
-                            let plugin = match effect.params {
-                                mooloop_core::EffectParams::Plugin(plugin) => Some(plugin),
-                                _ => None,
-                            };
-                            match (plugin, effect.params.eq()) {
-                                (Some(plugin), _) => {
-                                    let overlays = plugin_ui::plugin_overlays(
-                                        &self.session,
-                                        armed,
-                                        effect.id,
-                                        plugin,
-                                    );
-                                    row.modulation_depths = overlays.depths.as_slice().into();
-                                    row.modulation_allowed = overlays.allowed.as_slice().into();
-                                    row.modulation_offsets = overlays.offsets.as_slice().into();
-                                    row.modulation_route_counts = overlays.counts.as_slice().into();
-                                }
-                                (None, Some(eq)) => {
-                                    let ids = eq_face_ids(eq);
-                                    row.modulation_depths =
-                                        eq_overlay_view(&ids, &depths).as_slice().into();
-                                    row.modulation_allowed =
-                                        eq_overlay_view(&ids, &allowed).as_slice().into();
-                                    row.modulation_offsets =
-                                        eq_overlay_view(&ids, &offsets).as_slice().into();
-                                    row.modulation_route_counts =
-                                        eq_overlay_view(&ids, &counts).as_slice().into();
-                                }
-                                (None, None) => {
-                                    row.modulation_depths = depths.as_slice().into();
-                                    row.modulation_allowed = allowed.as_slice().into();
-                                    row.modulation_offsets = offsets.as_slice().into();
-                                    row.modulation_route_counts = counts.as_slice().into();
-                                }
-                            }
-                            self.plugin_faces.fill_row(&self.session, effect, &mut row);
-                            row
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
-            _ => {
-                let target = self.session.effect_target;
-                self.session
-                    .effect_chain()
-                    .map(|effects| {
-                        let views = self.rack_view(target, effects);
-                        effects
-                            .iter()
-                            .enumerate()
-                            .map(|(slot, effect)| {
-                                let mut row = effect_slot_row(
-                                    effect,
-                                    &self.session.effect_presets,
-                                    &self.session.plugins,
-                                    self.session.effect_preset_name(target, effect.id),
-                                    RackPlacement {
-                                        view: views[slot].clone(),
-                                        selected: selected == Some(slot),
-                                        wrap_enabled: wrap_enabled_at(effects, slot),
-                                    },
-                                    self.audio_sample_rate,
+                                    plugin,
                                 );
-                                self.plugin_faces.fill_row(&self.session, effect, &mut row);
-                                row
-                            })
-                            .collect()
+                                row.modulation_depths = overlays.depths.as_slice().into();
+                                row.modulation_allowed = overlays.allowed.as_slice().into();
+                                row.modulation_offsets = overlays.offsets.as_slice().into();
+                                row.modulation_route_counts = overlays.counts.as_slice().into();
+                            }
+                            (None, Some(eq)) => {
+                                let ids = eq_face_ids(eq);
+                                row.modulation_depths =
+                                    eq_overlay_view(&ids, &depths).as_slice().into();
+                                row.modulation_allowed =
+                                    eq_overlay_view(&ids, &allowed).as_slice().into();
+                                row.modulation_offsets =
+                                    eq_overlay_view(&ids, &offsets).as_slice().into();
+                                row.modulation_route_counts =
+                                    eq_overlay_view(&ids, &counts).as_slice().into();
+                            }
+                            (None, None) => {
+                                row.modulation_depths = depths.as_slice().into();
+                                row.modulation_allowed = allowed.as_slice().into();
+                                row.modulation_offsets = offsets.as_slice().into();
+                                row.modulation_route_counts = counts.as_slice().into();
+                            }
+                        }
+                        self.plugin_faces.fill_row(&self.session, effect, &mut row);
+                        row
                     })
-                    .unwrap_or_default()
-            }
-        };
+                    .collect()
+            })
+            .unwrap_or_default();
         let count = rows.len();
         self.effect_slot_model.set_vec(rows);
         self.realign_slot_displays(count);
@@ -5909,7 +5867,7 @@ impl UiState {
     /// draws at the base value.
     fn destination_depths(
         &self,
-        armed: Option<u8>,
+        armed: Option<ModSourceRef>,
         descriptors: &[ParamDescriptor],
         address: impl Fn(u32) -> ParamAddr,
     ) -> ModelRc<f32> {
@@ -5923,7 +5881,7 @@ impl UiState {
     /// right now, indexed by descriptor id. Resolved here rather than
     /// published per parameter by the engine: a channel has at most four
     /// sources but many destinations, so the audio thread ships the four
-    /// outputs and the UI does the same sum `ModRack::offset_for` does on the
+    /// outputs and the UI does the same sum `CompiledModulation::offset_for` does on the
     /// realtime side, against the same declared policy.
     fn destination_offsets(
         &self,
@@ -5987,7 +5945,7 @@ impl UiState {
         let source_kind = channel.generator_params().kind();
         let source = match self.session.plugin_source() {
             // By dense index, the plugin face's own numbering (MOO-316).
-            Some((device, slot)) => self.session.plugin_destination_offsets(device, slot),
+            Some((device, slot)) => self.session.plugin_destination_offsets(scope, device, slot),
             None => self.session.destination_offsets(source_kind.descriptors(), |param| {
                 ParamAddr::source(scope, source_kind, param)
             }),
@@ -6000,25 +5958,26 @@ impl UiState {
                 refresh.values_moved += 1;
             }
         }
-        // The insert rack only carries this channel's overlays when it is
-        // pointed at this channel, exactly as `sync_effects` decides.
-        if self.session.effect_target != scope {
+        // The insert rack carries the overlays of whatever chain it shows,
+        // a track's included, exactly as `sync_effects` decides.
+        let target = self.session.effect_target;
+        let Some(effects) = self.session.effect_chain() else {
             return refresh;
-        }
-        for (slot, effect) in channel.effects.iter().enumerate() {
+        };
+        for (slot, effect) in effects.iter().enumerate() {
             let Some(mut row) = self.effect_slot_model.row_data(slot) else {
                 continue;
             };
             let offsets = match effect.params {
                 // By dense index, the plugin face's own numbering (MOO-228).
                 mooloop_core::EffectParams::Plugin(plugin) => {
-                    self.session.plugin_destination_offsets(effect.id, plugin)
+                    self.session.plugin_destination_offsets(target, effect.id, plugin)
                 }
                 _ => {
                     let offsets = self
                         .session
                         .destination_offsets(effect.kind().descriptors(), |param| {
-                            ParamAddr::effect(scope, effect.id, param)
+                            ParamAddr::effect(target, effect.id, param)
                         });
                     match effect.params.eq() {
                         Some(eq) => eq_overlay_view(&eq_face_ids(eq), &offsets),
@@ -6189,7 +6148,7 @@ impl UiState {
                     ),
                     None => self
                         .session
-                        .channel_modulation_destination(route.destination)
+                        .modulation_destination(route.destination)
                         .map(|(device, descriptor)| {
                             (
                                 format!("{source_name} → {device} · {}", descriptor.name),
@@ -6318,12 +6277,14 @@ impl UiState {
             channel.name.as_str()
         };
         window.set_modulation_outlet_device(publisher.into());
+        let armed_source = self.session.modulation_armed.get();
         window.set_modulation_armed_name(
-            armed
-                .and_then(|slot| self.session.control_source_name(slot))
+            armed_source
+                .and_then(|source| self.session.modulation_source_name(source))
                 .unwrap_or_default()
                 .into(),
         );
+        window.set_modulation_assigning(armed_source.is_some());
         window.set_modulation_selected_outlet_name(
             selected_outlet.map_or("", |outlet| outlet.name).into(),
         );
@@ -6337,20 +6298,6 @@ impl UiState {
         window.set_modulation_selected_slot(selected.map_or(-1, i32::from));
         window.set_modulation_armed_slot(armed.map_or(-1, i32::from));
         window.set_modulation_max_sources(MAX_MODULATORS_PER_CHANNEL as i32);
-        // One entry per slot, named by whatever occupies it. The math
-        // module's input jack picks from this, so it reads "3 · STEP 3"
-        // rather than "3"; the length comes from the protocol constant, so
-        // raising capacity never needs a matching UI edit.
-        let slot_names: Vec<slint::SharedString> = (0..MAX_MODULATORS_PER_CHANNEL)
-            .map(|slot| match rack.params(slot) {
-                Some(params) => {
-                    format!("{} · {} {}", slot + 1, params.kind().badge(), slot + 1)
-                }
-                None => format!("{} · empty", slot + 1),
-            })
-            .map(slint::SharedString::from)
-            .collect();
-        window.set_modulation_slot_names(slot_names.as_slice().into());
 
         // The selected source's own controls. One editor is shown, so the shelf
         // reads scalars rather than searching the source rows for the
@@ -6399,17 +6346,19 @@ impl UiState {
         window.set_modulation_selected_preview_smoothing_cycles(selected_lfo.map_or(0.0, |lfo| {
             lfo.smoothing_seconds / selected_lfo_cycle_seconds
         }));
-        let input_channels: Vec<slint::SharedString> = self
-            .session.channels
-            .iter()
-            .enumerate()
-            .map(|(index, channel)| format!("{} · {}", index + 1, channel.name).into())
+        // The input picker: None, then every outlet that sends what the
+        // selected module takes, from anywhere in the song.
+        let selected_module = selected.and_then(|slot| self.session.module_in_slot(i32::from(slot)));
+        let input_options: Vec<slint::SharedString> = selected_module
+            .map(|id| self.session.module_input_options(id))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(_, name)| name.into())
             .collect();
-        window
-            .set_modulation_input_channels(ModelRc::from(Rc::new(VecModel::from(input_channels))));
-        window.set_modulation_selected_envelope_input_channel(
-            selected_envelope.map_or(self.session.selected as i32, |env| i32::from(env.input_channel)),
-        );
+        window.set_modulation_input_options(ModelRc::from(Rc::new(VecModel::from(input_options))));
+        let (input, note) = selected_module.map_or((0, ""), |id| self.session.module_input_choice(id));
+        window.set_modulation_selected_input(input as i32);
+        window.set_modulation_input_note(note.into());
         window.set_modulation_selected_envelope_preview_attack(selected_envelope.map_or(
             0.0,
             |env| {
@@ -6446,6 +6395,7 @@ impl UiState {
         // decided by descriptor metadata rather than by the UI naming them.
         let scope = EffectTarget::Channel(self.session.selected as u8);
         let generator = channel.generator_params().kind();
+        let armed = self.session.modulation_armed.get();
         window.set_source_modulation_depths(self.destination_depths(
             armed,
             generator.descriptors(),
@@ -6458,14 +6408,14 @@ impl UiState {
             |param| ParamAddr::source(scope, generator, param),
         ));
         window.set_source_modulation_route_counts(descriptor_route_counts(
-            &rack,
+            &self.session,
             generator.descriptors(),
             |param| ParamAddr::source(scope, generator, param),
         ));
         // A plugin instrument has no descriptor table: its face's overlays
         // are by dense index, as a plugin insert's are (MOO-316).
         if let Some((device, slot)) = self.session.plugin_source() {
-            let overlays = plugin_ui::plugin_overlays(&self.session, armed, device, slot);
+            let overlays = plugin_ui::plugin_overlays(&self.session, armed, scope, device, slot);
             window.set_source_modulation_depths(overlays.depths.as_slice().into());
             window.set_source_modulation_allowed(overlays.allowed.as_slice().into());
             window.set_source_modulation_offsets(overlays.offsets.as_slice().into());
@@ -6666,14 +6616,24 @@ impl UiState {
             .set_preferences_midi_transport_rows(ModelRc::from(Rc::new(VecModel::from(transport))));
     }
 
-    /// Retune (or first create) the armed source's one explicit route. The
-    /// base parameter is deliberately absent from this mutation: a normal
-    /// knob drag in armed mode moves only the depth, and the renderer keeps
-    /// resolving the same authored base underneath it.
-    /// Points the armed modulation source at `destination`.
-    ///
-    /// The rack edit is the session's, and so is telling the engine; refusing
-    /// out loud when the matrix is full is this layer's.
+    /// The address of face parameter `param` on the insert in `slot` of
+    /// whatever chain the rack shows: any channel's, a track's, the
+    /// master's. The one place an insert face's press becomes an address,
+    /// for the control menu, MIDI learn and Assign alike.
+    fn shown_effect_address(&self, slot: usize, param: u32) -> Option<ParamAddr> {
+        let target = self.session.effect_target;
+        let effect = self.session.effect_chain()?.get(slot)?;
+        let id = effect_face_param_id(effect, param)?;
+        effect.kind().descriptor(id)?;
+        Some(ParamAddr::effect(target, effect.id, id))
+    }
+
+    /// Retune (or first create) the armed source's one explicit route onto
+    /// `destination`, on any chain. The base parameter is deliberately
+    /// absent from this mutation: a normal knob drag in armed mode moves only
+    /// the depth, and the renderer keeps resolving the same authored base
+    /// underneath it. The song has no route limit, so nothing is refused for
+    /// room.
     fn set_armed_modulation_depth(
         &mut self,
         window: &MainWindow,
@@ -6682,19 +6642,6 @@ impl UiState {
     ) -> bool {
         match self.session.arm_modulation_route(destination, depth) {
             ArmedRoute::Unchanged => false,
-            ArmedRoute::Full => {
-                // An assignment gesture that does nothing at all reads as a
-                // broken knob, so say why.
-                window.set_status_message(
-                    format!(
-                        "This channel already has its {MAX_MOD_ROUTES_PER_CHANNEL} modulation \
-                         assignments; remove one to add another"
-                    )
-                    .as_str()
-                    .into(),
-                );
-                false
-            }
             ArmedRoute::Added(_) => {
                 self.modulation_edited(window);
                 true
@@ -12572,22 +12519,22 @@ impl AppUi {
             let commands = command_state.clone();
             let st = state.clone();
             let weak = window.as_weak();
-            window.on_modulation_envelope_input_channel_changed(move |slot, channel| {
+            window.on_modulation_input_changed(move |slot, index| {
                 let Some(window) = weak.upgrade() else { return };
-                with_gesture_history(&st, &commands, &window, "Envelope input", || {
+                with_gesture_history(&st, &commands, &window, "Modulator input", || {
                     let mut state = st.borrow_mut();
-                    // The gate is a jack rather than a descriptor id, so there is no
-                    // parameter to name: the module travels entire.
-                    let (Some(id), Some(channel)) = (
-                        state.session.module_in_slot(slot),
-                        usize::try_from(channel).ok().and_then(|seat| state.session.channel_id(seat)),
-                    ) else {
+                    // An input is a jack rather than a descriptor id, so there
+                    // is no parameter to name: the module travels entire.
+                    let Some(id) = state.session.module_in_slot(slot) else {
                         return false;
                     };
-                    let sent = state
-                        .session
-                        .set_module_input(id, mooloop_core::InputSource::ChannelNotes(channel));
-                    if !sent {
+                    let Some((input, _)) = usize::try_from(index)
+                        .ok()
+                        .and_then(|index| state.session.module_input_options(id).into_iter().nth(index))
+                    else {
+                        return false;
+                    };
+                    if !state.session.set_module_input(id, input) {
                         return false;
                     }
                     state.modulation_edited(&window);
@@ -12788,25 +12735,7 @@ impl AppUi {
                 // The address rather than a bare "is this legal": a learn
                 // gesture needs the address, and asking the same question two
                 // ways is how the two answers come to disagree.
-                let address = match state.session.effect_target {
-                    EffectTarget::Channel(channel)
-                        if channel as usize == state.session.selected =>
-                    {
-                        state
-                            .session
-                            .channels
-                            .get(state.session.selected)
-                            .and_then(|state| state.effects.get(slot))
-                            .and_then(|effect| {
-                                let id = effect_face_param_id(effect, param)?;
-                                effect.kind().descriptor(id).map(|_| (effect.id, id))
-                            })
-                            .map(|(device, id)| {
-                                ParamAddr::effect(EffectTarget::Channel(channel), device, id)
-                            })
-                    }
-                    _ => None,
-                };
+                let address = state.shown_effect_address(slot, param);
                 let Some(address) = address else { return };
                 if state.name_if_asked(&window, address) {
                     return;
@@ -12830,20 +12759,7 @@ impl AppUi {
                 };
                 with_gesture_history(&st, &commands, &window, "Modulation depth", || {
                     let mut state = st.borrow_mut();
-                    let destination = match state.session.effect_target {
-                    EffectTarget::Channel(channel) if channel as usize == state.session.selected => state
-                        .session.channels
-                        .get(state.session.selected)
-                        .and_then(|channel| channel.effects.get(slot))
-                        .and_then(|effect| {
-                            let id = effect_face_param_id(effect, param)?;
-                            effect.kind().descriptor(id).map(|_| (effect.id, id))
-                        })
-                        .map(|(device, id)| {
-                            ParamAddr::effect(EffectTarget::Channel(channel), device, id)
-                        }),
-                    _ => None,
-                };
+                    let destination = state.shown_effect_address(slot, param);
                     let Some(destination) = destination else {
                         return false;
                     };
@@ -19029,8 +18945,8 @@ impl AppUi {
                 {
                     // Live modulation on the knobs. The engine publishes
                     // every module's output and each channel's outlets and
-                    // keyboard; resolving the selected channel's into a
-                    // per-destination offset is the UI's job, so this is a
+                    // keyboard; resolving them into a per-destination offset
+                    // for the faces on show is the UI's job, so this is a
                     // read of a few cells plus arithmetic over the visible
                     // descriptors -- not a per-parameter feed.
                     let state = st.borrow();
@@ -19040,14 +18956,29 @@ impl AppUi {
                         &outlets,
                         &performance,
                     );
-                    let routed = state.session.modulation.routes.iter().any(|route| {
-                        route.destination.scope == EffectTarget::Channel(selected_channel as u8)
-                    });
-                    // An unrouted channel has nothing to animate, and once the
+                    let moved = state.session.read_modulation_levels(
+                        |at| handle.module_output(at),
+                        |seat| handle.channel_sources(seat),
+                    );
+                    // The faces on show: the selected channel's source, and
+                    // whatever chain the rack shows.
+                    let shown = [
+                        EffectTarget::Channel(selected_channel as u8),
+                        state.session.effect_target,
+                    ];
+                    let routed = state
+                        .session
+                        .modulation
+                        .routes
+                        .iter()
+                        .any(|route| shown.contains(&route.destination.scope));
+                    // An unrouted chain has nothing to animate, and once the
                     // outputs stop moving the arcs are already where they
-                    // belong -- so neither case is worth a model write.
-                    if routed && !editing_bus && outputs != state.session.modulation_outputs.get() {
-                        state.session.modulation_outputs.set(outputs);
+                    // belong -- so neither case is worth a model write. The
+                    // shelf's meters follow the selected channel's row.
+                    let meters = outputs != state.session.modulation_outputs.get();
+                    state.session.modulation_outputs.set(outputs);
+                    if routed && (moved || meters) {
                         state.refresh_modulation_offsets(&w);
                     }
                 }

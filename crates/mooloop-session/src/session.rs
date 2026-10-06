@@ -20,13 +20,13 @@ use mooloop_core::{
     ChannelSetup, DeviceId,
     AuxInState, ChannelSource, DeviceKind, DrumSynthState, Ds01State, GeneratorParams,
     EffectParams, EffectSlotState, EffectTarget, MlM1State, MlP8State,
-    LoopRange, ModDestinationDescriptor, ModPolarity, ModRoute, ModulatorParams,
+    LoopRange, ModDestinationDescriptor, ModPolarity, ModRoute, ModSourceRef, PublishesOutlets, ModulatorParams,
     MonoSynthState, NoteId, ParamAddr,
     ParamDescriptor, ParamOwner, PatternMeta, PatternPlacement, PlaybackMode, PointId,
     PolySynthState, Project, ProjectChannel, SampleReference, SamplerState,
     trim_pattern_meta,
     modulation::CONTROL_SOURCE_SLOTS,
-    MAX_MODULATORS_PER_CHANNEL, MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_BAR,
+    MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_BAR,
     TICKS_PER_STEP, DELAY_PARAM_TIME_MS, MODULATION_PARAM_RATE_HZ,
 };
 use mooloop_dsp::SampleData;
@@ -136,6 +136,9 @@ pub struct Session {
     /// engine on the pump tick. Held here rather than recomputed per knob
     /// so one read of the audio thread's cells feeds every destination.
     pub modulation_outputs: Cell<[f32; CONTROL_SOURCE_SLOTS]>,
+    /// Every source's latest output, read off the engine on the pump tick:
+    /// what the knobs on any chain draw their live offsets from.
+    pub modulation_levels: std::cell::RefCell<crate::modulation::ModulationLevels>,
     /// The compensation the engine has been told about, so the pump's
     /// reconcile can send only what changed. Not document state: it is a
     /// record of what has been said to the audio thread, and a fresh session
@@ -374,6 +377,7 @@ impl Default for Session {
             selected_source: None,
             modulation_armed: Cell::new(None),
             modulation_outputs: Cell::new([0.0; CONTROL_SOURCE_SLOTS]),
+            modulation_levels: Default::default(),
             compensation_sent: crate::engine::CompensationSent::default(),
             console_sums_sent: [false; MAX_BUSES],
             solo_silenced_sent: [false; MAX_BUSES],
@@ -441,8 +445,9 @@ pub enum ArmedRoute {
     /// Nothing armed, the destination refuses modulation, or it already sits
     /// at the depth asked for.
     Unchanged,
-    /// The channel's modulation matrix is full; no route was added.
-    Full,
+    /// The route as it now stands: added, or an existing one's new depth.
+    /// The song has no route limit, so an armed gesture is never refused
+    /// for room.
     Added(ModRoute),
 }
 
@@ -1249,63 +1254,75 @@ impl Session {
         }
     }
 
-    pub fn modulation_depth_for(&self, source_slot: u8, destination: ParamAddr) -> f32 {
-        self.selected_rack()
+    /// The depth `source` drives `destination` at; zero with no route.
+    pub fn modulation_depth_for(&self, source: ModSourceRef, destination: ParamAddr) -> f32 {
+        self.modulation
             .routes
             .iter()
-            .flatten()
-            .find(|route| route.source_slot == source_slot && route.destination == destination)
+            .find(|route| route.source == source && route.destination == destination)
             .map_or(0.0, |route| route.depth)
     }
 
-    /// The modulation shelf may address only the selected channel's own
-    /// generator, inserts, and strip. Buses and another channel's controls
-    /// stay deliberately outside this pass even though `ParamAddr` can name
-    /// them, matching the per-channel routing policy.
-    pub fn channel_modulation_destination(
+    /// What a route onto `address` drives, named for the shelf, and its
+    /// descriptor: any channel's generator, inserts and strip, and any
+    /// track's inserts and strip, the master's included (song modulation
+    /// step 03). `None` for an address the song cannot drive.
+    ///
+    /// The name says which chain when it is not the selected channel's, so
+    /// a route list read on one channel tells the destinations it reaches
+    /// elsewhere apart.
+    pub fn modulation_destination(
         &self,
         address: ParamAddr,
     ) -> Option<(String, &'static ParamDescriptor)> {
-        let EffectTarget::Channel(channel) = address.scope else {
-            return None;
+        let (chain, effects, strip, generator) = match address.scope {
+            EffectTarget::Channel(channel) => {
+                let state = self.channels.get(channel as usize)?;
+                let chain = (channel as usize != self.selected).then(|| state.name.clone());
+                (chain, &state.effects[..], "Channel strip", Some(state))
+            }
+            EffectTarget::Bus(bus) => {
+                let setup = self.buses.get(bus as usize)?;
+                let name = if bus == mooloop_core::MASTER_BUS {
+                    "Master".to_string()
+                } else {
+                    setup.bus.name.clone()
+                };
+                (Some(name), &setup.effects[..], "Track strip", None)
+            }
         };
-        if channel as usize != self.selected {
-            return None;
-        }
-        let state = self.channels.get(self.selected)?;
-        match address.owner {
+        let (device, descriptor) = match address.owner {
             // A route made on another kind of device is kept but drives
-            // nothing here, so it names no destination (MOO-135).
-            ParamOwner::Source { kind } if kind == Some(state.kind()) => state
-                .kind()
-                .descriptor(address.param)
-                .map(|descriptor| (state.name.clone(), descriptor)),
-            ParamOwner::Source { .. } => None,
-            ParamOwner::Effect { device } => mooloop_core::device_slot(&state.effects, device)
-                .and_then(|slot| {
-                    let effect = &state.effects[slot];
-                    effect
-                        .kind()
-                        .descriptor(address.param)
-                        .map(|descriptor| (slot, effect.kind(), descriptor))
-                })
-                .map(|(slot, kind, descriptor)| {
-                    (format!("{} {}", kind.label(), slot + 1), descriptor)
-                }),
-            ParamOwner::Strip => strip_descriptor(address.param)
-                .map(|descriptor| ("Channel strip".to_string(), descriptor)),
+            // nothing here, so it names no destination (MOO-135). A track
+            // has no generator.
+            ParamOwner::Source { kind } => {
+                let state = generator.filter(|state| kind == Some(state.kind()))?;
+                let descriptor = state.kind().descriptor(address.param)?;
+                (state.name.clone(), descriptor)
+            }
+            ParamOwner::Effect { device } => {
+                let slot = mooloop_core::device_slot(effects, device)?;
+                let effect = &effects[slot];
+                let descriptor = effect.kind().descriptor(address.param)?;
+                (format!("{} {}", effect.kind().label(), slot + 1), descriptor)
+            }
+            ParamOwner::Strip => (strip.to_string(), strip_descriptor(address.param)?),
             // Modulators are sources in this first UI pass, not destinations.
             // An instrument's own routes are not channel destinations either:
             // the shelf reaches a device's controls, and a route amount
             // belongs to the patch's internal modulation rather than to the
             // device's control surface.
-            ParamOwner::Modulator { .. } | ParamOwner::SourceRoute { .. } => None,
-            // A plugin's parameters have no `&'static` descriptor. Their
-            // ranges and values come from the instance, which step 07 of
-            // `docs/plans/plugin-hosting/` reaches; until then a plugin
-            // parameter reads as unavailable rather than as a native one.
-            ParamOwner::PluginParam { .. } => None,
-        }
+            ParamOwner::Modulator { .. } | ParamOwner::SourceRoute { .. } => return None,
+            // A plugin's parameters have no `&'static` descriptor; their
+            // policy is `modulation_policy`'s and their names the plugin's.
+            ParamOwner::PluginParam { .. } => return None,
+        };
+        let name = match (chain, address.owner) {
+            // A channel's own generator is already named for the channel.
+            (Some(_), ParamOwner::Source { .. }) | (None, _) => device,
+            (Some(chain), _) => format!("{chain} {device}"),
+        };
+        Some((name, descriptor))
     }
 
     /// Closes the open gesture, yielding the snapshot to record against if
@@ -1724,11 +1741,12 @@ impl Session {
 
     /// Points the armed modulation source at `destination` at `depth`.
     ///
-    /// Returns what the rack did rather than deciding how to report it: a
-    /// full matrix is a refusal the user has to be told about, and telling
-    /// them is the view's job.
+    /// Any knob in the song: another channel's, a track's inserts and
+    /// fader, the master's (song modulation step 03). A route that already
+    /// runs from the armed source to `destination` takes the new depth
+    /// rather than gaining a twin.
     pub fn arm_modulation_route(&mut self, destination: ParamAddr, depth: f32) -> ArmedRoute {
-        let Some(source_slot) = self.modulation_armed_slot() else {
+        let Some(source) = self.modulation_armed.get() else {
             return ArmedRoute::Unchanged;
         };
         // Native or a hosted plugin's parameter (MOO-82): the same question
@@ -1740,82 +1758,68 @@ impl Session {
             return ArmedRoute::Unchanged;
         }
         let depth = policy.clamp_depth(depth);
-        // Which kind of source is armed decides how the route is authored.
-        let outlet = self.selected_channel_outlet(source_slot);
-        // A slot in the outlet band that resolves to no outlet names nothing:
-        // the generator was swapped while the gesture was armed. Refusing
-        // here rather than falling through matters because the rack half
-        // would refuse it too, and would call it a full matrix.
-        if outlet.is_none() && mooloop_core::modulation::outlet_of_slot(source_slot).is_some() {
-            return ArmedRoute::Unchanged;
-        }
-        let Some(channel_id) = self.channel_id(self.selected) else {
-            return ArmedRoute::Unchanged;
-        };
-        let rack = self.selected_rack();
-        let default_polarity = match outlet {
-            // An outlet takes the destination's own default, whatever shape
-            // it declares, and the reason is that the two kinds of source
-            // publish in different ranges.
-            //
-            // `ModPolarity` describes how a route reads a **rack module**,
-            // which always emits `-1..1`: `Unipolar` lifts that to `0..1` so
-            // a one-way module rests at the destination's base rather than
-            // at its midpoint. An outlet publishes in its *declared* range,
-            // and a unipolar one is already `0..1` -- so `Bipolar` is what
-            // passes it through, resting at the base at zero and reaching
-            // full depth at one. Lifting it again would make a Gate sit half
-            // a depth above the base with nothing playing, and give it only
-            // half the swing when something did.
-            Some(_) => policy.default_polarity,
-            None => match rack.params(source_slot as usize) {
+        let default_polarity = match source {
+            ModSourceRef::Id(id) => match self.modulation.module(id).map(|module| module.params) {
+                // A module that has gone names nothing.
+                None => return ArmedRoute::Unchanged,
                 // Sources that only ever swing one way default to a unipolar
                 // route, so their resting value is the destination's base.
                 Some(ModulatorParams::Envelope(_)) => ModPolarity::Unipolar,
                 Some(ModulatorParams::Random(random)) if !random.bipolar => ModPolarity::Unipolar,
-                _ => policy.default_polarity,
+                Some(_) => policy.default_polarity,
             },
+            // An outlet takes the destination's own default, whatever shape
+            // it declares: it publishes in its declared range, and a
+            // unipolar one is already `0..1`, so `Bipolar` is what passes it
+            // through resting at the base (`MODULATION.md`). One the
+            // channel's generator no longer publishes -- swapped while the
+            // gesture was armed -- names nothing.
+            ModSourceRef::GeneratorOutlet { channel, outlet } => {
+                let published = self
+                    .channel_index(channel)
+                    .and_then(|seat| self.channels.get(seat))
+                    .is_some_and(|state| state.kind().control_outlet(outlet).is_some());
+                if !published {
+                    return ArmedRoute::Unchanged;
+                }
+                policy.default_polarity
+            }
+            // The mod wheel and aftertouch are the keyboard's (MOO-128).
+            ModSourceRef::Performance { channel, .. } => {
+                if self.channel_index(channel).is_none() {
+                    return ArmedRoute::Unchanged;
+                }
+                policy.default_polarity
+            }
+            ModSourceRef::LocalSlot(_) => return ArmedRoute::Unchanged,
         };
-        let current = rack
+        if let Some(route) = self
+            .modulation
             .routes
-            .iter()
-            .flatten()
-            .find(|route| route.source_slot == source_slot && route.destination == destination)
-            .map(|route| route.depth);
-        if current.is_some_and(|current| (current - depth).abs() < f32::EPSILON) {
-            return ArmedRoute::Unchanged;
+            .iter_mut()
+            .find(|route| route.source == source && route.destination == destination)
+        {
+            if (route.depth - depth).abs() < f32::EPSILON {
+                return ArmedRoute::Unchanged;
+            }
+            route.depth = depth;
+            let route = *route;
+            self.gesture_changed = true;
+            return ArmedRoute::Added(route);
         }
-        // An outlet route is authored complete: its id is already durable, so
-        // there is no slot to stamp an identity out of.
-        let authored = match outlet {
-            // The mod wheel and aftertouch are declared as outlets but are
-            // the keyboard's, not the generator's (MOO-128).
-            Some(performance) if mooloop_core::modulation::performance_of_slot(source_slot).is_some() => {
-                ModRoute::from_performance(channel_id, performance.id, destination, depth, default_polarity)
+        let route = match source {
+            ModSourceRef::GeneratorOutlet { channel, outlet } => {
+                ModRoute::from_outlet(channel, outlet, destination, depth, default_polarity)
             }
-            Some(outlet) => {
-                ModRoute::from_outlet(channel_id, outlet.id, destination, depth, default_polarity)
+            ModSourceRef::Performance { channel, source } => {
+                ModRoute::from_performance(channel, source, destination, depth, default_polarity)
             }
-            None => ModRoute::to_slot(source_slot, destination, depth, default_polarity),
+            ModSourceRef::Id(id) => ModRoute::from_module(id, destination, depth, default_polarity),
+            ModSourceRef::LocalSlot(_) => return ArmedRoute::Unchanged,
         };
-        // The rack stamps the durable source id on the way in; that stamped
-        // row is what travels, so the engine resolves the route against the
-        // module the gesture meant rather than against a slot number. Both
-        // authored forms resolve: the module slot was checked above and an
-        // outlet's locator is bounded arithmetic on an id this generator
-        // publishes. So the only way the rack refuses is a full matrix.
-        let added = self.edit_selected_rack(|rack| {
-            let index = rack.add_route(authored);
-            Some(index.and_then(|index| rack.routes[index]))
-        });
-        match added {
-            Some(Some(route)) => {
-                self.gesture_changed = true;
-                ArmedRoute::Added(route)
-            }
-            Some(None) => ArmedRoute::Full,
-            None => ArmedRoute::Unchanged,
-        }
+        self.modulation.routes.push(route);
+        self.gesture_changed = true;
+        ArmedRoute::Added(route)
     }
 
     /// Depth the armed source drives each destination in `descriptors` at.
@@ -1825,14 +1829,14 @@ impl Session {
     /// one control row.
     pub fn destination_depths(
         &self,
-        armed: Option<u8>,
+        armed: Option<ModSourceRef>,
         descriptors: &[ParamDescriptor],
         address: impl Fn(u32) -> ParamAddr,
     ) -> Vec<f32> {
         let mut depths = vec![0.0; descriptor_slots(descriptors)];
         for descriptor in descriptors {
-            depths[descriptor.id as usize] = armed.map_or(0.0, |slot| {
-                self.modulation_depth_for(slot, address(descriptor.id))
+            depths[descriptor.id as usize] = armed.map_or(0.0, |source| {
+                self.modulation_depth_for(source, address(descriptor.id))
             });
         }
         depths
@@ -1852,44 +1856,19 @@ impl Session {
     }
 
     /// Live modulation offset currently applied to each destination in
-    /// `descriptors`, from the last outputs read off the engine.
+    /// `descriptors`, on any chain, from the last outputs read off the
+    /// engine ([`Self::read_modulation_levels`]).
     pub fn destination_offsets(
         &self,
         descriptors: &[ParamDescriptor],
         address: impl Fn(u32) -> ParamAddr,
     ) -> Vec<f32> {
         let mut offsets = vec![0.0; descriptor_slots(descriptors)];
-        if self.channels.get(self.selected).is_none() {
-            return offsets;
-        }
-        let rack = self.selected_rack();
-        let outputs = self.modulation_outputs.get();
-        let sources = Self::control_sources(&outputs);
         for descriptor in descriptors {
             let policy = ModDestinationDescriptor::for_param(descriptor);
-            offsets[descriptor.id as usize] =
-                rack.offset_for(address(descriptor.id), sources, &policy);
+            offsets[descriptor.id as usize] = self.live_offset(address(descriptor.id), &policy);
         }
         offsets
-    }
-
-    /// The engine's last published source outputs, as the view a route reads.
-    ///
-    /// The engine publishes one flat row a block; a route reads it as its
-    /// bands, because they are captured at different rates. Split once per
-    /// read rather than per destination. Shared by the native and the plugin
-    /// offsets (MOO-228), so the two cannot read the row differently.
-    pub(crate) fn control_sources(
-        outputs: &[f32; CONTROL_SOURCE_SLOTS],
-    ) -> mooloop_core::modulation::ControlSources<'_> {
-        let (modulators, rest) = outputs.split_at(MAX_MODULATORS_PER_CHANNEL);
-        let (outlets, performance) =
-            rest.split_at(mooloop_core::modulation::MAX_GENERATOR_OUTLETS);
-        mooloop_core::modulation::ControlSources {
-            modulators: modulators.try_into().expect("the rack's half"),
-            outlets: outlets.try_into().expect("the outlet band"),
-            performance: performance.try_into().expect("the performance band"),
-        }
     }
 
     /// Which tracks `bus` may reach without closing a loop.

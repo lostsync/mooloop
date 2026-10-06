@@ -140,6 +140,44 @@ Differences from the plan:
   session's next set arrives without them; `forget_device` only forgets
   lanes.
 
+## Step 03: what was built, and where it differs from the plan
+
+- **Destinations.** `Session::modulation_destination` takes any scope: any
+  channel's source, inserts and strip, and any track's inserts and strip,
+  the master's included. A route list read on one channel names the chain
+  of a destination elsewhere ("Snare Filter 1 · Cutoff"). `modulation_policy`
+  no longer refuses a plugin parameter off the selected channel; it still
+  refuses what the descriptor or the plugin's flags refuse.
+- **The gesture.** Arming names a source, never a slot, so it survives a
+  channel change. `arm_modulation_route` writes the song's route directly
+  and retunes an existing one from the same source onto the same knob. The
+  song has no route limit, so the "already has its 16 assignments" refusal
+  is gone (`ArmedRoute::Full`). An insert face's press is addressed on
+  whatever chain the rack shows (`UiState::shown_effect_address`); the order
+  on one press is unchanged: name, learn, gesture.
+- **Showing it.** Route-count dots count the song's routes onto the
+  address (`Session::route_count`), and the armed depths read them too, so
+  every chain's faces draw both. Live offsets read every source's output
+  each pump tick (`Session::read_modulation_levels`: modules by position in
+  the set last sent, each seat's outlets and keyboard) and sum through
+  `CompiledModulation::offset_for`, the engine's rule over the same set.
+  The faces read a new `modulation-assigning` flag rather than the armed
+  slot, because a module seated on another channel has no slot in this
+  channel's shelf.
+- **Inputs.** One picker on the module surface for every kind: None, then
+  every channel's notes for the four kinds that hear notes, or every other
+  module in the song for Math. It writes `set_module_input`, which now
+  takes a Math module's `InputSource::Module` and refuses an input of the
+  wrong sort or a Math module reading itself. The slot list and
+  `MathParam.input-slot` are gone from the shelf.
+- **Not done: the strip faces.** The mixer's and the track rack's faders
+  and pan never carried an Assign overlay, a channel's included: the
+  `strip-modulation-*` callbacks are declared and nothing in the markup
+  raises them. The session takes a route onto a track's fader and the
+  master's (`assign_anywhere.rs`) and the engine moves them (step 02), but
+  the ordinary drag on a fader does not arm one yet. Left for step 04,
+  which builds the pane the gesture lives in.
+
 ## Open
 
 - **Step 04:** Adam sees the pane's mock-up before its markup is built.

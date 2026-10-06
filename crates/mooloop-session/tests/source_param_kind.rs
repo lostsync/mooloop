@@ -66,7 +66,7 @@ fn a_binding_made_on_one_device_moves_nothing_on_another_and_comes_back() {
     session.change_selected_source(DeviceKind::DrumSynth);
     assert_eq!(session.control_map.bindings.len(), 1);
     assert_eq!(session.param_descriptor(cutoff), None);
-    assert_eq!(session.channel_modulation_destination(cutoff), None);
+    assert_eq!(session.modulation_destination(cutoff), None);
     let before = session.channels[selected].generator_params();
     session.resolve_control_map(&ports);
     for value in [0, 64, 127, 3] {

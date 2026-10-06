@@ -33,9 +33,46 @@ use mooloop_core::modulation::{
     CONTROL_SOURCE_SLOTS, MAX_GENERATOR_OUTLETS, PERFORMANCE_SOURCES,
 };
 use mooloop_core::{
-    InputSource, ModPolarity, ModRack, ModSourceId, ModSourceRef, ModulatorKind, ModulatorParams,
+    CompiledSource, InputSource, ModPolarity, ModRack, ModSourceId, ModSourceRef, ModulatorKind, ModulatorParams,
     OutletDescriptor, PublishesOutlets,
 };
+
+/// What a list of every module in the song calls `module`: its name, or its
+/// kind for one that has none.
+fn module_name(module: &mooloop_core::SongModule) -> String {
+    if module.name.is_empty() {
+        module.params.kind().label().to_string()
+    } else {
+        module.name.clone()
+    }
+}
+
+/// Every source's latest output, as the knobs read it: each module by its
+/// position in the set the engine runs ([`Session::sync_modulation`]), and
+/// each channel's outlets and keyboard by its seat.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ModulationLevels {
+    pub modules: Vec<f32>,
+    pub channels: Vec<([f32; MAX_GENERATOR_OUTLETS], [f32; PERFORMANCE_SOURCES])>,
+}
+
+impl ModulationLevels {
+    /// The output of one resolved source; zero for one not read.
+    pub fn level(&self, source: CompiledSource) -> f32 {
+        match source {
+            CompiledSource::Module(at) => self.modules.get(usize::from(at)).copied(),
+            CompiledSource::Outlet { seat, outlet } => self
+                .channels
+                .get(usize::from(seat))
+                .and_then(|(outlets, _)| outlets.get(usize::from(outlet)).copied()),
+            CompiledSource::Performance { seat, source } => self
+                .channels
+                .get(usize::from(seat))
+                .and_then(|(_, performance)| performance.get(usize::from(source)).copied()),
+        }
+        .unwrap_or(0.0)
+    }
+}
 
 impl Session {
     /// The address of the selected channel's generator parameter `param`, as
@@ -81,6 +118,55 @@ impl Session {
             row[usize::from(performance_slot(source as u16))] = *value;
         }
         row
+    }
+
+    /// Read every source's output off the engine: `module` for a list
+    /// position in the set last sent, `channel` for a seat. Returns whether
+    /// anything moved, which is when the knobs need their offsets redrawn.
+    pub fn read_modulation_levels(
+        &self,
+        module: impl Fn(usize) -> f32,
+        channel: impl Fn(usize) -> ([f32; MAX_GENERATOR_OUTLETS], [f32; PERFORMANCE_SOURCES]),
+    ) -> bool {
+        let mut levels = self.modulation_levels.borrow_mut();
+        let modules = self.modulation_sent.modules.len();
+        let seats = self.channels.len();
+        let mut moved = levels.modules.len() != modules || levels.channels.len() != seats;
+        levels.modules.resize(modules, 0.0);
+        levels.channels.resize(seats, ([0.0; MAX_GENERATOR_OUTLETS], [0.0; PERFORMANCE_SOURCES]));
+        for (at, value) in levels.modules.iter_mut().enumerate() {
+            let next = module(at);
+            moved |= *value != next;
+            *value = next;
+        }
+        for (seat, value) in levels.channels.iter_mut().enumerate() {
+            let next = channel(seat);
+            moved |= *value != next;
+            *value = next;
+        }
+        moved
+    }
+
+    /// The live offset the routes onto `destination` add right now, as a
+    /// fraction of its range, under `policy`.
+    pub fn live_offset(
+        &self,
+        destination: mooloop_core::ParamAddr,
+        policy: &mooloop_core::ModDestinationDescriptor,
+    ) -> f32 {
+        let levels = self.modulation_levels.borrow();
+        self.modulation_sent
+            .offset_for(destination, policy, |source| levels.level(source))
+    }
+
+    /// How many of the song's routes land on `destination`, whatever drives
+    /// them: the dots under a knob.
+    pub fn route_count(&self, destination: mooloop_core::ParamAddr) -> usize {
+        self.modulation
+            .routes
+            .iter()
+            .filter(|route| route.destination == destination)
+            .count()
     }
 
     /// The channel at `seat`'s modules and the routes landing on it, as the
@@ -283,7 +369,31 @@ impl Session {
         };
         self.modulation_armed.set(next);
         self.modulation_shelf_open = true;
-        self.control_source_name(self.modulation_armed_slot()?)
+        self.modulation_source_name(next?)
+    }
+
+    /// What the assignment badge calls `source`, wherever it is seated: by
+    /// its place in the selected channel's shelf when it has one there, and
+    /// otherwise a module by its song-wide name and an outlet or the
+    /// keyboard by its channel. `None` for a source the song no longer has.
+    pub fn modulation_source_name(&self, source: ModSourceRef) -> Option<String> {
+        if let Some(slot) = self.slot_of_source(source) {
+            return self.control_source_name(slot);
+        }
+        match source {
+            ModSourceRef::Id(id) => self.modulation.module(id).map(module_name),
+            ModSourceRef::GeneratorOutlet { channel, outlet } => {
+                let state = self.channels.get(self.channel_index(channel)?)?;
+                let outlet = state.kind().control_outlet(outlet)?;
+                Some(format!("{} {}", state.name, outlet.name))
+            }
+            ModSourceRef::Performance { channel, source } => {
+                let state = self.channels.get(self.channel_index(channel)?)?;
+                let performance = performance_descriptor(performance_slot(source))?;
+                Some(format!("{} {}", state.name, performance.name))
+            }
+            ModSourceRef::LocalSlot(_) => None,
+        }
     }
 
     /// Adds a new module to the song, on the selected channel's rack.
@@ -365,27 +475,95 @@ impl Session {
         true
     }
 
-    /// Points a module's note input at an outlet: the Envelope's gate, the
-    /// LFO's retrigger, the Step's advance, the Random's trigger.
+    /// Points a module's input at an outlet: the Envelope's gate, the LFO's
+    /// retrigger, the Step's advance and the Random's trigger take a
+    /// channel's notes; a Math module takes another module's output.
     ///
-    /// Replaces the Envelope-only gate picker. A Math module reads another
-    /// module, not notes, and takes none; nor does an input naming a channel
-    /// the song does not have.
+    /// Refuses an input of the wrong sort for the module, a channel or a
+    /// module the song does not have, and a Math module reading itself.
     pub fn set_module_input(&mut self, id: ModSourceId, input: InputSource) -> bool {
-        if input
-            .channel()
-            .is_some_and(|channel| self.channel_index(channel).is_none())
-        {
-            return false;
-        }
-        let Some(module) = self.modulation.module_mut(id) else {
+        let Some(module) = self.modulation.module(id) else {
             return false;
         };
-        if matches!(module.params, ModulatorParams::Math(_)) || module.input == input {
+        let math = matches!(module.params, ModulatorParams::Math(_));
+        let fits = match input {
+            InputSource::None => true,
+            InputSource::ChannelNotes(channel) => !math && self.channel_index(channel).is_some(),
+            InputSource::Module(read) => {
+                math && read != id && self.modulation.module(read).is_some()
+            }
+        };
+        if !fits || module.input == input {
             return false;
         }
-        module.input = input;
+        if let Some(module) = self.modulation.module_mut(id) {
+            module.input = input;
+        }
         true
+    }
+
+    /// What module `id`'s input picker offers, in order, with the name each
+    /// is listed under: **None**, then every outlet that sends what the
+    /// module takes. A Math module takes a control value, so it lists every
+    /// other module in the song; the other four take gates, so they list
+    /// every outlet that sends notes (song modulation step 03).
+    pub fn module_input_options(&self, id: ModSourceId) -> Vec<(InputSource, String)> {
+        let Some(module) = self.modulation.module(id) else {
+            return Vec::new();
+        };
+        let mut options = vec![(InputSource::None, "None".to_string())];
+        if matches!(module.params, ModulatorParams::Math(_)) {
+            options.extend(
+                self.modulation
+                    .modules
+                    .iter()
+                    .filter(|other| other.id != id)
+                    .map(|other| (InputSource::Module(other.id), module_name(other))),
+            );
+        } else {
+            options.extend(self.gate_outlets());
+        }
+        options
+    }
+
+    /// Every outlet in the song that sends gates, as an input names it, with
+    /// its name: today each channel's notes. The next kind of gate source
+    /// joins the picker here.
+    fn gate_outlets(&self) -> impl Iterator<Item = (InputSource, String)> + '_ {
+        self.channels.iter().enumerate().map(|(seat, channel)| {
+            (
+                InputSource::ChannelNotes(channel.id),
+                format!("{} · {}", seat + 1, channel.name),
+            )
+        })
+    }
+
+    /// Where module `id`'s input sits in [`Self::module_input_options`], and
+    /// what is worth saying about it: a gate is a channel's notes, and a
+    /// Math module reads a module listed before it this tick and one listed
+    /// after it a tick late.
+    pub fn module_input_choice(&self, id: ModSourceId) -> (usize, &'static str) {
+        let Some(module) = self.modulation.module(id) else {
+            return (0, "");
+        };
+        let index = self
+            .module_input_options(id)
+            .iter()
+            .position(|(input, _)| *input == module.input)
+            .unwrap_or(0);
+        let note = match (module.params, module.input) {
+            (ModulatorParams::Envelope(_), _) => "CHANNEL NOTE GATE",
+            (ModulatorParams::Math(_), InputSource::Module(read)) => {
+                let at = |id| self.modulation.modules.iter().position(|module| module.id == id);
+                if at(read) < at(id) {
+                    "READS THIS TICK"
+                } else {
+                    "READS THE PREVIOUS TICK"
+                }
+            }
+            _ => "",
+        };
+        (index, note)
     }
 
     /// The module in `slot` of the selected channel's rack, by identity.

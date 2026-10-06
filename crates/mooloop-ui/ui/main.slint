@@ -2242,6 +2242,11 @@ export component MainWindow inherits Window {
     in-out property <bool> modulation-shelf-open;
     in-out property <int> modulation-selected-slot: -1;
     in-out property <int> modulation-armed-slot: -1;
+    // Whether the assignment gesture is armed, with any source in the song:
+    // what every face's knobs read, on any chain. `modulation-armed-slot`
+    // is only the armed source's place in the shelf, which a module seated
+    // on another channel does not have.
+    in property <bool> modulation-assigning;
     in property <int> modulation-selected-kind: -1;
     // Selection chooses the source editor. Arming is a separate, deliberate
     // assignment mode, so inspecting an LFO never changes what a knob drag
@@ -2252,13 +2257,13 @@ export component MainWindow inherits Window {
     in property <[float]> modulation-selected-values;
     in property <float> modulation-selected-preview-fade-cycles;
     in property <float> modulation-selected-preview-smoothing-cycles;
-    in property <[string]> modulation-input-channels;
-    in property <int> modulation-selected-envelope-input-channel;
+    in property <[string]> modulation-input-options;
+    in property <int> modulation-selected-input;
+    in property <string> modulation-input-note;
     in property <float> modulation-selected-envelope-preview-attack;
     in property <float> modulation-selected-envelope-preview-decay;
     in property <float> modulation-selected-envelope-preview-release;
     in property <int> modulation-max-sources;
-    in property <[string]> modulation-slot-names;
     in property <string> modulation-outlet-device;
     in property <string> modulation-armed-name;
     in property <string> modulation-selected-outlet-name;
@@ -2272,7 +2277,7 @@ export component MainWindow inherits Window {
     callback modulation-param-edit-started();
     callback modulation-param-edit-finished();
     callback modulation-source-removed(int);
-    callback modulation-envelope-input-channel-changed(int, int);
+    callback modulation-input-changed(int, int);
     callback modulation-route-polarity-changed(int, int);
     callback modulation-route-removed(int);
     // Generator and strip destinations, indexed by descriptor position the
@@ -5140,7 +5145,7 @@ export component MainWindow inherits Window {
                                                 filter-resonance <=> root.filter-resonance;
                                                 filter-env <=> root.filter-env;
                                                 drive <=> root.sampler-drive;
-                                                modulation-armed: root.modulation-armed-slot >= 0;
+                                                modulation-armed: root.modulation-assigning;
                                                 modulation-depths: root.source-modulation-depths;
                                                 modulation-allowed: root.source-modulation-allowed;
                                                 modulation-offsets: root.source-modulation-offsets;
@@ -5353,7 +5358,7 @@ export component MainWindow inherits Window {
                                                 osc3-wave <=> root.mono-osc3-wave; osc3-semitones <=> root.mono-osc3-semitones; osc3-cents <=> root.mono-osc3-cents; osc3-level <=> root.mono-osc3-level; osc3-pulse-width <=> root.mono-osc3-pulse-width;
                                                 glide <=> root.mono-glide; attack <=> root.mono-attack; decay <=> root.mono-decay; sustain <=> root.mono-sustain; release <=> root.mono-release;
                                                 filter-cutoff <=> root.mono-filter-cutoff; filter-resonance <=> root.mono-filter-resonance; filter-env <=> root.mono-filter-env; drive <=> root.mono-drive;
-                                                modulation-armed: root.modulation-armed-slot >= 0;
+                                                modulation-armed: root.modulation-assigning;
                                                 modulation-depths: root.source-modulation-depths;
                                                 param-defaults: root.source-param-defaults;
                                                 modulation-allowed: root.source-modulation-allowed;
@@ -5384,7 +5389,7 @@ export component MainWindow inherits Window {
                                                 osc3-wave <=> root.poly-osc3-wave; osc3-semitones <=> root.poly-osc3-semitones; osc3-cents <=> root.poly-osc3-cents; osc3-level <=> root.poly-osc3-level; osc3-pulse-width <=> root.poly-osc3-pulse-width;
                                                 glide <=> root.poly-glide; attack <=> root.poly-attack; decay <=> root.poly-decay; sustain <=> root.poly-sustain; release <=> root.poly-release;
                                                 filter-cutoff <=> root.poly-filter-cutoff; filter-resonance <=> root.poly-filter-resonance; filter-env <=> root.poly-filter-env; drive <=> root.poly-drive;
-                                                modulation-armed: root.modulation-armed-slot >= 0;
+                                                modulation-armed: root.modulation-assigning;
                                                 modulation-depths: root.source-modulation-depths;
                                                 param-defaults: root.source-param-defaults;
                                                 modulation-allowed: root.source-modulation-allowed;
@@ -5425,7 +5430,7 @@ export component MainWindow inherits Window {
                                                 accent <=> root.mlm1-accent;
                                                 glide-mode <=> root.mlm1-glide-mode; env-trigger <=> root.mlm1-env-trigger; priority <=> root.mlm1-priority;
                                                 filter-model <=> root.mlm1-filter-model;
-                                                modulation-armed: root.modulation-armed-slot >= 0;
+                                                modulation-armed: root.modulation-assigning;
                                                 modulation-depths: root.source-modulation-depths;
                                                 param-defaults: root.source-param-defaults;
                                                 modulation-allowed: root.source-modulation-allowed;
@@ -5487,7 +5492,7 @@ export component MainWindow inherits Window {
                                                 noise-osc2 <=> root.mlp8-noise-osc2; noise-osc3 <=> root.mlp8-noise-osc3; feedback1 <=> root.mlp8-feedback1; feedback2 <=> root.mlp8-feedback2; feedback3 <=> root.mlp8-feedback3;
                                                 sub-octave <=> root.mlp8-sub-octave; sub-wave <=> root.mlp8-sub-wave; sub-source <=> root.mlp8-sub-source; sync1 <=> root.mlp8-sync1; sync2 <=> root.mlp8-sync2;
                                                 sync3 <=> root.mlp8-sync3;
-                                                modulation-armed: root.modulation-armed-slot >= 0;
+                                                modulation-armed: root.modulation-assigning;
                                                 modulation-depths: root.source-modulation-depths;
                                                 modulation-allowed: root.source-modulation-allowed;
                                                 modulation-offsets: root.source-modulation-offsets;
@@ -5568,7 +5573,7 @@ export component MainWindow inherits Window {
                                                 body-decay-fraction: root.ds01-body-decay-fraction;
                                                 span-text: root.ds01-span-text;
                                                 page <=> root.ds01-device-page;
-                                                modulation-armed: root.modulation-armed-slot >= 0;
+                                                modulation-armed: root.modulation-assigning;
                                                 modulation-depths: root.source-modulation-depths;
                                                 modulation-allowed: root.source-modulation-allowed;
                                                 modulation-offsets: root.source-modulation-offsets;
@@ -5593,7 +5598,7 @@ export component MainWindow inherits Window {
                                                 level-text: root.aux-in-level-text;
                                                 tap-text: root.aux-in-tap-text;
                                                 refusal-text: root.aux-in-refusal-text;
-                                                modulation-armed: root.modulation-armed-slot >= 0;
+                                                modulation-armed: root.modulation-assigning;
                                                 modulation-depths: root.source-modulation-depths;
                                                 modulation-allowed: root.source-modulation-allowed;
                                                 modulation-offsets: root.source-modulation-offsets;
@@ -5625,7 +5630,7 @@ export component MainWindow inherits Window {
                                                 has-gui: root.source-plugin-face[0].has-gui;
                                                 gui-open: root.source-plugin-face[0].gui-open;
                                                 gui-requested => { root.source-plugin-gui-requested(); }
-                                                modulation-armed: root.modulation-armed-slot >= 0;
+                                                modulation-armed: root.modulation-assigning;
                                                 modulation-depths: root.source-modulation-depths;
                                                 modulation-allowed: root.source-modulation-allowed;
                                                 modulation-offsets: root.source-modulation-offsets;
@@ -5943,7 +5948,7 @@ export component MainWindow inherits Window {
                                                 save-preset-requested => { root.save-effect-preset-requested(index); }
 
                                                 if slot.kind == 0 : FilterDeviceFace {
-                                                    modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                    modulation-armed: root.modulation-assigning;
                                                     modulation-depths: slot.modulation-depths;
                                                     modulation-allowed: slot.modulation-allowed;
                                                     modulation-offsets: slot.modulation-offsets;
@@ -5974,7 +5979,7 @@ export component MainWindow inherits Window {
                                                     select-requested => { root.device-selected(index); }
                                                 }
                                                 if slot.kind == 1 : DriveDeviceFace {
-                                                    modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                    modulation-armed: root.modulation-assigning;
                                                     modulation-depths: slot.modulation-depths;
                                                     modulation-allowed: slot.modulation-allowed;
                                                     modulation-offsets: slot.modulation-offsets;
@@ -6005,7 +6010,7 @@ export component MainWindow inherits Window {
                                                     select-requested => { root.device-selected(index); }
                                                 }
                                                 if slot.kind == 12 : PreampDeviceFace {
-                                                    modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                    modulation-armed: root.modulation-assigning;
                                                     modulation-depths: slot.modulation-depths;
                                                     modulation-allowed: slot.modulation-allowed;
                                                     modulation-offsets: slot.modulation-offsets;
@@ -6037,7 +6042,7 @@ export component MainWindow inherits Window {
                                                     select-requested => { root.device-selected(index); }
                                                 }
                                                 if slot.kind == 2 : BitcrushDeviceFace {
-                                                    modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                    modulation-armed: root.modulation-assigning;
                                                     modulation-depths: slot.modulation-depths;
                                                     modulation-allowed: slot.modulation-allowed;
                                                     modulation-offsets: slot.modulation-offsets;
@@ -6066,7 +6071,7 @@ export component MainWindow inherits Window {
                                                     select-requested => { root.device-selected(index); }
                                                 }
                                                 if slot.kind == 3 : DelayDeviceFace {
-                                                    modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                    modulation-armed: root.modulation-assigning;
                                                     modulation-depths: slot.modulation-depths;
                                                     modulation-allowed: slot.modulation-allowed;
                                                     modulation-offsets: slot.modulation-offsets;
@@ -6108,7 +6113,7 @@ export component MainWindow inherits Window {
                                                     select-requested => { root.device-selected(index); }
                                                 }
                                                 if slot.kind == 4 : GateDeviceFace {
-                                                    modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                    modulation-armed: root.modulation-assigning;
                                                     modulation-depths: slot.modulation-depths;
                                                     modulation-allowed: slot.modulation-allowed;
                                                     modulation-offsets: slot.modulation-offsets;
@@ -6141,7 +6146,7 @@ export component MainWindow inherits Window {
                                                     select-requested => { root.device-selected(index); }
                                                 }
                                                 if slot.kind == 5 : CompressorDeviceFace {
-                                                    modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                    modulation-armed: root.modulation-assigning;
                                                     modulation-depths: slot.modulation-depths;
                                                     modulation-allowed: slot.modulation-allowed;
                                                     modulation-offsets: slot.modulation-offsets;
@@ -6178,7 +6183,7 @@ export component MainWindow inherits Window {
                                                     select-requested => { root.device-selected(index); }
                                                 }
                                                 if slot.kind == 6 : LimiterDeviceFace {
-                                                    modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                    modulation-armed: root.modulation-assigning;
                                                     modulation-depths: slot.modulation-depths;
                                                     modulation-allowed: slot.modulation-allowed;
                                                     modulation-offsets: slot.modulation-offsets;
@@ -6211,7 +6216,7 @@ export component MainWindow inherits Window {
                                                 // natural units, and reports the master's ids;
                                                 // Rust maps both onto this kind's table.
                                                 if slot.kind == 16 : BusCompDeviceFace {
-                                                    modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                    modulation-armed: root.modulation-assigning;
                                                     modulation-depths: slot.modulation-depths;
                                                     modulation-allowed: slot.modulation-allowed;
                                                     modulation-offsets: slot.modulation-offsets;
@@ -6236,7 +6241,7 @@ export component MainWindow inherits Window {
                                                     select-requested => { root.device-selected(index); }
                                                 }
                                                 if slot.kind == 7 : EqDeviceFace {
-                                                    modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                    modulation-armed: root.modulation-assigning;
                                                     modulation-depths: slot.modulation-depths;
                                                     modulation-allowed: slot.modulation-allowed;
                                                     modulation-offsets: slot.modulation-offsets;
@@ -6278,7 +6283,7 @@ export component MainWindow inherits Window {
                                                     select-requested => { root.device-selected(index); }
                                                 }
                                                 if slot.kind == 8 : ReverbDeviceFace {
-                                                    modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                    modulation-armed: root.modulation-assigning;
                                                     modulation-depths: slot.modulation-depths;
                                                     modulation-allowed: slot.modulation-allowed;
                                                     modulation-offsets: slot.modulation-offsets;
@@ -6319,7 +6324,7 @@ export component MainWindow inherits Window {
                                                     select-requested => { root.device-selected(index); }
                                                 }
                                                 if slot.kind == 9 : ModulationDeviceFace {
-                                                    modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                    modulation-armed: root.modulation-assigning;
                                                     modulation-depths: slot.modulation-depths;
                                                     modulation-allowed: slot.modulation-allowed;
                                                     modulation-offsets: slot.modulation-offsets;
@@ -6369,7 +6374,7 @@ export component MainWindow inherits Window {
                                                     select-requested => { root.device-selected(index); }
                                                 }
                                                 if slot.kind == 10 : PlateDeviceFace {
-                                                    modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                    modulation-armed: root.modulation-assigning;
                                                     modulation-depths: slot.modulation-depths;
                                                     modulation-allowed: slot.modulation-allowed;
                                                     modulation-offsets: slot.modulation-offsets;
@@ -6400,7 +6405,7 @@ export component MainWindow inherits Window {
                                                     select-requested => { root.device-selected(index); }
                                                 }
                                                 if slot.kind == 11 : BufferDeviceFace {
-                                                    modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                    modulation-armed: root.modulation-assigning;
                                                     modulation-depths: slot.modulation-depths;
                                                     modulation-allowed: slot.modulation-allowed;
                                                     modulation-offsets: slot.modulation-offsets;
@@ -6483,7 +6488,7 @@ export component MainWindow inherits Window {
                                                     gui-requested => { root.plugin-gui-requested(index); }
                                                     // By dense index, like the rows: Rust
                                                     // turns an index into the plugin's id.
-                                                    modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
+                                                    modulation-armed: root.modulation-assigning;
                                                     modulation-depths: slot.modulation-depths;
                                                     modulation-allowed: slot.modulation-allowed;
                                                     modulation-offsets: slot.modulation-offsets;
@@ -6812,13 +6817,14 @@ export component MainWindow inherits Window {
                                     selected-values: root.modulation-selected-values;
                                     selected-preview-fade-cycles: root.modulation-selected-preview-fade-cycles;
                                     selected-preview-smoothing-cycles: root.modulation-selected-preview-smoothing-cycles;
-                                    input-channels: root.modulation-input-channels;
-                                    selected-envelope-input-channel: root.modulation-selected-envelope-input-channel;
+                                    input-options: root.modulation-input-options;
+                                    selected-input: root.modulation-selected-input;
+                                    input-note: root.modulation-input-note;
+                                    assigning: root.modulation-assigning;
                                     selected-envelope-preview-attack: root.modulation-selected-envelope-preview-attack;
                                     selected-envelope-preview-decay: root.modulation-selected-envelope-preview-decay;
                                     selected-envelope-preview-release: root.modulation-selected-envelope-preview-release;
                                     max-sources: root.modulation-max-sources;
-                                    slot-names: root.modulation-slot-names;
                                     outlet-device: root.modulation-outlet-device;
                                     armed-name: root.modulation-armed-name;
                                     selected-outlet-name: root.modulation-selected-outlet-name;
@@ -6832,7 +6838,7 @@ export component MainWindow inherits Window {
                                     param-edit-started => { root.modulation-param-edit-started(); }
                                     param-edit-finished => { root.modulation-param-edit-finished(); }
                                     source-removed(slot) => { root.modulation-source-removed(slot); }
-                                    envelope-input-channel-changed(slot, value) => { root.modulation-envelope-input-channel-changed(slot, value); }
+                                    input-changed(slot, value) => { root.modulation-input-changed(slot, value); }
                                     route-polarity-changed(index, polarity) => {
                                         root.modulation-route-polarity-changed(index, polarity);
                                     }
