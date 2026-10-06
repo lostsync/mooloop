@@ -6155,7 +6155,7 @@ pub(crate) struct RenderState {
     source_curve_refusals: u64,
     /// The song's modulation set: its modules' running state, their outputs
     /// across this block, and its routes filed by the chain they land on
-    /// (`docs/plans/song-modulation/02-the-engine-runs-one-set.md`).
+    /// (`docs/plans/archive/song-modulation/02-the-engine-runs-one-set.md`).
     /// Replaced whole by `StructuralCommand::SetModulation`.
     song_modulation: Box<SongModulator>,
     /// Every channel's outlets and keyboard, as this block's routes read
@@ -11086,7 +11086,7 @@ impl RenderState {
                     .capture(producer, SendTap::PreFader, &strip.bus, frames);
             }
             // The fader and the pan, driven by a route or a lane as a
-            // channel's are (`docs/plans/song-modulation/02`, MOO-419).
+            // channel's are (`docs/plans/archive/song-modulation/02`, MOO-419).
             let segments = resolve_strip_segments(
                 strip.output.gain,
                 strip.output.pan,

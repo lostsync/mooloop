@@ -140,6 +140,16 @@ nearly agree, the plan gives song lanes the pattern lanes' point type and, in
 its last step, their editor. The tracker idea above is still Adam's to raise,
 and would now be a view of that one model.
 
+**2026-10-06: the modulation rack moved without the tracker.** Adam raised
+the move himself on 2026-10-05 (*"re-scope the modulation from per-channel
+to document-wide and move it into its own pane"*), and it is done: modules
+belong to the song and live in the Modulation pane
+(`plans/archive/song-modulation/`). The pane holds today's module grid, not
+a tracker, so the fork above is still unanswered for the modulator column.
+What comes after the move is the Song Patch proposal
+(`plans/song-patch/README.md`), a song-wide patching canvas, which is a
+different shape from the tracker and does not settle it either.
+
 Recorded while writing `docs/plans/archive/console/`, which is the mixer half of the
 same morning list and which deliberately does not touch the playlist.
 

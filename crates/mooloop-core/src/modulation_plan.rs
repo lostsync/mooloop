@@ -3,7 +3,7 @@
 //! [`SongModulation`] is the document's: modules and routes that name
 //! channels, modules and devices by identity. The audio thread cannot look an
 //! identity up, so this is the same set resolved once, off the audio thread,
-//! against the seats of one song (`docs/plans/song-modulation/02`):
+//! against the seats of one song (`docs/plans/archive/song-modulation/02`):
 //!
 //! - every module gets a **list position**, which is the order the engine
 //!   ticks them in. A Math module reads the module it names at that

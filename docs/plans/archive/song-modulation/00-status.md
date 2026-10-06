@@ -14,8 +14,7 @@ Release label `0.1.7`.
 Each step is blocked by the one before it. Step 02 closes MOO-497, MOO-487,
 MOO-373 and MOO-170 on the way.
 
-Planned 2026-10-05. Step 01 built 2026-10-05, step 02 2026-10-06; 03 to 05
-not started.
+Planned 2026-10-05. Step 01 built 2026-10-05; steps 02 to 05 by 2026-10-06.
 
 ## Adam's rulings
 
@@ -207,7 +206,8 @@ Differences from the plan:
   device rack, which is a fixed 378px again.
 - **Deviation: the mock-up came after the markup started.** It was rendered
   from the pane's own markup (`scripts/slint-sketch`), with sample data,
-  and posted to Joam for go on 2026-10-06. The merge waited on his answer.
+  and posted to Joam for go on 2026-10-06. He said go the same day, and the
+  merge waited on that.
 - **Deviation: modules keep a home seat.** `SongModule::rack` stays, as the
   channel a module was made on, for presets and naming. Nothing edits
   modulation through a rack any more.
@@ -260,3 +260,12 @@ is unchanged. Not profiled; the likely causes are what the one set does per
 block that the racks did not: every module's output copied into a
 tick-by-module table, and a meter cell per module plus each live channel's
 outlet and keyboard cells published.
+
+## Step 05, and the close
+
+Step 05 done 2026-10-06, plan archived. `MODULATION.md`, `current/modulation.md`,
+`UI_DESIGN.md`, `PROJECT_FORMAT.md`, `PRODUCT.md`, `TERMINOLOGY.md`,
+`SCOPE.md` §4, `FOCUS.md`, `IDEAS.md` and `ENHANCEMENTS.md` now say the song
+owns modulation. The Song Patch proposal moved out of this plan's
+`README.md` to `docs/plans/song-patch/README.md`. The three items under
+*Open* above are still owed.

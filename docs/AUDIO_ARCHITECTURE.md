@@ -125,11 +125,10 @@ tick offsets. A strip's Volume and Pan bypass both: the output stage applies
 them per tick directly. A device outlet consumed across a device boundary is
 read on the following block unless a future contract explicitly compiles a
 different declared latency.
-Display telemetry is never a control input. The runtime's fixed arrays --
-eight module slots and sixteen routes a channel -- are compile-time constants
-with a measured, linear price, not the persistent or product meaning of the
-number; `CAPACITY_POLICY.md` says why a ceiling is not the same as a
-reservation.
+Display telemetry is never a control input. The song's modulation set has no
+fixed arrays: it is sized from the song and replaced whole, built off the
+audio thread, when its shape changes (`MODULATION.md`, *Song collection*;
+`CAPACITY_POLICY.md` says why a ceiling is not the same as a reservation).
 
 ## Graph Compiler
 

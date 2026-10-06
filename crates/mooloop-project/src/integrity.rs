@@ -1703,7 +1703,7 @@ fn check_route_addresses(doctor: &mut Doctor, who: &str, own: &ChainShape, rack:
     }
 }
 
-/// The song's modulation set (`docs/plans/song-modulation/`).
+/// The song's modulation set (`docs/plans/archive/song-modulation/`).
 ///
 /// A route may be aimed at any channel or track in the song, so it is
 /// checked wherever it points; the rule that pointed a route on another

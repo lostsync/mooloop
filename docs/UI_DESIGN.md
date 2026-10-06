@@ -42,10 +42,10 @@ a control that belongs to one device would look like it belongs to the row.
 Channel presets remain in the channel header because they include the
 generator and channel-level state, which no single device owns.
 
-The modulation rack and its routes are channel state. A common device frame
-may expose that system because it is where the user reads the channel's signal
+The modulation modules and their routes are song state. A common device frame
+may expose that system because it is where the user reads a chain's signal
 flow, but the frame does not make a modulation source belong to that device.
-Device faces own their parameters; the channel owns the control signals that
+Device faces own their parameters; the song owns the control signals that
 can reach them.
 
 ## Module Grid
@@ -285,8 +285,8 @@ alignment, and height contract as effects.
   bounds rather than from a nominal one-unit pitch. Controls unique to that device
   begin below the header. The common frame also owns a compact `MOD n` route
   summary for routes terminating in the device. It can show source pills where
-  a count is too opaque and opens the channel's modulation shelf or a
-  device-filtered route inspector; it never creates a device-local modulator.
+  a count is too opaque and opens the Modulation pane or a device-filtered
+  route inspector; it never creates a device-local modulator.
 - Signal direction and insertion points remain visible between devices.
 - A device with more controls than one face can hold uses stable internal
   pages. Switching pages never changes device dimensions or moves neighboring
@@ -493,26 +493,27 @@ blank would say otherwise. Only a live loop tints the lanes below.
 The playhead is drawn whenever the playlist is in song mode, running or not:
 a position that can be aimed has to be visible to aim.
 
-### Channel modulation shelf
+### The Modulation pane
 
-**Its location is under review.** Adam wants the modulation rack moved and
-redesigned into its own panel; `reference/img/mooloop-1.0-mockup.png` puts it
-on the right with its own tabs, and `FOCUS.md` says what has to be settled
-first. What follows describes where it is today and, more usefully, the two
-rules that a move must carry with it — one shelf for the whole channel, and
-no fixed row of permanent empty slots.
+The song's modulation modules have a pane of their own, the sixth view
+(`PaneViews.modulation`; **Show Modulation**, Ctrl+6), not a shelf in the
+device rack. Adam, 2026-10-05: *"it will just go in its own pane"*. It
+docks, splits and moves between slots like the other views, and the device
+rack below a channel is a fixed height again. The markup is
+`ui/modulation-shelf.slint`, whose `ModulationShelf` component kept its name
+when it moved.
 
-The channel's modulation shelf lives immediately below the device rack and is
-collapsed by default. It is pinned to the bottom of the editor dock rather
-than living inside the rack's horizontal scroll: it is one surface for the
-whole channel, so following the chain's width put its module grid and Assign
-button off-window once the chain grew past a few devices. Its header is a
-small `MOD` affordance; opening it shows existing source chips and an
-add-source action. Because it is one shelf for the whole channel, a source
-can target a source parameter, any insert, and the strip at the same time.
-Do not place a fixed row of permanent empty slots in the
-rack or a separate modulation page inside every device: the grid's rows follow
-the capacity constant and scroll, so the number is not a layout decision.
+It holds the module grid, which wraps at the pane's width and scrolls, with
+the OUTLETS of every channel that publishes some under the channel's name; a
+narrow **Add** list to the grid's right; the selected source's surface, with
+its name edited in its header; and that source's routes, from the whole song.
+A route row names its chain, device and parameter ("Kick Filter 1 · Cutoff"),
+because a route can land on any channel or track. Because it is one pane for
+the whole song, a source can target a source parameter, any insert, and a
+strip on any channel or track at the same time. Do not place a fixed row of
+permanent empty slots in the pane or a separate modulation page inside every
+device: the song has no module limit, so the number is not a layout
+decision.
 
 Selecting a source tile opens its larger control surface without changing what
 ordinary parameter gestures mean. A separate **Assign** switch arms the
@@ -522,8 +523,10 @@ changing that control's base value. Its normal value display remains the base;
 an overlay or second arc communicates modulation excursion. Switching source
 tiles while Assign is active moves the assignment focus to the new source;
 turning Assign off restores base-value editing. A small marker on a parameter
-opens its incoming-route inspector. The inspector is destination-first and
-should be sufficient for ordinary review and removal.
+is meant to open its incoming-route inspector, destination-first and
+sufficient for ordinary review and removal; today the route-count dots raise
+nothing when clicked, and a fader or pan control does not take the assign
+gesture yet (open: `docs/plans/archive/song-modulation/00-status.md`).
 
 Both the compact tile and expanded source face are parameter-derived previews,
 not generic type icons. An envelope face follows its effective attack, decay,
@@ -533,12 +536,13 @@ has a visible ramp. An LFO face follows waveform, phase, amount, fade-in,
 smoothing, and pulse width. These are deterministic previews of the configured
 signal, not phase-locked telemetry from the audio thread.
 
-A source's own signal inputs belong on its expanded control surface. For an
-LFO this begins with `Reset: Free | Note On`. The gate-driven envelope exposes
-an explicit channel-note input picker, so `Kick notes → Envelope → Sampler
-position` is possible before generators publish typed outlets. The channel
-choice is an adapter for the future `Kick / Gate` outlet, not a competing
-routing language. Input selection is intentionally different from Assign: the
+A source's own signal inputs belong on its expanded control surface. Every
+module has one input picker: none, then every channel's notes for the four
+kinds that hear notes, or every other module in the song for Math. An LFO's
+`Reset: Free | Note On` reads that input, so `Kick notes → Envelope → Sampler
+position` is possible across channels before generators publish typed
+outlets. The channel choice is an adapter for the future `Kick / Gate`
+outlet, not a competing routing language. Input selection is intentionally different from Assign: the
 input picker determines what drives the source, while Assign determines where
 that source's output goes.
 
@@ -550,10 +554,12 @@ in the same value field. LFO rate/fade-in and envelope attack/decay/release use
 this pattern. Smoothing and square-wave pulse width remain ordinary continuous
 controls; pulse width is visibly disabled when another waveform is selected.
 
-The compact rack does not require drawn patch cords. A later expanded graph may
+The pane does not require drawn patch cords. A later expanded graph may
 draw and edit the same typed inlet and destination edges when that makes a
 complex patch easier to read; cables are a visualization of existing routes,
-not a separate engine or a replacement for the rack.
+not a separate engine. The Song Patch proposal
+(`docs/plans/song-patch/README.md`) is that direction: one song-wide canvas
+that could later replace the pane's contents.
 
 ### Sampler
 
@@ -611,10 +617,10 @@ plot responds to waveform, tuning, level, and pulse width.
   armed modulation source do. A timing control adds `show-sync` for the shared
   `O.` LED rather than dropping to a smaller widget for it.
 
-No synth face owns a general LFO page. The common frame exposes the channel
-modulation shelf and the routes that terminate in that device's parameters.
+No synth face owns a general LFO page. The common frame exposes the song's
+Modulation pane and the routes that terminate in that device's parameters.
 The v1 mono and poly faces still carry device-local LFO controls; those are
-transitional and must migrate to the channel rack rather than grow into a
+transitional and must migrate to the song's modules rather than grow into a
 second modulation system. A synth's *authored* modulation — per-voice
 envelopes, the ML-P8's oscillator network — is part of its synthesis contract
 and stays where it is.
@@ -1046,7 +1052,7 @@ Before committing UI work, answer all of these:
 - Does the narrow view wrap or scroll without overlap or clipped text?
 - Does every device retain the fixed rack height and an intentional unit width?
 - Is signal order legible without opening a menu or inspector?
-- Can a reader tell which devices receive modulation, open the channel shelf,
+- Can a reader tell which devices receive modulation, open the Modulation pane,
   and inspect a destination's incoming routes without treating a source as a
   property of one device?
 - Was the result inspected from a software-rendered screenshot rather than

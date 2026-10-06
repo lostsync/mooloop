@@ -2730,7 +2730,7 @@ impl InputSource {
 
 /// Where the engine runs a module until it runs the song's set itself.
 ///
-/// **A shim, and step 02 of `docs/plans/song-modulation/` deletes it.** The
+/// **A shim, and step 02 of `docs/plans/archive/song-modulation/` deletes it.** The
 /// engine still keeps one rack per channel; until it stops, each module has
 /// to sit in one of them, at one slot. A converted song keeps exactly the
 /// seat each module had, so the engine is handed the same racks it was
@@ -2850,7 +2850,7 @@ fn rack_input(
 }
 
 /// The song's modulation: every module, and every route from a source to a
-/// parameter anywhere in the song (`docs/plans/song-modulation/`).
+/// parameter anywhere in the song (`docs/plans/archive/song-modulation/`).
 ///
 /// Held by [`crate::Project::modulation`]. **Not `Copy`, and no fixed
 /// array**: a channel's rack was eight slots and sixteen routes because it

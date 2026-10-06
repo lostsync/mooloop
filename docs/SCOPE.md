@@ -173,6 +173,13 @@ additions:
   track, pattern and preset edits stop rebuilding the engine. Option 2,
   undo and redo applying the difference the same way instead of a whole-song
   install, is MOO-469.
+- **The modulation-rack move joins, 2026-10-05, and is done 2026-10-06.**
+  Adam, planning 0.1.7: *"re-scope the modulation from per-channel to
+  document-wide and move it into its own pane"*, and *"let's start by moving
+  what we have and making it work document-wide"*. Modulation belongs to the
+  song, a route reaches any channel or track, and the modules have the
+  Modulation pane (`plans/archive/song-modulation/`). The Song Patch canvas
+  beyond it is a proposal (`plans/song-patch/`), not in.
 
 ### Out, explicitly
 
@@ -193,11 +200,11 @@ additions:
   `Mooloop.app`, zipped, so the Mac can run a release build without building
   one. It is a convenience build, not a supported target, and there is no
   Intel build.
-- **The modulation-rack move and the tracker question** (MOO-159). Adam,
-  2026-09-26: it is one idea (automation written in something
-  tracker-inspired), and *"something i am interested in doing. i havent
-  decided on it"*. Out, and not a question waiting on him: it comes back only
-  when he raises it. Song automation shares the pattern lanes' point type and,
+- **The tracker question** (MOO-159). Adam, 2026-09-26: it is one idea
+  (automation written in something tracker-inspired), and *"something i am
+  interested in doing. i havent decided on it"*. Out, and not a question
+  waiting on him: it comes back only when he raises it. (The modulation-rack
+  move, once out with it, he raised on 2026-10-05; it is in, above.) Song automation shares the pattern lanes' point type and,
   by its last step, their editor, so a tracker-style view would still be one
   view of one data model, not a third editor.
 - **A curated factory bank.** Every device ships presets to prove its

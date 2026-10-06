@@ -323,7 +323,7 @@ pub struct ChannelSetup {
     /// The modulation a setup carries **outside a song**: a channel preset, a
     /// kit entry, a copied channel's preset, an ML-M1 factory patch. Always
     /// `None` inside a song, whose channels own no modulators
-    /// (`docs/plans/song-modulation/`): the song's set holds them.
+    /// (`docs/plans/archive/song-modulation/`): the song's set holds them.
     ///
     /// Whatever lands a setup in a song lifts this into the song's set as new
     /// modules ([`crate::SongModulation::lift_rack`]) and leaves `None`
@@ -932,7 +932,7 @@ pub struct Project {
     pub pattern_meta: Vec<PatternMeta>,
     pub playlist: Vec<PatternPlacement>,
     /// The song's modulation: every modulator and every route
-    /// (`docs/plans/song-modulation/`). Channels own none.
+    /// (`docs/plans/archive/song-modulation/`). Channels own none.
     ///
     /// Defaulted and skipped when empty, so a song with no modulation saves
     /// no `modulation` table. A song written before this table carries each

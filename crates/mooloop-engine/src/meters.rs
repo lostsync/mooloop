@@ -749,7 +749,7 @@ impl PlayheadMeters {
 /// modulation is doing right now.
 ///
 /// One cell per module of the song's set, by list position
-/// (`docs/plans/song-modulation/02`), up to [`MAX_METERED_MODULES`]: past
+/// (`docs/plans/archive/song-modulation/02`), up to [`MAX_METERED_MODULES`]: past
 /// that a module runs and is not drawn. The session knows which module sits
 /// at each position, because it sent the set.
 ///

@@ -70,6 +70,7 @@ should do in the middle of a feature. Today:
 | `MixerBus`, `BusSetup`, `MAX_BUSES`, `EffectTarget::Bus` | **track** |
 | `compile_bus_graph`, `CompiledBusGraph` | the track graph |
 | `bus` on a channel (its destination) | the channel's track |
+| `ModulationShelf`, `modulation-shelf.slint` | the Modulation pane |
 
 `MASTER_BUS` is the one that can stay: the master *is* a bus in the ordinary
 sense, and every desk calls it that.
@@ -92,3 +93,29 @@ summing thing for now is tracks-only."*
 **Strip** means the vertical run of controls a track draws — preamp, EQ,
 compressor, sends, fader. It is a face, not an object. See
 `docs/plans/archive/console/THE-STRIP.md`.
+
+## Modulation words
+
+As the Modulation pane uses them. Modulation belongs to the song, not to a
+channel (Adam, 2026-10-05: *"channels wont have modulators"*), so none of
+these is a property of a channel or a device.
+
+**Module** — one modulator in the song's set: an LFO, Envelope, Step, Random
+or Math. It is named by a durable id (`ModSourceId`), never by its place in
+the grid, and keeps a home seat, the channel it was made on, for its default
+name and for channel presets. In code, `SongModule`. A generator's published
+outlet is a *source* like a module, and is assigned the same way, but it is
+not a module: it has no editor, because the device that publishes it owns it.
+
+**Route** — one connection from a source (a module, a generator outlet, or a
+channel's mod wheel or aftertouch) to one parameter anywhere in the song,
+with a depth and a polarity. It adds an offset around the parameter's base
+and never replaces it. The pane lists a source's routes by chain, device and
+parameter. In code, `ModRoute`.
+
+**Input** — what drives a module, picked on its surface: nothing, one
+channel's notes, or (for Math) another module. In code, `InputSource`. The
+pane labels it by what it does to the kind: RESET for an LFO, GATE for an
+Envelope, CLOCK for a Step or Random, INPUT for Math. An input is not a
+route: the input says what drives a module, and its routes say where its
+output goes.

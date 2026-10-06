@@ -1,8 +1,13 @@
 # Modulation and parameters
 
-Status: the approved design and its implementation contract, August–September
-2026. Built: five module kinds, eight modules and sixteen routes per channel,
-durable route identity, direct assignment on ordinary controls.
+Status: the approved design and its implementation contract, August–October
+2026. **Modulation is song-wide since 2026-10-06** (0.1.7): the song owns
+every module and route, a route reaches any channel or track, and the modules
+have a pane of their own. Adam, 2026-10-05: *"channels wont have
+modulators"*; asked how many modulators a song can have, *"all of them"*; and
+*"it will just go in its own pane"*. Built: five module kinds with no count
+limit, durable route identity, direct assignment on ordinary controls, and
+the Modulation pane.
 
 `AUDIO_ARCHITECTURE.md` owns preparation, execution and realtime lifecycle.
 This document owns descriptors, addressing, ownership, and the resolution rule.
@@ -18,20 +23,21 @@ These decisions are made. Implement them; don't re-litigate them.
 ## Decisions
 
 ```text
-CHANNEL (ownership)
+SONG (ownership)
 │
-├── source device → ordered insert rack → channel strip       audio path
+├── channels: source device → insert rack → strip             audio path
+├── tracks:   insert rack → strip, the master's included
 │
 ├── modulation source collection                              control sources
 │     LFO · step · random · macro · note value · device outlet · ...
 │
 └── explicit routes                                           control path
-      source → transform → ParamAddr destination
+      source → transform → ParamAddr destination, on any channel or track
 ```
 
-- A **channel** owns its modulation sources and routes. A source is not the
-  property of Mono, Buffer, an insert, or the strip when it is a reusable
-  channel source or crosses a device boundary.
+- The **song** owns its modulation sources and routes. A source is not the
+  property of Mono, Buffer, an insert, the strip or a channel when it is a
+  reusable source or crosses a device boundary.
 - A device may own modulation that is endemic to its synthesis algorithm:
   per-voice envelopes and note values, audio-rate oscillator relationships,
   or an authored instrument LFO. It persists those local routes with the
@@ -40,15 +46,16 @@ CHANNEL (ownership)
 - A device owns parameter descriptors and may publish named control outlets.
   It does not need to know which sources are connected to its parameters.
 - `COMPOSABLE_DEVICE_UNITS.md` owns the general published/private port
-  contract. This specification applies that contract to channel modulation:
+  contract. This specification applies that contract to song modulation:
   only deliberately published, typed control outlets enter the route system.
 - The **common device frame** is the UI exposure point: it summarizes routes
-  terminating in that device and opens the channel-owned shelf/inspector. It
-  does not create a device-local modulator.
+  terminating in that device, while the modules themselves live in the
+  song's Modulation pane. It does not create a device-local modulator.
 - A route adds an offset around a destination's base value; it never writes an
   absolute replacement value.
 - The data is graph-capable, but the product is not graph-first. Patch cords
-  and a full graph editor are deferred.
+  and a full graph editor are deferred; the Song Patch proposal
+  (`docs/plans/song-patch/README.md`) is the direction they would take.
 
 ## Parameter descriptors
 
@@ -138,26 +145,39 @@ need to know which LFOs or other signals are currently connected to it.
 
 ## Ownership and data model
 
-### Channel collection
+### Song collection
 
-`ChannelSetup` continues to contain one modulation collection. A channel owns
-the sources it can play and all routes it makes. Project-global modulation is
-not implied; a later global source is a new explicit scope/source kind.
+The song holds one modulation set: `Project.modulation`, a `SongModulation`
+(`crates/mooloop-core/src/modulation.rs`) of every module (`SongModule`) and
+every route. A channel holds none. A route runs from one source to one
+`ParamAddr` anywhere in the song: any channel's generator, inserts and strip,
+and any track's inserts and strip, the master's included. Modules tick once
+per control tick in list order, before anything renders, so a Math module
+reading one listed before it reads that tick's value.
 
-The realtime representation may remain bounded and allocation-free. Capacity is
-an engine protocol boundary, not a UI layout: the UI shows existing modules
-plus **Add source**, never a fixed row of permanent empty bays. The grid's
-rows follow the capacity constant and scroll, which is pinned by a test that
-renders the shelf at eight and at sixteen. A larger
-capacity must not alter persisted destination or route meaning.
+**There is no count a user meets.** The set is sized from the song, not
+reserved: any edit that changes its shape (a module or route added, removed
+or reordered, an input repointed, a channel or track moved) installs a whole
+new set built off the audio thread (`StructuralCommand::SetModulation`), and
+the callback carries each surviving module's state into it by id and hands
+the old set back to be dropped off the audio thread. Only a module's params
+and a route's depth and polarity are retuned in place. This is
+`CAPACITY_POLICY.md`'s preallocate-and-grow-by-replacement rule. The UI shows
+existing modules plus an **Add** list, never a fixed row of empty bays.
 
-`MAX_MODULATORS_PER_CHANNEL` is a constant the layout obeys, modulation
-edits each name one fact so the command ring does not grow with capacity at
-all, and durable `ModSourceId` means slot numbers are an implementation
-detail rather than something a saved project depends on. Raising the number
-costs the DSP racks, the control outputs and the meters -- all linear and all
-small. See
-`docs/plans/archive/modulator-capacity/`.
+**A module keeps a home seat**, `SongModule::rack`: the channel it was made
+on, and a slot there. A new module is named for that channel
+(`<channel name> <kind> <n>`), and a channel preset saved from that channel
+carries the modules seated there, plus any module whose route lands on it;
+the engine does not read the seat. The first eight modules made on a channel
+get one, and a module past that, or one whose channel has gone, has none and
+is the song's alone.
+A channel preset still carries its modulation as a `ModRack`, so the
+`MAX_MODULATORS_PER_CHANNEL` (8) and `MAX_MOD_ROUTES_PER_CHANNEL` (16)
+constants bound what one preset holds, not what a song holds.
+
+A durable `ModSourceId` names every module, so its position in the list is an
+implementation detail rather than something a saved song depends on.
 
 ### Sources and source metadata
 
@@ -167,7 +187,7 @@ engine and UI to use it consistently:
 
 ```rust
 struct ModSourceDescriptor {
-    id: ModSourceId,             // stable within its channel/owner
+    id: ModSourceId,             // unique in the song
     kind: ModSourceKind,
     name: String,                // user-renamable where useful
     signal: SignalShape,         // bipolar | unipolar | gate | stepped
@@ -183,12 +203,18 @@ every route and lane, with the chain position derived — so a modulation
 destination is now as reorder-proof as a modulation source.
 See `docs/plans/archive/containers/01-a-device-is-an-identity.md`. It is minted when
 a module is added, carried through reorders, and never reused. `source_slot`
-survives only as the bounded runtime locator the realtime path indexes; it is
-derived from `source` whenever the rack changes and is never authored. Legacy
-routes saved before the id existed decode from their slot number. Reordering
-the grid therefore moves a module without changing what any route means — the
-one thing that did have to be remapped through the permutation is the Math
-module's `input_slot`, a slot reference the user never sees.
+is a runtime locator derived from `source` and never authored. Legacy routes
+saved before the id existed decode from their slot number. Reordering the
+module list therefore moves a module without changing what any route means,
+and a Math module names the module it reads by id as well
+(`InputSource::Module`).
+
+**A source names its channel.** A module's input is an `InputSource`: none,
+one channel's notes (`ChannelNotes`, by `ChannelId`), or, for Math, another
+module (`Module`). A generator outlet or performance source
+(`ModSourceRef::GeneratorOutlet`, `ModSourceRef::Performance`) carries the
+`ChannelId` whose generator or keyboard it is. Nothing means "my channel"
+implicitly.
 
 | Kind | Meaning | Status |
 | --- | --- | --- |
@@ -196,10 +222,11 @@ module's `input_slot`, a slot reference the user never sees.
 | Envelope | Gate-driven attack, decay, sustain, and release contour. | Implemented with an explicit channel-note gate adapter; typed device gate outlets are planned. |
 | Step / random generator | Clocked patterns, probability, and controlled variation. | Implemented as the Step and Random modules. |
 | Macro / internal value | User macro, transport phase, velocity, key track, pressure, or another declared channel value. | Planned. The Math module covers user arithmetic over an existing module's output, not a channel value source. |
-| Generator outlet | Generator-reduced values such as last-note velocity, gate, envelope, or Buffer state. | Implemented for the ML-P8's seven and DS-01's six, through `ModSourceRef::GeneratorOutlet` and the one-block control table, and offered by the shelf's own OUTLETS pane: a chip selects and arms exactly like a module, so the assign gesture builds the route. Only the control run is offered; an audio outlet is refused by domain. Note the range convention below. |
+| Generator outlet | Generator-reduced values such as last-note velocity, gate, envelope, or Buffer state. | Implemented for the ML-P8's seven and DS-01's six, through `ModSourceRef::GeneratorOutlet` and the one-block control table, and offered in the Modulation pane's OUTLETS list, under each publishing channel's name: a chip selects and arms exactly like a module, so the assign gesture builds the route. Only the control run is offered; an audio outlet is refused by domain. Note the range convention below. |
 | Device outlet | Named effect signals such as gain reduction, envelope-following level, or gate state. | Planned. The vocabulary is shared with generator outlets; no effect declares one. |
 | Audio-derived control | Explicit envelope follower, transient detector, or another control extractor. | Deferred until it has an outlet contract. |
-| External / cross-channel control | Another channel's note gate is an explicit source-inlet adapter. MIDI/CV, buses, global sources, and general cross-channel outlets remain deferred by routing policy. | Note-gate adapter implemented; general routing deferred. |
+| Another channel's control | Any channel's notes as a module's input, and any channel's generator outlets and performance controls as a route's source, each naming its channel. | Implemented. |
+| External control | MIDI/CV and other sources from outside the song. | Deferred. |
 
 A musical outlet is not display telemetry. Telemetry is best-effort observation
 for meters, plots, and waveforms; it cannot drive parameters. A control outlet
@@ -305,24 +332,27 @@ module scale by their own amount before lifting into the signed convention, so
 they do fill it, while the LFO scales an already-signed waveform by `depth` and
 so spans `-depth..depth`. Lifting that with `(v + 1) / 2` would rest the
 destination `(1 - depth) / 2` above its base and — at depth zero — offset it
-half a depth while producing no movement. `ModRack::wire_span` reads the span
-off the module's params, which is also why an LFO's **fade-in** is outside it:
-a fade is engine state and reading it per control tick would mean a second
-table beside `ControlOutputs`.
+half a depth while producing no movement. `CompiledModulation::wire_span`
+reads the span off the module's params, which is also why an LFO's **fade-in**
+is outside it: a fade is engine state and reading it per control tick would
+mean a second table beside the modules' outputs.
 
 ## Modulation architecture
 
 ### Modulator rack
 
-Each channel owns one modulation rack and routing matrix (see "Decisions").
-It does not strip an authored instrument of endemic modulation: per-voice
-envelopes, velocity/key/gate relationships, audio-rate oscillator routing,
-and a device-specific LFO with saved internal routes cannot in general be
-reproduced after the channel has reduced a chord to one control value.
+The song owns one set of modules and one routing matrix (see "Decisions" and
+"Song collection"). It does not strip an authored instrument of endemic
+modulation: per-voice envelopes, velocity/key/gate relationships, audio-rate
+oscillator routing, and a device-specific LFO with saved internal routes
+cannot in general be reproduced after a chord has been reduced to one control
+value.
 
-Per-channel, not project-global. It matches the rack UI and keeps a channel a
-self-contained instrument. Project-global modulators can be added later as a
-distinct source kind; nothing here blocks them.
+Song-wide, not per channel. Adam, 2026-10-05: *"channels wont have
+modulators"*. A copied or pasted channel brings the routes that point into
+it, aimed at the copy, from the same modules (*"assignments would
+copy/paste"*); a channel preset brings the modules its routes use and adds
+them to the song.
 
 A source is something that produces a normalized bounded control signal over
 time, conventionally `-1..1` before route transformation. The first source was
@@ -443,7 +473,8 @@ square pulse width moves the high-to-low transition without changing the
 route language. Note triggers are observed on the containing 32-frame control
 subdivision, keeping the callback bounded and allocation-free.
 
-An envelope stores an explicit input channel and ADSR values. Attack, decay,
+An envelope's input names one channel's notes (`InputSource::ChannelNotes`),
+and it stores ADSR values. Attack, decay,
 and release use the same free/synced timing vocabulary as the LFO. Note On
 restarts attack from the current value; the final held Note Off begins release,
 so overlapping piano-roll notes keep the gate high. Runtime output stays in the
@@ -484,7 +515,8 @@ An insert never sees a note. Its node gets its own slot's queue
 frame, and Buffer gestures) and the block's lane and route curves through
 `apply_curves`. The channel's event list, with its notes, goes to the
 generator alone, and the generator never sees an insert's events. Notes also
-reach the channel's modulation rack as per-tick note gates. Keep that
+reach every module whose input is that channel's notes, as per-tick note
+gates. Keep that
 isolation for parameter events, but **give effect slots access to the
 channel's note stream as a separate input**.
 
@@ -492,13 +524,16 @@ This is what makes the rack an instrument rather than a chain of processors.
 The rack's own modules already hear notes: an LFO resets its phase on
 note-on, and a step module advances per note. What no insert can do is react
 to one itself: a delay that flushes on a note, a stutter fired from a rack
-step. The sample-accurate note pipe reaches every channel's generator and
-modulation rack; it stops one node short of the inserts.
+step. The sample-accurate note pipe reaches every channel's generator and the
+modules listening to it; it stops one node short of the inserts.
 
 ## Inter-device and inter-channel data
 
-**Within a channel:** the mod matrix covers it. Effects may expose outlet
-signals (a compressor's gain reduction, an envelope follower's output, a
+**Within the song:** the mod matrix covers it. A route crosses channels and
+reaches tracks: a source on one channel may drive a parameter on any other
+channel, on any track's inserts and strip, and on the master's, and every
+source that reads a channel names it (see "Sources and source metadata").
+Effects may expose outlet signals (a compressor's gain reduction, an envelope follower's output, a
 gate's open state) as modulator sources. The dynamics effects already compute
 exactly these internally; exposing them is a matter of publishing the value,
 not of new DSP.
@@ -509,13 +544,13 @@ Generators also publish named, channel-rate outlets. This is how note-derived
 data reaches an effect without pretending a shared channel effect can own
 per-voice state: a generator reduces its voices to one musical control signal,
 then a downstream effect consumes ordinary CV. ML-P8 and DS-01 publish them
-(ML-P8's include Velocity, Gate and its LFO). The shelf's OUTLETS pane lists
-the channel generator's outlets, and a route takes one as its source
-(`ModSourceRef::GeneratorOutlet`) to any legal destination on the channel.
+(ML-P8's include Velocity, Gate and its LFO). The Modulation pane's OUTLETS
+list shows every publishing channel's outlets under the channel's name, and a
+route takes one as its source (`ModSourceRef::GeneratorOutlet`) to any legal
+destination in the song.
 
-An outlet source names an outlet index on its own channel's generator, plus
-its user-facing name; naming another channel's is the cross-channel work
-below. The first reduction is last-note; a later explicit outlet mode can add
+An outlet source names its channel by `ChannelId` and an outlet id on that
+channel's generator, plus its user-facing name. The first reduction is last-note; a later explicit outlet mode can add
 highest or loudest note without changing routing. An outlet source is a
 sibling of an LFO, not telemetry: its smoothing is part of its musical
 contract, because an
@@ -525,10 +560,11 @@ block later, under the timing rule above.
 Buffer outlets follow the same rule if and when the Buffer earns them;
 `BUFFER_ENGINE.md` lists the candidates.
 
-**Across channels: deferred, by decision.** Not in this pass. `ParamAddr`
-already carries a channel-or-bus scope, so enabling cross-channel control
-later is a routing-policy change rather than a retyping of every engine
-command.
+**Across channels and tracks: built** (0.1.7). `ParamAddr` already carried
+a channel-or-bus scope, so it was a routing-policy change rather than a
+retyping of every engine command: the session's
+`Session::modulation_destination` takes any scope, and the engine files each
+route under the chain it lands on (`CompiledModulation::chain_routes`).
 
 **True audio sidechain: still deferred.** A sidechain is a dependency edge
 in addition to ordinary audio routing: the source must be
@@ -560,30 +596,37 @@ typed control graph.
 
 ## User experience
 
-### Shelf and common frame
+### The Modulation pane and common frame
 
-The channel has one collapsed-by-default **MOD** shelf immediately beneath the
-device rack. It lists existing source chips and **Add source**. Selecting a chip
-opens its compact editor without arming assignment. The editor contains
+The song's modules live in the **Modulation** pane, a view of its own
+(`PaneViews.modulation`; **Show Modulation**, `view.pane-modulation`,
+Ctrl+6), not in the device rack. It lists the song's modules as chips, the
+outlets of every channel that publishes some, and an **Add** list. Selecting
+a chip opens its editor without arming assignment. The editor contains
 source-owned controls (for an LFO: waveform, free/synced rate, free/synced
 fade-in, phase, depth, smoothing, square pulse width, and retrigger; for an
 envelope: gate input, free/synced attack/decay/release, sustain, and amount).
-There is one shelf per channel, not a `MOD` page copied into Mono, Poly, Buffer,
-and every effect.
+Beside it are the selected source's routes, from the whole song, each naming
+the chain, device and parameter it reaches. There is one pane for the song,
+not a `MOD` page copied into Mono, Poly, Buffer, and every effect.
 
-Every common device frame shows `MOD n`, the number of routes that terminate
-there, and may show source pills where more legible. Activating it opens the
-same shelf focused on a destination-first route inspector. This is the UI
-entry point where signal order is visible without falsely making sources
-device-owned.
+A common device frame shows the routes that terminate there, and may show
+source pills where more legible. Activating that summary reveals the
+Modulation pane focused on a destination-first route inspector. This is the
+UI entry point where signal order is visible without falsely making sources
+device-owned. **Not built yet:** the faces draw route-count dots under each
+modulated parameter, but clicking one raises nothing, so it cannot select
+its module or reveal the pane (open:
+`docs/plans/archive/song-modulation/00-status.md`).
 
 Source tiles are iconified summaries. Selecting one expands its source-owned
-control surface without arming the rest of the rack. The expanded surface has
-a separate **Assign** switch and any declared source inputs. For an LFO the
-first input is reset/trigger: `Free` and channel `Note On` are current; a later
-compatible-signal picker may add named generator, effect, Buffer, and
-cross-channel outlets such as `Kick / Gate`. The picker binds a declared
-control signal to a declared source inlet. It does not create a device-local
+control surface without arming the rest of the pane. The expanded surface has
+a separate **Assign** switch and the module's one input picker
+(`InputSource`): none, then every channel's notes for the four kinds that
+hear notes, or every other module in the song for Math. An LFO's
+`Free | Note On` reset reads that input. A later picker may add named
+generator, effect and Buffer outlets such as `Kick / Gate`. The picker binds
+a declared control signal to a declared source inlet. It does not create a device-local
 modulator or infer control data from telemetry.
 
 Rate and fade-in place a clickable sync LED directly beside the knob. A dark
@@ -593,19 +636,19 @@ into the shared `4/1` through `1/64T` musical-division range. This compact
 adding a second selector row for each one.
 
 Today `Kick notes → Envelope / Gate → Sampler / Position` is readable and
-playable in the ordinary rack. Generators publish typed outlets through the
-control table, and a route on the same channel can take one as its source,
-but a source inlet cannot: the LFO's reset is the owning channel's note-ons,
-and the envelope's gate is a channel-note adapter. `Kick / Gate → LFO / Reset
-→ Sampler / Position` uses the same inlet and route concepts once an inlet
-can bind a declared generator outlet, including another channel's.
+playable, with the kick and the sampler on different channels if need be.
+Generators publish typed outlets through the control table, and a route can
+take one as its source, but a module's input cannot: it is a channel's notes
+or another module. `Kick / Gate → LFO / Reset → Sampler / Position` uses the
+same input and route concepts once an input can bind a declared generator
+outlet.
 
 ### Direct assignment
 
-1. Open the MOD shelf and select a source tile to edit it.
-2. Activate **Assign** for that source. Legal controls on the channel's source
-   device and its inserts acquire a subtle assignable state; illegal controls
-   do not.
+1. Open the Modulation pane and select a module or outlet to edit it.
+2. Activate **Assign** for that source. Legal controls on any channel's
+   source device and inserts, and on any track's inserts, acquire a subtle
+   assignable state; illegal controls do not.
 3. Drag a normal control to create or adjust the armed source's route depth.
    Preserve the ordinary control's base value.
 4. Keep the base readout; add a marker and modulation arc/range overlay for
@@ -615,13 +658,15 @@ can bind a declared generator outlet, including another channel's.
 6. Turning **Assign** off restores ordinary base-value editing while keeping
    the source selected for editing.
 
-**Modulation targets devices, not the channel strip.** The strip's volume and
-pan remain ordinary destinations in the engine and keep their descriptors, so
-existing routes resolve and nothing needs migrating -- but no strip control
-offers the assign gesture, and none is planned for now. "A modulator moves a
-device parameter" is a rule the user can hold without exceptions, and the
-mixer draws a strip per channel while routes belong to one channel, so an
-assignable fader would have to explain which channel it meant.
+**A strip is a destination; its gesture is not built yet.** A channel's and
+a track's volume and pan, the master's included, take routes: the session
+accepts them (`Session::modulation_destination`) and the engine moves them.
+Since a route names the channel or track it reaches, an assignable fader no
+longer has to explain which channel it meant. But no fader or pan control
+raises the assign gesture yet (the `strip-modulation-*` callbacks in
+`main.slint` are declared and nothing raises them), so a route onto a strip
+cannot be made by dragging one (open:
+`docs/plans/archive/song-modulation/00-status.md`).
 
 The indicator carries four states, and each has to be legible at a glance
 without a legend:
@@ -668,32 +713,34 @@ intentional rather than inconsistent.
 
 ## Scope boundaries and delivery order
 
-This work includes the channel-owned model, destination metadata,
-base-plus-offset resolution, current LFO continuity, the shelf/common-frame
+This work includes the song-owned model, destination metadata,
+base-plus-offset resolution, current LFO continuity, the pane/common-frame
 interaction, and the direct-assignment inspector.
 
-It excludes a general visual-programming environment; copying the same
-general-purpose channel LFO into every device; general cross-channel/global
-routing beyond the explicit channel-note gate adapter; true audio sidechain,
+It excludes a general visual-programming environment (the Song Patch
+proposal, `docs/plans/song-patch/README.md`, is where that would start);
+copying the same general-purpose LFO into every device; true audio sidechain,
 cross-device audio-rate FM, and control feedback cycles; and treating display
 telemetry as control data. A device-specific LFO or per-voice modulation
 system may remain local when it is an authored part of the instrument, works
-without the channel rack, persists with the device, and publishes any
+without the song's modules, persists with the device, and publishes any
 cross-device signal through the ordinary outlet contract. Transitional synth
-LFOs that are merely generic channel modulators should still migrate instead
+LFOs that are merely generic modulators should still migrate instead
 of growing a parallel system.
 
-The channel-owned model, direct assignment, durable references, the
-step/random/math modules and generator outlets are built; macro and
-note-derived sources are not (`docs/plans/archive/modulator-modules/00-status.md`).
+The song-owned model, direct assignment, durable references, the
+step/random/math modules, generator outlets and the Modulation pane are built
+(`docs/plans/archive/song-modulation/` records the move from per-channel
+racks); macro and note-derived sources are not (`docs/plans/archive/modulator-modules/00-status.md`).
 Next, declared effect and Buffer outlets through the one-block control table.
 After typed auxiliary graph edges and compensation exist, evaluate true
 sidechain and external routing. A graph UI, if useful, comes last.
 
 ## Acceptance criteria
 
-- A source on one channel can target legal generator, multiple insert, and
-  strip parameters on that channel without appearing as a device-owned LFO.
+- A source can target legal generator, insert, and strip parameters on any
+  channel, and insert and strip parameters on any track, the master's
+  included, without appearing as a device-owned LFO.
 - Resolved values follow descriptor mapping, automation base, and summed route
   offsets at 32-frame resolution. Devices receive them as per-tick curves
   through `AudioNode::apply_curves`, whose default hands a device with no
