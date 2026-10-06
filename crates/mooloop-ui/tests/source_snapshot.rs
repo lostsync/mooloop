@@ -238,15 +238,15 @@ fn render_sampler_source_editor() {
     assert!(snapshot.as_bytes().iter().any(|byte| *byte != 0));
     write_snapshot(&snapshot, "MOOLOOP_SAMPLER_SOURCE_SNAPSHOT");
 
-    // The shelf is channel-owned rather than a page inside the sampler. Its
-    // armed cutoff markers and destination-first route row are visible
-    // together, so a screenshot catches a lost model binding or a collapsed
-    // layout before it reaches the application. Use the normal desktop size
-    // for this expanded rack surface; the 960x760 shot above still covers the
-    // compact-window composition and this one exposes the complete shelf.
+    // The modulation pane is the song's, a view of its own rather than a
+    // page inside the sampler. Shown in the bottom slot beside nothing else,
+    // its route rows and the armed cutoff markers on the face above it are
+    // visible together, so a screenshot catches a lost model binding or a
+    // collapsed layout before it reaches the application.
     ui.window().set_size(LogicalSize::new(1440.0, 900.0));
     ui.set_sampler_device_page(2);
-    ui.set_modulation_shelf_open(true);
+    ui.invoke_move_view(view::MODULATION, 1);
+    ui.invoke_show_view(view::MODULATION);
     ui.set_modulation_selected_slot(1);
     ui.set_modulation_armed_slot(1);
     ui.set_modulation_armed_name(SharedString::from("ENV 2"));
@@ -331,17 +331,14 @@ fn render_sampler_source_editor() {
     ui.set_modulation_routes(ModelRc::from(Rc::new(VecModel::from(vec![
         ModulationRouteRow {
             route_index: 0,
-            source_slot: 1,
-            owner: -1,
             param: 12,
-            destination: SharedString::from("ENV 2 → Kick · Cutoff"),
+            destination: SharedString::from("Kick · Cutoff"),
             depth: 0.35,
             polarity: 1,
             allowed: true,
             missing: false,
         },
     ]))));
-    ui.set_modulation_max_sources(8);
     ui.set_modulation_selected_kind(1);
     ui.set_modulation_input_options(
         vec![
@@ -390,7 +387,6 @@ fn render_sampler_source_editor() {
     // The shot is what catches the two failure modes markup review cannot: a
     // pane that appears when the model is empty, and a module grid that lost a
     // row of tiles to make space for one that is not.
-    ui.set_modulation_outlet_device(SharedString::from("ML-P8 1"));
     ui.set_modulation_outlets(ModelRc::from(Rc::new(VecModel::from(
         [
             ("LFO", true, -0.62_f32),
@@ -408,6 +404,7 @@ fn render_sampler_source_editor() {
             // control address space the session arms from.
             slot: 8 + outlet as i32,
             name: SharedString::from(name),
+            heading: false,
             bipolar,
             output,
             selected: name == "Trigger",
@@ -432,7 +429,6 @@ fn render_sampler_source_editor() {
     ui.set_modulation_outlets(ModelRc::from(Rc::new(VecModel::from(
         Vec::<ModulationOutletRow>::new(),
     ))));
-    ui.set_modulation_outlet_device(SharedString::new());
     ui.set_modulation_selected_outlet_name(SharedString::new());
     ui.set_modulation_selected_outlet_signal(SharedString::new());
     ui.set_modulation_selected_slot(1);
@@ -1006,24 +1002,22 @@ fn render_sampler_committed_stretch() {
     write_snapshot(&snapshot, "MOOLOOP_SAMPLER_COMMITTED_SNAPSHOT");
 }
 
-/// Capacity is a constant, not a layout decision. The same shelf, told it
-/// has sixteen slots instead of eight, must still show every module cell and
-/// still pick an input by name — with no edit anywhere in the UI. This is the
-/// test that fails if a literal row count or a per-slot segment creeps back
-/// in (`docs/plans/archive/modulator-capacity/01-capacity-is-a-constant.md`).
+/// A song has no limit on how many modules it holds, so the grid must show
+/// every one of them: sixteen modules wrap across the pane's width rather
+/// than into a fixed four-column block, and the input picker still names
+/// another module.
 #[test]
-fn the_module_grid_scales_with_capacity_alone() {
+fn the_module_grid_lists_every_module() {
     common::install_testing_backend();
 
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(1440.0, 900.0));
     ui.set_channels(rack_rows());
-    ui.invoke_show_view(view::DEVICES);
-    ui.set_modulation_shelf_open(true);
+    ui.invoke_show_view(view::MODULATION);
     ui.set_modulation_selected_slot(3);
     ui.set_modulation_selected_kind(4);
+    ui.set_modulation_selected_name(SharedString::from("Math 4"));
     ui.set_modulation_selected_values(vec![0.0f32, 2.0, 1.75, -1.0, 1.0].as_slice().into());
-    // Sixteen modules, so the grid needs four rows where two fit.
     let sources: Vec<ModulationSourceRow> = (0..16)
         .map(|slot| ModulationSourceRow {
             slot,
@@ -1041,23 +1035,12 @@ fn the_module_grid_scales_with_capacity_alone() {
         })
         .collect();
     ui.set_modulation_sources(ModelRc::from(Rc::new(VecModel::from(sources))));
-
-    for capacity in [8usize, 16] {
-        ui.set_modulation_max_sources(capacity as i32);
-        ui.set_modulation_input_options(module_names());
-        ui.set_modulation_selected_input(3);
-        let shot = ui.window().take_snapshot().unwrap();
-        assert_eq!((shot.width(), shot.height()), (1440, 900));
-        assert!(shot.as_bytes().iter().any(|byte| *byte != 0));
-        write_snapshot(
-            &shot,
-            if capacity == 8 {
-                "MOOLOOP_CAPACITY_EIGHT_SNAPSHOT"
-            } else {
-                "MOOLOOP_CAPACITY_SIXTEEN_SNAPSHOT"
-            },
-        );
-    }
+    ui.set_modulation_input_options(module_names());
+    ui.set_modulation_selected_input(3);
+    let shot = ui.window().take_snapshot().unwrap();
+    assert_eq!((shot.width(), shot.height()), (1440, 900));
+    assert!(shot.as_bytes().iter().any(|byte| *byte != 0));
+    write_snapshot(&shot, "MOOLOOP_MODULE_GRID_SNAPSHOT");
 }
 
 /// The ML-P8's own modulation page: the LFO, and the route list it and the

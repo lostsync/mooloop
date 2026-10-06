@@ -369,6 +369,7 @@ pub(crate) static ACTIONS: &[ActionSpec] = &[
     action!("view.pane-source", "Show Devices", "View", ctrl + "3"),
     action!("view.pane-notes", "Show Notes", "View", ctrl + "4"),
     action!("view.pane-playlist", "Show Playlist", "View", ctrl + "5"),
+    action!("view.pane-modulation", "Show Modulation", "View", ctrl + "6"),
     action!("view.split-toggle", "Split Top Pane", "View", ctrl + "\\"),
     // The left sidebar (MOO-8), which only the status-bar chip could show
     // before. Ctrl+[ because it opens on the left; `]` is free for the

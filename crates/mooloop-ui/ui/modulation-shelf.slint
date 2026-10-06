@@ -1,10 +1,11 @@
 import { ComboBox, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
+import { NameField } from "toolbar.slint";
 import { Divisions, LedIndicator, MiniKnob, SelectorBank, SyncMiniKnob, ToggleButton, ToolButton, ValueScale } from "controls.slint";
 
-// The channel-owned source collection. `slot` is today's bounded runtime
-// locator; the UI deliberately presents only occupied entries, never four
-// permanent empty bays (docs/MODULATION.md).
+// One module in the song. `slot` is its index in the session's list of
+// sources (modules first, then every channel's outlets and keyboard), which
+// is what every callback from the pane carries back.
 export struct ModulationSourceRow {
     slot: int,
     name: string,
@@ -43,6 +44,10 @@ export struct ModulationSourceRow {
 export struct ModulationOutletRow {
     slot: int,
     name: string,
+    // A heading row: `name` is the channel whose outlets follow, and the row
+    // is a label rather than a chip. The band lists every channel's outlets,
+    // grouped, so the grouping travels as rows rather than as nesting.
+    heading: bool,
     // Whether the signal swings both ways, which is what decides whether the
     // chip's live fill grows from the centre or from the left.
     bipolar: bool,
@@ -51,17 +56,13 @@ export struct ModulationOutletRow {
     selected: bool,
 }
 
-// A route remains explicit even when it is currently parked at zero depth or
-// aimed at a destination that later becomes unavailable. The owner token is
-// an adapter for Slint: -1 means the source device, -2 the channel strip, a
-// non-negative value is a *position* in the rack this shelf is drawing, and
-// the minimum int means the destination is not on this chain at all. That
-// last case exists because a route names a device by durable id and the token
-// is a model index, so a destination on another chain has no row here.
+// One of the selected source's routes. `route-index` is the route's place
+// in the song's list, which the polarity and remove callbacks carry back;
+// `destination` names the chain, the device and the parameter, since the
+// route may land on any channel or track. A route stays listed when it is
+// parked at zero depth or aimed at a destination that has gone.
 export struct ModulationRouteRow {
     route-index: int,
-    source-slot: int,
-    owner: int,
     param: int,
     destination: string,
     depth: float,
@@ -74,20 +75,8 @@ export struct ModulationRouteRow {
     missing: bool,
 }
 
-// The rack reserves room for the shelf, so both files must agree on its
-// height. The expanded surface is one compact 104px module row beneath the
-// header; it does not steal height from the fixed device faces above it.
-export global ModulationShelfMetrics {
-    out property <length> closed-height: 30px;
-    // The grid is two rows of modules beside the selected module's full
-    // surface. The rack derives its own height from this, so the shelf pays
-    // for its own space rather than the layout guessing at it.
-    out property <length> open-height: 240px;
-}
-
-// Grid geometry in one place. Capacity is an engine protocol boundary, so
-// the grid wraps at a fixed column count and grows downward rather than the
-// layout being retuned every time a slot is added.
+// Grid geometry in one place. The pane wraps the grid at whatever its width
+// holds; `columns` is only a tile's default when nothing says otherwise.
 global ModuleGrid {
     out property <int> columns: 4;
     out property <length> tile-width: 58px;
@@ -431,6 +420,8 @@ component ModuleTile inherits Rectangle {
     // it is the caller's business.
     in property <int> position;
     in property <int> count;
+    // How many tiles a row holds, which the pane decides from its width.
+    in property <int> columns: ModuleGrid.columns;
     callback clicked();
     callback reorder-requested(int);
 
@@ -496,7 +487,7 @@ component ModuleTile inherits Rectangle {
             if (event.kind == PointerEventKind.up) {
                 let across = round((tap.mouse-x - tap.pressed-x) / (ModuleGrid.tile-width + ModuleGrid.gap));
                 let down = round((tap.mouse-y - tap.pressed-y) / (ModuleGrid.tile-height + ModuleGrid.gap));
-                let target = clamp(root.position + across + down * ModuleGrid.columns, 0, root.count - 1);
+                let target = clamp(root.position + across + down * root.columns, 0, root.count - 1);
                 if (target == root.position) {
                     root.clicked();
                 } else {
@@ -654,7 +645,8 @@ component LedToggle inherits Rectangle {
 // view of a control graph; it does not introduce patch cords or a second route
 // language.
 export component ModulationShelf inherits Rectangle {
-    in property <bool> open;
+    // The selected module's name, which its header edits.
+    in property <string> selected-name;
     in property <[ModulationSourceRow]> sources;
     in property <[ModulationRouteRow]> routes;
     in property <int> selected-slot: -1;
@@ -676,9 +668,6 @@ export component ModulationShelf inherits Rectangle {
     in property <float> selected-envelope-preview-attack;
     in property <float> selected-envelope-preview-decay;
     in property <float> selected-envelope-preview-release;
-    // Capacity is an engine protocol boundary, not a UI layout constant
-    // (docs/MODULATION.md), so Rust reports it.
-    in property <int> max-sources: 0;
     // Whether the assignment gesture is armed with any source in the song,
     // which a module seated on another channel is without a slot here.
     in property <bool> assigning;
@@ -687,7 +676,6 @@ export component ModulationShelf inherits Rectangle {
     // nothing, and the band is then absent rather than empty: an outlet is
     // designed, not discovered, so there is nothing to show a placeholder for.
     in property <[ModulationOutletRow]> outlets;
-    in property <string> outlet-device;
     // What the armed source is called. A module's badge and slot number, or an
     // outlet's name -- resolved in Rust because only one of the two is a
     // position, and the header should not have to know which it is holding.
@@ -697,7 +685,6 @@ export component ModulationShelf inherits Rectangle {
     // module header, the jack strip, and the empty state below.
     in property <string> selected-outlet-name;
     in property <string> selected-outlet-signal;
-    callback toggled();
     callback source-selected(int);
     // (rack slot, target position in the grid). The rack compacts as it
     // reorders, so the destination is a grid position rather than a slot.
@@ -713,13 +700,13 @@ export component ModulationShelf inherits Rectangle {
     callback param-edit-started();
     callback param-edit-finished();
     callback source-removed(int);
+    // (source, new name). An empty name is refused by the session.
+    callback source-renamed(int, string);
     // A module's input is a jack bound to a dynamic list, not a descriptor
     // id: (slot, index into `input-options`).
     callback input-changed(int, int);
     callback route-polarity-changed(int, int);
     callback route-removed(int);
-
-    private property <bool> add-source-menu-open: false;
 
     pure function kind-name(kind: int) -> string {
         return kind == 0 ? "LFO" : kind == 1 ? "ENVELOPE" : kind == 2 ? "STEP"
@@ -745,43 +732,42 @@ export component ModulationShelf inherits Rectangle {
             : kind == 1 ? "Add a gate-driven ADSR envelope"
             : kind == 2 ? "Add a clocked step pattern"
             : kind == 3 ? "Add a sample-and-hold random source"
-            : "Add a math module that reads another slot";
+            : "Add a math module that reads another module";
     }
 
-    height: root.open ? ModulationShelfMetrics.open-height : ModulationShelfMetrics.closed-height;
     border-width: Theme.hairline;
     border-color: root.assigning ? Theme.accent : Theme.border;
     border-radius: Theme.radius-md;
     background: Theme.surface;
     clip: true;
 
+    // How many tiles fit across the grid, which is as wide as the pane
+    // lets it be. At least one, so a narrow pane still lists every module.
+    private property <int> grid-columns: max(1, floor((grid-view.visible-width + ModuleGrid.gap) / (ModuleGrid.tile-width + ModuleGrid.gap)));
+    private property <length> grid-height: max(grid-view.visible-height,
+        ceil(root.sources.length / root.grid-columns) * (ModuleGrid.tile-height + ModuleGrid.gap));
+
     VerticalLayout {
         spacing: 0px;
 
         header := Rectangle {
-            height: 29px;
-            background: header-touch.has-hover ? Theme.surface-raised : Theme.panel;
+            height: 24px;
+            background: Theme.panel;
             HorizontalLayout {
                 padding-left: 7px;
                 padding-right: 7px;
                 spacing: 7px;
                 Text {
-                    width: 68px;
-                    text: "MODULATION";
-                    color: root.open || root.assigning ? Theme.accent : Theme.text-muted;
-                    font-size: Theme.text-md;
-                    vertical-alignment: center;
-                }
-                Text {
-                    text: root.sources.length + " source" + (root.sources.length == 1 ? "" : "s")
-                        + "  ·  " + root.routes.length + " route" + (root.routes.length == 1 ? "" : "s");
+                    text: root.sources.length + " module" + (root.sources.length == 1 ? "" : "s")
+                        + "  ·  " + root.routes.length + " route" + (root.routes.length == 1 ? "" : "s")
+                        + (root.routes.length > 0 ? " from the selected source" : "");
                     color: Theme.text-faint;
                     font-size: Theme.text-md;
                     vertical-alignment: center;
                 }
                 Rectangle { horizontal-stretch: 1; }
                 if root.assigning : Rectangle {
-                    width: 108px;
+                    width: 140px;
                     height: 18px;
                     border-radius: Theme.radius-sm;
                     background: Theme.accent-active;
@@ -791,33 +777,33 @@ export component ModulationShelf inherits Rectangle {
                         font-size: Theme.text-sm;
                         horizontal-alignment: center;
                         vertical-alignment: center;
+                        overflow: elide;
                     }
                 }
-                Text {
-                    text: root.open ? "⌃" : "⌄";
-                    color: Theme.text-muted;
-                    font-size: Theme.text-2xl;
-                    vertical-alignment: center;
-                }
-            }
-            header-touch := TouchArea {
-                mouse-cursor: pointer;
-                clicked => { root.toggled(); }
             }
         }
 
-        if root.open : Rectangle {
+        Rectangle {
             vertical-stretch: 1;
-            HorizontalLayout {
+            VerticalLayout {
                 padding: 6px;
                 spacing: 6px;
 
-                // The grid. Every module is one tile with its own face and a
-                // live output meter; the rack underneath is unchanged, which
-                // is what keeps this a presentation rather than an engine
-                // step (docs/plans/archive/modulator-modules/03-the-grid.md).
+                // The work area: every module in the song, the outlets every
+                // channel publishes, and what can be added. The song patch
+                // canvas is meant to replace the grid here later, so the add
+                // list and the surface below do not depend on it.
+                HorizontalLayout {
+                    vertical-stretch: 1;
+                    spacing: 6px;
+
+                // The grid. Every module in the song is one tile with its own
+                // face and a live output meter. It wraps at whatever the
+                // pane's width holds and scrolls downward; there is no limit
+                // on how many modules a song has.
                 Rectangle {
-                    width: ModuleGrid.row-width + 10px;
+                    horizontal-stretch: 1;
+                    min-width: ModuleGrid.tile-width + 12px;
                     border-width: Theme.hairline;
                     border-color: Theme.border;
                     background: Theme.panel;
@@ -828,26 +814,18 @@ export component ModulationShelf inherits Rectangle {
                             height: 10px;
                             Text { text: "MODULES"; color: Theme.text-faint; font-size: Theme.text-sm; vertical-alignment: center; }
                             Rectangle { horizontal-stretch: 1; }
-                            Text { text: root.sources.length + "/" + root.max-sources; color: Theme.text-faint; font-size: Theme.text-sm; vertical-alignment: center; }
+                            Text { text: root.sources.length + ""; color: Theme.text-faint; font-size: Theme.text-sm; vertical-alignment: center; }
                         }
-                        // A grid taller than the shelf scrolls inside it.
-                        // Capacity therefore never argues with the rack's
-                        // height, which is what makes it a constant edit.
-                        ScrollView {
+                        grid-view := ScrollView {
                             vertical-stretch: 1;
-                            width: ModuleGrid.row-width + 2px;
-                            content-width: ModuleGrid.row-width;
-                            // Whichever is taller: the capacity the grid can
-                            // hold, or what it is actually being shown. A
-                            // viewport sized from capacity alone would put
-                            // over-capacity content out of reach.
-                            content-height: ModuleGrid.height-for(max(root.max-sources, root.sources.length));
+                            content-width: self.visible-width;
+                            content-height: root.grid-height;
                             Rectangle {
-                            width: ModuleGrid.row-width;
-                            height: ModuleGrid.height-for(max(root.max-sources, root.sources.length));
+                            width: grid-view.visible-width;
+                            height: root.grid-height;
                             for source[index] in root.sources : ModuleTile {
-                                x: mod(index, ModuleGrid.columns) * (ModuleGrid.tile-width + ModuleGrid.gap);
-                                y: floor(index / ModuleGrid.columns) * (ModuleGrid.tile-height + ModuleGrid.gap);
+                                x: mod(index, root.grid-columns) * (ModuleGrid.tile-width + ModuleGrid.gap);
+                                y: floor(index / root.grid-columns) * (ModuleGrid.tile-height + ModuleGrid.gap);
                                 name: source.name;
                                 kind: source.kind;
                                 waveform: source.waveform;
@@ -868,87 +846,31 @@ export component ModulationShelf inherits Rectangle {
                                 armed: root.armed-slot == source.slot;
                                 position: index;
                                 count: root.sources.length;
-                                clicked => {
-                                    root.add-source-menu-open = false;
-                                    root.source-selected(source.slot);
-                                }
-                                reorder-requested(target) => {
-                                    root.add-source-menu-open = false;
-                                    root.source-moved(source.slot, target);
-                                }
+                                columns: root.grid-columns;
+                                clicked => { root.source-selected(source.slot); }
+                                reorder-requested(target) => { root.source-moved(source.slot, target); }
                             }
-                            // The add affordance takes the next free cell, so
-                            // the grid reads as filling rather than as a wall
-                            // of permanent empty bays.
-                            if root.sources.length < root.max-sources && !root.add-source-menu-open : ToolButton {
-                                x: mod(root.sources.length, ModuleGrid.columns) * (ModuleGrid.tile-width + ModuleGrid.gap);
-                                y: floor(root.sources.length / ModuleGrid.columns) * (ModuleGrid.tile-height + ModuleGrid.gap);
-                                width: ModuleGrid.tile-width;
+                            if root.sources.length == 0 : Text {
+                                width: grid-view.visible-width;
                                 height: ModuleGrid.tile-height;
-                                text: "+";
-                                tooltip: "Add"; hint: "Add a control module";
-                                clicked => { root.add-source-menu-open = true; }
-                            }
-                            if root.add-source-menu-open : Rectangle {
-                                x: 0px;
-                                y: 0px;
-                                width: ModuleGrid.row-width;
-                                height: ModuleGrid.column-height;
-                                z: 20;
-                                background: Theme.surface;
-                                border-width: Theme.hairline;
-                                border-color: Theme.accent;
-                                border-radius: Theme.radius-sm;
-                                VerticalLayout {
-                                    padding: 4px;
-                                    spacing: 3px;
-                                    HorizontalLayout {
-                                        height: 10px;
-                                        Text { text: "ADD MODULE"; color: Theme.text-faint; font-size: Theme.text-sm; vertical-alignment: center; }
-                                        Rectangle { horizontal-stretch: 1; }
-                                        ToolButton {
-                                            text: "×";
-                                            tooltip: "Cancel";
-                                            min-width: 18px; max-width: 18px; min-height: 10px; max-height: 10px;
-                                            text-color: Theme.text-muted;
-                                            clicked => { root.add-source-menu-open = false; }
-                                        }
-                                    }
-                                    for row in [{ left: 0, right: 1 }, { left: 2, right: 3 }, { left: 4, right: -1 }] : HorizontalLayout {
-                                        spacing: 4px;
-                                        ToolButton {
-                                            text: root.kind-badge(row.left);
-                                            tooltip: root.kind-tooltip(row.left);
-                                            clicked => {
-                                                root.add-source-menu-open = false;
-                                                root.source-added(row.left);
-                                            }
-                                        }
-                                        if row.right >= 0 : ToolButton {
-                                            text: root.kind-badge(row.right);
-                                            tooltip: root.kind-tooltip(row.right);
-                                            clicked => {
-                                                root.add-source-menu-open = false;
-                                                root.source-added(row.right);
-                                            }
-                                        }
-                                        if row.right < 0 : Rectangle { }
-                                    }
-                                }
+                                text: "No modules yet. Add one from the list on the right.";
+                                color: Theme.text-muted;
+                                font-size: Theme.text-md;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                wrap: word-wrap;
                             }
                             }
                         }
                     }
                 }
 
-                // The generator's published control outlets: a pane of its
-                // own, beside the rack rather than inside it, because these
-                // are not the rack's. Nothing here can be added, removed or
-                // reordered, and they belong to whichever device the channel
-                // currently holds. A generator that publishes nothing has no
-                // pane at all rather than an empty one -- an outlet is
-                // designed, not discovered, so there is nothing to hold a
-                // place for.
+                // The control outlets every channel's generator publishes,
+                // grouped under the channel's name. Nothing here can be added,
+                // removed or reordered: they belong to whichever device each
+                // channel holds. No channel publishing any means no band at
+                // all rather than an empty one -- an outlet is designed, not
+                // discovered, so there is nothing to hold a place for.
                 if root.outlets.length > 0 : Rectangle {
                     width: OutletBand.chip-width + 10px;
                     border-width: Theme.hairline;
@@ -960,8 +882,6 @@ export component ModulationShelf inherits Rectangle {
                         HorizontalLayout {
                             height: 10px;
                             Text { text: "OUTLETS"; color: Theme.text-faint; font-size: Theme.text-sm; vertical-alignment: center; }
-                            Rectangle { horizontal-stretch: 1; }
-                            Text { text: root.outlet-device; color: Theme.text-faint; font-size: Theme.text-sm; vertical-alignment: center; }
                         }
                         ScrollView {
                             vertical-stretch: 1;
@@ -971,22 +891,60 @@ export component ModulationShelf inherits Rectangle {
                             Rectangle {
                                 width: OutletBand.chip-width;
                                 height: OutletBand.height-for(root.outlets.length);
-                                for outlet[index] in root.outlets : OutletChip {
+                                for outlet[index] in root.outlets : Rectangle {
                                     y: index * (OutletBand.chip-height + OutletBand.gap);
-                                    name: outlet.name;
-                                    bipolar: outlet.bipolar;
-                                    output: outlet.output;
-                                    selected: outlet.selected;
-                                    armed: root.armed-slot == outlet.slot;
-                                    clicked => {
-                                        root.add-source-menu-open = false;
-                                        root.source-selected(outlet.slot);
+                                    width: OutletBand.chip-width;
+                                    height: OutletBand.chip-height;
+                                    if outlet.heading : Text {
+                                        width: parent.width;
+                                        height: parent.height;
+                                        text: outlet.name;
+                                        color: Theme.text-faint;
+                                        font-size: Theme.text-sm;
+                                        vertical-alignment: bottom;
+                                        overflow: elide;
+                                    }
+                                    if !outlet.heading : OutletChip {
+                                        name: outlet.name;
+                                        bipolar: outlet.bipolar;
+                                        output: outlet.output;
+                                        selected: outlet.selected;
+                                        armed: root.armed-slot == outlet.slot;
+                                        clicked => { root.source-selected(outlet.slot); }
                                     }
                                 }
                             }
                         }
                     }
                 }
+
+                // What can be added, as a narrow list on the right: one entry
+                // per kind, always there, so adding never covers the grid.
+                Rectangle {
+                    width: 72px;
+                    border-width: Theme.hairline;
+                    border-color: Theme.border;
+                    background: Theme.panel;
+                    VerticalLayout {
+                        padding: 4px;
+                        spacing: 3px;
+                        alignment: start;
+                        Text { height: 10px; text: "ADD"; color: Theme.text-faint; font-size: Theme.text-sm; vertical-alignment: center; }
+                        for kind in [0, 1, 2, 3, 4] : ToolButton {
+                            min-height: 18px; max-height: 18px;
+                            text: root.kind-badge(kind);
+                            tooltip: root.kind-tooltip(kind);
+                            clicked => { root.source-added(kind); }
+                        }
+                    }
+                }
+                }
+
+                // Below the work area: the selected source's surface and the
+                // routes it drives, wherever in the song they land.
+                HorizontalLayout {
+                    height: 112px;
+                    spacing: 6px;
 
                 // The selected module, expanded: one header and one jack
                 // strip for every kind, then that kind's own knob surface,
@@ -1003,16 +961,20 @@ export component ModulationShelf inherits Rectangle {
                             padding: 4px;
                             spacing: 3px;
                             if root.selected-slot >= 0 && root.selected-outlet-name == "" : HorizontalLayout {
-                                height: 15px;
+                                height: 20px;
                                 spacing: 5px;
-                                Text {
-                                    text: root.kind-name(root.selected-kind) + " " + (root.selected-slot + 1);
-                                    color: Theme.text;
-                                    font-size: Theme.text-lg;
-                                    vertical-alignment: center;
+                                // A song has many LFOs, so a module's name is
+                                // its own and is edited here.
+                                NameField {
+                                    width: 120px;
+                                    height: 20px;
+                                    text: root.selected-name;
+                                    placeholder: root.kind-name(root.selected-kind);
+                                    tooltip: "Rename this module";
+                                    edited(value) => { root.source-renamed(root.selected-slot, value); }
                                 }
                                 Text {
-                                    text: root.kind-signal(root.selected-kind) + "  ·  32 FRAME";
+                                    text: root.kind-name(root.selected-kind) + "  ·  " + root.kind-signal(root.selected-kind);
                                     color: Theme.text-faint;
                                     font-size: Theme.text-xs;
                                     vertical-alignment: center;
@@ -1142,7 +1104,7 @@ export component ModulationShelf inherits Rectangle {
                             }
                             if root.selected-outlet-name != "" : Text {
                                 vertical-stretch: 1;
-                                text: root.outlet-device + " publishes this. It has no controls of its "
+                                text: "Its channel's device publishes this. It has no controls of its "
                                     + "own: arm it, then drag a knob to route it.";
                                 color: Theme.text-muted;
                                 font-size: Theme.text-lg;
@@ -1668,11 +1630,11 @@ export component ModulationShelf inherits Rectangle {
                 }
                         }
                     }
-            // Destination-first route inspector. More routes scroll in
-            // this same module; a matrix is not required for ordinary use.
+                    }
+            // The selected source's routes, wherever in the song they land:
+            // a module that drives three channels is listed in one place.
             Rectangle {
-                horizontal-stretch: 1;
-                min-width: 170px;
+                width: 320px;
                 border-width: Theme.hairline;
                 border-color: Theme.border;
                 background: Theme.panel;

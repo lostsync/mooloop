@@ -547,3 +547,18 @@ chain the rack shows. With MIDI learn armed, a press should still learn the
 knob rather than route it. Then pick another channel in an Envelope's input
 and play that channel: the Envelope should open on its notes. Point a Math
 module's input at a module seated on another channel and check it follows.
+
+### 40. The modulation pane (MOO-513): look, in the app
+
+Press Ctrl+6. The Modulation pane should appear in the bottom pane. Drag
+its tab to the top-left and to the split, and try it zoomed: in each, the
+module grid should wrap to the width, the Add list should stay on the
+right, and the selected module's knobs and its route list should stay
+readable along the bottom. Add an LFO on one channel, select another
+channel: the LFO should still be selected. Rename it, route it to knobs on
+two channels and the master, and check the route list names each one with
+its channel or track. Remove a route there and its dot should leave the
+knob. Open a 0.1.6 song with a saved layout: it should open as it was, with
+Modulation in the bottom pane. The device rack should have no shelf under
+it.
+

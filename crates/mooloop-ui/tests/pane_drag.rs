@@ -10,7 +10,9 @@
 //! strips are inset the same, the first tab spans x 7..72, and the rows are
 //! the top pane's toolbar and the dock's. MOO-284 took the window's 8px
 //! padding away: the top row moved up 8px, the dock (anchored to the bottom
-//! edge) down 8px, and the tabs left 8px. These move if a pane toolbar's
+//! edge) down 8px, and the tabs left 8px. Song modulation step 04 took the
+//! 30px modulation shelf out of the device rack, so the dock is that much
+//! shorter and its tabs 30px lower. These move if a pane toolbar's
 //! height or padding changes — `coordinates_still_land_on_the_tabs` is here so
 //! that shows up as one obvious failure rather than as three silent ones.
 
@@ -23,7 +25,7 @@ mod common;
 const TAB_PITCH: f32 = 66.0;
 const FIRST_TAB_CENTRE_X: f32 = 39.0;
 const TOP_TAB_Y: f32 = 65.0;
-const BOTTOM_TAB_Y: f32 = 342.0;
+const BOTTOM_TAB_Y: f32 = 372.0;
 /// Well inside the dock, below the divider.
 const IN_BOTTOM_PANE: (f32, f32) = (480.0, 430.0);
 /// Inside the right-hand band of an unsplit top pane, past 72% of its width,

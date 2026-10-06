@@ -25,7 +25,6 @@ use mooloop_core::{
     ParamDescriptor, ParamOwner, PatternMeta, PatternPlacement, PlaybackMode, PointId,
     PolySynthState, Project, ProjectChannel, SampleReference, SamplerState,
     trim_pattern_meta,
-    modulation::CONTROL_SOURCE_SLOTS,
     MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_BAR,
     TICKS_PER_STEP, DELAY_PARAM_TIME_MS, MODULATION_PARAM_RATE_HZ,
 };
@@ -91,7 +90,6 @@ pub struct Session {
     /// neighbour reorders the map underneath the handle, and the index it
     /// releases with is then a different slice's.
     pub slice_audition: Option<(ChannelId, u8)>,
-    pub modulation_shelf_open: bool,
     /// Source whose editor is open in the shelf, by identity: a module by
     /// its id, an outlet or the keyboard by its channel. Selection is
     /// intentionally separate from assignment: looking at an LFO must not
@@ -132,10 +130,6 @@ pub struct Session {
     /// The source the assignment gesture is armed with, named as
     /// [`Self::modulation_selected`] is.
     pub modulation_armed: Cell<Option<mooloop_core::ModSourceRef>>,
-    /// The selected channel's latest modulator outputs, refreshed from the
-    /// engine on the pump tick. Held here rather than recomputed per knob
-    /// so one read of the audio thread's cells feeds every destination.
-    pub modulation_outputs: Cell<[f32; CONTROL_SOURCE_SLOTS]>,
     /// Every source's latest output, read off the engine on the pump tick:
     /// what the knobs on any chain draw their live offsets from.
     pub modulation_levels: std::cell::RefCell<crate::modulation::ModulationLevels>,
@@ -265,9 +259,9 @@ pub struct Session {
     pub pattern_meta: Vec<PatternMeta>,
     pub playlist: Vec<PatternPlacement>,
     /// The song's modulation: every module and every route
-    /// (`docs/plans/song-modulation/`). Channels own none; the rack a channel
-    /// shows and the engine runs is built from this
-    /// ([`Self::channel_rack`]).
+    /// (`docs/plans/song-modulation/`). Channels own none; the engine runs
+    /// it as one set ([`Self::sync_modulation`]) and the modulation pane
+    /// lists it whole.
     pub modulation: mooloop_core::SongModulation,
     /// The section of the arrangement the transport repeats. Document state,
     /// not a session gesture: a loop is set around the part being worked on
@@ -371,12 +365,10 @@ impl Default for Session {
             automation_target: Cell::new(None),
             automation_selected_point: Cell::new(None),
             slice_audition: None,
-            modulation_shelf_open: false,
             modulation_selected: Cell::new(None),
             selected_device: None,
             selected_source: None,
             modulation_armed: Cell::new(None),
-            modulation_outputs: Cell::new([0.0; CONTROL_SOURCE_SLOTS]),
             modulation_levels: Default::default(),
             compensation_sent: crate::engine::CompensationSent::default(),
             console_sums_sent: [false; MAX_BUSES],
@@ -1268,9 +1260,9 @@ impl Session {
     /// track's inserts and strip, the master's included (song modulation
     /// step 03). `None` for an address the song cannot drive.
     ///
-    /// The name says which chain when it is not the selected channel's, so
-    /// a route list read on one channel tells the destinations it reaches
-    /// elsewhere apart.
+    /// The name always says which chain, "Bass Filter 1" or "Master Track
+    /// strip": the modulation pane lists a module's routes wherever they
+    /// land, whatever channel is selected (song modulation step 04).
     pub fn modulation_destination(
         &self,
         address: ParamAddr,
@@ -1278,8 +1270,7 @@ impl Session {
         let (chain, effects, strip, generator) = match address.scope {
             EffectTarget::Channel(channel) => {
                 let state = self.channels.get(channel as usize)?;
-                let chain = (channel as usize != self.selected).then(|| state.name.clone());
-                (chain, &state.effects[..], "Channel strip", Some(state))
+                (state.name.clone(), &state.effects[..], "Channel strip", Some(state))
             }
             EffectTarget::Bus(bus) => {
                 let setup = self.buses.get(bus as usize)?;
@@ -1288,7 +1279,7 @@ impl Session {
                 } else {
                     setup.bus.name.clone()
                 };
-                (Some(name), &setup.effects[..], "Track strip", None)
+                (name, &setup.effects[..], "Track strip", None)
             }
         };
         let (device, descriptor) = match address.owner {
@@ -1317,10 +1308,10 @@ impl Session {
             // policy is `modulation_policy`'s and their names the plugin's.
             ParamOwner::PluginParam { .. } => return None,
         };
-        let name = match (chain, address.owner) {
+        let name = match address.owner {
             // A channel's own generator is already named for the channel.
-            (Some(_), ParamOwner::Source { .. }) | (None, _) => device,
-            (Some(chain), _) => format!("{chain} {device}"),
+            ParamOwner::Source { .. } => device,
+            _ => format!("{chain} {device}"),
         };
         Some((name, descriptor))
     }

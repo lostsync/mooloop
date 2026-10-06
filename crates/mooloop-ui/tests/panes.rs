@@ -35,6 +35,7 @@ fn every_occupied_pane_shows_something(ui: &MainWindow) {
         ui.get_devices_slot(),
         ui.get_notes_slot(),
         ui.get_playlist_slot(),
+        ui.get_modulation_slot(),
     ];
     let active = [
         ui.get_main_active(),

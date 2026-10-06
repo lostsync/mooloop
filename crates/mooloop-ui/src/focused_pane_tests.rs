@@ -127,7 +127,7 @@ fn pressing_two_panes_moves_the_outline_and_the_chords_with_it() {
     assert_eq!(window.get_active_slot(), 2, "the outlined pane's slot is the one Zoom means");
 }
 
-/// Ctrl+1..5 reveal a view through `show-view`, and the outline goes with it.
+/// Ctrl+1..6 reveal a view through `show-view`, and the outline goes with it.
 #[test]
 fn revealing_a_view_moves_the_outline_to_it() {
     let window = window();
@@ -150,7 +150,7 @@ fn a_selection_outlines_the_pane_that_shows_it() {
     // Ctrl+B reveals the sidebar before it aims the keys (`browser_take_focus`).
     window.set_sidebar_visible(true);
     set_focused_surface(&window, actions::Surface::Browser);
-    assert_eq!(outlined(&window), 5, "the browser sidebar is pane 5");
+    assert_eq!(outlined(&window), 6, "the browser sidebar is pane 6");
     assert_eq!(focused_surface(&window), actions::Surface::Browser);
 }
 
@@ -263,7 +263,7 @@ fn every_focused_chord_lands_on_the_outlined_pane() {
     // chords mean the channel, as they do in any pane without a clipboard.
     window.set_sidebar_visible(true);
     set_focused_surface(&window, actions::Surface::Browser);
-    assert_eq!(outlined(&window), 5);
+    assert_eq!(outlined(&window), 6);
     for id in &focused {
         let expected =
             if id.starts_with("notes.nudge") { Target::Browser } else { Target::Channel };

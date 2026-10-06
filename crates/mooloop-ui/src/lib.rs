@@ -101,7 +101,6 @@ use mooloop_core::{
     ControlRate, ControlTarget, ModulatorKind, ModulatorParams, OutletDescriptor,
     PublishesOutlets, RecordFace, SendTap, Takeover, TransportControl,
     SignalShape,
-    modulation::{outlet_slot, performance_slot, PERFORMANCE_DESCRIPTORS},
     aux_in, AuxInParams, EdgeRefusal,
     ds01, Ds01Params,
     NoteEvent,
@@ -112,7 +111,7 @@ use mooloop_core::{
     SAMPLER_TUNE_SEMITONE_CLAMP,
     VoiceMode, MAX_SLICES,
     DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_BUSES,
-    MAX_CHANNELS, MAX_MODULATORS_PER_CHANNEL,
+    MAX_CHANNELS,
     MOD_STEP_MAX_STEPS,
     MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO,
     MIN_STRETCH_GRAIN, MIN_STRETCH_RATIO,
@@ -1172,7 +1171,7 @@ fn show_pane(commands: &Rc<RefCell<CommandState>>, window: &MainWindow, pane: Pa
 }
 
 /// The view ids `main.slint`'s `PaneViews` global declares, in the order
-/// `Ctrl+1..5` already used, so a chord is `Ctrl+(id + 1)`.
+/// `Ctrl+1..6` use, so a chord is `Ctrl+(id + 1)`.
 ///
 /// Public because the UI tests reveal a view the same way the application
 /// does. They used to set `editor_page` and `mixer_visible` directly, which
@@ -1183,6 +1182,7 @@ pub mod view {
     pub const DEVICES: i32 = 2;
     pub const NOTES: i32 = 3;
     pub const PLAYLIST: i32 = 4;
+    pub const MODULATION: i32 = 5;
 }
 
 /// Restore the pane arrangement. Called once at startup, from a
@@ -1197,6 +1197,7 @@ fn apply_layout(window: &MainWindow, layout: &LayoutSettings) {
     window.set_devices_slot(slots[view::DEVICES as usize]);
     window.set_notes_slot(slots[view::NOTES as usize]);
     window.set_playlist_slot(slots[view::PLAYLIST as usize]);
+    window.set_modulation_slot(slots[view::MODULATION as usize]);
     window.set_main_active(layout.slot_active[0]);
     window.set_split_active(layout.slot_active[1]);
     window.set_bottom_active(layout.slot_active[2]);
@@ -1205,6 +1206,7 @@ fn apply_layout(window: &MainWindow, layout: &LayoutSettings) {
     window.set_mixer_dock_height(layout.mixer_dock_height);
     window.set_notes_dock_height(layout.notes_dock_height);
     window.set_playlist_dock_height(layout.playlist_dock_height);
+    window.set_modulation_dock_height(layout.modulation_dock_height);
     window.set_bottom_pane_visible(layout.bottom_pane_visible);
     window.set_sidebar_visible(layout.sidebar_visible);
     window.set_sidebar_width(layout.sidebar_width);
@@ -1222,6 +1224,7 @@ fn read_layout(window: &MainWindow) -> LayoutSettings {
             window.get_devices_slot(),
             window.get_notes_slot(),
             window.get_playlist_slot(),
+            window.get_modulation_slot(),
         ],
         slot_active: vec![
             window.get_main_active(),
@@ -1233,6 +1236,7 @@ fn read_layout(window: &MainWindow) -> LayoutSettings {
         mixer_dock_height: window.get_mixer_dock_height(),
         notes_dock_height: window.get_notes_dock_height(),
         playlist_dock_height: window.get_playlist_dock_height(),
+        modulation_dock_height: window.get_modulation_dock_height(),
         bottom_pane_visible: window.get_bottom_pane_visible(),
         sidebar_visible: window.get_sidebar_visible(),
         sidebar_width: window.get_sidebar_width(),
@@ -1249,6 +1253,7 @@ fn view_id(pane: Pane) -> i32 {
         Pane::Source => view::DEVICES,
         Pane::Notes => view::NOTES,
         Pane::Playlist => view::PLAYLIST,
+        Pane::Modulation => view::MODULATION,
     }
 }
 
@@ -5903,38 +5908,50 @@ impl UiState {
         let Some(channel) = self.session.channels.get(self.session.selected) else {
             return ModulationOffsetsRefresh::default();
         };
-        // Each grid tile's meter, touched in place: rebuilding the source
-        // rows on the pump tick would fight selection and the add menu for
-        // the same reason the effect rows are updated field-wise here.
-        let outputs = self.session.modulation_outputs.get();
+        // Each grid tile's and outlet chip's meter, touched in place:
+        // rebuilding the rows on the pump tick would fight selection for the
+        // same reason the effect rows are updated field-wise here.
+        let listed = self.session.modulation_sources();
+        let level = |slot: i32| {
+            usize::try_from(slot)
+                .ok()
+                .and_then(|slot| listed.get(slot))
+                .map_or(0.0, |source| self.session.modulation_source_level(*source))
+        };
         for index in 0..self.modulation_source_model.row_count() {
             let Some(mut row) = self.modulation_source_model.row_data(index) else {
                 continue;
             };
-            let next = usize::try_from(row.slot)
-                .ok()
-                .and_then(|slot| outputs.get(slot).copied())
-                .unwrap_or(0.0);
+            let next = level(row.slot);
             if row.output != next {
                 row.output = next;
                 self.modulation_source_model.set_row_data(index, row);
             }
         }
-        // The outlet chips carry the same telemetry, and are touched the
-        // same way: the engine already publishes the whole flat row, so an
-        // outlet's meter costs nothing the module band was not paying.
         for index in 0..self.modulation_outlet_model.row_count() {
             let Some(mut row) = self.modulation_outlet_model.row_data(index) else {
                 continue;
             };
-            let next = usize::try_from(row.slot)
-                .ok()
-                .and_then(|slot| outputs.get(slot).copied())
-                .unwrap_or(0.0);
+            if row.heading {
+                continue;
+            }
+            let next = level(row.slot);
             if row.output != next {
                 row.output = next;
                 self.modulation_outlet_model.set_row_data(index, row);
             }
+        }
+        // An unrouted face has nothing to animate, so the offsets are worth
+        // working out only for the faces on show that a route lands on.
+        let shown = [scope, self.session.effect_target];
+        let routed = self
+            .session
+            .modulation
+            .routes
+            .iter()
+            .any(|route| shown.contains(&route.destination.scope));
+        if !routed {
+            return ModulationOffsetsRefresh::default();
         }
         // Only what moved is written, and in place (MOO-257). This runs every
         // tick an LFO moves, stopped included, and it used to replace the
@@ -6001,62 +6018,62 @@ impl UiState {
         refresh
     }
 
-    /// Rebuild the selected channel's view of the song's modulation and the
-    /// destination inspector. Selection and assignment are transient UI
-    /// state held by source, so they follow a module the song keeps across
-    /// channel changes, and a project reload clears them.
+    /// Rebuild the modulation pane: every module in the song, every
+    /// channel's outlets, and the selected source's routes wherever they
+    /// land. Selection and assignment are transient UI state held by source,
+    /// so they follow a module across channel changes and reorders, and a
+    /// project reload clears them.
     fn refresh_modulation(&self, window: &MainWindow) {
         let Some(channel) = self.session.channels.get(self.session.selected) else {
             self.modulation_source_model.set_vec(Vec::new());
             self.modulation_outlet_model.set_vec(Vec::new());
             self.modulation_route_model.set_vec(Vec::new());
-            self.session.set_modulation_selected_slot(None);
-            self.session.set_modulation_armed_slot(None);
+            self.session.modulation_selected.set(None);
+            self.session.modulation_armed.set(None);
             window.set_modulation_selected_slot(-1);
             window.set_modulation_armed_slot(-1);
             window.set_modulation_armed_name(Default::default());
-            window.set_modulation_outlet_device(Default::default());
+            window.set_modulation_selected_name(Default::default());
             window.set_modulation_selected_outlet_name(Default::default());
             window.set_modulation_selected_outlet_signal(Default::default());
             return;
         };
 
-        // A slot survives only while it still names something. That is now
-        // two questions rather than one -- an occupied rack slot, or a
-        // control outlet this generator still publishes -- and the second is
-        // why a channel that swaps its ML-P8 for a sampler drops a selection
-        // pointed at `Trigger` instead of keeping an invisible one.
-        let gone = |slot: Option<u8>| slot.is_some_and(|slot| !self.session.control_source_exists(slot));
-        if gone(self.session.modulation_selected_slot()) {
-            self.session.set_modulation_selected_slot(None);
-        }
-        if gone(self.session.modulation_armed_slot()) {
-            self.session.set_modulation_armed_slot(None);
-        }
-        let selected = self.session.modulation_selected_slot();
-        let armed = self.session.modulation_armed_slot();
+        // A source survives only while the song still has it: a removed
+        // module, a channel gone, or an outlet the channel's new generator
+        // does not publish all drop the selection rather than keeping an
+        // invisible one.
+        self.session.forget_gone_modulation_sources();
+        let selected_source = self.session.modulation_selected.get();
+        let selected = self.session.modulation_selected_index();
+        let armed = self.session.modulation_armed_index();
         let bpm = f64::from(window.get_bpm().max(1));
-        let outputs = self.session.modulation_outputs.get();
-        let rack = self.session.selected_rack();
-        let sources: Vec<ModulationSourceRow> = rack
-            .slots
+        let listed = self.session.modulation_sources();
+        let sources: Vec<ModulationSourceRow> = self
+            .session
+            .modulation
+            .modules
             .iter()
             .enumerate()
-            .filter_map(|(slot, entry)| {
-                let params = (*entry)?.params;
+            .map(|(index, module)| {
+                let params = module.params;
                 // One row shape for every kind: the tile's face is whichever
                 // fields the kind actually fills, and the rest keep the
                 // shape component's own resting values.
                 let mut row = ModulationSourceRow {
-                    slot: slot as i32,
-                    name: format!("{} {}", params.kind().badge(), slot + 1).into(),
+                    slot: index as i32,
+                    name: self
+                        .session
+                        .modulation_source_name(ModSourceRef::Id(module.id))
+                        .unwrap_or_default()
+                        .into(),
                     kind: params.kind().to_index(),
                     depth: 1.0,
                     pulse_width: 0.5,
                     preview_sustain: 0.7,
                     step_length: MOD_STEP_MAX_STEPS as i32,
-                    output: outputs.get(slot).copied().unwrap_or(0.0),
-                    selected: selected == Some(slot as u8),
+                    output: self.session.modulation_source_level(ModSourceRef::Id(module.id)),
+                    selected: selected == Some(index),
                     ..Default::default()
                 };
                 match params {
@@ -6107,39 +6124,31 @@ impl UiState {
                     }
                     ModulatorParams::Random(random) => {
                         row.rate = random.rate_hz;
-                        row.phase = slot as f32 * 0.25;
+                        row.phase = index as f32 * 0.25;
                         row.retrigger = random.trigger == ModRandomTrigger::NoteTrigger;
                     }
                     ModulatorParams::Math(math) => {
                         row.math_op = math.op.to_index();
                     }
                 }
-                Some(row)
+                row
             })
             .collect();
-        // A plugin parameter has no descriptor, so the shelf names it from the
+        // The selected source's routes, wherever in the song they land. A
+        // plugin parameter has no descriptor, so its row is named from the
         // plugin's own list, missing ones included (MOO-228).
         let plugin_destinations = self.session.plugin_destinations();
-        let routes: Vec<ModulationRouteRow> = rack
-            .routes
-            .iter()
-            .enumerate()
-            .filter_map(|(index, route)| {
-                let route = route.as_ref()?;
-                // A module by its badge and slot, an outlet by its name, and
-                // "SOURCE ?" for a route whose source has left -- which is
-                // now also how a route reads when the channel's generator
-                // has been swapped out from under it.
-                let source_name = self
-                    .session
-                    .control_source_name(route.source_slot)
-                    .unwrap_or_else(|| "SOURCE ?".to_string());
+        let routes: Vec<ModulationRouteRow> = selected_source
+            .map(|source| self.session.routes_from(source))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(index, route)| {
                 let plugin = plugin_destinations
                     .iter()
                     .find(|row| row.address == route.destination);
                 let (destination, allowed) = match plugin {
                     Some(row) => (
-                        format!("{source_name} → {} · {}", row.device, row.name),
+                        format!("{} · {}", row.device, row.name),
                         !row.missing
                             && self
                                 .session
@@ -6151,65 +6160,14 @@ impl UiState {
                         .modulation_destination(route.destination)
                         .map(|(device, descriptor)| {
                             (
-                                format!("{source_name} → {device} · {}", descriptor.name),
+                                format!("{device} · {}", descriptor.name),
                                 ModDestinationDescriptor::for_param(descriptor).allowed,
                             )
                         })
-                        .unwrap_or_else(|| {
-                            (format!("{source_name} → unavailable destination"), false)
-                        }),
+                        .unwrap_or_else(|| ("Unavailable destination".to_string(), false)),
                 };
-                let missing = plugin.is_some_and(|row| row.missing);
-                let owner = match route.destination.owner {
-                    // The source face's row only for a route made on the
-                    // device the channel runs now. One left behind by a
-                    // device change is kept but drives nothing (MOO-135), so
-                    // it takes the no-row token rather than lighting up
-                    // whatever this device calls the same id.
-                    ParamOwner::Source { kind }
-                        if kind.is_some()
-                            && kind
-                                == self
-                                    .session
-                                    .channels
-                                    .get(self.session.selected)
-                                    .map(|state| state.kind()) =>
-                    {
-                        -1
-                    }
-                    ParamOwner::Source { .. } => i32::MIN,
-                    ParamOwner::Strip => -2,
-                    // The row this route points at, as a *position*: this
-                    // token is a Slint model index, not an address, so the
-                    // device id has to be resolved against the chain the
-                    // shelf is drawing. A destination on another chain -- a
-                    // bus device, which the shelf already labels as
-                    // unavailable -- resolves to nothing and takes the
-                    // no-row token rather than colliding with `Source`.
-                    // A plugin's parameter points at its device's row, as a
-                    // native effect's does.
-                    ParamOwner::Effect { device } | ParamOwner::PluginParam { device } => self
-                        .session
-                        .channels
-                        .get(self.session.selected)
-                        .filter(|_| {
-                            route.destination.scope
-                                == EffectTarget::Channel(self.session.selected as u8)
-                        })
-                        .and_then(|state| mooloop_core::device_slot(&state.effects, device))
-                        .map_or(i32::MIN, |slot| slot as i32),
-                    ParamOwner::Modulator { slot } => -3 - slot as i32,
-                    // Just past the modulator band, derived rather than
-                    // written out, so growing the rack cannot collide with
-                    // it. Unreachable today -- the shelf cannot address an
-                    // instrument's internal routes -- but the encoding has to
-                    // be total.
-                    ParamOwner::SourceRoute { .. } => -3 - MAX_MODULATORS_PER_CHANNEL as i32,
-                };
-                Some(ModulationRouteRow {
+                ModulationRouteRow {
                     route_index: index as i32,
-                    source_slot: route.source_slot as i32,
-                    owner,
                     // A plugin's id may be any `u32`, four billion included,
                     // and must not wrap into an `int`: the row carries the
                     // parameter's dense index, as its face does, or -1 for
@@ -6228,55 +6186,43 @@ impl UiState {
                         ModPolarity::Unipolar => 1,
                     },
                     allowed,
-                    missing,
-                })
+                    missing: plugin.is_some_and(|row| row.missing),
+                }
             })
             .collect();
-        // The generator's published control outlets, offered as sources on
-        // the same terms as a module. Only the control run: an audio outlet
-        // is not a control signal that happens to be fast, and offering one
-        // here is exactly the confusion `OutletDomain` exists to prevent.
-        //
-        // The keyboard's mod wheel and aftertouch follow them on every channel
-        // (MOO-128): offered on the same terms, because they are sources with
-        // no controls of their own, which is what this band is for.
-        let outlet_row = |slot: u8, outlet: &mooloop_core::OutletDescriptor| ModulationOutletRow {
-            slot: i32::from(slot),
-            name: outlet.name.into(),
-            bipolar: matches!(outlet.signal, SignalShape::Bipolar),
-            output: outputs.get(slot as usize).copied().unwrap_or(0.0),
-            selected: selected == Some(slot),
-        };
-        let outlets: Vec<ModulationOutletRow> = channel
-            .kind()
-            .control_outlets()
-            .iter()
-            .map(|outlet| outlet_row(outlet_slot(outlet.id), outlet))
-            .chain(
-                PERFORMANCE_DESCRIPTORS
-                    .iter()
-                    .map(|source| outlet_row(performance_slot(source.id), source)),
-            )
-            .collect();
-        let selected_outlet = selected.and_then(|slot| self.session.selected_channel_outlet(slot));
+        // Every channel's published control outlets and its keyboard's mod
+        // wheel and aftertouch (MOO-128), under the channel's name: sources
+        // with no controls of their own, offered on the same terms as a
+        // module.
+        let mut outlets: Vec<ModulationOutletRow> = Vec::new();
+        let mut heading: Option<&str> = None;
+        for (index, source) in listed.iter().enumerate() {
+            let Some(outlet) = self.session.modulation_outlet(*source) else {
+                continue;
+            };
+            let owner = self.session.modulation_source_channel(*source).unwrap_or_default();
+            if heading != Some(owner) {
+                heading = Some(owner);
+                outlets.push(ModulationOutletRow {
+                    slot: -1,
+                    name: owner.into(),
+                    heading: true,
+                    ..Default::default()
+                });
+            }
+            outlets.push(ModulationOutletRow {
+                slot: index as i32,
+                name: outlet.name.into(),
+                heading: false,
+                bipolar: matches!(outlet.signal, SignalShape::Bipolar),
+                output: self.session.modulation_source_level(*source),
+                selected: selected == Some(index),
+            });
+        }
+        let selected_outlet = selected_source.and_then(|source| self.session.modulation_outlet(source));
         self.modulation_source_model.set_vec(sources);
         self.modulation_outlet_model.set_vec(outlets);
         self.modulation_route_model.set_vec(routes);
-        // The publishing device, named the way a route's destination names
-        // it -- the channel's own name -- so "ML-P8 1 publishes this" and
-        // "ML-P8 1 · Cutoff" are visibly the same device.
-        //
-        // A performance source is the keyboard's, so the shelf says so
-        // rather than crediting the channel's device with it.
-        let publisher = if selected
-            .and_then(mooloop_core::modulation::performance_of_slot)
-            .is_some()
-        {
-            "The keyboard"
-        } else {
-            channel.name.as_str()
-        };
-        window.set_modulation_outlet_device(publisher.into());
         let armed_source = self.session.modulation_armed.get();
         window.set_modulation_armed_name(
             armed_source
@@ -6285,8 +6231,14 @@ impl UiState {
                 .into(),
         );
         window.set_modulation_assigning(armed_source.is_some());
+        // An outlet is named with its channel, "Bass Mod Wheel", since the
+        // band lists every channel's.
         window.set_modulation_selected_outlet_name(
-            selected_outlet.map_or("", |outlet| outlet.name).into(),
+            selected_outlet
+                .and(selected_source)
+                .and_then(|source| self.session.modulation_source_name(source))
+                .unwrap_or_default()
+                .into(),
         );
         window.set_modulation_selected_outlet_signal(
             selected_outlet
@@ -6294,15 +6246,25 @@ impl UiState {
                 .unwrap_or_default()
                 .into(),
         );
-        window.set_modulation_shelf_open(self.session.modulation_shelf_open);
-        window.set_modulation_selected_slot(selected.map_or(-1, i32::from));
-        window.set_modulation_armed_slot(armed.map_or(-1, i32::from));
-        window.set_modulation_max_sources(MAX_MODULATORS_PER_CHANNEL as i32);
+        let selected_module = match selected_source {
+            Some(ModSourceRef::Id(id)) => self.session.modulation.module(id),
+            _ => None,
+        };
+        window.set_modulation_selected_name(
+            selected_module
+                .map(|module| module.name.clone())
+                .unwrap_or_default()
+                .into(),
+        );
+        // Only a module has a surface; an outlet's selection index is not
+        // one, so the module surface is gated on the kind below.
+        window.set_modulation_selected_slot(selected.map_or(-1, |index| index as i32));
+        window.set_modulation_armed_slot(armed.map_or(-1, |index| index as i32));
 
         // The selected source's own controls. One editor is shown, so the shelf
         // reads scalars rather than searching the source rows for the
         // selected one.
-        let selected_params = selected.and_then(|slot| rack.params(slot as usize));
+        let selected_params = selected_module.map(|module| module.params);
         let selected_lfo = selected_params.and_then(|params| match params {
             ModulatorParams::Lfo(lfo) => Some(lfo),
             _ => None,
@@ -6348,7 +6310,7 @@ impl UiState {
         }));
         // The input picker: None, then every outlet that sends what the
         // selected module takes, from anywhere in the song.
-        let selected_module = selected.and_then(|slot| self.session.module_in_slot(i32::from(slot)));
+        let selected_module = selected_module.map(|module| module.id);
         let input_options: Vec<slint::SharedString> = selected_module
             .map(|id| self.session.module_input_options(id))
             .unwrap_or_default()
@@ -8944,6 +8906,7 @@ impl AppUi {
                     "view.pane-source" => show_pane(&commands, &window, Pane::Source),
                     "view.pane-notes" => show_pane(&commands, &window, Pane::Notes),
                     "view.pane-playlist" => show_pane(&commands, &window, Pane::Playlist),
+                    "view.pane-modulation" => show_pane(&commands, &window, Pane::Modulation),
                     "view.split-toggle" => window.invoke_toggle_split(),
                     "view.channel-sidebar-toggle" => window.invoke_toggle_channel_sidebar(),
                     "view.zoom-pane" => window.invoke_toggle_zoom_active(),
@@ -12341,17 +12304,7 @@ impl AppUi {
             });
         }
 
-        // --- Channel modulation shelf -------------------------------------
-        {
-            let st = state.clone();
-            let weak = window.as_weak();
-            window.on_modulation_shelf_toggled(move || {
-                let Some(window) = weak.upgrade() else { return };
-                let mut state = st.borrow_mut();
-                state.session.toggle_modulation_shelf();
-                state.refresh_modulation(&window);
-            });
-        }
+        // --- The modulation pane ------------------------------------------
         {
             let st = state.clone();
             let weak = window.as_weak();
@@ -12364,9 +12317,9 @@ impl AppUi {
                 state.refresh_modulation(&window);
             });
         }
-        // Reordering the grid. The rack compacts as it moves, so the target
-        // is a position among the occupied modules; routes follow by
-        // identity and a math module's input is remapped by the rack.
+        // Reordering the grid: the order the engine ticks the song's modules
+        // in. Routes, selection and a Math module's input name modules by
+        // identity, so they follow.
         {
             let st = state.clone();
             let commands = command_state.clone();
@@ -12443,7 +12396,7 @@ impl AppUi {
                     ),
                     ModulatorKind::Math => (
                         "Math module added",
-                        "Math module added \u{2014} choose the slot it reads, then Assign it",
+                        "Math module added \u{2014} choose the module it reads, then Assign it",
                     ),
                 };
                 record_project_history(&commands, before, &st, &window, history);
@@ -12515,6 +12468,24 @@ impl AppUi {
                 record_project_history(&commands, before, &st, &window, "Modulator removed");
             });
         }
+        // A module's name, the same shape as a channel rename: the engine
+        // never reads it, so nothing reinstalls.
+        {
+            let commands = command_state.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_modulation_source_renamed(move |slot, name| {
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Rename module", || {
+                    let mut state = st.borrow_mut();
+                    if !state.session.rename_modulation_source(slot, &name) {
+                        return false;
+                    }
+                    state.modulation_edited(&window);
+                    true
+                });
+            });
+        }
         {
             let commands = command_state.clone();
             let st = state.clone();
@@ -12525,7 +12496,7 @@ impl AppUi {
                     let mut state = st.borrow_mut();
                     // An input is a jack rather than a descriptor id, so there
                     // is no parameter to name: the module travels entire.
-                    let Some(id) = state.session.module_in_slot(slot) else {
+                    let Some(id) = state.session.module_at(slot) else {
                         return false;
                     };
                     let Some((input, _)) = usize::try_from(index)
@@ -18950,35 +18921,14 @@ impl AppUi {
                     // read of a few cells plus arithmetic over the visible
                     // descriptors -- not a per-parameter feed.
                     let state = st.borrow();
-                    let (outlets, performance) = handle.channel_sources(selected_channel);
-                    let outputs = state.session.selected_source_row(
-                        |at| handle.module_output(at),
-                        &outlets,
-                        &performance,
-                    );
                     let moved = state.session.read_modulation_levels(
                         |at| handle.module_output(at),
                         |seat| handle.channel_sources(seat),
                     );
-                    // The faces on show: the selected channel's source, and
-                    // whatever chain the rack shows.
-                    let shown = [
-                        EffectTarget::Channel(selected_channel as u8),
-                        state.session.effect_target,
-                    ];
-                    let routed = state
-                        .session
-                        .modulation
-                        .routes
-                        .iter()
-                        .any(|route| shown.contains(&route.destination.scope));
-                    // An unrouted chain has nothing to animate, and once the
-                    // outputs stop moving the arcs are already where they
-                    // belong -- so neither case is worth a model write. The
-                    // shelf's meters follow the selected channel's row.
-                    let meters = outputs != state.session.modulation_outputs.get();
-                    state.session.modulation_outputs.set(outputs);
-                    if routed && (moved || meters) {
+                    // Once the outputs stop moving, the meters and the arcs
+                    // are already where they belong, so neither is worth a
+                    // model write.
+                    if moved {
                         state.refresh_modulation_offsets(&w);
                     }
                 }

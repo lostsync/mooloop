@@ -804,10 +804,11 @@ mod paste_tests {
         let mut session = Session::default();
         assert!(session.add_modulation_source(ModulatorKind::Lfo));
         let volume = |seat| ParamAddr::strip(mooloop_core::EffectTarget::Channel(seat), STRIP_PARAM_VOLUME);
+        let lfo = session.module_at(0).expect("the LFO");
         session
-            .edit_selected_rack(|rack| rack.add_route(ModRoute::to_slot(0, volume(0), 0.5, ModPolarity::Bipolar)))
-            .expect("room for the route");
-        let lfo = session.module_in_slot(0).expect("the LFO");
+            .modulation
+            .routes
+            .push(ModRoute::from_module(lfo, volume(0), 0.5, ModPolarity::Bipolar));
 
         let copy = session.channel_clipboard(0, 120, 0).expect("a channel to copy");
         assert_eq!(copy.routes.len(), 1);

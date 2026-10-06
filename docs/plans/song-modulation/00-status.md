@@ -178,9 +178,54 @@ Differences from the plan:
   the ordinary drag on a fader does not arm one yet. Left for step 04,
   which builds the pane the gesture lives in.
 
+## Step 04: what was built, and where it differs from the plan
+
+- **A sixth view.** `PaneViews.modulation` (5; the browser's sidebar id moved
+  to 6), `view::MODULATION`, `Pane::Modulation`, and **Show Modulation**
+  (`view.pane-modulation`, Ctrl+6) in both View menus. `VIEW_COUNT` is 6. A
+  five-view layout saved by 0.1.6 opens with Modulation added to the bottom
+  slot behind whatever was showing there, or showing, if that slot held
+  nothing (`LayoutSettings::sanitized`). The pane has its own dock height.
+- **What is in it.** The shelf's markup moved, not rewritten, into the
+  pane: a module grid that wraps at the pane's width and scrolls, with no
+  capacity and no count limit; the outlets of every channel that publishes
+  some, under the channel's name; a narrow Add list on the right (it was a
+  popover over the grid); the selected module's surface with its input
+  picker and Assign; and beside it the selected source's routes, from the
+  whole song. A route row names its chain, device and parameter ("Kick
+  Filter 1 · Cutoff"); `modulation_destination` now always names the chain.
+  A module's name is edited in its header (`rename_modulation_source`).
+- **The session lists the song.** One list of every source
+  (`Session::modulation_sources`: modules in order, then each channel's
+  outlets and keyboard), and the pane's rows carry a place in it. Selection
+  and arming hold the source itself, so they survive a channel change, a
+  reorder and a new module. The per-channel helpers (`channel_rack`,
+  `selected_rack`, `edit_selected_rack`, the `*_slot` verbs,
+  `modulation_outputs`, `modulation_shelf_open`) are gone. Meters read
+  `modulation_source_level`, from the levels the pump already reads.
+- **Leaving the rack.** The shelf and its height logic are out of the
+  device rack, which is a fixed 378px again.
+- **Deviation: the mock-up came after the markup started.** It was rendered
+  from the pane's own markup (`scripts/slint-sketch`), with sample data,
+  and posted to Joam for go on 2026-10-06. The merge waited on his answer.
+- **Deviation: modules keep a home seat.** `SongModule::rack` stays, as the
+  channel a module was made on, for presets and naming. Nothing edits
+  modulation through a rack any more.
+- **Not done: a dot does not reveal the pane.** The faces draw their
+  route-count dots but raise nothing when one is clicked, so there is no
+  press to select the module from. It needs a callback on every face.
+- **Not done: plugin routes off the selected channel.** A route onto a
+  plugin parameter is named from `plugin_destinations`, which reads the
+  selected channel, so the same route listed while another channel is
+  selected reads "Unavailable destination". It still plays.
+- **Still not done: the strip faces** (step 03). A fader drag does not arm
+  a route.
+
 ## Open
 
-- **Step 04:** Adam sees the pane's mock-up before its markup is built.
+- A face's route dot should select its module and reveal the pane.
+- Plugin route names for every channel, not only the selected one.
+- Assign on the mixer's and the track rack's faders and pan.
 
 ## Measurements
 

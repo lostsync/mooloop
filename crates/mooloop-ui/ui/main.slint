@@ -56,7 +56,7 @@ import { EqSpec, EqDeviceFace } from "eq-device.slint";
 import { ReverbDeviceFace } from "reverb-device.slint";
 import { PlateDeviceFace } from "plate-device.slint";
 import { ModulationDeviceFace } from "modulation-device.slint";
-import { ModulationShelf, ModulationShelfMetrics, ModulationSourceRow, ModulationOutletRow, ModulationRouteRow } from "modulation-shelf.slint";
+import { ModulationShelf, ModulationSourceRow, ModulationOutletRow, ModulationRouteRow } from "modulation-shelf.slint";
 import { MixerMetrics, MixerPane, MixerSendRow, MixerStripRow, BusPicker } from "mixer.slint";
 export { MixerMetrics }
 import { BusDeviceFace, BusFaderRow, StripRackRow } from "bus-device.slint";
@@ -698,24 +698,27 @@ component PlaylistLoopHandle inherits Rectangle {
 // rectangles and each view is positioned into one, rather than every view
 // becoming a component instantiated once per slot.
 //
-// View ids are the order Ctrl+1..5 already uses in `actions.rs`, so a chord
+// View ids are the order Ctrl+1..6 already uses in `actions.rs`, so a chord
 // is `Ctrl+(id + 1)` and the tab strips render in a stable order without
 // carrying one.
 global PaneViews {
-    out property <[string]> names: ["STEPS", "MIXER", "DEVICES", "NOTES", "PLAYLIST"];
+    out property <[string]> names: ["STEPS", "MIXER", "DEVICES", "NOTES", "PLAYLIST", "MODULATION"];
     out property <int> steps: 0;
     out property <int> mixer: 1;
     out property <int> devices: 2;
     out property <int> notes: 3;
     out property <int> playlist: 4;
+    // The song's modulation: every module, every outlet and every route
+    // (song modulation step 04). It replaced the shelf under the rack.
+    out property <int> modulation: 5;
     // The browser sidebar, as a pane the keyboard can be aimed at (MOO-287).
     // It is not a view: no slot holds it and no tab names it, so it sits
     // past the end of `names` and nothing that walks the views meets it.
-    out property <int> browser: 5;
+    out property <int> browser: 6;
     // DEVICES is the only view with an intrinsic height -- a face is a fixed
     // 268px and does not stretch -- which is the whole of "the bottom pane
     // resizes except on the devices page".
-    out property <[bool]> fixed-height: [false, false, true, false, false];
+    out property <[bool]> fixed-height: [false, false, true, false, false, false];
 }
 
 // The view under the pointer, or -1 (MOO-287). Each `ViewSlot` publishes
@@ -1611,10 +1614,12 @@ export component MainWindow inherits Window {
     in-out property <length> playlist-dock-height: 376px;
     in-out property <length> steps-dock-height: 300px;
     in-out property <length> mixer-dock-height: 300px;
+    in-out property <length> modulation-dock-height: 300px;
     function dock-height(v: int) -> length {
         return v == PaneViews.notes ? root.notes-dock-height
             : v == PaneViews.playlist ? root.playlist-dock-height
             : v == PaneViews.steps ? root.steps-dock-height
+            : v == PaneViews.modulation ? root.modulation-dock-height
             : root.mixer-dock-height;
     }
     function set-dock-height(v: int, h: length) {
@@ -1622,6 +1627,7 @@ export component MainWindow inherits Window {
         else if (v == PaneViews.playlist) { root.playlist-dock-height = h; }
         else if (v == PaneViews.steps) { root.steps-dock-height = h; }
         else if (v == PaneViews.mixer) { root.mixer-dock-height = h; }
+        else if (v == PaneViews.modulation) { root.modulation-dock-height = h; }
     }
     // Where the top pane's divider sits, as a fraction of the work area's
     // width. Nothing drives it until step 02 opens the split.
@@ -1636,7 +1642,7 @@ export component MainWindow inherits Window {
     // 2 bottom. These are the defaults the interface has today, which is the
     // point -- step 01 changes the mechanism and not the arrangement. Step 02
     // makes them move.
-    // Membership is five scalars rather than one array, because a slot is
+    // Membership is six scalars rather than one array, because a slot is
     // assigned to and Slint has no way to write into an array element. The
     // array below exists only so a tab strip can iterate its members.
     in-out property <int> steps-slot: 0;
@@ -1644,9 +1650,10 @@ export component MainWindow inherits Window {
     in-out property <int> devices-slot: 2;
     in-out property <int> notes-slot: 2;
     in-out property <int> playlist-slot: 2;
+    in-out property <int> modulation-slot: 2;
     property <[int]> view-slots: [
         root.steps-slot, root.mixer-slot, root.devices-slot,
-        root.notes-slot, root.playlist-slot,
+        root.notes-slot, root.playlist-slot, root.modulation-slot,
     ];
     /// The arrangement changed and is worth remembering. Fired on discrete
     /// changes and at the *end* of a drag, never per frame: a divider drag
@@ -1680,6 +1687,7 @@ export component MainWindow inherits Window {
             : v == PaneViews.mixer ? root.mixer-slot
             : v == PaneViews.devices ? root.devices-slot
             : v == PaneViews.notes ? root.notes-slot
+            : v == PaneViews.modulation ? root.modulation-slot
             : root.playlist-slot;
     }
     function set-view-slot(v: int, s: int) {
@@ -1687,6 +1695,7 @@ export component MainWindow inherits Window {
         else if (v == PaneViews.mixer) { root.mixer-slot = s; }
         else if (v == PaneViews.devices) { root.devices-slot = s; }
         else if (v == PaneViews.notes) { root.notes-slot = s; }
+        else if (v == PaneViews.modulation) { root.modulation-slot = s; }
         else { root.playlist-slot = s; }
     }
     function set-slot-active(s: int, v: int) {
@@ -1703,7 +1712,7 @@ export component MainWindow inherits Window {
 
     // The main slot's other view -- the one the split opens with, so opening
     // it needs no prompt and no menu. Written out rather than looped because
-    // Slint functions have no loop and there are five views; the order is the
+    // Slint functions have no loop and there are six views; the order is the
     // tab order, so it is "the next tab along" as read.
     function other-main-view() -> int {
         return (root.steps-slot == 0 && root.main-active != PaneViews.steps) ? PaneViews.steps
@@ -1711,6 +1720,7 @@ export component MainWindow inherits Window {
             : (root.devices-slot == 0 && root.main-active != PaneViews.devices) ? PaneViews.devices
             : (root.notes-slot == 0 && root.main-active != PaneViews.notes) ? PaneViews.notes
             : (root.playlist-slot == 0 && root.main-active != PaneViews.playlist) ? PaneViews.playlist
+            : (root.modulation-slot == 0 && root.main-active != PaneViews.modulation) ? PaneViews.modulation
             : -1;
     }
     // Open or close the split. Closing folds its views back into the main
@@ -1731,6 +1741,7 @@ export component MainWindow inherits Window {
             if (root.devices-slot == 1) { root.devices-slot = 0; }
             if (root.notes-slot == 1) { root.notes-slot = 0; }
             if (root.playlist-slot == 1) { root.playlist-slot = 0; }
+            if (root.modulation-slot == 1) { root.modulation-slot = 0; }
             // `main-active` is deliberately left alone: closing the split
             // takes a pane away, it does not change what the pane you kept
             // was showing.
@@ -1827,7 +1838,7 @@ export component MainWindow inherits Window {
     function main-view-count() -> int {
         return (root.steps-slot == 0 ? 1 : 0) + (root.mixer-slot == 0 ? 1 : 0)
             + (root.devices-slot == 0 ? 1 : 0) + (root.notes-slot == 0 ? 1 : 0)
-            + (root.playlist-slot == 0 ? 1 : 0);
+            + (root.playlist-slot == 0 ? 1 : 0) + (root.modulation-slot == 0 ? 1 : 0);
     }
     // Give a slot back an active view after one has left it.
     //
@@ -1845,6 +1856,7 @@ export component MainWindow inherits Window {
         else if (root.devices-slot == s) { root.set-slot-active(s, PaneViews.devices); }
         else if (root.notes-slot == s) { root.set-slot-active(s, PaneViews.notes); }
         else if (root.playlist-slot == s) { root.set-slot-active(s, PaneViews.playlist); }
+        else if (root.modulation-slot == s) { root.set-slot-active(s, PaneViews.modulation); }
         else { root.set-slot-active(s, -1); }
     }
     // Move a view to a slot and make it the active one there. Dropping into
@@ -1899,13 +1911,13 @@ export component MainWindow inherits Window {
     out property <bool> showing-devices: root.view-showing(PaneViews.devices, root.devices-slot);
     out property <bool> showing-notes: root.view-showing(PaneViews.notes, root.notes-slot);
     out property <bool> showing-playlist: root.view-showing(PaneViews.playlist, root.playlist-slot);
+    out property <bool> showing-modulation: root.view-showing(PaneViews.modulation, root.modulation-slot);
     // How much room the bottom slot takes. DEVICES declares its own height;
     // every other view is given one. The three numbers were a conditional
     // chain on `editor-page` -- they are the same three, said once each.
-    property <length> devices-extent: 408px
-        + (root.modulation-shelf-open && !root.editing-bus
-            ? ModulationShelfMetrics.open-height - ModulationShelfMetrics.closed-height
-            : 0px);
+    // The rack's 378px held a 30px modulation shelf strip until the shelf
+    // became the Modulation view; the faces keep the room they had.
+    property <length> devices-extent: 378px;
     property <length> bottom-extent: !root.bottom-pane-visible || root.bottom-active < 0 ? 0px
         : PaneViews.fixed-height[root.bottom-active] ? root.devices-extent
         : root.dock-height(root.bottom-active);
@@ -2239,7 +2251,6 @@ export component MainWindow inherits Window {
     in property <[ModulationSourceRow]> modulation-sources;
     in property <[ModulationOutletRow]> modulation-outlets;
     in property <[ModulationRouteRow]> modulation-routes;
-    in-out property <bool> modulation-shelf-open;
     in-out property <int> modulation-selected-slot: -1;
     in-out property <int> modulation-armed-slot: -1;
     // Whether the assignment gesture is armed, with any source in the song:
@@ -2263,12 +2274,12 @@ export component MainWindow inherits Window {
     in property <float> modulation-selected-envelope-preview-attack;
     in property <float> modulation-selected-envelope-preview-decay;
     in property <float> modulation-selected-envelope-preview-release;
-    in property <int> modulation-max-sources;
-    in property <string> modulation-outlet-device;
     in property <string> modulation-armed-name;
     in property <string> modulation-selected-outlet-name;
     in property <string> modulation-selected-outlet-signal;
-    callback modulation-shelf-toggled();
+    // The selected module's name, which the pane's header edits.
+    in property <string> modulation-selected-name;
+    callback modulation-source-renamed(int, string);
     callback modulation-source-selected(int);
     callback modulation-source-moved(int, int);
     callback modulation-assignment-toggled();
@@ -3156,6 +3167,7 @@ export component MainWindow inherits Window {
             MenuItem { title: "Devices"; checked: root.showing-devices; activated => { root.show-view(PaneViews.devices); } }
             MenuItem { title: "Notes"; checked: root.showing-notes; activated => { root.show-view(PaneViews.notes); } }
             MenuItem { title: "Playlist"; checked: root.showing-playlist; activated => { root.show-view(PaneViews.playlist); } }
+            MenuItem { title: "Modulation"; checked: root.showing-modulation; activated => { root.show-view(PaneViews.modulation); } }
             MenuSeparator {}
             MenuItem { title: "Channel Sidebar"; checked: root.channel-sidebar-visible; activated => { root.toggle-channel-sidebar(); } }
             MenuItem {
@@ -3579,6 +3591,12 @@ export component MainWindow inherits Window {
                         shortcut: "Ctrl+5";
                         checked: root.showing-playlist;
                         selected => { root.show-view(PaneViews.playlist); }
+                    }
+                    MenuRow {
+                        text: "Modulation";
+                        shortcut: "Ctrl+6";
+                        checked: root.showing-modulation;
+                        selected => { root.show-view(PaneViews.modulation); }
                     }
                     MenuRowSeparator {}
                     MenuRow {
@@ -6796,54 +6814,79 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
-                            // The shelf is pinned to the bottom of the dock rather than
-                            // scrolling with the rack. It is one surface for the whole
-                            // channel, but inside the scroll content it inherited the
-                            // chain's width, so past a few devices its module grid and
-                            // Assign button sat screens to the right of the window. Out
-                            // here it is never wider than the frame, and the chain's
-                            // horizontal scrollbar sits above it rather than below.
-                            if !root.editing-bus : HorizontalLayout {
-                                padding-left: 8px;
-                                padding-right: 8px;
-                                ModulationShelf {
-                                    open: root.modulation-shelf-open;
-                                    sources: root.modulation-sources;
-                                    outlets: root.modulation-outlets;
-                                    routes: root.modulation-routes;
-                                    selected-slot: root.modulation-selected-slot;
-                                    armed-slot: root.modulation-armed-slot;
-                                    selected-kind: root.modulation-selected-kind;
-                                    selected-values: root.modulation-selected-values;
-                                    selected-preview-fade-cycles: root.modulation-selected-preview-fade-cycles;
-                                    selected-preview-smoothing-cycles: root.modulation-selected-preview-smoothing-cycles;
-                                    input-options: root.modulation-input-options;
-                                    selected-input: root.modulation-selected-input;
-                                    input-note: root.modulation-input-note;
-                                    assigning: root.modulation-assigning;
-                                    selected-envelope-preview-attack: root.modulation-selected-envelope-preview-attack;
-                                    selected-envelope-preview-decay: root.modulation-selected-envelope-preview-decay;
-                                    selected-envelope-preview-release: root.modulation-selected-envelope-preview-release;
-                                    max-sources: root.modulation-max-sources;
-                                    outlet-device: root.modulation-outlet-device;
-                                    armed-name: root.modulation-armed-name;
-                                    selected-outlet-name: root.modulation-selected-outlet-name;
-                                    selected-outlet-signal: root.modulation-selected-outlet-signal;
-                                    toggled => { root.modulation-shelf-toggled(); }
-                                    source-selected(slot) => { root.modulation-source-selected(slot); }
-                                    source-moved(slot, target) => { root.modulation-source-moved(slot, target); }
-                                    assignment-toggled => { root.modulation-assignment-toggled(); }
-                                    source-added(kind) => { root.modulation-source-added(kind); }
-                                    param-changed(slot, id, value) => { root.modulation-param-changed(slot, id, value); }
-                                    param-edit-started => { root.modulation-param-edit-started(); }
-                                    param-edit-finished => { root.modulation-param-edit-finished(); }
-                                    source-removed(slot) => { root.modulation-source-removed(slot); }
-                                    input-changed(slot, value) => { root.modulation-input-changed(slot, value); }
-                                    route-polarity-changed(index, polarity) => {
-                                        root.modulation-route-polarity-changed(index, polarity);
-                                    }
-                                    route-removed(index) => {
-                                        root.modulation-route-removed(index);
+                        }
+                    }
+
+                    // ===== MODULATION =====
+                    // The song's modulation: every module, every channel's
+                    // outlets, and the selected source's routes, whatever the
+                    // rack shows (song modulation step 04). It was a shelf
+                    // under the device rack, one channel's at a time.
+                    ViewSlot {
+                        rect: work.slot-rect(root.modulation-slot);
+                        shown: root.view-showing(PaneViews.modulation, root.modulation-slot);
+                        view: PaneViews.modulation;
+                        pressed => { root.focus-pane(PaneViews.modulation); }
+                        VerticalLayout {
+                            spacing: 0px;
+                            PaneToolbar {
+                                PaneTabs {
+                                    view-slots: root.view-slots;
+                                    slot: root.modulation-slot;
+                                    can-leave: root.modulation-slot != 0
+                                        || root.main-view-count() > 1;
+                                    active: root.slot-active(root.modulation-slot);
+                                    zoomed: root.zoomed == root.modulation-slot;
+                                    picked(v) => { root.view-picked(v); }
+                                    zoom-toggled() => { root.toggle-zoom(root.modulation-slot); }
+                                    drag-started(v) => { root.view-drag-started(v); }
+                                    drag-dropped(v) => { root.view-drag-dropped(v); }
+                                    move-requested(v, s) => { root.move-view(v, s); }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                            Rectangle {
+                                vertical-stretch: 1;
+                                HorizontalLayout {
+                                    padding: 8px;
+                                    ModulationShelf {
+                                        horizontal-stretch: 1;
+                                        selected-name: root.modulation-selected-name;
+                                        sources: root.modulation-sources;
+                                        outlets: root.modulation-outlets;
+                                        routes: root.modulation-routes;
+                                        selected-slot: root.modulation-selected-slot;
+                                        armed-slot: root.modulation-armed-slot;
+                                        selected-kind: root.modulation-selected-kind;
+                                        selected-values: root.modulation-selected-values;
+                                        selected-preview-fade-cycles: root.modulation-selected-preview-fade-cycles;
+                                        selected-preview-smoothing-cycles: root.modulation-selected-preview-smoothing-cycles;
+                                        input-options: root.modulation-input-options;
+                                        selected-input: root.modulation-selected-input;
+                                        input-note: root.modulation-input-note;
+                                        assigning: root.modulation-assigning;
+                                        selected-envelope-preview-attack: root.modulation-selected-envelope-preview-attack;
+                                        selected-envelope-preview-decay: root.modulation-selected-envelope-preview-decay;
+                                        selected-envelope-preview-release: root.modulation-selected-envelope-preview-release;
+                                        armed-name: root.modulation-armed-name;
+                                        selected-outlet-name: root.modulation-selected-outlet-name;
+                                        selected-outlet-signal: root.modulation-selected-outlet-signal;
+                                        source-selected(slot) => { root.modulation-source-selected(slot); }
+                                        source-moved(slot, target) => { root.modulation-source-moved(slot, target); }
+                                        assignment-toggled => { root.modulation-assignment-toggled(); }
+                                        source-added(kind) => { root.modulation-source-added(kind); }
+                                        param-changed(slot, id, value) => { root.modulation-param-changed(slot, id, value); }
+                                        param-edit-started => { root.modulation-param-edit-started(); }
+                                        param-edit-finished => { root.modulation-param-edit-finished(); }
+                                        source-removed(slot) => { root.modulation-source-removed(slot); }
+                                        source-renamed(slot, name) => { root.modulation-source-renamed(slot, name); }
+                                        input-changed(slot, value) => { root.modulation-input-changed(slot, value); }
+                                        route-polarity-changed(index, polarity) => {
+                                            root.modulation-route-polarity-changed(index, polarity);
+                                        }
+                                        route-removed(index) => {
+                                            root.modulation-route-removed(index);
+                                        }
                                     }
                                 }
                             }

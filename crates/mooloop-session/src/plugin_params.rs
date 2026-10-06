@@ -624,16 +624,13 @@ mod tests {
         let volume = ParamAddr::strip(scope, mooloop_core::STRIP_PARAM_VOLUME);
         let gain = ParamAddr::plugin_param(scope, device, 10);
         for destination in [volume, gain] {
-            session
-                .edit_selected_rack(|rack| {
-                    rack.add_route(mooloop_core::ModRoute::to_slot(
-                        0,
-                        destination,
-                        0.5,
-                        mooloop_core::ModPolarity::Bipolar,
-                    ))
-                })
-                .expect("room for a route");
+            let lfo = session.module_at(0).expect("the LFO");
+            session.modulation.routes.push(mooloop_core::ModRoute::from_module(
+                lfo,
+                destination,
+                0.5,
+                mooloop_core::ModPolarity::Bipolar,
+            ));
         }
         session.modulation_sent = session.modulation_plan();
         session.modulation_levels.borrow_mut().modules = vec![0.4];

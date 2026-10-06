@@ -25,7 +25,7 @@ fn routed_rack() -> (MainWindow, UiState) {
     let mut st = UiState::new(None, 48_000, &window);
     assert!(
         st.session.add_modulation_source(ModulatorKind::Lfo),
-        "an empty rack has a free slot"
+        "a song takes any number of modules"
     );
     st.session
         .insert_effect_at(EffectKind::Filter, 0)
@@ -35,16 +35,13 @@ fn routed_rack() -> (MainWindow, UiState) {
         .expect("a drive inserts after it");
     let scope = EffectTarget::Channel(0);
     let routed = st.session.channels[0].effects[0].id;
-    st.session
-        .edit_selected_rack(|rack| {
-            rack.add_route(ModRoute::to_slot(
-                0,
-                ParamAddr::effect(scope, routed, 0),
-                0.5,
-                ModPolarity::Bipolar,
-            ))
-        })
-        .expect("the matrix is empty");
+    let lfo = st.session.module_at(0).expect("the LFO");
+    st.session.modulation.routes.push(ModRoute::from_module(
+        lfo,
+        ParamAddr::effect(scope, routed, 0),
+        0.5,
+        ModPolarity::Bipolar,
+    ));
     st.session.modulation_sent = st.session.modulation_plan();
     st.sync_effects();
     st.refresh_modulation(&window);

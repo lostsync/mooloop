@@ -136,14 +136,16 @@ pub enum Pane {
     Source,
     Notes,
     Playlist,
+    Modulation,
 }
 
-const PANE_CYCLE: [Pane; 5] = [
+const PANE_CYCLE: [Pane; 6] = [
     Pane::Steps,
     Pane::Mixer,
     Pane::Source,
     Pane::Notes,
     Pane::Playlist,
+    Pane::Modulation,
 ];
 
 pub fn cycle_pane(current: Pane, forward: bool) -> Pane {
