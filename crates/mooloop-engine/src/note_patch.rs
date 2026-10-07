@@ -245,9 +245,9 @@ impl NotePass {
             }
         }
         self.owed.clear();
-        for seat in 0..live.min(self.choke_owed.len()) {
-            if std::mem::take(&mut self.choke_owed[seat]) {
-                let _ = events[seat].push_ordered(TimedEvent {
+        for (owed, list) in self.choke_owed.iter_mut().zip(events.iter_mut()).take(live) {
+            if std::mem::take(owed) {
+                let _ = list.push_ordered(TimedEvent {
                     offset: 0,
                     event: Event::Choke,
                 });
