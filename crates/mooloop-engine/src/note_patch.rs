@@ -99,7 +99,9 @@ pub(crate) struct NotePass {
     /// Whether link `i` is the first from its notes-in tag, so the tag
     /// counts each note it passes once however many wires leave it.
     counts_input: Vec<bool>,
-    taken: [bool; MAX_CHANNELS],
+    /// By seat. On the heap with the rest, so a song with no note wires
+    /// pays the render graph a few pointers rather than two banks.
+    taken: Box<[bool]>,
     any_taken: bool,
     /// The distinct seats the links read, and where each one's notes start
     /// in `heard`.
@@ -107,7 +109,7 @@ pub(crate) struct NotePass {
     heard: Vec<TimedEvent>,
     heard_at: Vec<(u32, u32)>,
     owed: Vec<Owed>,
-    choke_owed: [bool; MAX_CHANNELS],
+    choke_owed: Box<[bool]>,
     next_id: u64,
     tag_ids: Vec<ModSourceId>,
     /// Each tag's NoteOn count, wrapping: a notes-in tag's the notes it
@@ -133,7 +135,7 @@ impl NotePass {
         let counts_input = (0..links.len())
             .map(|at| !links[..at].iter().any(|earlier| earlier.from == links[at].from))
             .collect();
-        let mut taken = [false; MAX_CHANNELS];
+        let mut taken = vec![false; MAX_CHANNELS].into_boxed_slice();
         for &seat in &plan.taken {
             taken[usize::from(seat)] = true;
         }
@@ -146,7 +148,7 @@ impl NotePass {
             heard_at: vec![(0, 0); sources.len()],
             sources,
             owed: Vec::with_capacity(MAX_OWED),
-            choke_owed: [false; MAX_CHANNELS],
+            choke_owed: vec![false; MAX_CHANNELS].into_boxed_slice(),
             next_id: 0,
             tag_ids: plan.tags.iter().map(|tag| tag.id).collect(),
             tag_notes: vec![0; plan.tags.len()],
@@ -243,7 +245,7 @@ impl NotePass {
             }
         }
         self.owed.clear();
-        for seat in 0..live {
+        for seat in 0..live.min(self.choke_owed.len()) {
             if std::mem::take(&mut self.choke_owed[seat]) {
                 let _ = events[seat].push_ordered(TimedEvent {
                     offset: 0,
