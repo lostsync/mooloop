@@ -81,7 +81,23 @@ const LFO_IN: &[Port] = &[control("rate"), control("retrigger")];
 const ENVELOPE_IN: &[Port] = &[control("gate")];
 const STEP_IN: &[Port] = &[control("advance"), control("reset")];
 const RANDOM_IN: &[Port] = &[control("trigger")];
-const MATH_IN: &[Port] = &[control("in")];
+const MATH_IN: &[Port] = &[control("in"), control("operand")];
+const CLIP_IN: &[Port] = &[control("in")];
+const COUNTER_IN: &[Port] = &[control("advance"), control("reset")];
+const COUNTER_OUT: &[Port] = &[control("index")];
+/// A select's `index` and its inputs; a select of `n` has the first `n`.
+const SELECT_IN: &[Port] = &[
+    control("index"),
+    control("a"),
+    control("b"),
+    control("c"),
+    control("d"),
+    control("e"),
+    control("f"),
+    control("g"),
+    control("h"),
+];
+const SLEW_IN: &[Port] = &[control("in")];
 const NOTES: &[Port] = &[note("notes")];
 
 impl ModulatorKind {
@@ -108,6 +124,22 @@ impl ModulatorKind {
                 inlets: MATH_IN,
                 outlets: OUT,
             },
+            Self::Counter => Ports {
+                inlets: COUNTER_IN,
+                outlets: COUNTER_OUT,
+            },
+            Self::Select => Ports {
+                inlets: SELECT_IN,
+                outlets: OUT,
+            },
+            Self::Slew => Ports {
+                inlets: SLEW_IN,
+                outlets: OUT,
+            },
+            Self::Unknown => Ports {
+                inlets: &[],
+                outlets: &[],
+            },
         }
     }
 
@@ -117,7 +149,29 @@ impl ModulatorKind {
     pub const fn input_port(self) -> u8 {
         match self {
             Self::Lfo => 1,
-            Self::Envelope | Self::Step | Self::Random | Self::Math => 0,
+            _ => 0,
+        }
+    }
+}
+
+impl crate::modulation::ModulatorParams {
+    /// This box's jacks as its params have them: a select has as many
+    /// inputs as it is set to, and `clip`, the arithmetic box with two
+    /// bounds rather than an operand, has no operand inlet. Every other kind
+    /// has its kind's table.
+    pub fn ports(&self) -> Ports {
+        use crate::modulation::{ModMathOp, ModulatorParams};
+        let ports = self.kind().ports();
+        match self {
+            ModulatorParams::Select(select) => Ports {
+                inlets: &SELECT_IN[..1 + usize::from(select.inputs.clamp(2, 8))],
+                outlets: ports.outlets,
+            },
+            ModulatorParams::Math(math) if math.op == ModMathOp::Clamp => Ports {
+                inlets: CLIP_IN,
+                outlets: ports.outlets,
+            },
+            _ => ports,
         }
     }
 }
@@ -301,7 +355,7 @@ impl SongModulation {
     /// The jacks of the box or tag `node`, if it is in the song.
     pub fn ports_of(&self, node: ModSourceId) -> Option<Ports> {
         self.module(node)
-            .map(|module| module.params.kind().ports())
+            .map(|module| module.params.ports())
             .or_else(|| self.tag(node).map(|tag| tag.kind.ports()))
     }
 
@@ -343,6 +397,19 @@ impl SongModulation {
             late: false,
         });
         Ok(())
+    }
+
+    /// Remove every wire whose jacks a box no longer has: a select set to
+    /// fewer inputs, an arithmetic box made a `clip`, which has no operand.
+    /// Returns whether any went.
+    pub fn drop_dead_wires(&mut self) -> bool {
+        let before = self.wires.len();
+        let wires = std::mem::take(&mut self.wires);
+        self.wires = wires
+            .into_iter()
+            .filter(|wire| self.check_wire(wire.from, wire.to).is_ok())
+            .collect();
+        self.wires.len() != before
     }
 
     /// Remove the wire into `inlet`. Returns whether there was one.
@@ -689,6 +756,95 @@ mod tests {
         let text = toml::to_string(&loaded).unwrap();
         assert!(!text.contains("\ninput ="), "nothing writes an input now:\n{text}");
         assert_eq!(toml::from_str::<SongModulation>(&text).unwrap(), loaded);
+    }
+
+    #[test]
+    fn a_select_has_the_inputs_it_is_set_to_and_a_clip_has_no_operand() {
+        use crate::modulation::{ModMathOp, ModMathParams, ModSelectParams, ModulatorParams};
+        let select = ModulatorParams::Select(ModSelectParams { inputs: 3 });
+        let names: Vec<_> = select.ports().inlets.iter().map(|port| port.name).collect();
+        assert_eq!(names, ["index", "a", "b", "c"]);
+        let times = ModulatorParams::Math(ModMathParams::default());
+        assert_eq!(times.ports().inlets.len(), 2, "in and operand");
+        let clip = ModulatorParams::Math(ModMathParams {
+            op: ModMathOp::Clamp,
+            ..ModMathParams::default()
+        });
+        assert_eq!(clip.ports().inlets.len(), 1);
+        assert_eq!(ModulatorParams::Unknown.ports().inlets.len(), 0);
+        assert_eq!(ModulatorParams::Unknown.ports().outlets.len(), 0);
+        for kind in ModulatorKind::ALL {
+            assert!(kind.ports().inlets.len() <= crate::modulation_plan::MAX_INLETS, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn narrowing_a_box_drops_the_wires_into_jacks_it_no_longer_has() {
+        use crate::modulation::{ModMathOp, ModulatorParams, ModSelectParams};
+        let (mut song, ids) =
+            song_with(&[ModulatorKind::Lfo, ModulatorKind::Select, ModulatorKind::Math]);
+        let (lfo, select, math) = (ids[0], ids[1], ids[2]);
+        song.wires.clear();
+        let out = Jack::new(lfo, 0);
+        song.connect(out, Jack::new(select, 1)).unwrap();
+        song.connect(out, Jack::new(select, 4)).unwrap();
+        song.connect(out, Jack::new(math, 1)).unwrap();
+        assert!(!song.drop_dead_wires(), "every jack is there");
+        song.module_mut(select).unwrap().params = ModulatorParams::Select(ModSelectParams { inputs: 2 });
+        if let Some(ModulatorParams::Math(math)) = song.module_mut(math).map(|module| &mut module.params) {
+            math.op = ModMathOp::Clamp;
+        }
+        assert!(song.drop_dead_wires());
+        let left: Vec<_> = song.wires.iter().map(|wire| wire.to).collect();
+        assert_eq!(left, [Jack::new(select, 1)]);
+    }
+
+    #[test]
+    fn an_unknown_box_keeps_its_text_through_a_save() {
+        use crate::modulation::ModulatorParams;
+        let (mut song, ids) = song_with(&[ModulatorKind::Lfo]);
+        let unknown = song.add_module(ModulatorParams::Unknown, InputSource::None, ChannelId(1), "Kick 1");
+        song.module_mut(unknown).unwrap().text = "chord min7".into();
+        let saved = toml::to_string(&song).unwrap();
+        let loaded: SongModulation = toml::from_str(&saved).unwrap();
+        assert_eq!(loaded, song);
+        assert_eq!(loaded.module(unknown).unwrap().text, "chord min7");
+        assert_eq!(loaded.module(ids[0]).unwrap().text, "", "a known box saves no text");
+    }
+
+    #[test]
+    fn a_box_a_later_build_made_opens_as_an_unknown_box() {
+        use crate::modulation::ModulatorParams;
+        let later = r#"
+next_source_id = 3
+
+[[modules]]
+id = 1
+at = { x = 10, y = 10 }
+params = { kind = "chord", quality = "min7", inversion = 1 }
+
+[[modules]]
+id = 2
+at = { x = 10, y = 60 }
+text = "chance 0.70"
+params = { kind = "chance", p = 0.7 }
+"#;
+        let loaded: SongModulation = toml::from_str(later).unwrap();
+        let chord = loaded.module(ModSourceId(1)).unwrap();
+        assert_eq!((chord.params, chord.text.as_str()), (ModulatorParams::Unknown, "chord"));
+        let chance = loaded.module(ModSourceId(2)).unwrap();
+        assert_eq!((chance.params, chance.text.as_str()), (ModulatorParams::Unknown, "chance 0.70"));
+
+        let damaged = r#"
+[[modules]]
+id = 1
+at = { x = 10, y = 10 }
+params = { kind = "lfo", rate_hz = "fast" }
+"#;
+        assert!(
+            toml::from_str::<SongModulation>(damaged).is_err(),
+            "a known kind it cannot read is damage, not a newer box"
+        );
     }
 
     #[test]

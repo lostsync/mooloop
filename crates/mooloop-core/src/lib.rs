@@ -31,6 +31,7 @@ pub mod mlp8_factory;
 pub mod mlp8;
 pub mod outlet;
 pub mod patch;
+pub mod box_text;
 pub mod pattern;
 pub mod playlist;
 pub mod plugin;
@@ -116,6 +117,9 @@ pub use modulation::{
     RANDOM_PARAM_TRIGGER, RANDOM_PARAM_WALK, STEP_DESCRIPTORS, STEP_PARAM_DIVISION,
     STEP_PARAM_GLIDE, STEP_PARAM_LENGTH, STEP_PARAM_TRIGGER, STEP_PARAM_VALUE_BASE,
     STRIP_DESCRIPTORS, STRIP_PARAM_PAN, STRIP_PARAM_VOLUME,
+    ModCounterParams, ModSelectParams, ModSlewParams, COUNTER_DESCRIPTORS, COUNTER_MAX_STEPS,
+    COUNTER_PARAM_STEPS, SELECT_DESCRIPTORS, SELECT_MAX_INPUTS, SELECT_PARAM_INPUTS,
+    SLEW_DESCRIPTORS, SLEW_PARAM_TIME_S,
 };
 pub use strip::{
     strip_band_of, strip_band_param, strip_band_shelf, StripBand, StripParams, STRIP_BAND_BASE,

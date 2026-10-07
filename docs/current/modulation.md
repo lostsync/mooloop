@@ -28,16 +28,21 @@ area, and where each behaviour stops.
   or **Ctrl+6** (`view.pane-modulation`). It opens in the bottom slot and
   moves between panes like any other view. It holds the song's patch canvas:
   boxes where they were put, `gate` tags at the left edge, a tag under each
-  route naming its parameter, device and depth, and the wires; drag between
-  jacks to wire, click an outlet to arm Assign, click an inlet to pick what
-  feeds it, marquee and drag to move, Delete to remove. The canvas is larger
-  than the pane and scrolls. Beside it, the OUTLETS of every channel that
-  publishes some, under the channel's name; an **Add** list on the right;
-  the selected module's surface, with its name edited in its header; and
+  route naming its parameter, device and depth, and the wires; double-click
+  empty canvas to type a box (`lfo tri 1/4`, `counter 4`, `* -0.5`; a
+  completion list offers the vocabulary) and double-click a box to retype
+  it; drag between jacks to wire, click an outlet to arm Assign, click an
+  inlet to pick what feeds it, marquee and drag to move, Delete to remove.
+  A name the vocabulary lacks makes a box outlined in red that keeps its
+  text and does nothing. The canvas is larger than the pane and scrolls.
+  Beside it, the OUTLETS of every channel that publishes some, under the
+  channel's name; the selected module's surface, with its name edited in its header; and
   beside it the selected source's routes from the whole song, each naming
   its chain, device and parameter ("Kick Filter 1 · Cutoff"), with polarity
-  and remove. Five module kinds ship (LFO, Envelope, Step, Random and Math),
-  each a descriptor table plus a tick, so a module's parameters undo and
+  and remove. Eight module kinds ship (LFO, Envelope, Step, Random, Math as
+  the arithmetic boxes `+ - * / min max clip`, Counter, Select and Slew),
+  each a descriptor table plus a tick; the last three have no surface on
+  the shelf until step 05's faces, so a module's parameters undo and
   persist like an effect's. Selection and arming hold the source itself, so
   they survive a channel change, a reorder and a new module.
 - **A module's input is picked from a list**: none, then every channel's

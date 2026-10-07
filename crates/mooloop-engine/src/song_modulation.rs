@@ -229,6 +229,7 @@ mod tests {
             open: false,
             rack: None,
             params,
+            text: String::new(),
         }
     }
 

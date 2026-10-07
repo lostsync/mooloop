@@ -823,6 +823,18 @@ pub const MATH_PARAM_OPERAND: u32 = 2;
 pub const MATH_PARAM_CLAMP_LOW: u32 = 3;
 pub const MATH_PARAM_CLAMP_HIGH: u32 = 4;
 
+/// A counter's length: how many advances it takes to wrap.
+pub const COUNTER_PARAM_STEPS: u32 = 0;
+/// How many inputs a select chooses among, after its `index` inlet.
+pub const SELECT_PARAM_INPUTS: u32 = 0;
+/// How long a slew takes to cover its distance.
+pub const SLEW_PARAM_TIME_S: u32 = 0;
+
+/// The longest count a counter takes (song patch step 04).
+pub const COUNTER_MAX_STEPS: u8 = 64;
+/// The most inputs a select takes: `a` to `h`.
+pub const SELECT_MAX_INPUTS: u8 = 8;
+
 /// A boolean as a descriptor: two positions, off by default.
 const fn toggle(id: u32, name: &'static str) -> ParamDescriptor {
     ParamDescriptor {
@@ -1142,6 +1154,36 @@ pub const MATH_DESCRIPTORS: [ParamDescriptor; 5] = [
     },
 ];
 
+pub const COUNTER_DESCRIPTORS: [ParamDescriptor; 1] = [ParamDescriptor {
+    id: COUNTER_PARAM_STEPS,
+    name: "Length",
+    unit: "",
+    min: 2.0,
+    max: COUNTER_MAX_STEPS as f32,
+    curve: ParamCurve::Stepped(COUNTER_MAX_STEPS as u16 - 1),
+    default: 4.0,
+}];
+
+pub const SELECT_DESCRIPTORS: [ParamDescriptor; 1] = [ParamDescriptor {
+    id: SELECT_PARAM_INPUTS,
+    name: "Inputs",
+    unit: "",
+    min: 2.0,
+    max: SELECT_MAX_INPUTS as f32,
+    curve: ParamCurve::Stepped(SELECT_MAX_INPUTS as u16 - 1),
+    default: 4.0,
+}];
+
+pub const SLEW_DESCRIPTORS: [ParamDescriptor; 1] = [ParamDescriptor {
+    id: SLEW_PARAM_TIME_S,
+    name: "Time",
+    unit: "s",
+    min: 0.001,
+    max: 10.0,
+    curve: ParamCurve::Exponential,
+    default: 0.2,
+}];
+
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ModLfoParams {
@@ -1361,6 +1403,48 @@ impl Default for ModMathParams {
     }
 }
 
+/// Counts rises on `advance` and wraps at `steps`; `reset` goes back to 0.
+/// Its outlet is the count as `0..1` across the steps, as the prototype
+/// has it, so a `select` of as many inputs reads it directly.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ModCounterParams {
+    pub steps: u8,
+}
+
+impl Default for ModCounterParams {
+    fn default() -> Self {
+        Self { steps: 4 }
+    }
+}
+
+/// Passes one of `inputs` wires through, picked by its `index` inlet read
+/// as `0..1` across them.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ModSelectParams {
+    pub inputs: u8,
+}
+
+impl Default for ModSelectParams {
+    fn default() -> Self {
+        Self { inputs: 4 }
+    }
+}
+
+/// Follows its input, taking `time_seconds` to settle after a jump.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ModSlewParams {
+    pub time_seconds: f32,
+}
+
+impl Default for ModSlewParams {
+    fn default() -> Self {
+        Self { time_seconds: 0.2 }
+    }
+}
+
 /// One modulator slot's configuration.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
@@ -1370,6 +1454,13 @@ pub enum ModulatorParams {
     Step(ModStepParams),
     Random(ModRandomParams),
     Math(ModMathParams),
+    Counter(ModCounterParams),
+    Select(ModSelectParams),
+    Slew(ModSlewParams),
+    /// A box whose name this build does not know: typed, or saved by a
+    /// later build. It keeps its text ([`SongModule::text`]), has no jacks,
+    /// and puts out nothing.
+    Unknown,
 }
 
 impl ModulatorParams {
@@ -1380,6 +1471,10 @@ impl ModulatorParams {
             Self::Step(_) => ModulatorKind::Step,
             Self::Random(_) => ModulatorKind::Random,
             Self::Math(_) => ModulatorKind::Math,
+            Self::Counter(_) => ModulatorKind::Counter,
+            Self::Select(_) => ModulatorKind::Select,
+            Self::Slew(_) => ModulatorKind::Slew,
+            Self::Unknown => ModulatorKind::Unknown,
         }
     }
 
@@ -1443,6 +1538,19 @@ impl ModulatorParams {
                 MATH_PARAM_CLAMP_HIGH => p.clamp_high,
                 _ => return None,
             }),
+            Self::Counter(p) => match id {
+                COUNTER_PARAM_STEPS => Some(f32::from(p.steps)),
+                _ => None,
+            },
+            Self::Select(p) => match id {
+                SELECT_PARAM_INPUTS => Some(f32::from(p.inputs)),
+                _ => None,
+            },
+            Self::Slew(p) => match id {
+                SLEW_PARAM_TIME_S => Some(p.time_seconds),
+                _ => None,
+            },
+            Self::Unknown => None,
         }
     }
 
@@ -1522,6 +1630,22 @@ impl ModulatorParams {
                 MATH_PARAM_CLAMP_HIGH => p.clamp_high = value,
                 _ => {}
             },
+            Self::Counter(p) => {
+                if id == COUNTER_PARAM_STEPS {
+                    p.steps = index.clamp(2, i32::from(COUNTER_MAX_STEPS)) as u8;
+                }
+            }
+            Self::Select(p) => {
+                if id == SELECT_PARAM_INPUTS {
+                    p.inputs = index.clamp(2, i32::from(SELECT_MAX_INPUTS)) as u8;
+                }
+            }
+            Self::Slew(p) => {
+                if id == SLEW_PARAM_TIME_S {
+                    p.time_seconds = value;
+                }
+            }
+            Self::Unknown => {}
         }
     }
 }
@@ -1534,15 +1658,26 @@ pub enum ModulatorKind {
     Step,
     Random,
     Math,
+    Counter,
+    Select,
+    Slew,
+    /// A box this build has no name for; never in [`Self::ALL`].
+    Unknown,
 }
 
 impl ModulatorKind {
-    pub const ALL: [ModulatorKind; 5] = [
+    /// Every kind a box can be made as, in the order the shelf's kind
+    /// tokens number them: new kinds are appended, so a token keeps naming
+    /// the kind it did.
+    pub const ALL: [ModulatorKind; 8] = [
         ModulatorKind::Lfo,
         ModulatorKind::Envelope,
         ModulatorKind::Step,
         ModulatorKind::Random,
         ModulatorKind::Math,
+        ModulatorKind::Counter,
+        ModulatorKind::Select,
+        ModulatorKind::Slew,
     ];
 
     pub fn label(self) -> &'static str {
@@ -1552,6 +1687,10 @@ impl ModulatorKind {
             Self::Step => "Step",
             Self::Random => "Random",
             Self::Math => "Math",
+            Self::Counter => "Counter",
+            Self::Select => "Select",
+            Self::Slew => "Slew",
+            Self::Unknown => "Unknown",
         }
     }
 
@@ -1564,6 +1703,10 @@ impl ModulatorKind {
             Self::Step => "STEP",
             Self::Random => "RND",
             Self::Math => "MATH",
+            Self::Counter => "CNT",
+            Self::Select => "SEL",
+            Self::Slew => "SLEW",
+            Self::Unknown => "?",
         }
     }
 
@@ -1590,6 +1733,10 @@ impl ModulatorKind {
             Self::Step => ModulatorParams::Step(ModStepParams::default()),
             Self::Random => ModulatorParams::Random(ModRandomParams::default()),
             Self::Math => ModulatorParams::Math(ModMathParams::default()),
+            Self::Counter => ModulatorParams::Counter(ModCounterParams::default()),
+            Self::Select => ModulatorParams::Select(ModSelectParams::default()),
+            Self::Slew => ModulatorParams::Slew(ModSlewParams::default()),
+            Self::Unknown => ModulatorParams::Unknown,
         }
     }
 
@@ -1601,6 +1748,10 @@ impl ModulatorKind {
             Self::Step => &STEP_DESCRIPTORS,
             Self::Random => &RANDOM_DESCRIPTORS,
             Self::Math => &MATH_DESCRIPTORS,
+            Self::Counter => &COUNTER_DESCRIPTORS,
+            Self::Select => &SELECT_DESCRIPTORS,
+            Self::Slew => &SLEW_DESCRIPTORS,
+            Self::Unknown => &[],
         }
     }
 
@@ -2648,7 +2799,11 @@ impl ModRack {
             ModulatorParams::Envelope(_)
             | ModulatorParams::Step(_)
             | ModulatorParams::Random(_)
-            | ModulatorParams::Math(_) => 1.0,
+            | ModulatorParams::Math(_)
+            | ModulatorParams::Counter(_)
+            | ModulatorParams::Select(_)
+            | ModulatorParams::Slew(_)
+            | ModulatorParams::Unknown => 1.0,
         }
     }
 
@@ -2774,6 +2929,12 @@ pub struct SongModule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rack: Option<RackSeat>,
     pub params: ModulatorParams,
+    /// What was typed into a box whose name this build does not know
+    /// ([`ModulatorParams::Unknown`]), kept so the box reads as it was typed
+    /// and saves as it came. Empty for every box this build knows: those
+    /// are spelled from their params (song patch step 04).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text: String,
 }
 
 impl SongModule {
@@ -2839,6 +3000,11 @@ fn rack_input(
         ModulatorParams::Math(math) => {
             module_at(math.input_slot).map_or(InputSource::None, InputSource::Module)
         }
+        // Song patch boxes; no rack ever held one.
+        ModulatorParams::Counter(_)
+        | ModulatorParams::Select(_)
+        | ModulatorParams::Slew(_)
+        | ModulatorParams::Unknown => InputSource::None,
         // A seat with no identity: a preset's gate on its own channel's notes
         // (`Project::preset_rack`), which means the channel it lands on.
         ModulatorParams::Envelope(_)
@@ -2922,8 +3088,50 @@ struct SavedSongModule {
     input: InputSource,
     #[serde(default)]
     rack: Option<RackSeat>,
-    params: ModulatorParams,
+    params: SavedParams,
+    #[serde(default)]
+    text: String,
 }
+
+/// A module's params as the file holds them. A `kind` this build does not
+/// know is a box a later build made: it loads as an unknown box, its text
+/// kept (or its kind's name when it saved none), rather than refusing the
+/// song. A kind it does know with params it cannot read still refuses it:
+/// that is damage, not a newer box.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum SavedParams {
+    Known(ModulatorParams),
+    Unknown(UnknownParams),
+}
+
+struct UnknownParams {
+    kind: String,
+}
+
+impl<'de> serde::Deserialize<'de> for UnknownParams {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct Tagged {
+            kind: String,
+        }
+        let Tagged { kind } = Tagged::deserialize(deserializer)?;
+        if KNOWN_KINDS.contains(&kind.as_str()) {
+            return Err(serde::de::Error::custom(format!(
+                "a {kind} box whose settings could not be read"
+            )));
+        }
+        Ok(Self { kind })
+    }
+}
+
+/// Every `kind` a module's params are saved under, as serde spells them.
+const KNOWN_KINDS: [&str; 9] = [
+    "lfo", "envelope", "step", "random", "math", "counter", "select", "slew", "unknown",
+];
 
 fn is_zero(value: &u32) -> bool {
     *value == 0
@@ -3054,7 +3262,19 @@ impl<'de> serde::Deserialize<'de> for SongModulation {
                         .unwrap_or_else(|| crate::patch::grid_place(index)),
                     open: module.open,
                     rack: module.rack,
-                    params: module.params,
+                    params: match module.params {
+                        SavedParams::Known(params) => params,
+                        SavedParams::Unknown(_) => ModulatorParams::Unknown,
+                    },
+                    text: match module.params {
+                        SavedParams::Known(ModulatorParams::Unknown) | SavedParams::Unknown(_)
+                            if !module.text.is_empty() =>
+                        {
+                            module.text
+                        }
+                        SavedParams::Unknown(unknown) => unknown.kind,
+                        SavedParams::Known(_) => String::new(),
+                    },
                 }
             })
             .collect();
@@ -3175,6 +3395,7 @@ impl SongModulation {
             open: false,
             rack: seat,
             params: song_params(params),
+            text: String::new(),
         });
         self.set_input(id, input);
         id
@@ -3264,6 +3485,7 @@ impl SongModulation {
                     slot: slot as u8,
                 }),
                 params: song_params(entry.params),
+                text: String::new(),
             });
         }
         // After every module is in: a Math module may read a later slot.
@@ -3450,6 +3672,7 @@ impl SongModulation {
                             slot: slot as u8,
                         }),
                         params: song_params(entry.params),
+                        text: String::new(),
                     });
                     inputs.push((entry.id, input));
                 }

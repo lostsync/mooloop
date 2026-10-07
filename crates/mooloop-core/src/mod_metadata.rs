@@ -425,7 +425,13 @@ pub fn local_slot_sources(rack: &ModRack) -> Vec<(u8, ModSourceDescriptor)> {
                     name,
                     random.trigger == crate::modulation::ModRandomTrigger::NoteTrigger,
                 ),
-                ModulatorParams::Math(_) => ModSourceDescriptor::local_math(id, name),
+                // Song patch boxes are never in a channel rack; a value
+                // source with no notes of its own describes them.
+                ModulatorParams::Math(_)
+                | ModulatorParams::Counter(_)
+                | ModulatorParams::Select(_)
+                | ModulatorParams::Slew(_)
+                | ModulatorParams::Unknown => ModSourceDescriptor::local_math(id, name),
             };
             Some((slot as u8, descriptor))
         })
