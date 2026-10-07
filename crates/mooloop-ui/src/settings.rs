@@ -199,6 +199,10 @@ pub(crate) struct AppearanceSettings {
     /// what an existing config means.
     #[serde(default = "default_meter_falloff")]
     pub meter_falloff: String,
+    /// How much the patch canvas's cables show what moves through them, by
+    /// option name: `off`, `subtle` or `full`.
+    #[serde(default = "default_cable_activity")]
+    pub cable_activity: String,
     /// Schemes saved from the Appearance page before they were theme files.
     /// Emptied by the migration in `UiSettings::load_from`, and skipped on
     /// write, so a config saved today does not carry the key at all.
@@ -273,6 +277,32 @@ pub(crate) fn meter_falloff_name(index: i32) -> &'static str {
     METER_FALLOFFS
         .get(index.clamp(0, 3) as usize)
         .unwrap_or(&METER_FALLOFFS[1])
+}
+
+/// How much the patch canvas's cables show, by name, in the order the
+/// Appearance page lists them. Subtle is the default: Slint cannot read the
+/// system's reduced-motion setting, so nothing starts on Off by itself.
+pub(crate) const CABLE_ACTIVITIES: [&str; 3] = ["off", "subtle", "full"];
+
+fn default_cable_activity() -> String {
+    "subtle".to_owned()
+}
+
+/// Maps a persisted cable activity name onto its row; unknown names land
+/// on Subtle.
+pub(crate) fn cable_activity_index(name: &str) -> i32 {
+    CABLE_ACTIVITIES
+        .iter()
+        .position(|&option| option == name)
+        .map(|index| index as i32)
+        .unwrap_or(1)
+}
+
+/// Inverse of [`cable_activity_index`], for persisting the global back.
+pub(crate) fn cable_activity_name(index: i32) -> &'static str {
+    CABLE_ACTIVITIES
+        .get(index.clamp(0, 2) as usize)
+        .unwrap_or(&CABLE_ACTIVITIES[1])
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -504,6 +534,7 @@ impl Default for AppearanceSettings {
             motion_speed: default_motion_speed(),
             motion_easing: default_motion_easing(),
             meter_falloff: default_meter_falloff(),
+            cable_activity: default_cable_activity(),
             user_schemes: Vec::new(),
         }
     }
@@ -590,6 +621,11 @@ impl AppearanceSettings {
                 self.meter_falloff.clone()
             } else {
                 default_meter_falloff()
+            },
+            cable_activity: if CABLE_ACTIVITIES.contains(&self.cable_activity.as_str()) {
+                self.cable_activity.clone()
+            } else {
+                default_cable_activity()
             },
             user_schemes: self.user_schemes.clone(),
         })
@@ -2673,6 +2709,22 @@ mod tests {
         .validated()
         .unwrap();
         assert_eq!(settings.meter_falloff, "standard");
+    }
+
+    #[test]
+    fn cable_activity_names_round_trip_and_an_unknown_one_is_subtle() {
+        for (index, name) in CABLE_ACTIVITIES.iter().enumerate() {
+            assert_eq!(cable_activity_index(name), index as i32);
+            assert_eq!(cable_activity_name(index as i32), *name);
+        }
+        let settings = AppearanceSettings {
+            cable_activity: "blinky".to_owned(),
+            ..AppearanceSettings::default()
+        }
+        .validated()
+        .unwrap();
+        assert_eq!(settings.cable_activity, "subtle");
+        assert_eq!(AppearanceSettings::default().cable_activity, "subtle");
     }
 
     #[test]

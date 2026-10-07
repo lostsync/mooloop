@@ -297,3 +297,49 @@ fn a_set_grown_past_what_it_held_installs_without_allocating() {
     assert_eq!(running.modules.len(), 41);
     assert_eq!(running.routes.len(), 82);
 }
+
+/// **A box's outlet routed onto another box's knob moves that box** (song
+/// patch step 05, the first use of `ParamOwner::Modulator`). Shaped against
+/// the tree before it, where the engine resolved no route onto a box: the
+/// second box put out its own setting, 0, either way.
+#[test]
+fn a_box_routed_onto_another_box_knob_moves_it() {
+    use mooloop_core::{
+        ModMathOp, ModMathParams, MATH_PARAM_OPERAND, MAX_CHANNELS,
+    };
+    use mooloop_dsp::{NoteGateEvents, MAX_CONTROL_TICKS_PER_BLOCK};
+    let plus = |id: u32, operand: f32| SongModule {
+        id: ModSourceId(id),
+        name: String::new(),
+        seed: id,
+        at: Default::default(),
+        open: true,
+        rack: None,
+        params: ModulatorParams::Math(ModMathParams {
+            op: ModMathOp::Add,
+            operand,
+            ..ModMathParams::default()
+        }),
+        text: String::new(),
+    };
+    let mut project = Project::default();
+    project.modulation.modules = vec![plus(1, 0.5), plus(2, 0.0)];
+    project.modulation.next_source_id = 3;
+    let run = |project: &Project| {
+        let mut set = SongModulator::of_project(project);
+        let gates = vec![[NoteGateEvents::default(); MAX_CHANNELS]; MAX_CONTROL_TICKS_PER_BLOCK];
+        let beats = vec![None; MAX_CONTROL_TICKS_PER_BLOCK];
+        set.tick_block(SAMPLE_RATE, 120.0, BLOCK, &gates, &beats);
+        set.output(0, 1)
+    };
+    assert_eq!(run(&project), 0.0, "unrouted, the box puts out its setting");
+    // The operand runs -4..4: a tenth of 0.5 lifts it a twentieth of that.
+    project.modulation.routes.push(ModRoute::from_module(
+        ModSourceId(1),
+        ParamAddr::modulator(ModSourceId(2), MATH_PARAM_OPERAND),
+        0.1,
+        ModPolarity::Bipolar,
+    ));
+    let moved = run(&project);
+    assert!((moved - 0.4).abs() < 1e-5, "routed: {moved}");
+}

@@ -412,6 +412,18 @@ impl SongModulation {
         self.wires.len() != before
     }
 
+    /// Set or clear the bend of the wire into `inlet`. Returns whether that
+    /// changed anything.
+    pub fn bend_wire(&mut self, inlet: Jack, bend: Option<Bend>) -> bool {
+        match self.wires.iter_mut().find(|wire| wire.to == inlet) {
+            Some(wire) if wire.bend != bend => {
+                wire.bend = bend;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Remove the wire into `inlet`. Returns whether there was one.
     pub fn disconnect(&mut self, inlet: Jack) -> bool {
         let before = self.wires.len();

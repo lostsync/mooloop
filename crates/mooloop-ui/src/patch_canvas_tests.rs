@@ -387,3 +387,144 @@ fn patch_canvas_snapshot() {
         std::fs::write(&path, ppm).unwrap();
     }
 }
+
+#[test]
+fn a_cables_middle_drags_to_a_bend_and_a_double_click_straightens_it() {
+    let (h, [lfo, _, math]) = harness();
+    let math_in = Jack::new(math, 0);
+    h.drag(h.jack(lfo, true, 0), h.jack(math, false, 0));
+    let line = h
+        .state
+        .borrow()
+        .patch_layout()
+        .wires
+        .iter()
+        .find(|wire| wire.key == patch_canvas::WireKey::Patch(math_in))
+        .map(|wire| wire.points.clone())
+        .expect("the wire is drawn");
+    // The LFO's outlet is above the Math box's inlet, so the middle run is
+    // horizontal and drags up and down.
+    let (a, b) = (line[1], line[2]);
+    assert_eq!(a.1, b.1, "{line:?}");
+    let middle = ((a.0 + b.0) / 2.0, a.1);
+    h.drag(middle, (middle.0, middle.1 + 24.0));
+    let bend = h.state.borrow().session.modulation.wire_into(math_in).and_then(|wire| wire.bend);
+    assert_eq!(
+        bend,
+        Some(mooloop_core::Bend { axis: mooloop_core::BendAxis::Horizontal, at: (a.1 + 24.0).round() as i32 })
+    );
+    assert_eq!(h.feeds(math_in), Some(Jack::new(lfo, 0)), "bending keeps the wire");
+    assert_eq!(h.steps(), ["Patch wire", "Bend a cable"], "one undo step per drag");
+
+    h.double_click((middle.0, a.1 + 24.0));
+    let bend = h.state.borrow().session.modulation.wire_into(math_in).and_then(|wire| wire.bend);
+    assert_eq!(bend, None, "a double-click goes back to automatic routing");
+    assert_eq!(h.steps(), ["Patch wire", "Bend a cable", "Straighten a cable"]);
+}
+
+#[test]
+fn an_open_box_shows_its_knobs_and_an_armed_outlet_assigns_to_one() {
+    let (h, [lfo, other, _]) = harness();
+    let fold = {
+        let layout = h.state.borrow().patch_layout();
+        let node = layout.node(patch_canvas::NodeKey::Node(lfo)).unwrap().clone();
+        (node.x + node.width - patch_canvas::FOLD_WIDTH / 2.0, node.y + patch_canvas::BOX_HEIGHT / 2.0)
+    };
+    h.click(fold);
+    assert!(h.state.borrow().session.modulation.module(lfo).unwrap().open);
+    assert_eq!(h.steps(), ["Open a box"]);
+    let patch = h.window.global::<PatchView>();
+    let knobs: Vec<_> = patch.get_knobs().iter().filter(|knob| knob.module == lfo.0 as i32).collect();
+    assert!(!knobs.is_empty(), "the face has knobs");
+    let depth = knobs
+        .iter()
+        .find(|knob| knob.param == mooloop_core::LFO_PARAM_DEPTH as i32)
+        .expect("an LFO's face has its depth");
+
+    // A base edit is one step.
+    patch.invoke_knob_changed(lfo.0 as i32, depth.param, 0.25);
+    assert_eq!(h.steps(), ["Open a box", "Box setting"]);
+
+    h.click(h.jack(other, true, 0));
+    assert_eq!(h.state.borrow().session.modulation_armed.get(), Some(ModSourceRef::Id(other)));
+    let armed = patch.get_knobs().iter().find(|knob| knob.module == lfo.0 as i32 && knob.param == depth.param).unwrap();
+    assert!(armed.allowed, "another box's outlet may move this knob");
+    patch.invoke_knob_depth_started();
+    patch.invoke_knob_depth_changed(lfo.0 as i32, depth.param, 0.5);
+    patch.invoke_knob_depth_changed(lfo.0 as i32, depth.param, 0.6);
+    patch.invoke_knob_depth_finished();
+    let routes: Vec<_> = h
+        .state
+        .borrow()
+        .session
+        .modulation
+        .routes
+        .iter()
+        .map(|route| (route.source, route.destination, route.depth))
+        .collect();
+    assert_eq!(
+        routes,
+        [(ModSourceRef::Id(other), ParamAddr::modulator(lfo, depth.param as u32), 0.6)],
+        "one route onto the knob, at the depth the drag ended on"
+    );
+    assert_eq!(h.steps(), ["Open a box", "Box setting", "Modulation route changed"]);
+}
+
+#[test]
+fn cables_show_their_level_and_flash_for_a_note_as_much_as_the_setting_says() {
+    let (h, [lfo, _, math]) = harness();
+    let notes = h
+        .state
+        .borrow_mut()
+        .session
+        .add_patch_tag(mooloop_core::TagKind::NotesIn { channel: None, take: false }, CanvasPoint::new(16, 120))
+        .unwrap();
+    let out = h
+        .state
+        .borrow_mut()
+        .session
+        .add_patch_tag(mooloop_core::TagKind::NotesOut { channel: None }, CanvasPoint::new(16, 300))
+        .unwrap();
+    h.drag(h.jack(lfo, true, 0), h.jack(math, false, 0));
+    {
+        let mut st = h.state.borrow_mut();
+        st.session.connect_patch(Jack::new(notes, 0), Jack::new(out, 0)).unwrap();
+        st.modulation_edited(&h.window);
+        // No engine here to take the set, so this side says it was sent.
+        st.session.modulation_sent = st.session.modulation_plan();
+    }
+    let read = |level: f32, count: u32| {
+        let st = h.state.borrow();
+        st.session.read_modulation_levels(|_| level, |_| Default::default(), |_| (count, false));
+        st.refresh_patch_activity(&h.window);
+    };
+    let wire = |inlet: Jack| {
+        let patch = h.window.global::<PatchView>();
+        let layout = h.state.borrow().patch_layout();
+        let index = layout
+            .wires
+            .iter()
+            .position(|wire| wire.key == patch_canvas::WireKey::Patch(inlet))
+            .expect("the wire is drawn");
+        patch.get_wires().row_data(index).unwrap()
+    };
+    let (control, note) = (Jack::new(math, 0), Jack::new(out, 0));
+    assert!(wire(note).note && !wire(control).note);
+
+    read(-0.8, 0);
+    assert!((wire(control).level - 0.8).abs() < 1e-6, "a control wire carries its level, either sign");
+    read(-0.8, 2);
+    assert!(wire(note).flash > 0, "a note thickens its wire");
+    assert!(h.state.borrow().patch_canvas.flashing.get());
+    for _ in 0..40 {
+        read(-0.8, 2);
+    }
+    assert_eq!(wire(note).flash, 0, "and only briefly");
+    assert!(!h.state.borrow().patch_canvas.flashing.get());
+
+    // Off draws plain wires and writes nothing.
+    h.window.global::<crate::DisplayPrefs>().set_cable_activity(0);
+    read(0.1, 3);
+    assert!((wire(control).level - 0.8).abs() < 1e-6);
+    assert_eq!(wire(note).flash, 0);
+}

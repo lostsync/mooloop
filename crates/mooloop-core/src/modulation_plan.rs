@@ -83,9 +83,10 @@ pub struct CompiledModule {
     pub inlets: [Option<CompiledInlet>; MAX_INLETS],
 }
 
-/// One tag as the engine runs it: a gate tag is the seat whose notes it
-/// hears. Every other tag (an empty slot, a notes tag) sends nothing on a
-/// control wire.
+/// One tag as the engine runs it: a gate tag or a notes-in tag is the seat
+/// whose notes it hears. A notes-in tag's wires go to note inlets, which no
+/// box runs before step 07; it is heard so the canvas can show its notes.
+/// Every other tag (an empty slot, a notes-out tag) sends nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompiledTag {
     pub id: ModSourceId,
@@ -115,6 +116,23 @@ pub struct CompiledRoute {
     pub polarity: ModPolarity,
 }
 
+/// A route from a box onto a knob of another box's face (song patch step
+/// 05), as the set runs it: before the box ticks, the knob is offset from
+/// its setting by the source's output, as a route offsets a device's knob.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CompiledKnob {
+    /// The box whose knob it is, by list position.
+    pub module: u16,
+    pub param: u32,
+    /// The box that moves it, by list position. Its output is read as the
+    /// tick has it when the knob's box runs: this tick's when the order ran
+    /// it first, else the tick before's.
+    pub source: u16,
+    /// Clamped into the knob's declared limit.
+    pub depth: f32,
+    pub polarity: ModPolarity,
+}
+
 /// The song's modulation resolved against one song's seats. See the module.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct CompiledModulation {
@@ -129,6 +147,11 @@ pub struct CompiledModulation {
     /// `routes[chains[c]..chains[c + 1]]` land on chain `c`
     /// ([`chain_index`]). Empty for a set with no routes at all.
     chains: Vec<u32>,
+    /// Every route onto a box's knob that the box takes, grouped by the box
+    /// it moves and then by knob, the song's order within a knob. Knobs that refuse
+    /// modulation (a stepped setting) and routes from anything but a box
+    /// are left out.
+    pub knobs: Vec<CompiledKnob>,
 }
 
 impl CompiledModulation {
@@ -169,6 +192,10 @@ impl CompiledModulation {
                     TagKind::Inlet {
                         bind: Some(InletSource::Gate(channel)),
                     } => seat_of(channel),
+                    TagKind::NotesIn {
+                        channel: Some(channel),
+                        ..
+                    } => seat_of(channel),
                     _ => None,
                 },
             })
@@ -195,10 +222,37 @@ impl CompiledModulation {
             });
         }
         let order = tick_order(&mut modules, tags.len());
+        let mut knobs: Vec<CompiledKnob> = song
+            .routes
+            .iter()
+            .filter_map(|route| {
+                let module = position_of(route.destination.module()?)?;
+                let ModSourceRef::Id(source) = route.source else {
+                    return None;
+                };
+                let source = position_of(source)?;
+                let descriptor = modules[usize::from(module)]
+                    .params
+                    .kind()
+                    .descriptor(route.destination.param)?;
+                let policy = ModDestinationDescriptor::for_param(descriptor);
+                policy.allowed.then(|| CompiledKnob {
+                    module,
+                    param: route.destination.param,
+                    source,
+                    depth: policy.clamp_depth(route.depth),
+                    polarity: route.polarity,
+                })
+            })
+            .collect();
+        knobs.sort_by_key(|knob| (knob.module, knob.param));
         let mut filed: Vec<(usize, CompiledRoute)> = song
             .routes
             .iter()
             .filter_map(|route| {
+                if route.destination.module().is_some() {
+                    return None;
+                }
                 let chain = chain_index(route.destination.scope)?;
                 let resolved = match route.source {
                     ModSourceRef::Id(id) => {
@@ -241,6 +295,7 @@ impl CompiledModulation {
                 modules,
                 tags,
                 order,
+                knobs,
                 ..Self::default()
             };
         }
@@ -259,11 +314,19 @@ impl CompiledModulation {
             order,
             routes: filed.into_iter().map(|(_, route)| route).collect(),
             chains,
+            knobs,
         }
     }
 
     pub fn is_empty(&self) -> bool {
         self.modules.is_empty() && self.routes.is_empty()
+    }
+
+    /// The routes onto box `module`'s knobs, by its list position.
+    pub fn knobs_of(&self, module: u16) -> &[CompiledKnob] {
+        let start = self.knobs.partition_point(|knob| knob.module < module);
+        let end = self.knobs.partition_point(|knob| knob.module <= module);
+        &self.knobs[start..end]
     }
 
     /// The routes landing on `scope`, in the song's order.
@@ -303,13 +366,15 @@ impl CompiledModulation {
     /// Whether `other` differs from this set only in module parameters and
     /// in route depths and polarities -- what a narrow edit can carry -- and
     /// not in which modules and tags there are, in what order, wired how, or
-    /// in which routes there are.
+    /// in which routes there are. A route onto a box's knob is part of the
+    /// set's shape, depth and all: a change to one arrives as a set.
     pub fn same_shape(&self, other: &Self) -> bool {
         let module = |module: &CompiledModule| {
             (module.id, module.params.kind(), module.seed, module.inlets)
         };
         let route = |route: &CompiledRoute| (route.source, route.resolved, route.destination);
         self.chains == other.chains
+            && self.knobs == other.knobs
             && self.tags == other.tags
             && self.order == other.order
             && self.modules.len() == other.modules.len()
@@ -353,16 +418,30 @@ impl CompiledModulation {
         if !policy.allowed {
             return 0.0;
         }
+        let shape = |source: CompiledSource, polarity: ModPolarity, output: f32| match polarity {
+            ModPolarity::Bipolar => output,
+            ModPolarity::Unipolar => (output + self.wire_span(source)) * 0.5,
+        };
+        if let Some(id) = destination.module() {
+            let Some(at) = self.position_of(id).and_then(|at| u16::try_from(at).ok()) else {
+                return 0.0;
+            };
+            return self
+                .knobs_of(at)
+                .iter()
+                .filter(|knob| knob.param == destination.param)
+                .map(|knob| {
+                    let source = CompiledSource::Module(knob.source);
+                    shape(source, knob.polarity, level(source)) * knob.depth
+                })
+                .sum();
+        }
         let mut total = 0.0;
         for route in self.chain_routes(destination.scope) {
             if route.destination != destination {
                 continue;
             }
-            let output = level(route.resolved);
-            let shaped = match route.polarity {
-                ModPolarity::Bipolar => output,
-                ModPolarity::Unipolar => (output + self.wire_span(route.resolved)) * 0.5,
-            };
+            let shaped = shape(route.resolved, route.polarity, level(route.resolved));
             total += shaped * policy.clamp_depth(route.depth);
         }
         total
@@ -588,5 +667,65 @@ mod tests {
         let plan = CompiledModulation::compile(&song, |_| None);
         assert_eq!(plan.order, [0, 1]);
         assert_eq!(plan.modules[0].inlets[0].map(|inlet| inlet.delayed), Some(true));
+    }
+    /// A route onto a box's knob (song patch step 05) is filed with the
+    /// knobs, not under any chain; one onto a stepped knob, or from
+    /// anything but a box, is left out. Its depth is part of the set's
+    /// shape, and its live offset reads like any route's.
+    #[test]
+    fn a_route_onto_a_box_knob_is_filed_with_the_knobs() {
+        use crate::modulation::{LFO_PARAM_DEPTH, LFO_PARAM_RATE_HZ, LFO_PARAM_WAVEFORM};
+        let mut song = lfo_song(2);
+        let onto = |param| ParamAddr::modulator(ModSourceId(1), param);
+        let knob_route = |source, param| ModRoute {
+            source,
+            source_slot: crate::modulation::UNRESOLVED_SLOT,
+            destination: onto(param),
+            depth: 0.5,
+            polarity: ModPolarity::Bipolar,
+        };
+        song.routes = vec![
+            knob_route(ModSourceRef::Id(ModSourceId(0)), LFO_PARAM_RATE_HZ),
+            knob_route(ModSourceRef::Id(ModSourceId(0)), LFO_PARAM_WAVEFORM),
+            knob_route(
+                ModSourceRef::Performance {
+                    channel: ChannelId(1),
+                    source: 0,
+                },
+                LFO_PARAM_DEPTH,
+            ),
+        ];
+        let plan = CompiledModulation::compile(&song, |_| Some(0));
+        assert!(plan.routes.is_empty(), "no chain holds a knob's route");
+        assert_eq!(
+            plan.knobs,
+            [CompiledKnob {
+                module: 1,
+                param: LFO_PARAM_RATE_HZ,
+                source: 0,
+                depth: 0.5,
+                polarity: ModPolarity::Bipolar,
+            }]
+        );
+        assert_eq!(plan.knobs_of(1).len(), 1);
+        assert!(plan.knobs_of(0).is_empty());
+        let policy = ModDestinationDescriptor::unrestricted(LFO_PARAM_RATE_HZ);
+        let offset = plan.offset_for(onto(LFO_PARAM_RATE_HZ), &policy, |_| 0.4);
+        assert!((offset - 0.2).abs() < 1e-6, "{offset}");
+
+        let mut deeper = song.clone();
+        deeper.routes[0].depth = 0.9;
+        assert!(!plan.same_shape(&CompiledModulation::compile(&deeper, |_| Some(0))));
+    }
+
+    /// A box's knob is on no channel or track, so moving or removing one
+    /// leaves it where it is.
+    #[test]
+    fn a_box_knob_is_moved_by_no_seat_edit() {
+        use crate::structure::{ChannelEdit, TrackEdit};
+        let knob = ParamAddr::modulator(ModSourceId(4), 0);
+        assert_eq!(ChannelEdit::Removed(0).address(knob), Some(knob));
+        assert_eq!(TrackEdit::Removed(0).address(knob), Some(knob));
+        assert_eq!(chain_index(knob.scope), None);
     }
 }

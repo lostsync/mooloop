@@ -7993,8 +7993,9 @@ impl RenderState {
             }
             // Neither needs one. The strip's output stage keeps no parameter
             // state between blocks -- it re-reads its knob every block -- and
-            // a modulator's own parameters are not modulation destinations
-            // yet, so there is nothing left holding a stale resolved value.
+            // a box's knob is offset from its base afresh on every control
+            // tick (`ModulatorSet::tick`), so there is nothing left holding a
+            // stale resolved value.
             ParamOwner::Modulator { .. } | ParamOwner::Strip => {}
             // A hosted plugin's parameter, an effect's or an instrument's
             // (`resolve_plugin_curves`, MOO-82 and MOO-314), has no base on
@@ -10342,6 +10343,7 @@ impl RenderState {
         }
         if ticks > 0 {
             self.modulator_meters.publish_modules(self.song_modulation.outputs());
+            self.modulator_meters.publish_tags(self.song_modulation.tag_activity());
         }
         // Lanes resolve whether or not the transport is running: stopped, the
         // playhead simply holds still and the destination sits at the value

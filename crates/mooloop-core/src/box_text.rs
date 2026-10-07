@@ -94,6 +94,22 @@ const DIVISIONS: [(&str, ModTimeDivision); 21] = [
     ("1/64t", ModTimeDivision::SixtyFourthTriplet),
 ];
 
+/// An LFO shape as a box spells it: `sin`, `tri`, `saw`, `sqr`, `rnd`.
+pub fn shape_name(shape: ModLfoWaveform) -> &'static str {
+    SHAPES
+        .iter()
+        .find(|(_, held)| *held == shape)
+        .map_or("?", |(name, _)| name)
+}
+
+/// A tempo division as a box spells it: `1/4`, `1/8t`, `1/16.`.
+pub fn division_name(division: ModTimeDivision) -> &'static str {
+    DIVISIONS
+        .iter()
+        .find(|(_, held)| *held == division)
+        .map_or("?", |(name, _)| name)
+}
+
 /// A number as a box spells it: at most two decimals, no trailing zeros.
 pub fn format_number(value: f32) -> String {
     let text = format!("{value:.2}");

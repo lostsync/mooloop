@@ -93,7 +93,7 @@ pub use patch::{
     SongTag, TagKind, Wire, WireRefusal,
 };
 pub use modulation_plan::{
-    chain_index, CompiledInlet, CompiledModulation, CompiledModule, CompiledRoute, CompiledSource,
+    chain_index, CompiledInlet, CompiledKnob, CompiledModulation, CompiledModule, CompiledRoute, CompiledSource,
     CompiledTag, MAX_INLETS,
     MODULATION_CHAINS,
 };
@@ -102,7 +102,7 @@ pub use modulation::{
     ModMathOp, ModMathParams, ModPolarity, ModRack, ModRandomParams, ModRandomTrigger, ModRoute,
     InputSource, RackSeat, SongModulation, SongModule,
     ModStepParams, ModStepTrigger, ModTimeDivision, ModulatorKind, ModulatorParams, ParamAddr,
-    ParamKey, ParamOwner,
+    ParamKey, ParamOwner, MODULATOR_SCOPE,
     ENVELOPE_DESCRIPTORS, ENV_PARAM_AMOUNT, ENV_PARAM_ATTACK_DIVISION, ENV_PARAM_ATTACK_S,
     ENV_PARAM_ATTACK_SYNC, ENV_PARAM_DECAY_DIVISION, ENV_PARAM_DECAY_S, ENV_PARAM_DECAY_SYNC,
     ENV_PARAM_RELEASE_DIVISION, ENV_PARAM_RELEASE_S, ENV_PARAM_RELEASE_SYNC, ENV_PARAM_SUSTAIN,

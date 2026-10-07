@@ -1461,7 +1461,9 @@ struct ChainShape {
     /// The source slot's identity when the source is a plugin instrument
     /// (MOO-312); unassigned otherwise, when it matches no address.
     source_device: DeviceId,
-    modulators: Vec<Option<ModulatorKind>>,
+    /// The rack's modules as `(identity, kind)`: what a `Modulator`
+    /// address on the chain names.
+    modulators: Vec<(mooloop_core::ModSourceId, ModulatorKind)>,
 }
 
 impl ChainShape {
@@ -1486,7 +1488,8 @@ impl ChainShape {
                 .map(|rack| {
                     rack.slots
                         .iter()
-                        .map(|slot| slot.map(|slot| slot.params.kind()))
+                        .flatten()
+                        .map(|slot| (slot.id, slot.params.kind()))
                         .collect()
                 })
                 .unwrap_or_default(),
@@ -1564,14 +1567,10 @@ impl ChainShape {
             ParamOwner::PluginParam { device } => {
                 plugin_param_problem(&self.effects, Some(self.source_device), device, None)
             }
-            ParamOwner::Modulator { slot } => match self.modulators.get(slot as usize).copied().flatten() {
-                None => Some(format!("it drives modulator slot {}, which is empty", slot + 1)),
-                Some(kind) => kind.descriptor(id).is_none().then(|| {
-                    format!(
-                        "it drives control {id} of the {:?} in modulator slot {}, which has no such control",
-                        kind,
-                        slot + 1
-                    )
+            ParamOwner::Modulator { module } => match self.modulators.iter().find(|(id, _)| *id == module) {
+                None => Some(format!("it drives a knob of modulator {}, which the rack does not have", module.0)),
+                Some((_, kind)) => kind.descriptor(id).is_none().then(|| {
+                    format!("it drives control {id} of the {kind:?} modulator, which has no such control")
                 }),
             },
         }
@@ -1821,6 +1820,11 @@ fn check_song_modulation(
     }
 
     let modules: Vec<_> = modulation.modules.iter().map(|module| module.id).collect();
+    let kinds: Vec<_> = modulation
+        .modules
+        .iter()
+        .map(|module| (module.id, module.params.kind()))
+        .collect();
     for (index, module) in modulation.modules.iter_mut().enumerate() {
         let where_ = format!("{WHO}, module {} ({})", index + 1, module.name);
         if let Some(seat) = module.rack {
@@ -1853,7 +1857,18 @@ fn check_song_modulation(
                 Some(format!("it is driven by slot {slot} of no rack in particular"))
             }
         };
-        let problem = missing.or_else(|| match route.destination.scope {
+        let knob = route.destination.module().map(|module| {
+            let id = route.destination.param;
+            match kinds.iter().find(|(held, _)| *held == module) {
+                None => Some(format!("it drives a knob of box {}, which this song does not have", module.0)),
+                Some((_, kind)) => kind.descriptor(id).is_none().then(|| {
+                    format!("it drives control {id} of a {} box, which has no such control", kind.label())
+                }),
+            }
+        });
+        let is_knob = knob.is_some();
+        let problem = missing.or_else(|| knob.flatten()).or_else(|| match route.destination.scope {
+            _ if is_knob => None,
             EffectTarget::Channel(seat) => match shapes.get(usize::from(seat)) {
                 Some(shape) => address_problem(route.destination, shape, Some(buses)),
                 None => Some(format!("it drives channel {}, which does not exist", seat + 1)),

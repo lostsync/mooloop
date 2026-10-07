@@ -6,7 +6,7 @@
 //! buys nothing at these rates (`docs/MODULATION.md`).
 
 use mooloop_core::{
-    ModEnvelopeParams, ModLfoParams, ModLfoWaveform, ModMathOp, ModMathParams, ModRandomParams,
+    CompiledKnob, ModDestinationDescriptor, ModEnvelopeParams, ModLfoParams, ModPolarity, ModLfoWaveform, ModMathOp, ModMathParams, ModRandomParams,
     ModRandomTrigger, ModStepParams, ModStepTrigger, ModulatorParams, MAX_CHANNELS, MAX_INLETS,
     MOD_STEP_MAX_STEPS,
 };
@@ -812,6 +812,9 @@ struct Tag {
     gate: Option<u8>,
     /// Notes held on the channel, counted from its NoteOns and NoteOffs.
     held: u16,
+    /// Every NoteOn the tag has passed, wrapping: what the canvas reads to
+    /// see a note go down its wire.
+    notes: u32,
 }
 
 /// What a node put on its outlet this tick: a value, and the events that
@@ -855,6 +858,11 @@ pub struct ModulatorSet {
     /// delayed wire.
     signals: Vec<Signal>,
     previous: Vec<Signal>,
+    /// The routes onto the boxes' knobs, grouped by box then knob
+    /// ([`mooloop_core::CompiledModulation::knobs`]), and each box's span of
+    /// them. Empty when no knob is routed.
+    knobs: Vec<CompiledKnob>,
+    knob_spans: Vec<(u32, u32)>,
 }
 
 impl ModulatorSet {
@@ -875,7 +883,7 @@ impl ModulatorSet {
                 last: [f32::NAN; MAX_INLETS],
             })
             .collect();
-        let tags: Vec<Tag> = tags.into_iter().map(|gate| Tag { gate, held: 0 }).collect();
+        let tags: Vec<Tag> = tags.into_iter().map(|gate| Tag { gate, held: 0, notes: 0 }).collect();
         let nodes = modules.len() + tags.len();
         let order = order
             .into_iter()
@@ -888,7 +896,32 @@ impl ModulatorSet {
             modules,
             tags,
             order,
+            knobs: Vec::new(),
+            knob_spans: Vec::new(),
         }
+    }
+
+    /// Route outlets onto the boxes' knobs (song patch step 05): before a
+    /// box ticks, each routed knob is offset from its setting by its
+    /// source's output, as a route offsets a device's knob, and the box
+    /// runs on the result. `knobs` is grouped by box then knob; one naming a
+    /// box the set does not have is dropped. Allocates.
+    pub fn with_knobs(mut self, knobs: impl IntoIterator<Item = CompiledKnob>) -> Self {
+        let modules = self.modules.len();
+        self.knobs = knobs
+            .into_iter()
+            .filter(|knob| usize::from(knob.module) < modules && usize::from(knob.source) < modules)
+            .collect();
+        self.knobs.sort_by_key(|knob| (knob.module, knob.param));
+        self.knob_spans = vec![(0, 0); if self.knobs.is_empty() { 0 } else { modules }];
+        for (index, knob) in self.knobs.iter().enumerate() {
+            let span = &mut self.knob_spans[usize::from(knob.module)];
+            if span.0 == span.1 {
+                span.0 = index as u32;
+            }
+            span.1 = index as u32 + 1;
+        }
+        self
     }
 
     pub fn len(&self) -> usize {
@@ -907,13 +940,21 @@ impl ModulatorSet {
             return;
         };
         module.spec.params = params;
+        Self::run_on(module, params, true);
+    }
+
+    /// Run `module` on `params` from now, keeping its running state where
+    /// the kind is the same. `retuned` is a setting changed by hand rather
+    /// than a knob moved by a route, which every tick does: only the first
+    /// restarts an LFO's fade-in.
+    fn run_on(module: &mut Module, params: ModulatorParams, retuned: bool) {
         match (params, &mut module.source) {
             (ModulatorParams::Lfo(next), Source::Lfo(lfo)) => {
                 let fade_changed = lfo.params.fade_in_seconds != next.fade_in_seconds
                     || lfo.params.fade_in_tempo_sync != next.fade_in_tempo_sync
                     || lfo.params.fade_in_division != next.fade_in_division;
                 lfo.params = next;
-                if fade_changed {
+                if fade_changed && retuned {
                     lfo.fade_elapsed_seconds = 0.0;
                 }
             }
@@ -959,6 +1000,53 @@ impl ModulatorSet {
         }
     }
 
+    /// Module `at`'s settings with its routed knobs moved, as the
+    /// destinations of [`Self::with_knobs`] read now; `None` when no knob of
+    /// it is routed. Several routes onto one knob sum before the knob is
+    /// clamped to its range, as they do on a device.
+    fn moved_knobs(&self, at: usize) -> Option<ModulatorParams> {
+        let &(start, end) = self.knob_spans.get(at)?;
+        if start == end {
+            return None;
+        }
+        let base = self.modules[at].spec.params;
+        let mut params = base;
+        let knobs = &self.knobs[start as usize..end as usize];
+        let mut index = 0;
+        while index < knobs.len() {
+            let param = knobs[index].param;
+            let mut offset = 0.0;
+            while index < knobs.len() && knobs[index].param == param {
+                let knob = knobs[index];
+                let source = usize::from(knob.source);
+                let output = self.outputs.get(source).copied().unwrap_or(0.0);
+                offset += match knob.polarity {
+                    ModPolarity::Bipolar => output,
+                    // Lifted onto the source's span, so the setting is the
+                    // floor: an LFO's depth, the full span for the rest
+                    // (`CompiledModulation::wire_span`).
+                    ModPolarity::Unipolar => {
+                        let span = match self.modules[source].spec.params {
+                            ModulatorParams::Lfo(lfo) => lfo.depth.clamp(0.0, 1.0),
+                            _ => 1.0,
+                        };
+                        (output + span) * 0.5
+                    }
+                } * knob.depth;
+                index += 1;
+            }
+            let (Some(descriptor), Some(value)) = (base.kind().descriptor(param), base.get(param)) else {
+                continue;
+            };
+            if !ModDestinationDescriptor::for_param(descriptor).allowed {
+                continue;
+            }
+            let normalized = (descriptor.to_normalized(value) + offset).clamp(0.0, 1.0);
+            params.set(param, descriptor.from_normalized(normalized));
+        }
+        Some(params)
+    }
+
     /// Take the running state of `from`'s module at `from_at` into this set's
     /// module at `at`, as the same module carried across a new set: its
     /// phase, cursor, envelope stage and held draw, what its inlets last
@@ -997,6 +1085,7 @@ impl ModulatorSet {
         };
         if tag.gate.is_some() && previous.gate.is_some() {
             self.tags[at].held = previous.held;
+            self.tags[at].notes = previous.notes;
             let node = self.modules.len() + at;
             if let Some(signal) = from.signals.get(from.modules.len() + from_at) {
                 self.signals[node] = *signal;
@@ -1007,6 +1096,12 @@ impl ModulatorSet {
     /// Current `-1..1` output of every module, in list order.
     pub fn outputs(&self) -> &[f32] {
         &self.outputs
+    }
+
+    /// Each tag, in tag order: how many NoteOns it has passed, wrapping,
+    /// and whether a note is held.
+    pub fn tag_activity(&self) -> impl Iterator<Item = (u32, bool)> + '_ {
+        self.tags.iter().map(|tag| (tag.notes, tag.held > 0))
     }
 
     /// Run one control tick: every node in the compiled order, each box
@@ -1058,6 +1153,7 @@ impl ModulatorSet {
                     tag.held = tag.held.saturating_sub(u16::from(events.note_offs));
                 }
                 tag.held = tag.held.saturating_add(u16::from(events.note_ons));
+                tag.notes = tag.notes.wrapping_add(u32::from(events.note_ons));
                 self.signals[node] = Signal {
                     value: if tag.held > 0 { 1.0 } else { 0.0 },
                     events,
@@ -1070,6 +1166,9 @@ impl ModulatorSet {
                     let signals = if inlet.delayed { &self.previous } else { &self.signals };
                     signals.get(usize::from(inlet.node)).copied().unwrap_or_default()
                 });
+            }
+            if let Some(params) = self.moved_knobs(node) {
+                Self::run_on(&mut self.modules[node], params, false);
             }
             let module = &mut self.modules[node];
             let mut fired = [false; MAX_INLETS];
@@ -1296,6 +1395,24 @@ mod tests {
         fn run_at(&mut self, sample_rate: u32, frames: usize, bpm: f64, beats: Option<f64>) {
             self.tick(sample_rate, frames, bpm, beats, &NO_GATES);
         }
+    }
+
+    /// A gate tag counts every NoteOn it passes, for the canvas's note
+    /// wires, and keeps counting across a new set.
+    #[test]
+    fn a_gate_tag_counts_the_notes_it_passes() {
+        let mut set = set_of(&[ModulatorParams::Envelope(Default::default())]);
+        let mut gates = NO_GATES;
+        gates[0].note_ons = 2;
+        set.tick(48_000, 32, 120.0, None, &gates);
+        assert_eq!(set.tag_activity().collect::<Vec<_>>(), [(2, true)]);
+        gates[0].note_ons = 1;
+        set.tick(48_000, 32, 120.0, None, &gates);
+        set.run(48_000, 32, 120.0);
+        assert_eq!(set.tag_activity().collect::<Vec<_>>(), [(3, true)]);
+        let mut next = set_of(&[ModulatorParams::Envelope(Default::default())]);
+        next.carry_tag(0, &set, 0);
+        assert_eq!(next.tag_activity().collect::<Vec<_>>(), [(3, true)]);
     }
 
     /// A Random module keeps its held value in the range its own Bipolar
@@ -2133,6 +2250,49 @@ mod tests {
             let mut set = set(vec![constant(1.0), box_of(ModulatorParams::Unknown, &[])], 0);
             set.tick(48_000, 32, 120.0, None, &NO_GATES);
             assert_eq!(set.outputs()[1], 0.0);
+        }
+
+        /// A box's outlet routed onto another box's knob moves it (song
+        /// patch step 05): `+ 0.5` onto the operand of a `+ 0`, whose
+        /// operand runs -4..4, at a tenth, lifts it by a twentieth of its
+        /// range, 0.4. Two routes onto one knob sum, and the box's setting
+        /// is untouched underneath.
+        #[test]
+        fn a_route_onto_a_knob_moves_the_box() {
+            use mooloop_core::{CompiledKnob, ModPolarity, MATH_PARAM_OPERAND};
+            let knob = |source: u16| CompiledKnob {
+                module: 2,
+                param: MATH_PARAM_OPERAND,
+                source,
+                depth: 0.1,
+                polarity: ModPolarity::Bipolar,
+            };
+            let mut one = set(vec![constant(0.5), constant(0.5), constant(0.0)], 0).with_knobs([knob(0)]);
+            one.tick(48_000, 32, 120.0, None, &NO_GATES);
+            assert!((one.outputs()[2] - 0.4).abs() < 1e-5, "moved: {}", one.outputs()[2]);
+            let mut two = set(vec![constant(0.5), constant(0.5), constant(0.0)], 0)
+                .with_knobs([knob(0), knob(1)]);
+            two.tick(48_000, 32, 120.0, None, &NO_GATES);
+            assert!((two.outputs()[2] - 0.8).abs() < 1e-5, "summed: {}", two.outputs()[2]);
+            let mut none = set(vec![constant(0.5), constant(0.5), constant(0.0)], 0).with_knobs([]);
+            none.tick(48_000, 32, 120.0, None, &NO_GATES);
+            assert_eq!(none.outputs()[2], 0.0, "unrouted");
+        }
+
+        /// A stepped knob takes no route, as a device's mode switch does not.
+        #[test]
+        fn a_stepped_knob_is_not_moved() {
+            use mooloop_core::{CompiledKnob, ModPolarity, COUNTER_PARAM_STEPS};
+            let counter = ModulatorParams::Counter(ModCounterParams { steps: 4 });
+            let mut set = set(vec![constant(1.0), box_of(counter, &[])], 0).with_knobs([CompiledKnob {
+                module: 1,
+                param: COUNTER_PARAM_STEPS,
+                source: 0,
+                depth: 1.0,
+                polarity: ModPolarity::Bipolar,
+            }]);
+            set.tick(48_000, 32, 120.0, None, &NO_GATES);
+            assert!(matches!(set.modules[1].source, super::super::Source::Counter(counter) if counter.steps == 4));
         }
     }
 }

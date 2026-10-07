@@ -340,17 +340,6 @@ fn render_sampler_source_editor() {
         },
     ]))));
     ui.set_modulation_selected_kind(1);
-    ui.set_modulation_input_options(
-        vec![
-            SharedString::from("None"),
-            SharedString::from("1 · Kick"),
-            SharedString::from("2 · Snare"),
-        ]
-        .as_slice()
-        .into(),
-    );
-    ui.set_modulation_selected_input(1);
-    ui.set_modulation_input_note(SharedString::from("CHANNEL NOTE GATE"));
     // Descriptor-id indexed (ENV_PARAM_*): attack, attack sync, attack
     // division, decay, decay sync, decay division, sustain, release, release
     // sync, release division, amount.
@@ -361,11 +350,6 @@ fn render_sampler_source_editor() {
         .as_slice()
         .into(),
     );
-    ui.set_modulation_selected_envelope_preview_attack(0.015);
-    ui.set_modulation_selected_envelope_preview_decay(0.25);
-    ui.set_modulation_selected_envelope_preview_release(0.38);
-    ui.set_modulation_selected_preview_fade_cycles(0.5);
-    ui.set_modulation_selected_preview_smoothing_cycles(0.16);
     // Descriptor-id indexed, so the sampler's cutoff overlay sits at 12.
     let mut source_depths = vec![0.0f32; 22];
     source_depths[12] = 0.35;
@@ -442,111 +426,6 @@ fn render_sampler_source_editor() {
         "a generator that publishes nothing changed the shelf"
     );
 
-    // The source faces are parameter readouts, not generic type icons. A
-    // zero-time attack has a vertical leading edge, while a long attack
-    // visibly slopes toward the peak.
-    ui.set_modulation_selected_envelope_preview_attack(0.0);
-    let instant_attack = ui.window().take_snapshot().unwrap();
-    ui.set_modulation_selected_envelope_preview_attack(16.0);
-    let long_attack = ui.window().take_snapshot().unwrap();
-    assert_ne!(instant_attack.as_bytes(), long_attack.as_bytes());
-    write_snapshot(&instant_attack, "MOOLOOP_ENVELOPE_INSTANT_ATTACK_SNAPSHOT");
-    write_snapshot(&long_attack, "MOOLOOP_ENVELOPE_LONG_ATTACK_SNAPSHOT");
-
-    // The LFO face likewise follows waveform, phase, amount, fade, smoothing,
-    // and pulse width instead of retaining the last generic oscillator glyph.
-    ui.set_modulation_selected_slot(0);
-    ui.set_modulation_selected_kind(0);
-    // Descriptor-id indexed (LFO_PARAM_*): rate, depth, waveform, phase,
-    // tempo sync, rate division, retrigger, fade in, fade sync, fade
-    // division, smoothing, pulse width.
-    ui.set_modulation_selected_values(
-        vec![
-            2.0f32, 1.0, 2.0, 0.0, 1.0, 13.0, 0.0, 0.75, 0.0, 7.0, 0.08, 0.3,
-        ]
-        .as_slice()
-        .into(),
-    );
-    ui.set_modulation_selected_preview_fade_cycles(0.0);
-    ui.set_modulation_selected_preview_smoothing_cycles(0.0);
-    let saw_face = ui.window().take_snapshot().unwrap();
-    ui.set_modulation_selected_values(
-        vec![
-            2.0f32, 0.55, 3.0, 0.2, 1.0, 13.0, 0.0, 0.75, 0.0, 7.0, 0.08, 0.2,
-        ]
-        .as_slice()
-        .into(),
-    );
-    ui.set_modulation_selected_preview_fade_cycles(0.75);
-    ui.set_modulation_selected_preview_smoothing_cycles(0.2);
-    let shaped_lfo = ui.window().take_snapshot().unwrap();
-    assert_ne!(saw_face.as_bytes(), shaped_lfo.as_bytes());
-    write_snapshot(&shaped_lfo, "MOOLOOP_LFO_SHAPED_FACE_SNAPSHOT");
-
-    ui.set_modulation_selected_slot(1);
-    ui.set_modulation_selected_kind(1);
-    ui.set_modulation_selected_values(
-        vec![
-            0.015f32, 0.0, 13.0, 0.18, 1.0, 10.0, 0.62, 0.38, 0.0, 7.0, 1.0,
-        ]
-        .as_slice()
-        .into(),
-    );
-    ui.set_modulation_selected_envelope_preview_attack(0.015);
-
-    // The three module kinds added in step 02 each render their own editor
-    // through the same descriptor-indexed surface: a step bank, a random
-    // panel with its lamps, and a math module's operator and formula.
-    ui.set_modulation_selected_slot(2);
-    ui.set_modulation_selected_kind(2);
-    // Descriptor-id indexed (STEP_PARAM_*): length, division, glide,
-    // trigger, then the sixteen contiguous step values.
-    ui.set_modulation_selected_values(
-        vec![
-            8.0f32, 13.0, 0.25, 0.0, 0.0, 0.4, 0.8, 0.35, -0.2, -0.75, 0.15, 0.6, 0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0, 0.0, 0.0,
-        ]
-        .as_slice()
-        .into(),
-    );
-    let step_editor = ui.window().take_snapshot().unwrap();
-    assert_ne!(modulation.as_bytes(), step_editor.as_bytes());
-    write_snapshot(&step_editor, "MOOLOOP_STEP_MODULE_SNAPSHOT");
-
-    ui.set_modulation_selected_kind(3);
-    // Descriptor-id indexed (RANDOM_PARAM_*): rate, sync, division, trigger,
-    // bipolar, chance, quantize, drunk, walk.
-    ui.set_modulation_selected_values(
-        vec![4.0f32, 0.0, 13.0, 0.0, 1.0, 0.65, 5.0, 1.0, 0.3]
-            .as_slice()
-            .into(),
-    );
-    let random_editor = ui.window().take_snapshot().unwrap();
-    assert_ne!(step_editor.as_bytes(), random_editor.as_bytes());
-    write_snapshot(&random_editor, "MOOLOOP_RANDOM_MODULE_SNAPSHOT");
-
-    ui.set_modulation_selected_slot(3);
-    ui.set_modulation_selected_kind(4);
-    // Descriptor-id indexed (MATH_PARAM_*): input slot, operator, operand,
-    // clamp low, clamp high. Reading slot 1 from slot 4 is a same-tick read.
-    ui.set_modulation_selected_values(
-        vec![0.0f32, 2.0, 1.75, -1.0, 1.0].as_slice().into(),
-    );
-    let math_editor = ui.window().take_snapshot().unwrap();
-    assert_ne!(random_editor.as_bytes(), math_editor.as_bytes());
-    write_snapshot(&math_editor, "MOOLOOP_MATH_MODULE_SNAPSHOT");
-
-    // Back to the envelope, which is what the remaining shots are about.
-    ui.set_modulation_selected_slot(1);
-    ui.set_modulation_selected_kind(1);
-    ui.set_modulation_selected_values(
-        vec![
-            0.015f32, 0.0, 13.0, 0.18, 1.0, 10.0, 0.62, 0.38, 0.0, 7.0, 1.0,
-        ]
-        .as_slice()
-        .into(),
-    );
-
     // Out of assign mode the same knobs must read differently: the value arc
     // returns, the dots appear, and a live offset displaces the arc's end.
     ui.set_modulation_armed_slot(-1);
@@ -575,15 +454,6 @@ fn render_sampler_source_editor() {
     let crushed = ui.window().take_snapshot().unwrap();
     assert_ne!(tone.as_bytes(), crushed.as_bytes());
     write_snapshot(&crushed, "MOOLOOP_SAMPLER_CRUSHED_SOURCE_SNAPSHOT");
-}
-
-/// A Math module's input picker, as the shelf builds it: None, then every
-/// other module in the song by name.
-fn module_names() -> ModelRc<SharedString> {
-    ["None", "Kick LFO 1", "Kick Envelope 1", "Kick Step 1"]
-        .map(SharedString::from)
-        .as_slice()
-        .into()
 }
 
 /// A rack row for `kind`, addressed the way the application addresses it.
@@ -1004,8 +874,7 @@ fn render_sampler_committed_stretch() {
 
 /// A song has no limit on how many modules it holds, so the grid must show
 /// every one of them: sixteen modules wrap across the pane's width rather
-/// than into a fixed four-column block, and the input picker still names
-/// another module.
+/// than into a fixed four-column block.
 #[test]
 fn the_module_grid_lists_every_module() {
     common::install_testing_backend();
@@ -1035,8 +904,6 @@ fn the_module_grid_lists_every_module() {
         })
         .collect();
     ui.set_modulation_sources(ModelRc::from(Rc::new(VecModel::from(sources))));
-    ui.set_modulation_input_options(module_names());
-    ui.set_modulation_selected_input(3);
     let shot = ui.window().take_snapshot().unwrap();
     assert_eq!((shot.width(), shot.height()), (1440, 900));
     assert!(shot.as_bytes().iter().any(|byte| *byte != 0));

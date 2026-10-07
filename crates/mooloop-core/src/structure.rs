@@ -998,6 +998,10 @@ impl ListEdit {
     /// Where `address` points after the edit. Only its scope names a seat;
     /// the device and parameter inside it are identities and do not move.
     pub fn address(self, address: ParamAddr) -> Option<ParamAddr> {
+        // A box's knob sits on no seat, so no seat's edit moves it.
+        if address.module().is_some() {
+            return Some(address);
+        }
         Some(ParamAddr {
             scope: self.target(address.scope)?,
             ..address

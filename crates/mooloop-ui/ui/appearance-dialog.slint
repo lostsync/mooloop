@@ -1,5 +1,5 @@
 import { ComboBox, HorizontalBox, LineEdit, ScrollView, VerticalBox } from "std-widgets.slint";
-import { Theme, Motion, StatusHint } from "theme.slint";
+import { Theme, Motion, StatusHint, DisplayPrefs } from "theme.slint";
 import { MeterPrefs } from "meters.slint";
 import { AudioOrientation, IconButton, ParameterFader, SectionLabel, SegmentedControl, ToggleButton, ToolButton } from "controls.slint";
 import { AudioDriverCopy, DriverControlSurface, OutputTargetRow } from "audio-preferences.slint";
@@ -889,6 +889,29 @@ export component AppearancePage inherits VerticalLayout {
             options: ["Linear", "Ease out", "In-out", "Overshoot"];
             max-width: 240px;
             selected-index <=> Motion.easing;
+        }
+    }
+
+    HorizontalBox {
+        min-height: 36px;
+        padding: 0px;
+        spacing: 8px;
+        VerticalBox {
+            spacing: 0px;
+            padding: 0px;
+            Text { text: "Cable activity"; color: Theme.text; font-size: Theme.text-xl; }
+            Text {
+                text: "How much patch cables light up with what moves through them";
+                color: Theme.text-muted;
+                font-size: Theme.text-lg;
+            }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        SegmentedControl {
+            controlled: false;
+            options: ["Off", "Subtle", "Full"];
+            max-width: 240px;
+            selected-index <=> DisplayPrefs.cable-activity;
         }
     }
 
