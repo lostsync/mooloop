@@ -419,7 +419,7 @@ pub(crate) fn lay_out(
         };
         let source_node = nodes.iter().find(|node| node.key == NodeKey::Node(id));
         let below_box = source_node.map_or(BOX_HEIGHT, |node| node.height);
-        let tag_width = source_node.map_or(0.0, |node| node.width);
+        let source_width = source_node.map_or(0.0, |node| node.width);
         let key = NodeKey::Route {
             source: route.source,
             destination: route.destination,
@@ -444,7 +444,7 @@ pub(crate) fn lay_out(
                     )
                 } else {
                     CanvasPoint::new(
-                        source_at.x + tag_width as i32 + 48,
+                        source_at.x + source_width as i32 + 48,
                         source_at.y + below as i32 * 34,
                     )
                 }
