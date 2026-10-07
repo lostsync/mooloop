@@ -97,6 +97,39 @@ the graph walk itself is not where the time goes. A thousand boxes is 3% of
 a 128-frame block, so step 04's arithmetic boxes can each be a whole
 module.
 
+**03 (MOO-522).** The Modulation pane shows the patch. Adam said go on the
+mock-up (2026-10-07, *"looks great"*). `ui/patch-canvas.slint` draws what
+`ui/src/patch_canvas.rs` lays out: boxes spelled in the mono face (`lfo`,
+`* -0.5`), tags as arrows, an assignment tag per route from a box, and one
+`Path` per wire, routed orthogonally with rounded corners (the prototype's
+`route` and `rpath`). One `TouchArea` reports press, move and release; Rust
+hit tests jacks, then nodes, then wires. Drag between jacks to wire (a
+wired inlet's wire is replaced, a wire pulled off its inlet onto nothing
+comes out), click an outlet to arm Assign, click an inlet to pick its feed,
+marquee and drag to move, Delete to remove; each is one undo step
+(`patch_canvas_tests.rs` drives them through the window). Where it differs
+from the step file:
+
+- **Assignment tags are placed through `SongModulation::route_places`**, by
+  source and destination, saved as an `at` on each route; `ModRoute` is
+  copied by the realtime path and stays as it was. A route nobody placed
+  stacks under its box.
+- **Routes from a channel's outlet or keyboard have no tag yet.** Nothing on
+  the canvas stands for those sources until step 06's song inlets; the
+  route list beside the surface still shows them.
+- **Arming is still by source, not by `Jack`**: no box has a second outlet
+  before step 04.
+- **The selected box's surface stays under the canvas**, not beside it as
+  the mock-up drew it: today's surface is about 930 px wide. The dock's
+  default height for the Modulation pane went from 300 px to 440 px so the
+  canvas is about 235 px tall rather than 120; a saved layout keeps its own
+  height. Step 05 opens faces in place and gives the canvas the pane.
+- **Note wires are drawn solid in the note colour**: Slint's `Path` has no
+  dash. The theme has no note colour of its own yet; the canvas uses
+  `Theme.warning`.
+- **The route dots' reveal** (song modulation's *Open*) is not in this
+  step; it is MOO-531.
+
 ## Adam's rulings
 
 | When | Ruling |

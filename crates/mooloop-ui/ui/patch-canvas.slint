@@ -1,0 +1,382 @@
+// The song patch canvas (docs/plans/song-patch/03-the-canvas.md).
+//
+// Everything here is drawn from what Rust lays out (`patch_canvas.rs`):
+// node places, jack places and each wire's path. Nothing is hit tested in
+// Slint. One TouchArea covers the canvas and reports press, move and release
+// in canvas units, the way the piano roll's grid does, because a touch area
+// on each box would move out from under the pointer as its box is dragged.
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+// A box, a tag, or a route's assignment tag.
+export struct PatchNodeRow {
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+    is-box: bool,
+    // A box's text, in the mono face: `lfo`, `* -0.5`.
+    spelling: string,
+    // A tag's pieces: `gate  Kick 1`, or `Cutoff  ML-M1 9  +40%`.
+    kind: string,
+    name: string,
+    depth: string,
+    // A tag points right when its outlet is at its point (a source), left
+    // when its inlet is (a sink, an assignment).
+    points-right: bool,
+    note: bool,
+    // Bound to nothing: the `[ ]` slot shows what it expects.
+    unbound: bool,
+    selected: bool,
+    // Armed for the assignment gesture.
+    armed: bool,
+}
+
+// One jack, at the point its wire meets.
+export struct PatchJackRow {
+    x: length,
+    y: length,
+    note: bool,
+    outlet: bool,
+    // A tag's jack is a dot at its point; a box's is a bar on its edge.
+    dot: bool,
+    name: string,
+    // The name shows above an inlet, below an outlet; `right` ends it at the
+    // jack, for a box's last inlet, so a box's names spread outward.
+    named: bool,
+    right: bool,
+    // A loose wire is over this inlet, and the song would take it (`hot`)
+    // or would not (`refused`).
+    hot: bool,
+    refused: bool,
+}
+
+export struct PatchWireRow {
+    // SVG path commands in canvas units, corners rounded.
+    d: string,
+    note: bool,
+    selected: bool,
+    // It reads its outlet a tick late, marked at its inlet end.
+    delayed: bool,
+    mark-x: length,
+    mark-y: length,
+}
+
+export global PatchView {
+    in property <[PatchNodeRow]> nodes;
+    in property <[PatchJackRow]> jacks;
+    in property <[PatchWireRow]> wires;
+    in property <length> canvas-width: 1200px;
+    in property <length> canvas-height: 600px;
+    in property <bool> empty: true;
+    // The wire being drawn, to the pointer; empty when none is.
+    in property <string> loose-wire;
+    in property <bool> loose-refused;
+    in property <bool> marquee;
+    in property <length> marquee-x;
+    in property <length> marquee-y;
+    in property <length> marquee-width;
+    in property <length> marquee-height;
+    // The inlet picker: what can feed the inlet that was clicked.
+    in property <bool> menu-open;
+    in property <string> menu-title;
+    in property <[string]> menu-options;
+    in property <int> menu-current: -1;
+    in property <length> menu-x;
+    in property <length> menu-y;
+    // (x, y, shift) in canvas units.
+    callback pressed(length, length, bool);
+    callback moved(length, length);
+    callback released(length, length);
+    // A key while the canvas has the focus; true when the canvas used it.
+    callback key(string) -> bool;
+    callback picked(int);
+    callback menu-closed();
+}
+
+global PatchColors {
+    out property <color> box: #33333a;
+    out property <color> edge: #5a5a65;
+    out property <color> wire: #6f6f7a;
+    out property <color> armed-fill: #84cc1633;
+}
+
+component PatchTag inherits Rectangle {
+    in property <PatchNodeRow> node;
+    Path {
+        width: root.width;
+        height: root.height;
+        viewbox-width: self.width / 1px;
+        viewbox-height: self.height / 1px;
+        fill: root.node.armed ? PatchColors.armed-fill : PatchColors.box;
+        stroke: root.node.selected || root.node.armed ? Theme.accent
+            : root.node.unbound ? Theme.text-faint : PatchColors.edge;
+        stroke-width: root.node.selected ? 2px : 1px;
+        commands: root.node.points-right
+            ? "M 0.5 0.5 L \{root.width / 1px - 13} 0.5 L \{root.width / 1px - 0.5} \{root.height / 2px} L \{root.width / 1px - 13} \{root.height / 1px - 0.5} L 0.5 \{root.height / 1px - 0.5} Z"
+            : "M 13 0.5 L \{root.width / 1px - 0.5} 0.5 L \{root.width / 1px - 0.5} \{root.height / 1px - 0.5} L 13 \{root.height / 1px - 0.5} L 0.5 \{root.height / 2px} Z";
+    }
+    HorizontalLayout {
+        padding-left: root.node.points-right ? 10px : 22px;
+        padding-right: root.node.points-right ? 22px : 10px;
+        spacing: 7px;
+        alignment: start;
+        // A source reads kind then name (`gate  Kick 1`), an assignment
+        // name then device (`Cutoff  ML-M1 9`).
+        if root.node.points-right : Text {
+            text: root.node.kind;
+            color: root.node.note ? Theme.warning : Theme.text-muted;
+            font-size: Theme.text-xl;
+            vertical-alignment: center;
+        }
+        if root.node.name != "" : Text {
+            text: root.node.name;
+            color: Theme.text;
+            font-size: Theme.text-2xl;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        if root.node.unbound : Rectangle {
+            y: (parent.height - 16px) / 2;
+            width: 26px;
+            height: 16px;
+            border-width: 1px;
+            border-color: Theme.text-faint;
+            border-radius: Theme.radius-sm;
+        }
+        if !root.node.points-right && root.node.kind != "" : Text {
+            text: root.node.kind;
+            color: root.node.note ? Theme.warning : Theme.text-muted;
+            font-size: Theme.text-xl;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        if root.node.depth != "" : Rectangle {
+            y: (parent.height - 15px) / 2;
+            height: 15px;
+            width: depth-text.preferred-width + 8px;
+            background: PatchColors.armed-fill;
+            border-radius: Theme.radius-sm;
+            depth-text := Text {
+                text: root.node.depth;
+                color: Theme.accent;
+                font-family: Theme.font-family-mono;
+                font-size: Theme.text-lg;
+            }
+        }
+    }
+}
+
+export component PatchCanvas inherits Rectangle {
+    background: Theme.panel;
+    border-width: Theme.hairline;
+    border-color: Theme.border;
+    clip: true;
+
+    view := ScrollView {
+        width: parent.width;
+        height: parent.height;
+        content-width: PatchView.canvas-width;
+        content-height: PatchView.canvas-height;
+
+        world := Rectangle {
+            width: PatchView.canvas-width;
+            height: PatchView.canvas-height;
+
+            for wire in PatchView.wires : Path {
+                x: 0;
+                y: 0;
+                width: world.width;
+                height: world.height;
+                viewbox-width: world.width / 1px;
+                viewbox-height: world.height / 1px;
+                commands: wire.d;
+                fill: transparent;
+                stroke: wire.selected ? Theme.accent : wire.note ? Theme.warning.transparentize(0.35) : PatchColors.wire;
+                stroke-width: wire.selected ? 2.5px : 1.5px;
+            }
+            // A wire that reads a tick late carries a short bar across it
+            // just above its inlet.
+            for wire in PatchView.wires : Rectangle {
+                if wire.delayed : Rectangle {
+                    x: wire.mark-x - 5px;
+                    y: wire.mark-y - 10px;
+                    width: 10px;
+                    height: 2px;
+                    background: Theme.warning;
+                }
+            }
+            if PatchView.loose-wire != "" : Path {
+                x: 0;
+                y: 0;
+                width: world.width;
+                height: world.height;
+                viewbox-width: world.width / 1px;
+                viewbox-height: world.height / 1px;
+                commands: PatchView.loose-wire;
+                fill: transparent;
+                stroke: PatchView.loose-refused ? Theme.destructive : Theme.accent;
+                stroke-width: 1.5px;
+            }
+
+            for node in PatchView.nodes : Rectangle {
+                x: node.x;
+                y: node.y;
+                width: node.width;
+                height: node.height;
+                if node.is-box : Rectangle {
+                    background: PatchColors.box;
+                    border-width: node.selected || node.armed ? 2px : Theme.hairline;
+                    border-color: node.selected || node.armed ? Theme.accent : PatchColors.edge;
+                    border-radius: Theme.radius-md;
+                    Text {
+                        x: 12px;
+                        width: parent.width - 16px;
+                        height: parent.height;
+                        text: node.spelling;
+                        font-family: Theme.font-family-mono;
+                        font-size: Theme.text-2xl;
+                        color: Theme.text;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+                if !node.is-box : PatchTag {
+                    width: node.width;
+                    height: node.height;
+                    node: node;
+                }
+            }
+
+            for jack in PatchView.jacks : Rectangle {
+                x: jack.x;
+                y: jack.y;
+                width: 0;
+                height: 0;
+                property <color> fill: jack.hot ? Theme.accent : jack.refused ? Theme.destructive
+                    : jack.note ? Theme.warning : Theme.text-faint;
+                if jack.dot : Rectangle {
+                    x: -4.5px;
+                    y: -4.5px;
+                    width: 9px;
+                    height: 9px;
+                    border-radius: 4.5px;
+                    background: parent.fill;
+                }
+                if !jack.dot : Rectangle {
+                    x: -6px;
+                    y: jack.outlet ? -3px : -1px;
+                    width: 12px;
+                    height: 4px;
+                    background: parent.fill;
+                }
+                if jack.named : Text {
+                    x: jack.right ? 8px - self.width : -8px;
+                    y: jack.outlet ? 4px : -15px;
+                    width: 90px;
+                    horizontal-alignment: jack.right ? right : left;
+                    text: jack.name;
+                    font-family: Theme.font-family-mono;
+                    font-size: Theme.text-xs;
+                    color: jack.refused ? Theme.destructive : Theme.accent;
+                }
+            }
+
+            if PatchView.marquee : Rectangle {
+                x: PatchView.marquee-x;
+                y: PatchView.marquee-y;
+                width: PatchView.marquee-width;
+                height: PatchView.marquee-height;
+                background: Theme.focus.transparentize(0.85);
+                border-width: Theme.hairline;
+                border-color: Theme.focus;
+            }
+
+            focus := FocusScope {
+                key-pressed(event) => {
+                    if PatchView.key(event.text) {
+                        return accept;
+                    }
+                    return reject;
+                }
+            }
+
+            touch := TouchArea {
+                // Named so a test can find where the canvas is on screen.
+                accessible-role: groupbox;
+                accessible-label: "Patch canvas";
+                mouse-cursor: default;
+                pointer-event(event) => {
+                    if event.button != PointerEventButton.left {
+                        return;
+                    }
+                    if event.kind == PointerEventKind.down {
+                        focus.focus();
+                        PatchView.pressed(self.mouse-x, self.mouse-y, event.modifiers.shift);
+                    } else if event.kind == PointerEventKind.up {
+                        PatchView.released(self.mouse-x, self.mouse-y);
+                    }
+                }
+                moved => {
+                    PatchView.moved(self.mouse-x, self.mouse-y);
+                }
+            }
+
+            // The inlet picker, over the canvas at the inlet. Its rows take
+            // their own clicks; a press anywhere else on the canvas closes it.
+            if PatchView.menu-open : Rectangle {
+                x: min(PatchView.menu-x, world.width - self.width - 4px);
+                y: max(4px, PatchView.menu-y - self.height - 6px);
+                width: 190px;
+                height: menu-list.preferred-height;
+                background: Theme.surface-raised;
+                border-width: Theme.hairline;
+                border-color: PatchColors.edge;
+                border-radius: Theme.radius-lg;
+                drop-shadow-blur: 12px;
+                drop-shadow-color: #00000060;
+                TouchArea { }
+                menu-list := VerticalLayout {
+                    padding: 4px;
+                    spacing: 1px;
+                    Text {
+                        height: 16px;
+                        text: PatchView.menu-title;
+                        color: Theme.text-muted;
+                        font-family: Theme.font-family-mono;
+                        font-size: Theme.text-xs;
+                        vertical-alignment: center;
+                    }
+                    for option[index] in PatchView.menu-options : Rectangle {
+                        height: 20px;
+                        border-radius: Theme.radius-sm;
+                        background: row-touch.has-hover ? Theme.surface-active : transparent;
+                        Text {
+                            x: 6px;
+                            width: parent.width - 12px;
+                            height: parent.height;
+                            text: option;
+                            color: index == PatchView.menu-current ? Theme.accent : Theme.text;
+                            font-size: Theme.text-lg;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        row-touch := TouchArea {
+                            clicked => { PatchView.picked(index); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if PatchView.empty : Text {
+        width: root.width;
+        height: root.height;
+        text: "No boxes yet. Add one from the list on the right.";
+        color: Theme.text-muted;
+        font-size: Theme.text-md;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}

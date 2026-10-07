@@ -144,7 +144,7 @@ and would now be a view of that one model.
 the move himself on 2026-10-05 (*"re-scope the modulation from per-channel
 to document-wide and move it into its own pane"*), and it is done: modules
 belong to the song and live in the Modulation pane
-(`plans/archive/song-modulation/`). The pane holds today's module grid, not
+(`plans/archive/song-modulation/`). The pane holds the song patch canvas, not
 a tracker, so the fork above is still unanswered for the modulator column.
 What comes after the move is the Song Patch proposal
 (`plans/song-patch/README.md`), a song-wide patching canvas, which is a

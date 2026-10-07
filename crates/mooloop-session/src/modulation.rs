@@ -28,6 +28,17 @@ use mooloop_core::{
     WireRefusal,
 };
 
+/// What can feed an inlet, as the canvas's inlet picker offers it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PatchFeed {
+    /// Nothing: the inlet's wire is removed.
+    None,
+    /// A channel's notes as a gate, through the song's gate tag for it.
+    Gate(mooloop_core::ChannelId),
+    /// An outlet already on the canvas.
+    Outlet(Jack),
+}
+
 /// Why the session refused a wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PatchRefusal {
@@ -516,6 +527,155 @@ impl Session {
         Some(self.modulation.add_tag(kind, at))
     }
 
+    /// Wires outlet `from` into inlet `to`, replacing whatever fed it: the
+    /// canvas's drop. `Ok(false)` when that wire is already there.
+    pub fn rewire_patch(&mut self, from: Jack, to: Jack) -> Result<bool, PatchRefusal> {
+        self.modulation
+            .check_wire(from, to)
+            .map_err(PatchRefusal::Wire)?;
+        if self
+            .modulation
+            .wire_into(to)
+            .is_some_and(|wire| wire.from == from)
+        {
+            return Ok(false);
+        }
+        self.modulation.disconnect(to);
+        self.connect_patch(from, to).map(|()| true)
+    }
+
+    /// Puts the assignment tags of the routes at these indices in the song's
+    /// route list where they were dropped. `false` when none moved.
+    pub fn place_patch_routes(&mut self, places: &[(usize, CanvasPoint)]) -> bool {
+        let mut moved = false;
+        for &(index, at) in places {
+            let Some(route) = self.modulation.routes.get(index).copied() else {
+                continue;
+            };
+            if self.modulation.route_at(route.source, route.destination) != Some(at) {
+                moved |= self
+                    .modulation
+                    .place_route(route.source, route.destination, at);
+            }
+        }
+        moved
+    }
+
+    /// Removes a canvas selection in one edit: the wires into `inlets`, the
+    /// routes at `routes` (indices into the song's route list), and the boxes
+    /// and tags `nodes`, with their wires and routes. `false` when none of it
+    /// was there.
+    pub fn remove_patch_selection(
+        &mut self,
+        nodes: &[ModSourceId],
+        inlets: &[Jack],
+        routes: &[usize],
+    ) -> bool {
+        let mut changed = false;
+        for &inlet in inlets {
+            changed |= self.modulation.disconnect(inlet);
+        }
+        let mut routes = routes.to_vec();
+        routes.sort_unstable();
+        routes.dedup();
+        for index in routes.into_iter().rev() {
+            changed |= self.remove_route(index as i32);
+        }
+        for &node in nodes {
+            changed |= self.remove_patch_node(node);
+        }
+        changed
+    }
+
+    /// What the inlet picker offers for inlet `to`, in order, with the name
+    /// each is listed under: **None**, every channel's notes as a gate when
+    /// the inlet takes control, then every other box's and tag's outlet of
+    /// the inlet's sort.
+    pub fn patch_feed_options(&self, to: Jack) -> Vec<(PatchFeed, String)> {
+        let Some(inlet) = self
+            .modulation
+            .ports_of(to.node)
+            .and_then(|ports| ports.inlet(to.port))
+        else {
+            return Vec::new();
+        };
+        let mut options = vec![(PatchFeed::None, "None".to_string())];
+        if inlet.sort == mooloop_core::JackSort::Control {
+            options.extend(self.gate_outlets().filter_map(|(input, name)| match input {
+                InputSource::ChannelNotes(channel) => Some((PatchFeed::Gate(channel), name)),
+                _ => None,
+            }));
+        }
+        for module in &self.modulation.modules {
+            if module.id == to.node {
+                continue;
+            }
+            let ports = module.params.kind().ports();
+            for (port, outlet) in ports.outlets.iter().enumerate() {
+                if outlet.sort != inlet.sort {
+                    continue;
+                }
+                let name = if ports.outlets.len() > 1 {
+                    format!("{} · {}", module_name(module), outlet.name)
+                } else {
+                    module_name(module)
+                };
+                options.push((PatchFeed::Outlet(Jack::new(module.id, port as u8)), name));
+            }
+        }
+        options
+    }
+
+    /// Where inlet `to`'s feed sits in [`Self::patch_feed_options`].
+    pub fn patch_feed_choice(&self, to: Jack) -> usize {
+        let current = match self.modulation.wire_into(to) {
+            None => PatchFeed::None,
+            Some(wire) => match self.modulation.tag(wire.from.node).map(|tag| tag.kind) {
+                Some(TagKind::Inlet {
+                    bind: Some(mooloop_core::InletSource::Gate(channel)),
+                }) => PatchFeed::Gate(channel),
+                _ => PatchFeed::Outlet(wire.from),
+            },
+        };
+        self.patch_feed_options(to)
+            .iter()
+            .position(|(feed, _)| *feed == current)
+            .unwrap_or(0)
+    }
+
+    /// Feeds inlet `to` from `feed`, replacing its wire: a channel's gate
+    /// comes through the song's gate tag for it, made beside the box if the
+    /// song has none. Returns whether anything changed.
+    pub fn feed_patch_inlet(&mut self, to: Jack, feed: PatchFeed) -> bool {
+        let from = match feed {
+            PatchFeed::None => return self.disconnect_patch(to),
+            PatchFeed::Outlet(from) => from,
+            PatchFeed::Gate(channel) => {
+                if self.channel_index(channel).is_none() {
+                    return false;
+                }
+                let y = self
+                    .modulation
+                    .module(to.node)
+                    .map_or(0, |module| module.at.y);
+                Jack::new(self.modulation.gate_tag(channel, y), 0)
+            }
+        };
+        self.rewire_patch(from, to).unwrap_or(false)
+    }
+
+    /// Arms `source` for the assignment gesture, or disarms it when it is
+    /// the one armed: the canvas's click on an outlet or an assignment tag.
+    /// Selects it too, so the surface below shows what is being assigned.
+    /// Returns the armed source's name, `None` when nothing is armed now.
+    pub fn toggle_patch_arm(&mut self, source: ModSourceRef) -> Option<String> {
+        self.modulation_source_index(source)?;
+        self.modulation_selected.set(Some(source));
+        let next = (self.modulation_armed.get() != Some(source)).then_some(source);
+        self.modulation_armed.set(next);
+        self.modulation_source_name(next?)
+    }
+
     /// What module `id`'s input picker offers, in order, with the name each
     /// is listed under: **None**, then every outlet that sends what the
     /// module takes. A Math module takes a control value, so it lists every
@@ -861,6 +1021,124 @@ mod tests {
         assert!(session.modulation.wires.is_empty());
         assert!(session.remove_patch_node(notes));
         assert!(!session.remove_patch_node(notes));
+    }
+
+    /// The canvas's own verbs: a drop replaces an inlet's wire, the inlet
+    /// picker feeds from a channel's gate tag or any outlet of the inlet's
+    /// sort, assignment tags keep their places, and a selection goes in one
+    /// edit.
+    #[test]
+    fn the_canvas_verbs_rewire_feed_place_and_remove() {
+        use mooloop_core::{EffectTarget, ParamAddr, STRIP_PARAM_PAN, STRIP_PARAM_VOLUME};
+        let mut session = Session::default();
+        let lead = session.channel_id(0).expect("a first channel");
+        let lfo = session
+            .add_patch_box(ModulatorKind::Lfo, CanvasPoint::new(200, 80))
+            .unwrap();
+        let other = session
+            .add_patch_box(ModulatorKind::Lfo, CanvasPoint::new(400, 80))
+            .unwrap();
+        let math = session
+            .add_patch_box(ModulatorKind::Math, CanvasPoint::new(400, 200))
+            .unwrap();
+        let math_in = Jack::new(math, 0);
+
+        assert_eq!(session.rewire_patch(Jack::new(lfo, 0), math_in), Ok(true));
+        assert_eq!(
+            session.rewire_patch(Jack::new(lfo, 0), math_in),
+            Ok(false),
+            "already so"
+        );
+        assert_eq!(
+            session.rewire_patch(Jack::new(other, 0), math_in),
+            Ok(true),
+            "replaced"
+        );
+        assert_eq!(
+            session.modulation.input_of(math),
+            InputSource::Module(other)
+        );
+        assert_eq!(
+            session
+                .modulation
+                .wires
+                .iter()
+                .filter(|wire| wire.to == math_in)
+                .count(),
+            1
+        );
+
+        let rate = Jack::new(lfo, 0);
+        let options = session.patch_feed_options(rate);
+        assert_eq!(options[0], (PatchFeed::None, "None".to_string()));
+        let gate_name = format!("1 · {}", session.channels[0].name);
+        assert!(
+            options.contains(&(PatchFeed::Gate(lead), gate_name)),
+            "{options:?}"
+        );
+        assert!(options
+            .iter()
+            .any(|(feed, _)| *feed == PatchFeed::Outlet(Jack::new(math, 0))));
+        assert!(
+            !options
+                .iter()
+                .any(|(feed, _)| *feed == PatchFeed::Outlet(Jack::new(lfo, 0))),
+            "not itself"
+        );
+        assert!(session.feed_patch_inlet(rate, PatchFeed::Gate(lead)));
+        assert_eq!(
+            options[session.patch_feed_choice(rate)].0,
+            PatchFeed::Gate(lead)
+        );
+        assert!(session.feed_patch_inlet(rate, PatchFeed::Outlet(Jack::new(math, 0))));
+        assert_eq!(
+            options[session.patch_feed_choice(rate)].0,
+            PatchFeed::Outlet(Jack::new(math, 0))
+        );
+        assert!(session.feed_patch_inlet(rate, PatchFeed::None));
+        assert!(
+            !session.feed_patch_inlet(rate, PatchFeed::None),
+            "nothing to remove"
+        );
+
+        let source = ModSourceRef::Id(lfo);
+        for destination in [STRIP_PARAM_VOLUME, STRIP_PARAM_PAN] {
+            session.modulation.routes.push(ModRoute::from_module(
+                lfo,
+                ParamAddr::strip(EffectTarget::Channel(0), destination),
+                0.5,
+                ModPolarity::Bipolar,
+            ));
+        }
+        let volume = ParamAddr::strip(EffectTarget::Channel(0), STRIP_PARAM_VOLUME);
+        assert!(session.place_patch_routes(&[(0, CanvasPoint::new(180, 260))]));
+        assert!(!session
+            .place_patch_routes(&[(0, CanvasPoint::new(180, 260)), (9, CanvasPoint::default())]));
+        assert_eq!(
+            session.modulation.route_at(source, volume),
+            Some(CanvasPoint::new(180, 260))
+        );
+
+        assert_eq!(
+            session.toggle_patch_arm(source),
+            session.modulation_source_name(source)
+        );
+        assert!(session.modulation_armed.get().is_some());
+        assert_eq!(session.modulation_selected.get(), Some(source));
+        assert_eq!(
+            session.toggle_patch_arm(source),
+            None,
+            "the second click disarms"
+        );
+
+        assert!(session.remove_patch_selection(&[other], &[], &[1]));
+        assert_eq!(session.modulation.routes.len(), 1, "the pan route went");
+        assert_eq!(
+            session.modulation.input_of(math),
+            InputSource::None,
+            "with the box went its wire"
+        );
+        assert!(!session.remove_patch_selection(&[other], &[math_in], &[5]));
     }
 
     /// Arming toggles, and reports the badge the status bar names.

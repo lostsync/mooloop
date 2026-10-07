@@ -2877,6 +2877,11 @@ pub struct SongModulation {
     /// Every wire, from an outlet to an inlet. An inlet takes one.
     pub wires: Vec<crate::patch::Wire>,
     pub routes: Vec<ModRoute>,
+    /// Where each route's assignment tag sits on the canvas, by its source
+    /// and destination; a route with none is placed under its source. Kept
+    /// beside the routes rather than in [`ModRoute`], which the realtime
+    /// path copies (song patch step 03).
+    pub route_places: Vec<crate::patch::RoutePlace>,
     /// Next identity to mint. Monotonic, so removing a module and adding
     /// another never hands the newcomer a departed module's routes.
     pub next_source_id: u32,
@@ -2939,6 +2944,8 @@ struct SavedSongRoute {
     destination: ParamAddr,
     depth: f32,
     polarity: ModPolarity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    at: Option<crate::patch::CanvasPoint>,
 }
 
 impl serde::Serialize for SongModulation {
@@ -2970,6 +2977,7 @@ impl serde::Serialize for SongModulation {
                     destination: route.destination,
                     depth: route.depth,
                     polarity: route.polarity,
+                    at: self.route_at(route.source, route.destination),
                 })
             })
             .collect();
@@ -2990,6 +2998,7 @@ impl<'de> serde::Deserialize<'de> for SongModulation {
         D: serde::Deserializer<'de>,
     {
         let saved = SavedSongModulation::<SavedSongModule>::deserialize(deserializer)?;
+        let mut route_places = Vec::new();
         let routes = saved
             .routes
             .into_iter()
@@ -3008,6 +3017,13 @@ impl<'de> serde::Deserialize<'de> for SongModulation {
                     // mean is safer than a guess.
                     _ => return None,
                 };
+                if let Some(at) = route.at {
+                    route_places.push(crate::patch::RoutePlace {
+                        source,
+                        destination: route.destination,
+                        at,
+                    });
+                }
                 Some(ModRoute {
                     source,
                     source_slot: UNRESOLVED_SLOT,
@@ -3047,6 +3063,7 @@ impl<'de> serde::Deserialize<'de> for SongModulation {
             tags: saved.tags,
             wires: saved.wires,
             routes,
+            route_places,
             next_source_id: saved.next_source_id,
         };
         modulation.next_source_id = modulation.next_source_id.max(modulation.mint_floor());

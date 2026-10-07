@@ -1136,7 +1136,7 @@ pub(crate) struct LayoutSettings {
     pub notes_dock_height: f32,
     #[serde(default = "default_playlist_dock_height")]
     pub playlist_dock_height: f32,
-    #[serde(default = "default_steps_dock_height")]
+    #[serde(default = "default_modulation_dock_height")]
     pub modulation_dock_height: f32,
     #[serde(default = "default_true")]
     pub bottom_pane_visible: bool,
@@ -1174,6 +1174,12 @@ fn default_split_fraction() -> f32 {
 fn default_steps_dock_height() -> f32 {
     300.0
 }
+/// Taller than the step grid's: the patch canvas shares the pane with the
+/// selected box's surface until song patch step 05 retires it, and needs
+/// room for more than one row of boxes.
+fn default_modulation_dock_height() -> f32 {
+    440.0
+}
 fn default_notes_dock_height() -> f32 {
     410.0
 }
@@ -1197,7 +1203,7 @@ impl Default for LayoutSettings {
             mixer_dock_height: default_steps_dock_height(),
             notes_dock_height: default_notes_dock_height(),
             playlist_dock_height: default_playlist_dock_height(),
-            modulation_dock_height: default_steps_dock_height(),
+            modulation_dock_height: default_modulation_dock_height(),
             bottom_pane_visible: true,
             sidebar_visible: false,
             sidebar_width: default_sidebar_width(),

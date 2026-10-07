@@ -503,8 +503,10 @@ rack below a channel is a fixed height again. The markup is
 `ui/modulation-shelf.slint`, whose `ModulationShelf` component kept its name
 when it moved.
 
-It holds the module grid, which wraps at the pane's width and scrolls, with
-the OUTLETS of every channel that publishes some under the channel's name; a
+It holds the song's patch canvas (`ui/patch-canvas.slint`, song patch step
+03): boxes where the song put them, tags at the patch's edges, an assignment
+tag under each route, and the wires, in a canvas larger than the pane that
+scrolls; with the OUTLETS of every channel that publishes some under the channel's name; a
 narrow **Add** list to the grid's right; the selected source's surface, with
 its name edited in its header; and that source's routes, from the whole song.
 A route row names its chain, device and parameter ("Kick Filter 1 · Cutoff"),
