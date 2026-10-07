@@ -255,12 +255,14 @@ fn a_click_on_an_inlet_opens_its_picker_and_a_pick_feeds_it() {
 fn a_right_click_makes_an_inlet_tag_and_its_list_binds_it() {
     use mooloop_core::{InletSource, TagKind};
     let (h, [lfo, _, _]) = harness();
-    let at = h.at((640.0, 260.0));
+    let at = h.at((660.0, 110.0));
     let pos = LogicalPosition::new(at.0, at.1);
     let w = h.window.window();
     w.dispatch_event(WindowEvent::PointerMoved { position: pos });
     w.dispatch_event(WindowEvent::PointerPressed { position: pos, button: PointerEventButton::Right });
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(200));
     w.dispatch_event(WindowEvent::PointerReleased { position: pos, button: PointerEventButton::Right });
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(16));
     let patch = h.window.global::<PatchView>();
     assert!(patch.get_menu_open(), "the right-click opened the menu");
     let options = || patch.get_menu_options().iter().map(|option| option.to_string()).collect::<Vec<_>>();
@@ -270,7 +272,7 @@ fn a_right_click_makes_an_inlet_tag_and_its_list_binds_it() {
         let st = h.state.borrow();
         let tag = st.session.modulation.tags.last().expect("a tag was made").clone();
         assert_eq!(tag.kind, TagKind::Inlet { bind: None });
-        assert_eq!(tag.at, CanvasPoint::new(640, 260));
+        assert_eq!(tag.at, CanvasPoint::new(660, 110));
         tag.id
     };
     assert!(patch.get_menu_open(), "a new inlet asks what it reads");
