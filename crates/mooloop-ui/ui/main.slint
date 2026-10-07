@@ -20,6 +20,7 @@ import { MasterMeter, MeterPrefs } from "meters.slint";
 // fall rate out of this one once a tick.
 export { MeterPrefs }
 import { EnvelopeEditor } from "envelope.slint";
+import { AutomationGroupRow, AutomationLaneMenu, AutomationMenuRow, AutomationTargetRow } from "automation-menu.slint";
 import { PreferencesDialog, PluginFailureRow, AppearanceSchemeRow, AudioDriverCopy, OutputTargetRow, ShortcutRow, GestureRow, MidiBindingRow, MidiTransportRow } from "appearance-dialog.slint";
 import { SavePresetDialog } from "save-preset-dialog.slint";
 import { SaveErrorDialog } from "save-error-dialog.slint";
@@ -150,30 +151,6 @@ struct AutomationLaneCell {
     height: length,
     points: [AutomationPointCell],
     grid: [AutomationGridLine],
-}
-
-// One selectable automation destination in the lane picker. Rust builds the
-// whole catalogue — every param of every effect on the selected channel and on
-// every bus — because only Rust has the descriptor tables.
-struct AutomationTargetRow {
-    // "Cutoff". Displayed in the menu row and, with `device`, in the header.
-    param-name: string,
-    // "Filter 1" or "Bus 2 · Delay 1". Menu rows are grouped by this.
-    device: string,
-    // First row of a device's group draws the header above itself. Precomputed
-    // in Rust because Slint's `for` has no access to the previous element.
-    starts-group: bool,
-    // Already has a lane in this clip, so it sorts to the top level and offers
-    // clear/remove rather than just "open".
-    open: bool,
-    // True when this is the lane currently shown.
-    current: bool,
-    // Something names this destination and it is no longer there to drive:
-    // a plugin parameter the plugin stopped listing (MOO-74). The row stays,
-    // its title thin and italic, and reads normally again when it returns.
-    // Nothing here is plugin-specific, so any address that is kept but
-    // drives nothing can set it.
-    missing: bool,
 }
 
 // One channel row in the rack.
@@ -575,76 +552,6 @@ struct SourceRow {
     p33: float,
     p34: float,
     p35: float,
-}
-
-// One selectable destination inside the automation lane picker.
-component AutomationMenuRow inherits Rectangle {
-    in property <string> text;
-    in property <bool> current: false;
-    // Kept, and drives nothing: Adam's "itallicized/thin weight title in the
-    // lane selection menu" (MOO-74).
-    in property <bool> missing: false;
-    callback selected();
-    // 20px at 100%, growing with the text above it (MOO-328, the rule
-    // MOO-278 set for menu rows); the picker takes its height from its
-    // layout, so it grows with its rows.
-    height: 20px * Theme.row-growth;
-    min-width: 150px;
-    // Wide enough for the whole name, and the picker is as wide as its design
-    // width or this, whichever is more, so a long name, or any name at a
-    // large text size, is read whole rather than cut at the picker's edge.
-    preferred-width: label.preferred-width + 16px;
-    background: touch.has-hover ? Theme.surface-raised : transparent;
-    label := Text {
-        x: 8px;
-        text: root.text;
-        color: root.current ? Theme.accent : root.missing ? Theme.text-muted : Theme.text;
-        font-size: Theme.text-lg;
-        font-italic: root.missing;
-        font-weight: root.missing ? 300 : 400;
-        vertical-alignment: center;
-    }
-    touch := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.selected(); }
-    }
-}
-
-// The lane picker. Every parameter of every device the selected clip can
-// reach, grouped by device. A lane already open is marked, and picking it
-// focuses it rather than opening a second one.
-component AutomationLaneMenu inherits VerticalLayout {
-    in property <[AutomationTargetRow]> targets;
-    callback picked(int);
-    padding: 4px;
-    spacing: 1px;
-    ScrollView {
-        height: min(280px, list.preferred-height);
-        width: max(170px, list.preferred-width);
-        list := VerticalLayout {
-            spacing: 1px;
-            for row[index] in root.targets : VerticalLayout {
-                spacing: 1px;
-                // Rust marks the first row of each device so the header can be
-                // drawn here; Slint's `for` cannot see the previous element.
-                if row.starts-group : Text {
-                    // 16px at 100%, growing with the text above it (MOO-328).
-                    height: 16px * Theme.row-growth;
-                    text: row.device;
-                    color: Theme.text-faint;
-                    font-size: Theme.text-sm;
-                    vertical-alignment: bottom;
-                    x: 6px;
-                }
-                AutomationMenuRow {
-                    text: row.open ? "● " + row.param-name : row.param-name;
-                    current: row.current;
-                    missing: row.missing;
-                    selected => { root.picked(index); }
-                }
-            }
-        }
-    }
 }
 
 component FlatButton inherits ToolButton { }
@@ -2442,6 +2349,8 @@ export component MainWindow inherits Window {
     in-out property <bool> velocity-lane-visible: true;
     in-out property <bool> automation-lane-visible: false;
     in property <[AutomationTargetRow]> automation-targets;
+    // The picker's device column; `AutomationTargetRow.group` indexes it.
+    in property <[AutomationGroupRow]> automation-groups;
     // Every open lane of the clip, in the order the clip holds them.
     in property <[AutomationLaneCell]> automation-lanes;
     // Every lane's header and drawing height added up, from Rust.
@@ -7454,9 +7363,11 @@ export component MainWindow inherits Window {
                                                                 border-radius: Theme.radius-md;
                                                                 add-content := AutomationLaneMenu {
                                                                     targets: root.automation-targets;
+                                                                    groups: root.automation-groups;
+                                                                    has-open: root.automation-lanes.length > 0;
                                                                     picked(index) => {
-                                                                        add-menu.close();
                                                                         root.automation-lane-opened(index);
+                                                                        add-menu.close();
                                                                     }
                                                                 }
                                                             }
@@ -7555,15 +7466,15 @@ export component MainWindow inherits Window {
                                                                                 AutomationMenuRow {
                                                                                     text: "Clear points";
                                                                                     selected => {
-                                                                                        lane-menu.close();
                                                                                         root.automation-lane-cleared(lane-index);
+                                                                                        lane-menu.close();
                                                                                     }
                                                                                 }
                                                                                 AutomationMenuRow {
                                                                                     text: "Remove lane";
                                                                                     selected => {
-                                                                                        lane-menu.close();
                                                                                         root.automation-lane-closed(lane-index);
+                                                                                        lane-menu.close();
                                                                                     }
                                                                                 }
                                                                             }

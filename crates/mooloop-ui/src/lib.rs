@@ -4500,6 +4500,7 @@ struct UiState {
     /// The height a lane without its own takes; a Shift-drag sets it.
     automation_lane_default_height: Cell<f32>,
     automation_target_model: Rc<VecModel<AutomationTargetRow>>,
+    automation_group_model: Rc<VecModel<AutomationGroupRow>>,
     playlist_model: Rc<VecModel<PlaylistClip>>,
     waveform_model: Rc<VecModel<f32>>,
     /// Slice boundaries of the selected channel, normalized against the
@@ -4702,6 +4703,7 @@ impl UiState {
         let note_model = Rc::new(VecModel::from(Vec::<NoteCell>::new()));
         let automation_lane_model = Rc::new(VecModel::from(Vec::<AutomationLaneCell>::new()));
         let automation_target_model = Rc::new(VecModel::from(Vec::<AutomationTargetRow>::new()));
+        let automation_group_model = Rc::new(VecModel::from(Vec::<AutomationGroupRow>::new()));
         let playlist_model = Rc::new(VecModel::from(Vec::<PlaylistClip>::new()));
         let row = ChannelRow {
             name: first.name.as_str().into(),
@@ -4744,6 +4746,7 @@ impl UiState {
         window.set_notes(ModelRc::from(note_model.clone()));
         window.set_automation_lanes(ModelRc::from(automation_lane_model.clone()));
         window.set_automation_targets(ModelRc::from(automation_target_model.clone()));
+        window.set_automation_groups(ModelRc::from(automation_group_model.clone()));
         window.set_playlist_clips(ModelRc::from(playlist_model.clone()));
         window.set_waveform(ModelRc::from(waveform_model.clone()));
         window.set_slice_markers(ModelRc::from(slice_model.clone()));
@@ -4822,6 +4825,7 @@ impl UiState {
             automation_lane_heights: RefCell::new(HashMap::new()),
             automation_lane_default_height: Cell::new(AUTOMATION_LANE_HEIGHT),
             automation_target_model,
+            automation_group_model,
             audio_sample_rate,
             sampler_zone: (0, 0),
             sampler_zone_follow: false,
@@ -5128,23 +5132,37 @@ impl UiState {
             .map(|lanes| lanes.iter().map(|lane| lane.target).collect())
             .unwrap_or_default();
 
+        // The picker's device column: one row per run of a device's
+        // parameters, which `lane_destinations` keeps together.
         let mut previous_device: Option<&str> = None;
+        let mut groups: Vec<AutomationGroupRow> = Vec::new();
         let rows: Vec<AutomationTargetRow> = destinations
             .iter()
             .map(|row| {
                 let starts_group = previous_device != Some(row.device.as_str());
                 previous_device = Some(row.device.as_str());
+                let is_open = open.contains(&row.address);
+                if starts_group {
+                    groups.push(AutomationGroupRow {
+                        name: row.device.as_str().into(),
+                        open: false,
+                    });
+                }
+                let group = groups.len() - 1;
+                groups[group].open |= is_open;
                 AutomationTargetRow {
                     param_name: row.name.as_str().into(),
                     device: row.device.as_str().into(),
                     starts_group,
-                    open: open.contains(&row.address),
+                    group: group as i32,
+                    open: is_open,
                     current: self.session.automation_target.get() == Some(row.address),
                     missing: row.missing,
                 }
             })
             .collect();
         self.automation_target_model.set_vec(rows);
+        self.automation_group_model.set_vec(groups);
 
         // Every open lane whose destination the picker still offers, in the
         // order the clip holds them. A lane whose device was removed stays in

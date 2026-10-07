@@ -128,11 +128,13 @@ area, and where each behaviour stops.
   automation lane of the clip is shown, stacked, each with a header whose
   menu clears or removes it; the area scrolls once it reaches its height,
   which its top edge sets. A lane's bottom edge resizes it, and Shift-drag
-  resizes every lane (view state, not saved). **Add lane** lists the
-  selected channel's generator, every parameter of every effect on that
-  channel, the channel's fader and pan (as "Channel strip", after its
-  chain), and every effect on every bus, grouped by device, with
-  already-open lanes marked; picking an open one focuses it. Points are
+  resizes every lane (view state, not saved). **Add lane** opens two
+  columns: devices (the selected channel's generator, each effect on that
+  channel, the channel's fader and pan as "Channel strip", and each effect
+  on every bus), and the hovered device's parameters. **Open lanes** heads
+  the device column whenever the clip has a lane, listing just those;
+  devices and parameters with a lane are marked, and picking an open one
+  focuses it. Points are
   drawn by clicking, dragged to move (Ctrl for a tenth of the travel),
   right-clicked to remove, and interpolate linearly. Values snap to whole
   semitones or cents on a semitone or cent amount and to the positions of a
