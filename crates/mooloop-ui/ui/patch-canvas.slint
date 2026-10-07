@@ -120,7 +120,9 @@ export global PatchView {
     in property <length> marquee-y;
     in property <length> marquee-width;
     in property <length> marquee-height;
-    // The inlet picker: what can feed the inlet that was clicked.
+    // The canvas's one menu: what can feed the inlet that was clicked, what
+    // an inlet tag reads, or which tag to make where the canvas was
+    // right-clicked.
     in property <bool> menu-open;
     in property <string> menu-title;
     in property <[string]> menu-options;
@@ -135,6 +137,8 @@ export global PatchView {
     callback key(string) -> bool;
     callback picked(int);
     callback menu-closed();
+    // A right-click at (x, y) in canvas units.
+    callback context(length, length);
     // Typing a box (song patch step 04): a field at (typing-x, typing-y),
     // and below it the names that start with what is typed.
     in property <bool> typing;
@@ -416,6 +420,11 @@ export component PatchCanvas inherits Rectangle {
                 accessible-label: "Patch canvas";
                 mouse-cursor: default;
                 pointer-event(event) => {
+                    if event.button == PointerEventButton.right && event.kind == PointerEventKind.down {
+                        focus.focus();
+                        PatchView.context(self.mouse-x, self.mouse-y);
+                        return;
+                    }
                     if event.button != PointerEventButton.left {
                         return;
                     }
@@ -598,7 +607,7 @@ export component PatchCanvas inherits Rectangle {
                 }
             }
 
-            // The inlet picker, over the canvas at the inlet. Its rows take
+            // The menu, over the canvas where it was opened. Its rows take
             // their own clicks; a press anywhere else on the canvas closes it.
             if PatchView.menu-open : Rectangle {
                 x: min(PatchView.menu-x, world.width - self.width - 4px);
@@ -649,7 +658,7 @@ export component PatchCanvas inherits Rectangle {
     if PatchView.empty : Text {
         width: root.width;
         height: root.height;
-        text: "No boxes yet. Double-click to type one: lfo, counter 4, * -0.5.";
+        text: "No boxes yet. Double-click to type one: lfo, counter 4, * -0.5. Right-click for a song inlet.";
         color: Theme.text-muted;
         font-size: Theme.text-md;
         horizontal-alignment: center;

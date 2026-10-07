@@ -176,13 +176,53 @@ impl crate::modulation::ModulatorParams {
     }
 }
 
-/// What a song inlet tag is bound to. Step 06 of the plan adds the
-/// transport and the generator outlets.
+/// What a song inlet tag is bound to (song patch step 06): something the
+/// song sends into the patch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InletSource {
-    /// A channel's notes as a gate, by durable identity.
+    /// A channel's notes as a gate, by durable identity: 1 while a note is
+    /// held, firing on each NoteOn.
     Gate(crate::ChannelId),
+    /// A channel's generator outlet, by its declared id. Read as published
+    /// at the end of the block before, as routes read it.
+    Outlet {
+        channel: crate::ChannelId,
+        outlet: u16,
+    },
+    /// A channel's mod wheel or aftertouch
+    /// ([`crate::modulation::PERFORMANCE_DESCRIPTORS`]).
+    Performance {
+        channel: crate::ChannelId,
+        source: u16,
+    },
+    /// A ramp from 0 to 1 across each beat, firing on each.
+    Beat,
+    /// A ramp from 0 to 1 across each bar, firing on each.
+    Bar,
+    /// A ramp from 0 to 1 across the playing pattern, firing as it starts.
+    PatternPosition,
+    /// The playing pattern's number, 0 to 1 across the song's patterns,
+    /// firing when it changes.
+    Pattern,
+}
+
+impl InletSource {
+    /// The channel it reads, if it reads one.
+    pub const fn channel(self) -> Option<crate::ChannelId> {
+        match self {
+            Self::Gate(channel)
+            | Self::Outlet { channel, .. }
+            | Self::Performance { channel, .. } => Some(channel),
+            Self::Beat | Self::Bar | Self::PatternPosition | Self::Pattern => None,
+        }
+    }
+
+    /// Whether it reaches the patch a block late: a generator's outlet is
+    /// published as the channel renders, after the patch has ticked.
+    pub const fn late(self) -> bool {
+        matches!(self, Self::Outlet { .. })
+    }
 }
 
 /// The kinds of tag. `None` in a binding is the empty `[ ]` slot.
@@ -230,9 +270,7 @@ impl TagKind {
     /// The channel this tag names, bound or not.
     pub const fn channel(self) -> Option<crate::ChannelId> {
         match self {
-            Self::Inlet {
-                bind: Some(InletSource::Gate(channel)),
-            } => Some(channel),
+            Self::Inlet { bind: Some(source) } => source.channel(),
             Self::Inlet { bind: None } => None,
             Self::NotesIn { channel, .. } | Self::NotesOut { channel } => channel,
         }
@@ -451,6 +489,22 @@ impl SongModulation {
         let id = self.mint();
         self.tags.push(SongTag { id, at, kind });
         id
+    }
+
+    /// Bind inlet tag `id` to `bind`, or empty it with `None`. Its wires
+    /// stay: they now carry what it reads. Returns whether anything changed;
+    /// a Notes tag is not an inlet and is left alone.
+    pub fn bind_tag(&mut self, id: ModSourceId, bind: Option<InletSource>) -> bool {
+        match self.tags.iter_mut().find(|tag| tag.id == id) {
+            Some(SongTag {
+                kind: TagKind::Inlet { bind: held },
+                ..
+            }) if *held != bind => {
+                *held = bind;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Remove a tag and its wires. Returns whether it was there.
@@ -809,6 +863,33 @@ mod tests {
         assert!(song.drop_dead_wires());
         let left: Vec<_> = song.wires.iter().map(|wire| wire.to).collect();
         assert_eq!(left, [Jack::new(select, 1)]);
+    }
+
+    /// Every source an inlet tag can read saves and reopens as it was
+    /// (song patch step 06), and binding one keeps its wires.
+    #[test]
+    fn every_inlet_source_saves_and_reopens() {
+        let (mut song, ids) = song_with(&[ModulatorKind::Lfo]);
+        let sources = [
+            InletSource::Gate(ChannelId(1)),
+            InletSource::Outlet { channel: ChannelId(1), outlet: 2 },
+            InletSource::Performance { channel: ChannelId(1), source: 1 },
+            InletSource::Beat,
+            InletSource::Bar,
+            InletSource::PatternPosition,
+            InletSource::Pattern,
+        ];
+        let unbound = song.add_tag(TagKind::Inlet { bind: None }, CanvasPoint::new(0, 0));
+        song.connect(Jack::new(unbound, 0), Jack::new(ids[0], 1)).unwrap();
+        assert!(song.bind_tag(unbound, Some(InletSource::Bar)));
+        assert!(!song.bind_tag(unbound, Some(InletSource::Bar)), "already bound");
+        assert_eq!(song.wire_into(Jack::new(ids[0], 1)).map(|wire| wire.from.node), Some(unbound));
+        for (index, source) in sources.into_iter().enumerate() {
+            song.add_tag(TagKind::Inlet { bind: Some(source) }, CanvasPoint::new(0, 40 * index as i32));
+        }
+        let saved = toml::to_string(&song).unwrap();
+        let loaded: SongModulation = toml::from_str(&saved).unwrap();
+        assert_eq!(loaded, song);
     }
 
     #[test]

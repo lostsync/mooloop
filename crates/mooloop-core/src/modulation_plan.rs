@@ -83,14 +83,29 @@ pub struct CompiledModule {
     pub inlets: [Option<CompiledInlet>; MAX_INLETS],
 }
 
-/// One tag as the engine runs it: a gate tag or a notes-in tag is the seat
-/// whose notes it hears. A notes-in tag's wires go to note inlets, which no
-/// box runs before step 07; it is heard so the canvas can show its notes.
-/// Every other tag (an empty slot, a notes-out tag) sends nothing.
+/// One tag as the engine runs it, `None` for a tag that sends nothing (an
+/// empty slot, a notes-out tag, a channel the song no longer has).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompiledTag {
     pub id: ModSourceId,
-    pub gate: Option<u8>,
+    pub source: Option<TagSource>,
+}
+
+/// What a tag reads, resolved to seats (song patch step 06).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TagSource {
+    /// A seat's notes: a gate tag, or a notes-in tag. A notes-in tag's
+    /// wires go to note inlets, which no box runs before step 07; it is
+    /// heard so the canvas can show its notes.
+    Gate(u8),
+    /// A seat's generator outlet, by its place in the published outlets.
+    Outlet { seat: u8, outlet: u8 },
+    /// A seat's mod wheel or aftertouch.
+    Performance { seat: u8, source: u8 },
+    Beat,
+    Bar,
+    PatternPosition,
+    Pattern,
 }
 
 /// A route's source, resolved to where the engine reads it.
@@ -188,14 +203,26 @@ impl CompiledModulation {
             .take(tag_count)
             .map(|tag| CompiledTag {
                 id: tag.id,
-                gate: match tag.kind {
-                    TagKind::Inlet {
-                        bind: Some(InletSource::Gate(channel)),
-                    } => seat_of(channel),
+                source: match tag.kind {
+                    TagKind::Inlet { bind: Some(source) } => match source {
+                        InletSource::Gate(channel) => seat_of(channel).map(TagSource::Gate),
+                        InletSource::Outlet { channel, outlet } => seat_of(channel)
+                            .zip(u8::try_from(outlet).ok())
+                            .filter(|&(_, outlet)| usize::from(outlet) < crate::modulation::MAX_GENERATOR_OUTLETS)
+                            .map(|(seat, outlet)| TagSource::Outlet { seat, outlet }),
+                        InletSource::Performance { channel, source } => seat_of(channel)
+                            .zip(u8::try_from(source).ok())
+                            .filter(|&(_, source)| usize::from(source) < crate::modulation::PERFORMANCE_SOURCES)
+                            .map(|(seat, source)| TagSource::Performance { seat, source }),
+                        InletSource::Beat => Some(TagSource::Beat),
+                        InletSource::Bar => Some(TagSource::Bar),
+                        InletSource::PatternPosition => Some(TagSource::PatternPosition),
+                        InletSource::Pattern => Some(TagSource::Pattern),
+                    },
                     TagKind::NotesIn {
                         channel: Some(channel),
                         ..
-                    } => seat_of(channel),
+                    } => seat_of(channel).map(TagSource::Gate),
                     _ => None,
                 },
             })
@@ -583,7 +610,7 @@ mod tests {
         let seat_of = |id: ChannelId| (id == ChannelId(30)).then_some(1);
         let plan = CompiledModulation::compile(&song, seat_of);
         // The gate tag is node 2, after the two modules, and hears seat 1.
-        assert_eq!(plan.tags[0].gate, Some(1));
+        assert_eq!(plan.tags[0].source, Some(TagSource::Gate(1)));
         let lfo_retrigger = plan.modules[0].inlets[1].expect("the LFO's retrigger is wired");
         assert_eq!((lfo_retrigger.node, lfo_retrigger.delayed), (2, false));
         let math_in = plan.modules[1].inlets[0].expect("the Math box's in is wired");

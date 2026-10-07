@@ -763,10 +763,10 @@ impl PlayheadMeters {
 /// overwritten unseen -- the audio thread should not pay to store them.
 pub struct ModulatorMeters {
     modules: Vec<AtomicU32>,
-    /// Each tag's count of NoteOns, in tag order, and whether it holds a
-    /// note: the patch canvas's cables show both.
+    /// Each tag's count of NoteOns, in tag order, and its value: the patch
+    /// canvas's cables show both.
     tags: Vec<AtomicU32>,
-    tag_gates: Vec<AtomicU32>,
+    tag_values: Vec<AtomicU32>,
     /// `MAX_GENERATOR_OUTLETS + PERFORMANCE_SOURCES` cells per channel.
     channels: Vec<AtomicU32>,
 }
@@ -786,7 +786,7 @@ impl ModulatorMeters {
         Arc::new(Self {
             modules: cells(MAX_METERED_MODULES),
             tags: cells(MAX_METERED_MODULES),
-            tag_gates: cells(MAX_METERED_MODULES),
+            tag_values: cells(MAX_METERED_MODULES),
             channels: cells(MAX_CHANNELS * CHANNEL_SOURCES),
         })
     }
@@ -799,20 +799,20 @@ impl ModulatorMeters {
         }
     }
 
-    /// Publish every tag's NoteOn count and held gate, in tag order.
-    /// Called on the audio thread, once per block.
-    pub fn publish_tags(&self, tags: impl Iterator<Item = (u32, bool)>) {
-        for ((count, gate), (notes, held)) in self.tags.iter().zip(&self.tag_gates).zip(tags) {
+    /// Publish every tag's NoteOn count and value, in tag order. Called on
+    /// the audio thread, once per block.
+    pub fn publish_tags(&self, tags: impl Iterator<Item = (u32, f32)>) {
+        for ((count, cell), (notes, value)) in self.tags.iter().zip(&self.tag_values).zip(tags) {
             count.store(notes, Ordering::Relaxed);
-            gate.store(u32::from(held), Ordering::Relaxed);
+            cell.store(value.to_bits(), Ordering::Relaxed);
         }
     }
 
-    /// Tag `at`'s NoteOn count and held gate as of the last block. Called
-    /// on the GUI thread.
-    pub fn tag(&self, at: usize) -> (u32, bool) {
+    /// Tag `at`'s NoteOn count and value as of the last block. Called on
+    /// the GUI thread.
+    pub fn tag(&self, at: usize) -> (u32, f32) {
         let read = |cells: &[AtomicU32]| cells.get(at).map_or(0, |cell| cell.load(Ordering::Relaxed));
-        (read(&self.tags), read(&self.tag_gates) != 0)
+        (read(&self.tags), f32::from_bits(read(&self.tag_values)))
     }
 
     /// Publish `channel`'s outlets and keyboard. Called on the audio thread,

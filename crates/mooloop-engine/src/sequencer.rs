@@ -170,7 +170,6 @@ impl Sequencer {
         true
     }
 
-    #[cfg(test)]
     pub fn active_patterns(&self) -> usize {
         self.active_patterns
     }
@@ -750,6 +749,54 @@ impl Sequencer {
                     })
                     .nth(ordinal)
                     .map(|placement| placement.pattern as usize)
+            }
+        }
+    }
+
+    /// The pattern playing at `song_tick`, where in it, and its length, for
+    /// the song patch's `PatternPosition` and `Pattern` tags (MOO-525).
+    ///
+    /// Pattern mode answers the selected pattern folded by its length, as
+    /// scheduling does. Song mode folds by `song_length` -- passed in because
+    /// [`Self::song_length_ticks`] walks the playlist and the caller asks
+    /// once per control tick -- and, where placements are layered, answers
+    /// the one on the topmost playlist row: the lowest pattern number, and
+    /// of two clips of that pattern the latest-starting, the rule a click in
+    /// the overlap follows. `None` where nothing covers the tick.
+    pub fn playing_pattern_at(&self, song_tick: f64, song_length: u32) -> Option<(usize, f64, u32)> {
+        match self.playback_mode {
+            PlaybackMode::Pattern => {
+                let length = self.pattern_length_ticks(self.current)?;
+                Some((self.current, wrap_tick(song_tick, length), length))
+            }
+            PlaybackMode::Song => {
+                let position = wrap_tick(song_tick, song_length);
+                let hi = self
+                    .playlist_by_start
+                    .partition_point(|item| f64::from(item.start_tick) <= position);
+                let lo_tick = (position - f64::from(MAX_PATTERN_TICKS)).max(0.0);
+                let lo = self
+                    .playlist_by_start
+                    .partition_point(|item| f64::from(item.start_tick) < lo_tick);
+                let mut best: Option<(usize, f64, u32)> = None;
+                for placement in &self.playlist_by_start[lo..hi] {
+                    let index = placement.pattern as usize;
+                    if index >= self.active_patterns {
+                        continue;
+                    }
+                    let length = self.patterns[index].length_ticks();
+                    let start = placement.start_tick;
+                    if position < start as f64 || position >= start.saturating_add(length) as f64 {
+                        continue;
+                    }
+                    // Sorted by start, so a later cover of the same pattern
+                    // replaces an earlier one.
+                    if best.is_some_and(|(held, _, _)| held < index) {
+                        continue;
+                    }
+                    best = Some((index, position - start as f64, length));
+                }
+                best
             }
         }
     }

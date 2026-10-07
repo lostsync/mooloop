@@ -613,3 +613,21 @@ reopen: the bend and the open faces should be as left. Then play with
 Preferences > Appearance > Cable activity on each setting. Off: plain wires.
 Subtle: the LFO's cable should glow faintly with its swing, never enough to
 pull the eye from the boxes. Full: plainly lit. Is Subtle still too loud?
+
+### 44. Song inlets: the kick pump and a bar retrigger (MOO-525): listen, in the app
+
+Put a four-on-the-floor kick on one channel and a held bass note on
+another. In the patch canvas, right-click empty space and pick **Inlet**;
+its list opens at once: pick the kick channel's **gate**. Type `env` and
+`* -1`, wire the gate tag into the env's `gate`, the env into `* -1`, and
+arm `* -1` onto the bass channel's volume. Play: the bass should duck on
+every kick and swell back between them, with no audio sidechain anywhere.
+Shorten the env's release on its face: the pump should get tighter.
+
+Then right-click again, make another Inlet and pick **Bar**. Type `lfo saw
+1/8`, wire the Bar tag into its `retrigger`, and arm the LFO onto a filter
+cutoff. Play: the saw should restart on every downbeat, so each bar opens
+the same way. Stop and play again: it should start from the bar, not from
+where it stopped. A tag bound to a channel's generator outlet carries a
+small **late** mark: it reads that outlet a block behind. Does that matter
+anywhere you hear it?

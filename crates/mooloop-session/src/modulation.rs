@@ -23,7 +23,7 @@ use mooloop_core::modulation::{
     MAX_GENERATOR_OUTLETS, PERFORMANCE_DESCRIPTORS, PERFORMANCE_SOURCES,
 };
 use mooloop_core::{
-    Bend, CanvasPoint, CompiledSource, InputSource, Jack, ModPolarity, ModRoute, ModSourceId,
+    Bend, CanvasPoint, CompiledSource, InletSource, InputSource, Jack, ModPolarity, ModRoute, ModSourceId,
     ModSourceRef, ModulatorKind, ModulatorParams, OutletDescriptor, PublishesOutlets, TagKind,
     WireRefusal,
 };
@@ -65,9 +65,9 @@ fn module_name(module: &mooloop_core::SongModule) -> String {
 pub struct ModulationLevels {
     pub modules: Vec<f32>,
     pub channels: Vec<([f32; MAX_GENERATOR_OUTLETS], [f32; PERFORMANCE_SOURCES])>,
-    /// Each tag's count of NoteOns and held gate, in the set last sent's
-    /// tag order.
-    pub tags: Vec<(u32, bool)>,
+    /// Each tag's count of NoteOns and value, in the set last sent's tag
+    /// order.
+    pub tags: Vec<(u32, f32)>,
 }
 
 impl ModulationLevels {
@@ -219,13 +219,13 @@ impl Session {
 
     /// Read every source's output off the engine: `module` for a list
     /// position in the set last sent, `channel` for a seat, `tag` for a
-    /// tag's count of NoteOns and held gate by its place among the tags. Returns whether
+    /// tag's count of NoteOns and value by its place among the tags. Returns whether
     /// anything moved, which is when the knobs and wires need redrawing.
     pub fn read_modulation_levels(
         &self,
         module: impl Fn(usize) -> f32,
         channel: impl Fn(usize) -> ([f32; MAX_GENERATOR_OUTLETS], [f32; PERFORMANCE_SOURCES]),
-        tag: impl Fn(usize) -> (u32, bool),
+        tag: impl Fn(usize) -> (u32, f32),
     ) -> bool {
         let mut levels = self.modulation_levels.borrow_mut();
         let modules = self.modulation_sent.modules.len();
@@ -234,7 +234,7 @@ impl Session {
         let mut moved = levels.modules.len() != modules
             || levels.channels.len() != seats
             || levels.tags.len() != tags;
-        levels.tags.resize(tags, (0, false));
+        levels.tags.resize(tags, (0, 0.0));
         for (at, value) in levels.tags.iter_mut().enumerate() {
             let next = tag(at);
             moved |= *value != next;
@@ -256,20 +256,21 @@ impl Session {
     }
 
     /// What patch node `node` is putting on its outlet as of the last read:
-    /// a box's value, or a tag's gate (1 while a note is held) and how many
-    /// NoteOns it has passed. Zero for a node the engine does not run.
+    /// a box's value, or a tag's value (a gate tag's is 1 while a note is
+    /// held) and how many NoteOns it has passed. Zero for a node the engine
+    /// does not run.
     pub fn patch_node_activity(&self, node: ModSourceId) -> (f32, u32) {
         if self.modulation.module(node).is_some() {
             return (self.modulation_source_level(ModSourceRef::Id(node)), 0);
         }
-        let (notes, held) = self
+        let (notes, value) = self
             .modulation_sent
             .tags
             .iter()
             .position(|tag| tag.id == node)
             .and_then(|at| self.modulation_levels.borrow().tags.get(at).copied())
             .unwrap_or_default();
-        (if held { 1.0 } else { 0.0 }, notes)
+        (value, notes)
     }
 
     /// The live offset the routes onto `destination` add right now, as a
@@ -774,9 +775,9 @@ impl Session {
     }
 
     /// What the inlet picker offers for inlet `to`, in order, with the name
-    /// each is listed under: **None**, every channel's notes as a gate when
-    /// the inlet takes control, then every other box's and tag's outlet of
-    /// the inlet's sort.
+    /// each is listed under: **None**, every channel's notes as a gate and
+    /// every other bound inlet tag when the inlet takes control, then every
+    /// other box's outlet of the inlet's sort.
     pub fn patch_feed_options(&self, to: Jack) -> Vec<(PatchFeed, String)> {
         let Some(inlet) = self
             .modulation
@@ -791,6 +792,19 @@ impl Session {
                 InputSource::ChannelNotes(channel) => Some((PatchFeed::Gate(channel), name)),
                 _ => None,
             }));
+        }
+        if inlet.sort == mooloop_core::JackSort::Control {
+            for tag in &self.modulation.tags {
+                let TagKind::Inlet { bind: Some(source) } = tag.kind else {
+                    continue;
+                };
+                if matches!(source, InletSource::Gate(_)) {
+                    continue;
+                }
+                if let Some(name) = self.inlet_source_name(source) {
+                    options.push((PatchFeed::Outlet(Jack::new(tag.id, 0)), name));
+                }
+            }
         }
         for module in &self.modulation.modules {
             if module.id == to.node {
@@ -848,6 +862,99 @@ impl Session {
             }
         };
         self.rewire_patch(from, to).unwrap_or(false)
+    }
+
+    /// What an inlet tag's picker offers, in order, with the name each is
+    /// listed under (song patch step 06): the transport first, then for
+    /// each channel by seat its notes as a gate, its generator's control
+    /// outlets and its keyboard.
+    pub fn inlet_sources(&self) -> Vec<(InletSource, String)> {
+        let mut sources: Vec<(InletSource, String)> = [
+            InletSource::Beat,
+            InletSource::Bar,
+            InletSource::PatternPosition,
+            InletSource::Pattern,
+        ]
+        .into_iter()
+        .filter_map(|source| Some((source, self.inlet_source_name(source)?)))
+        .collect();
+        for channel in &self.channels {
+            let id = channel.id;
+            sources.push((InletSource::Gate(id), format!("{} · gate", channel.name)));
+            for outlet in channel.kind().control_outlets() {
+                let source = InletSource::Outlet {
+                    channel: id,
+                    outlet: outlet.id,
+                };
+                if let Some(name) = self.inlet_source_name(source) {
+                    sources.push((source, name));
+                }
+            }
+            for performance in &PERFORMANCE_DESCRIPTORS {
+                let source = InletSource::Performance {
+                    channel: id,
+                    source: performance.id,
+                };
+                if let Some(name) = self.inlet_source_name(source) {
+                    sources.push((source, name));
+                }
+            }
+        }
+        sources
+    }
+
+    /// What an inlet tag bound to `source` reads, as its tag says it: a
+    /// short lowercase word, `None` for an outlet the channel's generator
+    /// does not publish.
+    pub fn inlet_source_kind(&self, source: InletSource) -> Option<String> {
+        Some(match source {
+            InletSource::Gate(_) => "gate".to_string(),
+            InletSource::Outlet { channel, outlet } => self
+                .channels
+                .get(self.channel_index(channel)?)?
+                .kind()
+                .control_outlet(outlet)?
+                .name
+                .to_lowercase(),
+            InletSource::Performance { source, .. } => {
+                PERFORMANCE_DESCRIPTORS.get(usize::from(source))?.name.to_lowercase()
+            }
+            InletSource::Beat => "beat".to_string(),
+            InletSource::Bar => "bar".to_string(),
+            InletSource::PatternPosition => "pattern pos".to_string(),
+            InletSource::Pattern => "pattern".to_string(),
+        })
+    }
+
+    /// `source` as the picker lists it: its channel and what it reads, a
+    /// transport source by what it is. `None` for a channel the song does
+    /// not have or an outlet its generator does not publish.
+    pub fn inlet_source_name(&self, source: InletSource) -> Option<String> {
+        Some(match source {
+            InletSource::Beat => "Beat".to_string(),
+            InletSource::Bar => "Bar".to_string(),
+            InletSource::PatternPosition => "Pattern position".to_string(),
+            InletSource::Pattern => "Pattern (topmost row)".to_string(),
+            InletSource::Gate(channel) | InletSource::Outlet { channel, .. } | InletSource::Performance { channel, .. } => {
+                let name = &self.channels.get(self.channel_index(channel)?)?.name;
+                let kind = self.inlet_source_kind(source)?;
+                if source.late() {
+                    format!("{name} · {kind} (a block late)")
+                } else {
+                    format!("{name} · {kind}")
+                }
+            }
+        })
+    }
+
+    /// Binds inlet tag `id` to `bind`, or empties it. Refuses a source
+    /// [`Self::inlet_source_name`] cannot name. Returns whether anything
+    /// changed.
+    pub fn bind_patch_tag(&mut self, id: ModSourceId, bind: Option<InletSource>) -> bool {
+        if bind.is_some_and(|source| self.inlet_source_name(source).is_none()) {
+            return false;
+        }
+        self.modulation.bind_tag(id, bind)
     }
 
     /// Arms `source` for the assignment gesture, or disarms it when it is

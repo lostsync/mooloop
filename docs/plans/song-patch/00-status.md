@@ -199,6 +199,31 @@ by hand (`Wire.bend`, saved since step 01), and Preferences > Appearance has
   channel in the compiled set, so its wires flash before step 07 gives note
   wires a box to play.
 
+**06 (MOO-525), first half.** Inlet tags read every source in the step
+file: `InletSource` grows `Outlet`, `Performance`, `Beat`, `Bar`,
+`PatternPosition` and `Pattern` (`core/src/patch.rs`), compiled to a
+`TagSource` per tag. The render loop fills a per-tick transport table
+beside the gate table (`render.rs`, `transport_for`, walking the block's
+spans as `song_beats_for` does) and hands the tags each seat's published
+outlets and keyboard. Right-click on empty canvas makes a tag; a new inlet
+opens its list, and a click on an inlet tag reopens it. Where it differs
+from the step file:
+
+- **Split in two.** Routes from outlets and keyboards converting to tags,
+  `ModSourceRef` narrowing to a box's outlet, and the shelf's outlet band
+  going are the second PR, so this one changes no saved route.
+- **"Topmost playlist row" is the lowest pattern number**: placements have
+  no row of their own, and the playlist draws one row per pattern. Two
+  clips of that pattern resolve to the latest-starting, as a click does.
+- **Beat and Bar count from the pattern's start in Pattern mode**, so a
+  pattern whose length is not whole bars still downbeats where it loops,
+  and from the song's start in Song mode.
+- **A transport tag fires rather than sending a note**: a trigger inlet
+  takes the fire as a NoteOn; an Envelope's gate follows the ramp's value.
+  An outlet tag sends no fire of its own: a gate outlet rising through 0.5
+  triggers as any wire does.
+- **No toolbar button yet**: the right-click is the only way to make a tag.
+
 ## Adam's rulings
 
 | When | Ruling |

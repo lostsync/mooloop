@@ -2549,8 +2549,8 @@ impl EngineHandle {
     }
 
     /// How many NoteOns the patch's tag `at` (in tag order) has passed, as
-    /// of the last block, wrapping, and whether it holds a note.
-    pub fn tag_activity(&self, at: usize) -> (u32, bool) {
+    /// of the last block, wrapping, and the value it put out.
+    pub fn tag_activity(&self, at: usize) -> (u32, f32) {
         self.shared.modulator_meters.tag(at)
     }
 

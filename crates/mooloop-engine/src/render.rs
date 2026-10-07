@@ -36,7 +36,7 @@ use mooloop_dsp::{
     NoteGateEvents, OutputGuard, PolySynth,
     ChannelAudioSnapshot,
     ProcessContext, SampleData, Sampler, SourceNode, SpectrumAnalyzer, StereoBus, StretchPool,
-    TimedEvent,
+    TimedEvent, TransportTick,
     CONTROL_RATE_FRAMES, ControlCurve, CurveKind, MAX_BLOCK_SIZE, MAX_CONTROL_TICKS_PER_BLOCK,
     SILENCE_PEAK,
 };
@@ -1023,6 +1023,65 @@ fn song_beats_for(
         *slot = Some(position / ticks_per_beat.max(1.0));
     }
     beats
+}
+
+/// Where the transport is at each control tick of the block, for the song
+/// patch's transport tags (MOO-525). It walks the spans as
+/// [`song_beats_for`] does, so it follows loop folds and cuts the same way.
+/// Beat and bar count from the playing pattern's start in Pattern mode and
+/// from the song's in Song mode; `pattern` is the playing pattern's number
+/// across the song's patterns. Stopped, every tick reads as stopped and the
+/// tags hold.
+fn transport_for(
+    playing: bool,
+    spans: &[BlockSpan],
+    frames: usize,
+    ticks_per_beat: f64,
+    sequencer: &Sequencer,
+) -> [TransportTick; MAX_CONTROL_TICKS_PER_BLOCK] {
+    let mut transport = [TransportTick::default(); MAX_CONTROL_TICKS_PER_BLOCK];
+    if !playing || spans.is_empty() {
+        return transport;
+    }
+    let ticks_per_beat = ticks_per_beat.max(1.0);
+    let ticks_per_bar = ticks_per_beat * f64::from(mooloop_core::BEATS_PER_BAR);
+    let song_length = sequencer.song_length_ticks();
+    let patterns = sequencer.active_patterns();
+    let pattern_mode = sequencer.playback_mode() == PlaybackMode::Pattern;
+    for (tick, slot) in transport
+        .iter_mut()
+        .enumerate()
+        .take(frames.div_ceil(CONTROL_RATE_FRAMES))
+    {
+        let frame = tick * CONTROL_RATE_FRAMES;
+        let span = spans
+            .iter()
+            .rev()
+            .find(|span| span.frame <= frame)
+            .unwrap_or(&spans[0]);
+        let along = if span.frames == 0 {
+            0.0
+        } else {
+            (frame - span.frame).min(span.frames) as f64 / span.frames as f64
+        };
+        let position = span.start_tick + (span.end_tick - span.start_tick) * along;
+        let playing_pattern = sequencer.playing_pattern_at(position, song_length);
+        let base = if pattern_mode {
+            playing_pattern.map_or(position, |(_, local, _)| local)
+        } else {
+            mooloop_core::playlist::wrap_tick(position, song_length)
+        };
+        *slot = TransportTick {
+            playing: true,
+            beat: (base / ticks_per_beat).fract() as f32,
+            bar: (base / ticks_per_bar).fract() as f32,
+            pattern_position: playing_pattern
+                .map(|(_, local, length)| (local / f64::from(length.max(1))) as f32),
+            pattern: playing_pattern
+                .map(|(index, _, _)| index as f32 / patterns.saturating_sub(1).max(1) as f32),
+        };
+    }
+    transport
 }
 
 /// The most destinations any single [`mooloop_core::EffectKind`]'s parameter
@@ -10318,27 +10377,42 @@ impl RenderState {
         );
         // The song's set, once for the whole song, before anything renders:
         // every source is ahead of every destination by construction.
-        let ticks = self.song_modulation.tick_block(
+        let transport = transport_for(
+            self.transport.playing,
+            &spans[..span_count],
+            frames,
+            f64::from(self.transport.ppq.ticks_per_beat()),
+            &self.sequencer,
+        );
+        // Every channel's outlets as published at the end of the block before
+        // this one, and its keyboard, for a route on any chain -- and an
+        // inlet tag (MOO-525) -- to read. Taken before anything renders, so
+        // nothing in this block can read a publication from it and the one
+        // declared block of latency is a fact about the order rather than a
+        // rule.
+        for index in 0..active_channels {
+            self.channel_sources.outlets[index] = self.strips[index].published_outlets;
+            self.channel_sources.performance[index] = self.expression[index].performance;
+        }
+        let ticks = self.song_modulation.tick_block_with(
             self.sample_rate,
             self.transport.bpm,
             frames,
             &self.gate_ticks[..],
             &song_beats,
+            &transport,
+            Some((&self.channel_sources.outlets, &self.channel_sources.performance)),
         );
-        // Every channel's outlets as published at the end of the block before
-        // this one, and its keyboard, for a route on any chain to read. Taken
-        // before anything renders, so nothing in this block can read a
-        // publication from it and the one declared block of latency is a
-        // fact about the order rather than a rule. Published for the view
-        // with the modules' last outputs: one snapshot a block, so a knob
-        // driven by an outlet animates as well as one driven by a module.
-        for index in 0..active_channels {
-            let outlets = self.strips[index].published_outlets;
-            let performance = self.expression[index].performance;
-            self.channel_sources.outlets[index] = outlets;
-            self.channel_sources.performance[index] = performance;
-            if ticks > 0 {
-                self.modulator_meters.publish_channel(index, &outlets, &performance);
+        // Published for the view with the modules' last outputs: one
+        // snapshot a block, so a knob driven by an outlet animates as well
+        // as one driven by a module.
+        if ticks > 0 {
+            for index in 0..active_channels {
+                self.modulator_meters.publish_channel(
+                    index,
+                    &self.channel_sources.outlets[index],
+                    &self.channel_sources.performance[index],
+                );
             }
         }
         if ticks > 0 {
